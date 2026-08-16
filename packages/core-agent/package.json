@@ -1,0 +1,20 @@
+{
+  "name": "@i-harness/core-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/core-tools": "workspace:*",
+    "@i-harness/llm-mock": "workspace:*",
+    "@i-harness/llm-seam": "workspace:*"
+  }
+}
