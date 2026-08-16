@@ -20,6 +20,24 @@ importers:
 
   apps/cli: {}
 
+  packages/core-agent:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/llm-mock':
+        specifier: workspace:*
+        version: link:../llm-mock
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+
   packages/core-plugin: {}
 
   packages/core-session: {}
