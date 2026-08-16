@@ -32,6 +32,7 @@ function createScope(parentStore: ServiceStore | null, parentEmit: (event: strin
   const scopes = new Set<Scope>()
   const plugins = new Map<string, Plugin>()
   const pluginListeners = new Map<string, OwnedListener[]>()
+  const nestedPlugins = new Map<string, string[]>()
   let mountingPlugin: string | null = null
 
   function emitHere(event: string, payload: unknown): void {
@@ -76,28 +77,41 @@ function createScope(parentStore: ServiceStore | null, parentEmit: (event: strin
     },
     mount(plugin: Plugin): void {
       plugins.set(plugin.name, plugin)
+      if (mountingPlugin !== null) {
+        const nested = nestedPlugins.get(mountingPlugin) ?? []
+        nested.push(plugin.name)
+        nestedPlugins.set(mountingPlugin, nested)
+      }
+      const prev = mountingPlugin
       mountingPlugin = plugin.name
       try {
         plugin.mount(ctx)
       } finally {
-        mountingPlugin = null
+        mountingPlugin = prev
       }
     },
     unmount(name: string): void {
-      const plugin = plugins.get(name)
-      if (!plugin) return
-      plugin.unmount?.(ctx)
-      for (const { event, handler } of pluginListeners.get(name) ?? []) {
-        const list = listeners.get(event)
-        if (list) {
-          const index = list.indexOf(handler)
-          if (index !== -1) list.splice(index, 1)
-        }
-      }
-      pluginListeners.delete(name)
-      plugins.delete(name)
+      reclaim(name)
     },
   }
+
+  function reclaim(name: string): void {
+    const plugin = plugins.get(name)
+    if (!plugin) return
+    plugin.unmount?.(ctx)
+    for (const child of nestedPlugins.get(name) ?? []) reclaim(child)
+    for (const { event, handler } of pluginListeners.get(name) ?? []) {
+      const list = listeners.get(event)
+      if (list) {
+        const index = list.indexOf(handler)
+        if (index !== -1) list.splice(index, 1)
+      }
+    }
+    pluginListeners.delete(name)
+    nestedPlugins.delete(name)
+    plugins.delete(name)
+  }
+
   return ctx
 }
 
