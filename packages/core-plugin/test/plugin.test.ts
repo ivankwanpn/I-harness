@@ -101,3 +101,70 @@ describe("four primitives", () => {
     expect(calls).toEqual([1])
   })
 })
+
+describe("waterfall", () => {
+  it("runs handlers in order, each mutating payload, releasing via next", async () => {
+    const ctx = createContext()
+    const seen: string[] = []
+    ctx.on("wf", async (payload: unknown, next) => {
+      seen.push(`a:${(payload as { v: number }).v}`)
+      const nextPayload = (await next(payload)) as { v: number }
+      ;(nextPayload as { v: number }).v += 1
+      seen.push(`a2:${nextPayload.v}`)
+    })
+    ctx.on("wf", async (payload: unknown) => {
+      seen.push(`b:${(payload as { v: number }).v}`)
+      ;(payload as { v: number }).v += 10
+    })
+    await ctx.emit("wf", { v: 1 })
+    expect(seen).toEqual(["a:1", "b:1", "a2:12"])
+  })
+
+  it("treats a handler that forgets next() as an error, not a silent veto", async () => {
+    const ctx = createContext()
+    let err: unknown
+    ctx.on("wf2", async (_p: unknown, _next) => {
+      // forget to call next()
+    })
+    ctx.on("wf2", async (p: unknown) => {
+      void p
+    })
+    try {
+      await ctx.emit("wf2", {})
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeDefined()
+  })
+})
+
+describe("monotonic guard", () => {
+  it("is deny-only and order-independent", () => {
+    const ctx = createContext()
+    const denials: string[] = []
+    ctx.guard("g", (exec) => {
+      if ((exec as { cmd: string }).cmd === "rm") return "denied: rm"
+      return undefined
+    })
+    ctx.guard("g", (exec) => {
+      void exec
+      return undefined // cannot re-allow
+    })
+    // First deny wins; a second guard cannot turn it back.
+    expect(ctx.checkGuards("g", { cmd: "rm" })).toBe("denied: rm")
+    expect(ctx.checkGuards("g", { cmd: "ls" })).toBeUndefined()
+    expect(denials).toEqual([])
+  })
+
+  it("runs guards unconditionally even for non-allow decisions", () => {
+    const ctx = createContext()
+    let guardRan = false
+    ctx.guard("g2", () => {
+      guardRan = true
+      return undefined
+    })
+    // pre-execute returns a non-vocabulary object; guards must still run
+    ctx.checkGuards("g2", {})
+    expect(guardRan).toBe(true)
+  })
+})
