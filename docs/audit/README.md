@@ -15,6 +15,10 @@ drives the I-harness kernel design (see
 | 04 | Windows execution environment | `findings/04-windows-exec.md` | done |
 | 05 | Interaction model & UI consumption | `findings/05-interaction.md` | done |
 
+## Final report
+
+`dsh-risk-audit.md` — consolidated disposition table.
+
 ## Disposition values
 
 - **reuse** — audit confirms the component is clean enough to copy as reference.
