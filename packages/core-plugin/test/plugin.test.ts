@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { setTimeout as sleep } from "node:timers/promises"
 import { corePluginVersion, createContext } from "../src/index.ts"
 import type { Plugin } from "../src/index.ts"
@@ -215,15 +215,28 @@ describe("lifecycle", () => {
         removed = true
       },
     }
-    ctx.mount(plugin)
-    // Should resolve (via timeout), not hang
-    await ctx.unmount("hang")
-    expect(removed).toBe(false) // disposer timed out, not settled
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      ctx.mount(plugin)
+      // Should resolve (via timeout), not hang
+      await ctx.unmount("hang")
 
-    // The plugin is actually removed from the registry after the timed-out
-    // unmount: unmounting again is a no-op and does not re-invoke the
-    // never-settling disposer (which would wait another 5s).
-    await ctx.unmount("hang")
-    expect(disposerCalls).toBe(1)
+      // The 5s timeout path actually ran: the disposer never settled, so the
+      // exact timeout error was logged. A buggy implementation that deleted the
+      // plugin immediately without awaiting the disposer would never log this
+      // and would fail this assertion.
+      expect(errorSpy).toHaveBeenCalledWith(
+        "[core-plugin] unmount disposer for 'hang' timed out after 5s",
+      )
+      expect(removed).toBe(false) // disposer timed out, not settled
+
+      // The plugin is actually removed from the registry after the timed-out
+      // unmount: unmounting again is a no-op and does not re-invoke the
+      // never-settling disposer (which would wait another 5s).
+      await ctx.unmount("hang")
+      expect(disposerCalls).toBe(1)
+    } finally {
+      errorSpy.mockRestore()
+    }
   }, 15_000)
 })
