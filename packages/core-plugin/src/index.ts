@@ -98,6 +98,7 @@ function createScope(parentStore: ServiceStore | null, parentEmit: (event: strin
   function reclaim(name: string): void {
     const plugin = plugins.get(name)
     if (!plugin) return
+    plugins.delete(name) // remove before recursing so same-name/cycle chains terminate
     plugin.unmount?.(ctx)
     for (const child of nestedPlugins.get(name) ?? []) reclaim(child)
     for (const { event, handler } of pluginListeners.get(name) ?? []) {
@@ -109,7 +110,6 @@ function createScope(parentStore: ServiceStore | null, parentEmit: (event: strin
     }
     pluginListeners.delete(name)
     nestedPlugins.delete(name)
-    plugins.delete(name)
   }
 
   return ctx

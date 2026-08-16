@@ -76,4 +76,28 @@ describe("four primitives", () => {
     // unmounting A reclaims BOTH A's listener and B's (B was mounted inside A's mount)
     expect(calls).toEqual(["b", "a"])
   })
+
+  it("terminates on same-name nested mount (no stack overflow)", () => {
+    const ctx = createContext()
+    const calls: number[] = []
+    const inner: Plugin = {
+      name: "self",
+      mount(c) {
+        c.on("ev", () => calls.push(1))
+      },
+    }
+    const outer: Plugin = {
+      name: "self",
+      mount(c) {
+        c.mount(inner)
+      },
+    }
+    ctx.mount(outer)
+    ctx.emit("ev", {})
+    expect(calls).toEqual([1])
+    expect(() => ctx.unmount("self")).not.toThrow()
+    ctx.emit("ev", {})
+    // all same-name listeners reclaimed; unmount terminated without stack overflow
+    expect(calls).toEqual([1])
+  })
 })
