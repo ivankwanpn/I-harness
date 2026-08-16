@@ -9,7 +9,7 @@ Design a new agent runtime for I-harness, using **DeepSeek Harness's architectur
 
 ## Vision
 
-- **Conceptual base:** DeepSeek Harness (everything-is-a-plugin, per-session agent presets, generated tool catalog, anchored bootstrap → full-catalog promotion). Confirmed by five parallel research reports as the most suitable concept — especially because DeepSeek V4 models condition strongly on the first-request tool catalog.
+- **Conceptual base:** DeepSeek Harness (everything-is-a-plugin, per-session agent presets, generated tool catalog). Confirmed by five parallel research reports as the most suitable concept.
 - **Clean environment:** new pnpm monorepo; do NOT modify dsh source; do NOT embed dsh monorepo as a dependency.
 - **Code strategy (user-ruled):** lightweight self-developed implementation is the main line; **reuse selectively** (borrow stable dsh/Cordis algorithms and patterns where the audit confirms they are clean); **improve where a better design exists** (explicitly state how our writing is better than dsh's and which bug it avoids).
 - **Audit-first:** a read-only audit of deepseek-harness is the input for both design and implementation — it must list real risks with evidence, not guesses.
@@ -24,7 +24,7 @@ Design a new agent runtime for I-harness, using **DeepSeek Harness's architectur
 | Technology | dsh-style pnpm monorepo: TypeScript strict, vitest, tsdown; Node >=22 |
 | Plugin kernel | Lightweight self-developed (borrow Cordis semantics: everything-is-a-plugin, service shadow, scopes); ~300-500 lines, no Cordis dependency |
 | Audit strategy | Deep audit of deepseek-harness FIRST → design → implement |
-| Phase 1 scope | Kernel first (plugin kernel, session log, tool registry/catalog, preset mount, anchored bootstrap, minimal agent loop with mock LLM) |
+| Phase 1 scope | Kernel first (plugin kernel, session log, tool registry/catalog, preset mount, minimal agent loop with mock LLM) |
 | LLM support | Multi-protocol from the start (seam with openai/anthropic adapters first, gemini/bedrock later as plugins) |
 | Platform | Windows-first |
 | Execution safety | Approval + directory whitelist primary (policy plugins); OS sandbox as pluggable later (Linux: Landlock/bwrap; Windows: restricted token or none) |
@@ -44,7 +44,7 @@ I-harness/
 │   ├── core-session/             # session event log + projection
 │   ├── core-tools/               # tool define/registry/catalog/exec pipeline
 │   ├── core-agent/               # agent + agent-loop
-│   ├── guard-tool-bootstrap/     # anchored bootstrap plugin
+│   ├── guard/                     # loop-hygiene guard plugins (repeat-tool-reminder, timeout-policy)
 │   ├── shell/  fs/  terminal/  sandbox/  subagent/
 │   ├── llm-seam/ + llm-openai/ + llm-anthropic/ + llm-gemini/ + ...
 │   ├── preset/                   # agent preset discovery/mount
@@ -68,7 +68,7 @@ I-harness/
 - Each disposition says WHY: reuse requires audit-confirmed clean evidence; improved-writing states how ours beats dsh and which bug it avoids.
 
 **Sub-project 2: Kernel (first code sub-project)**
-- plugin kernel + session event log + tool registry/catalog/exec pipeline + preset mount + anchored bootstrap + minimal agent loop with mock LLM.
+- plugin kernel + session event log + tool registry/catalog/exec pipeline + preset mount + minimal agent loop with mock LLM.
 - Spec is written only AFTER sub-project 1's audit report is produced and user-confirmed.
 
 **Sub-project 3: Feature packages & opencode-fork pluginization**
@@ -97,7 +97,7 @@ I-harness/
 
 - turn = one user input → zero or more steps; step = one model request + its tool calls; Session = append-only event log spanning turns.
 
-## §3 Tool System & Anchored Bootstrap
+## §3 Tool System
 
 ### 3.1 Tool definition (`core-tools`)
 
@@ -131,12 +131,7 @@ tool/call logged → tools/pre-execute waterfall (allow/deny/ask)
 - Approval seam: pre-execute can mount "approval + directory whitelist" policy (Windows-first safety model).
 - Sandbox is a separate seam: `ctx.sandbox` pluggable — Linux: Landlock/bwrap; Windows: lightweight policy or none.
 
-### 3.4 Anchored bootstrap (`guard-tool-bootstrap`)
-
-- Concept (borrow): first request exposes ONLY a minimal tool set (e.g., `bash` + `read`) with injected context stripped; after the first durable signal (`tool/call` or `assistant/message`), promote to the full catalog.
-- Improved-writing (after audit): if dsh's `isPromoted()` event-scan has correctness/perf issues, use index markers or memoization. Fail-safe degradation kept (missing bootstrap tool → one-time warning + full catalog).
-
-### 3.5 Catalog-as-artifact
+### 3.4 Catalog-as-artifact
 
 - A generated model-visible tool catalog (name/desc/schema) aggregated from plugin registrations, with a completeness gate. Discipline mirrors dsh's `gen-tool-catalog`/`verify-tool-catalog`, but the generator is our own TS code.
 
@@ -194,7 +189,7 @@ interface Interaction {
 
 - Session log atomicity: failed `append` must not leave partial events (audit point: dsh JSONL crash consistency).
 - Tool timeout/cancel: `timeoutMs` + cancellation channel; tools must not swallow interruption.
-- Fail-safe: missing bootstrap tool → one-time warning + full catalog (dsh fail-safe aligned).
+- Fail-safe: catalog completeness gate fails loud on a registered-but-missing tool (aligned with dsh's `assertManifestComplete`).
 - Config errors: invalid preset mount fails fast.
 
 ### 5.3 Engineering discipline
@@ -207,7 +202,7 @@ interface Interaction {
 ### 5.4 Milestones
 
 - **M0 (audit):** deepseek-harness risk audit report → three-column disposition table → user confirms → design finalized.
-- **M1 (kernel):** plugin kernel + session log + tool registry/exec pipeline + preset mount + anchored bootstrap + minimal loop with mock LLM. CLI over interaction seam. Runnable: "read file → edit file → report" task.
+- **M1 (kernel):** plugin kernel + session log + tool registry/exec pipeline + preset mount + minimal loop with mock LLM. CLI over interaction seam. Runnable: "read file → edit file → report" task.
 - **M2 (protocols + environment):** llm-openai / llm-anthropic plugins, cross-platform exec/shell/fs, approval+whitelist policy.
 - **M3 (opencode-fork pluginization + front ends):** tool_search, task/subagent, MCP, LSP as plugins; TUI / Web / Desktop sequentially.
 
