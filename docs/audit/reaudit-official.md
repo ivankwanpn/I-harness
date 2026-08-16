@@ -74,7 +74,7 @@ Disposition-table change: **F03-8 reuse entry removed** (−1 reuse).
 
 ### Official-tree verification
 - **`repeat-tool-reminder` and `timeout-policy` exist in OFFICIAL.** Re-anchored evidence:
-  - `packages/guard/repeat-tool-reminder/src/index.ts` — `ctx.on('tools/post-execute', …)` at **`:213-227`**; `observe()` at `:189-204`; `ctx.on('agent/pre-step', …)` chain-reset at **`:229-232`**; `GENTLE_REMINDER` at `:63-67`; `detailedReminder` at `:70-78`; `canonicalize` at `:111-114`; `wildcardToRegExp` at `:117-122`; `previewArguments` at `:125-131`; `validateThresholds` at `:134-142`. Original cite `:213-233` re-anchors to `:213-232`.
+  - `packages/guard/repeat-tool-reminder/src/index.ts` — `ctx.on('tools/post-execute', …)` at **`:213-224`**; `observe()` at `:189-207`; `ctx.on('agent/pre-step', …)` chain-reset at **`:229-232`**; `GENTLE_REMINDER` at `:63-67`; `detailedReminder` at `:70-78`; `canonicalize` at `:103-105`; `wildcardToRegExp` at `:108-111`; `previewArguments` at `:118-121`; `validateThresholds` at `:128-141`. Original cite `:213-233` re-anchors to `:213-232`.
   - `packages/guard/timeout-policy/src/index.ts` — `ctx.on('tools/execute', …)` at **`:56-77`**; `toolTimeoutResult` at `:41-47`; `TOOL_TIMEOUT` at `:25`; deadline swap/restore of `exec.signal` at `:61-74`. Original cite `:55-78` re-anchors to `:56-77`.
   - Official mount points: `packages/bundle/base/cordis.patch.yml:343-344` (`timeout-policy`) and `:390-391` (`repeat-tool-reminder`).
 - **`tool-bootstrap` portion does not exist** — the cite must be dropped.
