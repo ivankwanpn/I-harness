@@ -18,7 +18,32 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@24.13.3)
 
-  apps/cli: {}
+  apps/cli:
+    dependencies:
+      '@i-harness/core-agent':
+        specifier: workspace:*
+        version: link:../../packages/core-agent
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../../packages/core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../../packages/core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../../packages/core-tools
+      '@i-harness/interaction':
+        specifier: workspace:*
+        version: link:../../packages/interaction
+      '@i-harness/llm-mock':
+        specifier: workspace:*
+        version: link:../../packages/llm-mock
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../../packages/llm-seam
+      '@i-harness/preset':
+        specifier: workspace:*
+        version: link:../../packages/preset
 
   packages/core-agent:
     dependencies:
