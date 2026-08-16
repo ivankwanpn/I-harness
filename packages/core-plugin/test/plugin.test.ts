@@ -194,6 +194,25 @@ describe("waterfall", () => {
     await ctx.emit("wf-seed2", { raw: true })
     expect(chainSaw).toEqual({ raw: true })
   })
+
+  it("does not let incidental listener returns rewrite the payload when no waterfall is registered", async () => {
+    const parent = createContext()
+    const parentSeen: unknown[] = []
+    parent.on("plain-ret", (payload) => parentSeen.push(payload))
+    const child = parent.scope.mount()
+    const childSeen: unknown[] = []
+    child.on("plain-ret", (payload) => {
+      childSeen.push(payload)
+      return 42 // incidental return value (e.g. from `calls.push(x)`)
+    })
+    await child.emit("plain-ret", { marker: true })
+    // The child listener still ran with the emitted payload...
+    expect(childSeen).toEqual([{ marker: true }])
+    // ...but its return value must NOT be forwarded to the parent scope:
+    // no waterfall is registered for this event, so the payload passes
+    // through unchanged (propagation keeps the original payload).
+    expect(parentSeen).toEqual([{ marker: true }])
+  })
 })
 
 describe("monotonic guard", () => {
