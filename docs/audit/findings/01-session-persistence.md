@@ -80,7 +80,7 @@ Findings below use the canonical `F01-n` template; later sections reuse it.
 
 ## Verification
 
-All 31 evidence cites verified against `D:\agent-complete\deepseek-harness-master` on 2026-08-16.
+All 31 evidence cites verified against `D:\agent-complete\deepseek-harness\deepseek-harness-master` on 2026-08-16.
 
 Verified cites (11 distinct files, 31 `path:line` references):
 `packages/core/session/src/types.ts` (:37-38, :56, :408-422); `packages/core/session/src/index.ts` (:604-634); `packages/core/session/src/surface.ts` (:26-27, :34-37); `packages/core/session/src/known-event-types.ts` (catalog consulted for F01-7 vocabulary); `packages/core/agent-loop/src/invariant.ts` (:22, :39-41); `packages/llm/llm/src/call-config.ts` (:13); `packages/session/session-persistence/src/coordinator.ts` (:697-710, :1046, :1061-1066); `packages/session/session-persistence-jsonl/src/index.ts` (:122, :172, :252, :438-443, :480-485, :665-679, :681-688, :884-885, :905-907); `packages/session/session-persistence-jsonl/src/format.ts` (:240-246, :258-259, :272-343, :388-394); `packages/session/session-persistence-sqlite/src/index.ts` (:225-239, :284-298); `packages/session/session-persistence-sqlite/src/schema.ts` (:20, :96-108, :108-109, :232-269).
