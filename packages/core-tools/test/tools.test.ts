@@ -124,4 +124,13 @@ describe("catalog", () => {
     expect(() => reg.verifyToolCatalog([{ name: "a", description: "", inputSchema: {}, execute: async () => ({}) }], catalog)).not.toThrow()
     expect(() => reg.verifyToolCatalog([{ name: "a" }, { name: "b" }] as Tool[], catalog)).toThrow(/missing/i)
   })
+
+  it("verify-tool-catalog gate fails loud (audit F03-7)", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "a", description: "", inputSchema: {}, execute: async () => ({}) })
+    const catalog = reg.genToolCatalog()
+    // completeness gate: registered tool must appear; missing → throw
+    expect(() => reg.verifyToolCatalog([{ name: "a" }, { name: "ghost" }] as Tool[], catalog)).toThrow(/missing.*ghost/i)
+  })
 })
