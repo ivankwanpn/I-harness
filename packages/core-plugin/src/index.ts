@@ -6,7 +6,7 @@ export type GuardFn = (exec: unknown) => string | undefined
 export interface Plugin {
   name: string
   mount(ctx: PluginContext): void
-  unmount?(ctx: PluginContext): void
+  unmount?(ctx: PluginContext): void | Promise<void>
 }
 
 export interface PluginContext {
@@ -24,10 +24,12 @@ export interface PluginContext {
   guard(event: string, fn: GuardFn): void
   checkGuards(event: string, exec: unknown): string | undefined
   mount(plugin: Plugin): void
-  unmount(name: string): void
+  unmount(name: string): Promise<void>
 }
 
 type ServiceStore = Map<string, unknown>
+
+const UNMOUNT_TIMEOUT_MS = 5_000
 
 interface OwnedListener {
   event: string
@@ -177,17 +179,25 @@ function createScope(
         mountingPlugin = prev
       }
     },
-    unmount(name: string): void {
-      reclaim(name)
+    unmount(name: string): Promise<void> {
+      const pending: Promise<void>[] = []
+      reclaim(name, pending)
+      return Promise.all(pending).then(() => undefined)
     },
   }
 
-  function reclaim(name: string): void {
+  // Unmount reclamation. Registry deletion, disposer invocation, nested reclaim
+  // and listener/waterfall cleanup all run synchronously so a caller that fires
+  // `ctx.unmount` and immediately proceeds sees the plugin reclaimed. Only
+  // promise-returning disposers are awaited afterwards (with a timeout), via the
+  // `pending` list collected during the synchronous pass.
+  function reclaim(name: string, pending: Promise<void>[]): void {
     const plugin = plugins.get(name)
     if (!plugin) return
     plugins.delete(name) // remove before recursing so same-name/cycle chains terminate
-    plugin.unmount?.(ctx)
-    for (const child of nestedPlugins.get(name) ?? []) reclaim(child)
+    const disposer = plugin.unmount?.(ctx)
+    if (disposer) pending.push(runDisposer(name, disposer))
+    for (const child of nestedPlugins.get(name) ?? []) reclaim(child, pending)
     for (const { event, handler } of pluginListeners.get(name) ?? []) {
       const list = listeners.get(event)
       if (list) {
@@ -205,6 +215,27 @@ function createScope(
     pluginListeners.delete(name)
     pluginWaterfalls.delete(name)
     nestedPlugins.delete(name)
+  }
+
+  // Audit F02-4: an unmount disposer may return a Promise. Race it against a 5s
+  // timeout so a teardown can never hang forever; on timeout log an error and
+  // complete anyway (the plugin is already removed from the registry). The
+  // timeout timer is unref'd so a pending disposer never keeps the process alive
+  // on its own.
+  function runDisposer(name: string, disposer: void | Promise<void>): Promise<void> {
+    let timedOut = false
+    const timeout = new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        timedOut = true
+        resolve()
+      }, UNMOUNT_TIMEOUT_MS)
+      timer.unref?.()
+    })
+    return Promise.race([Promise.resolve(disposer), timeout]).then(() => {
+      if (timedOut) {
+        console.error(`[core-plugin] unmount disposer for '${name}' timed out after 5s`)
+      }
+    })
   }
 
   return ctx
