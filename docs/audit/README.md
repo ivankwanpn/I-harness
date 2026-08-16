@@ -1,6 +1,12 @@
 # DeepSeek Harness Risk Audit
 
-Read-only audit of `D:\agent-complete\deepseek-harness-master` (dsh `0.1.0-rc.5`).
+Read-only audit of the OFFICIAL upstream
+`D:\agent-complete\deepseek-harness\deepseek-harness-master` (dsh `0.1.0-rc.5`).
+Correction note: the initial audit pass ran against a local MODIFIED copy
+(`D:\agent-complete\deepseek-harness-master`); findings were re-verified against
+the OFFICIAL tree and findings F04-1/F03-2/F03-8 were rewritten as Minor
+observations because they described local-only modifications (see
+`reaudit-official.md`).
 Purpose: produce the disposition table (reuse / rewrite / improved-writing) that
 drives the I-harness kernel design (see
 `docs/superpowers/specs/2026-08-16-i-harness-runtime-design.md` §2-§4).

@@ -8,8 +8,10 @@ stores (`packages/core/scope/src`), the tool registry's scoped layers and
 monotonic guard pipeline (`packages/core/tools/src/index.ts`), the
 `agent/pre-step`, `system-prompt/assemble`, `llm/stream`, and `tools/*`
 waterfall consumers, and the loop-hygiene plugins in `packages/guard/*`.
-Target: dsh `0.1.0-rc.5`. Read-only; all `path:line` citations verified against
-the dsh tree (see the Verification block at the end).
+Target: dsh `0.1.0-rc.5` (OFFICIAL upstream tree
+`D:\agent-complete\deepseek-harness\deepseek-harness-master`). Read-only; all
+`path:line` citations verified against the OFFICIAL tree (see the Verification
+block at the end).
 
 Findings below use the canonical `F02-n` template.
 
@@ -81,19 +83,24 @@ Findings below use the canonical `F02-n` template.
 ### F02-8: `packages/guard/*` loop-hygiene plugins are clean reference implementations for advice-style guard plugins
 
 - **Severity:** Minor
-- **Component:** `packages/guard/repeat-tool-reminder`, `packages/guard/timeout-policy`, `packages/guard/tool-bootstrap`
-- **Evidence:** `packages/guard/repeat-tool-reminder/src/index.ts:213-233` — counts in `tools/post-execute` (denied calls included), always delegates, folds the reminder into `additionalContexts` for BOTH decision variants, and resets the per-agent chain on a user-sourced pre-step message (229-233); `packages/guard/timeout-policy/src/index.ts:55-78` — a `tools/execute` wrapper swaps `exec.signal` under its own deadline code, restores the upstream signal in `finally`, and replaces the result only when its own `TOOL_TIMEOUT` fired; `packages/guard/tool-bootstrap/src/index.ts:155-158` and `packages/guard/tool-bootstrap/src/index.ts:189-191` — outermost `prepend: true` transforms that `await next()` first and degrade gracefully (full catalog / keep-context) when their OWN filter logic fails.
+- **Component:** `packages/guard/repeat-tool-reminder`, `packages/guard/timeout-policy`
+- **Evidence:** `packages/guard/repeat-tool-reminder/src/index.ts` — counts consecutive identical calls in `tools/post-execute` (`:213-224`), always delegates, folds the reminder into `additionalContexts` for BOTH decision variants (block and allow), and never vetoes (`observe()` at `:189-207`); the per-agent chain is reset on any user-sourced message via `agent/pre-step` (`:229-232`); reminder text from `GENTLE_REMINDER` (`:63-67`) / `detailedReminder` (`:70-78`); helpers `canonicalize` (`:103-105`), `wildcardToRegExp` (`:108-111`), `previewArguments` (`:118-121`), `validateThresholds` (`:128-141`). `packages/guard/timeout-policy/src/index.ts` — a `tools/execute` wrapper (`:56-80`) arms `deadline()` from the tool's declared `timeoutMs` (`:61`), swaps `exec.signal` under its own deadline (`:65-66`) and restores the upstream signal in `finally` (`:78`), replacing the result only when its own `TOOL_TIMEOUT` fired (`toolTimeoutResult` `:41-47`, `TOOL_TIMEOUT` `:25`, check at `:73-74`).
 - **Disposition:** reuse
-- **Reason:** no fault found — these are the reference patterns for composing with the tool pipeline: enrich in post-execute, wrap around execution with signal ownership, and prepend-first transforms that always delegate and contain only their own failure modes.
-- **Details:** Each guard plugin composes with the kernel exactly as the seams intend and stays discipline-clean: repeat-tool-reminder observes and enriches without vetoing (only a NEW user message resets the chain); timeout-policy takes the documented `tools/execute` signal-swap path and never leaves a derived signal behind; tool-bootstrap registers with `prepend: true` so its transforms stay outermost, fails loud on invalid config, and degrades to the full/kept surface on its own runtime filter error rather than bricking a session. None of them touch the monotonic guard table (F02-2), so they are purely additive to the security pipeline. These are safe templates for I-harness advisor-style plugins.
+- **Reason:** no fault found — these are the reference patterns for composing with the tool pipeline: enrich in post-execute, wrap around execution with signal ownership. (The original audit also listed a `tool-bootstrap` member; it does not exist in the OFFICIAL tree — see F03-8 and `docs/audit/reaudit-official.md`.)
+- **Details:** Each guard plugin composes with the kernel exactly as the seams intend and stays discipline-clean: repeat-tool-reminder observes and enriches without vetoing (only a NEW user message resets the chain); timeout-policy takes the documented `tools/execute` signal-swap path and never leaves a derived signal behind (restored in `finally`, so post-execute listeners never see this plugin's possibly-aborted timeout signal). Neither plugin touches the monotonic guard table (F02-2), so they are purely additive to the security pipeline. These are safe templates for I-harness advisor-style plugins.
 
 ---
 
 ## Verification
 
-All 44 evidence cites verified against `D:\agent-complete\deepseek-harness-master` on 2026-08-16.
+All evidence cites in this section verified against the OFFICIAL tree
+`D:\agent-complete\deepseek-harness\deepseek-harness-master` on 2026-08-16.
+Re-audit correction (see `docs/audit/reaudit-official.md`): F02-8's
+`tool-bootstrap` member does not exist upstream and was dropped; the two
+official guard-plugin evidence cites were re-anchored (`repeat-tool-reminder`,
+`timeout-policy`).
 
-Verified cites (17 distinct files, 44 `path:line` references):
-`docs/cordis-primer.md` (:30-34, :34); `vendor/cordis/src/events.ts` (:165-174, :165-176, :194-198, :234-243); `vendor/cordis/src/fiber.ts` (:292-295, :646-673, :675-702, :704-712); `vendor/cordis/src/reflect.ts` (:153-154, :191, :333); `vendor/cordis/src/service.ts` (:42-58); `packages/core/scope/src/index.ts` (:55-59, :72-84, :115-117, :137-155); `packages/core/scope/src/store.ts` (:43-59, :122-136, :192-201, :221-263); `packages/core/scope/src/invariant.ts` (:17-19); `packages/core/tools/src/index.ts` (:704-711, :727-728, :747-753, :811-815, :1110-1115, :1119-1128, :1160-1183, :1475-1498, :1486-1498, :1657-1680); `packages/core/tools/src/invariant.ts` (consulted, no `path:line` cite, for the F02-3 disposition statement); `packages/core/agent-loop/src/index.ts` (:507-509); `packages/core/agent-loop/src/agent.ts` (:234-241); `packages/core/agent/src/dispatch.ts` (:120-135); `packages/boot/app-boot/src/index.ts` (:692-722, :770-784); `packages/bundle/base/cordis.patch.yml` (:24-27, :424-439); `packages/guard/repeat-tool-reminder/src/index.ts` (:213-233); `packages/guard/timeout-policy/src/index.ts` (:55-78); `packages/guard/tool-bootstrap/src/index.ts` (:155-158, :189-191).
+Verified cites (16 distinct files, 53 `path:line` references):
+`docs/cordis-primer.md` (:30-34, :34); `vendor/cordis/src/events.ts` (:165-174, :165-176, :194-198, :234-243); `vendor/cordis/src/fiber.ts` (:292-295, :646-673, :675-702, :704-712); `vendor/cordis/src/reflect.ts` (:153-154, :191, :333); `vendor/cordis/src/service.ts` (:42-58); `packages/core/scope/src/index.ts` (:55-59, :72-84, :115-117, :137-155); `packages/core/scope/src/store.ts` (:43-59, :122-136, :192-201, :221-263); `packages/core/scope/src/invariant.ts` (:17-19); `packages/core/tools/src/index.ts` (:704-711, :727-728, :747-753, :811-815, :1110-1115, :1119-1128, :1160-1183, :1475-1498, :1486-1498, :1657-1680); `packages/core/tools/src/invariant.ts` (consulted, no `path:line` cite, for the F02-3 disposition statement); `packages/core/agent-loop/src/index.ts` (:507-509); `packages/core/agent-loop/src/agent.ts` (:234-241); `packages/core/agent/src/dispatch.ts` (:120-135); `packages/boot/app-boot/src/index.ts` (:692-722, :770-784); `packages/bundle/base/cordis.patch.yml` (:24-27, :424-439); `packages/guard/repeat-tool-reminder/src/index.ts` (:63-67, :70-78, :103-105, :108-111, :118-121, :128-141, :189-207, :213-224, :229-232); `packages/guard/timeout-policy/src/index.ts` (:25, :41-47, :56-80, :61-78).
 
-Verification method: every cited `path:line` was located with `grep`/`sed`/`read` in the dsh tree; the line content at the cited range matches the claim in the corresponding Evidence field. During verification 4 citations were corrected (the `tools/pre-execute` gate, the `Machine`-owned `scope.dispose`, the `internal/get` proxy path, and the `notifyResult` loop were re-pinned to their exact lines in `tools/src/index.ts` and `agent-loop/src/index.ts`); all 44 passed after the fix.
+Verification method: every cited `path:line` was located with `grep`/`sed`/`read` in the OFFICIAL tree; the line content at the cited range matches the claim in the corresponding Evidence field. During the original verification 4 citations were corrected (the `tools/pre-execute` gate, the `Machine`-owned `scope.dispose`, the `internal/get` proxy path, and the `notifyResult` loop were re-pinned to their exact lines in `tools/src/index.ts` and `agent-loop/src/index.ts`); after the re-audit re-anchoring of the two guard plugins (F02-8) all 53 passed.
