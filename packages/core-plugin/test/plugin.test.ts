@@ -168,6 +168,32 @@ describe("waterfall", () => {
     }
     expect(err).toBeDefined()
   })
+
+  it("seeds the waterfall chain from the last non-undefined plain-listener return", async () => {
+    const ctx = createContext()
+    let chainSaw: unknown
+    ctx.on("wf-seed", () => ({ kind: "ask" }))
+    ctx.waterfall("wf-seed", async (payload: unknown, next) => {
+      chainSaw = payload
+      await next(payload)
+    })
+    await ctx.emit("wf-seed", { raw: true })
+    expect(chainSaw).toEqual({ kind: "ask" })
+  })
+
+  it("keeps the emitted payload as the chain seed when listeners return nothing", async () => {
+    const ctx = createContext()
+    let chainSaw: unknown
+    ctx.on("wf-seed2", () => {
+      void 0 // listener with no decision to contribute
+    })
+    ctx.waterfall("wf-seed2", async (payload: unknown, next) => {
+      chainSaw = payload
+      await next(payload)
+    })
+    await ctx.emit("wf-seed2", { raw: true })
+    expect(chainSaw).toEqual({ raw: true })
+  })
 })
 
 describe("monotonic guard", () => {
