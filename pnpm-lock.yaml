@@ -22,6 +22,8 @@ importers:
 
   packages/core-plugin: {}
 
+  packages/core-session: {}
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
