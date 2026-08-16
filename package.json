@@ -1,20 +1,20 @@
 {
-  "name": "i-harness",
-  "version": "0.1.0",
+  "name": "@i-harness/root",
   "private": true,
-  "description": "Blank AI agent starting template (TypeScript, ESM)",
+  "version": "0.1.0",
+  "description": "I-harness agent runtime monorepo",
   "type": "module",
   "license": "MIT",
   "engines": {
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test",
-    "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm run test"
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0",
+    "@types/node": "^24.0.0"
   }
 }
