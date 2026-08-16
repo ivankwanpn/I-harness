@@ -66,6 +66,15 @@ importers:
         specifier: workspace:*
         version: link:../core-session
 
+  packages/preset:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
