@@ -57,13 +57,17 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
 
   ctx.waterfall("tools/pre-execute", async (payload, next) => {
     const chainValue = await next(payload)
-    // The chain settles on the emitted payload unless a producer transformed it
-    // into a decision. Only objects carrying a `kind` are decision-shaped; the
-    // unmodified ToolCall payload and non-object values mean "no decision".
-    if (chainValue === undefined || typeof chainValue !== "object" || chainValue === null) return
+    // Closed-vocabulary rules (audit F03-1):
+    //   - undefined                → no decision (allow)
+    //   - object WITHOUT a `kind`  → raw ToolCall passthrough → no decision
+    //   - object WITH a `kind`     → must be in DECISION_KINDS else HARD error
+    //   - any non-object value     → malformed decision, HARD error (never allow)
+    if (chainValue === undefined) return
+    if (typeof chainValue !== "object" || chainValue === null) {
+      throw new Error(`malformed pre-execute decision: ${JSON.stringify(chainValue)}`)
+    }
     const candidate = chainValue as ToolDecision
     if (!("kind" in candidate)) return
-    // Closed vocabulary (audit F03-1): any non-vocabulary kind is a HARD error.
     if (!DECISION_KINDS.has(candidate.kind)) {
       throw new Error(`malformed pre-execute decision: ${JSON.stringify(chainValue)}`)
     }

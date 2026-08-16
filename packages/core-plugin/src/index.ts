@@ -110,21 +110,24 @@ function createScope(
     return run(0, payload)
   }
 
-  // Dispatch runs plain listeners FIRST, then the waterfall chain. The last
-  // non-undefined listener return value seeds the chain payload (falling back
-  // to the emitted payload), so a `ctx.on` pre-execute producer can feed a
-  // decision object into the waterfall that a registry's pre-execute handler
-  // reads. Waterfall handlers still run in explicit `next()` order and mutate
-  // the seeded payload as before.
+  // Dispatch runs plain listeners FIRST, then the waterfall chain. Only events
+  // that have a registered waterfall let listener returns seed the chain
+  // payload: the last non-undefined listener return value becomes the chain
+  // seed (falling back to the emitted payload), so a `ctx.on` pre-execute
+  // producer can feed a decision object into the waterfall that a registry's
+  // pre-execute handler reads. For plain events with no waterfall, listener
+  // returns are ignored and the payload passes through unchanged, so an
+  // incidental return value (e.g. `calls.push(x)` → a number) can never
+  // rewrite what other listeners or the parent scope receive.
   async function emitFn(event: string, payload: unknown): Promise<void> {
     const plainListeners = [...(listeners.get(event) ?? [])]
+    const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
     let chainPayload = payload
     for (const handler of plainListeners) {
       const res = handler(payload)
       const resolved = isPromiseLike(res) ? await res : res
-      if (resolved !== undefined) chainPayload = resolved
+      if (waterfallHandlers.length > 0 && resolved !== undefined) chainPayload = resolved
     }
-    const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
     let resolvedPayload = chainPayload
     if (waterfallHandlers.length > 0) {
       resolvedPayload = (await runWaterfall(event, waterfallHandlers, chainPayload)) ?? chainPayload

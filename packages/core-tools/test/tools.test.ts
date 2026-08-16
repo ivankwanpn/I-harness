@@ -88,6 +88,29 @@ describe("execution pipeline", () => {
     await expect(reg.execute({ name: "t", args: {} })).rejects.toThrow(/approval|denied/i)
     expect(asked).toBe(true)
   })
+
+  it("treats non-object pre-execute returns as malformed decisions (audit F03-1)", async () => {
+    for (const bad of ["deny", false, null] as const) {
+      const ctx = makeCtx()
+      const reg = createToolRegistry(ctx)
+      let bodyRan = false
+      reg.register({ name: "t", description: "", inputSchema: {}, execute: async () => { bodyRan = true; return {} } })
+      // a producer returns a non-object ("deny", false, null) → malformed
+      ctx.on("tools/pre-execute", () => bad)
+      await expect(reg.execute({ name: "t", args: {} })).rejects.toThrow(/decision/i)
+      expect(bodyRan).toBe(false)
+    }
+  })
+
+  it("allows when a pre-execute return is an object without a kind (tool executes)", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "t", description: "", inputSchema: {}, execute: async (args: { m?: string }) => ({ out: args.m ?? "" }) })
+    // producer returns the raw ToolCall payload — object without `kind` → no decision
+    ctx.on("tools/pre-execute", (payload: unknown) => payload)
+    const result = await reg.execute({ name: "t", args: { m: "hi" } })
+    expect(result.output).toEqual({ out: "hi" })
+  })
 })
 
 describe("catalog", () => {
