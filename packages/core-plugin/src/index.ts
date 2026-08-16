@@ -1,6 +1,6 @@
 export type NextFn = (payload: unknown) => unknown | Promise<unknown>
-export type Listener = (payload: unknown, next: NextFn) => unknown | Promise<unknown>
-export type WaterfallHandler = Listener
+export type Listener = (payload: unknown) => unknown
+export type WaterfallHandler = (payload: unknown, next: NextFn) => unknown | Promise<unknown>
 export type GuardFn = (exec: unknown) => string | undefined
 
 export interface Plugin {
@@ -18,7 +18,7 @@ export interface PluginContext {
     mount(): PluginContext
     unmount(): void
   }
-  on(event: string, handler: WaterfallHandler): void
+  on(event: string, handler: Listener): void
   emit(event: string, payload: unknown): Promise<void>
   waterfall(event: string, handler: WaterfallHandler): void
   guard(event: string, fn: GuardFn): void
@@ -31,6 +31,11 @@ type ServiceStore = Map<string, unknown>
 
 interface OwnedListener {
   event: string
+  handler: Listener
+}
+
+interface OwnedWaterfall {
+  event: string
   handler: WaterfallHandler
 }
 
@@ -39,15 +44,17 @@ function createScope(
   parentEmit: (event: string, payload: unknown) => Promise<void>,
 ): PluginContext {
   const store: ServiceStore = new Map()
-  const listeners = new Map<string, WaterfallHandler[]>()
+  const listeners = new Map<string, Listener[]>()
+  const waterfalls = new Map<string, WaterfallHandler[]>()
   const guards = new Map<string, GuardFn[]>()
   const scopes = new Set<PluginContext>()
   const plugins = new Map<string, Plugin>()
   const pluginListeners = new Map<string, OwnedListener[]>()
+  const pluginWaterfalls = new Map<string, OwnedWaterfall[]>()
   const nestedPlugins = new Map<string, string[]>()
   let mountingPlugin: string | null = null
 
-  function registerHandler(event: string, handler: WaterfallHandler): void {
+  function registerListener(event: string, handler: Listener): void {
     const list = listeners.get(event) ?? []
     list.push(handler)
     listeners.set(event, list)
@@ -58,43 +65,59 @@ function createScope(
     }
   }
 
-  // Waterfall dispatch: handlers run in registration order, each receiving a
-  // `next` release function. A handler that declares a `next` parameter but
-  // forgets to call it is treated as an ERROR (audit F02-1) — never a silent
-  // veto. Handlers without a `next` parameter are plain listeners run in the
-  // chain as pass-throughs. The handler list is re-snapshotted per dispatch so
-  // registrations made mid-dispatch do not affect the current run.
-  async function runNext(
+  function registerWaterfall(event: string, handler: WaterfallHandler): void {
+    const list = waterfalls.get(event) ?? []
+    list.push(handler)
+    waterfalls.set(event, list)
+    if (mountingPlugin !== null) {
+      const owned = pluginWaterfalls.get(mountingPlugin) ?? []
+      owned.push({ event, handler })
+      pluginWaterfalls.set(mountingPlugin, owned)
+    }
+  }
+
+  // Waterfall dispatch: `ctx.waterfall` registration is EXPLICIT — every
+  // waterfall handler always receives a real `next` release function and MUST
+  // call it, including the last handler, whose `next()` completes the chain.
+  // Forgetting `next` throws (audit F02-1, no silent veto) and calling `next()`
+  // twice throws as well. No arity heuristics are involved. The handler list is
+  // re-snapshotted per dispatch so mid-dispatch registrations don't affect the
+  // current run.
+  async function runWaterfall(
     event: string,
     handlers: WaterfallHandler[],
-    i: number,
-    p: unknown,
+    payload: unknown,
   ): Promise<unknown> {
-    if (i >= handlers.length) return p
-    const handler = handlers[i]!
-    if (handler.length < 2) {
-      // Plain listener: no `next` parameter declared — pass through to the
-      // following handler after it runs.
-      const res = handler(p, () => undefined)
-      if (isPromiseLike(res)) await res
-      return runNext(event, handlers, i + 1, p)
+    const run = async (i: number, p: unknown): Promise<unknown> => {
+      if (i >= handlers.length) return p
+      let nextCalled = false
+      const next = (pp: unknown): unknown | Promise<unknown> => {
+        if (nextCalled) {
+          throw new Error(`waterfall handler ${i} for '${event}' called next() twice`)
+        }
+        nextCalled = true
+        return run(i + 1, pp)
+      }
+      const res = handlers[i]!(p, next)
+      const resolved = isPromiseLike(res) ? await res : res
+      if (!nextCalled) {
+        throw new Error(`waterfall handler ${i} for '${event}' forgot next()`)
+      }
+      return resolved ?? p
     }
-    let nextCalled = false
-    const localNext = (pp: unknown): unknown | Promise<unknown> => {
-      nextCalled = true
-      return runNext(event, handlers, i + 1, pp)
-    }
-    const res = handler(p, localNext)
-    const resolved = isPromiseLike(res) ? await res : res
-    if (!nextCalled) {
-      throw new Error(`waterfall handler ${i} for '${event}' forgot next()`)
-    }
-    return resolved ?? p
+    return run(0, payload)
   }
 
   async function emitFn(event: string, payload: unknown): Promise<void> {
-    const handlers = [...(listeners.get(event) ?? [])]
-    if (handlers.length > 0) await runNext(event, handlers, 0, payload)
+    const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
+    if (waterfallHandlers.length > 0) {
+      await runWaterfall(event, waterfallHandlers, payload)
+    }
+    const plainListeners = [...(listeners.get(event) ?? [])]
+    for (const handler of plainListeners) {
+      const res = handler(payload)
+      if (isPromiseLike(res)) await res
+    }
     await parentEmit(event, payload)
   }
 
@@ -120,12 +143,12 @@ function createScope(
         scopes.delete(ctx)
       },
     },
-    on(event: string, handler: WaterfallHandler): void {
-      registerHandler(event, handler)
+    on(event: string, handler: Listener): void {
+      registerListener(event, handler)
     },
     emit: emitFn,
     waterfall(event: string, handler: WaterfallHandler): void {
-      registerHandler(event, handler)
+      registerWaterfall(event, handler)
     },
     guard(event: string, fn: GuardFn): void {
       const list = guards.get(event) ?? []
@@ -172,7 +195,15 @@ function createScope(
         if (index !== -1) list.splice(index, 1)
       }
     }
+    for (const { event, handler } of pluginWaterfalls.get(name) ?? []) {
+      const list = waterfalls.get(event)
+      if (list) {
+        const index = list.indexOf(handler)
+        if (index !== -1) list.splice(index, 1)
+      }
+    }
     pluginListeners.delete(name)
+    pluginWaterfalls.delete(name)
     nestedPlugins.delete(name)
   }
 
