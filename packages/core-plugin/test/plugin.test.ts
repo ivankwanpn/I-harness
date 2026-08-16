@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { setTimeout as sleep } from "node:timers/promises"
 import { corePluginVersion, createContext } from "../src/index.ts"
 import type { Plugin } from "../src/index.ts"
 
@@ -198,4 +199,31 @@ describe("monotonic guard", () => {
     ctx.checkGuards("g2", {})
     expect(guardRan).toBe(true)
   })
+})
+
+describe("lifecycle", () => {
+  it("times out a never-settling unmount disposer and removes the plugin", async () => {
+    const ctx = createContext()
+    let removed = false
+    let disposerCalls = 0
+    const plugin: Plugin = {
+      name: "hang",
+      mount() {},
+      async unmount() {
+        disposerCalls++
+        await sleep(10_000) // never settles within the 5s timeout
+        removed = true
+      },
+    }
+    ctx.mount(plugin)
+    // Should resolve (via timeout), not hang
+    await ctx.unmount("hang")
+    expect(removed).toBe(false) // disposer timed out, not settled
+
+    // The plugin is actually removed from the registry after the timed-out
+    // unmount: unmounting again is a no-op and does not re-invoke the
+    // never-settling disposer (which would wait another 5s).
+    await ctx.unmount("hang")
+    expect(disposerCalls).toBe(1)
+  }, 15_000)
 })
