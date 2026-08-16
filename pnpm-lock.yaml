@@ -24,6 +24,12 @@ importers:
 
   packages/core-session: {}
 
+  packages/core-tools:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':

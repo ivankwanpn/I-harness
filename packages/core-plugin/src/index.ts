@@ -110,17 +110,26 @@ function createScope(
     return run(0, payload)
   }
 
+  // Dispatch runs plain listeners FIRST, then the waterfall chain. The last
+  // non-undefined listener return value seeds the chain payload (falling back
+  // to the emitted payload), so a `ctx.on` pre-execute producer can feed a
+  // decision object into the waterfall that a registry's pre-execute handler
+  // reads. Waterfall handlers still run in explicit `next()` order and mutate
+  // the seeded payload as before.
   async function emitFn(event: string, payload: unknown): Promise<void> {
-    const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
-    if (waterfallHandlers.length > 0) {
-      await runWaterfall(event, waterfallHandlers, payload)
-    }
     const plainListeners = [...(listeners.get(event) ?? [])]
+    let chainPayload = payload
     for (const handler of plainListeners) {
       const res = handler(payload)
-      if (isPromiseLike(res)) await res
+      const resolved = isPromiseLike(res) ? await res : res
+      if (resolved !== undefined) chainPayload = resolved
     }
-    await parentEmit(event, payload)
+    const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
+    let resolvedPayload = chainPayload
+    if (waterfallHandlers.length > 0) {
+      resolvedPayload = (await runWaterfall(event, waterfallHandlers, chainPayload)) ?? chainPayload
+    }
+    await parentEmit(event, resolvedPayload)
   }
 
   const ctx: PluginContext = {
