@@ -1,10 +1,16 @@
 # DeepSeek Harness Risk Audit — Disposition Table
 
 Date: 2026-08-16
-Source: `D:\agent-complete\deepseek-harness-master` (dsh `0.1.0-rc.5`)
+Source: `D:\agent-complete\deepseek-harness\deepseek-harness-master` (dsh `0.1.0-rc.5`, OFFICIAL upstream tree)
 Purpose: input for I-harness kernel design (spec §2-§4). Each row states whether
 the dsh component should be reused, rewritten, or re-implemented with an
 improved design.
+
+> **Audit target corrected:** findings verified against the OFFICIAL upstream
+> `D:\agent-complete\deepseek-harness\deepseek-harness-master`; findings
+> F04-1/F03-2/F03-8 were rewritten as Minor observations because they originally
+> described modifications present only in our local copy (see
+> `docs/audit/reaudit-official.md`).
 
 _Disposition scope note: each disposition labels the finding's mechanism (the
 component and behavior cited in the row's Evidence), not the whole file or
@@ -13,9 +19,9 @@ the file._
 
 ## Summary
 
-- Findings: 39 total (3 Critical, 19 Important, 17 Minor) across sections
+- Findings: 39 total (2 Critical, 18 Important, 19 Minor) across sections
   01-05. Counts from the section files.
-- Disposition mix: 14 reuse, 1 rewrite, 24 improved-writing.
+- Disposition mix: 13 reuse, 0 rewrite, 26 improved-writing.
 - Top risks that MUST drive the kernel design:
   1. **F03-1 (Critical)** — Guard bypass: a malformed or non-vocabulary
      `tools/pre-execute` decision (kind not exactly `allow`, `reason` undefined)
@@ -26,10 +32,12 @@ the file._
      migration chain: any format bump strands every stored session. The kernel
      ships a monotonic version, a stepwise upgrade chain, and a
      migrate-on-continue path from day one.
-  3. **F04-1 (Critical)** — Windows profiles ship no `bash` tool and no
-     persistent shell, and the bootstrap anchor silently fails open to the
-     full catalog. The kernel resolves `bootstrapTools` per platform and treats
-     a missing bootstrap tool as a loud error, never a silent fallback.
+  3. **F04-1 (Minor)** — Platform note: OFFICIAL dsh has no bootstrap anchor;
+     the standard preset swaps shell dialect per `process.platform` (full
+     catalog always-on), and the `minimal` preset mounts `persistent-shell`
+     unconditionally, so a Windows minimal preset fails loud at first PTY
+     spawn. The kernel must define a per-platform terminal plan and never
+     repeat the unconditional-PTY-mount on Windows.
   4. **F02-1 (Important)** — Waterfall dispatch has no per-listener
      containment: a forgotten `next()` silently vetoes and a throwing listener
      aborts the whole chain. The kernel needs a distinct veto signal,
@@ -44,10 +52,11 @@ the file._
      is cosmetic. The kernel must treat the interception surface as a
      documented, sealable privileged API. (T2 review: arguably Critical —
      surfaced at Important or higher as required.)
-  7. **F03-2 (Important, rewrite)** — The `bash` destructive-command consent
-     gate is a raw-string regex bypassable by shell quoting (`r\m`, `'r''m'`).
-     Do not copy it; classify destructive intent on the parsed argv at the
-     effect boundary.
+  7. **F03-2 (Minor)** — Design observation: official dsh performs no
+     pre-execution approval on destructive commands — the only human gate is
+     post-denial sandbox escalation, and `danger-full-access` sets approval
+     `never`. The kernel's Windows-first approval+whitelist model should
+     classify destructive ops at the parsed-effect boundary.
   8. **F03-4 (Important)** — Timeouts are cooperative and opt-in: a missing
      watchdog plugin or an undeclared `timeoutMs` silently disables every
      deadline. The kernel arms deadlines at the registry for every tool that
@@ -79,20 +88,20 @@ the file._
 | T12 | 02 | `app-boot` + `vendor/cordis/src/reflect.ts` + `events.ts` | F02-5 — "Everything is a plugin" holds for the product spine — but three real privileged surfaces exist, incl. blanket `internal/*` interception | Important | improved-writing | plugin-everything spine is real but the interception surface gives any plugin undetectable rewrite of all service traffic | `vendor/cordis/src/reflect.ts:153-154` |
 | T13 | 02 | `vendor/cordis/src/events.ts` (+ agent dispatch, tools) | F02-6 — `emit` (fire-and-forget) dispatches through `Array.map`: a throwing listener starves later observers and propagates into the emitter | Minor | improved-writing | fire-and-forget concept is right but `emit` has no containment while dsh's busiest callers re-implement it | `vendor/cordis/src/events.ts:194-198` |
 | T14 | 02 | `packages/core/scope/src/index.ts` | F02-7 — `bindScopeParent().rebind()` re-parents inheritance under live layers with an unenforceable precondition | Minor | improved-writing | bind-once primitive is good but rebind silently re-parents live registrations with no runtime idleness check | `packages/core/scope/src/index.ts:72-84` |
-| T15 | 02 | `packages/guard/*` (repeat-tool-reminder, timeout-policy, tool-bootstrap) | F02-8 — `packages/guard/*` loop-hygiene plugins are clean reference implementations for advice-style guard plugins | Minor | reuse | no fault found; reference patterns for composing with the tool pipeline | `packages/guard/timeout-policy/src/index.ts:55-78` |
+| T15 | 02 | `packages/guard/repeat-tool-reminder`, `packages/guard/timeout-policy` | F02-8 — `packages/guard/*` loop-hygiene plugins are clean reference implementations for advice-style guard plugins | Minor | reuse | no fault found; reference patterns for composing with the tool pipeline | `packages/guard/timeout-policy/src/index.ts:56-80` |
 | T16 | 03 | `packages/core/tools/src/index.ts` | F03-1 — Guard enforcement is conditionally skipped: a non-`allow`, reason-less pre-execute decision dispatches the call and bypasses the monotonic guards | Critical | improved-writing | deny-only monotonic guard is the right invariant but the implementation trusts an unvalidated runtime object; kernel must validate the vocabulary and run guards before ANY dispatch | `packages/core/tools/src/index.ts:1486-1488` |
-| T17 | 03 | `packages/shell/tool-bash/src/index.ts` | F03-2 — `bash` destructive-command consent gate is a raw-string regex: shell quoting executes `rm` without the approval ask | Important | rewrite | a string-substring classifier over an unparsed shell command is trivially bypassable — do not copy; classify destructive intent on parsed argv at the effect boundary | `packages/shell/tool-bash/src/index.ts:39` |
+| T17 | 03 | `packages/shell/tool-bash/src/index.ts` (+ `bash-sandbox`, approval policy) | F03-2 — OFFICIAL dsh performs no pre-execution approval on destructive commands: bash denial/approval is file-access-based sandbox escalation only (design observation) | Minor | improved-writing | official dsh gates destructive commands only via post-denial sandbox escalation (`danger-full-access` = approval `never`); classify destructive ops at the parsed-effect boundary | `packages/shell/tool-bash/src/index.ts:213-228` |
 | T18 | 03 | `packages/core/tools/src/code-mode.ts` (+ index) | F03-3 — `run_code` reserved transport re-enters the complete guarded pipeline per sub-dispatch: no policy shortcut | Minor | reuse | no fault found; transport changes only visibility, every sub-dispatch re-enters the full guarded pipeline | `packages/core/tools/src/code-mode.ts:545-561` |
 | T19 | 03 | `packages/guard/timeout-policy/src/index.ts` (+ tools, util/timeout) | F03-4 — Timeouts are cooperative and opt-in: a missing watchdog plugin or an undeclared `timeoutMs` silently disables every deadline | Important | improved-writing | signal-based cooperative timeout is sound but the effective deadline depends on a per-tool declaration AND an optional plugin; arm at the registry and gate on body quiescence | `packages/guard/timeout-policy/src/index.ts:58-59` |
 | T20 | 03 | `packages/core/scope/src/store.ts` (+ tools, subagent) | F03-5 — `bash` duplicate-registration pitfall: a scoped registration silently shadows the global `bash` and escapes every deny/allow restriction | Important | improved-writing | fail-loud duplicate-in-layer is the right floor but cross-layer shadowing lets a per-agent `bash` bypass all masks; bind sandbox/approval to the capability provider, not the tool name | `packages/core/tools/src/index.ts:1176-1180` |
 | T21 | 03 | `packages/core/tools/src/index.ts` (+ escalation, fs-sandbox, user-approval) | F03-6 — Restriction masks, approval, and sandbox are genuinely separate seams with no cross-bypass — but only approval and effect-time fences are security boundaries | Minor | reuse | seam separation is real and worth copying; document that `restrict()` is presentation, never a security boundary | `packages/core/tools/src/index.ts:1475-1488` |
-| T22 | 03 | `scripts/gen-tool-catalog.ts` (+ `docs/tool-catalog.md`) | F03-7 — Catalog completeness gate checks doc freshness against default-config package boots: it cannot see agent-scoped, config-branched, or non-`tool-*` tools | Minor | improved-writing | doc-freshness gate is a good discipline but stays green while the runtime shows tools the catalog never recorded | `scripts/gen-tool-catalog.ts:607-614` |
-| T23 | 03 | `packages/guard/tool-bootstrap/src/index.ts` | F03-8 — Anchored bootstrap is a prompt/catalog narrow, not an execution boundary: degrade-to-full-catalog is safe only because nothing gates the non-bootstrap tools | Minor | reuse | nothing claims to be an enforcement boundary; presentational anchor with an honest fail-safe degrade — copy it | `packages/guard/tool-bootstrap/src/index.ts:142-153` |
-| T24 | 04 | `agent-presets/*` + `cordis.patch.yml` + `tool-bootstrap` | F04-1 — On Windows the shipped profile has no `bash` tool and no persistent shell: the bootstrap anchor silently degrades to the full catalog | Critical | improved-writing | minimal-catalog anchor concept is sound but hardcodes a POSIX-only pair and fails open on Windows; resolve per platform and fail loud | `apps/cli/config/agent-presets/standard/agent.cordis.yml:89` |
+| T22 | 03 | `scripts/gen-tool-catalog.ts` (+ `docs/tool-catalog.md`) | F03-7 — Catalog completeness gate checks doc freshness against default-config package boots: it cannot see agent-scoped, config-branched, or non-`tool-*` tools | Minor | improved-writing | doc-freshness gate is a good discipline but stays green while the runtime shows tools the catalog never recorded | `scripts/gen-tool-catalog.ts:581-590,599-612` |
+| T23 | 03 | `packages/guard/` family (no `tool-bootstrap` in OFFICIAL) | F03-8 — OFFICIAL dsh ships exactly two loop-hygiene guard plugins and no bootstrap concept: the anchored-bootstrap technique has no upstream counterpart (note) | Minor | improved-writing | anchored bootstrap is a proven I-harness concept but has no official dsh counterpart to copy — implement it fresh per spec §3.4 | `packages/guard/` (repeat-tool-reminder, timeout-policy only) |
+| T24 | 04 | `agent-presets/standard` + `agent-presets/minimal` + `process-inspector` | F04-1 — OFFICIAL dsh has no bootstrap anchor: Windows swaps the shell dialect via explicit `process.platform` conditionals, and the `minimal` preset's unconditional PTY shell fails loud on win32 (platform note) | Minor | improved-writing | no bootstrap/narrowing exists upstream (full catalog always-on); the one gap is the minimal preset's unconditional PTY mount — define a per-platform terminal plan | `apps/cli/config/agent-presets/standard/agent.cordis.yml:44-50` |
 | T25 | 04 | `packages/subprocess/subprocess-local/src/process-inspector.ts` (+ consumers) | F04-2 — Root cause of F04-1: the terminal process inspector throws on `win32`, so `spawnTerminal` cannot create any PTY | Important | improved-writing | Linux-specific inspector is by construction and correctly refuses on Windows, but the all-or-nothing throw forces composition-level disable; add a win32 inspector or a first-class "no terminal" signal | `packages/subprocess/subprocess-local/src/process-inspector.ts:366-374` |
 | T26 | 04 | `packages/sandbox/sandbox/src/index.ts` + `sandbox-local` + twin executors | F04-3 — The sandbox seam is genuinely per-platform pluggable: one interface, three real backends, zero Linux leakage into call sites | Important | reuse | no fault found; exactly the cross-platform ablation I-harness §4.3 asks for | `packages/sandbox/sandbox/src/index.ts:158-175` |
 | T27 | 04 | `packages/sandbox/sandbox-windows-acl` (+ `sandbox-local`) | F04-4 — The Windows sandbox is a real restricted-token mechanism — but write-only, partial-enforcement, console-constrained | Important | improved-writing | strong mechanism reference but its contract is materially weaker than the same `SandboxMode` under bwrap; scope policy claims per platform | `packages/sandbox/sandbox-windows-acl/src/index.ts:4` |
-| T28 | 04 | `bash-local`, `pwsh-local`, `shell` + tool consumers | F04-5 — The pwsh/bash shell split is two dialects over ONE capability seam: one-shot pwsh is a real capability loss on Windows | Important | improved-writing | one shell seam / one dialect per host is the right shape but the Windows dialect is one-shot; decide the persistent-pwsh question explicitly | `packages/shell/shell/src/index.ts:2-16` |
+| T28 | 04 | `bash-local`, `pwsh-local`, `shell` + tool consumers | F04-5 — The pwsh/bash shell split is two dialects over ONE capability seam: one-shot pwsh is a real capability loss on Windows | Important | improved-writing | one shell seam / one dialect per host is the right shape but the Windows dialect is one-shot; decide the persistent-pwsh question explicitly | `packages/shell/tool-pwsh/src/index.ts:117-133,199,222-242,353` |
 | T29 | 04 | `packages/subprocess/subprocess-local/src/spawn.ts` (+ index, cli plugin) | F04-6 — Subprocess/exec plumbing is Windows-correct (taskkill trees, PATHEXT resolution, case-insensitive env) — reuse-as-is | Minor | reuse | no faults found; every platform branch is the right Windows answer | `packages/subprocess/subprocess-local/src/spawn.ts:276-283` |
 | T30 | 04 | `fs-sandbox/containment.ts` + `fs-local` + credentials | F04-7 — Filesystem isolation and atomic writes are Windows-aware — except POSIX permission-privacy silently degrades to skipped checks | Important | improved-writing | DACL-preserving atomic write and identity containment are correct Windows engineering, but "POSIX permissions → silently skipped" is not a Windows privacy policy | `packages/fs/fs-sandbox/src/containment.ts:58-82` |
 | T31 | 04 | `.gitattributes` + subprocess decode + pwsh + str-replace-editor | F04-8 — Canonical line endings and output decoding are already LF/UTF-8: no CRLF hazard in the surface the tools see | Minor | reuse | no fault found; LF-canonical + UTF-8 decode + CRLF-aware PTY boundary — adopt unchanged | `.gitattributes:7` |
@@ -107,7 +116,7 @@ the file._
 
 ## Reuse candidates
 
-Components the kernel can copy as reference (`reuse` rows, 14 total):
+Components the kernel can copy as reference (`reuse` rows, 13 total):
 
 | # | Section | Component | Finding | Evidence |
 |---|---------|-----------|---------|----------|
@@ -115,16 +124,15 @@ Components the kernel can copy as reference (`reuse` rows, 14 total):
 | R2 | 01 | `session-persistence-jsonl/src/format.ts` (+ coordinator) | F01-7 — Unknown/foreign format versions refused before structural decode | `packages/session/session-persistence-jsonl/src/format.ts:240-246` |
 | R3 | 02 | `packages/core/tools/src/index.ts` | F02-2 — Monotonic deny-only `tools.guard()` pipeline | `packages/core/tools/src/index.ts:704-711` |
 | R4 | 02 | `packages/core/scope/src/store.ts` (+ tools, scope index) | F02-3 — Scoped layers: nearest-scope-wins shadowing + unmount reclamation | `packages/core/scope/src/store.ts:43-59` |
-| R5 | 02 | `packages/guard/*` | F02-8 — Loop-hygiene guard plugins (repeat-tool-reminder, timeout-policy, tool-bootstrap) | `packages/guard/timeout-policy/src/index.ts:55-78` |
+| R5 | 02 | `packages/guard/repeat-tool-reminder`, `packages/guard/timeout-policy` | F02-8 — Loop-hygiene guard plugins (repeat-tool-reminder, timeout-policy) | `packages/guard/timeout-policy/src/index.ts:56-80` |
 | R6 | 03 | `packages/core/tools/src/code-mode.ts` (+ index) | F03-3 — `run_code` reserved transport re-enters the guarded pipeline per sub-dispatch | `packages/core/tools/src/code-mode.ts:545-561` |
 | R7 | 03 | `packages/core/tools/src/index.ts` (+ escalation, fs-sandbox, user-approval) | F03-6 — Separate restriction / approval / sandbox seams | `packages/core/tools/src/index.ts:1475-1488` |
-| R8 | 03 | `packages/guard/tool-bootstrap/src/index.ts` | F03-8 — Presentational anchored bootstrap with honest degrade | `packages/guard/tool-bootstrap/src/index.ts:142-153` |
-| R9 | 04 | `packages/sandbox/sandbox/src/index.ts` + `sandbox-local` + twin executors | F04-3 — Per-platform pluggable sandbox seam (argv-in/argv-out) | `packages/sandbox/sandbox/src/index.ts:158-175` |
-| R10 | 04 | `packages/subprocess/subprocess-local/src/spawn.ts` (+ index, cli plugin) | F04-6 — Windows-correct subprocess plumbing (taskkill, PATHEXT, case-insensitive env) | `packages/subprocess/subprocess-local/src/spawn.ts:276-283` |
-| R11 | 04 | `.gitattributes` + subprocess decode + pwsh + str-replace-editor | F04-8 — LF/UTF-8 canonical surface with CRLF-aware PTY boundary | `.gitattributes:7` |
-| R12 | 05 | `apiproxy/src/api/events.ts` + `api/index.ts` + `client/connection` | F05-1 — Push-subscription wire contract (typed `ApiProxy` barrel, two downlinks, `/api/respond`) | `packages/host/apiproxy/src/api/events.ts:69-108` |
-| R13 | 05 | `packages/core/tools/src/presentation.ts` + `schema.ts` + host + `ui-tool` | F05-2 — Provider-neutral pure-function render intents | `packages/core/tools/src/schema.ts:528` |
-| R14 | 05 | `packages/interaction/commands` | F05-6 — UI-plane command channel (never enters model history) | `packages/interaction/commands/README.md:15` |
+| R8 | 04 | `packages/sandbox/sandbox/src/index.ts` + `sandbox-local` + twin executors | F04-3 — Per-platform pluggable sandbox seam (argv-in/argv-out) | `packages/sandbox/sandbox/src/index.ts:158-175` |
+| R9 | 04 | `packages/subprocess/subprocess-local/src/spawn.ts` (+ index, cli plugin) | F04-6 — Windows-correct subprocess plumbing (taskkill, PATHEXT, case-insensitive env) | `packages/subprocess/subprocess-local/src/spawn.ts:276-283` |
+| R10 | 04 | `.gitattributes` + subprocess decode + pwsh + str-replace-editor | F04-8 — LF/UTF-8 canonical surface with CRLF-aware PTY boundary | `.gitattributes:7` |
+| R11 | 05 | `apiproxy/src/api/events.ts` + `api/index.ts` + `client/connection` | F05-1 — Push-subscription wire contract (typed `ApiProxy` barrel, two downlinks, `/api/respond`) | `packages/host/apiproxy/src/api/events.ts:69-108` |
+| R12 | 05 | `packages/core/tools/src/presentation.ts` + `schema.ts` + host + `ui-tool` | F05-2 — Provider-neutral pure-function render intents | `packages/core/tools/src/schema.ts:528` |
+| R13 | 05 | `packages/interaction/commands` | F05-6 — UI-plane command channel (never enters model history) | `packages/interaction/commands/README.md:15` |
 
 ## Findings detail
 
