@@ -13,8 +13,13 @@ export interface ApprovalDecision {
 
 export type ApprovalAnswerer = (req: ApprovalRequest) => Promise<ApprovalDecision>
 
+// The seam contract between interaction and core-tools is a boolean-returning
+// answerer (audit F05-5, fail-closed): core-tools checks `if (!ok) throw`.
+// Normalize AT the service boundary so a host implementing the richer
+// `{ approved }` decision shape can never accidentally fail-open by returning
+// a truthy object (a user denial would be ignored and the tool would execute).
 export function registerApprovalAnswerer(ctx: PluginContext, fn: ApprovalAnswerer): void {
-  ctx.services.register("approval/answerer", fn)
+  ctx.services.register("approval/answerer", async (req: ApprovalRequest) => (await fn(req)).approved)
 }
 
 // ── questions seam (audit F05-5) ───────────────────────────────────────────

@@ -14,5 +14,8 @@
   },
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*"
+  },
+  "devDependencies": {
+    "@i-harness/interaction": "workspace:*"
   }
 }

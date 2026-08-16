@@ -38,6 +38,11 @@ describe("session log", () => {
     expect(() => fromJSONL(bad)).toThrow(/version/i)
   })
 
+  it("rejects empty or whitespace-only log input with a clear error", () => {
+    expect(() => fromJSONL("")).toThrow(/session log is empty/)
+    expect(() => fromJSONL("   \n\t  ")).toThrow(/session log is empty/)
+  })
+
   it("migrate-on-continue upgrades v1 (no-op in M1) and refuses higher", () => {
     const s = createSession()
     expect(assertVersion(s, 1)).toBe(1)

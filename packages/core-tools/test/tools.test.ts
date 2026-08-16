@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
+import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { createToolRegistry, type Tool } from "../src/index.ts"
 
 function makeCtx(): PluginContext {
@@ -87,6 +88,30 @@ describe("execution pipeline", () => {
     // no approval answerer registered → fail closed → deny
     await expect(reg.execute({ name: "t", args: {} })).rejects.toThrow(/approval|denied/i)
     expect(asked).toBe(true)
+  })
+
+  it("does NOT execute when a registered answerer returns { approved: false } (regression: contract mismatch)", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    let bodyRan = false
+    reg.register({ name: "t", description: "", inputSchema: {}, execute: async () => { bodyRan = true; return {} } })
+    ctx.on("tools/pre-execute", () => ({ kind: "ask", reason: "needs approval" }))
+    registerApprovalAnswerer(ctx, async () => ({ approved: false }))
+    // a user denial must be honored — the tool must NOT execute (audit F05-5 fail-closed)
+    await expect(reg.execute({ name: "t", args: {} })).rejects.toThrow(/denied/i)
+    expect(bodyRan).toBe(false)
+  })
+
+  it("executes when a registered answerer returns { approved: true }", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    let bodyRan = false
+    reg.register({ name: "t", description: "", inputSchema: {}, execute: async () => { bodyRan = true; return {} } })
+    ctx.on("tools/pre-execute", () => ({ kind: "ask", reason: "needs approval" }))
+    registerApprovalAnswerer(ctx, async () => ({ approved: true }))
+    const result = await reg.execute({ name: "t", args: {} })
+    expect(result.output).toEqual({})
+    expect(bodyRan).toBe(true)
   })
 
   it("treats non-object pre-execute returns as malformed decisions (audit F03-1)", async () => {

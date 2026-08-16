@@ -12,11 +12,12 @@ describe("approval seam", () => {
     expect(() => ctx.services.get("approval/answerer")).toThrow()
   })
 
-  it("registers an answerer and resolves it", async () => {
+  it("registers an answerer resolved as a boolean wrapper (audit F05-5)", async () => {
     const ctx = makeCtx()
     registerApprovalAnswerer(ctx, async () => ({ approved: true }))
-    const fn = ctx.services.get<{ name: string; reason: string }>("approval/answerer")
-    expect(fn).toBeDefined()
+    const fn = ctx.services.get<(req: { name: string; reason: string }) => Promise<boolean>>("approval/answerer")
+    expect(typeof fn).toBe("function")
+    expect(await fn({ name: "read", reason: "needs approval" })).toBe(true)
   })
 })
 

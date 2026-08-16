@@ -75,6 +75,10 @@ importers:
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
+    devDependencies:
+      '@i-harness/interaction':
+        specifier: workspace:*
+        version: link:../interaction
 
   packages/interaction:
     dependencies:
