@@ -230,3 +230,15 @@ i-harness run "把 src/data.txt 第一行改成 hello"
 ## Out of Scope for M1 (YAGNI)
 
 - No anchored bootstrap, no OS-level sandbox, no SQLite backend, no real LLM providers (llm-openai/anthropic are M2), no TUI/Web/Desktop, no tsdown packaging, no interaction-cli separate package.
+
+## Future Extension Paths (not built in M1, but the architecture reserves the seams)
+
+New capabilities are NEW plugin packages that consume existing seams — the 8 packages do not change.
+
+- **MCP** → new `packages/mcp` package: manages MCP server connections (lifecycle via `core-plugin` mount/unmount), registers MCP tools into the `core-tools` catalog (they execute through the same guard/approval/sandbox pipeline, logged as ordinary `tool/call`), and provides resource tools. Consumes: `core-plugin`, `core-tools`, `core-session`, `interaction`.
+- **Marketplace** → new `packages/marketplace` package: a horizontal install/management layer (package manager style, like npm/pnpm/VS Code extensions) for installable units:
+  - **plugins** (e.g. superpowers-style skills, opencode-style plugins) → mounted via `core-plugin`
+  - **MCP servers** (external processes, config-managed) → via `packages/mcp`
+  - **presets / agent definitions** → via `packages/preset`
+  Consumes: `core-plugin`, `mcp`, `preset`. Trust model + version compatibility management (cf. grok-build marketplace, opencode plugin system).
+- **Skills** → new `packages/skill` package (SKILL.md prompt packages) mounted per-session via `core-plugin`, consumed by marketplace.
