@@ -106,15 +106,16 @@ describe("waterfall", () => {
   it("runs handlers in order, each mutating payload, releasing via next", async () => {
     const ctx = createContext()
     const seen: string[] = []
-    ctx.on("wf", async (payload: unknown, next) => {
+    ctx.waterfall("wf", async (payload: unknown, next) => {
       seen.push(`a:${(payload as { v: number }).v}`)
       const nextPayload = (await next(payload)) as { v: number }
       ;(nextPayload as { v: number }).v += 1
       seen.push(`a2:${nextPayload.v}`)
     })
-    ctx.on("wf", async (payload: unknown) => {
+    ctx.waterfall("wf", async (payload: unknown, next) => {
       seen.push(`b:${(payload as { v: number }).v}`)
       ;(payload as { v: number }).v += 10
+      await next(payload) // even the last handler must release via next()
     })
     await ctx.emit("wf", { v: 1 })
     expect(seen).toEqual(["a:1", "b:1", "a2:12"])
@@ -123,14 +124,44 @@ describe("waterfall", () => {
   it("treats a handler that forgets next() as an error, not a silent veto", async () => {
     const ctx = createContext()
     let err: unknown
-    ctx.on("wf2", async (_p: unknown, _next) => {
+    ctx.waterfall("wf2", async (_p: unknown, _next) => {
       // forget to call next()
     })
-    ctx.on("wf2", async (p: unknown) => {
+    ctx.waterfall("wf2", async (p: unknown) => {
       void p
     })
     try {
       await ctx.emit("wf2", {})
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeDefined()
+  })
+
+  it("registers waterfall handlers explicitly: a default-value next param is still a waterfall handler", async () => {
+    const ctx = createContext()
+    let err: unknown
+    ctx.waterfall("wf3", async (_payload: unknown, _next = () => {}) => {
+      // `.length === 1` here (default-value next) must not silence the error:
+      // explicit waterfall registration is what grants next, not arity.
+    })
+    try {
+      await ctx.emit("wf3", {})
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeDefined()
+  })
+
+  it("throws when a waterfall handler calls next() twice", async () => {
+    const ctx = createContext()
+    let err: unknown
+    ctx.waterfall("wf4", async (payload: unknown, next) => {
+      await next(payload)
+      await next(payload) // double release — must throw, not re-run the chain
+    })
+    try {
+      await ctx.emit("wf4", {})
     } catch (e) {
       err = e
     }
