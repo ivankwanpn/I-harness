@@ -3,18 +3,25 @@ import { createMockClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
 describe("llm-mock", () => {
-  it("replays a scripted sequence", async () => {
+  it("replays one step per stream() call (turn-based)", async () => {
     const client = createMockClient([
       { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
       { role: "assistant", text: "done reading" },
     ])
-    const events: string[] = []
+    // turn 1: tool call step
+    const turn1: string[] = []
     for await (const ev of client.stream({} as LLMRequest)) {
-      if (ev.type === "tool_call") events.push(`tool:${ev.call.name}`)
-      if (ev.type === "text/chunk") events.push(`text:${ev.text}`)
-      if (ev.type === "end") events.push("end")
+      if (ev.type === "tool_call") turn1.push(`tool:${ev.call.name}`)
+      if (ev.type === "end") turn1.push("end")
     }
-    expect(events).toEqual(["tool:read", "text:done reading", "end"])
+    expect(turn1).toEqual(["tool:read", "end"])
+    // turn 2: final text step
+    const turn2: string[] = []
+    for await (const ev of client.stream({} as LLMRequest)) {
+      if (ev.type === "text/chunk") turn2.push(`text:${ev.text}`)
+      if (ev.type === "end") turn2.push("end")
+    }
+    expect(turn2).toEqual(["text:done reading", "end"])
   })
 
   it("exhausts the script with an error", async () => {

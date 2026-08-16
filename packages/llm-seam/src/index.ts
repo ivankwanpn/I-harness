@@ -1,4 +1,4 @@
-import type { Session } from "@i-harness/core-session"
+import type { LLMMessage, Session } from "@i-harness/core-session"
 
 export type LLMStreamEvent =
   | { type: "text/chunk"; text: string }
@@ -7,10 +7,9 @@ export type LLMStreamEvent =
   | { type: "end" }
   | { type: "error"; error: Error }
 
-export interface LLMMessage {
-  role: "user" | "assistant"
-  content: string
-}
+// LLMMessage is owned by core-session (it is the audit seam for the session
+// log); llm-seam re-exports it rather than re-declaring a duplicate type.
+export type { LLMMessage } from "@i-harness/core-session"
 
 export interface ToolSchema {
   name: string
