@@ -9,11 +9,11 @@ drives the I-harness kernel design (see
 
 | # | Area | File | Status |
 |---|------|------|--------|
-| 01 | Session persistence & format | `findings/01-session-persistence.md` | in-progress |
-| 02 | Plugin kernel, scopes, waterfalls, guards | `findings/02-plugin-kernel.md` | pending |
-| 03 | Tool execution pipeline & safety seams | `findings/03-tool-pipeline.md` | pending |
-| 04 | Windows execution environment | `findings/04-windows-exec.md` | pending |
-| 05 | Interaction model & UI consumption | `findings/05-interaction.md` | pending |
+| 01 | Session persistence & format | `findings/01-session-persistence.md` | done |
+| 02 | Plugin kernel, scopes, waterfalls, guards | `findings/02-plugin-kernel.md` | done |
+| 03 | Tool execution pipeline & safety seams | `findings/03-tool-pipeline.md` | done |
+| 04 | Windows execution environment | `findings/04-windows-exec.md` | done |
+| 05 | Interaction model & UI consumption | `findings/05-interaction.md` | done |
 
 ## Disposition values
 
