@@ -51,7 +51,7 @@ Write exactly:
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test"
   },
