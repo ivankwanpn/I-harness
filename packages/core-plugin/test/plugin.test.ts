@@ -1,8 +1,53 @@
 import { describe, expect, it } from "vitest"
-import { corePluginVersion } from "../src/index.ts"
+import { corePluginVersion, createContext } from "../src/index.ts"
+import type { Plugin } from "../src/index.ts"
 
 describe("core-plugin", () => {
   it("exports a version", () => {
     expect(corePluginVersion).toBe("0.1.0")
+  })
+})
+
+describe("four primitives", () => {
+  it("registers and resolves a service", () => {
+    const ctx = createContext()
+    const svc = { value: 1 }
+    ctx.services.register("svc", svc)
+    expect(ctx.services.get<{ value: number }>("svc")).toBe(svc)
+  })
+
+  it("mounts and unmounts a plugin, reclaiming listeners", () => {
+    const ctx = createContext()
+    const calls: number[] = []
+    const plugin: Plugin = {
+      name: "p",
+      mount(c) {
+        c.on("ev", () => calls.push(1))
+      },
+    }
+    ctx.mount(plugin)
+    ctx.emit("ev", {})
+    expect(calls).toEqual([1])
+    ctx.unmount(plugin.name)
+    ctx.emit("ev", {})
+    expect(calls).toEqual([1]) // no second call — listener reclaimed
+  })
+
+  it("shadows service in child scope, restores on unmount", () => {
+    const ctx = createContext()
+    ctx.services.register("svc", { value: 1 })
+    const child = ctx.scope.mount()
+    child.services.register("svc", { value: 2 })
+    expect(child.services.get<{ value: number }>("svc").value).toBe(2)
+    expect(ctx.services.get<{ value: number }>("svc").value).toBe(1)
+    child.scope.unmount()
+    const child2 = ctx.scope.mount()
+    expect(child2.services.get<{ value: number }>("svc").value).toBe(1)
+  })
+
+  it("throws on same-layer duplicate service name", () => {
+    const ctx = createContext()
+    ctx.services.register("dup", { a: 1 })
+    expect(() => ctx.services.register("dup", { a: 2 })).toThrow(/duplicate/)
   })
 })
