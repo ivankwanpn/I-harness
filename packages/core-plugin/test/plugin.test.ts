@@ -50,4 +50,30 @@ describe("four primitives", () => {
     ctx.services.register("dup", { a: 1 })
     expect(() => ctx.services.register("dup", { a: 2 })).toThrow(/duplicate/)
   })
+
+  it("attributes listeners correctly when a plugin nests another mount", () => {
+    const ctx = createContext()
+    const calls: string[] = []
+    const b: Plugin = {
+      name: "b",
+      mount(c) {
+        c.on("ev", () => calls.push("b"))
+      },
+    }
+    const a: Plugin = {
+      name: "a",
+      mount(c) {
+        c.mount(b)
+        // listener registered AFTER the nested mount must still be attributed to A
+        c.on("ev", () => calls.push("a"))
+      },
+    }
+    ctx.mount(a)
+    ctx.emit("ev", {})
+    expect(calls).toEqual(["b", "a"])
+    ctx.unmount("a")
+    ctx.emit("ev", {})
+    // unmounting A reclaims BOTH A's listener and B's (B was mounted inside A's mount)
+    expect(calls).toEqual(["b", "a"])
+  })
 })
