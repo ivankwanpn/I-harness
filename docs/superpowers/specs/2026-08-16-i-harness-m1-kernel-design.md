@@ -242,3 +242,37 @@ New capabilities are NEW plugin packages that consume existing seams — the 8 p
   - **presets / agent definitions** → via `packages/preset`
   Consumes: `core-plugin`, `mcp`, `preset`. Trust model + version compatibility management (cf. grok-build marketplace, opencode plugin system).
 - **Skills** → new `packages/skill` package (SKILL.md prompt packages) mounted per-session via `core-plugin`, consumed by marketplace.
+
+## M2 Design Notes (recorded 2026-08-17 — M1 final review)
+
+Design decisions deliberately deferred to M2. Recorded here so the deferred
+behavior is explicit and the M1 limitations are acknowledged (these are NOT
+M1 bugs to fix; they are policy decisions for the next milestone).
+
+### I3 — Guards and decision-seeding do not cross scopes
+
+- **Observed M1 behavior:** `ctx.checkGuards` consults only the current scope's
+  guard list — it does not walk ancestors. A root-scope guard registration is
+  therefore bypassed by a child-scope tool registry. Likewise, `tools/pre-execute`
+  decision seeding runs inside the emitting scope's own listener/waterfall pass;
+  parent-scope producers do not constrain a child registry's dispatch (the
+  parent chain is invoked for propagation, but the child does not read back the
+  parent's resolved decision).
+- **M1 scope note:** the kernel is all-on-root today, so this is latent, not
+  exploitable in the current acceptance path.
+- **M2 decision required:** define scope-affinity semantics for guards and
+  decision seeds — e.g. nearest-scope-wins vs. union-of-ancestors for guards,
+  and whether/which pre-execute decision seeds propagate upward. Whatever is
+  chosen must keep deny-only monotonicity (a parent guard can deny a child
+  dispatch; ordering must never re-allow).
+
+### I4 — `isReadOnly` is declared but never consulted
+
+- **Observed M1 behavior:** `Tool.isReadOnly` is part of the `Tool` interface
+  but the execution pipeline never reads it. Approval decisions are driven
+  entirely by `tools/pre-execute` producers; the design's "non-readOnly tools go
+  through approval" (§4.3) is not implemented as an automatic policy.
+- **M2 decision required:** implement the readOnly→approval policy — e.g.
+  automatic `ask` for non-readOnly tools (configurable), and `allow` without
+  prompt for readOnly tools — and decide how it composes with
+  `tools/pre-execute` producers and guards.

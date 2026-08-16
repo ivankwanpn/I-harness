@@ -61,6 +61,9 @@ export function assertVersion(session: Session, expected: number): number {
 }
 
 export function fromJSONL(text: string): Session {
+  if (text.trim().length === 0) {
+    throw new Error("session log is empty")
+  }
   const lines = text.trim().split("\n")
   const header = JSON.parse(lines[0]!) as { formatVersion?: number }
   if (header.formatVersion !== CURRENT_FORMAT_VERSION) {
