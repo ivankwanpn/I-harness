@@ -173,6 +173,12 @@ importers:
         specifier: workspace:*
         version: link:../exec
 
+  packages/tool-search:
+    dependencies:
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':
