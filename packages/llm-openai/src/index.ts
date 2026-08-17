@@ -25,7 +25,22 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       const body = {
         model: config.model,
         instructions: request.systemPrompt,
-        input: request.messages.map((m) => ({ role: m.role, content: m.content })),
+        input: request.messages
+          .map((m) => {
+            if (m.role === "user") return { role: "user", content: m.content }
+            if (m.role === "tool") return { type: "function_call_output", call_id: m.toolCallId, output: m.content }
+            // assistant
+            if (m.toolCalls && m.toolCalls.length > 0) {
+              return m.toolCalls.map((c) => ({
+                type: "function_call",
+                call_id: c.id,
+                name: c.name,
+                arguments: JSON.stringify(c.args),
+              }))
+            }
+            return { role: "assistant", content: m.content }
+          })
+          .flat(),
         tools: request.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
         stream: true,
       }
@@ -41,6 +56,73 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      let receivedDone = false
+      const pendingCalls = new Map<string, { name: string; argsBuffer: string }>()
+      const yieldedInline = new Set<string>()
+      const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
+        const t = event.type as string
+        if (t === "response.output_text.delta") {
+          return [{ type: "text/chunk", text: (event as { delta: string }).delta }]
+        }
+        if (t === "response.output_item.added") {
+          const item = event.item as { type: string; id?: string; name?: string; arguments?: string }
+          if (item?.type === "function_call") {
+            // Some Responses streams send the full arguments inline on the item.
+            if (item.arguments && item.arguments.trim() !== "") {
+              try {
+                const args = JSON.parse(item.arguments) as unknown
+                if (item.id) yieldedInline.add(item.id)
+                return [{ type: "tool_call", call: { name: item.name!, args } }]
+              } catch {
+                return [{ type: "error", error: new Error("openai malformed inline function_call arguments") }]
+              }
+            }
+            if (item.id) pendingCalls.set(item.id, { name: item.name ?? "", argsBuffer: "" })
+          }
+          return []
+        }
+        if (t === "response.function_call_arguments.delta") {
+          const ev = event as { item_id: string; delta: string }
+          const pending = pendingCalls.get(ev.item_id)
+          if (pending) pending.argsBuffer += ev.delta
+          return []
+        }
+        if (t === "response.function_call_arguments.done") {
+          const ev = event as { item_id: string }
+          const pending = pendingCalls.get(ev.item_id)
+          if (pending) {
+            pendingCalls.delete(ev.item_id)
+            if (!yieldedInline.has(ev.item_id)) {
+              try {
+                const args = JSON.parse(pending.argsBuffer) as unknown
+                return [{ type: "tool_call", call: { name: pending.name, args } }]
+              } catch {
+                return [{ type: "error", error: new Error("openai malformed function_call arguments") }]
+              }
+            }
+          }
+          return []
+        }
+        if (t === "response.reasoning_summary_text.delta") {
+          return [{ type: "reasoning", text: (event as { text: string }).text }]
+        }
+        if (t === "response.completed") return []
+        if (t === "[DONE]") {
+          receivedDone = true
+          return []
+        }
+        return []
+      }
+      const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
+        for (const ev of events) {
+          if (ev.type === "error") {
+            yield ev
+            return true
+          }
+          yield ev
+        }
+        return false
+      }
       try {
         while (true) {
           const { done, value } = await reader.read()
@@ -50,15 +132,19 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           const chunks = buffer.split("\n\n")
           buffer = chunks.pop() ?? ""
           for (const chunk of chunks) {
+            if (receivedDone) break
             for (const event of parseSSE(chunk)) {
-              const t = event.type as string
-              if (t === "response.output_text.delta") yield { type: "text/chunk", text: (event as { delta: string }).delta }
-              else if (t === "response.output_item.added") {
-                const item = event.item as { type: string; name?: string; arguments?: string }
-                if (item?.type === "function_call") yield { type: "tool_call", call: { name: item.name!, args: JSON.parse(item.arguments ?? "{}") } }
-              } else if (t === "response.completed") { /* end is emitted after loop */ }
-              else if (t === "[DONE]") break
+              if (receivedDone) break
+              if (yield* emitEvents(handleEvent(event))) return
             }
+          }
+          if (receivedDone) break
+        }
+        // flush any residual partial chunk left in the buffer
+        if (buffer.trim() !== "") {
+          for (const event of parseSSE(buffer)) {
+            if (receivedDone) break
+            if (yield* emitEvents(handleEvent(event))) return
           }
         }
       } finally {
