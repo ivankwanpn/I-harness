@@ -24,6 +24,14 @@ describe("session log", () => {
     expect(msgs[1]!.content).toBe("done")
   })
 
+  it("ignores assistant/chunk events without buffering (chunkBuffer removed)", () => {
+    const s = createSession()
+    append(s, { type: "assistant/chunk", text: "hel" })
+    append(s, { type: "assistant/chunk", text: "lo" })
+    append(s, { type: "assistant/message", text: "done" })
+    expect(deriveMessages(s)).toEqual([{ role: "assistant", content: "done" }])
+  })
+
   it("round-trips JSONL with formatVersion", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "x" })
