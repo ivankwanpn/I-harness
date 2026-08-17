@@ -200,6 +200,33 @@ importers:
         specifier: workspace:*
         version: link:../exec
 
+  packages/subagent:
+    dependencies:
+      '@i-harness/core-agent':
+        specifier: workspace:*
+        version: link:../core-agent
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/preset':
+        specifier: workspace:*
+        version: link:../preset
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
+
   packages/tool-search:
     dependencies:
       '@i-harness/core-plugin':
