@@ -131,8 +131,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
     const result = await agent.run(task)
     if (opts.coordinator) {
-      if (activeId) await opts.coordinator.flush(activeId) // durability signal for this session
-      await opts.coordinator.close() // drain document chain + any other sessions
+      // flush first: this is the durability-failure signal (rejects on a durable
+      // write failure → exitCode 1); close() then drains everything best-effort.
+      if (activeId) await opts.coordinator.flush(activeId)
+      await opts.coordinator.close()
     }
     return { finalText: result.finalText, exitCode: 0 }
   } catch (err) {

@@ -107,4 +107,57 @@ describe("SessionWriteBehind", () => {
     await controller.flush()
     expect(controller.hasWork).toBe(false)
   })
+
+  it("cancelAutomaticWait clears the timer and preserves retained work", async () => {
+    vi.useFakeTimers()
+    const batches: SessionEvent[][] = []
+    const controller = new SessionWriteBehind({
+      maxDelayMs: 200,
+      write: async (events) => { batches.push(events) },
+      reportBackgroundFailure: vi.fn(),
+    })
+    controller.enqueue({ type: "turn/start" })
+    controller.cancelAutomaticWait() // cancel before the deadline can fire
+    await vi.advanceTimersByTimeAsync(500) // no automatic write: the timer was cancelled
+    expect(batches).toEqual([])
+    expect(controller.hasWork).toBe(true) // pending preserved
+    await controller.flush() // explicit drain still works after the cancel
+    expect(batches).toEqual([[{ type: "turn/start" }]])
+    expect(controller.hasWork).toBe(false)
+    controller.enqueue({ type: "turn/end" }) // after the cancel (like post-close) a later enqueue arms a fresh window
+    await vi.advanceTimersByTimeAsync(200)
+    expect(batches).toEqual([
+      [{ type: "turn/start" }],
+      [{ type: "turn/end" }],
+    ])
+    expect(controller.hasWork).toBe(false)
+    vi.useRealTimers()
+  })
+
+  it("latches deadlineExpired when the deadline fires during an active write", async () => {
+    vi.useFakeTimers()
+    const batches: SessionEvent[][] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>((res) => { release = res })
+    let first = true
+    const controller = new SessionWriteBehind({
+      maxDelayMs: 200,
+      write: async (events) => {
+        batches.push(events)
+        if (first) { first = false; await gate }
+      },
+      reportBackgroundFailure: vi.fn(),
+    })
+    controller.enqueue({ type: "turn/start" }) // t=0 arms the 200 ms window
+    await vi.advanceTimersByTimeAsync(200) // deadline: starts the background write (now active)
+    controller.enqueue({ type: "turn/end" }) // pending is empty again, so a fresh deadline arms
+    await vi.advanceTimersByTimeAsync(500) // deadline fires mid-active → deadlineExpired latched
+    expect(batches).toHaveLength(1) // the active write is still in flight: no second write yet
+    release() // let the active write settle
+    await vi.advanceTimersByTimeAsync(0)
+    expect(batches).toHaveLength(2) // continueAutomatic starts the latched write
+    expect(batches[1]).toEqual([{ type: "turn/end" }])
+    expect(controller.hasWork).toBe(false)
+    vi.useRealTimers()
+  })
 })
