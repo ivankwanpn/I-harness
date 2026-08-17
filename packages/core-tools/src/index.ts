@@ -43,6 +43,7 @@ type ApprovalAnswerer = (req: { name: string; reason: string }) => Promise<boole
 
 export interface ToolRegistry {
   register(tool: Tool): void
+  get(name: string): Tool | undefined
   schemas(): ToolSchema[]
   execute(call: ToolCall): Promise<ToolResult>
   genToolCatalog(): ToolSchema[]
@@ -80,6 +81,13 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     // their own registry instance and shadow freely by name.
     if (tools.has(tool.name)) throw new Error(`duplicate tool registration: ${tool.name}`)
     tools.set(tool.name, tool)
+  }
+
+  // Metadata lookup for policy consumers (guard-approval reads isReadOnly /
+  // getArgv before dispatch). Returns undefined for unknown names so callers
+  // can fail closed instead of throwing.
+  function get(name: string): Tool | undefined {
+    return tools.get(name)
   }
 
   function schemas(): ToolSchema[] {
@@ -143,5 +151,5 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     }
   }
 
-  return { register, schemas, execute, genToolCatalog, verifyToolCatalog }
+  return { register, get, schemas, execute, genToolCatalog, verifyToolCatalog }
 }
