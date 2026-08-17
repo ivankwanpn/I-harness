@@ -12,13 +12,15 @@ Design the M3 milestone's third sub-project: the task/subagent plugin, plus the 
 
 - **codex-rust-v0.147.0** (`core/src/tools/handlers/multi_agents_v2/`): async-by-default swarm — `spawn_agent` returns immediately, `wait_agent` waits on mailbox updates, `send_message`/`interrupt_agent`/`list_agents`/`followup_task`; `fork_turns` (none/all/N); **v2 removed the spawn depth limit** (`MultiAgentVersion::V2` no longer calls `exceeds_thread_spawn_depth_limit`; depth is only tracked into the agent path).
 - **deepseek-harness** (`packages/jobs/jobs`, `tool-jobs`, `tool-subagent`, `subagent-in-process-driver`): the unified `ctx.jobs` background-job service — job ids `<kind>-N`, session-scoped access, `wait`/`read`/`list`/`kill`, completion delivery; in-process one-shot subagent driver with `mountPreset`-style child scope; delegation depth accounting. Provider model: `ProviderSpec` (provider route key + displayName + api/wire-protocol + baseURL + models list + apiKeyEnv credential reference).
-- **opencode fork**: task/get_task_output/stop_task with durable SQLite lifecycle — **not adopted** (unstable fork-authored design; no persistence layer here). **Adopted**: `CustomProvider.Protocol` three-value protocol (`openai-responses` / `openai-compatible` / `anthropic-messages`), custom-provider configure/discover pattern, provider catalog shared by main + sub agents.
+- **opencode fork**: task/get_task_output/stop_task with durable SQLite lifecycle — **not adopted** (unstable fork-authored design; no persistence layer here). **Adopted**: `CustomProvider.Protocol` three-value protocol (`openai-responses` / `openai-compatible` / `anthropic-messages`), custom-provider configure/discover pattern, provider catalog shared by main + sub agents. **Clarification — `@ai-sdk/openai-compatible` is an EXTERNAL npm dependency** (Vercel AI SDK, `"@ai-sdk/openai-compatible": "2.0.41"` in `packages/core/package.json`), not fork-authored; the fork only layers provider integration on top of AI SDK packages. We do NOT adopt the AI SDK.
 - **cc-custom**: `run_in_background` + output-to-file + Read — not adopted (two query paths, complex output management). Model-selection `inherit` semantics adopted.
+- **deepseek-harness `llm-deepseek`**: the model for our self-written `llm-openai-compatible` — a **self-authored** Chat Completions adapter over dsh's own `LlmAdapter` seam (`serialize.ts` request building, `sse.ts` SSE parse, `translate.ts` chunk mapping, `types.ts` own wire types; deps only `eventsource-parser` + dsh workspace packages, NO `@ai-sdk`). We follow the same self-authored pattern: our `llm-openai-compatible` is a NEW protocol plugin in the style of `llm-openai`/`llm-anthropic`, not a wrapper around an AI SDK package.
 
 ## Global Constraints (binding)
 
 - **This project does NOT use bun** (pnpm/Node monorepo). Do NOT introduce bun dependencies, bun APIs, or bun config.
 - ESM + strict TS; tests under `test/*.test.ts` per package; pnpm workspaces.
+- **No `@ai-sdk/*` dependencies.** The new `llm-openai-compatible` protocol plugin is SELF-AUTHORED (mirroring `llm-openai`/`llm-anthropic` and dsh's `llm-deepseek`) — request serialization + SSE parsing written by us, `eventsource-parser`-style SSE handling only if already vendored, no Vercel AI SDK.
 - Platform-neutral: all tools are plain registered tools — OpenAI (`function_call`), Anthropic (`tool_use`), and Chat Completions call them through the protocol plugins. NO protocol-plugin changes (the new `llm-openai-compatible` package is a NEW protocol plugin, not a change to existing ones).
 - No real network in tests — always `vi.stubGlobal("fetch", ...)`.
 - No session persistence / no SQLite (deferred to a future `session-persistence` sub-project).
@@ -68,6 +70,7 @@ packages/llm-openai-compatible/
 
 - `config = { apiKey, baseUrl?, model }`; implements `ModelClient` over the OpenAI **Chat Completions** API (`POST {baseUrl}/v1/chat/completions`, stream: true).
 - SSE mapping: `choices[].delta.content` → `text/chunk`; `delta.tool_calls[]` → `tool_call` (accumulate arguments deltas); `choices[].finish_reason` / stream end → `end`; `reasoning` events if provided by the provider. Mirrors the llm-openai/llm-anthropic structure.
+- **Self-authored** (like dsh's `llm-deepseek`): our own request serialization + SSE parsing, no `@ai-sdk/*` dependency.
 
 ### 1.2 packages/shell (MODIFIED)
 
