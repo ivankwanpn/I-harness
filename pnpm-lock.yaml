@@ -68,6 +68,9 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../../packages/session-persistence-jsonl
+      '@i-harness/session-persistence-sqlite':
+        specifier: workspace:*
+        version: link:../../packages/session-persistence-sqlite
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell

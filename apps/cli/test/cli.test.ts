@@ -12,6 +12,7 @@ import { createApprovalPolicy } from "@i-harness/guard-approval"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createSqliteBackend, closeSqliteBackends } from "@i-harness/session-persistence-sqlite"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 
 describe("headless CLI (M2)", () => {
@@ -301,6 +302,63 @@ describe("headless CLI persistence (M4)", () => {
 
   it("main() with --session-dir creates a session file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {})
+      try {
+        const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir])
+        expect(code).toBe(0)
+        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+        expect(files).toHaveLength(1)
+      } finally {
+        log.mockRestore()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("headless CLI SQLite persistence (M5)", () => {
+  it("runHeadless with a sqlite coordinator persists to sessions.db", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
+    try {
+      const coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")))
+      const { id } = await coordinator.create()
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        approveAll: true,
+        sessionId: id,
+        coordinator,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(existsSync(join(dir, "sessions.db"))).toBe(true)
+    } finally {
+      // The sqlite backend holds an open DatabaseSync connection; close it
+      // before removing the dir, otherwise rmSync fails on Windows (EPERM).
+      closeSqliteBackends()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("main() with --session-backend sqlite creates a sessions.db", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {})
+      try {
+        const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir, "--session-backend", "sqlite"])
+        expect(code).toBe(0)
+        expect(existsSync(join(dir, "sessions.db"))).toBe(true)
+      } finally {
+        log.mockRestore()
+      }
+    } finally {
+      closeSqliteBackends()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("default (no flag) still writes a .jsonl file (M4 regression guard)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
       const log = vi.spyOn(console, "log").mockImplementation(() => {})
       try {
