@@ -7,6 +7,7 @@ import { assertMessagesFromLog } from "@i-harness/llm-seam"
 
 export interface AgentConfig {
   systemPrompt: string
+  maxTurns?: number
   // NOTE: `model?: string` from the task brief collides with `AgentDeps.model`
   // (the ModelClient) under `AgentDeps & AgentConfig`, so the string selector
   // is dropped for M1 — the ModelClient IS the model configuration and the
@@ -22,12 +23,15 @@ export interface AgentDeps {
 export interface AgentResult {
   finalText: string
   turns: number
+  reasoning: string[]
 }
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
+  const maxTurns = deps.maxTurns ?? 20
   return {
     async run(task: string): Promise<AgentResult> {
       let turns = 0
+      const reasoning: string[] = []
 
       append(deps.session, { type: "turn/start" })
       append(deps.session, { type: "user/message", text: task })
@@ -35,6 +39,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
       let needsContinuation = true
       while (needsContinuation) {
         turns += 1
+        // Guard against an infinite tool-call loop: throw once turns exceed
+        // the configured maximum (default 20).
+        if (turns > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
         append(deps.session, { type: "step/start" })
 
         await ctx.emit("agent/pre-step", { task, session: deps.session })
@@ -58,6 +65,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
           switch (ev.type) {
             case "text/chunk":
               stepText += ev.text
+              break
+            case "reasoning":
+              reasoning.push(ev.text)
               break
             case "tool_call":
               append(deps.session, { type: "tool/call", name: ev.call.name, args: ev.call.args })
@@ -85,7 +95,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
 
       append(deps.session, { type: "turn/end" })
       const finalText = deriveMessages(deps.session).at(-1)?.content ?? ""
-      return { finalText, turns }
+      return { finalText, turns, reasoning }
     },
   }
 }
