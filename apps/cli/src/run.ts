@@ -5,7 +5,6 @@ import { createAgent } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import type { SessionEvent } from "@i-harness/core-session"
 import { registerShell } from "@i-harness/shell"
 import { createFsTools } from "@i-harness/fs"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
@@ -45,24 +44,6 @@ function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
   )
 }
 
-// M6: serialize document writes through the coordinator. Subagent persistence
-// saves are fire-and-forget (`void save(...)` in the wrapped registries), so
-// two saves can race two putDocument calls against the same sidecar file and
-// interleave/truncate each other at the OS level (observed as concatenated
-// JSON). Chaining keeps exactly one document write in flight at a time; a
-// failed write does not wedge the chain. Session append/flush go through the
-// raw coordinator and are unaffected.
-function withSerializedDocuments(coordinator: SessionCoordinator): SessionCoordinator {
-  let chain: Promise<void> = Promise.resolve()
-  return {
-    ...coordinator,
-    putDocument(key, data) {
-      chain = chain.catch(() => {}).then(() => coordinator.putDocument(key, data))
-      return chain
-    },
-  }
-}
-
 // Headless single-agent run for the CLI. Everything lives on ONE scope/ctx:
 // the execution environment (exec + shell + fs tools) and the approval policy
 // are mounted on the same ctx that the agent's tool registry dispatches
@@ -92,20 +73,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
   const model = opts.model ?? createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
 
-  // Persistence mirror: buffer appended events and flush each batch to the
-  // coordinator at turn/end (a natural durability boundary), plus a final flush.
-  let pendingEvents: SessionEvent[] = []
+  // M7: session events go through the coordinator's write-behind (batched,
+  // durable on flush). One durability point per turn; the 200 ms deadline
+  // coalesces intra-turn events. Without a coordinator the events stay in the
+  // in-memory session only.
   const activeId = opts.resumeSessionId ?? opts.sessionId
-  const flushPending = async () => {
-    if (!opts.coordinator || !activeId) return
-    if (pendingEvents.length === 0) return
-    const batch = pendingEvents
-    pendingEvents = []
-    await opts.coordinator.append(activeId, batch)
-  }
   const session = createSession((ev) => {
-    pendingEvents.push(ev)
-    if (ev.type === "turn/end") void flushPending()
+    if (!opts.coordinator || !activeId) return
+    opts.coordinator.enqueue(activeId, [ev])
+    if (ev.type === "turn/end") void opts.coordinator.flush(activeId).catch(() => {})
   })
 
   // Resume: restore the persisted history into the session WITHOUT re-appending
@@ -145,22 +121,22 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       exec: ctx.services.get<import("@i-harness/exec").ExecService>("exec/service"),
       parentModel: model,
       parentSession: session,
-      // M6: persist every subagent registry mutation through the coordinator
-      // document API, keyed by the session id (spec) so sessions never share
-      // state. putDocument is serialized so fire-and-forget saves never race
-      // each other against the same sidecar file.
+      // M7: the coordinator owns document-write serialization, failure
+      // reporting (reportBackgroundFailure), and run-end draining.
       ...(opts.coordinator && activeId
-        ? { persist: { coordinator: withSerializedDocuments(opts.coordinator), stateId: activeId } }
+        ? { persist: { coordinator: opts.coordinator, stateId: activeId } }
         : {}),
       ...(restoredState ? { restoredState } : {}),
     })
     const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
     const result = await agent.run(task)
-    await flushPending()
-    if (opts.coordinator && activeId) await opts.coordinator.flush(activeId)
+    if (opts.coordinator) {
+      if (activeId) await opts.coordinator.flush(activeId) // durability signal for this session
+      await opts.coordinator.close() // drain document chain + any other sessions
+    }
     return { finalText: result.finalText, exitCode: 0 }
   } catch (err) {
-    await flushPending().catch(() => {})
+    if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   }
 }
