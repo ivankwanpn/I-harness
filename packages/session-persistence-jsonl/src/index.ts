@@ -49,7 +49,10 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async list(): Promise<string[]> {
       const names = await readdir(root).catch(() => [] as string[])
-      return names.filter((n) => n.endsWith(".jsonl")).map((n) => basename(n, ".jsonl"))
+      // Skip `.doc.jsonl` document sidecars — they are not sessions.
+      return names
+        .filter((n) => n.endsWith(".jsonl") && !n.endsWith(".doc.jsonl"))
+        .map((n) => basename(n, ".jsonl"))
     },
 
     async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[] }> {
