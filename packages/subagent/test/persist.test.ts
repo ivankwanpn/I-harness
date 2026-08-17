@@ -32,7 +32,10 @@ describe("subagent state snapshot", () => {
     const fresh = makeState()
     const snap: SubagentStateSnapshot = {
       formatVersion: 1,
-      jobs: [{ id: "subagent-1", owner: "root", kind: "subagent", label: "h", status: "completed", output: "done", terminal: true }],
+      jobs: [
+        { id: "subagent-1", owner: "root", kind: "subagent", label: "h", status: "completed", output: "done", terminal: true },
+        { id: "subagent-2", owner: "root", kind: "subagent", label: "h2", status: "running", output: "", terminal: false },
+      ],
       agentTable: [
         { path: "root/helper", status: "completed", finalText: "done", mailbox: [] },
         { path: "root/running", status: "running", mailbox: [] },
@@ -41,6 +44,8 @@ describe("subagent state snapshot", () => {
     }
     restoreState(fresh, snap)
     expect(fresh.jobs.read("subagent-1").status).toBe("completed")
+    expect(fresh.jobs.read("subagent-2").status).toBe("error") // running job → error
+    expect(fresh.jobs.read("subagent-2").output).toBe("interrupted by resume")
     expect(fresh.table.get("root/helper")?.status).toBe("completed")
     expect(fresh.table.get("root/running")?.status).toBe("error") // running → error
     expect(fresh.roles.get("custom")).toBeDefined()
@@ -56,10 +61,13 @@ describe("persistent wrappers", () => {
     const wrapped = persistentJobRegistry(jobs, save)
     const { id } = wrapped.registerJob("root", "subagent", "h")
     expect(save).toHaveBeenCalledTimes(1)
-    wrapped.updateJob(id, { status: "completed" })
+    expect(wrapped.kill(id)).toBe("cancellation-requested")
     expect(save).toHaveBeenCalledTimes(2)
-    wrapped.kill(id) // terminal → kill returns already-finished
-    expect(save).toHaveBeenCalled()
+    wrapped.updateJob(id, { status: "completed" })
+    expect(save).toHaveBeenCalledTimes(3)
+    // Already-terminal → no state change and no spurious save.
+    expect(wrapped.kill(id)).toBe("already-finished")
+    expect(save).toHaveBeenCalledTimes(3)
   })
 
   it("persistentAgentTable saves after add and remove", async () => {

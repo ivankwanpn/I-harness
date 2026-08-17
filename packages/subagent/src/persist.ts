@@ -132,7 +132,9 @@ export function persistentJobRegistry(
     kill(id) {
       const outcome = jobs.kill(id)
       const rec = record.get(id)
-      if (rec) { rec.status = "killed"; rec.terminal = true; void save({ jobs: [...record.values()] }) }
+      // Only reflect a real kill: an already-terminal job returns
+      // "already-finished" with no state change — mirror stays accurate.
+      if (rec && outcome === "cancellation-requested") { rec.status = "killed"; rec.terminal = true; void save({ jobs: [...record.values()] }) }
       return outcome
     },
   }
