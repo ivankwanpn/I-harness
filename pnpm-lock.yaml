@@ -92,6 +92,18 @@ importers:
         specifier: workspace:*
         version: link:../core-tools
 
+  packages/guard-approval:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/interaction':
+        specifier: workspace:*
+        version: link:../interaction
+
   packages/interaction:
     dependencies:
       '@i-harness/core-plugin':

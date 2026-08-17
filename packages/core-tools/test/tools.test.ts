@@ -29,6 +29,15 @@ describe("tool registry", () => {
     expect(() => reg.register({ ...t })).toThrow(/duplicate/i)
   })
 
+  it("get(name) returns the registered tool metadata and undefined for unknown", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    const t: Tool = { name: "t", description: "", inputSchema: {}, isReadOnly: true, execute: async () => ({}) }
+    reg.register(t)
+    expect(reg.get("t")).toBe(t)
+    expect(reg.get("nope")).toBeUndefined()
+  })
+
   it("shadows tool in child scope and restores on unmount", () => {
     const ctx = makeCtx()
     const reg = createToolRegistry(ctx)
