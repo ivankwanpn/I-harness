@@ -74,6 +74,15 @@ function decide(
   dangerousFlags: string[],
   askForNonReadOnly: boolean,
 ): ToolDecision | undefined {
+  // Single-producer property: at most one policy seeds a decision per emit,
+  // and the seeded value is the chain payload that reaches every waterfall
+  // handler. A payload that is already a decision object ({ kind: ... }) must
+  // pass through unchanged — it is the previous producer's decision, not a
+  // ToolCall to classify. Without this, re-parsing it as a ToolCall would
+  // silently drop the decision and fail open.
+  const asDecision = payload as { kind?: unknown }
+  if (asDecision && typeof asDecision.kind === "string") return undefined
+
   const call = payload as Partial<ToolCall>
   if (typeof call !== "object" || call === null || typeof call.name !== "string") return undefined
 
