@@ -114,6 +114,15 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       }
       return { version: row.version, events: [...events, ...closers] }
     },
+
+    async putDocument(key: string, data: unknown): Promise<void> {
+      db.prepare("INSERT INTO documents (key, data) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data")
+        .run(key, JSON.stringify(data))
+    },
+    async getDocument(key: string): Promise<unknown | undefined> {
+      const row = db.prepare("SELECT data FROM documents WHERE key = ?").get(key) as { data: string } | undefined
+      return row ? (JSON.parse(row.data) as unknown) : undefined
+    },
   }
 }
 
