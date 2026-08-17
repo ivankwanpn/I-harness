@@ -55,3 +55,61 @@ describe("subagent tools", () => {
     await expect(spawn.execute({ message: "x", task_name: "h", agent_type: "nope" }, {})).rejects.toThrow(/unknown role/i)
   })
 })
+
+describe("subagent control tools", () => {
+  it("send_message queues into the child mailbox", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const send = all.find((t) => t.name === "send_message")!
+    await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    const out = await send.execute({ target: "root/helper", message: "extra" }, {})
+    expect(out).toEqual({ queued: true })
+    expect(table.get("root/helper")!.mailbox).toContain("extra")
+  }, 10_000)
+
+  it("close_agent aborts and removes the child", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const close = all.find((t) => t.name === "close_agent")!
+    await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    expect(table.get("root/helper")).toBeDefined()
+    const out = await close.execute({ target: "root/helper" }, {})
+    expect((out as { previous_status: string }).previous_status).toBe("running")
+    expect(table.get("root/helper")).toBeUndefined()
+  }, 10_000)
+
+  it("interrupt_agent aborts the controller but keeps the agent", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const interrupt = all.find((t) => t.name === "interrupt_agent")!
+    await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    const entry = table.get("root/helper")!
+    const out = await interrupt.execute({ target: "root/helper" }, {})
+    expect((out as { previous_status: string }).previous_status).toBe("running")
+    expect(table.get("root/helper")).toBeDefined()
+    expect(entry.controller.signal.aborted).toBe(true)
+  }, 10_000)
+
+  it("resume_agent re-adds a fresh child entry", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers })
+    const resume = all.find((t) => t.name === "resume_agent")!
+    const out = await resume.execute({ target: "root/helper" }, {})
+    expect((out as { resumed: boolean }).resumed).toBe(true)
+    expect(table.get("root/helper")!.status).toBe("running")
+  })
+
+  it("followup_task queues and marks delivered", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const follow = all.find((t) => t.name === "followup_task")!
+    await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    const out = await follow.execute({ target: "root/helper", message: "more" }, {})
+    expect((out as { delivered: boolean }).delivered).toBe(true)
+    expect(table.get("root/helper")!.mailbox).toContain("more")
+  }, 10_000)
+})
