@@ -33,6 +33,21 @@ describe("jsonl backend", () => {
     expect(events).toMatchObject([{ type: "turn/start" }, { type: "user/message", text: "hi" }])
   })
 
+  it("repair truncates a torn tail left by a crash during the first append batch", async () => {
+    const backend = createJsonlBackend(dir)
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
+    // Crash during the FIRST append batch: the only event line after the header is torn.
+    const path = join(dir, "s1.jsonl")
+    writeFileSync(path, readFileSync(path, "utf-8") + '{"type":"user/mess')
+    await backend.repair("s1")
+    // Torn bytes are gone; the file is back to header-only.
+    expect(readFileSync(path, "utf-8")).not.toContain('{"type":"user/mess')
+    // A retry append lands after the repaired prefix and stays reachable.
+    await backend.append("s1", [{ type: "turn/start" }, { type: "user/message", text: "hi" }])
+    const { events } = await backend.read("s1")
+    expect(events).toMatchObject([{ type: "turn/start" }, { type: "user/message", text: "hi" }])
+  })
+
   it("append after a failed write rolls back so retry does not duplicate seqs", async () => {
     const backend = createJsonlBackend(dir)
     await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
