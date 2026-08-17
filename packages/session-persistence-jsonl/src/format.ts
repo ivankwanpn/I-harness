@@ -28,7 +28,7 @@ export function parseEventLines(lines: string[]): SessionEvent[] {
 // True if the final non-empty line is not valid JSON (a torn tail exists).
 export function hasTornTail(lines: string[]): boolean {
   const nonEmpty = lines.filter((l) => l.trim() !== "")
-  if (nonEmpty.length <= 1) return false
+  if (nonEmpty.length === 0) return false
   const last = nonEmpty[nonEmpty.length - 1]!
   try { JSON.parse(last); return false } catch { return true }
 }
