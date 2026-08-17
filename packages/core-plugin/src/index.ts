@@ -61,8 +61,10 @@ function createScope(
   const listeners = new Map<string, Listener[]>()
   const waterfalls = new Map<string, WaterfallHandler[]>()
   const guards = new Map<string, GuardFn[]>()
-  // I3: a scope's own resolved decision per event, written by emitFn only when
-  // the local pass actually transformed the payload (see emitFn below).
+  // I3: a scope's own decision per event for the CURRENT emit, written by
+  // emitFn only when a plain-listener producer actually seeded one (see
+  // emitFn below). Cleared at the start of every emit so decisions never leak
+  // across repeated emits for the same event.
   const decisions = new Map<string, unknown>()
   const scopes = new Set<PluginContext>()
   const plugins = new Map<string, Plugin>()
@@ -152,27 +154,34 @@ function createScope(
   // incidental return value (e.g. `calls.push(x)` → a number) can never
   // rewrite what other listeners or the parent scope receive.
   //
-  // I3 decision nearest-wins: this scope's resolved payload is recorded as its
-  // decision for the event ONLY when the local pass actually transformed the
-  // payload (a producer seeded the chain or the waterfall resolved to
-  // something different). A raw pass-through is not a decision, so a
-  // descendant registry can still read a parent producer's decision via
-  // `resolveDecision`, which picks the nearest scope with a recorded decision
-  // and otherwise falls back to the emitted payload.
+  // I3 decision nearest-wins: a decision exists for this event only when a
+  // plain-listener producer returned a non-undefined value that seeded the
+  // chain. Detection is "a value was produced", NOT object identity — so a
+  // producer that mutates and returns the same payload reference still counts,
+  // and a waterfall that merely normalizes the payload does not create a
+  // decision (it cannot shadow a parent decision as nearest). The entry is
+  // cleared at the start of every emit so a scope's decision never leaks
+  // across repeated emits: a pass-through emit reads the parent's FRESH
+  // decision recorded during the same emit's propagation, not a stale one.
   async function emitFn(event: string, payload: unknown): Promise<void> {
+    decisions.delete(event)
     const plainListeners = [...(listeners.get(event) ?? [])]
     const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
     let chainPayload = payload
+    let seeded = false
     for (const handler of plainListeners) {
       const res = handler(payload)
       const resolved = isPromiseLike(res) ? await res : res
-      if (waterfallHandlers.length > 0 && resolved !== undefined) chainPayload = resolved
+      if (waterfallHandlers.length > 0 && resolved !== undefined) {
+        chainPayload = resolved
+        seeded = true
+      }
     }
     let resolvedPayload = chainPayload
     if (waterfallHandlers.length > 0) {
       resolvedPayload = (await runWaterfall(event, waterfallHandlers, chainPayload)) ?? chainPayload
     }
-    if (resolvedPayload !== payload) decisions.set(event, resolvedPayload)
+    if (seeded) decisions.set(event, chainPayload)
     await parentEmit(event, resolvedPayload)
   }
 
@@ -225,9 +234,9 @@ function createScope(
       }
       return undefined
     },
-    // I3 decision nearest-wins: the nearest scope (self first) with a recorded
-    // decision for the event wins; if no scope in the chain made a decision,
-    // fall back to the emitted payload.
+    // I3 decision nearest-wins: the nearest scope (self first) with a decision
+    // recorded by its most recent emit of this event wins; if no scope in the
+    // chain made one, fall back to the emitted payload.
     resolveDecision(event: string, payload: unknown): unknown {
       let cur: InternalScope | null = ctx
       while (cur) {

@@ -348,4 +348,65 @@ describe("I3 scope propagation", () => {
     await bare.emit("t/none", raw)
     expect(bare.resolveDecision("t/none", raw)).toBe(raw)
   })
+
+  it("does not leak a stale decision across repeated emits", async () => {
+    const ctx = createContext()
+    let decided = true
+    ctx.on("t/stale", () => (decided ? { kind: "ask" } : undefined))
+    ctx.waterfall("t/stale", async (payload, next) => {
+      await next(payload)
+    })
+    await ctx.emit("t/stale", { v: 1 })
+    expect(ctx.resolveDecision("t/stale", { v: 1 })).toEqual({ kind: "ask" })
+
+    // second emit on the SAME scope produces no decision: the previous
+    // { kind: "ask" } must NOT leak into this execution.
+    decided = false
+    const raw2 = { v: 2 }
+    await ctx.emit("t/stale", raw2)
+    expect(ctx.resolveDecision("t/stale", raw2)).toBe(raw2)
+  })
+
+  it("falls back to the parent's fresh decision when a child stops deciding", async () => {
+    const ctx = createContext()
+    ctx.on("t/fallback", () => ({ kind: "ask" }))
+    ctx.waterfall("t/fallback", async (payload, next) => {
+      await next(payload)
+    })
+    const child = ctx.scope.mount()
+    let childDecides = true
+    child.on("t/fallback", () => (childDecides ? { kind: "deny" } : undefined))
+    child.waterfall("t/fallback", async (payload, next) => {
+      await next(payload)
+    })
+    await child.emit("t/fallback", { v: 1 })
+    expect(child.resolveDecision("t/fallback", { v: 1 })).toEqual({ kind: "deny" })
+
+    // the child producer now passes through: nearest-wins must fall back to
+    // the parent's ask recorded during THIS emit — not the child's stale deny
+    // from the previous emit.
+    childDecides = false
+    const raw2 = { v: 2 }
+    await child.emit("t/fallback", raw2)
+    expect(child.resolveDecision("t/fallback", raw2)).toEqual({ kind: "ask" })
+  })
+
+  it("records a decision from a producer that mutates and returns the same payload reference", async () => {
+    const ctx = createContext()
+    ctx.on("t/mutate", (payload) => {
+      ;(payload as { kind?: string }).kind = "ask"
+      return payload // same object reference back — not a new object
+    })
+    ctx.waterfall("t/mutate", async (payload, next) => {
+      await next(payload)
+    })
+    const child = ctx.scope.mount()
+    await child.emit("t/mutate", { tool: "sh" })
+    // a fresh object as fallback (NOT the emitted one): the recorded decision
+    // must win, proving detection did not rely on object-identity changes.
+    expect(child.resolveDecision("t/mutate", { fallback: true })).toEqual({
+      kind: "ask",
+      tool: "sh",
+    })
+  })
 })
