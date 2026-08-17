@@ -113,9 +113,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // A missing/corrupt document just means no restored state — the run proceeds
   // with fresh registries (builtin seeding).
   let restoredState: SubagentStateSnapshot | undefined
-  if (opts.resumeSessionId && opts.coordinator) {
+  if (opts.resumeSessionId && opts.coordinator && activeId) {
     try {
-      const doc = await opts.coordinator.getDocument("subagent-state")
+      // M6: the subagent-state document is keyed by the session id (spec:
+      // "stateId derived from the session id") so sessions never share state.
+      const doc = await opts.coordinator.getDocument(activeId)
       if (doc) restoredState = doc as SubagentStateSnapshot
     } catch {
       restoredState = undefined
@@ -130,11 +132,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       parentModel: model,
       parentSession: session,
       // M6: persist every subagent registry mutation through the coordinator
-      // document API (fixed key shared across sessions in the same backend).
-      // putDocument is serialized so fire-and-forget saves never race each
-      // other against the same sidecar file.
-      ...(opts.coordinator && (opts.sessionId || opts.resumeSessionId)
-        ? { persist: { coordinator: withSerializedDocuments(opts.coordinator), stateId: "subagent-state" } }
+      // document API, keyed by the session id (spec) so sessions never share
+      // state. putDocument is serialized so fire-and-forget saves never race
+      // each other against the same sidecar file.
+      ...(opts.coordinator && activeId
+        ? { persist: { coordinator: withSerializedDocuments(opts.coordinator), stateId: activeId } }
         : {}),
       ...(restoredState ? { restoredState } : {}),
     })
