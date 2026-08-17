@@ -110,6 +110,12 @@ importers:
         specifier: workspace:*
         version: link:../core-plugin
 
+  packages/llm-anthropic:
+    dependencies:
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+
   packages/llm-mock:
     dependencies:
       '@i-harness/llm-seam':
