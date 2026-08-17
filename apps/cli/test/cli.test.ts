@@ -470,7 +470,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
       // eventual: poll until the document shows a settled job. This also proves
       // the child's terminal save completed before teardown (no ENOENT race).
       const state = await pollUntil(async () => {
-        const doc = await coordinator.getDocument("subagent-state")
+        const doc = await coordinator.getDocument(id)
         if (!doc) return undefined
         const jobs = (doc as { jobs: { status: string }[] }).jobs
         return jobs.length > 0 && jobs.every((j) => j.status !== "running") ? doc : undefined
@@ -492,7 +492,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
         { type: "assistant/message", text: "first answer" }, { type: "turn/end" },
       ])
       // Persist a state document with a custom role + a settled job.
-      await coordinator.putDocument("subagent-state", {
+      await coordinator.putDocument(id, {
         formatVersion: 1,
         jobs: [{ id: "subagent-1", owner: "root", kind: "subagent", label: "old", status: "completed", output: "done", terminal: true }],
         agentTable: [],
@@ -527,7 +527,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
       // restored job (label "old") AND the new spawn (label "helper", only
       // possible if the restored custom role was effective). Poll until both.
       const state = await pollUntil(async () => {
-        const doc = await coordinator.getDocument("subagent-state")
+        const doc = await coordinator.getDocument(id)
         if (!doc) return undefined
         const labels = (doc as { jobs: { label: string; status: string }[] }).jobs.map((j) => j.label)
         const allSettled = (doc as { jobs: { status: string }[] }).jobs.every((j) => j.status !== "running")
