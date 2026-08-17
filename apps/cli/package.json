@@ -26,6 +26,9 @@
     "@i-harness/guard-approval": "workspace:*",
     "@i-harness/tool-search": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
-    "@i-harness/session-persistence-jsonl": "workspace:*"
+    "@i-harness/session-persistence-jsonl": "workspace:*",
+    "@i-harness/fs-search": "workspace:*",
+    "@i-harness/subagent": "workspace:*",
+    "@vscode/ripgrep": "^1.18.0"
   }
 }

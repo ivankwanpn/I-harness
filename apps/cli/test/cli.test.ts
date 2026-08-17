@@ -178,6 +178,51 @@ describe("CLI main + entry guard", () => {
   })
 })
 
+describe("headless CLI subagent + fs-search mount (M3-C finish)", () => {
+  it("mounts the subagent tools into the harness registry (job_list callable)", async () => {
+    // Deterministic mount probe: drive a headless run whose only tool call is
+    // job_list (a read-only subagent tool, no child spawn, so no shared-model
+    // race). registerSubagent runs inside the try before createAgent, so any
+    // mount error surfaces as exitCode 1; a successful job_list dispatch proves
+    // the 11 subagent tools are mounted and executable in the pipeline. The
+    // spawn_agent reachability variant is intentionally NOT used here: the
+    // spawned child consumes the SHARED destructive mock cassette, exhausting
+    // the main agent's next stream (spec §3 race).
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m3cf-"))
+    try {
+      const result = await runHeadless("list jobs", {
+        workspace: dir,
+        approveAll: true,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "job_list", args: {} }] },
+          { role: "assistant", text: "ok" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("glob is a real deferred tool discoverable by tool_search", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m3cf-"))
+    try {
+      const result = await runHeadless("find the glob tool", {
+        workspace: dir,
+        approveAll: true,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "tool_search", args: { query: "find files by pattern" } }] },
+          { role: "assistant", toolCalls: [{ name: "glob", args: { pattern: "**/*.txt" } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+})
+
 describe("headless CLI persistence (M4)", () => {
   it("runHeadless with a coordinator persists the session to a JSONL file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))

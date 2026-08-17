@@ -11,6 +11,9 @@ import { createFsTools } from "@i-harness/fs"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { registerToolSearch } from "@i-harness/tool-search"
+import { createFsSearchTools } from "@i-harness/fs-search"
+import { registerSubagent } from "@i-harness/subagent"
+import { createProviderRegistry } from "@i-harness/provider"
 
 export interface HeadlessOptions {
   workspace: string
@@ -49,21 +52,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     registerApprovalAnswerer(ctx, async () => ({ approved: true }))
   }
 
-  // register a deferred grep-style tool so tool_search has something to find
-  tools.register({
-    name: "grep",
-    description: "search text in files",
-    inputSchema: {
-      type: "object",
-      properties: { pattern: { type: "string" }, path: { type: "string" } },
-      required: ["pattern"],
-    },
-    exposure: "deferred",
-    searchHint: "find patterns",
-    isReadOnly: true,
-    execute: async () => ({ matches: [] }),
-  })
   registerToolSearch(ctx, tools)
+
+  // fs-search glob/grep (replaces the deferred grep stub below)
+  const execService = ctx.services.get<import("@i-harness/exec").ExecService>("exec/service")
+  for (const tool of createFsSearchTools({ exec: execService })) tools.register(tool)
 
   const model = opts.model ?? createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
 
@@ -98,6 +91,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   }
 
   try {
+    // Mount the subagent + job tools so the main agent can delegate.
+    registerSubagent(ctx, tools, {
+      providers: createProviderRegistry(),
+      exec: ctx.services.get<import("@i-harness/exec").ExecService>("exec/service"),
+      parentModel: model,
+      parentSession: session,
+    })
     const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
     const result = await agent.run(task)
     await flushPending()

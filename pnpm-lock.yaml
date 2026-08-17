@@ -41,6 +41,9 @@ importers:
       '@i-harness/fs':
         specifier: workspace:*
         version: link:../../packages/fs
+      '@i-harness/fs-search':
+        specifier: workspace:*
+        version: link:../../packages/fs-search
       '@i-harness/guard-approval':
         specifier: workspace:*
         version: link:../../packages/guard-approval
@@ -68,9 +71,15 @@ importers:
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell
+      '@i-harness/subagent':
+        specifier: workspace:*
+        version: link:../../packages/subagent
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../../packages/tool-search
+      '@vscode/ripgrep':
+        specifier: ^1.18.0
+        version: 1.18.0
 
   packages/core-agent:
     dependencies:
