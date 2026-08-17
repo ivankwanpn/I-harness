@@ -4,13 +4,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createRequire } from "node:module"
 import { openDatabase, SCHEMA_VERSION, MIGRATIONS, APPLICATION_ID } from "../src/schema.ts"
+import { createSqliteBackend, closeSqliteBackends } from "../src/index.ts"
 
 const require = createRequire(import.meta.url)
 const { DatabaseSync } = require("node:sqlite") as typeof import("node:sqlite")
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "sqlite-schema-")) })
-afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => { closeSqliteBackends(); rmSync(dir, { recursive: true, force: true }) })
 
 describe("sqlite schema", () => {
   it("opens a fresh database at SCHEMA_VERSION with all tables", () => {
@@ -76,5 +77,48 @@ describe("sqlite schema", () => {
     db.exec("CREATE TABLE stray (a TEXT)")
     db.close()
     expect(() => openDatabase(dbPath)).toThrow()
+  })
+})
+
+describe("sqlite backend", () => {
+  it("create + append + read round-trips events preserving order and ignorable", async () => {
+    const backend = createSqliteBackend(join(dir, "sessions.db"))
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
+    await backend.append("s1", [
+      { type: "turn/start" },
+      { type: "user/message", text: "hi" },
+      { type: "future/x", ignorable: true } as unknown as import("@i-harness/core-session").SessionEvent,
+    ])
+    const { version, events } = await backend.read("s1")
+    expect(version).toBe(1)
+    expect(events).toMatchObject([
+      { type: "turn/start" },
+      { type: "user/message", text: "hi" },
+      { type: "future/x", ignorable: true },
+    ])
+    expect(backend.capabilities).toEqual({ seekableRead: true, rawArtifacts: false })
+  })
+
+  it("list enumerates created sessions", async () => {
+    const backend = createSqliteBackend(join(dir, "sessions.db"))
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "a" })
+    await backend.create("s2", { formatVersion: 1, sessionId: "s2", createdAt: "b" })
+    expect((await backend.list()).sort()).toEqual(["s1", "s2"])
+  })
+
+  it("read throws for an unknown session", async () => {
+    const backend = createSqliteBackend(join(dir, "sessions.db"))
+    await expect(backend.read("nope")).rejects.toThrow(/unknown session/i)
+  })
+
+  it("repair re-closes an interrupted turn without truncating committed events", async () => {
+    const backend = createSqliteBackend(join(dir, "sessions.db"))
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
+    await backend.append("s1", [{ type: "turn/start" }, { type: "user/message", text: "hi" }])
+    const { events } = await backend.repair("s1")
+    expect(events.map((e) => e.type)).toEqual(["turn/start", "user/message", "turn/end"])
+    // repair is durable: re-reading shows the closers
+    const again = await backend.read("s1")
+    expect(again.events.map((e) => e.type)).toEqual(["turn/start", "user/message", "turn/end"])
   })
 })
