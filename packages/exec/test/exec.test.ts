@@ -35,3 +35,31 @@ describe("exec service", () => {
     expect(result.stdout.trim()).toBe(process.cwd())
   })
 })
+
+describe("exec background jobs", () => {
+  it("runBackground returns immediately and accumulates output", async () => {
+    const exec = createExecService()
+    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>console.log('done'), 100)"] })
+    expect(jobId).toMatch(/^bash-\d+$/)
+    expect(exec.getOutput(jobId).status).toBe("running")
+    await new Promise((r) => setTimeout(r, 300))
+    const view = exec.getOutput(jobId)
+    expect(view.status).toBe("completed")
+    expect(view.stdout.trim()).toBe("done")
+    expect(view.exitCode).toBe(0)
+  }, 10_000)
+
+  it("killJob cancels a running job and marks it killed", async () => {
+    const exec = createExecService()
+    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
+    expect(exec.killJob(jobId)).toBe("cancellation-requested")
+    await new Promise((r) => setTimeout(r, 300))
+    expect(exec.getOutput(jobId).status).toBe("killed")
+    expect(exec.killJob(jobId)).toBe("already-finished")
+  }, 10_000)
+
+  it("getOutput for unknown job throws", () => {
+    const exec = createExecService()
+    expect(() => exec.getOutput("nope")).toThrow(/unknown job/i)
+  })
+})
