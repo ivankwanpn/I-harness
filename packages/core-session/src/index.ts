@@ -54,6 +54,12 @@ export function deriveMessages(session: Session): LLMMessage[] {
       pendingCalls.push({ id: ev.callId, name: ev.name, args: ev.args })
     } else if (ev.type === "tool/result") {
       pendingResults.push({ role: "tool", toolCallId: ev.callId, content: JSON.stringify(ev.output) })
+    } else if (ev.type === "step/end") {
+      // Each step is a self-contained [assistant toolCalls -> tool results]
+      // unit; flushing at step/end keeps per-turn tool blocks separate so the
+      // log never folds across steps into consecutive user/tool-result runs
+      // (which would violate Anthropic's Messages API role alternation).
+      flushToolBlock()
     }
     // assistant/chunk events carry no model-visible text; skipped entirely
   }
