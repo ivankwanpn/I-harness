@@ -90,7 +90,79 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  return [spawnTool, waitTool, listTool]
+  const sendTool: Tool<{ target: string; message: string }, { queued: boolean }> = {
+    name: "send_message",
+    description: "Send a message to an existing subagent. Queued; does not trigger a new turn.",
+    inputSchema: { type: "object", properties: { target: { type: "string" }, message: { type: "string" } }, required: ["target", "message"] },
+    isReadOnly: false,
+    execute: async (args) => {
+      const entry = deps.table.get(args.target)
+      if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      entry.mailbox.push(args.message)
+      return { queued: true }
+    },
+  }
+
+  const interruptTool: Tool<{ target: string }, { previous_status: string }> = {
+    name: "interrupt_agent",
+    description: "Interrupt a subagent's current turn, if any, and return its previous status. The agent remains available.",
+    inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
+    isReadOnly: false,
+    execute: async (args) => {
+      const entry = deps.table.get(args.target)
+      if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      const previous = entry.status
+      entry.controller.abort()
+      return { previous_status: previous }
+    },
+  }
+
+  const followupTool: Tool<{ target: string; message: string }, { delivered: boolean }> = {
+    name: "followup_task",
+    description: "Send a follow-up task to a subagent and trigger a new turn. This sub-project queues the message and marks delivered; re-driving the loop is deferred.",
+    inputSchema: { type: "object", properties: { target: { type: "string" }, message: { type: "string" } }, required: ["target", "message"] },
+    isReadOnly: false,
+    execute: async (args) => {
+      const entry = deps.table.get(args.target)
+      if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      entry.mailbox.push(args.message)
+      return { delivered: true }
+    },
+  }
+
+  const closeTool: Tool<{ target: string }, { previous_status: string }> = {
+    name: "close_agent",
+    description: "Close a subagent and reclaim its resources (abort execution, remove from the table).",
+    inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
+    isReadOnly: false,
+    execute: async (args) => {
+      const entry = deps.table.get(args.target)
+      if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      const previous = entry.status
+      entry.controller.abort()
+      deps.table.remove(args.target)
+      return { previous_status: previous }
+    },
+  }
+
+  const resumeTool: Tool<{ target: string }, { resumed: boolean }> = {
+    name: "resume_agent",
+    description: "Re-activate a previously closed subagent path with a fresh controller and session.",
+    inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
+    isReadOnly: false,
+    execute: async (args) => {
+      deps.table.add(args.target, {
+        path: args.target,
+        status: "running",
+        session: createSession(),
+        controller: new AbortController(),
+        mailbox: [],
+      })
+      return { resumed: true }
+    },
+  }
+
+  return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool]
 }
 
 function parseForkTurns(value: string | number | undefined): "none" | "all" | number {
