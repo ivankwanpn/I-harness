@@ -31,6 +31,9 @@ describe("getArgv (shell-quote parser)", () => {
 describe("createShellTools", () => {
   const fakeExec: ExecService = {
     run: async () => ({ stdout: "ok", stderr: "", exitCode: 0, timedOut: false }),
+    runBackground: () => ({ jobId: "none" }),
+    getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+    killJob: () => "already-finished",
   }
 
   it("returns bash and pwsh tools carrying getArgv (for guard-approval)", () => {
@@ -48,6 +51,9 @@ describe("createShellTools", () => {
         captured = cmd.argv
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
+      runBackground: () => ({ jobId: "none" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
     }
     const [bash] = createShellTools({ exec: spyExec })
     const result = (await bash.execute({ command: "echo hi" }, {})) as {
@@ -68,10 +74,27 @@ describe("createShellTools", () => {
         captured = cmd.argv
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
+      runBackground: () => ({ jobId: "none" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
     }
     const [, pwsh] = createShellTools({ exec: spyExec })
     await pwsh.execute({ command: "Get-Date" }, {})
     expect(captured).toEqual(["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-Date"])
+  })
+
+  it("bash tool with background:true returns a job id immediately", async () => {
+    let ranBackground = false
+    const fakeExec: ExecService = {
+      run: async () => ({ stdout: "ok", stderr: "", exitCode: 0, timedOut: false }),
+      runBackground: () => { ranBackground = true; return { jobId: "bash-1" } },
+      getOutput: () => ({ id: "bash-1", status: "running", stdout: "", stderr: "" }),
+      killJob: () => "already-finished",
+    }
+    const [bash] = createShellTools({ exec: fakeExec })
+    const result = await bash.execute({ command: "sleep 5", background: true }, {})
+    expect(ranBackground).toBe(true)
+    expect(result).toEqual({ job_id: "bash-1" })
   })
 })
 

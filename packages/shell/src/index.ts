@@ -85,12 +85,12 @@ export interface ShellToolDeps {
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
-  const bash: Tool<{ command: string }, { stdout: string; exitCode: number }> = {
+  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
     name: "bash",
-    description: "run a bash command",
+    description: "run a bash command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
-      properties: { command: { type: "string" } },
+      properties: { command: { type: "string" }, background: { type: "boolean" } },
       required: ["command"],
     },
     getArgv: (args: { command: string }) => getArgv(args.command),
@@ -98,24 +98,32 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     // default shell (resolveShell can return pwsh on Windows without bash).
     // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
     // executing PowerShell.
-    execute: async (args: { command: string }, _exec: ToolExec) => {
-      const result = await deps.exec.run({ argv: ["bash", "-c", args.command] })
+    execute: async (args: { command: string; background?: boolean }, _exec: ToolExec) => {
+      const argv = ["bash", "-c", args.command]
+      if (args.background === true) {
+        const { jobId } = deps.exec.runBackground({ argv })
+        return { job_id: jobId }
+      }
+      const result = await deps.exec.run({ argv })
       return { stdout: result.stdout, exitCode: result.exitCode }
     },
   }
-  const pwsh: Tool<{ command: string }, { stdout: string; exitCode: number }> = {
+  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
     name: "pwsh",
-    description: "run a PowerShell command",
+    description: "run a PowerShell command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
-      properties: { command: { type: "string" } },
+      properties: { command: { type: "string" }, background: { type: "boolean" } },
       required: ["command"],
     },
     getArgv: (args: { command: string }) => getArgv(args.command),
-    execute: async (args: { command: string }, _exec: ToolExec) => {
-      const result = await deps.exec.run({
-        argv: ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command],
-      })
+    execute: async (args: { command: string; background?: boolean }, _exec: ToolExec) => {
+      const argv = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
+      if (args.background === true) {
+        const { jobId } = deps.exec.runBackground({ argv })
+        return { job_id: jobId }
+      }
+      const result = await deps.exec.run({ argv })
       return { stdout: result.stdout, exitCode: result.exitCode }
     },
   }
