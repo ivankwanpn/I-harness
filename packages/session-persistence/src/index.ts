@@ -40,6 +40,12 @@ export interface SessionCoordinator {
   load(sessionId: string): Promise<{ session: Session }>
   list(): Promise<string[]>
   flush(sessionId: string): Promise<void>
+  /**
+   * Drain all live write-behinds best-effort (flush failures are swallowed) and
+   * stop their automatic timers. Write-behinds stay in the map after close(),
+   * so a later enqueue still works; a session whose flush failed here retains
+   * its batch for a future enqueue/flush.
+   */
   close(): Promise<void>
   putDocument(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
