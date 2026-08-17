@@ -340,6 +340,47 @@ describe("headless CLI SQLite persistence (M5)", () => {
     }
   })
 
+  it("resume with --session-backend sqlite restores the persisted history into the model request", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
+    try {
+      const coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")))
+      const { id } = await coordinator.create()
+      await coordinator.append(id, [
+        { type: "turn/start" },
+        { type: "user/message", text: "earlier question" },
+        { type: "assistant/message", text: "earlier answer" },
+        { type: "turn/end" },
+      ])
+
+      const seen: LLMRequest[] = []
+      const recordingModel: ModelClient = {
+        async *stream(request: LLMRequest) {
+          seen.push(request)
+          yield { type: "text/chunk", text: "continued" }
+          yield { type: "end" }
+        },
+      }
+
+      const result = await runHeadless("continue here", {
+        workspace: dir,
+        approveAll: true,
+        resumeSessionId: id,
+        coordinator,
+        model: recordingModel,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(seen.length).toBeGreaterThan(0)
+      const texts = seen[0]!.messages.map((m) => m.content).filter((c) => c.length > 0)
+      expect(texts).toContain("earlier question")
+      expect(texts).toContain("earlier answer")
+    } finally {
+      // The sqlite backend holds an open DatabaseSync connection; close it
+      // before removing the dir, otherwise rmSync fails on Windows (EPERM).
+      closeSqliteBackends()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it("main() with --session-backend sqlite creates a sessions.db", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
