@@ -1,56 +1,56 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession } from "@i-harness/core-session"
-import { createToolRegistry, type Tool } from "@i-harness/core-tools"
+import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
+import type { ModelClient } from "@i-harness/llm-seam"
+import { registerShell } from "@i-harness/shell"
+import { createFsTools } from "@i-harness/fs"
+import { createApprovalPolicy } from "@i-harness/guard-approval"
+import { registerApprovalAnswerer } from "@i-harness/interaction"
 
 export interface HeadlessOptions {
   workspace: string
   mockScript?: MockStep[]
+  model?: ModelClient
+  approveAll?: boolean
 }
 
 export interface HeadlessResult {
   finalText: string
   exitCode: number
+  error?: string
 }
 
+// Headless single-agent run for the CLI. Everything lives on ONE scope/ctx:
+// the execution environment (exec + shell + fs tools) and the approval policy
+// are mounted on the same ctx that the agent's tool registry dispatches
+// through, so the policy IS in the dispatching scope for this path. Cross-scope
+// dispatch (a child scope's registry) is gated separately by core-tools'
+// `execute` consulting `ctx.resolveDecision` — see mechanism B in the Task 10
+// report.
 export async function runHeadless(task: string, opts: HeadlessOptions): Promise<HeadlessResult> {
   const ctx: PluginContext = createContext()
   const session = createSession()
   const tools = createToolRegistry(ctx)
 
-  // real file tools for the acceptance task
-  const readTool: Tool<{ path: string }, { content: string }> = {
-    name: "read",
-    description: "read a file",
-    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-    execute: async ({ path }) => {
-      const fs = await import("node:fs/promises")
-      const full = `${opts.workspace}/${path}`
-      return { content: await fs.readFile(full, "utf-8") }
-    },
-  }
-  const editTool: Tool<{ path: string; text: string }, { ok: boolean }> = {
-    name: "edit",
-    description: "write a file",
-    inputSchema: {
-      type: "object",
-      properties: { path: { type: "string" }, text: { type: "string" } },
-      required: ["path", "text"],
-    },
-    execute: async ({ path, text }) => {
-      const fs = await import("node:fs/promises")
-      const full = `${opts.workspace}/${path}`
-      await fs.writeFile(full, text, "utf-8")
-      return { ok: true }
-    },
-  }
-  tools.register(readTool)
-  tools.register(editTool)
+  // mount the execution environment + policy
+  registerShell(ctx, tools)
+  for (const tool of createFsTools({ workspace: opts.workspace })) tools.register(tool)
+  createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
 
-  const model = createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
+  // approval: approveAll → auto-approve; else fail closed (no answerer)
+  if (opts.approveAll) {
+    registerApprovalAnswerer(ctx, async () => ({ approved: true }))
+  }
 
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
-  const result = await agent.run(task)
-  return { finalText: result.finalText, exitCode: 0 }
+  const model = opts.model ?? createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
+
+  try {
+    const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
+    const result = await agent.run(task)
+    return { finalText: result.finalText, exitCode: 0 }
+  } catch (err) {
+    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
+  }
 }

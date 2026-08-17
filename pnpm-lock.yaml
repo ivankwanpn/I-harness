@@ -35,18 +35,36 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../../packages/core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../../packages/exec
+      '@i-harness/fs':
+        specifier: workspace:*
+        version: link:../../packages/fs
+      '@i-harness/guard-approval':
+        specifier: workspace:*
+        version: link:../../packages/guard-approval
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../../packages/interaction
+      '@i-harness/llm-anthropic':
+        specifier: workspace:*
+        version: link:../../packages/llm-anthropic
       '@i-harness/llm-mock':
         specifier: workspace:*
         version: link:../../packages/llm-mock
+      '@i-harness/llm-openai':
+        specifier: workspace:*
+        version: link:../../packages/llm-openai
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../../packages/llm-seam
       '@i-harness/preset':
         specifier: workspace:*
         version: link:../../packages/preset
+      '@i-harness/shell':
+        specifier: workspace:*
+        version: link:../../packages/shell
 
   packages/core-agent:
     dependencies:

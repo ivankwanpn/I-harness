@@ -1,20 +1,67 @@
 import { pathToFileURL } from "node:url"
-import { runHeadless } from "./run.ts"
+import { runHeadless, type HeadlessOptions } from "./run.ts"
+import { createOpenAIClient } from "@i-harness/llm-openai"
+import { createAnthropicClient } from "@i-harness/llm-anthropic"
+import type { ModelClient } from "@i-harness/llm-seam"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
 
+function parseModel(modelSpec: string, apiKey: string): ModelClient {
+  const [provider, model] = modelSpec.split(":")
+  if (provider === "openai") return createOpenAIClient({ apiKey, model: model ?? "gpt-4o" })
+  if (provider === "deepseek") return createOpenAIClient({ apiKey, baseUrl: "https://api.deepseek.com", model: model ?? "deepseek-chat" })
+  if (provider === "anthropic") return createAnthropicClient({ apiKey, model: model ?? "claude-3-5-sonnet-latest" })
+  throw new Error(`unknown model provider: ${provider}`)
+}
+
 export function main(argv: string[]): Promise<number> {
-  const cmd = argv[2]
-  if (cmd === "run") {
-    const task = argv.slice(3).join(" ")
-    return runHeadless(task, { workspace: process.cwd() }).then((r) => {
-      console.log(r.finalText)
-      return r.exitCode
-    })
+  const args = argv.slice(2)
+  if (args[0] !== "run") {
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes]")
+    return Promise.resolve(1)
   }
-  console.error("usage: i-harness run <task>")
-  return Promise.resolve(1)
+
+  const yes = args.includes("--yes")
+  const modelIdx = args.indexOf("--model")
+  const keyIdx = args.indexOf("--api-key")
+
+  // --model requires --api-key: fail loud rather than silently falling back.
+  let model: ModelClient | undefined
+  if (modelIdx !== -1) {
+    const modelSpec = args[modelIdx + 1]
+    const apiKey = args[keyIdx + 1]
+    if (keyIdx === -1 || !modelSpec || !apiKey) {
+      console.error("--model requires --api-key KEY")
+      return Promise.resolve(1)
+    }
+    try {
+      model = parseModel(modelSpec, apiKey)
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err))
+      return Promise.resolve(1)
+    }
+  }
+
+  // task = everything after the "run" command, excluding flag tokens/values.
+  const taskArgs = args.slice(1).filter((a, i) => {
+    if (a === "--model" || a === "--api-key" || a === "--yes") return false
+    const prev = args.slice(1)[i - 1]
+    return prev !== "--model" && prev !== "--api-key"
+  })
+  const task = taskArgs.join(" ")
+  if (!task) {
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes]")
+    return Promise.resolve(1)
+  }
+
+  const opts: HeadlessOptions = { workspace: process.cwd(), approveAll: yes }
+  if (model) opts.model = model
+  return runHeadless(task, opts).then((r) => {
+    if (r.finalText) console.log(r.finalText)
+    if (r.error) console.error(r.error)
+    return r.exitCode
+  })
 }
 
 // Entry guard: invoke main only when this module is executed directly as the
