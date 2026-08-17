@@ -5,5 +5,8 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
-  "dependencies": { "@i-harness/core-tools": "workspace:*" }
+  "dependencies": {
+    "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-tools": "workspace:*"
+  }
 }
