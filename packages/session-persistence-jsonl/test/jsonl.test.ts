@@ -86,6 +86,13 @@ describe("jsonl backend", () => {
     await backend.create("s2", { formatVersion: 1, sessionId: "s2", createdAt: "x" })
     expect((await backend.list()).sort()).toEqual(["s1", "s2"])
   })
+
+  it("list excludes document sidecars", async () => {
+    const backend = createJsonlBackend(dir)
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
+    await backend.putDocument("subagent-state", { jobs: [] })
+    expect((await backend.list()).sort()).toEqual(["s1"])
+  })
 })
 
 describe("jsonl documents", () => {
