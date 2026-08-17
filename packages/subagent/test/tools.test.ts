@@ -153,8 +153,8 @@ describe("job tools bridge", () => {
     const output = all.find((t) => t.name === "job_output")!
     const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>console.log('bg done'), 100)"] })
     expect(jobId).toMatch(/^bash-\d+$/)
-    await new Promise((r) => setTimeout(r, 300))
-    const read = await output.execute({ job_id: jobId }, {})
+    // wait:true exercises the exec-fallback poll-wait path and avoids a fixed sleep.
+    const read = await output.execute({ job_id: jobId, wait: true, timeout_ms: 5000 }, {})
     expect((read as { status: string }).status).toBe("completed")
     expect((read as { text: string }).text).toContain("bg done")
     expect((read as { text: string }).text).toContain("[status: completed]")
