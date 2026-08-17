@@ -1,0 +1,18 @@
+{
+  "name": "@i-harness/subagent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-tools": "workspace:*",
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/core-agent": "workspace:*",
+    "@i-harness/llm-seam": "workspace:*",
+    "@i-harness/provider": "workspace:*",
+    "@i-harness/exec": "workspace:*",
+    "@i-harness/preset": "workspace:*"
+  }
+}
