@@ -31,6 +31,20 @@ export interface HeadlessResult {
   error?: string
 }
 
+// Shape guard for the restored subagent-state document: a wrong-shape-but-valid
+// JSON document must degrade to fresh registries instead of throwing inside
+// restoreState (which the outer catch would turn into exitCode 1).
+function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
+  if (typeof doc !== "object" || doc === null) return false
+  const d = doc as Record<string, unknown>
+  return (
+    d.formatVersion === 1 &&
+    Array.isArray(d.jobs) &&
+    Array.isArray(d.agentTable) &&
+    Array.isArray(d.roles)
+  )
+}
+
 // M6: serialize document writes through the coordinator. Subagent persistence
 // saves are fire-and-forget (`void save(...)` in the wrapped registries), so
 // two saves can race two putDocument calls against the same sidecar file and
@@ -118,7 +132,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // M6: the subagent-state document is keyed by the session id (spec:
       // "stateId derived from the session id") so sessions never share state.
       const doc = await opts.coordinator.getDocument(activeId)
-      if (doc) restoredState = doc as SubagentStateSnapshot
+      if (doc && isSubagentStateSnapshot(doc)) restoredState = doc
     } catch {
       restoredState = undefined
     }
