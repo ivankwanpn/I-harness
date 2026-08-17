@@ -4,8 +4,8 @@ export type SessionEvent =
   | { type: "user/message"; text: string; seq?: number }
   | { type: "assistant/chunk"; text: string; seq?: number }
   | { type: "assistant/message"; text: string; seq?: number }
-  | { type: "tool/call"; name: string; args: unknown; seq?: number }
-  | { type: "tool/result"; name: string; output: unknown; seq?: number }
+  | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
+  | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
   | { type: "step/end"; seq?: number }
   | { type: "turn/end"; seq?: number }
 
@@ -28,19 +28,48 @@ export function append(session: Session, event: SessionEvent): void {
   session.events.push(ev)
 }
 
-export interface LLMMessage {
-  role: "user" | "assistant"
-  content: string
-}
+export type LLMMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string; toolCalls?: { id: string; name: string; args: unknown }[] }
+  | { role: "tool"; toolCallId: string; content: string }
 
 export function deriveMessages(session: Session): LLMMessage[] {
   const result: LLMMessage[] = []
+  // A tool block is one step of assistant toolCalls followed by its tool
+  // results. Both are buffered and flushed together (assistant toolCalls
+  // FIRST, then tool results) so the model-visible order matches what the
+  // APIs expect (function_call before function_call_output / tool_use before
+  // tool_result), regardless of how the session log interleaves them.
+  let pendingCalls: { id: string; name: string; args: unknown }[] | undefined
+  const pendingResults: LLMMessage[] = []
   for (const ev of session.events) {
-    if (ev.type === "user/message") result.push({ role: "user", content: ev.text })
-    else if (ev.type === "assistant/message") result.push({ role: "assistant", content: ev.text })
-    // assistant/chunk events carry no model-visible text; they are skipped entirely
+    if (ev.type === "user/message") {
+      flushToolBlock()
+      result.push({ role: "user", content: ev.text })
+    } else if (ev.type === "assistant/message") {
+      flushToolBlock()
+      result.push({ role: "assistant", content: ev.text })
+    } else if (ev.type === "tool/call") {
+      pendingCalls ??= []
+      pendingCalls.push({ id: ev.callId, name: ev.name, args: ev.args })
+    } else if (ev.type === "tool/result") {
+      pendingResults.push({ role: "tool", toolCallId: ev.callId, content: JSON.stringify(ev.output) })
+    }
+    // assistant/chunk events carry no model-visible text; skipped entirely
   }
+  flushToolBlock()
   return result
+
+  function flushToolBlock() {
+    if (pendingCalls) {
+      result.push({ role: "assistant", content: "", toolCalls: pendingCalls })
+      pendingCalls = undefined
+    }
+    if (pendingResults.length > 0) {
+      result.push(...pendingResults)
+      pendingResults.length = 0
+    }
+  }
 }
 
 export function toJSONL(session: Session): string {

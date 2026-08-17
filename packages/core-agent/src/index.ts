@@ -31,6 +31,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
   return {
     async run(task: string): Promise<AgentResult> {
       let turns = 0
+      let callSeq = 0
       const reasoning: string[] = []
 
       append(deps.session, { type: "turn/start" })
@@ -70,9 +71,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
               reasoning.push(ev.text)
               break
             case "tool_call":
-              append(deps.session, { type: "tool/call", name: ev.call.name, args: ev.call.args })
+              callSeq += 1
+              const callId = `call_${callSeq}`
+              append(deps.session, { type: "tool/call", callId, name: ev.call.name, args: ev.call.args })
               const result = await deps.tools.execute({ name: ev.call.name, args: ev.call.args })
-              append(deps.session, { type: "tool/result", name: ev.call.name, output: result.output })
+              append(deps.session, { type: "tool/result", callId, name: ev.call.name, output: result.output })
               toolCallsThisStep += 1
               break
             case "error":
