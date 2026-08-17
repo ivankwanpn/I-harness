@@ -63,7 +63,7 @@ Flat string per deferred tool:
 
 ### 2.2 tokenize
 
-`splitName` (CamelCase `([\p{Ll}\d])([\p{Lu}])` → space, `_`/`-` → space) then lowercase, split on `[^\p{L}\p{N}]+`, drop empties and STOPWORDS (`the, a, an, of, to, and, or, for, in, on, with, is, are`).
+`splitName` (CamelCase `([\p{Ll}\d])([\p{Lu}])` → space, `_`/`-` → space) then lowercase, split on `[^\p{L}\p{N}]+`, drop empties and STOPWORDS (`the, a, an, of, to, and, or, for, in, on, with, is, are, my`).
 
 ### 2.3 BM25 ranking
 
