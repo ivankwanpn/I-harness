@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
 import {
   createSessionCoordinator,
@@ -114,7 +114,7 @@ describe("session coordinator", () => {
     await expect(coordinator.load("s1")).rejects.toThrow(/unknown event type/i)
   })
 
-  it("flush resolves (append batches already fsync at the backend)", async () => {
+  it("flush on a session with no write-behind resolves (no pending writes)", async () => {
     const coordinator = createSessionCoordinator(fakeBackend())
     const { id } = await coordinator.create()
     await expect(coordinator.flush(id)).resolves.toBeUndefined()
@@ -129,5 +129,48 @@ describe("session coordinator documents", () => {
     await coordinator.putDocument("subagent-state", doc)
     expect(await coordinator.getDocument("subagent-state")).toEqual(doc)
     expect(await coordinator.getDocument("missing")).toBeUndefined()
+  })
+})
+
+describe("session coordinator write-behind (M7)", () => {
+  it("enqueue then flush persists events through the backend", async () => {
+    const backend = fakeBackend()
+    const coordinator = createSessionCoordinator(backend)
+    const { id } = await coordinator.create()
+    coordinator.enqueue(id, [{ type: "turn/start" }, { type: "turn/end" }])
+    await coordinator.flush(id)
+    const { events } = await backend.read(id)
+    expect(events).toMatchObject([{ type: "turn/start" }, { type: "turn/end" }])
+  })
+
+  it("flush on a session with no write-behind resolves", async () => {
+    const coordinator = createSessionCoordinator(fakeBackend())
+    await expect(coordinator.flush("sess-none")).resolves.toBeUndefined()
+  })
+
+  it("close drains sessions and documents and is idempotent", async () => {
+    const backend = fakeBackend()
+    const coordinator = createSessionCoordinator(backend)
+    const { id } = await coordinator.create()
+    coordinator.enqueue(id, [{ type: "turn/start" }])
+    await coordinator.putDocument("k", { a: 1 })
+    await coordinator.close()
+    await coordinator.close()
+    const { events } = await backend.read(id)
+    expect(events).toMatchObject([{ type: "turn/start" }])
+    expect(await backend.getDocument("k")).toEqual({ a: 1 })
+  })
+
+  it("putDocument never rejects and reports background failures", async () => {
+    const backend = fakeBackend()
+    const report = vi.fn()
+    const coordinator = createSessionCoordinator(backend, { reportBackgroundFailure: report })
+    const failing = vi.spyOn(backend, "putDocument").mockRejectedValueOnce(new Error("disk"))
+    await expect(coordinator.putDocument("k", {})).resolves.toBeUndefined()
+    expect(report).toHaveBeenCalledTimes(1)
+    expect(failing).toHaveBeenCalledTimes(1)
+    // the chain stays alive: the next putDocument still lands
+    await coordinator.putDocument("k2", { b: 2 })
+    expect(await backend.getDocument("k2")).toEqual({ b: 2 })
   })
 })
