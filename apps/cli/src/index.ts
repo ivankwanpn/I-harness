@@ -1,9 +1,11 @@
 import { pathToFileURL } from "node:url"
+import { join } from "node:path"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createSqliteBackend } from "@i-harness/session-persistence-sqlite"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 
 export { runHeadless } from "./run.ts"
@@ -24,7 +26,7 @@ export function parseModel(modelSpec: string, apiKey: string): ModelClient {
 export async function main(argv: string[]): Promise<number> {
   const args = argv.slice(2)
   if (args[0] !== "run") {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID]")
     return Promise.resolve(1)
   }
 
@@ -33,6 +35,16 @@ export async function main(argv: string[]): Promise<number> {
   const keyIdx = args.indexOf("--api-key")
   const sessionDirIdx = args.indexOf("--session-dir")
   const resumeIdx = args.indexOf("--resume")
+  const backendIdx = args.indexOf("--session-backend")
+  let sessionBackend: "jsonl" | "sqlite" = "jsonl"
+  if (backendIdx !== -1) {
+    const value = args[backendIdx + 1]
+    if (value === "sqlite" || value === "jsonl") sessionBackend = value
+    else {
+      console.error("--session-backend must be jsonl or sqlite")
+      return Promise.resolve(1)
+    }
+  }
 
   // persistence wiring
   let coordinator: SessionCoordinator | undefined
@@ -44,7 +56,11 @@ export async function main(argv: string[]): Promise<number> {
       console.error("--session-dir requires a directory")
       return Promise.resolve(1)
     }
-    coordinator = createSessionCoordinator(createJsonlBackend(dir))
+    if (sessionBackend === "sqlite") {
+      coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")))
+    } else {
+      coordinator = createSessionCoordinator(createJsonlBackend(dir))
+    }
     if (resumeIdx !== -1) {
       resumeSessionId = args[resumeIdx + 1]
       if (!resumeSessionId) {
@@ -76,13 +92,13 @@ export async function main(argv: string[]): Promise<number> {
 
   // task = everything after the "run" command, excluding flag tokens/values.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume") return false
+    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--session-backend") return false
     const prev = args.slice(1)[i - 1]
-    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume"
+    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--session-backend"
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID]")
     return Promise.resolve(1)
   }
 
