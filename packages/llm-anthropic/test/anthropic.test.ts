@@ -100,4 +100,40 @@ describe("llm-anthropic protocol", () => {
     }
     expect(events).toEqual(["r:ponder", "r:ing", "end"])
   })
+
+  it("yields an error event and aborts on malformed tool args", async () => {
+    const sse = [
+      `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "write", input: {} } })}`,
+      `data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{not-json" } })}`,
+      `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+      `data: ${JSON.stringify({ type: "message_stop" })}`,
+    ].join("\n\n")
+    const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: string[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "error") events.push("error")
+      if (ev.type === "end") events.push("end")
+      if (ev.type === "tool_call") events.push("tool")
+    }
+    expect(events).toEqual(["error"]) // error, and NO end, NO tool_call
+  })
+
+  it("uses inline input as tool args when no deltas arrive", async () => {
+    const sse = [
+      `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "write", input: { path: "a.txt", text: "hi" } } })}`,
+      `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+      `data: ${JSON.stringify({ type: "message_stop" })}`,
+    ].join("\n\n")
+    const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    let call: { name: string; args: unknown } | undefined
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "tool_call") call = ev.call
+    }
+    expect(call?.name).toBe("write")
+    expect(call?.args).toEqual({ path: "a.txt", text: "hi" })
+  })
 })
