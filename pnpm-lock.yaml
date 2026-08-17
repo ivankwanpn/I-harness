@@ -59,6 +59,12 @@ importers:
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../../packages/provider
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../../packages/session-persistence
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../../packages/session-persistence-jsonl
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell

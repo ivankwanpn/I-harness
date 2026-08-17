@@ -2,6 +2,9 @@ import { pathToFileURL } from "node:url"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -18,16 +21,41 @@ export function parseModel(modelSpec: string, apiKey: string): ModelClient {
   return buildModelClient(profile, model)
 }
 
-export function main(argv: string[]): Promise<number> {
+export async function main(argv: string[]): Promise<number> {
   const args = argv.slice(2)
   if (args[0] !== "run") {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID]")
     return Promise.resolve(1)
   }
 
   const yes = args.includes("--yes")
   const modelIdx = args.indexOf("--model")
   const keyIdx = args.indexOf("--api-key")
+  const sessionDirIdx = args.indexOf("--session-dir")
+  const resumeIdx = args.indexOf("--resume")
+
+  // persistence wiring
+  let coordinator: SessionCoordinator | undefined
+  let sessionId: string | undefined
+  let resumeSessionId: string | undefined
+  if (sessionDirIdx !== -1) {
+    const dir = args[sessionDirIdx + 1]
+    if (!dir) {
+      console.error("--session-dir requires a directory")
+      return Promise.resolve(1)
+    }
+    coordinator = createSessionCoordinator(createJsonlBackend(dir))
+    if (resumeIdx !== -1) {
+      resumeSessionId = args[resumeIdx + 1]
+      if (!resumeSessionId) {
+        console.error("--resume requires a session id")
+        return Promise.resolve(1)
+      }
+    } else {
+      const { id } = await coordinator.create()
+      sessionId = id
+    }
+  }
 
   // --model requires --api-key: fail loud rather than silently falling back.
   let model: ModelClient | undefined
@@ -48,18 +76,23 @@ export function main(argv: string[]): Promise<number> {
 
   // task = everything after the "run" command, excluding flag tokens/values.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes") return false
+    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume") return false
     const prev = args.slice(1)[i - 1]
-    return prev !== "--model" && prev !== "--api-key"
+    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume"
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID]")
     return Promise.resolve(1)
   }
 
   const opts: HeadlessOptions = { workspace: process.cwd(), approveAll: yes }
   if (model) opts.model = model
+  if (coordinator) {
+    opts.coordinator = coordinator
+    if (sessionId) opts.sessionId = sessionId
+    if (resumeSessionId) opts.resumeSessionId = resumeSessionId
+  }
   return runHeadless(task, opts).then((r) => {
     if (r.finalText) console.log(r.finalText)
     if (r.error) console.error(r.error)
