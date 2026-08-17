@@ -9,6 +9,7 @@ export interface Tool<Args = unknown, Output = unknown> {
   timeoutMs?: number
   isConcurrencySafe?: boolean
   isReadOnly?: boolean
+  getArgv?(args: Args): string[]
 }
 
 export interface ToolExec {
