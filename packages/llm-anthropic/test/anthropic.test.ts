@@ -23,7 +23,8 @@ describe("llm-anthropic protocol", () => {
   it("maps a mocked SSE response to LLMStreamEvents", async () => {
     const sse = [
       `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "hel" } })}`,
-      `data: ${JSON.stringify({ type: "content_block_start", content_block: { type: "tool_use", name: "read", input: {} } })}`,
+      `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", name: "read", input: {} } })}`,
+      `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
       `data: ${JSON.stringify({ type: "message_stop" })}`,
     ].join("\n\n")
     const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }))
@@ -36,5 +37,67 @@ describe("llm-anthropic protocol", () => {
       if (ev.type === "end") events.push("end")
     }
     expect(events).toEqual(["t:hel", "c:read", "end"])
+  })
+
+  it("translates neutral tool messages to Messages content blocks", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const request: LLMRequest = {
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
+      ],
+      tools: [],
+      systemPrompt: "sys",
+    }
+    const it = client.stream(request)[Symbol.asyncIterator]()
+    await it.next()
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string)
+    expect(body.messages).toEqual([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "read", input: { path: "a.txt" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: '{"content":"data"}' }] },
+    ])
+    await it.return?.()
+  })
+
+  it("accumulates input_json_delta into tool args", async () => {
+    const sse = [
+      `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "write", input: {} } })}`,
+      `data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: "{\"path\"" } })}`,
+      `data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: ":\"a.txt\"}" } })}`,
+      `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+      `data: ${JSON.stringify({ type: "message_stop" })}`,
+    ].join("\n\n")
+    const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    let call: { name: string; args: unknown } | undefined
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "tool_call") call = ev.call
+    }
+    expect(call?.name).toBe("write")
+    expect(call?.args).toEqual({ path: "a.txt" })
+  })
+
+  it("forwards reasoning events and flushes before end", async () => {
+    const sse = [
+      `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "ponder" } })}`,
+      `data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "ing" } })}`,
+      `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+      `data: ${JSON.stringify({ type: "message_stop" })}`,
+    ].join("\n\n")
+    const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: string[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "reasoning") events.push(`r:${ev.text}`)
+      if (ev.type === "end") events.push("end")
+    }
+    expect(events).toEqual(["r:ponder", "r:ing", "end"])
   })
 })
