@@ -498,24 +498,44 @@ describe("headless CLI subagent state persistence (M6)", () => {
         agentTable: [],
         roles: [{ name: "custom", description: "d", systemPrompt: "custom prompt", tools: ["read"] }],
       })
-      const seen: LLMRequest[] = []
-      const recordingModel: ModelClient = {
-        async *stream(request: LLMRequest) { seen.push(request); yield { type: "text/chunk", text: "continued" }; yield { type: "end" } },
+      // Deterministic resume driver: first stream yields a spawn with the
+      // restored custom role; every later stream (child + main agent) is text.
+      // If restoreState skipped the custom role, spawn_agent throws
+      // `unknown role: custom` and no "helper" job ever appears.
+      let calls = 0
+      const resumeModel: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = calls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", agent_type: "custom" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "continued" }
+          yield { type: "end" }
+        },
       }
       const result = await runHeadless("continue", {
         workspace: dir,
         approveAll: true,
         resumeSessionId: id,
         coordinator,
-        model: recordingModel,
+        model: resumeModel,
       })
       expect(result.exitCode).toBe(0)
-      // The custom role must be registered (spawnable) and the restored job
-      // readable — assert via a second spawn attempt in the same run is hard
-      // with a recording model, so assert the state was restored by checking
-      // the document was not clobbered (still has custom role).
-      const after = await coordinator.getDocument("subagent-state")
-      expect((after as { roles: { name: string }[] }).roles.map((r) => r.name)).toContain("custom")
+      // The spawn's terminal save snapshots the full restored state: the
+      // restored job (label "old") AND the new spawn (label "helper", only
+      // possible if the restored custom role was effective). Poll until both.
+      const state = await pollUntil(async () => {
+        const doc = await coordinator.getDocument("subagent-state")
+        if (!doc) return undefined
+        const labels = (doc as { jobs: { label: string; status: string }[] }).jobs.map((j) => j.label)
+        const allSettled = (doc as { jobs: { status: string }[] }).jobs.every((j) => j.status !== "running")
+        if (!allSettled) return undefined
+        return labels.includes("old") && labels.includes("helper") ? doc : undefined
+      })
+      expect(state).toBeDefined()
+      expect((state as { roles: { name: string }[] }).roles.map((r) => r.name)).toContain("custom")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
