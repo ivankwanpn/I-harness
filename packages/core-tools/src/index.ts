@@ -39,6 +39,29 @@ export interface ToolSchema {
 
 const DECISION_KINDS = new Set(["allow", "deny", "ask"])
 
+// Strictness ranking for decision merging: deny > ask > allow. A stricter
+// decision always wins so an ancestor deny can never be downgraded by a nearer
+// allow (monotonic, matching the guard layer's union-of-ancestors semantics).
+const DECISION_STRICTNESS: Record<ToolDecision["kind"], number> = { allow: 0, ask: 1, deny: 2 }
+
+// Validate an arbitrary value against the same closed-vocabulary rules as the
+// pre-execute waterfall handler (audit F03-1): a non-object is malformed
+// (HARD error, never allow); an object without `kind` contributes no decision;
+// an object whose `kind` is outside the vocabulary is malformed. Returns the
+// stricter of the local decision and the (validated) candidate.
+function mergeDecision(local: ToolDecision, candidate: unknown): ToolDecision {
+  if (candidate === undefined) return local
+  if (typeof candidate !== "object" || candidate === null) {
+    throw new Error(`malformed pre-execute decision: ${JSON.stringify(candidate)}`)
+  }
+  const d = candidate as ToolDecision
+  if (!("kind" in d)) return local
+  if (!DECISION_KINDS.has(d.kind)) {
+    throw new Error(`malformed pre-execute decision: ${JSON.stringify(candidate)}`)
+  }
+  return DECISION_STRICTNESS[d.kind] > DECISION_STRICTNESS[local.kind] ? d : local
+}
+
 type ApprovalAnswerer = (req: { name: string; reason: string }) => Promise<boolean>
 
 export interface ToolRegistry {
@@ -106,14 +129,24 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     decision = { kind: "allow" }
     await ctx.emit("tools/pre-execute", call)
 
+    // 1b. Cross-scope fail-open fix (Task 10 mechanism B): `emit` propagates
+    // CHILD → PARENT, so a policy mounted on an ancestor scope (e.g.
+    // guard-approval on the parent) runs and may decide, but its decision never
+    // flows BACK DOWN into this registry's own waterfall chain — the local
+    // `decision` slot would stay "allow" and a dangerous child-scope dispatch
+    // would execute silently. The scope plumbing records ancestor decisions
+    // (plain-listener seeds, nearest-wins) and exposes them via
+    // `ctx.resolveDecision`; consult it and merge so a stricter ancestor
+    // decision gates this dispatch from any scope in the chain.
+    const ancestorDecision = ctx.resolveDecision("tools/pre-execute", call)
+    const resolved = mergeDecision(decision, ancestorDecision)
+
     // 2. monotonic guards run UNCONDITIONALLY before any dispatch (audit F03-1):
     //    a decision-shaped object can never short-circuit the guard layer.
     const guardReason = ctx.checkGuards("tools/execute", { name: call.name, args: call.args })
     if (guardReason !== undefined) throw new Error(`guard denied: ${guardReason}`)
 
     // 3. decision enforcement + approval seam — fail closed: no answerer ⇒ deny.
-    //    (read the shared slot into a local so TS can narrow the union)
-    const resolved = decision as ToolDecision
     if (resolved.kind === "deny") throw new Error(`denied: ${resolved.reason}`)
     if (resolved.kind === "ask") {
       let answerer: ApprovalAnswerer | null = null
