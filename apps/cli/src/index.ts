@@ -1,7 +1,6 @@
 import { pathToFileURL } from "node:url"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
-import { createOpenAIClient } from "@i-harness/llm-openai"
-import { createAnthropicClient } from "@i-harness/llm-anthropic"
+import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
 
 export { runHeadless } from "./run.ts"
@@ -9,10 +8,14 @@ export type { HeadlessOptions, HeadlessResult } from "./run.ts"
 
 function parseModel(modelSpec: string, apiKey: string): ModelClient {
   const [provider, model] = modelSpec.split(":")
-  if (provider === "openai") return createOpenAIClient({ apiKey, model: model ?? "gpt-4o" })
-  if (provider === "deepseek") return createOpenAIClient({ apiKey, baseUrl: "https://api.deepseek.com", model: model ?? "deepseek-chat" })
-  if (provider === "anthropic") return createAnthropicClient({ apiKey, model: model ?? "claude-3-5-sonnet-latest" })
-  throw new Error(`unknown model provider: ${provider}`)
+  const reg = createProviderRegistry()
+  // built-in convenience profiles so the CLI keeps working without user config
+  reg.register({ name: "openai", displayName: "OpenAI", protocol: "openai-responses", apiKey, models: [] })
+  reg.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible", baseUrl: "https://api.deepseek.com", apiKey, models: [] })
+  reg.register({ name: "anthropic", displayName: "Anthropic", protocol: "anthropic-messages", apiKey, models: [] })
+  const profile = reg.get(provider ?? "")
+  if (!profile) throw new Error(`unknown model provider: ${provider}`)
+  return buildModelClient(profile, model ?? "gpt-4o")
 }
 
 export function main(argv: string[]): Promise<number> {

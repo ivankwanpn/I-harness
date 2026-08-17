@@ -62,6 +62,9 @@ importers:
       '@i-harness/preset':
         specifier: workspace:*
         version: link:../../packages/preset
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../../packages/provider
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell
@@ -169,6 +172,21 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+
+  packages/provider:
+    dependencies:
+      '@i-harness/llm-anthropic':
+        specifier: workspace:*
+        version: link:../llm-anthropic
+      '@i-harness/llm-openai':
+        specifier: workspace:*
+        version: link:../llm-openai
+      '@i-harness/llm-openai-compatible':
+        specifier: workspace:*
+        version: link:../llm-openai-compatible
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
 
   packages/shell:
     dependencies:
