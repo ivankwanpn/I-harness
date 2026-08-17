@@ -4,6 +4,7 @@ export interface OpenAICompatibleConfig {
   apiKey: string
   baseUrl?: string
   model: string
+  options?: Record<string, unknown>
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -52,6 +53,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
           function: { name: t.name, description: t.description, parameters: t.inputSchema },
         })),
         stream: true,
+        ...(config.options ?? {}),
       }
       const response = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: "POST",

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createProviderRegistry, buildModelClient } from "../src/index.ts"
 
 describe("provider registry", () => {
@@ -28,5 +28,37 @@ describe("provider registry", () => {
 
   it("buildModelClient throws on unknown protocol", () => {
     expect(() => buildModelClient({ name: "x", displayName: "X", protocol: "bogus" as never }, "m")).toThrow(/protocol/i)
+  })
+})
+
+describe("buildModelClient defaults and extra", () => {
+  it("falls back to profile.defaultModel when model is omitted", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = buildModelClient(
+      { name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible", baseUrl: "https://api.deepseek.com", apiKey: "k", defaultModel: "deepseek-chat" },
+      undefined as unknown as string,
+    )
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as never)[Symbol.asyncIterator]()
+    await it.next()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toContain("/v1/chat/completions")
+    expect(JSON.parse(init.body as string).model).toBe("deepseek-chat")
+    await it.return?.()
+  })
+
+  it("passes extra through to the request body", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = buildModelClient(
+      { name: "o", displayName: "O", protocol: "openai-compatible", apiKey: "k" },
+      "m",
+      { reasoning_effort: "high" },
+    )
+    const it = client.stream({ messages: [], tools: [], systemPrompt: "" } as never)[Symbol.asyncIterator]()
+    await it.next()
+    const [, init] = fetchMock.mock.calls[0]!
+    expect(JSON.parse(init.body as string).reasoning_effort).toBe("high")
+    await it.return?.()
   })
 })

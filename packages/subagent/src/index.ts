@@ -9,3 +9,56 @@ export { spawnChild } from "./child.ts"
 export type { SpawnOptions } from "./child.ts"
 export { createSubagentTools } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
+
+import type { PluginContext } from "@i-harness/core-plugin"
+import type { ToolRegistry } from "@i-harness/core-tools"
+import { createSession } from "@i-harness/core-session"
+import type { ModelClient } from "@i-harness/llm-seam"
+import type { ProviderRegistry } from "@i-harness/provider"
+import type { ExecService } from "@i-harness/exec"
+import { createJobRegistry, type JobRegistry } from "./jobs.ts"
+import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
+import { createAgentTable, type AgentTable } from "./agent-table.ts"
+import { createSubagentTools } from "./tools.ts"
+
+export interface RegisterSubagentOptions {
+  providers: ProviderRegistry
+  exec: ExecService
+  parentModel: ModelClient
+  parentSession: ReturnType<typeof createSession>
+}
+
+export interface RegisterSubagentResult {
+  roles: RoleRegistry
+  jobs: JobRegistry
+  table: AgentTable
+}
+
+// Mount entry point (spec §1.1.6 / §2.3): seeds the role registry with the
+// four built-in roles, creates the job registry + agent table, builds the 11
+// subagent/job tools, and registers them on the parent registry.
+export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistry, opts: RegisterSubagentOptions): RegisterSubagentResult {
+  const roles = createRoleRegistry()
+  for (const r of builtinRoles()) {
+    if (!roles.get(r.name)) roles.register(r)
+  }
+  const jobs = createJobRegistry()
+  const table = createAgentTable()
+  const tools = createSubagentTools({
+    table,
+    jobs,
+    roles,
+    parentRegistry,
+    parentSession: opts.parentSession,
+    parentCtx: ctx,
+    parentModel: opts.parentModel,
+    providers: opts.providers,
+    exec: opts.exec,
+  })
+  // ToolRegistry.register throws on duplicate names, so skip tools the parent
+  // already has — makes registerSubagent idempotent for repeat mounts.
+  for (const tool of tools) {
+    if (!parentRegistry.get(tool.name)) parentRegistry.register(tool)
+  }
+  return { roles, jobs, table }
+}

@@ -47,15 +47,9 @@ importers:
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../../packages/interaction
-      '@i-harness/llm-anthropic':
-        specifier: workspace:*
-        version: link:../../packages/llm-anthropic
       '@i-harness/llm-mock':
         specifier: workspace:*
         version: link:../../packages/llm-mock
-      '@i-harness/llm-openai':
-        specifier: workspace:*
-        version: link:../../packages/llm-openai
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../../packages/llm-seam

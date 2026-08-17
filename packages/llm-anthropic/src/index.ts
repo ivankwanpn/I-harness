@@ -4,6 +4,7 @@ export interface AnthropicConfig {
   apiKey: string
   baseUrl?: string
   model: string
+  options?: Record<string, unknown>
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -37,6 +38,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         }),
         tools: request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
         stream: true,
+        ...(config.options ?? {}),
       }
       const response = await fetch(`${baseUrl}/v1/messages`, {
         method: "POST",

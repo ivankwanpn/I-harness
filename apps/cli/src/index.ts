@@ -6,16 +6,16 @@ import type { ModelClient } from "@i-harness/llm-seam"
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
 
-function parseModel(modelSpec: string, apiKey: string): ModelClient {
+export function parseModel(modelSpec: string, apiKey: string): ModelClient {
   const [provider, model] = modelSpec.split(":")
   const reg = createProviderRegistry()
   // built-in convenience profiles so the CLI keeps working without user config
-  reg.register({ name: "openai", displayName: "OpenAI", protocol: "openai-responses", apiKey, models: [] })
-  reg.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible", baseUrl: "https://api.deepseek.com", apiKey, models: [] })
-  reg.register({ name: "anthropic", displayName: "Anthropic", protocol: "anthropic-messages", apiKey, models: [] })
+  reg.register({ name: "openai", displayName: "OpenAI", protocol: "openai-responses", apiKey, models: [], defaultModel: "gpt-4o" })
+  reg.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible", baseUrl: "https://api.deepseek.com", apiKey, models: [], defaultModel: "deepseek-chat" })
+  reg.register({ name: "anthropic", displayName: "Anthropic", protocol: "anthropic-messages", apiKey, models: [], defaultModel: "claude-3-5-sonnet-latest" })
   const profile = reg.get(provider ?? "")
   if (!profile) throw new Error(`unknown model provider: ${provider}`)
-  return buildModelClient(profile, model ?? "gpt-4o")
+  return buildModelClient(profile, model)
 }
 
 export function main(argv: string[]): Promise<number> {
