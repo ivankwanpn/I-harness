@@ -44,6 +44,13 @@ const DECISION_KINDS = new Set(["allow", "deny", "ask"])
 // allow (monotonic, matching the guard layer's union-of-ancestors semantics).
 const DECISION_STRICTNESS: Record<ToolDecision["kind"], number> = { allow: 0, ask: 1, deny: 2 }
 
+// Decision merge is single-candidate: resolveDecision returns the NEAREST
+// ancestor decision, and the propagation model allows at most one producer
+// per emit (once a nearer policy seeds, the payload reaching farther
+// ancestors is the decision object, which policies refuse to re-classify).
+// A resolveStrictestDecision walk is therefore a no-op today; revisit only if
+// multi-producer decisions become possible.
+
 // Validate an arbitrary value against the same closed-vocabulary rules as the
 // pre-execute waterfall handler (audit F03-1): a non-object is malformed
 // (HARD error, never allow); an object without `kind` contributes no decision;
