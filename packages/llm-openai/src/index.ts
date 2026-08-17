@@ -4,6 +4,7 @@ export interface OpenAIConfig {
   apiKey: string
   baseUrl?: string
   model: string
+  options?: Record<string, unknown>
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -43,6 +44,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           .flat(),
         tools: request.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
         stream: true,
+        ...(config.options ?? {}),
       }
       const response = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",

@@ -24,8 +24,6 @@
     "@i-harness/shell": "workspace:*",
     "@i-harness/fs": "workspace:*",
     "@i-harness/guard-approval": "workspace:*",
-    "@i-harness/llm-openai": "workspace:*",
-    "@i-harness/llm-anthropic": "workspace:*",
     "@i-harness/tool-search": "workspace:*"
   }
 }

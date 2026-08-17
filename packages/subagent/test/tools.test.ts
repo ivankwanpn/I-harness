@@ -115,6 +115,15 @@ describe("subagent control tools", () => {
     expect((out as { delivered: boolean }).delivered).toBe(true)
     expect(table.get("root/helper")!.mailbox).toContain("more")
   }, 10_000)
+
+  it("resume_agent refuses to overwrite a running entry", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const resume = all.find((t) => t.name === "resume_agent")!
+    await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    await expect(resume.execute({ target: "root/helper" }, {})).rejects.toThrow(/already running/i)
+  })
 })
 
 describe("job tools", () => {

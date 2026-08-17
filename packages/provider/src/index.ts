@@ -12,6 +12,7 @@ export interface ProviderProfile {
   baseUrl?: string
   apiKey?: string
   models?: string[]
+  defaultModel?: string
 }
 
 export interface ProviderRegistry {
@@ -35,16 +36,19 @@ export function createProviderRegistry(): ProviderRegistry {
 }
 
 // Builds a ModelClient by dispatching on the provider's protocol. extra is
-// passed through for model-end options (e.g. reasoning_effort); unknown
-// protocols error here, and bad models error at the model end.
-export function buildModelClient(profile: ProviderProfile, model: string, _extra?: Record<string, unknown>): ModelClient {
+// passed through to the model end as request-body options (e.g.
+// reasoning_effort). When model is omitted, profile.defaultModel is used,
+// falling back to "gpt-4o". Unknown protocols error here, and bad models
+// error at the model end.
+export function buildModelClient(profile: ProviderProfile, model?: string, extra?: Record<string, unknown>): ModelClient {
+  const resolved = model ?? profile.defaultModel ?? "gpt-4o"
   switch (profile.protocol) {
     case "openai-responses":
-      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model })
+      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra })
     case "openai-compatible":
-      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model })
+      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra })
     case "anthropic-messages":
-      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model })
+      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra })
     default:
       throw new Error(`unknown provider protocol: ${String((profile as { protocol?: unknown }).protocol)}`)
   }

@@ -31,7 +31,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         message: { type: "string", description: "Initial task for the subagent." },
         task_name: { type: "string", description: "Short name used in the agent path." },
         agent_type: { type: "string", description: "Role name (default general)." },
-        fork_turns: { type: "string", description: "none, all, or N." },
+        fork_turns: { type: ["string", "number"], description: "none, all, or N." },
       },
       required: ["message", "task_name"],
     },
@@ -155,6 +155,8 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     isReadOnly: false,
     execute: async (args) => {
+      const existing = deps.table.get(args.target)
+      if (existing && existing.status === "running") throw new Error(`subagent already running: ${args.target}`)
       deps.table.add(args.target, {
         path: args.target,
         status: "running",

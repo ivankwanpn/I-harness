@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { runHeadless } from "../src/run.ts"
-import { main } from "../src/index.ts"
+import { main, parseModel } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
@@ -160,5 +160,17 @@ describe("CLI main + entry guard", () => {
     })
     expect(res.status).toBe(0)
     expect(res.stdout).toContain("ok")
+  })
+
+  it("parseModel applies per-provider defaultModel for bare provider specs", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = parseModel("deepseek", "k")
+    const it = client.stream({ messages: [], tools: [], systemPrompt: "" } as never)[Symbol.asyncIterator]()
+    await it.next()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toContain("api.deepseek.com")
+    expect(JSON.parse(init.body as string).model).toBe("deepseek-chat")
+    await it.return?.()
   })
 })
