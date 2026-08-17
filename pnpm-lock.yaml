@@ -149,6 +149,12 @@ importers:
         specifier: workspace:*
         version: link:../llm-seam
 
+  packages/llm-openai-compatible:
+    dependencies:
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+
   packages/llm-seam:
     dependencies:
       '@i-harness/core-session':
