@@ -23,8 +23,19 @@ export interface PluginContext {
   waterfall(event: string, handler: WaterfallHandler): void
   guard(event: string, fn: GuardFn): void
   checkGuards(event: string, exec: unknown): string | undefined
+  resolveDecision(event: string, payload: unknown): unknown
   mount(plugin: Plugin): void
   unmount(name: string): Promise<void>
+}
+
+// Internal scope plumbing used to walk the ancestor chain. Only reachable
+// through the createScope closure (not part of the public surface): every
+// scope exposes its local guard check and its recorded decision so ancestors
+// and descendants can compose without leaking their maps.
+interface InternalScope {
+  parentScope: InternalScope | null
+  checkLocalGuards(event: string, exec: unknown): string | undefined
+  resolveLocalDecision(event: string): unknown | undefined
 }
 
 type ServiceStore = Map<string, unknown>
@@ -43,12 +54,16 @@ interface OwnedWaterfall {
 
 function createScope(
   parentStore: ServiceStore | null,
+  parentScope: InternalScope | null,
   parentEmit: (event: string, payload: unknown) => Promise<void>,
 ): PluginContext {
   const store: ServiceStore = new Map()
   const listeners = new Map<string, Listener[]>()
   const waterfalls = new Map<string, WaterfallHandler[]>()
   const guards = new Map<string, GuardFn[]>()
+  // I3: a scope's own resolved decision per event, written by emitFn only when
+  // the local pass actually transformed the payload (see emitFn below).
+  const decisions = new Map<string, unknown>()
   const scopes = new Set<PluginContext>()
   const plugins = new Map<string, Plugin>()
   const pluginListeners = new Map<string, OwnedListener[]>()
@@ -76,6 +91,23 @@ function createScope(
       owned.push({ event, handler })
       pluginWaterfalls.set(mountingPlugin, owned)
     }
+  }
+
+  // Local guard pass: runs only THIS scope's guards. `checkGuards` walks the
+  // ancestor chain and calls this per scope; union-of-ancestors semantics are
+  // expressed in the walk (first non-undefined reason wins), keeping guards
+  // deny-only and monotonic — a child allow (undefined) can never re-allow a
+  // parent deny because the walk keeps ascending.
+  function checkLocalGuards(event: string, exec: unknown): string | undefined {
+    for (const fn of guards.get(event) ?? []) {
+      const reason = fn(exec)
+      if (reason !== undefined) return reason // first deny wins; later guards cannot re-allow
+    }
+    return undefined
+  }
+
+  function resolveLocalDecision(event: string): unknown | undefined {
+    return decisions.get(event)
   }
 
   // Waterfall dispatch: `ctx.waterfall` registration is EXPLICIT — every
@@ -119,6 +151,14 @@ function createScope(
   // returns are ignored and the payload passes through unchanged, so an
   // incidental return value (e.g. `calls.push(x)` → a number) can never
   // rewrite what other listeners or the parent scope receive.
+  //
+  // I3 decision nearest-wins: this scope's resolved payload is recorded as its
+  // decision for the event ONLY when the local pass actually transformed the
+  // payload (a producer seeded the chain or the waterfall resolved to
+  // something different). A raw pass-through is not a decision, so a
+  // descendant registry can still read a parent producer's decision via
+  // `resolveDecision`, which picks the nearest scope with a recorded decision
+  // and otherwise falls back to the emitted payload.
   async function emitFn(event: string, payload: unknown): Promise<void> {
     const plainListeners = [...(listeners.get(event) ?? [])]
     const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
@@ -132,10 +172,14 @@ function createScope(
     if (waterfallHandlers.length > 0) {
       resolvedPayload = (await runWaterfall(event, waterfallHandlers, chainPayload)) ?? chainPayload
     }
+    if (resolvedPayload !== payload) decisions.set(event, resolvedPayload)
     await parentEmit(event, resolvedPayload)
   }
 
-  const ctx: PluginContext = {
+  const ctx: PluginContext & InternalScope = {
+    parentScope,
+    checkLocalGuards,
+    resolveLocalDecision,
     services: {
       register(name: string, impl: unknown): void {
         if (store.has(name)) throw new Error(`duplicate service registration: ${name}`)
@@ -149,7 +193,7 @@ function createScope(
     },
     scope: {
       mount(): PluginContext {
-        const child = createScope(store, emitFn)
+        const child = createScope(store, ctx, emitFn)
         scopes.add(child)
         return child
       },
@@ -169,12 +213,29 @@ function createScope(
       list.push(fn)
       guards.set(event, list)
     },
+    // I3 guards union-of-ancestors: consult every scope from this one up to
+    // the root. First non-undefined reason wins, so a child deny holds and a
+    // child allow (undefined) can never override a parent deny — monotonic.
     checkGuards(event: string, exec: unknown): string | undefined {
-      for (const fn of guards.get(event) ?? []) {
-        const reason = fn(exec)
-        if (reason !== undefined) return reason // first deny wins; later guards cannot re-allow
+      let cur: InternalScope | null = ctx
+      while (cur) {
+        const reason = cur.checkLocalGuards(event, exec)
+        if (reason !== undefined) return reason
+        cur = cur.parentScope
       }
       return undefined
+    },
+    // I3 decision nearest-wins: the nearest scope (self first) with a recorded
+    // decision for the event wins; if no scope in the chain made a decision,
+    // fall back to the emitted payload.
+    resolveDecision(event: string, payload: unknown): unknown {
+      let cur: InternalScope | null = ctx
+      while (cur) {
+        const decision = cur.resolveLocalDecision(event)
+        if (decision !== undefined) return decision
+        cur = cur.parentScope
+      }
+      return payload
     },
     mount(plugin: Plugin): void {
       plugins.set(plugin.name, plugin)
@@ -262,7 +323,7 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
 }
 
 export function createContext(): PluginContext {
-  return createScope(null, async () => {})
+  return createScope(null, null, async () => {})
 }
 
 export const corePluginVersion = "0.1.0"
