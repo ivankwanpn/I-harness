@@ -226,6 +226,10 @@ importers:
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../provider
+    devDependencies:
+      '@i-harness/llm-mock':
+        specifier: workspace:*
+        version: link:../llm-mock
 
   packages/tool-search:
     dependencies:
