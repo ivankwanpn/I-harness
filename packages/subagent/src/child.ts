@@ -21,6 +21,7 @@ export interface SpawnOptions {
   providers: ProviderRegistry
   jobs: JobRegistry
   table: AgentTable
+  forkTurns?: "none" | "all" | number
 }
 
 export function spawnChild(opts: SpawnOptions): { path: string; jobId: string } {
@@ -29,7 +30,11 @@ export function spawnChild(opts: SpawnOptions): { path: string; jobId: string } 
   const childSession = createSession()
 
   // fork_turns: seed the child session with the last N parent turns (default all).
-  for (const ev of forkTurns(opts.parentSession.events, Infinity)) childSession.events.push({ ...ev })
+  const turns = opts.forkTurns ?? "all"
+  if (turns !== "none") {
+    const n = turns === "all" ? Infinity : turns
+    for (const ev of forkTurns(opts.parentSession.events, n)) childSession.events.push({ ...ev })
+  }
 
   // child registry: register the role's allowed tools (resolved from the parent).
   const childReg = createToolRegistry(childCtx)
