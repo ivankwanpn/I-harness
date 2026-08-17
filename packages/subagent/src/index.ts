@@ -9,6 +9,8 @@ export { spawnChild } from "./child.ts"
 export type { SpawnOptions } from "./child.ts"
 export { createSubagentTools } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
+export { restoreState, wireSubagentPersistence } from "./persist.ts"
+export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
@@ -20,12 +22,22 @@ import { createJobRegistry, type JobRegistry } from "./jobs.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
 import { createAgentTable, type AgentTable } from "./agent-table.ts"
 import { createSubagentTools } from "./tools.ts"
+import { restoreState, wireSubagentPersistence } from "./persist.ts"
+import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 
 export interface RegisterSubagentOptions {
   providers: ProviderRegistry
   exec: ExecService
   parentModel: ModelClient
   parentSession: ReturnType<typeof createSession>
+  // M6 state persistence: when set, every registry mutation persists the full
+  // snapshot through the coordinator document API.
+  persist?: SubagentPersistence
+  // M6 resume: snapshot whose roles/jobs/agent-table are authoritative. When
+  // present the builtin seeding below is SKIPPED — the snapshot's roles list
+  // already contains the builtins (possibly user-edited) plus any custom roles,
+  // and RoleRegistry.register throws on duplicates.
+  restoredState?: SubagentStateSnapshot
 }
 
 export interface RegisterSubagentResult {
@@ -38,12 +50,24 @@ export interface RegisterSubagentResult {
 // four built-in roles, creates the job registry + agent table, builds the 11
 // subagent/job tools, and registers them on the parent registry.
 export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistry, opts: RegisterSubagentOptions): RegisterSubagentResult {
-  const roles = createRoleRegistry()
-  for (const r of builtinRoles()) {
-    if (!roles.get(r.name)) roles.register(r)
+  let roles: RoleRegistry = createRoleRegistry()
+  let jobs: JobRegistry = createJobRegistry()
+  let table: AgentTable = createAgentTable()
+  if (!opts.restoredState) {
+    // Snapshot roles are authoritative (builtins + custom/edited); seeding
+    // builtins now would throw on duplicates and shadow edited builtins.
+    for (const r of builtinRoles()) roles.register(r)
   }
-  const jobs = createJobRegistry()
-  const table = createAgentTable()
+  if (opts.restoredState) {
+    // Restore BEFORE wrapping so the first save persists the restored state.
+    restoreState({ jobs, table, roles }, opts.restoredState)
+  }
+  if (opts.persist) {
+    const wired = wireSubagentPersistence({ jobs, table, roles }, opts.persist)
+    jobs = wired.jobs
+    table = wired.table
+    roles = wired.roles
+  }
   const tools = createSubagentTools({
     table,
     jobs,
