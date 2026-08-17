@@ -41,7 +41,7 @@ describe("createShellTools", () => {
     expect(pwsh.getArgv?.({ command: 'echo "hi there"' })).toEqual(["echo", "hi there"])
   })
 
-  it("execute calls deps.exec.run with the resolved shell argv prefix", async () => {
+  it("bash tool execute hardcodes ['bash', '-c', ...] (no silent pwsh fallback)", async () => {
     let captured: string[] = []
     const spyExec: ExecService = {
       run: async (cmd) => {
@@ -56,8 +56,22 @@ describe("createShellTools", () => {
     }
     expect(result.stdout).toBe("ok")
     expect(result.exitCode).toBe(0)
-    const shell = resolveShell()
-    expect(captured).toEqual([...shell.argv, "echo hi"])
+    // Must be the exact bash form — NOT resolveShell()'s output (which can be
+    // pwsh on a Windows host without bash on PATH).
+    expect(captured).toEqual(["bash", "-c", "echo hi"])
+  })
+
+  it("pwsh tool execute constructs pwsh -Command argv", async () => {
+    let captured: string[] = []
+    const spyExec: ExecService = {
+      run: async (cmd) => {
+        captured = cmd.argv
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+    }
+    const [, pwsh] = createShellTools({ exec: spyExec })
+    await pwsh.execute({ command: "Get-Date" }, {})
+    expect(captured).toEqual(["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-Date"])
   })
 })
 
