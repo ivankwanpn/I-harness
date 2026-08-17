@@ -48,7 +48,7 @@ packages/subagent/
 ├── package.json          # @i-harness/subagent; deps: core-plugin, core-tools, core-session, core-agent, llm-seam, llm-openai, llm-anthropic, exec, preset
 ├── tsconfig.json
 ├── src/
-│   ├── roles.ts          # role system: SubagentRole, ModelSelector, RoleRegistry, built-in roles
+│   ├── roles.ts          # role+provider system: SubagentRole, ProviderProfile, RoleRegistry, ProviderRegistry, built-in roles
 │   ├── jobs.ts           # unified job service (dsh ctx.jobs concept): registerJob/wait/read/list/kill
 │   ├── agent-table.ts    # subagent table + mailbox queues + lifecycle
 │   ├── child.ts          # subagent creation: mountPreset child scope + fresh session + createAgent background start
@@ -63,29 +63,43 @@ packages/subagent/
 
 The role system lets users define subagent roles (different needs, model protocols, model selections), managed programmatically now and via a future front-end (e.g. Web settings) through the same registry API. The model-selection precedence follows opencode's `agent.model ?? parent.model` and cc-custom's `inherit` semantics.
 
-### 2.1 Role definition
+### 2.1 Role and provider definitions
+
+Providers and roles are user-defined, named data (not code). A provider profile names the user's configured endpoint (so a user recognizes "which provider's model I set up"); the role references a provider by name and picks a model under it. Unknown/mistyped providers/models surface as model-end errors at spawn time — the role system does not pre-validate provider existence.
 
 ```ts
-export interface ModelSelector {
-  provider: "inherit" | "openai" | "anthropic" | "deepseek" | string
-  model?: string        // model name; omitted → provider default
+// A named provider profile — the user's recognizable name for an endpoint.
+export interface ProviderProfile {
+  name: string              // unique id the user recognizes (e.g. "my-deepseek", "company-internal")
+  displayName: string       // for future front-end selectors
+  protocol: "openai-responses" | "anthropic-messages"  // which protocol plugin builds the client
+  baseUrl?: string          // endpoint; omitted → protocol plugin default
+  apiKey?: string           // key (env-var reference / OAuth deferred to later plugin work)
 }
 
+// A role references a provider by name and picks a model under it.
 export interface SubagentRole {
-  name: string          // unique id (e.g. "worker", "reviewer")
-  description: string   // human/model-visible purpose
-  systemPrompt: string  // child agent system prompt
-  tools: string[]       // allowed tool names (resolved from the parent registry)
-  model?: ModelSelector // optional; omitted → inherit parent model
+  name: string              // unique id (e.g. "worker", "reviewer")
+  description: string       // human/model-visible purpose
+  systemPrompt: string      // child agent system prompt
+  tools: string[]           // allowed tool names (resolved from the parent registry)
+  model?: {                 // optional; omitted → inherit parent ModelClient
+    provider: string        // references a registered ProviderProfile name
+    model: string           // model under that provider
+    extra?: Record<string, unknown>  // e.g. reasoning_effort — passed through to the model end
+  }
 }
 ```
+
+The same protocol plugin serves many providers (a host can expose both a Responses-compatible and a Messages-compatible endpoint). `protocol` picks the plugin; `baseUrl`+`apiKey` set the endpoint; `model` selects the model; `extra` carries model-end options (thinking effort, etc.) and errors propagate from the model end.
+
 
 ### 2.2 Role sources
 
 - **Built-in roles** (code-defined): `general`, `explore`, `research`, `worker` — each with a purpose-driven `systemPrompt` and a read-mostly tool allowlist (patterned on opencode's built-in agent prompts and cc-custom's built-in agent definitions).
 - **User roles**: programmatic `registerRole(role)` — the same API a future front-end calls to create/edit/delete roles. Roles are data, not code.
 
-### 2.3 Role registry API (front-end-ready)
+### 2.3 Registry APIs (front-end-ready)
 
 ```ts
 export interface RoleRegistry {
@@ -94,15 +108,23 @@ export interface RoleRegistry {
   list(): SubagentRole[]
   remove(name: string): void
 }
+
+export interface ProviderRegistry {
+  registerProvider(profile: ProviderProfile): void  // throws on duplicate name
+  getProvider(name: string): ProviderProfile | undefined
+  listProviders(): ProviderProfile[]
+  removeProvider(name: string): void
+}
 ```
 
-`registerSubagent(ctx, registry, opts?)` seeds the registry with the four built-in roles. A future front-end layer reads/writes through this interface (persistence deferred to the `session-persistence` sub-project).
+`registerSubagent(ctx, registry, opts?)` seeds the role registry with the four built-in roles and a provider registry (initially empty — users register their providers). A future front-end layer reads/writes through these interfaces (persistence deferred to the `session-persistence` sub-project).
 
 ### 2.4 Model selection
 
-- `spawn_agent` resolves `agent_type` to a role. If the role has `model`, the child uses it (provider + model, constructed via the corresponding `createXxxClient`); otherwise the child inherits the parent `ModelClient`.
-- Resolution precedence (cc-custom-inspired): role `model` > inherit parent model. (No env/tool-specified override in this sub-project.)
-- Different providers map to the existing protocol plugins (`llm-openai`, `llm-anthropic`) — this is what makes "different model protocols" per role possible.
+- `spawn_agent` resolves `agent_type` to a role. If the role has `model`, the child looks up the referenced provider profile and builds a `ModelClient` via the protocol plugin named by `profile.protocol` (`createOpenAIClient` / `createAnthropicClient`) with `profile.baseUrl`/`profile.apiKey` + `role.model.model` (+ `extra` passed to the model end). Unknown provider / bad model errors surface from the model end at spawn time.
+- Otherwise (role has no `model`) the child inherits the parent `ModelClient`.
+- Resolution precedence: role `model` (via provider profile) > inherit parent model.
+- Because `protocol` is decoupled from the provider name, one provider endpoint can serve either protocol, and future auth modes (OAuth, env-var key refs) are additive plugin work.
 
 ## §3 Unified Job Service (dsh model)
 
@@ -165,7 +187,7 @@ All 11 tools are plain `Tool` registrations on the parent registry. `llm-openai`
 
 ## §9 Verification
 
-- Role system: built-in roles registered (`general`/`explore`/`research`/`worker`); `registerRole` adds a user role (duplicate name throws); `get`/`list`/`remove` work; `spawn_agent` with an unknown `agent_type` errors; a role with `model` selects that provider's client, a role without inherits the parent model.
+- Role system: built-in roles registered (`general`/`explore`/`research`/`worker`); `registerRole` adds a user role (duplicate name throws); `get`/`list`/`remove` work; `spawn_agent` with an unknown `agent_type` errors. Provider profiles: `registerProvider`/`getProvider`/`listProviders`/`removeProvider`; a role whose `model.provider` is unregistered errors at spawn; a role with a registered provider + model builds the client via that protocol plugin; a role without `model` inherits the parent model.
 - `subagent.test.ts`:
   - spawn_agent returns immediately with `{ agent_path, job_id }`; the subagent runs in the background (await points yield the event loop).
   - job_output on a `subagent` job returns the final result after completion; `wait: true` blocks until terminal.
