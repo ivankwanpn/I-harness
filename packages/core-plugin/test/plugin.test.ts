@@ -285,3 +285,67 @@ describe("lifecycle", () => {
     }
   }, 15_000)
 })
+
+describe("I3 scope propagation", () => {
+  it("checks guards across the ancestor chain (union-of-ancestors)", () => {
+    const ctx = createContext()
+    ctx.guard("tools/execute", (exec) => {
+      if ((exec as { name: string }).name === "dangerous") return "denied by root"
+      return undefined
+    })
+    const child = ctx.scope.mount()
+    // child scope has NO guards of its own; the root guard must still apply
+    expect(child.checkGuards("tools/execute", { name: "dangerous" })).toBe("denied by root")
+    expect(child.checkGuards("tools/execute", { name: "safe" })).toBeUndefined()
+  })
+
+  it("keeps child guards additive (union — stricter, never re-allows)", () => {
+    const ctx = createContext()
+    ctx.guard("g", () => undefined) // root: allow
+    const child = ctx.scope.mount()
+    child.guard("g", () => "child denied")
+    // child deny must hold even though root would allow
+    expect(child.checkGuards("g", {})).toBe("child denied")
+    // and a child allow never overrides a parent deny
+    const child2 = ctx.scope.mount()
+    child2.guard("g", () => undefined)
+    expect(child2.checkGuards("g", {})).toBeUndefined() // both allow → undefined
+    // add a root deny, child allow must not override
+    ctx.guard("g2", () => "root denied")
+    const child3 = ctx.scope.mount()
+    child3.guard("g2", () => undefined)
+    expect(child3.checkGuards("g2", {})).toBe("root denied")
+  })
+
+  it("resolves the nearest-ancestor decision (nearest-wins, falls back to payload)", async () => {
+    // root producer constrains a child registry: child has no producer, emit
+    // passes through and the root { kind: "ask" } decision is read back.
+    const ctx = createContext()
+    ctx.on("t/ask", () => ({ kind: "ask" }))
+    ctx.waterfall("t/ask", async (payload, next) => {
+      await next(payload)
+    })
+    const child = ctx.scope.mount()
+    const raw = { tool: "sh", args: ["dangerous"] }
+    await child.emit("t/ask", raw)
+    expect(child.resolveDecision("t/ask", raw)).toEqual({ kind: "ask" })
+
+    // child decision wins over the root decision (nearest-wins)
+    const child2 = ctx.scope.mount()
+    child2.on("t/deny", () => ({ kind: "deny" }))
+    child2.waterfall("t/deny", async (payload, next) => {
+      await next(payload)
+    })
+    ctx.on("t/deny", () => ({ kind: "ask" }))
+    ctx.waterfall("t/deny", async (payload, next) => {
+      await next(payload)
+    })
+    await child2.emit("t/deny", raw)
+    expect(child2.resolveDecision("t/deny", raw)).toEqual({ kind: "deny" })
+
+    // no decision anywhere in the chain → the emitted payload falls through
+    const bare = createContext()
+    await bare.emit("t/none", raw)
+    expect(bare.resolveDecision("t/none", raw)).toBe(raw)
+  })
+})
