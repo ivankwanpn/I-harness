@@ -1,4 +1,5 @@
 import type { LLMMessage, Session } from "@i-harness/core-session"
+import { deriveMessages } from "@i-harness/core-session"
 
 export type LLMStreamEvent =
   | { type: "text/chunk"; text: string }
@@ -29,12 +30,8 @@ export interface ModelClient {
 }
 
 export function assertMessagesFromLog(messages: LLMMessage[], session: Session): void {
-  const logged: LLMMessage[] = []
-  for (const ev of session.events) {
-    if (ev.type === "user/message") logged.push({ role: "user", content: ev.text })
-    else if (ev.type === "assistant/message") logged.push({ role: "assistant", content: ev.text })
-  }
-  const msgJson = JSON.stringify(messages.map((m) => ({ role: m.role, content: m.content })))
-  const logJson = JSON.stringify(logged.map((m) => ({ role: m.role, content: m.content })))
+  const logged = deriveMessages(session)
+  const msgJson = JSON.stringify(messages)
+  const logJson = JSON.stringify(logged)
   if (msgJson !== logJson) throw new Error("model-visible messages must derive from the session log (audit F01-3)")
 }

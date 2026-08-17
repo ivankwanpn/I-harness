@@ -82,4 +82,21 @@ describe("agent loop", () => {
     expect(result.reasoning).toEqual(["think about the file", "decide to edit"])
     expect(result.finalText).toBe("edited")
   })
+
+  it("writes callIds on tool/call and tool/result events", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
+      { role: "assistant", text: "done" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    await agent.run("read a.txt")
+    const calls = deps.session.events.filter((e) => e.type === "tool/call")
+    const results = deps.session.events.filter((e) => e.type === "tool/result")
+    expect(calls).toHaveLength(1)
+    expect(results).toHaveLength(1)
+    expect((calls[0] as { callId: string }).callId).toMatch(/^call_\d+$/)
+    expect((calls[0] as { callId: string }).callId).toBe((results[0] as { callId: string }).callId)
+  })
 })
