@@ -14,5 +14,8 @@
     "@i-harness/provider": "workspace:*",
     "@i-harness/exec": "workspace:*",
     "@i-harness/preset": "workspace:*"
+  },
+  "devDependencies": {
+    "@i-harness/llm-mock": "workspace:*"
   }
 }
