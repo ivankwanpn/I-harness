@@ -3,9 +3,8 @@ import { resolve } from "node:path"
 import type { Tool } from "@i-harness/core-tools"
 
 export function resolvePath(workspace: string, path: string): string {
-  const abs = resolve(path)
-  // absolute paths used as-is; relative resolved against workspace
-  return path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path) ? abs : resolve(workspace, path)
+  const isAbsoluteInput = path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)
+  return isAbsoluteInput ? resolve(path) : resolve(workspace, path)
 }
 
 export interface FsToolDeps {

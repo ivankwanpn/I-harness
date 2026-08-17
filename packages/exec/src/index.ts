@@ -34,11 +34,14 @@ export function createExecService(): ExecService {
         let timedOut = false
         let settled = false
 
-        const timer = cmd.timeoutMs !== undefined ? setTimeout(() => {
+        const timer = cmd.timeoutMs !== undefined ? setTimeout(async () => {
           timedOut = true
-          // Windows: taskkill tree; POSIX: kill process group
           if (process.platform === "win32") {
-            spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"])
+            await new Promise<void>((res) => {
+              const k = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"])
+              k.on("close", () => res())
+              k.on("error", () => res())
+            })
           } else {
             try { process.kill(-child.pid!, "SIGKILL") } catch { try { child.kill("SIGKILL") } catch { /* ignore */ } }
           }
