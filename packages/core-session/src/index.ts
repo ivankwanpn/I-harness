@@ -35,14 +35,10 @@ export interface LLMMessage {
 
 export function deriveMessages(session: Session): LLMMessage[] {
   const result: LLMMessage[] = []
-  let chunkBuffer = ""
   for (const ev of session.events) {
     if (ev.type === "user/message") result.push({ role: "user", content: ev.text })
-    else if (ev.type === "assistant/chunk") chunkBuffer += ev.text
-    else if (ev.type === "assistant/message") {
-      result.push({ role: "assistant", content: ev.text })
-      chunkBuffer = ""
-    }
+    else if (ev.type === "assistant/message") result.push({ role: "assistant", content: ev.text })
+    // assistant/chunk events carry no model-visible text; they are skipped entirely
   }
   return result
 }
