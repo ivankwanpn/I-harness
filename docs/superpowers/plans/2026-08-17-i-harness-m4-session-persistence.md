@@ -42,11 +42,10 @@ Append to `packages/core-session/test/session.test.ts` (below the existing `desc
 describe("session ignorable marker", () => {
   it("carries an ignorable marker through JSONL round-trip", () => {
     const session = createSession()
-    const futureEvent: SessionEvent & { type: "future/thing"; payload: string; ignorable?: true } = {
-      type: "future/thing",
-      payload: "x",
-      ignorable: true,
-    }
+    // "future/thing" is not a known event type; the ignorable marker is how a
+    // future writer tags events that readers may safely drop. Cast through
+    // unknown because the type is intentionally outside the current union.
+    const futureEvent = { type: "future/thing", payload: "x", ignorable: true } as unknown as SessionEvent
     append(session, futureEvent)
     const text = toJSONL(session)
     const restored = fromJSONL(text)
@@ -81,16 +80,20 @@ Expected: FAIL — `createSession` takes no callback; `SessionEvent` has no `ign
 In `packages/core-session/src/index.ts`:
 
 ```ts
+// `&` binds tighter than `|`, so the intersection must wrap the whole union —
+// otherwise only the last member would carry `ignorable`.
 export type SessionEvent =
-  | { type: "turn/start"; seq?: number }
-  | { type: "step/start"; seq?: number }
-  | { type: "user/message"; text: string; seq?: number }
-  | { type: "assistant/chunk"; text: string; seq?: number }
-  | { type: "assistant/message"; text: string; seq?: number }
-  | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
-  | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
-  | { type: "step/end"; seq?: number }
-  | { type: "turn/end"; seq?: number }
+  | (
+    | { type: "turn/start"; seq?: number }
+    | { type: "step/start"; seq?: number }
+    | { type: "user/message"; text: string; seq?: number }
+    | { type: "assistant/chunk"; text: string; seq?: number }
+    | { type: "assistant/message"; text: string; seq?: number }
+    | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
+    | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
+    | { type: "step/end"; seq?: number }
+    | { type: "turn/end"; seq?: number }
+  )
   & { ignorable?: true }
 ```
 
@@ -780,7 +783,7 @@ describe("headless CLI persistence (M4)", () => {
       })
       expect(result.exitCode).toBe(0)
       expect(seen.length).toBeGreaterThan(0)
-      const texts = seen[0]!.messages.map((m) => ("text" in m ? m.text : "")).filter(Boolean)
+      const texts = seen[0]!.messages.map((m) => m.content).filter((c) => c.length > 0)
       expect(texts).toContain("earlier question")
       expect(texts).toContain("earlier answer")
     } finally {
