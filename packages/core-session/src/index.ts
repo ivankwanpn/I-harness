@@ -1,13 +1,18 @@
+// `&` binds tighter than `|`, so the intersection must wrap the whole union —
+// otherwise only the last member would carry `ignorable`.
 export type SessionEvent =
-  | { type: "turn/start"; seq?: number }
-  | { type: "step/start"; seq?: number }
-  | { type: "user/message"; text: string; seq?: number }
-  | { type: "assistant/chunk"; text: string; seq?: number }
-  | { type: "assistant/message"; text: string; seq?: number }
-  | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
-  | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
-  | { type: "step/end"; seq?: number }
-  | { type: "turn/end"; seq?: number }
+  | (
+    | { type: "turn/start"; seq?: number }
+    | { type: "step/start"; seq?: number }
+    | { type: "user/message"; text: string; seq?: number }
+    | { type: "assistant/chunk"; text: string; seq?: number }
+    | { type: "assistant/message"; text: string; seq?: number }
+    | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
+    | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
+    | { type: "step/end"; seq?: number }
+    | { type: "turn/end"; seq?: number }
+  )
+  & { ignorable?: true }
 
 export interface Session {
   formatVersion: number
@@ -16,8 +21,14 @@ export interface Session {
 
 export const CURRENT_FORMAT_VERSION = 1
 
-export function createSession(): Session {
-  return { formatVersion: CURRENT_FORMAT_VERSION, events: [] }
+// Optional per-session append observer (M4 persistence mirror). Stored in a
+// WeakMap so the Session shape itself is unchanged.
+const appendHooks = new WeakMap<Session, (ev: SessionEvent) => void>()
+
+export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
+  const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: [] }
+  if (onAppend) appendHooks.set(session, onAppend)
+  return session
 }
 
 export function append(session: Session, event: SessionEvent): void {
@@ -26,6 +37,7 @@ export function append(session: Session, event: SessionEvent): void {
   }
   const ev = { ...event, seq: session.events.length }
   session.events.push(ev)
+  appendHooks.get(session)?.(ev)
 }
 
 export type LLMMessage =
