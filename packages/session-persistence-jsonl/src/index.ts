@@ -1,4 +1,5 @@
-import { mkdir, open, readFile, readdir, writeFile } from "node:fs/promises"
+import { mkdir, open, readFile, readdir, rename, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import { join, basename } from "node:path"
 import type { SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
@@ -79,7 +80,13 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async putDocument(key: string, data: unknown): Promise<void> {
       await mkdir(root, { recursive: true })
-      await writeFile(docPath(key), JSON.stringify(data) + "\n", { encoding: "utf-8" })
+      const path = docPath(key)
+      // Atomic write: temp file + rename so concurrent saves never
+      // interleave/truncate the sidecar. A transient `<uuid>.tmp` matches
+      // neither `*.jsonl` nor `*.doc.jsonl`, so list() stays correct.
+      const tmp = `${path}.${randomUUID()}.tmp`
+      await writeFile(tmp, JSON.stringify(data) + "\n", { encoding: "utf-8" })
+      await rename(tmp, path)
     },
     async getDocument(key: string): Promise<unknown | undefined> {
       const text = await readFile(docPath(key), "utf-8").catch(() => undefined)

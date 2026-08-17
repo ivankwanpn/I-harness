@@ -34,11 +34,6 @@ export interface SubagentPersistence {
   stateId: string
 }
 
-type SnapshotOf<T> = T extends "jobs" ? Pick<SubagentStateSnapshot, "jobs">
-  : T extends "agentTable" ? Pick<SubagentStateSnapshot, "agentTable">
-  : T extends "roles" ? Pick<SubagentStateSnapshot, "roles">
-  : never
-
 export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry }): SubagentStateSnapshot {
   // The harness registers all subagent jobs under owner "root" (spawnChild uses
   // registerJob("root", "subagent", ...)); list("root") is the enumeration.
@@ -109,32 +104,24 @@ function createSessionFromEmpty() {
 
 export function persistentJobRegistry(
   jobs: JobRegistry,
-  save: (snap: SnapshotOf<"jobs">) => Promise<void>,
+  save: () => Promise<void>,
 ): JobRegistry {
-  const record = new Map<string, DurableJobRecord>()
   return {
     ...jobs,
     registerJob(owner, kind, label) {
       const result = jobs.registerJob(owner, kind, label)
-      record.set(result.id, { id: result.id, owner, kind, label, status: "running", output: "", terminal: false })
-      void save({ jobs: [...record.values()] })
+      void save()
       return result
     },
     updateJob(id, patch) {
       jobs.updateJob(id, patch)
-      const rec = record.get(id)
-      if (rec) {
-        if (patch.status !== undefined) { rec.status = patch.status; rec.terminal = rec.status !== "running" }
-        if (patch.output !== undefined) rec.output = patch.output
-        void save({ jobs: [...record.values()] })
-      }
+      void save()
     },
     kill(id) {
       const outcome = jobs.kill(id)
-      const rec = record.get(id)
-      // Only reflect a real kill: an already-terminal job returns
-      // "already-finished" with no state change — mirror stays accurate.
-      if (rec && outcome === "cancellation-requested") { rec.status = "killed"; rec.terminal = true; void save({ jobs: [...record.values()] }) }
+      // Only a real kill changes state; a no-op kill ("already-finished")
+      // must not trigger a save.
+      if (outcome === "cancellation-requested") void save()
       return outcome
     },
   }
@@ -142,47 +129,36 @@ export function persistentJobRegistry(
 
 export function persistentAgentTable(
   table: AgentTable,
-  save: (snap: SnapshotOf<"agentTable">) => Promise<void>,
+  save: () => Promise<void>,
 ): AgentTable {
   return {
     ...table,
     add(path, entry) {
       table.add(path, entry)
-      void save({ agentTable: durableEntries(table) })
+      void save()
     },
     remove(path) {
       table.remove(path)
-      void save({ agentTable: durableEntries(table) })
+      void save()
     },
   }
 }
 
 export function persistentRoleRegistry(
   roles: RoleRegistry,
-  save: (snap: SnapshotOf<"roles">) => Promise<void>,
+  save: () => Promise<void>,
 ): RoleRegistry {
   return {
     ...roles,
     register(role) {
       roles.register(role)
-      void save({ roles: roles.list() })
+      void save()
     },
     remove(name) {
       roles.remove(name)
-      void save({ roles: roles.list() })
+      void save()
     },
   }
-}
-
-function durableEntries(table: AgentTable): DurableAgentEntry[] {
-  return [...table.entries().values()].map((e) => ({
-    path: e.path,
-    status: e.status,
-    ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
-    ...(e.error !== undefined ? { error: e.error } : {}),
-    mailbox: e.mailbox,
-    ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
-  }))
 }
 
 export function wireSubagentPersistence(
