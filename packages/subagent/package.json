@@ -9,6 +9,7 @@
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/core-session": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*",
     "@i-harness/core-agent": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/provider": "workspace:*",
