@@ -274,6 +274,9 @@ importers:
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../provider
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
     devDependencies:
       '@i-harness/llm-mock':
         specifier: workspace:*
