@@ -133,4 +133,17 @@ describe("guard-approval policy", () => {
     const result = await registry.execute({ name: "bash", args: { command: "rm -rf /tmp/x" } })
     expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
   })
+
+  it("decide guard is discriminating: a ToolCall-shaped decision passes through as-is", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd() })
+    // a NON-readOnly bash tool whose args would classify as dangerous IF re-parsed
+    registry.register(makeBashTool((args) => args.command.split(" ")))
+    // seed the chain with a decision object that is ALSO ToolCall-shaped.
+    // Without the guard, decide() would see `name: "bash"` + dangerous args and
+    // re-classify it to { kind: "ask" } → no answerer → fail-closed throw.
+    // With the guard, it passes through as { kind: "allow" } → dispatch runs.
+    ctx.on("tools/pre-execute", () => ({ kind: "allow", name: "bash", args: { command: "rm -rf /tmp/x" } }))
+    const result = await registry.execute({ name: "bash", args: { command: "rm -rf /tmp/x" } })
+    expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
+  })
 })
