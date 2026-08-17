@@ -136,4 +136,46 @@ describe("llm-anthropic protocol", () => {
     expect(call?.name).toBe("write")
     expect(call?.args).toEqual({ path: "a.txt", text: "hi" })
   })
+
+  it("second request includes the tool result when the model calls a tool then answers", async () => {
+    const bodies: unknown[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(init.body as string))
+      return new Response(
+        bodies.length === 1
+          ? [
+              `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "read", input: { path: "a.txt" } } })}`,
+              `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+              `data: ${JSON.stringify({ type: "message_stop" })}`,
+            ].join("\n\n")
+          : [
+              `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "ok" } })}`,
+              `data: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } })}`,
+              `data: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+              `data: ${JSON.stringify({ type: "message_stop" })}`,
+            ].join("\n\n"),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    for await (const _ev of client.stream({ messages: [{ role: "user", content: "read a.txt" }], tools: [], systemPrompt: "" } as LLMRequest)) { /* consume */ }
+
+    const turn2Request: LLMRequest = {
+      messages: [
+        { role: "user", content: "read a.txt" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
+      ],
+      tools: [],
+      systemPrompt: "",
+    }
+    for await (const _ev of client.stream(turn2Request)) { /* consume */ }
+
+    const secondBody = bodies[1] as { messages: unknown[] }
+    const last = secondBody.messages[secondBody.messages.length - 1] as { role: string; content: unknown[] }
+    expect(last.role).toBe("user")
+    expect(JSON.stringify(last.content)).toContain("tool_result")
+  })
 })

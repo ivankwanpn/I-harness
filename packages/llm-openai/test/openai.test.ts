@@ -105,4 +105,54 @@ describe("llm-openai protocol", () => {
     }
     expect(events).toEqual(["r:think", "end"])
   })
+
+  it("second request includes the tool result when the model calls a tool then answers", async () => {
+    const bodies: unknown[] = []
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(init.body as string))
+      // turn 1: function_call; turn 2: no tool call (just end)
+      return new Response(
+        bodies.length === 1
+          ? [
+              `data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_1", name: "read", arguments: '{"path":"a.txt"}' } })}`,
+              `data: ${JSON.stringify({ type: "response.completed" })}`,
+              "data: [DONE]",
+            ].join("\n\n")
+          : [
+              `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "ok" })}`,
+              `data: ${JSON.stringify({ type: "response.completed" })}`,
+              "data: [DONE]",
+            ].join("\n\n"),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+
+    // turn 1: ask for a tool call
+    const firstEvents: string[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "read a.txt" }], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "tool_call") firstEvents.push(`c:${ev.call.name}`)
+    }
+    expect(firstEvents).toEqual(["c:read"])
+
+    // turn 2: pass tool history; the body must contain function_call_output
+    const secondEvents: string[] = []
+    const turn2Request: LLMRequest = {
+      messages: [
+        { role: "user", content: "read a.txt" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
+      ],
+      tools: [],
+      systemPrompt: "",
+    }
+    for await (const ev of client.stream(turn2Request)) {
+      if (ev.type === "text/chunk") secondEvents.push(`t:${ev.text}`)
+    }
+    expect(secondEvents).toEqual(["t:ok"])
+    const secondBody = bodies[1] as { input: unknown[] }
+    expect(secondBody.input.some((i) => (i as { type?: string }).type === "function_call_output")).toBe(true)
+  })
 })
