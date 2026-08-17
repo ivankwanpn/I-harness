@@ -1,5 +1,7 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 
+export type ToolExposure = "direct" | "deferred" | "hidden"
+
 export interface Tool<Args = unknown, Output = unknown> {
   name: string
   description: string
@@ -10,6 +12,8 @@ export interface Tool<Args = unknown, Output = unknown> {
   isConcurrencySafe?: boolean
   isReadOnly?: boolean
   getArgv?(args: Args): string[]
+  exposure?: ToolExposure
+  searchHint?: string
 }
 
 export interface ToolExec {
@@ -35,6 +39,14 @@ export interface ToolSchema {
   name: string
   description: string
   inputSchema: unknown
+  exposure: ToolExposure
+}
+
+export interface SearchableTool {
+  name: string
+  description: string
+  inputSchema: unknown
+  searchHint?: string
 }
 
 const DECISION_KINDS = new Set(["allow", "deny", "ask"])
@@ -78,10 +90,21 @@ export interface ToolRegistry {
   execute(call: ToolCall): Promise<ToolResult>
   genToolCatalog(): ToolSchema[]
   verifyToolCatalog(expected: Tool[], catalog: ToolSchema[]): void
+  installSearch(fn: (query: string, opts?: { limit?: number }) => ToolSchema[]): void
+  search(query: string, opts?: { limit?: number }): ToolSchema[]
+  deferredSearchIndex(): SearchableTool[]
+  deferredToolCount(): number
 }
 
 export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   const tools = new Map<string, Tool>()
+  // Deferred tools whose names were returned by the search engine are promoted
+  // into schemas() output (but never hidden tools). Additive metadata: a name
+  // stays promoted for the registry's lifetime.
+  const promoted = new Set<string>()
+  // Pluggable search engine hook, installed via installSearch(). Until then,
+  // search() fails loud rather than returning an empty corpus.
+  let searchFn: ((query: string, opts?: { limit?: number }) => ToolSchema[]) | undefined
   // Single pre-execute decision slot. The waterfall handler is registered ONCE
   // at construction (not per-execute) so dispatches reuse it instead of
   // accumulating transient handlers in core-plugin's waterfall map.
@@ -121,11 +144,16 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   }
 
   function schemas(): ToolSchema[] {
-    return [...tools.values()].map((t) => ({
-      name: t.name,
-      description: t.description,
-      inputSchema: t.inputSchema,
-    }))
+    // Hidden tools never surface in schemas(); deferred tools surface only
+    // after promotion via search().
+    return [...tools.values()]
+      .filter((t) => t.exposure !== "hidden" && (t.exposure !== "deferred" || promoted.has(t.name)))
+      .map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+        exposure: t.exposure ?? "direct",
+      }))
   }
 
   async function execute(call: ToolCall): Promise<ToolResult> {
@@ -179,6 +207,37 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     return { name: call.name, output }
   }
 
+  // Pluggable search hook (opencode-fork mechanism). installSearch replaces the
+  // engine; search() delegates to it and promotes every returned name so the
+  // corresponding deferred tool surfaces in schemas().
+  function installSearch(fn: (query: string, opts?: { limit?: number }) => ToolSchema[]): void {
+    searchFn = fn
+  }
+
+  function search(query: string, opts?: { limit?: number }): ToolSchema[] {
+    if (!searchFn) throw new Error("no search engine installed")
+    const matches = searchFn(query, opts)
+    for (const m of matches) promoted.add(m.name)
+    return matches
+  }
+
+  // Raw metadata of all deferred tools, used as the search corpus by the
+  // search engine (Task 2). searchHint boosts matching when present.
+  function deferredSearchIndex(): SearchableTool[] {
+    return [...tools.values()]
+      .filter((t) => t.exposure === "deferred")
+      .map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: t.inputSchema,
+        ...(t.searchHint !== undefined ? { searchHint: t.searchHint } : {}),
+      }))
+  }
+
+  function deferredToolCount(): number {
+    return deferredSearchIndex().length
+  }
+
   function genToolCatalog(): ToolSchema[] {
     return schemas()
   }
@@ -191,5 +250,16 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     }
   }
 
-  return { register, get, schemas, execute, genToolCatalog, verifyToolCatalog }
+  return {
+    register,
+    get,
+    schemas,
+    execute,
+    genToolCatalog,
+    verifyToolCatalog,
+    installSearch,
+    search,
+    deferredSearchIndex,
+    deferredToolCount,
+  }
 }

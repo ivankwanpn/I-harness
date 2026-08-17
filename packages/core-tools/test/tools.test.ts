@@ -168,3 +168,72 @@ describe("catalog", () => {
     expect(() => reg.verifyToolCatalog([{ name: "a" }, { name: "ghost" }] as Tool[], catalog)).toThrow(/missing.*ghost/i)
   })
 })
+
+describe("exposure and promoted search", () => {
+  it("schemas() includes direct tools and excludes deferred/hidden by default", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "read", description: "read a file", inputSchema: {}, exposure: "direct", execute: async () => ({}) })
+    reg.register({ name: "write", description: "write a file", inputSchema: {}, exposure: "deferred", execute: async () => ({}) })
+    reg.register({ name: "secret", description: "hidden", inputSchema: {}, exposure: "hidden", execute: async () => ({}) })
+    const names = reg.schemas().map((s) => s.name)
+    expect(names).toEqual(["read"])
+  })
+
+  it("exposure defaults to direct when omitted", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "x", description: "", inputSchema: {}, execute: async () => ({}) })
+    expect(reg.schemas()[0]!.exposure).toBe("direct")
+  })
+
+  it("search throws before installSearch", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    expect(() => reg.search("read")).toThrow(/no search engine installed/i)
+  })
+
+  it("installSearch + search promotes matches into schemas()", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "read", description: "read a file", inputSchema: {}, exposure: "direct", execute: async () => ({}) })
+    reg.register({ name: "grep", description: "search text", inputSchema: {}, exposure: "deferred", searchHint: "find patterns", execute: async () => ({}) })
+    reg.installSearch((query, _opts) => {
+      // fake engine: "grep" matches query "grep"
+      return query.includes("grep")
+        ? [{ name: "grep", description: "search text", inputSchema: {}, exposure: "deferred" as const }]
+        : []
+    })
+    const matches = reg.search("grep")
+    expect(matches.map((m) => m.name)).toEqual(["grep"])
+    // promoted: deferred tool now appears in schemas()
+    expect(reg.schemas().map((s) => s.name)).toEqual(["read", "grep"])
+  })
+
+  it("hidden tools stay out of schemas() even after promotion", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "secret", description: "", inputSchema: {}, exposure: "hidden", execute: async () => ({}) })
+    reg.installSearch((_q, _o) => [{ name: "secret", description: "", inputSchema: {}, exposure: "hidden" as const }])
+    reg.search("secret")
+    expect(reg.schemas()).toEqual([])
+  })
+
+  it("deferred tool with no match stays out of schemas()", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "grep", description: "search text", inputSchema: {}, exposure: "deferred", execute: async () => ({}) })
+    reg.installSearch(() => [])
+    reg.search("nothing")
+    expect(reg.schemas()).toEqual([])
+  })
+
+  it("deferredSearchIndex returns raw deferred metadata with searchHint", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "grep", description: "search text", inputSchema: {}, exposure: "deferred", searchHint: "find patterns", execute: async () => ({}) })
+    reg.register({ name: "read", description: "read", inputSchema: {}, execute: async () => ({}) })
+    expect(reg.deferredSearchIndex()).toEqual([{ name: "grep", description: "search text", inputSchema: {}, searchHint: "find patterns" }])
+    expect(reg.deferredToolCount()).toBe(1)
+  })
+})
