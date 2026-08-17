@@ -45,9 +45,10 @@ Design the M3 milestone's third sub-project: the task/subagent plugin. It replic
 
 ```
 packages/subagent/
-├── package.json          # @i-harness/subagent; deps: core-plugin, core-tools, core-session, core-agent, llm-seam, exec, preset
+├── package.json          # @i-harness/subagent; deps: core-plugin, core-tools, core-session, core-agent, llm-seam, llm-openai, llm-anthropic, exec, preset
 ├── tsconfig.json
 ├── src/
+│   ├── roles.ts          # role system: SubagentRole, ModelSelector, RoleRegistry, built-in roles
 │   ├── jobs.ts           # unified job service (dsh ctx.jobs concept): registerJob/wait/read/list/kill
 │   ├── agent-table.ts    # subagent table + mailbox queues + lifecycle
 │   ├── child.ts          # subagent creation: mountPreset child scope + fresh session + createAgent background start
@@ -58,7 +59,52 @@ packages/subagent/
     └── subagent.test.ts
 ```
 
-## §2 Unified Job Service (dsh model)
+## §2 Role System (user-defined subagent roles)
+
+The role system lets users define subagent roles (different needs, model protocols, model selections), managed programmatically now and via a future front-end (e.g. Web settings) through the same registry API. The model-selection precedence follows opencode's `agent.model ?? parent.model` and cc-custom's `inherit` semantics.
+
+### 2.1 Role definition
+
+```ts
+export interface ModelSelector {
+  provider: "inherit" | "openai" | "anthropic" | "deepseek" | string
+  model?: string        // model name; omitted → provider default
+}
+
+export interface SubagentRole {
+  name: string          // unique id (e.g. "worker", "reviewer")
+  description: string   // human/model-visible purpose
+  systemPrompt: string  // child agent system prompt
+  tools: string[]       // allowed tool names (resolved from the parent registry)
+  model?: ModelSelector // optional; omitted → inherit parent model
+}
+```
+
+### 2.2 Role sources
+
+- **Built-in roles** (code-defined): `general`, `explore`, `research`, `worker` — each with a purpose-driven `systemPrompt` and a read-mostly tool allowlist (patterned on opencode's built-in agent prompts and cc-custom's built-in agent definitions).
+- **User roles**: programmatic `registerRole(role)` — the same API a future front-end calls to create/edit/delete roles. Roles are data, not code.
+
+### 2.3 Role registry API (front-end-ready)
+
+```ts
+export interface RoleRegistry {
+  register(role: SubagentRole): void      // throws on duplicate name
+  get(name: string): SubagentRole | undefined
+  list(): SubagentRole[]
+  remove(name: string): void
+}
+```
+
+`registerSubagent(ctx, registry, opts?)` seeds the registry with the four built-in roles. A future front-end layer reads/writes through this interface (persistence deferred to the `session-persistence` sub-project).
+
+### 2.4 Model selection
+
+- `spawn_agent` resolves `agent_type` to a role. If the role has `model`, the child uses it (provider + model, constructed via the corresponding `createXxxClient`); otherwise the child inherits the parent `ModelClient`.
+- Resolution precedence (cc-custom-inspired): role `model` > inherit parent model. (No env/tool-specified override in this sub-project.)
+- Different providers map to the existing protocol plugins (`llm-openai`, `llm-anthropic`) — this is what makes "different model protocols" per role possible.
+
+## §3 Unified Job Service (dsh model)
 
 - Job id format: `<kind>-N` (e.g. `bash-1`, `subagent-1`), monotonic counter per kind.
 - `kind` unifies shell background commands (`bash`) and subagents (`subagent`).
@@ -71,11 +117,11 @@ packages/subagent/
 - Owner-scoped access (jobs belong to the agent that created them).
 - Settled jobs retain output until the session ends (no auto-eviction in this sub-project; `close_agent` is the explicit resource-reclaim path).
 
-## §3 Tools (11)
+## §4 Tools (11)
 
 | Tool | Input | Behavior |
 |------|-------|----------|
-| `spawn_agent` | `message` (required), `task_name` (required), `agent_type?`, `fork_turns?` (none/all/N) | Background-start subagent; returns `{ agent_path, job_id }` immediately. Registers a `subagent` job. |
+| `spawn_agent` | `message` (required), `task_name` (required), `agent_type?` (role name, default `general`), `fork_turns?` (none/all/N) | Resolve `agent_type` to a role (built-in or user-defined); background-start subagent with the role's systemPrompt/tools/model; returns `{ agent_path, job_id }` immediately. Registers a `subagent` job. |
 | `wait_agent` | `timeout_ms?` | Wait for mailbox update from any live subagent; returns summary `{ message, timed_out }` (not final content). |
 | `list_agents` | `path_prefix?` | List live subagents (agent path tree, depth tracked not limited). |
 | `send_message` | `target`, `message` | Queue a message on the target subagent; does NOT trigger a new turn. |
@@ -87,37 +133,39 @@ packages/subagent/
 | `job_list` | — | List all jobs for the current agent (id/kind/status/label). |
 | `job_kill` | `job_id` (required), `reason?` | Request cancellation; returns `cancellation-requested` or `already-finished`. |
 
-## §4 Subagent Execution (dsh in-process driver + codex v2 async)
+## §5 Subagent Execution (dsh in-process driver + codex v2 async)
 
 - `spawn_agent.execute`:
   1. Validate `message`/`task_name`.
-  2. Resolve child depth = parent depth + 1 (TRACKED only, into agent path `parent/child/...`).
-  3. Create child scope via `ctx.scope.mount()`; register a fresh child `ToolRegistry`; copy permitted parent tools into it (reuse the `mountPreset` pattern; tools are resolved through the parent registry and registered into the child registry by reference — the child scope's service chain inherits parent services like `exec/service` via `core-plugin`'s parent-store lookup, so shell/fs tools work unchanged).
-  4. Create a fresh session (`createSession()`); if `fork_turns` is set, seed it with the last N turns of the parent session's events (via `fork.ts`).
-  5. Build a `createAgent(childCtx, { session, tools, model, systemPrompt })`.
-  6. Start `childAgent.run(message)` WITHOUT awaiting — store the promise + AbortController in the agent table; register a `subagent` job.
-  7. Return `{ agent_path, job_id }`.
+  2. Resolve `agent_type` → role via the role registry (default `general`); if unknown role name → error. Determine the child `model` (`role.model` → construct client; else inherit parent `ModelClient`).
+  3. Resolve child depth = parent depth + 1 (TRACKED only, into agent path `parent/child/...`).
+  4. Create child scope via `ctx.scope.mount()`; register a fresh child `ToolRegistry`; copy the role's allowed tools (resolved through the parent registry) into it (reuse the `mountPreset` pattern; the child scope's service chain inherits parent services like `exec/service` via `core-plugin`'s parent-store lookup, so shell/fs tools work unchanged).
+  5. Create a fresh session (`createSession()`); if `fork_turns` is set, seed it with the last N turns of the parent session's events (via `fork.ts`).
+  6. Build a `createAgent(childCtx, { session, tools, model, systemPrompt: role.systemPrompt })`.
+  7. Start `childAgent.run(message)` WITHOUT awaiting — store the promise + AbortController in the agent table; register a `subagent` job.
+  8. Return `{ agent_path, job_id }`.
 - Completion: the stored run promise resolves → job status `completed` + final text stored; mailbox gets a completion notification so `wait_agent` can observe it.
 - Agent path: `parent/child/grandchild/...` — tree-shaped, depth unlimited but queryable via `list_agents`.
 
-## §5 close_agent Resource Reclaim (user-emphasized)
+## §6 close_agent Resource Reclaim (user-emphasized)
 
 - Abort the subagent's execution (AbortController wired to `createAgent`/tool `exec.abortSignal`).
 - Unmount the child scope (`child.scope.unmount()`).
 - Remove the entry from the agent table and mark the `subagent` job `killed` (or remove it).
 - Completed-but-unclosed agents remain in the table (memory held) — `close_agent` is the explicit reclaim path; a future `session-persistence` sub-project may add auto-eviction.
 
-## §6 No Depth Limit / No Durable
+## §7 No Depth Limit / No Durable
 
 - No `maxDepth` rejection (codex v2 behavior). `createAgent`'s `maxTurns` remains the loop guard.
 - No SQLite / notification outbox / cancelTree / completion_delivery. Job + agent tables are in-memory, session-scoped, and vanish with the session.
 
-## §7 Platform Neutrality
+## §8 Platform Neutrality
 
 All 11 tools are plain `Tool` registrations on the parent registry. `llm-openai` and `llm-anthropic` translate them via the existing `function_call`/`tool_use` paths with zero changes.
 
-## §8 Verification
+## §9 Verification
 
+- Role system: built-in roles registered (`general`/`explore`/`research`/`worker`); `registerRole` adds a user role (duplicate name throws); `get`/`list`/`remove` work; `spawn_agent` with an unknown `agent_type` errors; a role with `model` selects that provider's client, a role without inherits the parent model.
 - `subagent.test.ts`:
   - spawn_agent returns immediately with `{ agent_path, job_id }`; the subagent runs in the background (await points yield the event loop).
   - job_output on a `subagent` job returns the final result after completion; `wait: true` blocks until terminal.
@@ -128,9 +176,10 @@ All 11 tools are plain `Tool` registrations on the parent registry. `llm-openai`
 - Existing core-agent / shell / exec tests stay green.
 - Gates: `pnpm --filter @i-harness/subagent test`, `pnpm --filter @i-harness/exec test`, `pnpm --filter @i-harness/shell test`, `pnpm -r test`, `pnpm -r typecheck`.
 
-## §9 Out of Scope (this sub-project)
+## §10 Out of Scope (this sub-project)
 
-- SQLite/JSONL persistence, notification outbox, completion delivery, cancelTree.
+- SQLite/JSONL persistence (jobs, agent table, AND role registry persistence) — deferred to the `session-persistence` sub-project.
+- Notification outbox, completion delivery, cancelTree.
 - Delegation depth limit (explicitly removed by user; codex v2 also removed it).
-- Front ends.
+- Front ends (a future Web settings UI will manage roles through the same registry API).
 - MCP / LSP plugin integration (separate M3 sub-projects).
