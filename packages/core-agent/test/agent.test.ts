@@ -38,6 +38,7 @@ describe("agent loop", () => {
     const result = await agent.run("edit a.txt")
     expect(result.finalText).toBe("Report: edited a.txt")
     expect(result.turns).toBeGreaterThanOrEqual(1)
+    expect(result.reasoning).toEqual([])
     // session log records the tool calls
     const callTypes = deps.session.events.filter((e) => e.type === "tool/call").map((e) => (e as { name: string }).name)
     expect(callTypes).toEqual(["read", "edit"])
@@ -51,5 +52,34 @@ describe("agent loop", () => {
     const result = await agent.run("nothing")
     expect(result.finalText).toBe("all done")
     expect(result.turns).toBe(1)
+    expect(result.reasoning).toEqual([])
+  })
+
+  it("throws when maxTurns is exceeded", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    // a model that always returns a tool call → infinite loop without the guard
+    deps.model = createMockClient(
+      Array.from({ length: 30 }, () => ({ role: "assistant" as const, toolCalls: [{ name: "read", args: { path: "a.txt" } }] })),
+    )
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 5 })
+    await expect(agent.run("loop")).rejects.toThrow(/maxTurns|max turns/i)
+  })
+
+  it("accumulates reasoning stream events into the result", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = {
+      async *stream() {
+        yield { type: "reasoning", text: "think about the file" }
+        yield { type: "reasoning", text: "decide to edit" }
+        yield { type: "text/chunk", text: "edited" }
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const result = await agent.run("task")
+    expect(result.reasoning).toEqual(["think about the file", "decide to edit"])
+    expect(result.finalText).toBe("edited")
   })
 })
