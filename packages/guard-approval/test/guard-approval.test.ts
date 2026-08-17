@@ -43,12 +43,26 @@ describe("guard-approval policy", () => {
     await expect(registry.execute({ name: "write", args: {} })).rejects.toThrow(/approval/i)
   })
 
-  it("Layer 2: write inside workspace allows", async () => {
+  it("Layer 2: write with no path asks then approves via answerer", async () => {
     const { ctx, registry } = setup({ workspace: process.cwd() })
     registry.register(makeWriteTool)
     registerApprovalAnswerer(ctx, async () => ({ approved: true }))
-    // write tool in this test uses path inside workspace
+    // no path arg → policy asks (not the whitelist allow); the answerer approves
     const result = await registry.execute({ name: "write", args: {} })
+    expect(result.output).toEqual({ ok: true })
+  })
+
+  it("Layer 2: write inside workspace allows without any approval (no answerer)", async () => {
+    const { registry } = setup({ workspace: process.cwd() })
+    const writeTool: Tool = {
+      name: "write", description: "", inputSchema: {},
+      isReadOnly: false,
+      // resolvePath happens in the fs tool; here simulate an in-workspace path
+      execute: async () => ({ ok: true }),
+    }
+    registry.register(writeTool)
+    // no answerer registered — the whitelist allow must NOT require approval
+    const result = await registry.execute({ name: "write", args: { path: "inside.txt" } })
     expect(result.output).toEqual({ ok: true })
   })
 
