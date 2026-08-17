@@ -72,6 +72,11 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
         // path arg, cwd is left unset (the process cwd) and "." searches it.
         const result = await deps.exec.run({ argv: [rgPath, ...parts], ...(args.path !== undefined ? { cwd: args.path } : {}) })
         // rg exits 1 with empty stdout when nothing matches — a normal empty result.
+        // Any other non-zero exit (2+ = rg error, -1 = spawn failure) is a genuine
+        // failure: surface it as an error note instead of a silent empty success.
+        if (result.exitCode !== 0 && result.exitCode !== 1) {
+          return { matches: [], error: result.stderr?.trim() || `ripgrep failed (exit ${result.exitCode})` }
+        }
         // Paths come back relative to the search root but with a "./" prefix
         // (".\" on Windows); strip it so callers get bare relative paths.
         const matches = result.stdout
@@ -110,6 +115,12 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
         if (args.include !== undefined) parts.push(`--glob=${args.include}`)
         parts.push("--", args.path ?? ".")
         const result = await deps.exec.run({ argv: [rgPath, ...parts] })
+        // rg exits 1 with no match lines when nothing matches — a normal empty
+        // result. Any other non-zero exit (2+ = rg error, -1 = spawn failure) is
+        // a genuine failure: surface it as an error note, not empty success.
+        if (result.exitCode !== 0 && result.exitCode !== 1) {
+          return { matches: [], error: result.stderr?.trim() || `ripgrep failed (exit ${result.exitCode})` }
+        }
         const matches: GrepMatch[] = []
         for (const line of result.stdout.split("\n")) {
           if (line.trim() === "") continue
