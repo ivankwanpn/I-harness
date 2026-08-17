@@ -125,3 +125,25 @@ describe("agent loop", () => {
     expect(second.some((m) => (m as { toolCallId?: string }).toolCallId !== undefined)).toBe(true)
   })
 })
+
+describe("agent abort", () => {
+  it("rejects immediately when the signal is already aborted", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = createMockClient([{ role: "assistant", text: "x" }])
+    const ac = new AbortController()
+    ac.abort()
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
+    await expect(agent.run("do it")).rejects.toThrow(/aborted/i)
+  })
+
+  it("stops a mid-run loop when a tool aborts the signal", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const ac = new AbortController()
+    deps.tools.register({ name: "abort", description: "", inputSchema: {}, execute: async () => { ac.abort(); return {} } })
+    deps.model = createMockClient([{ role: "assistant", toolCalls: [{ name: "abort", args: {} }] }])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
+    await expect(agent.run("do it")).rejects.toThrow(/aborted/i)
+  })
+})

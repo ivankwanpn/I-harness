@@ -94,6 +94,7 @@ export interface ExecService {
   run(cmd: ExecCommand): Promise<ExecResult>
   runBackground(cmd: ExecCommand): { jobId: string }
   getOutput(jobId: string): BackgroundJobView
+  listJobs(): BackgroundJobView[]
   killJob(jobId: string): "cancellation-requested" | "already-finished"
 }
 
@@ -110,14 +111,17 @@ export function createExecService(): ExecService {
       bashCounter += 1
       const jobId = `bash-${bashCounter}`
       const handle = spawnChild(cmd)
-      jobs.set(jobId, { id: jobId, status: "running", stdout: "", stderr: "", handle })
+      const job: BackgroundJobView & { handle: SpawnHandle } = { id: jobId, status: "running", stdout: "", stderr: "", handle }
+      jobs.set(jobId, job)
+      handle.child.stdout?.on("data", (d: Buffer) => { job.stdout += d.toString("utf-8").replace(/\r\n/g, "\n") })
+      handle.child.stderr?.on("data", (d: Buffer) => { job.stderr += d.toString("utf-8").replace(/\r\n/g, "\n") })
       handle.done.then(({ stdout, stderr, exitCode, timedOut }) => {
-        const job = jobs.get(jobId)
-        if (!job || job.status !== "running") return
-        job.stdout = stdout
-        job.stderr = stderr
-        job.exitCode = exitCode
-        job.status = timedOut ? "killed" : exitCode === 0 ? "completed" : "error"
+        const j = jobs.get(jobId)
+        if (!j || j.status !== "running") return
+        j.stdout = stdout
+        j.stderr = stderr
+        j.exitCode = exitCode
+        j.status = timedOut ? "killed" : exitCode === 0 ? "completed" : "error"
       })
       return { jobId }
     },
@@ -125,6 +129,9 @@ export function createExecService(): ExecService {
       const job = jobs.get(jobId)
       if (!job) throw new Error(`unknown job: ${jobId}`)
       return { id: job.id, status: job.status, stdout: job.stdout, stderr: job.stderr, ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}) }
+    },
+    listJobs(): BackgroundJobView[] {
+      return [...jobs.values()].map((j) => ({ id: j.id, status: j.status, stdout: j.stdout, stderr: j.stderr, ...(j.exitCode !== undefined ? { exitCode: j.exitCode } : {}) }))
     },
     killJob(jobId: string): "cancellation-requested" | "already-finished" {
       const job = jobs.get(jobId)

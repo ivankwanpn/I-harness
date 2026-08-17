@@ -8,6 +8,7 @@ import { assertMessagesFromLog } from "@i-harness/llm-seam"
 export interface AgentConfig {
   systemPrompt: string
   maxTurns?: number
+  signal?: AbortSignal
   // NOTE: `model?: string` from the task brief collides with `AgentDeps.model`
   // (the ModelClient) under `AgentDeps & AgentConfig`, so the string selector
   // is dropped for M1 — the ModelClient IS the model configuration and the
@@ -39,6 +40,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
 
       let needsContinuation = true
       while (needsContinuation) {
+        if (deps.signal?.aborted) throw new Error("agent aborted")
         turns += 1
         // Guard against an infinite tool-call loop: throw once turns exceed
         // the configured maximum (default 20).
@@ -63,6 +65,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
         let stepText = ""
         let toolCallsThisStep = 0
         for await (const ev of deps.model.stream(request)) {
+          if (deps.signal?.aborted) throw new Error("agent aborted")
           switch (ev.type) {
             case "text/chunk":
               stepText += ev.text
@@ -75,6 +78,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig) {
               const callId = `call_${callSeq}`
               append(deps.session, { type: "tool/call", callId, name: ev.call.name, args: ev.call.args })
               const result = await deps.tools.execute({ name: ev.call.name, args: ev.call.args })
+              if (deps.signal?.aborted) throw new Error("agent aborted")
               append(deps.session, { type: "tool/result", callId, name: ev.call.name, output: result.output })
               toolCallsThisStep += 1
               break

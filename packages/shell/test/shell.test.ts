@@ -34,6 +34,7 @@ describe("createShellTools", () => {
     runBackground: () => ({ jobId: "none" }),
     getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
     killJob: () => "already-finished",
+    listJobs: () => [],
   }
 
   it("returns bash and pwsh tools carrying getArgv (for guard-approval)", () => {
@@ -54,6 +55,7 @@ describe("createShellTools", () => {
       runBackground: () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
       killJob: () => "already-finished",
+    listJobs: () => [],
     }
     const [bash] = createShellTools({ exec: spyExec })
     const result = (await bash.execute({ command: "echo hi" }, {})) as {
@@ -77,6 +79,7 @@ describe("createShellTools", () => {
       runBackground: () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
       killJob: () => "already-finished",
+    listJobs: () => [],
     }
     const [, pwsh] = createShellTools({ exec: spyExec })
     await pwsh.execute({ command: "Get-Date" }, {})
@@ -90,6 +93,7 @@ describe("createShellTools", () => {
       runBackground: () => { ranBackground = true; return { jobId: "bash-1" } },
       getOutput: () => ({ id: "bash-1", status: "running", stdout: "", stderr: "" }),
       killJob: () => "already-finished",
+    listJobs: () => [],
     }
     const [bash] = createShellTools({ exec: fakeExec })
     const result = await bash.execute({ command: "sleep 5", background: true }, {})
