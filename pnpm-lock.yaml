@@ -80,6 +80,12 @@ importers:
         specifier: workspace:*
         version: link:../interaction
 
+  packages/exec:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+
   packages/interaction:
     dependencies:
       '@i-harness/core-plugin':
