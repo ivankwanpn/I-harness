@@ -99,4 +99,29 @@ describe("agent loop", () => {
     expect((calls[0] as { callId: string }).callId).toMatch(/^call_\d+$/)
     expect((calls[0] as { callId: string }).callId).toBe((results[0] as { callId: string }).callId)
   })
+
+  it("passes tool history to the model on the next turn (multi-turn loop)", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seenRequests: { messages: unknown[] }[] = []
+    deps.model = {
+      async *stream(request: { messages: unknown[]; tools: unknown[]; systemPrompt: string }) {
+        seenRequests.push({ messages: request.messages })
+        const turn = seenRequests.length
+        if (turn === 1) {
+          yield { type: "tool_call", call: { name: "read", args: { path: "a.txt" } } }
+        } else {
+          yield { type: "text/chunk", text: "final" }
+        }
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 5 })
+    const result = await agent.run("read a.txt")
+    expect(result.finalText).toBe("final")
+    // second turn's messages must contain the tool result from turn 1
+    const second = seenRequests[1]!.messages
+    expect(second.some((m) => (m as { role: string }).role === "tool")).toBe(true)
+    expect(second.some((m) => (m as { toolCallId?: string }).toolCallId !== undefined)).toBe(true)
+  })
 })
