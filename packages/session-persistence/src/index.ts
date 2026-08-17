@@ -1,4 +1,7 @@
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from "@i-harness/core-session"
+import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
+
+export { SessionWriteBehind, type SessionWriteBehindOptions }
 
 export interface SessionMeta {
   formatVersion: number
@@ -23,12 +26,21 @@ export interface PersistenceBackend {
   getDocument(key: string): Promise<unknown | undefined>
 }
 
+export interface CoordinatorOptions {
+  /** Write-behind batching window. Default 200. */
+  maxDelayMs?: number
+  /** Observe a detached background document/write-behind failure. Default console.warn. */
+  reportBackgroundFailure?: (error: unknown) => void
+}
+
 export interface SessionCoordinator {
   create(): Promise<{ id: string }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
+  enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
   list(): Promise<string[]>
   flush(sessionId: string): Promise<void>
+  close(): Promise<void>
   putDocument(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
 }
@@ -54,7 +66,26 @@ const KNOWN_EVENT_TYPES = new Set([
   "tool/call", "tool/result", "step/end", "turn/end",
 ])
 
-export function createSessionCoordinator(backend: PersistenceBackend): SessionCoordinator {
+export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
+  const report = opts?.reportBackgroundFailure
+    ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
+  const maxDelayMs = opts?.maxDelayMs ?? 200
+  const writeBehinds = new Map<string, SessionWriteBehind>()
+  let docChain: Promise<void> = Promise.resolve()
+
+  const writeBehindFor = (sessionId: string): SessionWriteBehind => {
+    let wb = writeBehinds.get(sessionId)
+    if (!wb) {
+      wb = new SessionWriteBehind({
+        maxDelayMs,
+        write: (events) => backend.append(sessionId, events),
+        reportBackgroundFailure: report,
+      })
+      writeBehinds.set(sessionId, wb)
+    }
+    return wb
+  }
+
   async function migrate(version: number, events: SessionEvent[]): Promise<SessionEvent[]> {
     let v = version
     let result = events
@@ -106,6 +137,10 @@ export function createSessionCoordinator(backend: PersistenceBackend): SessionCo
     async append(sessionId, events) {
       await backend.append(sessionId, events)
     },
+    enqueue(sessionId, events) {
+      const wb = writeBehindFor(sessionId)
+      for (const ev of events) wb.enqueue(ev)
+    },
     async load(sessionId) {
       // Version gate BEFORE any backend mutation: a future-format session must
       // be refused on a non-destructive read alone — repair may rewrite the
@@ -120,13 +155,19 @@ export function createSessionCoordinator(backend: PersistenceBackend): SessionCo
     async list() {
       return backend.list()
     },
-    async flush(_sessionId) {
-      // append batches already fsync at the backend; flush is the explicit
-      // durability barrier (a no-op today, kept on the seam for callers that
-      // want to be explicit about ordering).
+    async flush(sessionId) {
+      const wb = writeBehinds.get(sessionId)
+      if (wb) await wb.flush()
+    },
+    async close() {
+      await Promise.allSettled([...writeBehinds.values()].map((wb) => wb.flush()))
+      for (const wb of writeBehinds.values()) wb.cancelAutomaticWait()
+      await docChain
     },
     async putDocument(key, data) {
-      await backend.putDocument(key, data)
+      const p = docChain.then(() => backend.putDocument(key, data))
+      docChain = p.catch(() => {}) // keep the chain alive after a failure
+      return p.catch((error: unknown) => { report(error) }) // report; never rejects the caller
     },
     async getDocument(key) {
       return backend.getDocument(key)
