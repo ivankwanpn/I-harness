@@ -182,6 +182,12 @@ importers:
         specifier: workspace:*
         version: link:../llm-seam
 
+  packages/session-persistence:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+
   packages/shell:
     dependencies:
       '@i-harness/core-plugin':
