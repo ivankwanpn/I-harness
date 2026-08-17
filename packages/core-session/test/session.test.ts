@@ -124,3 +124,33 @@ describe("append validation", () => {
     expect(() => append(s, { type: "assistant/message", text: "external", source: "non-log" } as SessionEvent)).toThrow(/log/i)
   })
 })
+
+describe("session ignorable marker", () => {
+  it("carries an ignorable marker through JSONL round-trip", () => {
+    const session = createSession()
+    // "future/thing" is not a known event type; the ignorable marker is how a
+    // future writer tags events that readers may safely drop. Cast through
+    // unknown because the type is intentionally outside the current union.
+    const futureEvent = { type: "future/thing", payload: "x", ignorable: true } as unknown as SessionEvent
+    append(session, futureEvent)
+    const text = toJSONL(session)
+    const restored = fromJSONL(text)
+    expect(restored.events[0]!).toMatchObject({ type: "future/thing", payload: "x", ignorable: true })
+  })
+})
+
+describe("session onAppend observer", () => {
+  it("invokes the observer for each appended event with seq assigned", () => {
+    const seen: string[] = []
+    const session = createSession((ev) => { seen.push(`${ev.type}#${ev.seq}`) })
+    append(session, { type: "turn/start" })
+    append(session, { type: "user/message", text: "hi" })
+    expect(seen).toEqual(["turn/start#0", "user/message#1"])
+  })
+
+  it("does not invoke the observer when none was provided", () => {
+    const session = createSession()
+    append(session, { type: "turn/start" })
+    expect(session.events).toHaveLength(1)
+  })
+})
