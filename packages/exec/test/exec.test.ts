@@ -62,4 +62,27 @@ describe("exec background jobs", () => {
     const exec = createExecService()
     expect(() => exec.getOutput("nope")).toThrow(/unknown job/i)
   })
+
+  it("listJobs enumerates running and finished jobs", async () => {
+    const exec = createExecService()
+    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 200)"] })
+    const ids = exec.listJobs().map((j) => j.id)
+    expect(ids).toContain(jobId)
+    expect(exec.listJobs().find((j) => j.id === jobId)!.status).toBe("running")
+    await new Promise((r) => setTimeout(r, 400))
+    expect(exec.listJobs().find((j) => j.id === jobId)!.status).toBe("completed")
+  }, 10_000)
+
+  it("getOutput shows accumulated stdout while the job is still running", async () => {
+    const exec = createExecService()
+    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "console.log('early'); setTimeout(()=>console.log('late'), 300)"] })
+    await new Promise((r) => setTimeout(r, 120))
+    const view = exec.getOutput(jobId)
+    expect(view.status).toBe("running")
+    expect(view.stdout).toContain("early")
+    await new Promise((r) => setTimeout(r, 400))
+    const done = exec.getOutput(jobId)
+    expect(done.status).toBe("completed")
+    expect(done.stdout).toContain("late")
+  }, 10_000)
 })

@@ -3,6 +3,7 @@ import { createSession } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderRegistry } from "@i-harness/provider"
+import type { ExecService } from "@i-harness/exec"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
@@ -17,6 +18,7 @@ export interface SubagentToolDeps {
   parentCtx: PluginContext
   parentModel: ModelClient
   providers: ProviderRegistry
+  exec: ExecService
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
@@ -132,7 +134,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const closeTool: Tool<{ target: string }, { previous_status: string }> = {
     name: "close_agent",
-    description: "Close a subagent and reclaim its resources (abort execution, remove from the table).",
+    description: "Close a subagent and reclaim its resources (abort execution, unmount child scope, remove from the agent and job tables).",
     inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     isReadOnly: false,
     execute: async (args) => {
@@ -140,6 +142,8 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
       const previous = entry.status
       entry.controller.abort()
+      entry.unmount?.()
+      if (entry.jobId) deps.jobs.kill(entry.jobId)
       deps.table.remove(args.target)
       return { previous_status: previous }
     },
@@ -164,34 +168,56 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const jobOutputTool: Tool<{ job_id: string; wait?: boolean; timeout_ms?: number }, { text: string; status: string }> = {
     name: "job_output",
-    description: "Read a background job. Non-blocking unless wait: true. Every response ends with [status: ...].",
+    description: "Read a background job (subagent or shell). Non-blocking unless wait: true. Every response ends with [status: ...].",
     inputSchema: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "boolean" }, timeout_ms: { type: "number" } }, required: ["job_id"] },
     isReadOnly: true,
     execute: async (args) => {
-      if (args.wait === true) await deps.jobs.wait(args.job_id, args.timeout_ms ?? 30_000)
-      const snapshot = deps.jobs.read(args.job_id)
-      const body = snapshot.output.length > 0 ? snapshot.output : "(no output)"
-      return { text: `${body}\n[status: ${snapshot.status}]`, status: snapshot.status }
+      // Prefer the subagent JobRegistry; fall back to the exec service (bash/pwsh jobs).
+      try {
+        if (args.wait === true) await deps.jobs.wait(args.job_id, args.timeout_ms ?? 30_000)
+        const snapshot = deps.jobs.read(args.job_id)
+        const body = snapshot.output.length > 0 ? snapshot.output : "(no output)"
+        return { text: `${body}\n[status: ${snapshot.status}]`, status: snapshot.status }
+      } catch (e) {
+        if (!(e instanceof Error) || !/unknown job/i.test(e.message)) throw e
+      }
+      if (args.wait === true) {
+        const deadline = Date.now() + (args.timeout_ms ?? 30_000)
+        while (Date.now() < deadline && deps.exec.getOutput(args.job_id).status === "running") {
+          await new Promise((r) => setTimeout(r, 20))
+        }
+      }
+      const view = deps.exec.getOutput(args.job_id)
+      const body = view.stdout.length > 0 ? view.stdout : "(no output)"
+      return { text: `${body}\n[status: ${view.status}]`, status: view.status }
     },
   }
 
   const jobListTool: Tool<Record<string, never>, { jobs: { id: string; kind: string; status: string; label: string }[] }> = {
     name: "job_list",
-    description: "List your background jobs (running and finished) with ids, kinds, and statuses.",
+    description: "List your background jobs (subagent and shell) with ids, kinds, and statuses.",
     inputSchema: { type: "object", properties: {} },
     isReadOnly: true,
     execute: async () => {
-      const jobs = deps.jobs.list("root").map((j) => ({ id: j.id, kind: j.kind, status: j.status, label: j.label }))
-      return { jobs }
+      const sub = deps.jobs.list("root").map((j) => ({ id: j.id, kind: j.kind, status: j.status, label: j.label }))
+      const shell = deps.exec.listJobs().map((v) => ({ id: v.id, kind: "bash", status: v.status, label: v.id }))
+      return { jobs: [...sub, ...shell] }
     },
   }
 
   const jobKillTool: Tool<{ job_id: string; reason?: string }, { outcome: string }> = {
     name: "job_kill",
-    description: "Request cancellation of a running background job.",
+    description: "Request cancellation of a running background job (subagent or shell).",
     inputSchema: { type: "object", properties: { job_id: { type: "string" }, reason: { type: "string" } }, required: ["job_id"] },
     isReadOnly: false,
-    execute: async (args) => ({ outcome: deps.jobs.kill(args.job_id) }),
+    execute: async (args) => {
+      try {
+        return { outcome: deps.jobs.kill(args.job_id) }
+      } catch (e) {
+        if (!(e instanceof Error) || !/unknown job/i.test(e.message)) throw e
+        return { outcome: deps.exec.killJob(args.job_id) }
+      }
+    },
   }
 
   return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool, jobOutputTool, jobListTool, jobKillTool]

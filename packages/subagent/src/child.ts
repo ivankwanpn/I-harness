@@ -52,20 +52,23 @@ export function spawnChild(opts: SpawnOptions): { path: string; jobId: string } 
   }
 
   const controller = new AbortController()
+  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName)
   opts.table.add(childPath, {
     path: childPath,
     status: "running",
     session: childSession,
     controller,
     mailbox: [],
+    jobId,
+    unmount: () => childCtx.scope.unmount(),
   })
-  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName)
 
   const agent = createAgent(childCtx, {
     session: childSession,
     tools: childReg,
     model,
     systemPrompt: opts.role.systemPrompt,
+    signal: controller.signal,
   })
 
   agent.run(opts.message).then(
@@ -75,9 +78,12 @@ export function spawnChild(opts: SpawnOptions): { path: string; jobId: string } 
       opts.jobs.updateJob(jobId, { status: "completed", output: result.finalText })
     },
     (err) => {
+      const aborted = controller.signal.aborted
+      const status = aborted ? "killed" : "error"
+      const msg = err instanceof Error ? err.message : String(err)
       const e = opts.table.get(childPath)
-      if (e) { e.status = "error"; e.error = err instanceof Error ? err.message : String(err) }
-      opts.jobs.updateJob(jobId, { status: "error", output: err instanceof Error ? err.message : String(err) })
+      if (e) { e.status = status; e.error = aborted ? "aborted" : msg }
+      opts.jobs.updateJob(jobId, { status, output: aborted ? "aborted" : msg })
     },
   )
 

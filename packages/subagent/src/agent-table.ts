@@ -9,6 +9,8 @@ export interface ChildAgentEntry {
   finalText?: string
   error?: string
   mailbox: string[]
+  jobId?: string
+  unmount?: () => void
 }
 export interface AgentTable {
   entries(): Map<string, ChildAgentEntry>
