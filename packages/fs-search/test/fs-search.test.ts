@@ -54,6 +54,18 @@ describe("fs-search glob", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
+
+  it("reports an error when the search path does not exist", async () => {
+    if (!rgAvailable) return
+    const missingDir = join(tmpdir(), `fs-search-missing-${Date.now()}`)
+    const [glob] = createFsSearchTools({ exec: createExecService() })
+    const result = await (glob as { execute(a: unknown, e: unknown): Promise<{ matches: string[]; error?: string }> }).execute(
+      { pattern: "**/*.txt", path: missingDir },
+      {},
+    )
+    expect(result.matches).toEqual([])
+    expect(result.error).toBeTruthy()
+  }, 20_000)
 })
 
 describe("fs-search grep", () => {
@@ -86,6 +98,22 @@ describe("fs-search grep", () => {
       )
       expect(result.matches).toEqual([])
       expect(result.error).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it("reports an error for an invalid regex pattern", async () => {
+    if (!rgAvailable) return
+    const dir = setupDir()
+    try {
+      const [, grep] = createFsSearchTools({ exec: createExecService() })
+      const result = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string; line: number; text: string }[]; error?: string }> }).execute(
+        { pattern: "[", path: dir },
+        {},
+      )
+      expect(result.matches).toEqual([])
+      expect(result.error).toBeTruthy()
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
