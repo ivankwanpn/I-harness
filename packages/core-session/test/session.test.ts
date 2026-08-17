@@ -92,6 +92,29 @@ describe("session log", () => {
     expect(assertVersion(s, 1)).toBe(1)
     expect(() => assertVersion(s, 2)).toThrow(/version/i)
   })
+
+  it("keeps tool blocks separate across steps (per-turn folding)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "task" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_1", name: "read", args: { path: "a.txt" } })
+    append(s, { type: "tool/result", callId: "call_1", name: "read", output: { content: "a" } })
+    append(s, { type: "step/end" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_2", name: "write", args: { path: "a.txt", text: "b" } })
+    append(s, { type: "tool/result", callId: "call_2", name: "write", output: { ok: true } })
+    append(s, { type: "step/end" })
+    append(s, { type: "assistant/message", text: "done" })
+    const msgs = deriveMessages(s)
+    expect(msgs).toEqual([
+      { role: "user", content: "task" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+      { role: "tool", toolCallId: "call_1", content: '{"content":"a"}' },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_2", name: "write", args: { path: "a.txt", text: "b" } }] },
+      { role: "tool", toolCallId: "call_2", content: '{"ok":true}' },
+      { role: "assistant", content: "done" },
+    ])
+  })
 })
 
 describe("append validation", () => {
