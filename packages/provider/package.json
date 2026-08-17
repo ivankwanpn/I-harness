@@ -1,0 +1,19 @@
+{
+  "name": "@i-harness/provider",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@i-harness/llm-seam": "workspace:*",
+    "@i-harness/llm-openai": "workspace:*",
+    "@i-harness/llm-openai-compatible": "workspace:*",
+    "@i-harness/llm-anthropic": "workspace:*"
+  }
+}

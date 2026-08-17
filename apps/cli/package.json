@@ -19,6 +19,7 @@
     "@i-harness/llm-mock": "workspace:*",
     "@i-harness/interaction": "workspace:*",
     "@i-harness/preset": "workspace:*",
+    "@i-harness/provider": "workspace:*",
     "@i-harness/exec": "workspace:*",
     "@i-harness/shell": "workspace:*",
     "@i-harness/fs": "workspace:*",
