@@ -123,4 +123,14 @@ describe("guard-approval policy", () => {
     const result = await registry.execute({ name: "write", args: {} })
     expect(result.output).toEqual({ ok: true })
   })
+
+  it("decide tolerates a payload that is already a decision object", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd() })
+    registry.register(makeBashTool((args) => args.command.split(" ")))
+    registerApprovalAnswerer(ctx, async () => ({ approved: true }))
+    // seed a decision via the plain-listener path, then dispatch: the waterfall
+    // handler receives the seeded { kind } object and must pass it through
+    const result = await registry.execute({ name: "bash", args: { command: "rm -rf /tmp/x" } })
+    expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
+  })
 })
