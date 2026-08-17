@@ -74,6 +74,25 @@ describe("session coordinator", () => {
     await expect(coordinator.load("future")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
   })
 
+  // F01-7: refusal must fire BEFORE the backend's repair can structurally
+  // decode + rewrite a foreign-version file. The gate reads via the
+  // non-destructive `read`, so `repair` (which may mutate) is never reached.
+  it("refuses an unsupported version BEFORE repair runs (no file mutation)", async () => {
+    let repairCalled = false
+    const backend: PersistenceBackend = {
+      id: "jsonl",
+      capabilities: { seekableRead: false, rawArtifacts: true },
+      async create() {},
+      async append() {},
+      async read() { return { version: 99, events: [] } },
+      async list() { return [] },
+      async repair() { repairCalled = true; return { version: 99, events: [] } },
+    }
+    const coordinator = createSessionCoordinator(backend)
+    await expect(coordinator.load("future")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
+    expect(repairCalled).toBe(false)
+  })
+
   it("ignorable guard: unknown type without marker refuses; with marker is dropped", async () => {
     const backend = fakeBackend()
     await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
