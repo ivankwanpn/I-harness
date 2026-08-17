@@ -94,9 +94,12 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       required: ["command"],
     },
     getArgv: (args: { command: string }) => getArgv(args.command),
+    // Hardcoded bash argv: a tool NAMED bash must run bash, never the platform
+    // default shell (resolveShell can return pwsh on Windows without bash).
+    // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
+    // executing PowerShell.
     execute: async (args: { command: string }, _exec: ToolExec) => {
-      const shell = resolveShell()
-      const result = await deps.exec.run({ argv: [...shell.argv, args.command] })
+      const result = await deps.exec.run({ argv: ["bash", "-c", args.command] })
       return { stdout: result.stdout, exitCode: result.exitCode }
     },
   }
