@@ -65,6 +65,9 @@ importers:
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell
+      '@i-harness/tool-search':
+        specifier: workspace:*
+        version: link:../../packages/tool-search
 
   packages/core-agent:
     dependencies:
