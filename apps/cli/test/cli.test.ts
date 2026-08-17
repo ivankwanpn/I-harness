@@ -122,6 +122,19 @@ describe("headless CLI (M2)", () => {
     const result = await childTools.execute({ name: "bash", args: { command: "rm -rf data.txt" } })
     expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
   })
+
+  it("tool_search promotes a deferred tool in the headless pipeline", async () => {
+    const result = await runHeadless("find the grep tool", {
+      workspace: dir,
+      approveAll: true,
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "tool_search", args: { query: "search patterns" } }] },
+        { role: "assistant", toolCalls: [{ name: "grep", args: { pattern: "x", path: "data.txt" } }] },
+        { role: "assistant", text: "done" },
+      ],
+    })
+    expect(result.exitCode).toBe(0)
+  })
 })
 
 describe("CLI main + entry guard", () => {

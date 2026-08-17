@@ -8,6 +8,7 @@ import { registerShell } from "@i-harness/shell"
 import { createFsTools } from "@i-harness/fs"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
+import { registerToolSearch } from "@i-harness/tool-search"
 
 export interface HeadlessOptions {
   workspace: string
@@ -43,6 +44,22 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   if (opts.approveAll) {
     registerApprovalAnswerer(ctx, async () => ({ approved: true }))
   }
+
+  // register a deferred grep-style tool so tool_search has something to find
+  tools.register({
+    name: "grep",
+    description: "search text in files",
+    inputSchema: {
+      type: "object",
+      properties: { pattern: { type: "string" }, path: { type: "string" } },
+      required: ["pattern"],
+    },
+    exposure: "deferred",
+    searchHint: "find patterns",
+    isReadOnly: true,
+    execute: async () => ({ matches: [] }),
+  })
+  registerToolSearch(ctx, tools)
 
   const model = opts.model ?? createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
 
