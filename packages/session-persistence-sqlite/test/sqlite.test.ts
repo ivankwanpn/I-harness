@@ -22,7 +22,7 @@ describe("sqlite schema", () => {
       expect(user_version).toBe(SCHEMA_VERSION)
       expect(application_id).toBe(APPLICATION_ID)
       const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]
-      expect(tables.map((t) => t.name)).toEqual(["events", "persistence_state", "sessions"])
+      expect(tables.map((t) => t.name)).toEqual(["documents", "events", "persistence_state", "sessions"])
     } finally {
       db.close()
     }
@@ -120,5 +120,14 @@ describe("sqlite backend", () => {
     // repair is durable: re-reading shows the closers
     const again = await backend.read("s1")
     expect(again.events.map((e) => e.type)).toEqual(["turn/start", "user/message", "turn/end"])
+  })
+})
+
+describe("sqlite documents", () => {
+  it("putDocument/getDocument persist to the documents table", async () => {
+    const backend = createSqliteBackend(join(dir, "sessions.db"))
+    await backend.putDocument("subagent-state", { roles: [{ name: "x" }] })
+    expect(await backend.getDocument("subagent-state")).toEqual({ roles: [{ name: "x" }] })
+    expect(await backend.getDocument("missing")).toBeUndefined()
   })
 })

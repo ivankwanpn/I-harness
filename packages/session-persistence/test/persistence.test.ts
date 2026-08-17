@@ -11,6 +11,7 @@ import {
 // In-memory fake backend so coordinator logic is tested without disk I/O.
 function fakeBackend(): PersistenceBackend {
   const files = new Map<string, { meta: SessionMeta; events: SessionEvent[] }>()
+  const documents = new Map<string, unknown>()
   return {
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
@@ -31,6 +32,8 @@ function fakeBackend(): PersistenceBackend {
       if (!f) throw new Error(`unknown session: ${sessionId}`)
       return { version: f.meta.formatVersion, events: f.events }
     },
+    async putDocument(key, data) { documents.set(key, data) },
+    async getDocument(key) { return documents.get(key) },
   }
 }
 
@@ -87,6 +90,8 @@ describe("session coordinator", () => {
       async read() { return { version: 99, events: [] } },
       async list() { return [] },
       async repair() { repairCalled = true; return { version: 99, events: [] } },
+      async putDocument() {},
+      async getDocument() { return undefined },
     }
     const coordinator = createSessionCoordinator(backend)
     await expect(coordinator.load("future")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
@@ -113,5 +118,16 @@ describe("session coordinator", () => {
     const coordinator = createSessionCoordinator(fakeBackend())
     const { id } = await coordinator.create()
     await expect(coordinator.flush(id)).resolves.toBeUndefined()
+  })
+})
+
+describe("session coordinator documents", () => {
+  it("putDocument/getDocument round-trips arbitrary data", async () => {
+    const backend = fakeBackend()
+    const coordinator = createSessionCoordinator(backend)
+    const doc = { jobs: [], agentTable: [], roles: [] }
+    await coordinator.putDocument("subagent-state", doc)
+    expect(await coordinator.getDocument("subagent-state")).toEqual(doc)
+    expect(await coordinator.getDocument("missing")).toBeUndefined()
   })
 })

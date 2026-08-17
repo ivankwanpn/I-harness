@@ -6,6 +6,7 @@ import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./fo
 
 export function createJsonlBackend(root: string): PersistenceBackend {
   const filePath = (id: string) => join(root, `${id}.jsonl`)
+  const docPath = (key: string) => join(root, `${key}.doc.jsonl`)
 
   return {
     id: "jsonl",
@@ -71,6 +72,16 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         }
       }
       return { version: header.formatVersion, events: [...events, ...closers] }
+    },
+
+    async putDocument(key: string, data: unknown): Promise<void> {
+      await mkdir(root, { recursive: true })
+      await writeFile(docPath(key), JSON.stringify(data) + "\n", { encoding: "utf-8" })
+    },
+    async getDocument(key: string): Promise<unknown | undefined> {
+      const text = await readFile(docPath(key), "utf-8").catch(() => undefined)
+      if (text === undefined) return undefined
+      return JSON.parse(text) as unknown
     },
   }
 }

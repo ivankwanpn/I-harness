@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createJsonlBackend } from "../src/index.ts"
@@ -85,5 +85,14 @@ describe("jsonl backend", () => {
     await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
     await backend.create("s2", { formatVersion: 1, sessionId: "s2", createdAt: "x" })
     expect((await backend.list()).sort()).toEqual(["s1", "s2"])
+  })
+})
+
+describe("jsonl documents", () => {
+  it("putDocument/getDocument persist a sidecar file", async () => {
+    const backend = createJsonlBackend(dir)
+    await backend.putDocument("subagent-state", { jobs: [{ id: "subagent-1" }] })
+    expect(await backend.getDocument("subagent-state")).toEqual({ jobs: [{ id: "subagent-1" }] })
+    expect(existsSync(join(dir, "subagent-state.doc.jsonl"))).toBe(true)
   })
 })

@@ -17,6 +17,10 @@ export interface PersistenceBackend {
   list(): Promise<string[]>
   repair(sessionId: string): Promise<{ version: number; events: SessionEvent[] }>
   capabilities: { seekableRead: boolean; rawArtifacts: boolean }
+  // Generic non-session document store (M6): arbitrary keyed state such as
+  // the subagent registry snapshot. Session-event semantics unchanged.
+  putDocument(key: string, data: unknown): Promise<void>
+  getDocument(key: string): Promise<unknown | undefined>
 }
 
 export interface SessionCoordinator {
@@ -25,6 +29,8 @@ export interface SessionCoordinator {
   load(sessionId: string): Promise<{ session: Session }>
   list(): Promise<string[]>
   flush(sessionId: string): Promise<void>
+  putDocument(key: string, data: unknown): Promise<void>
+  getDocument(key: string): Promise<unknown | undefined>
 }
 
 // F01-7: refusal before structural decode — "upgrade the harness", never a
@@ -118,6 +124,12 @@ export function createSessionCoordinator(backend: PersistenceBackend): SessionCo
       // append batches already fsync at the backend; flush is the explicit
       // durability barrier (a no-op today, kept on the seam for callers that
       // want to be explicit about ordering).
+    },
+    async putDocument(key, data) {
+      await backend.putDocument(key, data)
+    },
+    async getDocument(key) {
+      return backend.getDocument(key)
     },
   }
 }

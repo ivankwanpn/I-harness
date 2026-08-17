@@ -105,6 +105,10 @@ export function openDatabase(path: string, journalMode: JournalMode = "wal"): Da
           ignorable         INTEGER,
           PRIMARY KEY (session_id, seq)
         ) STRICT;
+        CREATE TABLE IF NOT EXISTS documents (
+          key  TEXT PRIMARY KEY,
+          data TEXT NOT NULL
+        ) STRICT;
       `)
       db.prepare("INSERT OR IGNORE INTO persistence_state (singleton, store_id) VALUES (1, ?)").run(randomUUID())
       db.exec(`PRAGMA application_id = ${APPLICATION_ID}`)
