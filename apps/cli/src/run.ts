@@ -85,10 +85,16 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
   // Resume: restore the persisted history into the session WITHOUT re-appending
   // it (it is already durable); subsequent appends continue from this history.
+  // A missing/corrupt session id must surface as a clean result (exitCode 1 +
+  // message), not an unhandled rejection before the try/catch below.
   if (opts.resumeSessionId && opts.coordinator) {
-    const { session: restored } = await opts.coordinator.load(opts.resumeSessionId)
-    session.events.push(...restored.events)
-    session.formatVersion = restored.formatVersion
+    try {
+      const { session: restored } = await opts.coordinator.load(opts.resumeSessionId)
+      session.events.push(...restored.events)
+      session.formatVersion = restored.formatVersion
+    } catch (err) {
+      return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
+    }
   }
 
   try {

@@ -64,6 +64,23 @@ export function createSessionCoordinator(backend: PersistenceBackend): SessionCo
     return result
   }
 
+  // F01-7: refuse unsupported versions BEFORE the backend's repair can
+  // structurally decode + rewrite a foreign-version file. Read is
+  // non-destructive (torn-tail tolerant, never mutates); repair may truncate
+  // + rewrite, so it is only reached once the version gate has passed.
+  function assertVersionSupported(version: number): void {
+    if (version > CURRENT_FORMAT_VERSION) {
+      throw new SessionFormatUnsupportedError(`format version ${version} is newer than this build (upgrade the harness)`)
+    }
+    let v = version
+    while (v < CURRENT_FORMAT_VERSION) {
+      if (!upgrades.has(v)) {
+        throw new SessionFormatUnsupportedError(`no upgrade path from format version ${v} to ${CURRENT_FORMAT_VERSION}`)
+      }
+      v += 1
+    }
+  }
+
   function guardIgnorable(events: SessionEvent[]): SessionEvent[] {
     const kept: SessionEvent[] = []
     for (const ev of events) {
@@ -84,6 +101,11 @@ export function createSessionCoordinator(backend: PersistenceBackend): SessionCo
       await backend.append(sessionId, events)
     },
     async load(sessionId) {
+      // Version gate BEFORE any backend mutation: a future-format session must
+      // be refused on a non-destructive read alone — repair may rewrite the
+      // file, and it must never touch bytes the current build cannot decode.
+      const peeked = await backend.read(sessionId)
+      assertVersionSupported(peeked.version)
       const { version, events } = await backend.repair(sessionId)
       const guarded = guardIgnorable(events)
       const migrated = await migrate(version, guarded)

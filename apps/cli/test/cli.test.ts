@@ -235,6 +235,25 @@ describe("headless CLI persistence (M4)", () => {
     }
   })
 
+  it("resume with a missing session id resolves cleanly instead of throwing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      // no session file was created → coordinator.load rejects; runHeadless must
+      // turn that into a clean { exitCode: 1, error } result, not a throw.
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        approveAll: true,
+        resumeSessionId: "missing",
+        coordinator,
+      })
+      expect(result.exitCode).toBe(1)
+      expect(result.error).toBeTruthy()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it("main() with --session-dir creates a session file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {
