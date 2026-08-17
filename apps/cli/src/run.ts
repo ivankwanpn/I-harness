@@ -12,7 +12,7 @@ import { createApprovalPolicy } from "@i-harness/guard-approval"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
-import { registerSubagent } from "@i-harness/subagent"
+import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createProviderRegistry } from "@i-harness/provider"
 
 export interface HeadlessOptions {
@@ -29,6 +29,24 @@ export interface HeadlessResult {
   finalText: string
   exitCode: number
   error?: string
+}
+
+// M6: serialize document writes through the coordinator. Subagent persistence
+// saves are fire-and-forget (`void save(...)` in the wrapped registries), so
+// two saves can race two putDocument calls against the same sidecar file and
+// interleave/truncate each other at the OS level (observed as concatenated
+// JSON). Chaining keeps exactly one document write in flight at a time; a
+// failed write does not wedge the chain. Session append/flush go through the
+// raw coordinator and are unaffected.
+function withSerializedDocuments(coordinator: SessionCoordinator): SessionCoordinator {
+  let chain: Promise<void> = Promise.resolve()
+  return {
+    ...coordinator,
+    putDocument(key, data) {
+      chain = chain.catch(() => {}).then(() => coordinator.putDocument(key, data))
+      return chain
+    },
+  }
 }
 
 // Headless single-agent run for the CLI. Everything lives on ONE scope/ctx:
@@ -90,6 +108,20 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
   }
 
+  // M6: restore subagent state (jobs/agent-table/roles) from the coordinator
+  // document API on resume; settled only, running→error handled by restoreState.
+  // A missing/corrupt document just means no restored state — the run proceeds
+  // with fresh registries (builtin seeding).
+  let restoredState: SubagentStateSnapshot | undefined
+  if (opts.resumeSessionId && opts.coordinator) {
+    try {
+      const doc = await opts.coordinator.getDocument("subagent-state")
+      if (doc) restoredState = doc as SubagentStateSnapshot
+    } catch {
+      restoredState = undefined
+    }
+  }
+
   try {
     // Mount the subagent + job tools so the main agent can delegate.
     registerSubagent(ctx, tools, {
@@ -97,6 +129,14 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       exec: ctx.services.get<import("@i-harness/exec").ExecService>("exec/service"),
       parentModel: model,
       parentSession: session,
+      // M6: persist every subagent registry mutation through the coordinator
+      // document API (fixed key shared across sessions in the same backend).
+      // putDocument is serialized so fire-and-forget saves never race each
+      // other against the same sidecar file.
+      ...(opts.coordinator && (opts.sessionId || opts.resumeSessionId)
+        ? { persist: { coordinator: withSerializedDocuments(opts.coordinator), stateId: "subagent-state" } }
+        : {}),
+      ...(restoredState ? { restoredState } : {}),
     })
     const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
     const result = await agent.run(task)
