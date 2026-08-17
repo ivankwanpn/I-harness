@@ -162,7 +162,39 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool]
+  const jobOutputTool: Tool<{ job_id: string; wait?: boolean; timeout_ms?: number }, { text: string; status: string }> = {
+    name: "job_output",
+    description: "Read a background job. Non-blocking unless wait: true. Every response ends with [status: ...].",
+    inputSchema: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "boolean" }, timeout_ms: { type: "number" } }, required: ["job_id"] },
+    isReadOnly: true,
+    execute: async (args) => {
+      if (args.wait === true) await deps.jobs.wait(args.job_id, args.timeout_ms ?? 30_000)
+      const snapshot = deps.jobs.read(args.job_id)
+      const body = snapshot.output.length > 0 ? snapshot.output : "(no output)"
+      return { text: `${body}\n[status: ${snapshot.status}]`, status: snapshot.status }
+    },
+  }
+
+  const jobListTool: Tool<Record<string, never>, { jobs: { id: string; kind: string; status: string; label: string }[] }> = {
+    name: "job_list",
+    description: "List your background jobs (running and finished) with ids, kinds, and statuses.",
+    inputSchema: { type: "object", properties: {} },
+    isReadOnly: true,
+    execute: async () => {
+      const jobs = deps.jobs.list("root").map((j) => ({ id: j.id, kind: j.kind, status: j.status, label: j.label }))
+      return { jobs }
+    },
+  }
+
+  const jobKillTool: Tool<{ job_id: string; reason?: string }, { outcome: string }> = {
+    name: "job_kill",
+    description: "Request cancellation of a running background job.",
+    inputSchema: { type: "object", properties: { job_id: { type: "string" }, reason: { type: "string" } }, required: ["job_id"] },
+    isReadOnly: false,
+    execute: async (args) => ({ outcome: deps.jobs.kill(args.job_id) }),
+  }
+
+  return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool, jobOutputTool, jobListTool, jobKillTool]
 }
 
 function parseForkTurns(value: string | number | undefined): "none" | "all" | number {

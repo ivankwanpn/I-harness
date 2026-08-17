@@ -113,3 +113,32 @@ describe("subagent control tools", () => {
     expect(table.get("root/helper")!.mailbox).toContain("more")
   }, 10_000)
 })
+
+describe("job tools", () => {
+  it("job_output reads a completed job; job_list enumerates it", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const output = all.find((t) => t.name === "job_output")!
+    const list = all.find((t) => t.name === "job_list")!
+    const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    const jobId = (spawnOut as { job_id: string }).job_id
+    await new Promise((r) => setTimeout(r, 150))
+    const read = await output.execute({ job_id: jobId }, {})
+    const body = read as { text: string; status: string }
+    expect(body.text).toContain("[status: completed]")
+    const jobsOut = await list.execute({}, {})
+    expect((jobsOut as { jobs: { id: string }[] }).jobs.map((j) => j.id)).toContain(jobId)
+  }, 10_000)
+
+  it("job_kill cancels a running job", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const kill = all.find((t) => t.name === "job_kill")!
+    const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    const jobId = (spawnOut as { job_id: string }).job_id
+    const out = await kill.execute({ job_id: jobId }, {})
+    expect(["cancellation-requested", "already-finished"]).toContain((out as { outcome: string }).outcome)
+  }, 10_000)
+})
