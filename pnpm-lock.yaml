@@ -224,6 +224,15 @@ importers:
         specifier: workspace:*
         version: link:../session-persistence
 
+  packages/session-persistence-sqlite:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+
   packages/shell:
     dependencies:
       '@i-harness/core-plugin':
