@@ -6,20 +6,20 @@ Supersedes: builds on `docs/superpowers/specs/2026-08-16-i-harness-runtime-desig
 
 ## Purpose
 
-Design the M3 milestone's third sub-project: the task/subagent plugin. It replicates codex v2's asynchronous agent-swarm model (spawn/wait/list/send/interrupt/followup/close/resume) combined with dsh's unified background-job service (`ctx.jobs`: `job_output`/`job_list`/`job_kill`), so the main agent can both background its own long shell commands and delegate to subagents — both unified as jobs. No depth limit, no SQLite persistence, platform-neutral.
+Design the M3 milestone's third sub-project: the task/subagent plugin, plus the provider system it depends on. The subagent plugin replicates codex v2's asynchronous agent-swarm model (spawn/wait/list/send/interrupt/followup/close/resume) combined with dsh's unified background-job service (`ctx.jobs`: `job_output`/`job_list`/`job_kill`), so the main agent can both background its own long shell commands and delegate to subagents — both unified as jobs. A user-defined **provider system** (independent package shared by main and sub agents) supplies model endpoints by named profile + protocol, and a new `llm-openai-compatible` protocol plugin covers Chat Completions. No depth limit, no SQLite persistence, platform-neutral.
 
 ## References (verified)
 
 - **codex-rust-v0.147.0** (`core/src/tools/handlers/multi_agents_v2/`): async-by-default swarm — `spawn_agent` returns immediately, `wait_agent` waits on mailbox updates, `send_message`/`interrupt_agent`/`list_agents`/`followup_task`; `fork_turns` (none/all/N); **v2 removed the spawn depth limit** (`MultiAgentVersion::V2` no longer calls `exceeds_thread_spawn_depth_limit`; depth is only tracked into the agent path).
-- **deepseek-harness** (`packages/jobs/jobs`, `tool-jobs`, `tool-subagent`, `subagent-in-process-driver`): the unified `ctx.jobs` background-job service — job ids `<kind>-N`, session-scoped access, `wait`/`read`/`list`/`kill`, completion delivery; in-process one-shot subagent driver with `mountPreset`-style child scope; delegation depth accounting.
-- **opencode fork**: task/get_task_output/stop_task with durable SQLite lifecycle — **not adopted** (unstable fork-authored design; no persistence layer here).
-- **cc-custom**: `run_in_background` + output-to-file + Read — not adopted (two query paths, complex output management).
+- **deepseek-harness** (`packages/jobs/jobs`, `tool-jobs`, `tool-subagent`, `subagent-in-process-driver`): the unified `ctx.jobs` background-job service — job ids `<kind>-N`, session-scoped access, `wait`/`read`/`list`/`kill`, completion delivery; in-process one-shot subagent driver with `mountPreset`-style child scope; delegation depth accounting. Provider model: `ProviderSpec` (provider route key + displayName + api/wire-protocol + baseURL + models list + apiKeyEnv credential reference).
+- **opencode fork**: task/get_task_output/stop_task with durable SQLite lifecycle — **not adopted** (unstable fork-authored design; no persistence layer here). **Adopted**: `CustomProvider.Protocol` three-value protocol (`openai-responses` / `openai-compatible` / `anthropic-messages`), custom-provider configure/discover pattern, provider catalog shared by main + sub agents.
+- **cc-custom**: `run_in_background` + output-to-file + Read — not adopted (two query paths, complex output management). Model-selection `inherit` semantics adopted.
 
 ## Global Constraints (binding)
 
 - **This project does NOT use bun** (pnpm/Node monorepo). Do NOT introduce bun dependencies, bun APIs, or bun config.
 - ESM + strict TS; tests under `test/*.test.ts` per package; pnpm workspaces.
-- Platform-neutral: all tools are plain registered tools — OpenAI (`function_call`) and Anthropic (`tool_use`) call them through the existing protocol plugins. NO protocol-plugin changes.
+- Platform-neutral: all tools are plain registered tools — OpenAI (`function_call`), Anthropic (`tool_use`), and Chat Completions call them through the protocol plugins. NO protocol-plugin changes (the new `llm-openai-compatible` package is a NEW protocol plugin, not a change to existing ones).
 - No real network in tests — always `vi.stubGlobal("fetch", ...)`.
 - No session persistence / no SQLite (deferred to a future `session-persistence` sub-project).
 - **No delegation depth limit** — codex v2 removed it; trust modern models. Depth is still TRACKED into the agent path (`parent/child/...`) for identification and list_agents filtering, never rejected.
@@ -37,6 +37,38 @@ Design the M3 milestone's third sub-project: the task/subagent plugin. It replic
 - `runBackground` spawns the child, registers it as a job (`bash-N`), returns immediately. `getOutput` reads current accumulated output. `run` (existing await-until-done) is unchanged.
 - Job table lives in the exec service instance (in-process, session-scoped by construction).
 
+### 1.1.5 packages/provider (NEW — independent, shared by main + sub agents)
+
+```
+packages/provider/
+├── package.json          # @i-harness/provider; deps: llm-seam, llm-openai, llm-openai-compatible, llm-anthropic
+├── tsconfig.json
+├── src/
+│   └── index.ts          # ProviderProfile, ProviderRegistry, buildModelClient
+└── test/
+    └── provider.test.ts
+```
+
+- `ProviderProfile` (below, §2.1) — a user-defined, NAMED provider endpoint.
+- `ProviderRegistry` — `register`/`get`/`list`/`remove` by name (front-end-ready; persistence deferred).
+- `buildModelClient(profile, model, extra?)` — constructs a `ModelClient` by dispatching on `profile.protocol` to `createOpenAIClient` (responses) / `createOpenAICompatibleClient` (chat completions) / `createAnthropicClient` (messages), with `profile.baseUrl`/`profile.apiKey` + `model` (+ `extra` passed through). Unknown protocol → error at build time.
+- The CLI's `parseModel` if/else is REPLACED by this package (main agent selects models through the provider registry); subagent roles reference providers through it too. **One shared provider system for main and sub agents.**
+
+### 1.1.6 packages/llm-openai-compatible (NEW — Chat Completions protocol plugin)
+
+```
+packages/llm-openai-compatible/
+├── package.json          # @i-harness/llm-openai-compatible; deps: llm-seam
+├── tsconfig.json
+├── src/
+│   └── index.ts          # createOpenAICompatibleClient(config), parseSSE
+└── test/
+    └── openai-compatible.test.ts
+```
+
+- `config = { apiKey, baseUrl?, model }`; implements `ModelClient` over the OpenAI **Chat Completions** API (`POST {baseUrl}/v1/chat/completions`, stream: true).
+- SSE mapping: `choices[].delta.content` → `text/chunk`; `delta.tool_calls[]` → `tool_call` (accumulate arguments deltas); `choices[].finish_reason` / stream end → `end`; `reasoning` events if provided by the provider. Mirrors the llm-openai/llm-anthropic structure.
+
 ### 1.2 packages/shell (MODIFIED)
 
 - `bash` and `pwsh` tools gain an optional `background?: boolean` argument (default false). When true, the tool calls `exec.runBackground` and returns `{ job_id }` immediately instead of awaiting.
@@ -45,10 +77,10 @@ Design the M3 milestone's third sub-project: the task/subagent plugin. It replic
 
 ```
 packages/subagent/
-├── package.json          # @i-harness/subagent; deps: core-plugin, core-tools, core-session, core-agent, llm-seam, llm-openai, llm-anthropic, exec, preset
+├── package.json          # @i-harness/subagent; deps: core-plugin, core-tools, core-session, core-agent, llm-seam, provider, exec, preset
 ├── tsconfig.json
 ├── src/
-│   ├── roles.ts          # role+provider system: SubagentRole, ProviderProfile, RoleRegistry, ProviderRegistry, built-in roles
+│   ├── roles.ts          # SubagentRole, RoleRegistry, built-in roles (references @i-harness/provider)
 │   ├── jobs.ts           # unified job service (dsh ctx.jobs concept): registerJob/wait/read/list/kill
 │   ├── agent-table.ts    # subagent table + mailbox queues + lifecycle
 │   ├── child.ts          # subagent creation: mountPreset child scope + fresh session + createAgent background start
@@ -69,12 +101,16 @@ Providers and roles are user-defined, named data (not code). A provider profile 
 
 ```ts
 // A named provider profile — the user's recognizable name for an endpoint.
+// Lives in @i-harness/provider (shared by main + sub agents).
+export type ProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic-messages"
+
 export interface ProviderProfile {
   name: string              // unique id the user recognizes (e.g. "my-deepseek", "company-internal")
   displayName: string       // for future front-end selectors
-  protocol: "openai-responses" | "anthropic-messages"  // which protocol plugin builds the client
+  protocol: ProviderProtocol  // which protocol plugin builds the client (opencode CustomProvider.Protocol)
   baseUrl?: string          // endpoint; omitted → protocol plugin default
   apiKey?: string           // key (env-var reference / OAuth deferred to later plugin work)
+  models?: string[]         // optional model id list for front-end selectors; unknown models error at the model end
 }
 
 // A role references a provider by name and picks a model under it.
@@ -99,7 +135,7 @@ The same protocol plugin serves many providers (a host can expose both a Respons
 - **Built-in roles** (code-defined): `general`, `explore`, `research`, `worker` — each with a purpose-driven `systemPrompt` and a read-mostly tool allowlist (patterned on opencode's built-in agent prompts and cc-custom's built-in agent definitions).
 - **User roles**: programmatic `registerRole(role)` — the same API a future front-end calls to create/edit/delete roles. Roles are data, not code.
 
-### 2.3 Registry APIs (front-end-ready)
+### 2.3 Role registry API (front-end-ready)
 
 ```ts
 export interface RoleRegistry {
@@ -108,20 +144,13 @@ export interface RoleRegistry {
   list(): SubagentRole[]
   remove(name: string): void
 }
-
-export interface ProviderRegistry {
-  registerProvider(profile: ProviderProfile): void  // throws on duplicate name
-  getProvider(name: string): ProviderProfile | undefined
-  listProviders(): ProviderProfile[]
-  removeProvider(name: string): void
-}
 ```
 
-`registerSubagent(ctx, registry, opts?)` seeds the role registry with the four built-in roles and a provider registry (initially empty — users register their providers). A future front-end layer reads/writes through these interfaces (persistence deferred to the `session-persistence` sub-project).
+The provider registry (`ProviderRegistry` with `registerProvider`/`getProvider`/`listProviders`/`removeProvider`) lives in **`@i-harness/provider`** — shared by main and sub agents. `registerSubagent(ctx, parentRegistry, opts?)` seeds the role registry with the four built-in roles and accepts an injected `ProviderRegistry` (from the provider package). A future front-end layer reads/writes both registries through these interfaces (persistence deferred to the `session-persistence` sub-project).
 
 ### 2.4 Model selection
 
-- `spawn_agent` resolves `agent_type` to a role. If the role has `model`, the child looks up the referenced provider profile and builds a `ModelClient` via the protocol plugin named by `profile.protocol` (`createOpenAIClient` / `createAnthropicClient`) with `profile.baseUrl`/`profile.apiKey` + `role.model.model` (+ `extra` passed to the model end). Unknown provider / bad model errors surface from the model end at spawn time.
+- `spawn_agent` resolves `agent_type` to a role. If the role has `model`, the child looks up the referenced provider profile via the injected `ProviderRegistry` and calls `buildModelClient(profile, model, extra)` (from `@i-harness/provider`) — which dispatches on `profile.protocol` to `createOpenAIClient` / `createOpenAICompatibleClient` / `createAnthropicClient`. Unknown provider / bad model errors surface from the model end at spawn time.
 - Otherwise (role has no `model`) the child inherits the parent `ModelClient`.
 - Resolution precedence: role `model` (via provider profile) > inherit parent model.
 - Because `protocol` is decoupled from the provider name, one provider endpoint can serve either protocol, and future auth modes (OAuth, env-var key refs) are additive plugin work.
@@ -187,7 +216,10 @@ All 11 tools are plain `Tool` registrations on the parent registry. `llm-openai`
 
 ## §9 Verification
 
-- Role system: built-in roles registered (`general`/`explore`/`research`/`worker`); `registerRole` adds a user role (duplicate name throws); `get`/`list`/`remove` work; `spawn_agent` with an unknown `agent_type` errors. Provider profiles: `registerProvider`/`getProvider`/`listProviders`/`removeProvider`; a role whose `model.provider` is unregistered errors at spawn; a role with a registered provider + model builds the client via that protocol plugin; a role without `model` inherits the parent model.
+- **provider package**: `registerProvider`/`getProvider`/`listProviders`/`removeProvider`; `buildModelClient` dispatches on protocol — `openai-responses` builds via llm-openai, `openai-compatible` via llm-openai-compatible, `anthropic-messages` via llm-anthropic; unknown protocol errors. Mocked-fetch tests assert the request body shape per protocol.
+- **llm-openai-compatible**: request body (`{ model, messages, tools, stream: true }` to `POST {baseUrl}/v1/chat/completions`); SSE mapping (`delta.content` → text/chunk, `delta.tool_calls` → tool_call with argument-delta accumulation, finish → end); mock-fetch only.
+- **CLI**: `parseModel` if/else replaced — main agent selects models through the provider registry.
+- Role system: built-in roles registered (`general`/`explore`/`research`/`worker`); `registerRole` adds a user role (duplicate name throws); `get`/`list`/`remove` work; `spawn_agent` with an unknown `agent_type` errors. A role whose `model.provider` is unregistered errors at spawn; a role with a registered provider + model builds the client via that protocol plugin; a role without `model` inherits the parent model.
 - `subagent.test.ts`:
   - spawn_agent returns immediately with `{ agent_path, job_id }`; the subagent runs in the background (await points yield the event loop).
   - job_output on a `subagent` job returns the final result after completion; `wait: true` blocks until terminal.
@@ -196,7 +228,7 @@ All 11 tools are plain `Tool` registrations on the parent registry. `llm-openai`
   - shell background: `bash { background: true }` returns `{ job_id }`; job_output reads stdout.
   - job_list enumerates both kinds; job_kill cancels a running job.
 - Existing core-agent / shell / exec tests stay green.
-- Gates: `pnpm --filter @i-harness/subagent test`, `pnpm --filter @i-harness/exec test`, `pnpm --filter @i-harness/shell test`, `pnpm -r test`, `pnpm -r typecheck`.
+- Gates: `pnpm --filter @i-harness/subagent test`, `pnpm --filter @i-harness/provider test`, `pnpm --filter @i-harness/llm-openai-compatible test`, `pnpm --filter @i-harness/exec test`, `pnpm --filter @i-harness/shell test`, `pnpm -r test`, `pnpm -r typecheck`.
 
 ## §10 Out of Scope (this sub-project)
 
