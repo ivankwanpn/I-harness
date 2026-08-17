@@ -67,4 +67,24 @@ describe("tool_search registration", () => {
     registerToolSearch(ctx, reg)
     await expect(reg.execute({ name: toolSearchName, args: { query: "" } })).rejects.toThrow(/empty/i)
   })
+
+  it("CLI-style: tool_search output carries matches AND schemas() gains the promoted tool", async () => {
+    const ctx = createContext()
+    const reg = createToolRegistry(ctx)
+    reg.register({
+      name: "grep",
+      description: "search text in files",
+      inputSchema: {},
+      exposure: "deferred",
+      searchHint: "find patterns",
+      isReadOnly: true,
+      execute: async () => ({ matches: [] }),
+    })
+    registerToolSearch(ctx, reg)
+
+    const result = await reg.execute({ name: toolSearchName, args: { query: "search patterns" } })
+    const output = result.output as { matches: { name: string }[] }
+    expect(output.matches.map((m) => m.name)).toContain("grep")
+    expect(reg.schemas().map((s) => s.name)).toContain("grep") // promoted
+  })
 })
