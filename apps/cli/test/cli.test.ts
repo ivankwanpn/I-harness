@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, readdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -10,6 +10,9 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 
 describe("headless CLI (M2)", () => {
   let dir: string
@@ -172,5 +175,80 @@ describe("CLI main + entry guard", () => {
     expect(url).toContain("api.deepseek.com")
     expect(JSON.parse(init.body as string).model).toBe("deepseek-chat")
     await it.return?.()
+  })
+})
+
+describe("headless CLI persistence (M4)", () => {
+  it("runHeadless with a coordinator persists the session to a JSONL file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        approveAll: true,
+        sessionId: id,
+        coordinator,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(existsSync(join(dir, `${id}.jsonl`))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("resume restores the persisted history into the model request", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      await coordinator.append(id, [
+        { type: "turn/start" },
+        { type: "user/message", text: "earlier question" },
+        { type: "assistant/message", text: "earlier answer" },
+        { type: "turn/end" },
+      ])
+
+      const seen: LLMRequest[] = []
+      const recordingModel: ModelClient = {
+        async *stream(request: LLMRequest) {
+          seen.push(request)
+          yield { type: "text/chunk", text: "continued" }
+          yield { type: "end" }
+        },
+      }
+
+      const result = await runHeadless("continue here", {
+        workspace: dir,
+        approveAll: true,
+        resumeSessionId: id,
+        coordinator,
+        model: recordingModel,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(seen.length).toBeGreaterThan(0)
+      const texts = seen[0]!.messages.map((m) => m.content).filter((c) => c.length > 0)
+      expect(texts).toContain("earlier question")
+      expect(texts).toContain("earlier answer")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("main() with --session-dir creates a session file", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {})
+      try {
+        const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir])
+        expect(code).toBe(0)
+        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+        expect(files).toHaveLength(1)
+      } finally {
+        log.mockRestore()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
