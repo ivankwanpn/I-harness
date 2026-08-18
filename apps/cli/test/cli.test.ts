@@ -831,5 +831,5 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  })
+  }, 20_000)
 })

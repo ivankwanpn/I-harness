@@ -40,12 +40,14 @@ export interface PluginContext {
 
 // Internal scope plumbing used to walk the ancestor chain. Only reachable
 // through the createScope closure (not part of the public surface): every
-// scope exposes its local guard check and its recorded decision so ancestors
-// and descendants can compose without leaking their maps.
+// scope exposes its local guard check, its recorded decision and its local
+// cascade handlers so ancestors and descendants can compose without leaking
+// their maps.
 interface InternalScope {
   parentScope: InternalScope | null
   checkLocalGuards(event: string, exec: unknown): string | undefined
   resolveLocalDecision(event: string): unknown | undefined
+  localCascades(event: string): CascadeHandler<unknown, unknown>[]
 }
 
 type ServiceStore = Map<string, unknown>
@@ -140,6 +142,13 @@ function createScope(
     return decisions.get(event)
   }
 
+  // Local cascade snapshot for the ancestor walk in dispatchCascade: only
+  // THIS scope's handlers, re-snapshotted per call so mid-dispatch
+  // registrations don't affect the current run.
+  function localCascades(event: string): CascadeHandler<unknown, unknown>[] {
+    return [...(cascades.get(event) ?? [])]
+  }
+
   // Waterfall dispatch: `ctx.waterfall` registration is EXPLICIT — every
   // waterfall handler always receives a real `next` release function and MUST
   // call it, including the last handler, whose `next()` completes the chain.
@@ -178,12 +187,27 @@ function createScope(
   // error). Double-`next` throws. Only registered cascade handlers run (plain
   // listeners never do); the handler list is re-snapshotted per dispatch so
   // mid-dispatch registrations don't affect the current run.
+  //
+  // Ancestor visibility (M10a final-review): like `checkGuards` and
+  // `resolveDecision`, the dispatch walks the parent chain — handlers are
+  // collected ROOT-FIRST then self-last, so a cascade handler mounted on an
+  // ancestor scope wraps dispatches made on a child scope (root handlers run
+  // OUTERMOST; a child's own handlers wrap closer to the tool). This matters
+  // because a child scope (M8 subagents) creates its own cascade registry, and
+  // a root-mounted handler (e.g. guard-timeout) must stay visible to it.
   async function dispatchCascade<TInput, TOutput>(
     event: string,
     input: TInput,
     final: () => Promise<TOutput>,
   ): Promise<TOutput> {
-    const handlers = [...(cascades.get(event) ?? [])]
+    // Walk self → root, then reverse for root-first composition, flattening
+    // each scope's local snapshot in registration order.
+    const chain: InternalScope[] = []
+    for (let cur: InternalScope | null = ctx; cur; cur = cur.parentScope) chain.push(cur)
+    chain.reverse()
+    const handlers: CascadeHandler<unknown, unknown>[] = []
+    for (const scope of chain) handlers.push(...scope.localCascades(event))
+    if (handlers.length === 0) return final() // unchanged no-op path
     const run = (i: number): Promise<TOutput> => {
       if (i >= handlers.length) return final()
       let nextCalled = false
@@ -244,6 +268,7 @@ function createScope(
     parentScope,
     checkLocalGuards,
     resolveLocalDecision,
+    localCascades,
     services: {
       register(name: string, impl: unknown): void {
         if (store.has(name)) throw new Error(`duplicate service registration: ${name}`)

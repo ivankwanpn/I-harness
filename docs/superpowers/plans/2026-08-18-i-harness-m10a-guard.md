@@ -284,18 +284,21 @@ append(deps.session, { type: "tool/result", callId, name: ev.call.name, output: 
 ```
 
 **Change.** Emit the observation after the abort check (only completed
-dispatches are observed) and before appending the result:
+dispatches are observed) and AFTER appending the result, so a listener that
+appends a `user/message` (the repeat-reminder) lands after the result in the
+log — keeping the spec §4 ordering invariant (`tool/result` before the
+appended `user/message`):
 
 ```ts
 const result = await deps.tools.execute({ name: ev.call.name, args: ev.call.args })
 if (abort?.aborted) throw new Error("agent aborted")
+append(deps.session, { type: "tool/result", callId, name: ev.call.name, output: result.output })
 await ctx.emit("agent/post-tool", {
   name: ev.call.name,
   args: ev.call.args,
   output: result.output,
   session: deps.session,
 })
-append(deps.session, { type: "tool/result", callId, name: ev.call.name, output: result.output })
 ```
 
 `ctx` must be in scope in `runTurn` — check how `agent/pre-step` is emitted at

@@ -146,4 +146,30 @@ describe("guard-timeout", () => {
     expect(result.output).toMatchObject({ code: TOOL_TIMEOUT })
     expect((result.output as { error?: string }).error).toContain("timed out after 300ms")
   })
+
+  it("a tool that honors the abort by REJECTING still yields TOOL_TIMEOUT (not a rejection)", async () => {
+    const ctx = createContext()
+    const registry = createToolRegistry(ctx)
+    const rejectingTool: Tool = {
+      name: "reject-on-abort",
+      description: "",
+      inputSchema: {},
+      timeoutMs: 40,
+      execute: async (_args, exec) => {
+        const signal = exec.abortSignal!
+        await new Promise<void>((_resolve, reject) => {
+          if (signal.aborted) reject(new Error("killed"))
+          else signal.addEventListener("abort", () => reject(new Error("killed")), { once: true })
+        })
+        return { output: "unreachable" }
+      },
+    }
+    registry.register(rejectingTool)
+    ctx.mount(createTimeoutGuard(ctx))
+
+    // must RESOLVE with the structured marker, not reject the whole execute
+    const result = await registry.execute({ name: "reject-on-abort", args: {} })
+    expect(result.output).toMatchObject({ code: TOOL_TIMEOUT })
+    expect((result.output as { error?: string }).error).toContain("timed out after 40ms")
+  })
 })
