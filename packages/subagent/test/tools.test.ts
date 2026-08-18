@@ -309,6 +309,141 @@ describe("subagent control tools", () => {
     expect(jobs.read(jobId).output).toBe("ok2")
   })
 
+  it("interrupt → aborted → a fresh followup succeeds (driver clears stale error)", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const agents = createAgentRegistry()
+    const followup = vi.fn().mockResolvedValue({ finalText: "recovered", turns: 2, reasoning: [] })
+    const fakeAgent: Agent = { run: vi.fn(), followup }
+    agents.register("child-1", fakeAgent)
+    const { id: jobId } = jobs.registerJob("root", "subagent", "helper")
+    const entrySession = createSession()
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+      jobId,
+      sessionId: "child-1",
+    })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const follow = all.find((t) => t.name === "followup_task")!
+    const entry = table.get("root/helper")!
+    // Turn 1 simulates the child's run loop observing an interrupt: the
+    // controller was aborted and the run surfaced an AbortError. Turn 2 (the
+    // default mock) succeeds.
+    followup.mockImplementationOnce(() => {
+      entry.controller.abort()
+      return Promise.reject(new DOMException("Aborted", "AbortError"))
+    })
+
+    // Turn 1: the child's turn is interrupted → entry.error "aborted", job killed.
+    await follow.execute({ target: "root/helper", message: "first" }, {})
+    await entry.followupChain
+    expect(followup).toHaveBeenCalledTimes(1)
+    expect(entry.error).toBe("aborted")
+    expect(entry.status).toBe("waiting")
+    expect(jobs.read(jobId).status).toBe("killed")
+
+    // Turn 2: a fresh followup succeeds → stale error cleared, job completed.
+    await follow.execute({ target: "root/helper", message: "retry" }, {})
+    await entry.followupChain
+    expect(followup).toHaveBeenCalledTimes(2)
+    expect(entry.error).toBeUndefined()
+    expect(entry.status).toBe("waiting")
+    expect(entry.finalText).toBe("recovered")
+    expect(jobs.read(jobId).status).toBe("completed")
+    expect(jobs.read(jobId).output).toBe("recovered")
+  })
+
+  it("two rapid followups serialize deterministically (second turn waits for the first)", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const agents = createAgentRegistry()
+    const calls: string[] = []
+    let resolveFirst: ((v: { finalText: string; turns: number; reasoning: string[] }) => void) | undefined
+    const firstTurn = new Promise<{ finalText: string; turns: number; reasoning: string[] }>((r) => { resolveFirst = r })
+    const followup = vi.fn().mockImplementation((msg: string) => {
+      calls.push(msg)
+      return calls.length === 1 ? firstTurn : Promise.resolve({ finalText: `ok:${msg}`, turns: 2, reasoning: [] })
+    })
+    const fakeAgent: Agent = { run: vi.fn(), followup }
+    agents.register("child-1", fakeAgent)
+    const { id: jobId } = jobs.registerJob("root", "subagent", "helper")
+    const entrySession = createSession()
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+      jobId,
+      sessionId: "child-1",
+    })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const follow = all.find((t) => t.name === "followup_task")!
+    const entry = table.get("root/helper")!
+
+    // Two followup_tasks back to back: both queue durably, both wake the driver.
+    await follow.execute({ target: "root/helper", message: "one" }, {})
+    await follow.execute({ target: "root/helper", message: "two" }, {})
+    // Turn 1 is in flight; turn 2 must NOT have started yet (serialized chain).
+    expect(calls).toEqual(["one"])
+    expect(entry.status).toBe("running")
+    expect(jobs.read(jobId).status).toBe("running")
+
+    // Release turn 1 → turn 2 runs to completion, then the chain settles.
+    resolveFirst!({ finalText: "ok:one", turns: 1, reasoning: [] })
+    await entry.followupChain
+    expect(calls).toEqual(["one", "two"])
+    expect(entry.status).toBe("waiting")
+    expect(entry.finalText).toBe("ok:two")
+    expect(jobs.read(jobId).status).toBe("completed")
+    expect(jobs.read(jobId).output).toBe("ok:two")
+  })
+
+  it("close_agent mid-drain stops the driver (no further followup calls)", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const agents = createAgentRegistry()
+    const calls: string[] = []
+    let resolveFirst: ((v: { finalText: string; turns: number; reasoning: string[] }) => void) | undefined
+    const firstTurn = new Promise<{ finalText: string; turns: number; reasoning: string[] }>((r) => { resolveFirst = r })
+    const followup = vi.fn().mockImplementation((msg: string) => {
+      calls.push(msg)
+      return calls.length === 1 ? firstTurn : Promise.resolve({ finalText: `ok:${msg}`, turns: 2, reasoning: [] })
+    })
+    const fakeAgent: Agent = { run: vi.fn(), followup }
+    agents.register("child-1", fakeAgent)
+    const { id: jobId } = jobs.registerJob("root", "subagent", "helper")
+    const entrySession = createSession()
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+      jobId,
+      sessionId: "child-1",
+    })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const follow = all.find((t) => t.name === "followup_task")!
+    const close = all.find((t) => t.name === "close_agent")!
+    const entry = table.get("root/helper")!
+
+    // Queue TWO pending inbox messages; turn 1 hangs on the deferred promise.
+    await follow.execute({ target: "root/helper", message: "one" }, {})
+    await follow.execute({ target: "root/helper", message: "two" }, {})
+    expect(calls).toEqual(["one"])
+
+    // Close the agent mid-drain (entry removed) while turn 1 is still in flight.
+    await close.execute({ target: "root/helper" }, {})
+    expect(table.get("root/helper")).toBeUndefined()
+    // Release turn 1; the driver must observe the removed entry and stop
+    // without ever starting a turn for the second pending message.
+    resolveFirst!({ finalText: "ok:one", turns: 1, reasoning: [] })
+    await entry.followupChain
+    expect(calls).toEqual(["one"])
+  })
+
   it("close_agent unregisters the child agent from the registry", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
     const agents = createAgentRegistry()

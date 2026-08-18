@@ -184,7 +184,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         }
       }
       const role = deps.roles.get(existing.roleName ?? "general")
-      if (!role) throw new Error(`unknown role: ${existing.roleName}`)
+      if (!role) throw new Error(`unknown role: ${existing.roleName ?? "general"}`)
       const childCtx = deps.parentCtx.scope.mount()
       const childReg = createToolRegistry(childCtx)
       for (const name of role.tools) {
@@ -299,6 +299,10 @@ function driveFollowups(deps: SubagentToolDeps, entry: ChildAgentEntry, sessionI
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
       try {
         const result = await agent.followup(ev.message, entry.controller.signal)
+        // Clear a stale error (e.g. "aborted" from an earlier interrupted
+        // turn) once a followup succeeds — otherwise a misleading error would
+        // persist into the M6 snapshot.
+        entry.error = undefined
         entry.status = "waiting"
         entry.finalText = result.finalText
         if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: result.finalText })
@@ -310,6 +314,9 @@ function driveFollowups(deps: SubagentToolDeps, entry: ChildAgentEntry, sessionI
       }
     }
   })
-  entry.followupChain = next
+  // Defensive hardening: the body fully try/catches, but a future throwing
+  // statement before the try must not reject the chain and silently kill all
+  // later followups for this child.
+  entry.followupChain = next.catch(() => {})
   return next
 }

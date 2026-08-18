@@ -79,6 +79,19 @@ describe("subagent state snapshot", () => {
     expect(fresh.table.get("root/helper")?.roleName).toBe("research")
   })
 
+  it("snapshotState/restoreState round-trip the inbox consumption cursor (lastInboxSeq)", () => {
+    const s = makeState()
+    s.table.add("root/helper", {
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      controller: new AbortController(), mailbox: [], sessionId: "child-abc", lastInboxSeq: 6,
+    })
+    const snap = snapshotState(s)
+    expect(snap.agentTable[0]?.lastInboxSeq).toBe(6)
+    const fresh = makeState()
+    restoreState(fresh, snap)
+    expect(fresh.table.get("root/helper")?.lastInboxSeq).toBe(6)
+  })
+
   it("restoreState maps waiting entries to error (interrupted by resume)", () => {
     const fresh = makeState()
     const snap: SubagentStateSnapshot = {
