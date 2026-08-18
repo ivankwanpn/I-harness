@@ -541,3 +541,74 @@ describe("headless CLI subagent state persistence (M6)", () => {
     }
   }, 20_000)
 })
+
+describe("headless CLI durable child sessions (M8)", () => {
+  it("spawn persists the child session log (child-<uuid> file with events)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      // Deterministic driver: first stream yields spawn_agent; later streams (child + main) are text.
+      let calls = 0
+      const spawnModel: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = calls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "done" }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("delegate", {
+        workspace: dir, approveAll: true, sessionId: id, coordinator, model: spawnModel,
+      })
+      expect(result.exitCode).toBe(0)
+      const childIds = (await coordinator.list()).filter((sid) => sid.startsWith("child-"))
+      expect(childIds.length).toBe(1)
+      const { session } = await coordinator.load(childIds[0]!)
+      expect(session.header).toMatchObject({ origin: "subagent", parentSession: id })
+      expect(session.events.length).toBeGreaterThan(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it("resume keeps the child sessionId link in the restored registry snapshot", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      let calls = 0
+      const spawnModel: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = calls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "done" }
+          yield { type: "end" }
+        },
+      }
+      const first = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model: spawnModel })
+      expect(first.exitCode).toBe(0)
+      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
+      expect(childId).toBeDefined()
+      const textModel: ModelClient = {
+        async *stream(_request: LLMRequest) { yield { type: "text/chunk", text: "continued" }; yield { type: "end" } },
+      }
+      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: textModel })
+      expect(second.exitCode).toBe(0)
+      // The post-resume registry snapshot still carries the child sessionId link.
+      const after = await coordinator.getDocument(id)
+      const agents = (after as { agentTable: { path: string; sessionId?: string }[] }).agentTable
+      expect(agents.find((a) => a.path === "root/helper")?.sessionId).toBe(childId)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+})

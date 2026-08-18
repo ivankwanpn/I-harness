@@ -34,9 +34,10 @@ export interface SubagentPersistence {
   coordinator: SessionCoordinator
   stateId: string
   // M8: the main session id, for child lineage (child-<uuid> header
-  // parentSession). Optional until the CLI (Task 5) wires it — without it no
-  // childSessions context is passed to the tools and spawns stay anonymous.
-  parentSessionId?: string
+  // parentSession). The CLI (Task 5) is the only caller and always passes it;
+  // without it no childSessions context is passed to the tools and spawns stay
+  // anonymous.
+  parentSessionId: string
 }
 
 export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry }): SubagentStateSnapshot {

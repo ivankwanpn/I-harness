@@ -112,6 +112,7 @@ describe("persistent wrappers", () => {
         getDocument: async () => undefined,
       } as unknown as SubagentPersistence["coordinator"],
       stateId: "subagent-state",
+      parentSessionId: "sess-main",
     }
     const wired = wireSubagentPersistence(s, persist)
     wired.jobs.registerJob("root", "subagent", "h")
