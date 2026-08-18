@@ -116,7 +116,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
   try {
     // Mount the subagent + job tools so the main agent can delegate.
-    registerSubagent(ctx, tools, {
+    // M8: persist child sessions through the same coordinator (child lineage
+    // records the main session id) and on resume load each restored child's
+    // durable log into a live mirror session.
+    const subagent = registerSubagent(ctx, tools, {
       providers: createProviderRegistry(),
       exec: ctx.services.get<import("@i-harness/exec").ExecService>("exec/service"),
       parentModel: model,
@@ -124,10 +127,30 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // M7: the coordinator owns document-write serialization, failure
       // reporting (reportBackgroundFailure), and run-end draining.
       ...(opts.coordinator && activeId
-        ? { persist: { coordinator: opts.coordinator, stateId: activeId } }
+        ? { persist: { coordinator: opts.coordinator, stateId: activeId, parentSessionId: activeId } }
         : {}),
       ...(restoredState ? { restoredState } : {}),
     })
+    if (opts.coordinator && opts.resumeSessionId && activeId) {
+      for (const entry of subagent.table.entries().values()) {
+        if (!entry.sessionId) continue
+        try {
+          const loaded = await opts.coordinator.load(entry.sessionId)
+          // Fresh mirror session (like the main session resume): history loaded,
+          // subsequent appends keep persisting through the write-behind.
+          const resumed = createSession((ev) => {
+            opts.coordinator!.enqueue(entry.sessionId!, [ev])
+            if (ev.type === "turn/end") void opts.coordinator!.flush(entry.sessionId!).catch(() => {})
+          })
+          resumed.events.push(...loaded.session.events)
+          resumed.formatVersion = loaded.session.formatVersion
+          resumed.header = loaded.session.header
+          entry.session = resumed
+        } catch {
+          // missing/corrupt child log → keep the empty stub
+        }
+      }
+    }
     const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
     const result = await agent.run(task)
     if (opts.coordinator) {
