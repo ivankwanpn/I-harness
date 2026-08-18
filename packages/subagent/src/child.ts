@@ -49,7 +49,9 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       parentSession: opts.childSessions.parentSessionId,
       seedLength: seedEvents.length,
       origin: "subagent",
-      delegationDepth: 0,
+      // dsh: resolveChildDepth = delegationDepthOf(parent) + 1 — a child of a
+      // top-level (depth 0) session is depth 1.
+      delegationDepth: 1,
     })
     childSession = createSession((ev) => {
       opts.childSessions!.coordinator.enqueue(sessionId!, [ev])
@@ -58,7 +60,8 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // Persist the seed through the mirror so the child log starts at seq 0
     // with the inherited context (dsh: seed events live in the child log).
     for (const ev of seedEvents) append(childSession, { ...ev })
-    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: 0 }
+    // dsh parent+1 rule: same depth as the coordinator.create lineage above.
+    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: 1 }
   } else {
     childSession = createSession()
     for (const ev of seedEvents) childSession.events.push({ ...ev })

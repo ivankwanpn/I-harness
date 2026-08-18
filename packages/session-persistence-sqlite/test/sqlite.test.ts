@@ -89,8 +89,10 @@ describe("sqlite backend", () => {
       { type: "user/message", text: "hi" },
       { type: "future/x", ignorable: true } as unknown as import("@i-harness/core-session").SessionEvent,
     ])
-    const { version, events } = await backend.read("s1")
+    const { version, events, meta } = await backend.read("s1")
     expect(version).toBe(1)
+    // Plain session (no lineage columns) must read back with meta undefined.
+    expect(meta).toBeUndefined()
     expect(events).toMatchObject([
       { type: "turn/start" },
       { type: "user/message", text: "hi" },

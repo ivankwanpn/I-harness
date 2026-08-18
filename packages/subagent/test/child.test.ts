@@ -114,7 +114,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     expect(sessionId).toMatch(/^child-/)
     expect(path).toBe("root/helper")
     expect(coordinator.created).toHaveLength(1)
-    expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-main", origin: "subagent", seedLength: 4, delegationDepth: 0 })
+    expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-main", origin: "subagent", seedLength: 4, delegationDepth: 1 })
     // append() fires the mirror once per event → the 4 fork-seed events are
     // enqueued as single-event batches (seq 0..3). The child's own run appends
     // further events right after spawnChild returns, so only the seed prefix is
@@ -126,7 +126,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       .toEqual(["turn/start", "user/message", "assistant/message", "turn/end"])
     const entry = table.get("root/helper")
     expect(entry?.sessionId).toBe(sessionId)
-    expect(entry?.session.header).toMatchObject({ parentSession: "sess-main", origin: "subagent", delegationDepth: 0, seedLength: 4 })
+    expect(entry?.session.header).toMatchObject({ parentSession: "sess-main", origin: "subagent", delegationDepth: 1, seedLength: 4 })
   })
 
   it("without childSessions behaves exactly as today (anonymous session, no sessionId)", async () => {
