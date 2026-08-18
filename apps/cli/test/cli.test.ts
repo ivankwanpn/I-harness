@@ -671,3 +671,107 @@ describe("headless CLI durable child sessions (M8)", () => {
     }
   }, 20_000)
 })
+
+describe("headless CLI multi-turn subagents (M9)", () => {
+  it("followup_task drives a second turn on the child's durable session", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      // Deterministic driver: n=0 spawn_agent (fork none), n=2 followup_task,
+      // every other stream (child turns + main) is text.
+      let calls = 0
+      const model: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = calls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
+            yield { type: "end" }
+            return
+          }
+          if (n === 2) {
+            yield { type: "tool_call", call: { name: "followup_task", args: { target: "root/helper", message: "again" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "ok" }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model })
+      expect(result.exitCode).toBe(0)
+      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
+      expect(childId).toBeDefined()
+      const { session } = await coordinator.load(childId!)
+      // Two turns (initial + followup): two user messages, no fork seed.
+      const userMessages = session.events.filter((e) => e.type === "user/message")
+      expect(userMessages.map((e) => e.text)).toEqual(["do it", "again"])
+      expect(session.events.filter((e) => e.type === "turn/start")).toHaveLength(2)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it("resume_agent cold-resumes a child and continues the conversation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      // Run 1: spawn (fork none) + followup → child log has 2 turns.
+      let calls = 0
+      const run1Model: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = calls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
+            yield { type: "end" }
+            return
+          }
+          if (n === 2) {
+            yield { type: "tool_call", call: { name: "followup_task", args: { target: "root/helper", message: "again" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "ok" }
+          yield { type: "end" }
+        },
+      }
+      const first = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model: run1Model })
+      expect(first.exitCode).toBe(0)
+      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
+      expect(childId).toBeDefined()
+      // Run 2: resume → resume_agent then followup_task → child log gains a 3rd turn.
+      let resumeCalls = 0
+      const run2Model: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = resumeCalls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "resume_agent", args: { target: "root/helper" } } }
+            yield { type: "end" }
+            return
+          }
+          if (n === 1) {
+            yield { type: "tool_call", call: { name: "followup_task", args: { target: "root/helper", message: "third" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "ok" }
+          yield { type: "end" }
+        },
+      }
+      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: run2Model })
+      expect(second.exitCode).toBe(0)
+      // The followup "third" turn is driven in the background (serialization
+      // chain is NOT awaited by runHeadless), so wait for the third user
+      // message durably before asserting the exact conversation.
+      const childMsgs = await pollUntil(async () => {
+        const { session: s } = await coordinator.load(childId!)
+        const msgs = s.events.filter((e) => e.type === "user/message")
+        return msgs.length >= 3 ? msgs : undefined
+      })
+      expect(childMsgs?.map((e) => e.text)).toEqual(["do it", "again", "third"])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+})

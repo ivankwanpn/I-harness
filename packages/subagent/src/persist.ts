@@ -14,6 +14,10 @@ export interface DurableAgentEntry {
   // M9: the role name the child was spawned with — needed to rebuild the
   // agent (systemPrompt/tools/model) on cold resume.
   roleName?: string
+  // M9: the durable inbox consumption cursor. Persisted so a cold-resumed
+  // child does NOT re-process inbox events that were already consumed into
+  // followup turns (duplicate-turn bug fixed in Task 5).
+  lastInboxSeq?: number
 }
 
 export interface DurableJobRecord {
@@ -61,6 +65,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
     ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
     ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
+    ...(e.lastInboxSeq !== undefined ? { lastInboxSeq: e.lastInboxSeq } : {}),
   }))
 
   const roles = state.roles.list()
@@ -93,6 +98,7 @@ export function restoreState(
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
       ...(entry.roleName !== undefined ? { roleName: entry.roleName } : {}),
+      ...(entry.lastInboxSeq !== undefined ? { lastInboxSeq: entry.lastInboxSeq } : {}),
     })
   }
   // Jobs: register fresh (ids drift — registerJob assigns new per-kind ids;
