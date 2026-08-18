@@ -82,6 +82,7 @@ export function getArgv(command: string): string[] {
 
 export interface ShellToolDeps {
   exec: ExecService
+  timeoutMs?: number // declared on bash/pwsh tools; drives guard-timeout
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
@@ -93,18 +94,19 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       properties: { command: { type: "string" }, background: { type: "boolean" } },
       required: ["command"],
     },
+    timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
     // Hardcoded bash argv: a tool NAMED bash must run bash, never the platform
     // default shell (resolveShell can return pwsh on Windows without bash).
     // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
     // executing PowerShell.
-    execute: async (args: { command: string; background?: boolean }, _exec: ToolExec) => {
+    execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
       const argv = ["bash", "-c", args.command]
       if (args.background === true) {
         const { jobId } = deps.exec.runBackground({ argv })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal })
       return { stdout: result.stdout, exitCode: result.exitCode }
     },
   }
@@ -116,22 +118,27 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       properties: { command: { type: "string" }, background: { type: "boolean" } },
       required: ["command"],
     },
+    timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
-    execute: async (args: { command: string; background?: boolean }, _exec: ToolExec) => {
+    execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
       const argv = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
       if (args.background === true) {
         const { jobId } = deps.exec.runBackground({ argv })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal })
       return { stdout: result.stdout, exitCode: result.exitCode }
     },
   }
   return [bash, pwsh]
 }
 
-export function registerShell(ctx: PluginContext, registry: { register(t: Tool): void }): void {
+export function registerShell(
+  ctx: PluginContext,
+  registry: { register(t: Tool): void },
+  opts?: { timeoutMs?: number },
+): void {
   registerExec(ctx)
   const exec = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createShellTools({ exec })) registry.register(tool)
+  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs })) registry.register(tool)
 }

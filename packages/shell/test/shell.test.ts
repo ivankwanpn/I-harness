@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { resolveShell, getArgv, createShellTools, registerShell } from "../src/index.ts"
-import type { ExecService } from "@i-harness/exec"
+import type { ExecService, ExecCommand } from "@i-harness/exec"
+import type { Tool } from "@i-harness/core-tools"
 import { createContext } from "@i-harness/core-plugin"
 
 describe("resolveShell", () => {
@@ -100,6 +101,72 @@ describe("createShellTools", () => {
     expect(ranBackground).toBe(true)
     expect(result).toEqual({ job_id: "bash-1" })
   })
+
+  it("declares timeoutMs on both tools when provided, else undefined", () => {
+    const [bash, pwsh] = createShellTools({ exec: fakeExec, timeoutMs: 5000 })
+    expect(bash.timeoutMs).toBe(5000)
+    expect(pwsh.timeoutMs).toBe(5000)
+    const [bash2, pwsh2] = createShellTools({ exec: fakeExec })
+    expect(bash2.timeoutMs).toBeUndefined()
+    expect(pwsh2.timeoutMs).toBeUndefined()
+  })
+
+  it("foreground bash execute forwards abortSignal into exec.run", async () => {
+    let captured: ExecCommand | undefined
+    const signal = new AbortController().signal
+    const spyExec: ExecService = {
+      run: async (cmd) => {
+        captured = cmd
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: () => ({ jobId: "none" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const [bash] = createShellTools({ exec: spyExec })
+    await bash.execute({ command: "echo hi" }, { abortSignal: signal })
+    expect(captured?.abortSignal).toBe(signal)
+  })
+
+  it("foreground pwsh execute forwards abortSignal into exec.run", async () => {
+    let captured: ExecCommand | undefined
+    const signal = new AbortController().signal
+    const spyExec: ExecService = {
+      run: async (cmd) => {
+        captured = cmd
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: () => ({ jobId: "none" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const [, pwsh] = createShellTools({ exec: spyExec })
+    await pwsh.execute({ command: "Get-Date" }, { abortSignal: signal })
+    expect(captured?.abortSignal).toBe(signal)
+  })
+
+  it("background executes do NOT pass an abortSignal (fire-and-forget)", async () => {
+    let captured: ExecCommand | undefined
+    const spyExec: ExecService = {
+      run: async (cmd) => {
+        captured = cmd
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: (cmd) => {
+        captured = cmd
+        return { jobId: "bash-1" }
+      },
+      getOutput: () => ({ id: "bash-1", status: "running", stdout: "", stderr: "" }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const [bash] = createShellTools({ exec: spyExec })
+    await bash.execute({ command: "sleep 5", background: true }, { abortSignal: new AbortController().signal })
+    expect(captured).toBeDefined()
+    expect(captured!.abortSignal).toBeUndefined()
+  })
 })
 
 describe("registerShell", () => {
@@ -109,5 +176,13 @@ describe("registerShell", () => {
     registerShell(ctx, { register: (t) => names.push(t.name) })
     expect(names).toEqual(["bash", "pwsh"])
     expect(ctx.services.get("exec/service")).toBeDefined()
+  })
+
+  it("passes timeoutMs through to the registered tools", async () => {
+    const ctx = createContext()
+    const tools: Tool[] = []
+    registerShell(ctx, { register: (t) => tools.push(t) }, { timeoutMs: 7000 })
+    expect(tools.find((t) => t.name === "bash")?.timeoutMs).toBe(7000)
+    expect(tools.find((t) => t.name === "pwsh")?.timeoutMs).toBe(7000)
   })
 })

@@ -34,6 +34,37 @@ describe("exec service", () => {
     expect(result.timedOut).toBe(true)
   }, 10_000)
 
+  it("external abort kills a running command", async () => {
+    const exec = createExecService()
+    const controller = new AbortController()
+    const started = Date.now()
+    // run() spawns + registers the abort listener synchronously, so schedule
+    // the abort right after and await the promise.
+    const pending = exec.run({
+      argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
+      abortSignal: controller.signal,
+    })
+    setTimeout(() => controller.abort(), 200)
+    const result = await pending
+    const elapsed = Date.now() - started
+    expect(elapsed).toBeLessThan(10_000)
+    expect(result.exitCode).not.toBe(0)
+    // An abort is NOT a timeout — callers must see the real exitCode.
+    expect(result.timedOut).toBe(false)
+  }, 10_000)
+
+  it("aborts immediately when the signal is already aborted before spawn", async () => {
+    const exec = createExecService()
+    const controller = new AbortController()
+    controller.abort()
+    const result = await exec.run({
+      argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
+      abortSignal: controller.signal,
+    })
+    expect(result.exitCode).not.toBe(0)
+    expect(result.timedOut).toBe(false)
+  }, 10_000)
+
   it("writes stdin", async () => {
     const exec = createExecService()
     const result = await exec.run({ argv: [process.execPath, "-e", "process.stdin.on('data', d => process.stdout.write('got:'+d))"], input: "x" })
