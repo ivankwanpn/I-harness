@@ -125,16 +125,25 @@ describe("subagent control tools", () => {
     expect(table.get("root/helper")?.mailbox).toEqual(["ping"])
   })
 
-  it("followup_task queues and marks delivered", async () => {
+  it("followup_task queues, marks delivered, and appends a durable subagent/inbox event", async () => {
+    const spy = vi.fn()
+    const entrySession = createSession((ev) => { spy(ev) })
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "running",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+    })
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
-    const spawn = all.find((t) => t.name === "spawn_agent")!
     const follow = all.find((t) => t.name === "followup_task")!
-    await spawn.execute({ message: "do it", task_name: "helper" }, {})
     const out = await follow.execute({ target: "root/helper", message: "more" }, {})
     expect((out as { delivered: boolean }).delivered).toBe(true)
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "more" }))
+    expect((spy.mock.calls[0]![0] as { messageId: string }).messageId).toBeTruthy()
     expect(table.get("root/helper")!.mailbox).toContain("more")
-  }, 10_000)
+  })
 
   it("resume_agent refuses to overwrite a running entry", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()

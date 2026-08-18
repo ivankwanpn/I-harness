@@ -598,15 +598,74 @@ describe("headless CLI durable child sessions (M8)", () => {
       expect(first.exitCode).toBe(0)
       const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
       expect(childId).toBeDefined()
-      const textModel: ModelClient = {
-        async *stream(_request: LLMRequest) { yield { type: "text/chunk", text: "continued" }; yield { type: "end" } },
+      // Resumed run: first stream sends a message to the restored child (which
+      // only works if the resume-load loop installed the live mirror session),
+      // later streams are text.
+      let resumeCalls = 0
+      const resumeModel: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = resumeCalls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "send_message", args: { target: "root/helper", message: "ping" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "continued" }
+          yield { type: "end" }
+        },
       }
-      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: textModel })
+      const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: resumeModel })
       expect(second.exitCode).toBe(0)
+      // The restored child's mirror session received the durable inbox event.
+      const reloaded = await coordinator.load(childId!)
+      expect(reloaded.session.events.some((e) => e.type === "subagent/inbox" && e.message === "ping")).toBe(true)
       // The post-resume registry snapshot still carries the child sessionId link.
       const after = await coordinator.getDocument(id)
       const agents = (after as { agentTable: { path: string; sessionId?: string }[] }).agentTable
       expect(agents.find((a) => a.path === "root/helper")?.sessionId).toBe(childId)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it("fresh run: the main agent spawns a child then sends it a message; the inbox event lands in the child log", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      // Deterministic driver. The spawned child shares the model client, so the
+      // first stream AFTER spawn (n=1) is the CHILD's own stream (M3-C race) —
+      // it must be text, not a tool call. The main agent's send_message is n=2.
+      let calls = 0
+      const model: ModelClient = {
+        async *stream(_request: LLMRequest) {
+          const n = calls++
+          if (n === 0) {
+            yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper" } } }
+            yield { type: "end" }
+            return
+          }
+          if (n === 1) {
+            yield { type: "text/chunk", text: "child done" }
+            yield { type: "end" }
+            return
+          }
+          if (n === 2) {
+            yield { type: "tool_call", call: { name: "send_message", args: { target: "root/helper", message: "ping" } } }
+            yield { type: "end" }
+            return
+          }
+          yield { type: "text/chunk", text: "done" }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model })
+      expect(result.exitCode).toBe(0)
+      const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
+      expect(childId).toBeDefined()
+      const { session } = await coordinator.load(childId!)
+      const inbox = session.events.filter((e) => e.type === "subagent/inbox")
+      expect(inbox.map((e) => e.message)).toEqual(["ping"])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
