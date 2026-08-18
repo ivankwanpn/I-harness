@@ -130,12 +130,16 @@ describe("subagent control tools", () => {
     const agents = createAgentRegistry()
     // Entry restored by M8's resume-load: loaded durable session, sessionId,
     // roleName, status "error" (running/waiting → error on restore). Registry
-    // is empty so resume must rebuild the agent.
+    // is empty so resume must rebuild the agent. The snapshot ALSO restores the
+    // inbox consumption cursor (lastInboxSeq) marking "pre-consumed" as already
+    // followed up — cold resume must NOT re-drain it into a duplicate turn.
     const loadedSession = createSession()
     append(loadedSession, { type: "turn/start" })
     append(loadedSession, { type: "user/message", text: "first task" })
     append(loadedSession, { type: "assistant/message", text: "first answer" })
     append(loadedSession, { type: "turn/end" })
+    append(loadedSession, { type: "subagent/inbox", messageId: "in-0", message: "pre-consumed" })
+    const consumedSeq = loadedSession.events.length - 1
     append(loadedSession, { type: "subagent/inbox", messageId: "in-1", message: "queued before resume" })
     table.add("root/helper", {
       path: "root/helper",
@@ -145,6 +149,7 @@ describe("subagent control tools", () => {
       mailbox: [],
       sessionId: "child-abc",
       roleName: "general",
+      lastInboxSeq: consumedSeq,
     })
     const model = createMockClient([
       { role: "assistant", text: "queued handled" },
@@ -159,11 +164,13 @@ describe("subagent control tools", () => {
     const rebuilt = agents.get("child-abc")
     expect(rebuilt).toBeDefined()
     expect(entry.session).toBe(loadedSession) // rebuilt on the persisted session, not a fresh one
-    // Cold resume drains the queued inbox on the rebuilt agent (turn 1).
+    // Cold resume drains ONLY the unconsumed inbox on the rebuilt agent (turn 1);
+    // the cursor-restored "pre-consumed" message must not be re-processed.
     await entry.followupChain
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("queued handled")
     expect(loadedSession.events.some((e) => e.type === "user/message" && e.text === "queued before resume")).toBe(true)
+    expect(loadedSession.events.some((e) => e.type === "user/message" && e.text === "pre-consumed")).toBe(false)
     // The rebuilt agent is retained; a followup_task drives a further turn (turn 2).
     expect(agents.get("child-abc")).toBe(rebuilt)
     await follow.execute({ target: "root/helper", message: "continue" }, {})
@@ -171,6 +178,47 @@ describe("subagent control tools", () => {
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("child done")
     expect(loadedSession.events.some((e) => e.type === "user/message" && e.text === "continue")).toBe(true)
+  }, 10_000)
+
+  it("cold resume skips a previously-consumed inbox when the snapshot carries the cursor", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, exec } = setup()
+    const agents = createAgentRegistry()
+    // Exact M9 e2e bug: the child's durable log still holds the inbox event
+    // that was already consumed into a followup turn, and the restored snapshot
+    // carries lastInboxSeq marking it consumed. driveFollowups must treat only
+    // genuinely-new inbox events as pending — otherwise the child re-processes
+    // the old message and appends a duplicate user/message turn.
+    const loadedSession = createSession()
+    append(loadedSession, { type: "turn/start" })
+    append(loadedSession, { type: "user/message", text: "first task" })
+    append(loadedSession, { type: "assistant/message", text: "first answer" })
+    append(loadedSession, { type: "turn/end" })
+    append(loadedSession, { type: "subagent/inbox", messageId: "old-1", message: "already handled" })
+    const consumedSeq = loadedSession.events.length - 1
+    append(loadedSession, { type: "subagent/inbox", messageId: "new-1", message: "fresh after resume" })
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "error",
+      session: loadedSession,
+      controller: new AbortController(),
+      mailbox: [],
+      sessionId: "child-cursor",
+      roleName: "general",
+      lastInboxSeq: consumedSeq, // restored via restoreState from the snapshot
+    })
+    const model = createMockClient([{ role: "assistant", text: "handled" }])
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const resume = all.find((t) => t.name === "resume_agent")!
+    const entry = table.get("root/helper")!
+    await resume.execute({ target: "root/helper" }, {})
+    await entry.followupChain
+    // Only the unconsumed message became a turn; the consumed one was NOT
+    // re-processed into a duplicate user/message.
+    const userTexts = loadedSession.events.filter((e) => e.type === "user/message").map((e) => e.text)
+    expect(userTexts).toEqual(["first task", "fresh after resume"])
+    expect(loadedSession.events.some((e) => e.type === "user/message" && e.text === "already handled")).toBe(false)
+    expect(entry.status).toBe("waiting")
+    expect(entry.finalText).toBe("handled")
   }, 10_000)
 
   it("resume_agent on a path with no entry errors", async () => {
