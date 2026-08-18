@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
-import type { Tool, ToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { ProviderRegistry } from "@i-harness/provider"
+import { buildModelClient, type ProviderRegistry } from "@i-harness/provider"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
-import type { AgentRegistry } from "@i-harness/core-agent"
+import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
@@ -168,19 +168,47 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const resumeTool: Tool<{ target: string }, { resumed: boolean }> = {
     name: "resume_agent",
-    description: "Re-activate a previously closed subagent path with a fresh controller and session.",
+    description: "Re-activate a previously settled subagent from its persisted session; queued inbox messages are processed.",
     inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     isReadOnly: false,
     execute: async (args) => {
       const existing = deps.table.get(args.target)
-      if (existing && existing.status === "running") throw new Error(`subagent already running: ${args.target}`)
-      deps.table.add(args.target, {
-        path: args.target,
-        status: "running",
-        session: createSession(),
-        controller: new AbortController(),
-        mailbox: [],
+      if (!existing) throw new Error(`unknown subagent: ${args.target}`)
+      if (existing.status === "running") throw new Error(`subagent already running: ${args.target}`)
+      if (existing.sessionId) {
+        const resident = deps.agents.get(existing.sessionId)
+        if (resident) {
+          // already resident (e.g. a waiting child) → just re-drive pending inbox
+          void driveFollowups(deps, existing, existing.sessionId)
+          return { resumed: true }
+        }
+      }
+      const role = deps.roles.get(existing.roleName ?? "general")
+      if (!role) throw new Error(`unknown role: ${existing.roleName}`)
+      const childCtx = deps.parentCtx.scope.mount()
+      const childReg = createToolRegistry(childCtx)
+      for (const name of role.tools) {
+        const tool = deps.parentRegistry.get(name)
+        if (tool) childReg.register(tool)
+      }
+      // model resolution identical to spawnChild (child.ts): role.model →
+      // provider → buildModelClient; else inherit the parent model.
+      let model = deps.parentModel
+      if (role.model) {
+        const profile = deps.providers.get(role.model.provider)
+        if (!profile) throw new Error(`role '${role.name}' references unknown provider '${role.model.provider}'`)
+        model = buildModelClient(profile, role.model.model, role.model.extra)
+      }
+      const controller = new AbortController()
+      const agent = createAgent(childCtx, {
+        session: existing.session, tools: childReg, model,
+        systemPrompt: role.systemPrompt, signal: controller.signal,
       })
+      if (existing.sessionId) deps.agents.register(existing.sessionId, agent)
+      existing.status = "waiting"
+      existing.controller = controller
+      existing.unmount = () => childCtx.scope.unmount()
+      if (existing.sessionId) void driveFollowups(deps, existing, existing.sessionId)
       return { resumed: true }
     },
   }
