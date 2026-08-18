@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append, createSession } from "@i-harness/core-session"
 import { createToolRegistry, type ToolRegistry } from "@i-harness/core-tools"
-import { createAgent } from "@i-harness/core-agent"
+import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { buildModelClient, type ProviderRegistry } from "@i-harness/provider"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -23,6 +23,7 @@ export interface SpawnOptions {
   providers: ProviderRegistry
   jobs: JobRegistry
   table: AgentTable
+  agents: AgentRegistry
   forkTurns?: "none" | "all" | number
   // M8: when present, the child session is durable — minted as child-<uuid>,
   // created through the coordinator with the lineage header, and mirrored to
@@ -83,6 +84,14 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   }
 
   const controller = new AbortController()
+  const agent = createAgent(childCtx, {
+    session: childSession,
+    tools: childReg,
+    model,
+    systemPrompt: opts.role.systemPrompt,
+    signal: controller.signal,
+  })
+  if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName)
   opts.table.add(childPath, {
     path: childPath,
@@ -92,30 +101,27 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     mailbox: [],
     jobId,
     ...(sessionId !== undefined ? { sessionId } : {}),
+    roleName: opts.role.name,
     unmount: () => childCtx.scope.unmount(),
   })
 
-  const agent = createAgent(childCtx, {
-    session: childSession,
-    tools: childReg,
-    model,
-    systemPrompt: opts.role.systemPrompt,
-    signal: controller.signal,
-  })
-
-  agent.run(opts.message).then(
+  agent.run(opts.message, controller.signal).then(
     (result) => {
       const e = opts.table.get(childPath)
-      if (e) { e.status = "completed"; e.finalText = result.finalText }
+      // The turn is done, but the child is KEPT alive (waiting) so a later
+      // followup can re-drive the same agent (M9 spec §2.2).
+      if (e) { e.status = "waiting"; e.finalText = result.finalText }
       opts.jobs.updateJob(jobId, { status: "completed", output: result.finalText })
     },
     (err) => {
       const aborted = controller.signal.aborted
-      const status = aborted ? "killed" : "error"
-      const msg = err instanceof Error ? err.message : String(err)
       const e = opts.table.get(childPath)
-      if (e) { e.status = status; e.error = aborted ? "aborted" : msg }
-      opts.jobs.updateJob(jobId, { status, output: aborted ? "aborted" : msg })
+      if (e) {
+        // An interrupted turn leaves the child ALIVE (waiting) so followups still work.
+        e.status = "waiting"
+        e.error = aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
+      }
+      opts.jobs.updateJob(jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
     },
   )
 
