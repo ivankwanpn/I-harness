@@ -7,6 +7,7 @@ export interface ExecCommand {
   env?: Record<string, string>
   timeoutMs?: number
   input?: string
+  abortSignal?: AbortSignal // NEW: external cancel → kill the process tree
 }
 
 export interface ExecResult {
@@ -31,6 +32,19 @@ interface SpawnHandle {
   done: Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>
 }
 
+// Kill the entire process tree of `child`. Shared by the timeout timer, the
+// returned kill(), and the external abort listener — one implementation, three
+// call sites. Windows uses taskkill /T /F; elsewhere we signal the process
+// group (-pid) and fall back to a direct child SIGKILL.
+function killTree(child: ChildProcess): void {
+  if (process.platform === "win32") {
+    const k = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"])
+    k.on("error", () => { /* ignore */ })
+  } else {
+    try { process.kill(-child.pid!, "SIGKILL") } catch { try { child.kill("SIGKILL") } catch { /* ignore */ } }
+  }
+}
+
 function spawnChild(cmd: ExecCommand): SpawnHandle {
   const child = spawn(cmd.argv[0]!, cmd.argv.slice(1), {
     cwd: cmd.cwd,
@@ -44,18 +58,19 @@ function spawnChild(cmd: ExecCommand): SpawnHandle {
   let resolveDone!: (v: { exitCode: number; stdout: string; stderr: string; timedOut: boolean }) => void
   const done = new Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>((res) => { resolveDone = res })
 
-  const timer = cmd.timeoutMs !== undefined ? setTimeout(async () => {
+  const timer = cmd.timeoutMs !== undefined ? setTimeout(() => {
     timedOut = true
-    if (process.platform === "win32") {
-      await new Promise<void>((res) => {
-        const k = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"])
-        k.on("close", () => res())
-        k.on("error", () => res())
-      })
-    } else {
-      try { process.kill(-child.pid!, "SIGKILL") } catch { try { child.kill("SIGKILL") } catch { /* ignore */ } }
-    }
+    killTree(child)
   }, cmd.timeoutMs) : null
+
+  // External cancel: kill the process tree when the signal fires. If it was
+  // already aborted before spawn, kill immediately. An abort is NOT a timeout
+  // — timedOut stays false so callers see the real (killed) exitCode.
+  const abortListener = () => killTree(child)
+  if (cmd.abortSignal) {
+    if (cmd.abortSignal.aborted) abortListener()
+    else cmd.abortSignal.addEventListener("abort", abortListener, { once: true })
+  }
 
   child.stdout?.on("data", (d: Buffer) => { stdout += d.toString("utf-8") })
   child.stderr?.on("data", (d: Buffer) => { stderr += d.toString("utf-8") })
@@ -66,6 +81,9 @@ function spawnChild(cmd: ExecCommand): SpawnHandle {
     if (settled) return
     settled = true
     if (timer) clearTimeout(timer)
+    // Leak hygiene: drop the abort listener once the process settles before
+    // the abort ever fires (the `once` flag already handles the fired case).
+    cmd.abortSignal?.removeEventListener("abort", abortListener)
     resolveDone({
       stdout: stdout.replace(/\r\n/g, "\n"),
       stderr: stderr.replace(/\r\n/g, "\n"),
@@ -78,14 +96,7 @@ function spawnChild(cmd: ExecCommand): SpawnHandle {
 
   return {
     child,
-    kill() {
-      if (process.platform === "win32") {
-        const k = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"])
-        k.on("error", () => { /* ignore */ })
-      } else {
-        try { process.kill(-child.pid!, "SIGKILL") } catch { try { child.kill("SIGKILL") } catch { /* ignore */ } }
-      }
-    },
+    kill() { killTree(child) },
     done,
   }
 }
