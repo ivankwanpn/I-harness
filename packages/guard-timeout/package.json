@@ -1,0 +1,21 @@
+{
+  "name": "@i-harness/guard-timeout",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@i-harness/exec": "workspace:*",
+    "@i-harness/shell": "workspace:*"
+  }
+}
