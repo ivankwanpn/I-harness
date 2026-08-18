@@ -3,7 +3,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
-import { createAgentRegistry } from "@i-harness/core-agent"
+import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createExecService } from "@i-harness/exec"
@@ -153,6 +153,60 @@ describe("subagent control tools", () => {
     const resume = all.find((t) => t.name === "resume_agent")!
     await spawn.execute({ message: "do it", task_name: "helper" }, {})
     await expect(resume.execute({ target: "root/helper" }, {})).rejects.toThrow(/already running/i)
+  })
+
+  it("followup_task drives a turn on the child (appends inbox + wakes the driver)", async () => {
+    const spy = vi.fn()
+    const entrySession = createSession((ev) => { spy(ev) })
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const agents = createAgentRegistry()
+    const followup = vi.fn().mockResolvedValue({ finalText: "ok2", turns: 2, reasoning: [] })
+    const fakeAgent: Agent = { run: vi.fn(), followup }
+    agents.register("child-1", fakeAgent)
+    const { id: jobId } = jobs.registerJob("root", "subagent", "helper")
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+      sessionId: "child-1",
+      jobId,
+    })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const follow = all.find((t) => t.name === "followup_task")!
+    const entry = table.get("root/helper")!
+    const out = await follow.execute({ target: "root/helper", message: "again" }, {})
+    expect(out).toEqual({ delivered: true })
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "again" }))
+    await entry.followupChain
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(entry.status).toBe("waiting")
+    expect(entry.finalText).toBe("ok2")
+    expect(jobs.read(jobId).status).toBe("completed")
+    expect(jobs.read(jobId).output).toBe("ok2")
+  })
+
+  it("close_agent unregisters the child agent from the registry", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const agents = createAgentRegistry()
+    const fakeAgent: Agent = { run: vi.fn(), followup: vi.fn() }
+    agents.register("child-2", fakeAgent)
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: createSession(),
+      controller: new AbortController(),
+      mailbox: [],
+      sessionId: "child-2",
+    })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const close = all.find((t) => t.name === "close_agent")!
+    expect(agents.get("child-2")).toBeDefined()
+    const out = await close.execute({ target: "root/helper" }, {})
+    expect((out as { previous_status: string }).previous_status).toBe("waiting")
+    expect(table.get("root/helper")).toBeUndefined()
+    expect(agents.get("child-2")).toBeUndefined()
   })
 })
 

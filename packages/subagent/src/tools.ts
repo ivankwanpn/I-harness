@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderRegistry } from "@i-harness/provider"
@@ -8,7 +8,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
-import type { AgentTable } from "./agent-table.ts"
+import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
 import { spawnChild } from "./child.ts"
 
@@ -134,15 +134,16 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const followupTool: Tool<{ target: string; message: string }, { delivered: boolean }> = {
     name: "followup_task",
-    description: "Send a follow-up task to a subagent and trigger a new turn. This sub-project queues the message and marks delivered; re-driving the loop is deferred.",
+    description: "Send a follow-up task to a subagent and trigger a new turn. Queues the message durably and wakes the child to process it as a serialized followup turn.",
     inputSchema: { type: "object", properties: { target: { type: "string" }, message: { type: "string" } }, required: ["target", "message"] },
     isReadOnly: false,
     execute: async (args) => {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
-      // Durable inbox: same append as send_message; re-driving the turn is deferred to M9.
+      // Durable inbox + wake: queue the message and drive a turn on the child.
       append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message })
       entry.mailbox.push(args.message)
+      if (entry.sessionId) void driveFollowups(deps, entry, entry.sessionId)
       return { delivered: true }
     },
   }
@@ -160,6 +161,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       entry.unmount?.()
       if (entry.jobId) deps.jobs.kill(entry.jobId)
       deps.table.remove(args.target)
+      if (entry.sessionId) deps.agents.remove(entry.sessionId)
       return { previous_status: previous }
     },
   }
@@ -245,4 +247,41 @@ function parseForkTurns(value: string | number | undefined): "none" | "all" | nu
   if (value === "none") return "none"
   const n = typeof value === "number" ? value : Number(value)
   return Number.isInteger(n) && n > 0 ? n : "all"
+}
+
+// Drain all unconsumed durable inbox events as serialized turns on the child.
+// Turns are chained through entry.followupChain (one at a time, per child), a
+// fresh AbortController is minted per turn so interrupt_agent targets the
+// current turn, and each turn re-opens the entry's job (running -> completed /
+// killed / error) so wait_agent/job_output observe the followup lifecycle.
+function driveFollowups(deps: SubagentToolDeps, entry: ChildAgentEntry, sessionId: string): Promise<void> {
+  const prev = entry.followupChain ?? Promise.resolve()
+  const next = prev.then(async () => {
+    const agent = deps.agents.get(sessionId)
+    if (!agent) return
+    const pending = entry.session.events.filter(
+      (e): e is Extract<SessionEvent, { type: "subagent/inbox" }> =>
+        e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
+    )
+    for (const ev of pending) {
+      if (!deps.table.get(entry.path)) return // closed mid-drain → stop
+      entry.lastInboxSeq = ev.seq ?? 0
+      entry.status = "running"
+      entry.controller = new AbortController() // fresh signal per turn (interrupt targets this)
+      if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
+      try {
+        const result = await agent.followup(ev.message, entry.controller.signal)
+        entry.status = "waiting"
+        entry.finalText = result.finalText
+        if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: result.finalText })
+      } catch (err) {
+        const aborted = entry.controller.signal.aborted
+        entry.status = "waiting"
+        entry.error = aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
+        if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
+      }
+    }
+  })
+  entry.followupChain = next
+  return next
 }
