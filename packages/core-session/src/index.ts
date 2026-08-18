@@ -4,7 +4,7 @@ export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
     | { type: "step/start"; seq?: number }
-    | { type: "user/message"; text: string; seq?: number }
+    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string } }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
