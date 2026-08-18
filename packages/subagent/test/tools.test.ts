@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { createSession } from "@i-harness/core-session"
+import { append, createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -97,13 +97,87 @@ describe("subagent control tools", () => {
     expect(entry.controller.signal.aborted).toBe(true)
   }, 10_000)
 
-  it("resume_agent re-adds a fresh child entry", async () => {
+  it("resume_agent on a resident waiting child just re-drives the inbox (no rebuild)", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const agents = createAgentRegistry()
+    const entrySession = createSession()
+    append(entrySession, { type: "subagent/inbox", messageId: "m1", message: "pending" })
+    const followup = vi.fn().mockResolvedValue({ finalText: "ok", turns: 1, reasoning: [] })
+    const fakeAgent: Agent = { run: vi.fn(), followup }
+    agents.register("child-1", fakeAgent)
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+      sessionId: "child-1",
+    })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const resume = all.find((t) => t.name === "resume_agent")!
+    const entry = table.get("root/helper")!
+    const out = await resume.execute({ target: "root/helper" }, {})
+    expect(out).toEqual({ resumed: true })
+    expect(agents.get("child-1")).toBe(fakeAgent) // unchanged — NOT rebuilt
+    await entry.followupChain
+    expect(followup).toHaveBeenCalledWith("pending", expect.any(AbortSignal))
+    expect(entry.status).toBe("waiting")
+    expect(entry.finalText).toBe("ok")
+  }, 10_000)
+
+  it("resume_agent rebuilds the child from the loaded session + role", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, exec } = setup()
+    const agents = createAgentRegistry()
+    // Entry restored by M8's resume-load: loaded durable session, sessionId,
+    // roleName, status "error" (running/waiting → error on restore). Registry
+    // is empty so resume must rebuild the agent.
+    const loadedSession = createSession()
+    append(loadedSession, { type: "turn/start" })
+    append(loadedSession, { type: "user/message", text: "first task" })
+    append(loadedSession, { type: "assistant/message", text: "first answer" })
+    append(loadedSession, { type: "turn/end" })
+    append(loadedSession, { type: "subagent/inbox", messageId: "in-1", message: "queued before resume" })
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "error",
+      session: loadedSession,
+      controller: new AbortController(),
+      mailbox: [],
+      sessionId: "child-abc",
+      roleName: "general",
+    })
+    const model = createMockClient([
+      { role: "assistant", text: "queued handled" },
+      { role: "assistant", text: "child done" },
+    ])
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents })
+    const resume = all.find((t) => t.name === "resume_agent")!
+    const follow = all.find((t) => t.name === "followup_task")!
+    const entry = table.get("root/helper")!
+    const out = await resume.execute({ target: "root/helper" }, {})
+    expect(out).toEqual({ resumed: true })
+    const rebuilt = agents.get("child-abc")
+    expect(rebuilt).toBeDefined()
+    expect(entry.session).toBe(loadedSession) // rebuilt on the persisted session, not a fresh one
+    // Cold resume drains the queued inbox on the rebuilt agent (turn 1).
+    await entry.followupChain
+    expect(entry.status).toBe("waiting")
+    expect(entry.finalText).toBe("queued handled")
+    expect(loadedSession.events.some((e) => e.type === "user/message" && e.text === "queued before resume")).toBe(true)
+    // The rebuilt agent is retained; a followup_task drives a further turn (turn 2).
+    expect(agents.get("child-abc")).toBe(rebuilt)
+    await follow.execute({ target: "root/helper", message: "continue" }, {})
+    await entry.followupChain
+    expect(entry.status).toBe("waiting")
+    expect(entry.finalText).toBe("child done")
+    expect(loadedSession.events.some((e) => e.type === "user/message" && e.text === "continue")).toBe(true)
+  }, 10_000)
+
+  it("resume_agent on a path with no entry errors", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const resume = all.find((t) => t.name === "resume_agent")!
-    const out = await resume.execute({ target: "root/helper" }, {})
-    expect((out as { resumed: boolean }).resumed).toBe(true)
-    expect(table.get("root/helper")!.status).toBe("running")
+    await expect(resume.execute({ target: "root/ghost" }, {})).rejects.toThrow(/unknown subagent/)
   })
 
   it("send_message appends a durable subagent/inbox event to the child session", async () => {

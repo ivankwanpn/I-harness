@@ -11,6 +11,9 @@ export interface DurableAgentEntry {
   mailbox: string[]
   jobId?: string
   sessionId?: string
+  // M9: the role name the child was spawned with — needed to rebuild the
+  // agent (systemPrompt/tools/model) on cold resume.
+  roleName?: string
 }
 
 export interface DurableJobRecord {
@@ -57,6 +60,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     mailbox: e.mailbox,
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
     ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
+    ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
   }))
 
   const roles = state.roles.list()
@@ -88,6 +92,7 @@ export function restoreState(
       mailbox: [...entry.mailbox],
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
+      ...(entry.roleName !== undefined ? { roleName: entry.roleName } : {}),
     })
   }
   // Jobs: register fresh (ids drift — registerJob assigns new per-kind ids;

@@ -66,6 +66,19 @@ describe("subagent state snapshot", () => {
     expect(fresh.table.get("root/helper")?.sessionId).toBe("child-abc")
   })
 
+  it("snapshotState/restoreState round-trip the child roleName", () => {
+    const s = makeState()
+    s.table.add("root/helper", {
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      controller: new AbortController(), mailbox: [], sessionId: "child-abc", roleName: "research",
+    })
+    const snap = snapshotState(s)
+    expect(snap.agentTable[0]?.roleName).toBe("research")
+    const fresh = makeState()
+    restoreState(fresh, snap)
+    expect(fresh.table.get("root/helper")?.roleName).toBe("research")
+  })
+
   it("restoreState maps waiting entries to error (interrupted by resume)", () => {
     const fresh = makeState()
     const snap: SubagentStateSnapshot = {
