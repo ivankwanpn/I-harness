@@ -197,9 +197,17 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       if (!ok) throw new Error(`denied by user: ${resolved.reason}`)
     }
 
-    // 4. dispatch.
+    // 4. dispatch — around-seam: registered `tools/execute` cascade handlers
+    // (e.g. guard approval wrappers) may observe / wrap / substitute the real
+    // tool dispatch. With no handlers, `ctx.cascade` runs `final` directly —
+    // identical behavior to a plain `tool.execute` call. Skipping `next()` in
+    // a handler short-circuits the dispatch (the tool never runs).
     const exec: ToolExec = {}
-    const output = await tool.execute(call.args as never, exec)
+    const output = await ctx.cascade(
+      "tools/execute",
+      { name: call.name, args: call.args, exec, tool },
+      async () => tool.execute(call.args as never, exec),
+    )
 
     // 5. post-execute waterfall.
     await ctx.emit("tools/post-execute", { name: call.name, output })

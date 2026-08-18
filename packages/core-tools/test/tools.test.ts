@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
-import { createToolRegistry, type Tool } from "../src/index.ts"
+import { createToolRegistry, type Tool, type ToolExec } from "../src/index.ts"
 
 function makeCtx(): PluginContext {
   return createContext()
@@ -144,6 +144,65 @@ describe("execution pipeline", () => {
     ctx.on("tools/pre-execute", (payload: unknown) => payload)
     const result = await reg.execute({ name: "t", args: { m: "hi" } })
     expect(result.output).toEqual({ out: "hi" })
+  })
+})
+
+describe("tools/execute cascade seam", () => {
+  it("no cascade → identical dispatch (tool executes normally)", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "echo", description: "", inputSchema: {}, execute: async (args: { m?: string }) => ({ out: args.m ?? "" }) })
+    const result = await reg.execute({ name: "echo", args: { m: "hi" } })
+    expect(result.output).toEqual({ out: "hi" })
+  })
+
+  it("handler can observe the dispatch context", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    const t: Tool = { name: "echo", description: "", inputSchema: {}, execute: async (args: { m?: string }) => ({ out: args.m ?? "" }) }
+    reg.register(t)
+    const observed: Array<{ name: string; args: unknown; tool: Tool; exec: ToolExec }> = []
+    ctx.onCascade("tools/execute", async (input, next) => {
+      const dispatch = input as { name: string; args: unknown; tool: Tool; exec: ToolExec }
+      observed.push({ name: dispatch.name, args: dispatch.args, tool: dispatch.tool, exec: dispatch.exec })
+      return next()
+    })
+    const result = await reg.execute({ name: "echo", args: { m: "hi" } })
+    expect(result.output).toEqual({ out: "hi" })
+    expect(observed).toHaveLength(1)
+    expect(observed[0]!.name).toBe("echo")
+    expect(observed[0]!.args).toEqual({ m: "hi" })
+    expect(observed[0]!.tool).toBe(t)
+    expect(observed[0]!.exec).toEqual({})
+  })
+
+  it("handler can substitute the dispatch without running the tool", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    let toolRan = false
+    reg.register({ name: "echo", description: "", inputSchema: {}, execute: async () => { toolRan = true; return {} } })
+    ctx.onCascade("tools/execute", async (input) => {
+      const dispatch = input as { name: string }
+      // the handler returns its own value without calling next() → the real
+      // tool never runs; the substituted ToolResult becomes execute().output
+      return { name: dispatch.name, output: "substituted" }
+    })
+    const result = await reg.execute({ name: "echo", args: { m: "hi" } })
+    expect(result.output).toEqual({ name: "echo", output: "substituted" })
+    expect(toolRan).toBe(false)
+  })
+
+  it("handler can wrap the inner dispatch result", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "echo", description: "", inputSchema: {}, execute: async (args: { m?: string }) => ({ out: args.m ?? "" }) })
+    ctx.onCascade("tools/execute", async (_input, next) => {
+      const out = (await next()) as Record<string, unknown>
+      return { ...out, output: { ...(out.output as Record<string, unknown> | undefined), wrapped: true } }
+    })
+    const result = await reg.execute({ name: "echo", args: { m: "hi" } })
+    // the tool ran (out: "hi") and the wrapper's marker is nested in the output
+    expect(result.output).toEqual({ out: "hi", output: { wrapped: true } })
   })
 })
 
