@@ -126,6 +126,43 @@ describe("agent loop", () => {
   })
 })
 
+describe("agent/post-tool observation", () => {
+  it("emits agent/post-tool for each completed tool dispatch", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seen: { name: string; args: unknown; output: unknown; session: unknown }[] = []
+    ctx.on("agent/post-tool", (p) =>
+      seen.push(p as { name: string; args: unknown; output: unknown; session: unknown }),
+    )
+    deps.model = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
+      { role: "assistant", text: "done" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    await agent.run("read a.txt")
+    // one completed dispatch → one observation, carrying name/args/output/session
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({
+      name: "read",
+      args: { path: "a.txt" },
+      output: { content: "content-of-a.txt" },
+    })
+    expect(seen[0]!.session).toBe(deps.session)
+  })
+
+  it("completes the turn normally with no agent/post-tool listener", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
+      { role: "assistant", text: "done" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const result = await agent.run("read a.txt")
+    expect(result.finalText).toBe("done")
+  })
+})
+
 describe("agent abort", () => {
   it("rejects immediately when the signal is already aborted", async () => {
     const ctx = createContext()

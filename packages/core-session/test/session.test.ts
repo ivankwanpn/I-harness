@@ -81,6 +81,38 @@ describe("session log", () => {
     ])
   })
 
+  it("stores user/message.source and derives its text (content unaffected)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "reminder", source: { kind: "plugin", plugin: "guard-repeat-tool" } })
+    expect(s.events[0]).toMatchObject({
+      type: "user/message",
+      text: "reminder",
+      source: { kind: "plugin", plugin: "guard-repeat-tool" },
+    })
+    const msgs = deriveMessages(s)
+    expect(msgs[0]).toEqual({ role: "user", content: "reminder" })
+  })
+
+  it("round-trips user/message.source through JSONL", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "reminder", source: { kind: "plugin", plugin: "guard-repeat-tool" } })
+    const restored = fromJSONL(toJSONL(s))
+    expect(restored.events[0]).toMatchObject({
+      text: "reminder",
+      source: { kind: "plugin", plugin: "guard-repeat-tool" },
+    })
+    expect(deriveMessages(restored)).toEqual([{ role: "user", content: "reminder" }])
+  })
+
+  it("parses a legacy user/message without source and derives normally", () => {
+    const oldLog =
+      JSON.stringify({ formatVersion: 1 }) + "\n" + JSON.stringify({ type: "user/message", text: "hi" }) + "\n"
+    const s = fromJSONL(oldLog)
+    expect(s.events[0]).toMatchObject({ type: "user/message", text: "hi" })
+    expect(s.events[0]).not.toHaveProperty("source")
+    expect(deriveMessages(s)).toEqual([{ role: "user", content: "hi" }])
+  })
+
   it("round-trips JSONL with formatVersion", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "x" })

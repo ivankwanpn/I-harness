@@ -87,6 +87,15 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             append(deps.session, { type: "tool/call", callId, name: ev.call.name, args: ev.call.args })
             const result = await deps.tools.execute({ name: ev.call.name, args: ev.call.args })
             if (abort?.aborted) throw new Error("agent aborted")
+            // Observation seam: only completed dispatches are observed (after
+            // the abort check), before the result is appended to the log. With
+            // no listener the emit is a no-op — behavior-preserving.
+            await ctx.emit("agent/post-tool", {
+              name: ev.call.name,
+              args: ev.call.args,
+              output: result.output,
+              session: deps.session,
+            })
             append(deps.session, { type: "tool/result", callId, name: ev.call.name, output: result.output })
             toolCallsThisStep += 1
             break
