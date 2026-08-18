@@ -93,6 +93,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   })
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName)
+  const initialRun = agent.run(opts.message, controller.signal)
   opts.table.add(childPath, {
     path: childPath,
     status: "running",
@@ -102,15 +103,22 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     jobId,
     ...(sessionId !== undefined ? { sessionId } : {}),
     roleName: opts.role.name,
+    // Serialization: seed the followup chain with the initial run so a
+    // followup_task fired mid-run waits for turn 1 to finish (dsh's
+    // queue-then-run semantics) instead of running two runTurns concurrently
+    // on the same session. The rejection is swallowed so a failed initial run
+    // cannot reject the chain and silently kill all later followups.
+    followupChain: initialRun.then(() => {}, () => {}),
     unmount: () => childCtx.scope.unmount(),
   })
 
-  agent.run(opts.message, controller.signal).then(
+  initialRun.then(
     (result) => {
       const e = opts.table.get(childPath)
       // The turn is done, but the child is KEPT alive (waiting) so a later
-      // followup can re-drive the same agent (M9 spec §2.2).
-      if (e) { e.status = "waiting"; e.finalText = result.finalText }
+      // followup can re-drive the same agent (M9 spec §2.2). A stale error
+      // from an earlier interrupted attempt is cleared on success.
+      if (e) { e.status = "waiting"; e.error = undefined; e.finalText = result.finalText }
       opts.jobs.updateJob(jobId, { status: "completed", output: result.finalText })
     },
     (err) => {
