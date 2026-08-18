@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
@@ -103,6 +103,26 @@ describe("subagent control tools", () => {
     const out = await resume.execute({ target: "root/helper" }, {})
     expect((out as { resumed: boolean }).resumed).toBe(true)
     expect(table.get("root/helper")!.status).toBe("running")
+  })
+
+  it("send_message appends a durable subagent/inbox event to the child session", async () => {
+    const spy = vi.fn()
+    const entrySession = createSession((ev) => { spy(ev) })
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "running",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+    })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const send = all.find((t) => t.name === "send_message")!
+    const out = await send.execute({ target: "root/helper", message: "ping" }, {})
+    expect(out).toEqual({ queued: true })
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "ping" }))
+    expect((spy.mock.calls[0]![0] as { messageId: string }).messageId).toBeTruthy()
+    expect(table.get("root/helper")?.mailbox).toEqual(["ping"])
   })
 
   it("followup_task queues and marks delivered", async () => {

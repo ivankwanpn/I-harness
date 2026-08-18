@@ -11,6 +11,7 @@ export type SessionEvent =
     | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
     | { type: "step/end"; seq?: number }
     | { type: "turn/end"; seq?: number }
+    | { type: "subagent/inbox"; messageId: string; message: string; seq?: number }
   )
   & { ignorable?: true }
 

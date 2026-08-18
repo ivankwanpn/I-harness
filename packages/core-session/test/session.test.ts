@@ -68,6 +68,19 @@ describe("session log", () => {
     expect(deriveMessages(s)).toEqual([{ role: "assistant", content: "done" }])
   })
 
+  it("subagent/inbox events are model-hidden (ignored by deriveMessages)", () => {
+    const s = createSession()
+    append(s, { type: "turn/start" })
+    append(s, { type: "user/message", text: "hi" })
+    append(s, { type: "subagent/inbox", messageId: "m1", message: "ping" })
+    append(s, { type: "assistant/message", text: "yo" })
+    append(s, { type: "turn/end" })
+    expect(deriveMessages(s)).toMatchObject([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "yo" },
+    ])
+  })
+
   it("round-trips JSONL with formatVersion", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "x" })

@@ -198,4 +198,17 @@ describe("session coordinator lineage (M8)", () => {
     const { session } = await coordinator.load(id)
     expect(session.header).toBeUndefined()
   })
+
+  it("load tolerates subagent/inbox events (known type)", async () => {
+    const backend = fakeBackend()
+    await backend.create("child-abc", { formatVersion: 1, sessionId: "child-abc", createdAt: "x" })
+    await backend.append("child-abc", [
+      { type: "turn/start" },
+      { type: "subagent/inbox", messageId: "m1", message: "ping" },
+      { type: "turn/end" },
+    ])
+    const coordinator = createSessionCoordinator(backend)
+    const { session } = await coordinator.load("child-abc")
+    expect(session.events.map((e) => e.type)).toContain("subagent/inbox")
+  })
 })
