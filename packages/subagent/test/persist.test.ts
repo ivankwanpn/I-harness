@@ -52,6 +52,19 @@ describe("subagent state snapshot", () => {
     // restored entries have fresh (non-persisted) session/controller
     expect(typeof fresh.table.get("root/helper")?.session.events.push).toBe("function")
   })
+
+  it("snapshotState/restoreState round-trip the child sessionId link", () => {
+    const s = makeState()
+    s.table.add("root/helper", {
+      path: "root/helper", status: "completed", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      controller: new AbortController(), mailbox: [], sessionId: "child-abc",
+    })
+    const snap = snapshotState(s)
+    expect(snap.agentTable[0]?.sessionId).toBe("child-abc")
+    const fresh = makeState()
+    restoreState(fresh, snap)
+    expect(fresh.table.get("root/helper")?.sessionId).toBe("child-abc")
+  })
 })
 
 describe("persistent wrappers", () => {

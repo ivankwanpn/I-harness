@@ -10,6 +10,7 @@ export interface ChildAgentEntry {
   error?: string
   mailbox: string[]
   jobId?: string
+  sessionId?: string
   unmount?: () => void
 }
 export interface AgentTable {

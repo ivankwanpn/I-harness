@@ -10,6 +10,7 @@ export interface DurableAgentEntry {
   error?: string
   mailbox: string[]
   jobId?: string
+  sessionId?: string
 }
 
 export interface DurableJobRecord {
@@ -32,6 +33,10 @@ export interface SubagentStateSnapshot {
 export interface SubagentPersistence {
   coordinator: SessionCoordinator
   stateId: string
+  // M8: the main session id, for child lineage (child-<uuid> header
+  // parentSession). Optional until the CLI (Task 5) wires it — without it no
+  // childSessions context is passed to the tools and spawns stay anonymous.
+  parentSessionId?: string
 }
 
 export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry }): SubagentStateSnapshot {
@@ -50,6 +55,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     ...(e.error !== undefined ? { error: e.error } : {}),
     mailbox: e.mailbox,
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
+    ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
   }))
 
   const roles = state.roles.list()
@@ -80,6 +86,7 @@ export function restoreState(
       ...(wasRunning || entry.error !== undefined ? { error: wasRunning ? "interrupted by resume" : entry.error } : {}),
       mailbox: [...entry.mailbox],
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
+      ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
     })
   }
   // Jobs: register fresh (ids drift — registerJob assigns new per-kind ids;
