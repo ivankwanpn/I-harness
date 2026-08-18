@@ -490,9 +490,16 @@ export function createTimeoutGuard(ctx: PluginContext): Plugin {
           // OUR timer fired (not an upstream cancel) → the tool saw the abort
           // and reached quiescence; replace whatever it returned.
           if (timedOut) {
+            // Ruling (controller, M10a execution): error/code go at the TOP
+            // level of the substituted raw value, preserving the tool's other
+            // fields via spread. The registry wraps the cascade value in
+            // { name, output }, so the marker reads at tool/result.output.code
+            // (NOT .output.output.code — the spec's initial `output:` nesting
+            // would bury it one level deeper).
             return {
               ...result,
-              output: { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT },
+              error: `tool call timed out after ${timeoutMs}ms`,
+              code: TOOL_TIMEOUT,
             }
           }
           return result
@@ -507,8 +514,13 @@ export function createTimeoutGuard(ctx: PluginContext): Plugin {
 ```
 
 `ctx.cascade` dispatches only cascade handlers and `next()` returns the inner
-result, so the inner `result` is the tool's `ToolResult` (`{ output, ... }`).
-The substituted result keeps `name`/other fields and replaces `output`.
+result — the RAW tool output value (what `tool.execute` returned). The registry
+wraps the cascade value in `{ name, output }`. On timeout the guard returns
+`{ ...rawResult, error, code: TOOL_TIMEOUT }`, so the wrapped
+`tool/result.output` is `{ ...rawToolFields, error, code }` and the marker reads
+at `result.output.code`. For a `bash` tool: `output = { stdout, exitCode, error,
+code }`. For a tool whose raw result is `{ output: "x" }`: `output = { output:
+"x", error, code }`.
 
 **`test/timeout.test.ts`** — helper tools:
 
