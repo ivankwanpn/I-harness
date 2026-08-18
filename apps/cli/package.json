@@ -24,6 +24,8 @@
     "@i-harness/shell": "workspace:*",
     "@i-harness/fs": "workspace:*",
     "@i-harness/guard-approval": "workspace:*",
+    "@i-harness/guard-repeat-tool": "workspace:*",
+    "@i-harness/guard-timeout": "workspace:*",
     "@i-harness/tool-search": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-persistence-jsonl": "workspace:*",

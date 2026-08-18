@@ -775,3 +775,61 @@ describe("headless CLI multi-turn subagents (M9)", () => {
     }
   }, 20_000)
 })
+
+describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
+  it("bash that outlives shellTimeoutMs → TOOL_TIMEOUT marker on tool/result, run completes", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m10a-"))
+    try {
+      const start = performance.now()
+      const result = await runHeadless("slow", {
+        workspace: dir,
+        approveAll: true,
+        shellTimeoutMs: 300,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "bash", args: { command: 'node -e "setTimeout(()=>{}, 30000)"' } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      const elapsed = performance.now() - start
+      // the guard must cut the 30s command short, not hang the headless run
+      expect(elapsed).toBeLessThan(10_000)
+      expect(result.exitCode).toBe(0)
+      expect(result.finalText).toBe("done")
+      // the session's tool/result carries the substituted output with the
+      // TOOL_TIMEOUT marker at the TOP level of `output` (registry wraps the
+      // guard's substituted value in { name, output })
+      const bashResult = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash")
+      expect(bashResult).toBeDefined()
+      const output = (bashResult as { output: { code?: string; error?: string } }).output
+      expect(output.code).toBe("TOOL_TIMEOUT")
+      expect(output.error).toContain("timed out after 300ms")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  it("four identical bash calls → plugin user/message consecutive-times reminder", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m10a-"))
+    try {
+      const result = await runHeadless("repeat", {
+        workspace: dir,
+        approveAll: true,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
+          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
+          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
+          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      const pluginMessages = result.session?.events.filter(
+        (e) => e.type === "user/message" && (e as { source?: { kind: string } }).source?.kind === "plugin",
+      )
+      expect(pluginMessages).toBeDefined()
+      expect(pluginMessages!.some((e) => (e as { text: string }).text.includes("consecutive times"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})

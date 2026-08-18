@@ -1,5 +1,5 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
-import { createSession } from "@i-harness/core-session"
+import { createSession, type Session } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -8,6 +8,8 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { registerShell } from "@i-harness/shell"
 import { createFsTools } from "@i-harness/fs"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
+import { createTimeoutGuard } from "@i-harness/guard-timeout"
+import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
@@ -19,6 +21,7 @@ export interface HeadlessOptions {
   mockScript?: MockStep[]
   model?: ModelClient
   approveAll?: boolean
+  shellTimeoutMs?: number // default 120_000; the shipped harness deadline
   sessionId?: string // new session: persist under this id
   resumeSessionId?: string // resume: load this id, restore history, continue appending
   coordinator?: SessionCoordinator
@@ -28,6 +31,7 @@ export interface HeadlessResult {
   finalText: string
   exitCode: number
   error?: string
+  session?: Session // NEW: session events so tests can assert guard outcomes
 }
 
 // Shape guard for the restored subagent-state document: a wrong-shape-but-valid
@@ -56,9 +60,16 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   const tools = createToolRegistry(ctx)
 
   // mount the execution environment + policy
-  registerShell(ctx, tools)
+  const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
+  registerShell(ctx, tools, { timeoutMs: shellTimeoutMs })
   for (const tool of createFsTools({ workspace: opts.workspace })) tools.register(tool)
   createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
+
+  // M10a guards (part of the shipped harness):
+  //  - timeout: cooperative deadline on tools that declare timeoutMs (bash/pwsh).
+  //  - repeat-reminder: advisory consecutive-repeat notice for the model.
+  ctx.mount(createTimeoutGuard(ctx))
+  ctx.mount(createRepeatToolGuard(ctx))
 
   // approval: approveAll → auto-approve; else fail closed (no answerer)
   if (opts.approveAll) {
@@ -159,7 +170,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       if (activeId) await opts.coordinator.flush(activeId)
       await opts.coordinator.close()
     }
-    return { finalText: result.finalText, exitCode: 0 }
+    return { finalText: result.finalText, exitCode: 0, session }
   } catch (err) {
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
