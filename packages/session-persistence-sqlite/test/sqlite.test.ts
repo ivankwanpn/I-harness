@@ -121,6 +121,19 @@ describe("sqlite backend", () => {
     const again = await backend.read("s1")
     expect(again.events.map((e) => e.type)).toEqual(["turn/start", "user/message", "turn/end"])
   })
+
+  it("create/read/repair round-trip lineage columns", async () => {
+    const backend = createSqliteBackend(join(dir, "sessions.db"))
+    await backend.create("child-abc", {
+      formatVersion: 1, sessionId: "child-abc", createdAt: "x",
+      parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0,
+    })
+    await backend.append("child-abc", [{ type: "turn/start" }])
+    const { meta } = await backend.read("child-abc")
+    expect(meta).toMatchObject({ parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0 })
+    const { meta: repairedMeta } = await backend.repair("child-abc")
+    expect(repairedMeta).toMatchObject({ parentSession: "sess-p", seedLength: 3 })
+  })
 })
 
 describe("sqlite documents", () => {
