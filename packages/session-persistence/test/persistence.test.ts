@@ -24,13 +24,13 @@ function fakeBackend(): PersistenceBackend {
     async read(sessionId) {
       const f = files.get(sessionId)
       if (!f) throw new Error(`unknown session: ${sessionId}`)
-      return { version: f.meta.formatVersion, events: f.events }
+      return { version: f.meta.formatVersion, events: f.events, meta: f.meta }
     },
     async list() { return [...files.keys()] },
     async repair(sessionId) {
       const f = files.get(sessionId)
       if (!f) throw new Error(`unknown session: ${sessionId}`)
-      return { version: f.meta.formatVersion, events: f.events }
+      return { version: f.meta.formatVersion, events: f.events, meta: f.meta }
     },
     async putDocument(key, data) { documents.set(key, data) },
     async getDocument(key) { return documents.get(key) },
@@ -172,5 +172,30 @@ describe("session coordinator write-behind (M7)", () => {
     // the chain stays alive: the next putDocument still lands
     await coordinator.putDocument("k2", { b: 2 })
     expect(await backend.getDocument("k2")).toEqual({ b: 2 })
+  })
+})
+
+describe("session coordinator lineage (M8)", () => {
+  it("create with a lineage meta persists it and load returns the header", async () => {
+    const backend = fakeBackend()
+    const coordinator = createSessionCoordinator(backend)
+    const { id } = await coordinator.create({
+      sessionId: "child-abc",
+      parentSession: "sess-parent",
+      seedLength: 3,
+      origin: "subagent",
+      delegationDepth: 0,
+    })
+    expect(id).toBe("child-abc")
+    const { session } = await coordinator.load(id)
+    expect(session.header).toEqual({ parentSession: "sess-parent", seedLength: 3, origin: "subagent", delegationDepth: 0 })
+  })
+
+  it("create without a sessionId still generates sess-... and no header", async () => {
+    const coordinator = createSessionCoordinator(fakeBackend())
+    const { id } = await coordinator.create()
+    expect(id).toMatch(/^sess-/)
+    const { session } = await coordinator.load(id)
+    expect(session.header).toBeUndefined()
   })
 })

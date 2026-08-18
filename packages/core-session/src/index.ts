@@ -14,9 +14,19 @@ export type SessionEvent =
   )
   & { ignorable?: true }
 
+// Lineage/identity carried on a session (M8): who spawned it and how deep in
+// the subagent delegation chain it sits. Optional — a root session has none.
+export interface SessionHeader {
+  parentSession?: string
+  seedLength?: number
+  delegationDepth?: number
+  origin?: string
+}
+
 export interface Session {
   formatVersion: number
   events: SessionEvent[]
+  header?: SessionHeader
 }
 
 export const CURRENT_FORMAT_VERSION = 1

@@ -1,9 +1,9 @@
-import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent, type SessionHeader } from "@i-harness/core-session"
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
 
-export interface SessionMeta {
+export interface SessionMeta extends SessionHeader {
   formatVersion: number
   sessionId: string
   createdAt: string
@@ -16,9 +16,9 @@ export interface PersistenceBackend {
   id: "jsonl" | "sqlite"
   create(sessionId: string, meta: SessionMeta): Promise<void>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
-  read(sessionId: string): Promise<{ version: number; events: SessionEvent[] }>
+  read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
   list(): Promise<string[]>
-  repair(sessionId: string): Promise<{ version: number; events: SessionEvent[] }>
+  repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
   capabilities: { seekableRead: boolean; rawArtifacts: boolean }
   // Generic non-session document store (M6): arbitrary keyed state such as
   // the subagent registry snapshot. Session-event semantics unchanged.
@@ -34,7 +34,7 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
-  create(): Promise<{ id: string }>
+  create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
@@ -135,9 +135,15 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   }
 
   return {
-    async create() {
-      const id = `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-      await backend.create(id, { formatVersion: CURRENT_FORMAT_VERSION, sessionId: id, createdAt: new Date().toISOString() })
+    async create(meta) {
+      const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      const fullMeta: SessionMeta = {
+        formatVersion: CURRENT_FORMAT_VERSION,
+        sessionId: id,
+        createdAt: new Date().toISOString(),
+        ...meta,
+      }
+      await backend.create(id, fullMeta)
       return { id }
     },
     async append(sessionId, events) {
@@ -153,10 +159,20 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       // file, and it must never touch bytes the current build cannot decode.
       const peeked = await backend.read(sessionId)
       assertVersionSupported(peeked.version)
-      const { version, events } = await backend.repair(sessionId)
+      const { version, events, meta } = await backend.repair(sessionId)
       const guarded = guardIgnorable(events)
       const migrated = await migrate(version, guarded)
-      return { session: { formatVersion: CURRENT_FORMAT_VERSION, events: migrated } }
+      const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: migrated }
+      if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined
+        || meta.delegationDepth !== undefined || meta.origin !== undefined)) {
+        session.header = {
+          ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
+          ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
+          ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
+          ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
+        }
+      }
+      return { session }
     },
     async list() {
       return backend.list()
