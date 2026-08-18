@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { createSession } from "@i-harness/core-session"
+import { append, createSession } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderRegistry } from "@i-harness/provider"
@@ -105,6 +106,8 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     execute: async (args) => {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      // Durable inbox: append a model-hidden event through the child's mirror.
+      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message })
       entry.mailbox.push(args.message)
       return { queued: true }
     },
@@ -132,6 +135,8 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     execute: async (args) => {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+      // Durable inbox: same append as send_message; re-driving the turn is deferred to M9.
+      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message })
       entry.mailbox.push(args.message)
       return { delivered: true }
     },
