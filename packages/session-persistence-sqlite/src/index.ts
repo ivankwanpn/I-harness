@@ -23,6 +23,10 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
     id: string
     version: number
     created_at: number
+    parent_session: string | null
+    seed_length: number | null
+    origin: string | null
+    delegation_depth: number | null
     incarnation: string
     revision: number
   }
@@ -35,10 +39,23 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
 
   const getSession = (sessionId: string): SessionRow => {
     const row = db.prepare(
-      "SELECT id, version, created_at, incarnation, revision FROM sessions WHERE id = ?",
+      "SELECT id, version, created_at, parent_session, seed_length, origin, delegation_depth, incarnation, revision FROM sessions WHERE id = ?",
     ).get(sessionId) as SessionRow | undefined
     if (!row) throw new Error(`unknown session: ${sessionId}`)
     return row
+  }
+
+  const lineageMeta = (row: SessionRow): SessionMeta | undefined => {
+    if (row.parent_session === null && row.seed_length === null && row.origin === null && row.delegation_depth === null) return undefined
+    return {
+      formatVersion: row.version,
+      sessionId: row.id,
+      createdAt: new Date(row.created_at).toISOString(),
+      ...(row.parent_session !== null ? { parentSession: row.parent_session } : {}),
+      ...(row.seed_length !== null ? { seedLength: row.seed_length } : {}),
+      ...(row.origin !== null ? { origin: row.origin } : {}),
+      ...(row.delegation_depth !== null ? { delegationDepth: row.delegation_depth } : {}),
+    }
   }
 
   return {
@@ -49,8 +66,13 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       db.exec("BEGIN")
       try {
         db.prepare(
-          `INSERT INTO sessions (id, version, created_at, incarnation, revision) VALUES (?, ?, ?, ?, 0)`,
-        ).run(sessionId, meta.formatVersion, Date.now(), randomUUID())
+          `INSERT INTO sessions (id, version, created_at, parent_session, seed_length, origin, delegation_depth, incarnation, revision)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+        ).run(
+          sessionId, meta.formatVersion, Date.now(),
+          meta.parentSession ?? null, meta.seedLength ?? null, meta.origin ?? null, meta.delegationDepth ?? null,
+          randomUUID(),
+        )
         db.exec("COMMIT")
       } catch (err) {
         db.exec("ROLLBACK")
@@ -78,10 +100,10 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       }
     },
 
-    async read(sessionId: string): Promise<{ version: number; events: SessionEvent[] }> {
+    async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       const row = getSession(sessionId)
       const rows = db.prepare("SELECT seq, type, data, ignorable FROM events WHERE session_id = ? ORDER BY seq").all(sessionId) as unknown as EventRow[]
-      return { version: row.version, events: rows.map((r) => JSON.parse(r.data) as SessionEvent) }
+      return { version: row.version, events: rows.map((r) => JSON.parse(r.data) as SessionEvent), meta: lineageMeta(row) }
     },
 
     async list(): Promise<string[]> {
@@ -89,7 +111,7 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       return rows.map((r) => r.id)
     },
 
-    async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[] }> {
+    async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       const row = getSession(sessionId)
       const rows = db.prepare("SELECT seq, type, data, ignorable FROM events WHERE session_id = ? ORDER BY seq").all(sessionId) as unknown as EventRow[]
       const events = rows.map((r) => JSON.parse(r.data) as SessionEvent)
@@ -112,7 +134,7 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
           throw err
         }
       }
-      return { version: row.version, events: [...events, ...closers] }
+      return { version: row.version, events: [...events, ...closers], meta: lineageMeta(row) }
     },
 
     async putDocument(key: string, data: unknown): Promise<void> {
