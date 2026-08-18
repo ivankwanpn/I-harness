@@ -1,6 +1,10 @@
 export type NextFn = (payload: unknown) => unknown | Promise<unknown>
 export type Listener = (payload: unknown) => unknown
 export type WaterfallHandler = (payload: unknown, next: NextFn) => unknown | Promise<unknown>
+export type CascadeHandler<TInput = unknown, TOutput = unknown> = (
+  input: TInput,
+  next: () => Promise<TOutput>,
+) => Promise<TOutput>
 export type GuardFn = (exec: unknown) => string | undefined
 
 export interface Plugin {
@@ -21,6 +25,12 @@ export interface PluginContext {
   on(event: string, handler: Listener): void
   emit(event: string, payload: unknown): Promise<void>
   waterfall(event: string, handler: WaterfallHandler): void
+  cascade<TInput, TOutput>(
+    event: string,
+    input: TInput,
+    final: () => Promise<TOutput>,
+  ): Promise<TOutput>
+  onCascade(event: string, handler: CascadeHandler<unknown, unknown>): void
   guard(event: string, fn: GuardFn): void
   checkGuards(event: string, exec: unknown): string | undefined
   resolveDecision(event: string, payload: unknown): unknown
@@ -52,6 +62,11 @@ interface OwnedWaterfall {
   handler: WaterfallHandler
 }
 
+interface OwnedCascade {
+  event: string
+  handler: CascadeHandler<unknown, unknown>
+}
+
 function createScope(
   parentStore: ServiceStore | null,
   parentScope: InternalScope | null,
@@ -70,6 +85,8 @@ function createScope(
   const plugins = new Map<string, Plugin>()
   const pluginListeners = new Map<string, OwnedListener[]>()
   const pluginWaterfalls = new Map<string, OwnedWaterfall[]>()
+  const cascades = new Map<string, CascadeHandler<unknown, unknown>[]>()
+  const pluginCascades = new Map<string, OwnedCascade[]>()
   const nestedPlugins = new Map<string, string[]>()
   let mountingPlugin: string | null = null
 
@@ -92,6 +109,17 @@ function createScope(
       const owned = pluginWaterfalls.get(mountingPlugin) ?? []
       owned.push({ event, handler })
       pluginWaterfalls.set(mountingPlugin, owned)
+    }
+  }
+
+  function registerCascade(event: string, handler: CascadeHandler<unknown, unknown>): void {
+    const list = cascades.get(event) ?? []
+    list.push(handler)
+    cascades.set(event, list)
+    if (mountingPlugin !== null) {
+      const owned = pluginCascades.get(mountingPlugin) ?? []
+      owned.push({ event, handler })
+      pluginCascades.set(mountingPlugin, owned)
     }
   }
 
@@ -142,6 +170,33 @@ function createScope(
       return resolved ?? p
     }
     return run(0, payload)
+  }
+
+  // Cascade dispatch: `ctx.cascade` handlers are AROUND hooks over a single
+  // `final` function — unlike waterfall, `next()` returns the inner result and
+  // a handler that skips `next()` short-circuits (legal, no "forgot next"
+  // error). Double-`next` throws. Only registered cascade handlers run (plain
+  // listeners never do); the handler list is re-snapshotted per dispatch so
+  // mid-dispatch registrations don't affect the current run.
+  async function dispatchCascade<TInput, TOutput>(
+    event: string,
+    input: TInput,
+    final: () => Promise<TOutput>,
+  ): Promise<TOutput> {
+    const handlers = [...(cascades.get(event) ?? [])]
+    const run = (i: number): Promise<TOutput> => {
+      if (i >= handlers.length) return final()
+      let nextCalled = false
+      const next = (): Promise<TOutput> => {
+        if (nextCalled) {
+          throw new Error(`cascade handler ${i} for '${event}' called next() twice`)
+        }
+        nextCalled = true
+        return run(i + 1)
+      }
+      return handlers[i]!(input, next) as Promise<TOutput>
+    }
+    return run(0)
   }
 
   // Dispatch runs plain listeners FIRST, then the waterfall chain. Only events
@@ -216,6 +271,10 @@ function createScope(
     emit: emitFn,
     waterfall(event: string, handler: WaterfallHandler): void {
       registerWaterfall(event, handler)
+    },
+    cascade: dispatchCascade,
+    onCascade(event: string, handler: CascadeHandler<unknown, unknown>): void {
+      registerCascade(event, handler)
     },
     guard(event: string, fn: GuardFn): void {
       const list = guards.get(event) ?? []
@@ -294,8 +353,16 @@ function createScope(
         if (index !== -1) list.splice(index, 1)
       }
     }
+    for (const { event, handler } of pluginCascades.get(name) ?? []) {
+      const list = cascades.get(event)
+      if (list) {
+        const index = list.indexOf(handler)
+        if (index !== -1) list.splice(index, 1)
+      }
+    }
     pluginListeners.delete(name)
     pluginWaterfalls.delete(name)
+    pluginCascades.delete(name)
     nestedPlugins.delete(name)
   }
 
