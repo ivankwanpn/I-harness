@@ -3,6 +3,7 @@ import { createSession } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderRegistry } from "@i-harness/provider"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
@@ -19,6 +20,9 @@ export interface SubagentToolDeps {
   parentModel: ModelClient
   providers: ProviderRegistry
   exec: ExecService
+  // M8: when present, spawned children get durable child-<uuid> sessions with
+  // the parent-session lineage header (P1).
+  childSessions?: { coordinator: SessionCoordinator; parentSessionId: string }
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
@@ -40,7 +44,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       const role = deps.roles.get(args.agent_type ?? "general")
       if (!role) throw new Error(`unknown role: ${args.agent_type}`)
       const turns = parseForkTurns(args.fork_turns)
-      const { path, jobId } = spawnChild({
+      const { path, jobId } = await spawnChild({
         taskName: args.task_name,
         message: args.message,
         parentPath: "root",
@@ -53,6 +57,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         jobs: deps.jobs,
         table: deps.table,
         forkTurns: turns,
+        childSessions: deps.childSessions,
       })
       return { agent_path: path, job_id: jobId }
     },

@@ -78,6 +78,11 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     parentModel: opts.parentModel,
     providers: opts.providers,
     exec: opts.exec,
+    // M8: when persistence has a known main-session id, spawns get durable
+    // child-<uuid> sessions with the lineage header.
+    ...(opts.persist && opts.persist.parentSessionId
+      ? { childSessions: { coordinator: opts.persist.coordinator, parentSessionId: opts.persist.parentSessionId } }
+      : {}),
   })
   // ToolRegistry.register throws on duplicate names, so skip tools the parent
   // already has — makes registerSubagent idempotent for repeat mounts.

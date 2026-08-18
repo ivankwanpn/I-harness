@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { createSession } from "@i-harness/core-session"
+import { append, createSession } from "@i-harness/core-session"
 import { createToolRegistry, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { buildModelClient, type ProviderRegistry } from "@i-harness/provider"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
 import type { SubagentRole } from "./roles.ts"
@@ -22,18 +24,44 @@ export interface SpawnOptions {
   jobs: JobRegistry
   table: AgentTable
   forkTurns?: "none" | "all" | number
+  // M8: when present, the child session is durable — minted as child-<uuid>,
+  // created through the coordinator with the lineage header, and mirrored to
+  // the parent's write-behind coordinator.
+  childSessions?: { coordinator: SessionCoordinator; parentSessionId: string }
 }
 
-export function spawnChild(opts: SpawnOptions): { path: string; jobId: string } {
+export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jobId: string; sessionId?: string }> {
   const childPath = `${opts.parentPath}/${opts.taskName}`
   const childCtx = opts.parentCtx.scope.mount()
-  const childSession = createSession()
 
-  // fork_turns: seed the child session with the last N parent turns (default all).
+  // fork_turns: last N parent turns (default all). The seed events are the
+  // child's inherited context; with persistence they are stored in the child's
+  // log and seedLength marks the boundary (dsh lineage).
   const turns = opts.forkTurns ?? "all"
-  if (turns !== "none") {
-    const n = turns === "all" ? Infinity : turns
-    for (const ev of forkTurns(opts.parentSession.events, n)) childSession.events.push({ ...ev })
+  const seedEvents = turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns)
+
+  let childSession: ReturnType<typeof createSession>
+  let sessionId: string | undefined
+  if (opts.childSessions) {
+    sessionId = `child-${randomUUID()}`
+    await opts.childSessions.coordinator.create({
+      sessionId,
+      parentSession: opts.childSessions.parentSessionId,
+      seedLength: seedEvents.length,
+      origin: "subagent",
+      delegationDepth: 0,
+    })
+    childSession = createSession((ev) => {
+      opts.childSessions!.coordinator.enqueue(sessionId!, [ev])
+      if (ev.type === "turn/end") void opts.childSessions!.coordinator.flush(sessionId!).catch(() => {})
+    })
+    // Persist the seed through the mirror so the child log starts at seq 0
+    // with the inherited context (dsh: seed events live in the child log).
+    for (const ev of seedEvents) append(childSession, { ...ev })
+    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: 0 }
+  } else {
+    childSession = createSession()
+    for (const ev of seedEvents) childSession.events.push({ ...ev })
   }
 
   // child registry: register the role's allowed tools (resolved from the parent).
@@ -60,6 +88,7 @@ export function spawnChild(opts: SpawnOptions): { path: string; jobId: string } 
     controller,
     mailbox: [],
     jobId,
+    ...(sessionId !== undefined ? { sessionId } : {}),
     unmount: () => childCtx.scope.unmount(),
   })
 
@@ -87,5 +116,5 @@ export function spawnChild(opts: SpawnOptions): { path: string; jobId: string } 
     },
   )
 
-  return { path: childPath, jobId }
+  return { path: childPath, jobId, sessionId }
 }
