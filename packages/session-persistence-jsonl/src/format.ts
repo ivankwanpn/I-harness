@@ -9,7 +9,15 @@ export function parseHeader(line: string): SessionMeta {
   const h = JSON.parse(line) as Partial<SessionMeta>
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
-  return { formatVersion: h.formatVersion, sessionId: h.sessionId, createdAt: typeof h.createdAt === "string" ? h.createdAt : "" }
+  return {
+    formatVersion: h.formatVersion,
+    sessionId: h.sessionId,
+    createdAt: typeof h.createdAt === "string" ? h.createdAt : "",
+    ...(typeof h.parentSession === "string" ? { parentSession: h.parentSession } : {}),
+    ...(typeof h.seedLength === "number" ? { seedLength: h.seedLength } : {}),
+    ...(typeof h.delegationDepth === "number" ? { delegationDepth: h.delegationDepth } : {}),
+    ...(typeof h.origin === "string" ? { origin: h.origin } : {}),
+  }
 }
 
 // Parse event lines up to the first torn/invalid record — the contiguous

@@ -39,13 +39,13 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       }
     },
 
-    async read(sessionId: string): Promise<{ version: number; events: SessionEvent[] }> {
+    async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       const text = await readFile(filePath(sessionId), "utf-8")
       const lines = text.split("\n")
       if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
       const header = parseHeader(lines[0]!)
       const events = parseEventLines(lines.slice(1))
-      return { version: header.formatVersion, events }
+      return { version: header.formatVersion, events, meta: header }
     },
 
     async list(): Promise<string[]> {
@@ -56,7 +56,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         .map((n) => basename(n, ".jsonl"))
     },
 
-    async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[] }> {
+    async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       const path = filePath(sessionId)
       const text = await readFile(path, "utf-8")
       const lines = text.split("\n")
@@ -75,7 +75,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
           await handle.close()
         }
       }
-      return { version: header.formatVersion, events: [...events, ...closers] }
+      return { version: header.formatVersion, events: [...events, ...closers], meta: header }
     },
 
     async putDocument(key: string, data: unknown): Promise<void> {

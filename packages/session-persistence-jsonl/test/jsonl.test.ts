@@ -103,3 +103,20 @@ describe("jsonl documents", () => {
     expect(existsSync(join(dir, "subagent-state.doc.jsonl"))).toBe(true)
   })
 })
+
+describe("jsonl lineage header", () => {
+  it("create/read/repair round-trip the lineage header", async () => {
+    const backend = createJsonlBackend(dir)
+    await backend.create("child-abc", {
+      formatVersion: 1, sessionId: "child-abc", createdAt: "x",
+      parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0,
+    })
+    await backend.append("child-abc", [{ type: "turn/start" }])
+    const { meta } = await backend.read("child-abc")
+    expect(meta).toMatchObject({ parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0 })
+    // repair rewrites the header line — lineage must survive.
+    await backend.repair("child-abc")
+    const again = await backend.read("child-abc")
+    expect(again.meta).toMatchObject({ parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0 })
+  })
+})
