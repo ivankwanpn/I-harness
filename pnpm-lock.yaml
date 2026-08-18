@@ -47,6 +47,12 @@ importers:
       '@i-harness/guard-approval':
         specifier: workspace:*
         version: link:../../packages/guard-approval
+      '@i-harness/guard-repeat-tool':
+        specifier: workspace:*
+        version: link:../../packages/guard-repeat-tool
+      '@i-harness/guard-timeout':
+        specifier: workspace:*
+        version: link:../../packages/guard-timeout
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../../packages/interaction
