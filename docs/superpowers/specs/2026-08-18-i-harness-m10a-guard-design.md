@@ -93,6 +93,8 @@ await ctx.emit("agent/post-tool", { name: ev.call.name, args: ev.call.args, outp
 
 This is a plain observation event (listeners may append to `session`). The reminder hooks it (it needs session access — the tool pipeline does not carry the session). Behavior-preserving: no listener → no-op.
 
+**Ordering invariant (execution ruling):** the emit fires AFTER `tool/result` is appended to the session. A listener that appends a `user/message` (the repeat-reminder) must land after the result in the log, so `deriveMessages` renders `assistant(toolCalls) → tool(result) → user(reminder)` — a `user` message between an assistant `tool_calls` block and its tool result is rejected by OpenAI-style providers. An aborted dispatch still fires neither (the abort check precedes both).
+
 ## §5 timeout-policy plugin — `@i-harness/guard-timeout`
 
 A `tools/execute` cascade handler. When the resolved `tool.timeoutMs` is `undefined`, delegate unchanged. Otherwise (cooperative, mirroring dsh):
