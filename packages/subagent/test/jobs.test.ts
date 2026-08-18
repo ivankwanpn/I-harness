@@ -40,4 +40,16 @@ describe("job registry", () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(40)
     expect(jobs.read(id).status).toBe("running")
   })
+
+  it("updateJob re-opens a terminal job when set to running again", () => {
+    const jobs = createJobRegistry()
+    const { id } = jobs.registerJob("root", "subagent", "h")
+    jobs.updateJob(id, { status: "completed", output: "done" })
+    expect(jobs.read(id).status).toBe("completed")
+    jobs.updateJob(id, { status: "running" })
+    expect(jobs.read(id).status).toBe("running")
+    jobs.updateJob(id, { status: "completed", output: "second" })
+    expect(jobs.read(id).status).toBe("completed")
+    expect(jobs.read(id).output).toBe("second")
+  })
 })

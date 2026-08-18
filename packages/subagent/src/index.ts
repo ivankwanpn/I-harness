@@ -22,6 +22,7 @@ import { createJobRegistry, type JobRegistry } from "./jobs.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
 import { createAgentTable, type AgentTable } from "./agent-table.ts"
 import { createSubagentTools } from "./tools.ts"
+import { createAgentRegistry } from "@i-harness/core-agent"
 import { restoreState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 
@@ -68,19 +69,14 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table = wired.table
     roles = wired.roles
   }
+  const agents = createAgentRegistry()
   const tools = createSubagentTools({
-    table,
-    jobs,
-    roles,
-    parentRegistry,
-    parentSession: opts.parentSession,
-    parentCtx: ctx,
-    parentModel: opts.parentModel,
-    providers: opts.providers,
-    exec: opts.exec,
+    table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
+    parentModel: opts.parentModel, providers: opts.providers, exec: opts.exec,
+    agents,
     // M8: when persistence has a known main-session id, spawns get durable
     // child-<uuid> sessions with the lineage header.
-    ...(opts.persist && opts.persist.parentSessionId
+    ...(opts.persist
       ? { childSessions: { coordinator: opts.persist.coordinator, parentSessionId: opts.persist.parentSessionId } }
       : {}),
   })

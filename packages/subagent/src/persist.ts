@@ -76,7 +76,7 @@ export function restoreState(
   // design spec M6). Such entries carry the explicit "interrupted by resume"
   // marker so callers can distinguish them from genuine runtime errors.
   for (const entry of snap.agentTable) {
-    const wasRunning = entry.status === "running"
+    const wasRunning = entry.status === "running" || entry.status === "waiting"
     const status: ChildStatus = wasRunning ? "error" : entry.status
     state.table.add(entry.path, {
       path: entry.path,

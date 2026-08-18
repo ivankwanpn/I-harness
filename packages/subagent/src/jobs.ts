@@ -27,7 +27,9 @@ export function createJobRegistry(): JobRegistry {
     },
     updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output">>) {
       const rec = records.get(id)
-      if (!rec || rec.terminal) return
+      if (!rec) return
+      if (rec.terminal && patch.status !== "running") return
+      if (patch.status === "running") rec.terminal = false
       if (patch.status !== undefined) rec.status = patch.status
       if (patch.output !== undefined) rec.output = patch.output
       if (rec.status !== "running") rec.terminal = true

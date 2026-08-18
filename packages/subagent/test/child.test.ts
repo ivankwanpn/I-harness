@@ -4,6 +4,7 @@ import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import { createMockClient } from "@i-harness/llm-mock"
+import { createAgentRegistry } from "@i-harness/core-agent"
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable } from "../src/agent-table.ts"
@@ -52,12 +53,13 @@ describe("spawnChild", () => {
       providers,
       jobs,
       table,
+      agents: createAgentRegistry(),
     })
     expect(path).toBe("root/helper")
     expect(jobId).toMatch(/^subagent-\d+$/)
     expect(table.get("root/helper")!.status).toBe("running")
     await new Promise((r) => setTimeout(r, 150))
-    expect(table.get("root/helper")!.status).toBe("completed")
+    expect(table.get("root/helper")!.status).toBe("waiting")
     expect(jobs.read(jobId).status).toBe("completed")
   }, 10_000)
 })
@@ -96,6 +98,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     // two parent turns so forkTurns("all") has seed content
     parentSession.events.push({ type: "turn/start" }, { type: "user/message", text: "a" }, { type: "assistant/message", text: "b" }, { type: "turn/end" })
     const mock = createMockClient([{ role: "assistant", text: "ok" }])
+    const agents = createAgentRegistry()
 
     const { path, sessionId } = await spawnChild({
       taskName: "helper",
@@ -109,6 +112,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       providers: createProviderRegistry(),
       jobs,
       table,
+      agents,
       childSessions: { coordinator, parentSessionId: "sess-main" },
     })
     expect(sessionId).toMatch(/^child-/)
@@ -127,6 +131,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const entry = table.get("root/helper")
     expect(entry?.sessionId).toBe(sessionId)
     expect(entry?.session.header).toMatchObject({ parentSession: "sess-main", origin: "subagent", delegationDepth: 1, seedLength: 4 })
+    expect(agents.get(sessionId!)).toBeDefined() // agent retained in the registry
   })
 
   it("without childSessions behaves exactly as today (anonymous session, no sessionId)", async () => {
@@ -142,6 +147,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       taskName: "h", message: "hi", parentPath: "root",
       parentRegistry, parentSession, parentCtx: ctx, role: roles.get("general")!,
       parentModel: mock, providers: createProviderRegistry(), jobs, table,
+      agents: createAgentRegistry(),
     })
     expect(sessionId).toBeUndefined()
     expect(path).toBe("root/h")

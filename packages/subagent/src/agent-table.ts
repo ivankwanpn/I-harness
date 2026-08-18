@@ -1,6 +1,6 @@
 import { createSession } from "@i-harness/core-session"
 
-export type ChildStatus = "running" | "completed" | "killed" | "error"
+export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error"
 export interface ChildAgentEntry {
   path: string
   status: ChildStatus
@@ -10,8 +10,11 @@ export interface ChildAgentEntry {
   error?: string
   mailbox: string[]
   jobId?: string
-  sessionId?: string
   unmount?: () => void
+  sessionId?: string
+  roleName?: string
+  followupChain?: Promise<void>
+  lastInboxSeq?: number
 }
 export interface AgentTable {
   entries(): Map<string, ChildAgentEntry>

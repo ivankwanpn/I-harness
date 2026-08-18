@@ -65,6 +65,18 @@ describe("subagent state snapshot", () => {
     restoreState(fresh, snap)
     expect(fresh.table.get("root/helper")?.sessionId).toBe("child-abc")
   })
+
+  it("restoreState maps waiting entries to error (interrupted by resume)", () => {
+    const fresh = makeState()
+    const snap: SubagentStateSnapshot = {
+      formatVersion: 1,
+      jobs: [],
+      agentTable: [{ path: "root/w", status: "waiting", mailbox: [] }],
+      roles: [],
+    }
+    restoreState(fresh, snap)
+    expect(fresh.table.get("root/w")?.status).toBe("error")
+  })
 })
 
 describe("persistent wrappers", () => {

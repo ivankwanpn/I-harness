@@ -3,6 +3,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
+import { createAgentRegistry } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createExecService } from "@i-harness/exec"
@@ -23,7 +24,7 @@ function setup() {
   const providers = createProviderRegistry()
   const exec = createExecService()
   const model = createMockClient([{ role: "assistant", text: "child done" }])
-  const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+  const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
   return { ctx, parentReg, session, jobs, table, roles, providers, model, exec, tools }
 }
 
@@ -38,7 +39,7 @@ describe("subagent tools", () => {
 
   it("spawn_agent returns a job id; list_agents shows it; wait_agent observes completion", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const list = all.find((t) => t.name === "list_agents")!
     const wait = all.find((t) => t.name === "wait_agent")!
@@ -53,7 +54,7 @@ describe("subagent tools", () => {
 
   it("spawn_agent with unknown agent_type errors", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     await expect(spawn.execute({ message: "x", task_name: "h", agent_type: "nope" }, {})).rejects.toThrow(/unknown role/i)
   })
@@ -62,7 +63,7 @@ describe("subagent tools", () => {
 describe("subagent control tools", () => {
   it("send_message queues into the child mailbox", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const send = all.find((t) => t.name === "send_message")!
     await spawn.execute({ message: "do it", task_name: "helper" }, {})
@@ -73,7 +74,7 @@ describe("subagent control tools", () => {
 
   it("close_agent aborts and removes the child", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const close = all.find((t) => t.name === "close_agent")!
     await spawn.execute({ message: "do it", task_name: "helper" }, {})
@@ -85,7 +86,7 @@ describe("subagent control tools", () => {
 
   it("interrupt_agent aborts the controller but keeps the agent", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const interrupt = all.find((t) => t.name === "interrupt_agent")!
     await spawn.execute({ message: "do it", task_name: "helper" }, {})
@@ -98,7 +99,7 @@ describe("subagent control tools", () => {
 
   it("resume_agent re-adds a fresh child entry", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const resume = all.find((t) => t.name === "resume_agent")!
     const out = await resume.execute({ target: "root/helper" }, {})
     expect((out as { resumed: boolean }).resumed).toBe(true)
@@ -116,7 +117,7 @@ describe("subagent control tools", () => {
       controller: new AbortController(),
       mailbox: [],
     })
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const send = all.find((t) => t.name === "send_message")!
     const out = await send.execute({ target: "root/helper", message: "ping" }, {})
     expect(out).toEqual({ queued: true })
@@ -136,7 +137,7 @@ describe("subagent control tools", () => {
       controller: new AbortController(),
       mailbox: [],
     })
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const follow = all.find((t) => t.name === "followup_task")!
     const out = await follow.execute({ target: "root/helper", message: "more" }, {})
     expect((out as { delivered: boolean }).delivered).toBe(true)
@@ -147,7 +148,7 @@ describe("subagent control tools", () => {
 
   it("resume_agent refuses to overwrite a running entry", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const resume = all.find((t) => t.name === "resume_agent")!
     await spawn.execute({ message: "do it", task_name: "helper" }, {})
@@ -158,7 +159,7 @@ describe("subagent control tools", () => {
 describe("job tools", () => {
   it("job_output reads a completed job; job_list enumerates it", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const output = all.find((t) => t.name === "job_output")!
     const list = all.find((t) => t.name === "job_list")!
@@ -174,7 +175,7 @@ describe("job tools", () => {
 
   it("job_kill cancels a running job", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const kill = all.find((t) => t.name === "job_kill")!
     const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})
@@ -187,7 +188,7 @@ describe("job tools", () => {
 describe("job tools bridge", () => {
   it("job_output reads an exec/bash background job via the exec bridge", async () => {
     const { exec, jobs, table, roles, parentReg, session, providers, model } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, providers, exec, agents: createAgentRegistry() })
     const output = all.find((t) => t.name === "job_output")!
     const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>console.log('bg done'), 100)"] })
     expect(jobId).toMatch(/^bash-\d+$/)
@@ -200,7 +201,7 @@ describe("job tools bridge", () => {
 
   it("job_list enumerates both subagent and bash jobs", async () => {
     const { exec, jobs, table, roles, parentReg, session, providers, model } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const list = all.find((t) => t.name === "job_list")!
     const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})
@@ -217,7 +218,7 @@ describe("job tools bridge", () => {
 
   it("job_kill cancels a bash job via the exec bridge", async () => {
     const { exec, jobs, table, roles, parentReg, session, providers, model } = setup()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, providers, exec, agents: createAgentRegistry() })
     const kill = all.find((t) => t.name === "job_kill")!
     const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
     const out = await kill.execute({ job_id: jobId }, {})
@@ -235,7 +236,7 @@ describe("job tools bridge", () => {
         yield { type: "end" }
       },
     }
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: slowModel, providers, exec })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: slowModel, providers, exec, agents: createAgentRegistry() })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const close = all.find((t) => t.name === "close_agent")!
     const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})

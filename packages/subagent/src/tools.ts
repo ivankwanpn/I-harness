@@ -6,6 +6,7 @@ import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderRegistry } from "@i-harness/provider"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
+import type { AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
@@ -21,6 +22,9 @@ export interface SubagentToolDeps {
   parentModel: ModelClient
   providers: ProviderRegistry
   exec: ExecService
+  // M9: live Agent instances retained for the child's session id, enabling
+  // followup re-drives (Task 3) without re-creating the agent.
+  agents: AgentRegistry
   // M8: when present, spawned children get durable child-<uuid> sessions with
   // the parent-session lineage header (P1).
   childSessions?: { coordinator: SessionCoordinator; parentSessionId: string }
@@ -57,6 +61,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         providers: deps.providers,
         jobs: deps.jobs,
         table: deps.table,
+        agents: deps.agents,
         forkTurns: turns,
         childSessions: deps.childSessions,
       })
