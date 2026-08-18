@@ -91,4 +91,53 @@ describe("cascade", () => {
     const out2 = await ctx.cascade("owned", 1, async () => "final2")
     expect(out2).toBe("final2")
   })
+
+  it("lets a parent-scope handler wrap a child-scope dispatch (ancestor visibility)", async () => {
+    const parentCtx = createContext()
+    const results: string[] = []
+    parentCtx.onCascade("ev", async (_input, next) => {
+      results.push("parent-pre")
+      const r = await next()
+      results.push("parent-post")
+      return r
+    })
+    const child = parentCtx.scope.mount()
+    const out = await child.cascade("ev", 1, async () => {
+      results.push("final")
+      return "out"
+    })
+    expect(results).toEqual(["parent-pre", "final", "parent-post"])
+    expect(out).toBe("out")
+  })
+
+  it("a child-scope handler runs INNER to a parent handler", async () => {
+    const parentCtx = createContext()
+    const results: string[] = []
+    parentCtx.onCascade("ev", async (_input, next) => {
+      results.push("parent-pre")
+      const r = await next()
+      results.push("parent-post")
+      return r
+    })
+    const child = parentCtx.scope.mount()
+    child.onCascade("ev", async (_input, next) => {
+      results.push("child-pre")
+      const r = await next()
+      results.push("child-post")
+      return r
+    })
+    const out = await child.cascade("ev", 1, async () => {
+      results.push("final")
+      return "out"
+    })
+    expect(results).toEqual(["parent-pre", "child-pre", "final", "child-post", "parent-post"])
+    expect(out).toBe("out")
+  })
+
+  it("runs final directly for a child dispatch with no handlers anywhere", async () => {
+    const parentCtx = createContext()
+    const child = parentCtx.scope.mount()
+    const out = await child.cascade("ev", { v: 1 }, async () => "direct")
+    expect(out).toBe("direct")
+  })
 })

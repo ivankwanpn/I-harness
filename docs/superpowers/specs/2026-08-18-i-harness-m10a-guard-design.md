@@ -118,8 +118,14 @@ onCascade("tools/execute", async (dispatch, next) => {
     const result = await next()
     // OUR timer fired (and not an upstream cancel) → the tool saw the abort and
     // reached quiescence; replace whatever it returned with the structured result.
-    if (timedOut) return { ...result, output: { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT } }
+    if (timedOut) return { ...result, error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT }
     return result
+  } catch (err) {
+    // A deadline tool that honors the abort by REJECTING must still surface a
+    // structured TOOL_TIMEOUT when our timer fired; otherwise the rejection
+    // aborts the whole agent run with no marker.
+    if (timedOut) return { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT }
+    throw err
   } finally {
     clearTimeout(timer)
     dispatch.exec.abortSignal = upstream           // restore for post-execute
@@ -127,7 +133,7 @@ onCascade("tools/execute", async (dispatch, next) => {
 })
 ```
 
-The substituted result carries `code: TOOL_TIMEOUT` (a stable model-facing + machine-readable marker). The plugin is mounted ONLY when the host wants timeout enforcement (opt-in). A tool honoring the signal settles promptly after the abort; a hostile tool that ignores it hangs (cooperative contract — documented).
+The substituted result carries `code: TOOL_TIMEOUT` (a stable model-facing + machine-readable marker). **Marker placement (execution ruling):** error/code sit at the TOP level of the substituted raw value (the spread preserves the tool's other fields); the registry wraps the cascade value in `{ name, output }`, so the marker reads at `tool/result.output.code` — NOT `.output.output.code` (the initial `output:` nesting above would bury it one level deeper). The plugin is mounted ONLY when the host wants timeout enforcement (opt-in). A tool honoring the signal settles promptly after the abort; a hostile tool that ignores it hangs (cooperative contract — documented).
 
 ## §6 exec + shell signal threading
 

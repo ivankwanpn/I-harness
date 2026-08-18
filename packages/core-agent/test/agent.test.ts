@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
-import { createSession } from "@i-harness/core-session"
+import { createSession, append } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgent, createAgentRegistry, type Agent } from "../src/index.ts"
@@ -160,6 +160,31 @@ describe("agent/post-tool observation", () => {
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
     const result = await agent.run("read a.txt")
     expect(result.finalText).toBe("done")
+  })
+
+  it("a listener-appended reminder lands AFTER the tool/result (spec §4 ordering invariant)", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    ctx.on("agent/post-tool", (p) => {
+      const session = (p as { session: ReturnType<typeof createSession> }).session
+      append(session, { type: "user/message", text: "reminder" })
+    })
+    deps.model = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
+      { role: "assistant", text: "done" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    await agent.run("read a.txt")
+
+    const events = deps.session.events
+    const resultIndex = events.findIndex((e) => e.type === "tool/result")
+    const reminderIndex = events.findIndex(
+      (e) => e.type === "user/message" && (e as { text: string }).text === "reminder",
+    )
+    // the reminder must exist AND be appended after the tool result
+    expect(resultIndex).toBeGreaterThanOrEqual(0)
+    expect(reminderIndex).toBeGreaterThanOrEqual(0)
+    expect(resultIndex).toBeLessThan(reminderIndex)
   })
 })
 
