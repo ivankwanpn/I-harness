@@ -211,4 +211,30 @@ describe("session coordinator lineage (M8)", () => {
     const { session } = await coordinator.load("child-abc")
     expect(session.events.map((e) => e.type)).toContain("subagent/inbox")
   })
+
+  it("load tolerates compaction events (known types), returned intact", async () => {
+    const backend = fakeBackend()
+    const coordinator = createSessionCoordinator(backend)
+    await coordinator.create({ sessionId: "sess-compacted" })
+    await coordinator.append("sess-compacted", [
+      { type: "turn/start" },
+      { type: "user/message", text: "old work" },
+      { type: "compaction/start" },
+      { type: "compaction/summary", text: "SUMMARY", shadowedSeqs: [1] },
+      { type: "compaction/end" },
+      { type: "turn/end" },
+    ])
+    const { session } = await coordinator.load("sess-compacted")
+    expect(session.events.map((e) => e.type)).toEqual([
+      "turn/start",
+      "user/message",
+      "compaction/start",
+      "compaction/summary",
+      "compaction/end",
+      "turn/end",
+    ])
+    const summary = session.events.find((e) => e.type === "compaction/summary") as { text: string; shadowedSeqs: number[] }
+    expect(summary.text).toBe("SUMMARY")
+    expect(summary.shadowedSeqs).toEqual([1])
+  })
 })
