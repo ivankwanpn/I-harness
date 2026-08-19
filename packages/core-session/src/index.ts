@@ -101,6 +101,25 @@ export function deriveMessages(session: Session): LLMMessage[] {
   }
 }
 
+// Canonical event→searchable-text normalizer for the session-query FTS index
+// (M10b). Control events and assistant/chunk (streaming noise duplicating the
+// final assistant/message) contribute no text.
+export function deriveSearchText(ev: SessionEvent): string {
+  switch (ev.type) {
+    case "user/message":
+    case "assistant/message":
+      return ev.text
+    case "tool/call":
+      return JSON.stringify(ev.args)
+    case "tool/result":
+      return JSON.stringify(ev.output)
+    case "subagent/inbox":
+      return ev.message
+    default:
+      return ""
+  }
+}
+
 export function toJSONL(session: Session): string {
   const lines: string[] = [JSON.stringify({ formatVersion: session.formatVersion })]
   for (const ev of session.events) lines.push(JSON.stringify(ev))

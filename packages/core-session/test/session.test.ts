@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages, toJSONL, fromJSONL, assertVersion } from "../src/index.ts"
+import { deriveSearchText } from "../src/index.ts"
 import type { SessionEvent } from "../src/index.ts"
 
 describe("session log", () => {
@@ -159,6 +160,26 @@ describe("session log", () => {
       { role: "tool", toolCallId: "call_2", content: '{"ok":true}' },
       { role: "assistant", content: "done" },
     ])
+  })
+})
+
+describe("deriveSearchText", () => {
+  it("returns the text for user/message and assistant/message", () => {
+    expect(deriveSearchText({ type: "user/message", text: "hello world" })).toBe("hello world")
+    expect(deriveSearchText({ type: "assistant/message", text: "reply text" })).toBe("reply text")
+  })
+  it("returns JSON for tool/call args and tool/result output", () => {
+    expect(deriveSearchText({ type: "tool/call", callId: "c", name: "bash", args: { command: "echo hi" } })).toBe(JSON.stringify({ command: "echo hi" }))
+    expect(deriveSearchText({ type: "tool/result", callId: "c", name: "bash", output: { stdout: "hi" } })).toBe(JSON.stringify({ stdout: "hi" }))
+  })
+  it("returns the message for subagent/inbox", () => {
+    expect(deriveSearchText({ type: "subagent/inbox", messageId: "m", message: "ping" })).toBe("ping")
+  })
+  it("returns empty string for control and chunk events", () => {
+    expect(deriveSearchText({ type: "turn/start" })).toBe("")
+    expect(deriveSearchText({ type: "step/end" })).toBe("")
+    expect(deriveSearchText({ type: "assistant/chunk", text: "partial" })).toBe("")
+    expect(deriveSearchText({ type: "assistant/message", text: "x", seq: 1 })).toBe("x") // seq is irrelevant
   })
 })
 
