@@ -13,6 +13,7 @@ import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSqliteBackend, closeSqliteBackends } from "@i-harness/session-persistence-sqlite"
+import { createSessionQuery, closeSessionQueries } from "@i-harness/session-query"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 
 // Poll a read until it returns a defined value (bounded). The subagent
@@ -157,6 +158,78 @@ describe("headless CLI (M2)", () => {
       ],
     })
     expect(result.exitCode).toBe(0)
+  })
+  describe("headless CLI M10b session-query tools", () => {
+    it("session_search finds previously written session content", async () => {
+      const dbPath = join(dir, "query.db") // dir is the per-test temp workspace already used in this file
+      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      await coordinator.create({ sessionId: "main" })
+      await coordinator.append("main", [{ type: "user/message", text: "the purple unicorn fixed the parser" }])
+      const sessionQuery = createSessionQuery(dbPath)
+      try {
+        const result = await runHeadless("find it", {
+          workspace: dir,
+          approveAll: true,
+          coordinator,
+          sessionQuery,
+          sessionId: "main",
+          mockScript: [
+            { role: "assistant", toolCalls: [{ name: "session_search", args: { query: "purple unicorn" } }] },
+            { role: "assistant", text: "ok" },
+          ],
+        })
+        expect(result.exitCode).toBe(0)
+        const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { hits: { sessionId: string; snippet: string }[] } } | undefined
+        expect(resultEvent).toBeDefined()
+        const hits = resultEvent!.output.hits
+        expect(hits.length).toBe(1)
+        expect(hits[0]!.sessionId).toBe("main")
+        expect(hits[0]!.snippet).toContain("unicorn")
+      } finally {
+        closeSessionQueries()
+        closeSqliteBackends()
+      }
+    })
+
+    it("lineage shows the parent/child structure", async () => {
+      const dbPath = join(dir, "query.db")
+      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      await coordinator.create({ sessionId: "parent" })
+      await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })
+      const sessionQuery = createSessionQuery(dbPath)
+      try {
+        const result = await runHeadless("lineage", {
+          workspace: dir,
+          approveAll: true,
+          coordinator,
+          sessionQuery,
+          sessionId: "parent",
+          mockScript: [
+            { role: "assistant", toolCalls: [{ name: "lineage", args: { session_id: "parent", direction: "children" } }] },
+            { role: "assistant", text: "ok" },
+          ],
+        })
+        expect(result.exitCode).toBe(0)
+        const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { nodes: { sessionId: string; parentSession?: string }[] } } | undefined
+        expect(resultEvent).toBeDefined()
+        const nodes = resultEvent!.output.nodes
+        expect(nodes.map((n) => n.sessionId)).toEqual(["child"])
+        expect(nodes[0]!.parentSession).toBe("parent")
+      } finally {
+        closeSessionQueries()
+        closeSqliteBackends()
+      }
+    })
+
+    it("tools are not mounted when no sessionQuery is provided", async () => {
+      const result = await runHeadless("no query", {
+        workspace: dir,
+        approveAll: true,
+        mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(result.exitCode).toBe(0)
+      // the tool schemas never surface to the model, so a mock call to session_search is an unknown tool
+    })
   })
 })
 
