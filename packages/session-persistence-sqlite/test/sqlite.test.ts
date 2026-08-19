@@ -220,6 +220,28 @@ describe("append/repair FTS maintenance", () => {
     }
   })
 
+  it("rolls back events and FTS rows after a mid-batch serialization failure", async () => {
+    const { backend, path } = makeSqliteEnv()
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: new Date().toISOString() })
+    const bad: Record<string, unknown> = {}
+    bad.self = bad
+
+    await expect(backend.append("s1", [
+      { type: "user/message", text: "first event" },
+      { type: "tool/call", callId: "bad", name: "bad", args: bad },
+    ])).rejects.toThrow()
+
+    const db = openDatabase(path)
+    try {
+      const events = (db.prepare("SELECT COUNT(*) AS c FROM events WHERE session_id = ?").get("s1") as { c: number }).c
+      const fts = (db.prepare("SELECT COUNT(*) AS c FROM events_fts WHERE session_id = ?").get("s1") as { c: number }).c
+      expect(events).toBe(0)
+      expect(fts).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
   it("repair re-syncs FTS rows for the session (no duplicates, content correct)", async () => {
     const { backend, path } = makeSqliteEnv()
     await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: new Date().toISOString() })

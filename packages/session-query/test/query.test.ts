@@ -37,11 +37,16 @@ describe("session-query", () => {
     try {
       await seed(coordinator)
       const hits = await query.search("unicorn")
-      expect(hits.length).toBeGreaterThanOrEqual(2)
+      expect(hits.length).toBeGreaterThan(1)
       expect(hits[0]!.snippet.toLowerCase()).toContain("unicorn")
       expect(hits.every((h) => h.sessionId === "parent" || h.sessionId === "grand")).toBe(true)
+      for (let i = 1; i < hits.length; i += 1) {
+        expect(hits[i - 1]!.bm25).toBeLessThanOrEqual(hits[i]!.bm25)
+      }
       const limited = await query.search("unicorn", { limit: 1 })
       expect(limited.length).toBe(1)
+      const lowerClamped = await query.search("unicorn", { limit: 0 })
+      expect(lowerClamped.length).toBeLessThanOrEqual(1)
     } finally {
       cleanup(dir)
     }
@@ -60,6 +65,19 @@ describe("session-query", () => {
     }
   })
 
+  it("matches embedded quotes as literal text", async () => {
+    const { dir, coordinator, query } = makeEnv()
+    try {
+      await seed(coordinator)
+      await coordinator.append("parent", [{ type: "user/message", text: 'say "hello" now' }])
+      const hits = await query.search('say "hello" now')
+      expect(hits).toHaveLength(1)
+      expect(hits[0]).toMatchObject({ sessionId: "parent", seq: 2, eventType: "user/message" })
+    } finally {
+      cleanup(dir)
+    }
+  })
+
   it("filters by sessionId and subtreeOf", async () => {
     const { dir, coordinator, query } = makeEnv()
     try {
@@ -69,6 +87,9 @@ describe("session-query", () => {
       expect(single.every((h) => h.sessionId === "parent")).toBe(true)
       const subtree = await query.search("unicorn", { subtreeOf: "child" }) // child + grand, but only grand matches "unicorn"
       expect(subtree.map((h) => h.sessionId)).toEqual(["grand"])
+      const combined = await query.search("unicorn", { sessionId: "parent", subtreeOf: "child" })
+      expect(combined).toHaveLength(3)
+      expect(new Set(combined.map((h) => h.sessionId))).toEqual(new Set(["parent", "grand"]))
     } finally {
       cleanup(dir)
     }
@@ -111,6 +132,7 @@ describe("session-query", () => {
       await expect(query.lineage("nope", { direction: "children" })).rejects.toThrow(/unknown session/)
       await expect(query.lineage("parent", { direction: "children", depth: 0 })).rejects.toThrow(/invalid depth/)
       await expect(query.lineage("parent", { direction: "ancestors", depth: -1 })).rejects.toThrow(/invalid depth/)
+      await expect(query.search("x", { limit: 1.5 })).rejects.toThrow(/invalid limit/)
       // capability gate: a non-session DB lacks events_fts
       const bareDir = mkdtempSync(join(tmpdir(), "m10b-bare-"))
       const barePath = join(bareDir, "x.db")
@@ -119,10 +141,23 @@ describe("session-query", () => {
       const bareQuery = createSessionQuery(barePath)
       try {
         await expect(bareQuery.search("x")).rejects.toThrow(/events_fts/)
+        await expect(bareQuery.lineage("x", { direction: "children" })).rejects.toThrow(/events_fts/)
       } finally {
         closeSessionQueries()
         rmSync(bareDir, { recursive: true, force: true })
       }
+    } finally {
+      cleanup(dir)
+    }
+  })
+
+  it("lineage ancestors rejects cyclic parent metadata", async () => {
+    const { dir, coordinator, query } = makeEnv()
+    try {
+      await coordinator.create({ sessionId: "a", parentSession: "a" })
+      await expect(query.lineage("a", { direction: "ancestors" })).rejects.toThrow(
+        /cycle detected in session lineage at: a/,
+      )
     } finally {
       cleanup(dir)
     }

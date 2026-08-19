@@ -110,9 +110,9 @@ export function deriveSearchText(ev: SessionEvent): string {
     case "assistant/message":
       return ev.text
     case "tool/call":
-      return JSON.stringify(ev.args)
+      return JSON.stringify(ev.args) ?? ""
     case "tool/result":
-      return JSON.stringify(ev.output)
+      return JSON.stringify(ev.output) ?? ""
     case "subagent/inbox":
       return ev.message
     default:

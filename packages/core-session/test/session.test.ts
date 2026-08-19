@@ -172,6 +172,10 @@ describe("deriveSearchText", () => {
     expect(deriveSearchText({ type: "tool/call", callId: "c", name: "bash", args: { command: "echo hi" } })).toBe(JSON.stringify({ command: "echo hi" }))
     expect(deriveSearchText({ type: "tool/result", callId: "c", name: "bash", output: { stdout: "hi" } })).toBe(JSON.stringify({ stdout: "hi" }))
   })
+  it("returns empty text for undefined tool/call args and tool/result output", () => {
+    expect(deriveSearchText({ type: "tool/call", callId: "c", name: "n", args: undefined })).toBe("")
+    expect(deriveSearchText({ type: "tool/result", callId: "c", name: "n", output: undefined })).toBe("")
+  })
   it("returns the message for subagent/inbox", () => {
     expect(deriveSearchText({ type: "subagent/inbox", messageId: "m", message: "ping" })).toBe("ping")
   })
