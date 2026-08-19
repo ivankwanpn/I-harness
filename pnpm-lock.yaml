@@ -267,6 +267,22 @@ importers:
         specifier: workspace:*
         version: link:../session-persistence
 
+  packages/session-query:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+    devDependencies:
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+      '@i-harness/session-persistence-sqlite':
+        specifier: workspace:*
+        version: link:../session-persistence-sqlite
+
   packages/shell:
     dependencies:
       '@i-harness/core-plugin':
