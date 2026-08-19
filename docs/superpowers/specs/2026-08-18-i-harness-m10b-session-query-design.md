@@ -238,13 +238,15 @@ Two direct, read-only tools:
 - **`session_search`**
   - inputSchema: `{ query: string (required), session_id?: string,
     subtree_of?: string, limit?: integer }`
-  - output: JSON array of hits `{ sessionId, seq, eventType, time, snippet,
-    bm25 }`
+  - output: `{ hits: SearchHit[] }` — a JSON object wrapping the hits array
+    (each hit `{ sessionId, seq, eventType, time, snippet, bm25 }`). The
+    wrapper shape is canonical (consistent with other tools returning object
+    results); the model reads `.hits`.
 - **`lineage`**
   - inputSchema: `{ session_id: string (required), direction:
     "ancestors"|"descendants"|"children" (default "children"),
     depth?: integer }`
-  - output: JSON array of `LineageNode`
+  - output: `{ nodes: LineageNode[] }` — a JSON object wrapping the nodes array.
 
 Both declare `isReadOnly: true` (approval treats them as safe; no `getArgv`
 needed). Tool errors (unknown session, invalid depth) throw → CLI exitCode 1,
