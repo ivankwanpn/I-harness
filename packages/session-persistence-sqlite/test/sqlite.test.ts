@@ -13,6 +13,11 @@ let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "sqlite-schema-")) })
 afterEach(() => { closeSqliteBackends(); rmSync(dir, { recursive: true, force: true }) })
 
+function makeSqliteEnv(): { backend: ReturnType<typeof createSqliteBackend>; dir: string; path: string } {
+  const path = join(dir, "sessions.db")
+  return { backend: createSqliteBackend(path), dir, path }
+}
+
 describe("sqlite schema", () => {
   it("opens a fresh database at SCHEMA_VERSION with all tables", () => {
     const db = openDatabase(join(dir, "sessions.db"))
@@ -83,8 +88,7 @@ describe("sqlite schema", () => {
 
 describe("schema v2 events_fts", () => {
   it("upgrades a v1 database and backfills existing events into events_fts", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "m10b-mig-"))
-    const path = join(dir, "s.db")
+    const path = join(dir, "m10b-mig.db")
     // Build a v1 database by hand (the pre-v2 DDL, no events_fts).
     {
       const db = new DatabaseSync(path)
@@ -117,8 +121,7 @@ describe("schema v2 events_fts", () => {
   })
 
   it("creates events_fts on a fresh database", () => {
-    const dir = mkdtempSync(join(tmpdir(), "m10b-fresh-"))
-    const path = join(dir, "s.db")
+    const path = join(dir, "m10b-fresh.db")
     const db = openDatabase(path)
     try {
       const { user_version: v } = db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -186,6 +189,49 @@ describe("sqlite backend", () => {
     expect(meta).toMatchObject({ parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0 })
     const { meta: repairedMeta } = await backend.repair("child-abc")
     expect(repairedMeta).toMatchObject({ parentSession: "sess-p", seedLength: 3 })
+  })
+})
+
+describe("append/repair FTS maintenance", () => {
+  it("append writes FTS rows in the same transaction (immediately searchable)", async () => {
+    const { backend, path } = makeSqliteEnv()
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: new Date().toISOString() })
+    await backend.append("s1", [{ type: "user/message", text: "the green dragon flew" }])
+    const db = openDatabase(path)
+    try {
+      const hits = db.prepare("SELECT session_id, seq FROM events_fts WHERE events_fts MATCH ?").all('"dragon"') as { session_id: string; seq: number }[]
+      expect(hits).toEqual([{ session_id: "s1", seq: 0 }])
+    } finally {
+      db.close()
+    }
+  })
+
+  it("a rolled-back append leaves no FTS rows", async () => {
+    const { backend, path } = makeSqliteEnv()
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: new Date().toISOString() })
+    // trigger a failing append: appending to an unknown session throws before BEGIN
+    await expect(backend.append("nope", [{ type: "user/message", text: "x" }])).rejects.toThrow()
+    const db = openDatabase(path)
+    try {
+      const n = (db.prepare("SELECT COUNT(*) AS c FROM events_fts").get() as { c: number }).c
+      expect(n).toBe(0)
+    } finally {
+      db.close()
+    }
+  })
+
+  it("repair re-syncs FTS rows for the session (no duplicates, content correct)", async () => {
+    const { backend, path } = makeSqliteEnv()
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: new Date().toISOString() })
+    await backend.append("s1", [{ type: "user/message", text: "alpha beta" }])
+    await backend.repair("s1") // repair even with no missing closers re-syncs FTS
+    const db = openDatabase(path)
+    try {
+      const rows = db.prepare("SELECT session_id, seq, text FROM events_fts WHERE session_id = ?").all("s1") as { session_id: string; seq: number; text: string }[]
+      expect(rows).toEqual([{ session_id: "s1", seq: 0, text: "alpha beta" }])
+    } finally {
+      db.close()
+    }
   })
 })
 
