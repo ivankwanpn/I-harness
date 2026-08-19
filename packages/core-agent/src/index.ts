@@ -1,3 +1,4 @@
+import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append, deriveMessages } from "@i-harness/core-session"
@@ -9,6 +10,7 @@ export interface AgentConfig {
   systemPrompt: string
   maxTurns?: number
   signal?: AbortSignal
+  compact?: CompactionConfig // M11: enable context-pressure auto-compaction (requires contextWindow)
   // NOTE: `model?: string` from the task brief collides with `AgentDeps.model`
   // (the ModelClient) under `AgentDeps & AgentConfig`, so the string selector
   // is dropped for M1 — the ModelClient IS the model configuration and the
@@ -30,10 +32,18 @@ export interface AgentResult {
 export interface Agent {
   run(task: string, signal?: AbortSignal): Promise<AgentResult>
   followup(message: string, signal?: AbortSignal): Promise<AgentResult>
+  // M11: explicit manual compaction. Optional because a registry may hold
+  // agents that were never configured with a compact seam (no engine). With no
+  // compact config, `createAgent` still returns a `compact` that no-ops.
+  compact?(): Promise<CompactionResult>
 }
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
   const maxTurns = deps.maxTurns ?? 20
+  // M11: optional compaction seam. No `compact` config → no engine → the agent
+  // behaves byte-identically to before this milestone.
+  const compactor = deps.compact ? createCompactionEngine({ model: deps.model, config: deps.compact }) : undefined
+  const compactEnabled = deps.compact?.auto ?? true
   // `steps`/`callSeq`/`reasoning` are shared across the agent's lifetime so a
   // followup continues the same step budget, call-id sequence and reasoning
   // trail as the original run.
@@ -54,6 +64,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // the configured maximum (default 20).
       if (steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
       append(deps.session, { type: "step/start" })
+
+      // M11 compaction: pressure check at the step boundary, before the model sees
+      // the derived surface. Compaction only ever runs between steps.
+      if (compactor && compactEnabled) await compactor.maybeCompact(deps.session)
 
       await ctx.emit("agent/pre-step", { task: message, session: deps.session })
 
@@ -127,6 +141,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   return {
     run: (task, signal) => runTurn(task, signal),
     followup: (message, signal) => runTurn(message, signal),
+    compact: async () => (compactor ? compactor.compact(deps.session) : { compacted: false, shadowedSeqs: [] }),
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
-import { createSession, append } from "@i-harness/core-session"
+import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgent, createAgentRegistry, type Agent } from "../src/index.ts"
@@ -307,5 +307,54 @@ describe("agent followup", () => {
     registry.remove("s1")
     expect(registry.get("s1")).toBeUndefined()
     expect(registry.entries().size).toBe(0)
+  })
+})
+
+describe("agent compaction seam", () => {
+  it("auto-compacts at a step boundary when under pressure", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "summary and reply ".repeat(40) }
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, {
+      ...deps, systemPrompt: "p",
+      compact: { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0 },
+    })
+    const result = await agent.run("z".repeat(300)) // ~75 tokens ≥ 50 threshold → compacts at step 1's boundary
+    expect(deps.session.events.some((e) => e.type === "compaction/summary")).toBe(true)
+    const summary = deps.session.events.find((e) => e.type === "compaction/summary") as { text: string }
+    const msgs = deriveMessages(deps.session)
+    expect(msgs[0]).toEqual({ role: "user", content: summary.text })
+    expect(result.finalText).toContain("summary and reply")
+  })
+
+  it("no compact config → no engine, identical behavior", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = { async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    await agent.run("task")
+    expect(deps.session.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+  })
+
+  it("explicit agent.compact() appends the compaction events", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = { async *stream() { yield { type: "text/chunk", text: "reply ".repeat(20) }; yield { type: "end" } } }
+    const agent = createAgent(ctx, {
+      ...deps, systemPrompt: "p",
+      compact: { contextWindow: 100000, retainTokens: 0 }, // window huge so auto never fires
+    })
+    await agent.run("task")
+    // `compact?` is optional on the Agent interface (registry fakes may lack
+    // it), but createAgent always returns one — assert it exists for the call.
+    const res = await agent.compact!()
+    expect(res.compacted).toBe(true)
+    expect(res.shadowedSeqs.length).toBeGreaterThan(0)
+    expect(deps.session.events.slice(-3).map((e) => e.type)).toEqual(["compaction/start", "compaction/summary", "compaction/end"])
   })
 })
