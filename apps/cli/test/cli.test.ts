@@ -227,9 +227,11 @@ describe("headless CLI (M2)", () => {
         approveAll: true,
         mockScript: [
           { role: "assistant", toolCalls: [{ name: "session_search", args: { query: "x" } }] },
+          { role: "assistant", text: "ok" },
         ],
       })
       expect(result.exitCode).not.toBe(0)
+      expect(result.error).toContain("unknown tool: session_search")
       // Without sessionQuery, session_search is unknown because the tool is not mounted.
     })
   })
