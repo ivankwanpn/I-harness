@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { DatabaseSync } from "node:sqlite"
-import type { SessionEvent } from "@i-harness/core-session"
+import { deriveSearchText, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { openDatabase } from "./schema.ts"
 
@@ -85,11 +85,16 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       const insert = db.prepare(
         `INSERT INTO events (session_id, seq, type, time, data, ignorable) VALUES (?, ?, ?, ?, ?, ?)`,
       )
+      const insertFts = db.prepare(
+        `INSERT INTO events_fts (session_id, seq, event_type, time, text) VALUES (?, ?, ?, ?, ?)`,
+      )
       db.exec("BEGIN")
       try {
         let seq = db.prepare("SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM events WHERE session_id = ?").get(sessionId) as { next: number }
         for (const ev of events) {
-          insert.run(sessionId, seq.next, ev.type, Date.now(), JSON.stringify(ev), (ev as { ignorable?: true }).ignorable === true ? 1 : null)
+          const time = Date.now()
+          insert.run(sessionId, seq.next, ev.type, time, JSON.stringify(ev), (ev as { ignorable?: true }).ignorable === true ? 1 : null)
+          insertFts.run(sessionId, seq.next, ev.type, time, deriveSearchText(ev))
           seq.next += 1
         }
         db.prepare("UPDATE sessions SET revision = revision + 1 WHERE id = ?").run(sessionId)
@@ -133,6 +138,22 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
           db.exec("ROLLBACK")
           throw err
         }
+      }
+      // FTS re-sync (idempotent): rebuild this session's index rows from events.
+      const evRows = db.prepare("SELECT seq, type, time, data FROM events WHERE session_id = ? ORDER BY seq").all(sessionId) as unknown as
+        { seq: number; type: string; time: number; data: string }[]
+      db.exec("BEGIN")
+      try {
+        db.prepare("DELETE FROM events_fts WHERE session_id = ?").run(sessionId)
+        const insertFts = db.prepare("INSERT INTO events_fts (session_id, seq, event_type, time, text) VALUES (?, ?, ?, ?, ?)")
+        for (const r of evRows) {
+          const ev = JSON.parse(r.data) as SessionEvent
+          insertFts.run(sessionId, r.seq, r.type, r.time, deriveSearchText(ev))
+        }
+        db.exec("COMMIT")
+      } catch (err) {
+        db.exec("ROLLBACK")
+        throw err
       }
       return { version: row.version, events: [...events, ...closers], meta: lineageMeta(row) }
     },
