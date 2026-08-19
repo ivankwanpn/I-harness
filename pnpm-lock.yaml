@@ -93,6 +93,15 @@ importers:
         specifier: ^1.18.0
         version: 1.18.0
 
+  packages/compaction:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+
   packages/core-agent:
     dependencies:
       '@i-harness/core-plugin':
@@ -272,9 +281,6 @@ importers:
 
   packages/session-query:
     dependencies:
-      '@i-harness/core-plugin':
-        specifier: workspace:*
-        version: link:../core-plugin
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
@@ -282,6 +288,9 @@ importers:
         specifier: workspace:*
         version: link:../core-tools
     devDependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
