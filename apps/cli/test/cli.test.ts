@@ -15,6 +15,8 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSqliteBackend, closeSqliteBackends } from "@i-harness/session-persistence-sqlite"
 import { createSessionQuery, closeSessionQueries } from "@i-harness/session-query"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
+import type { CompactionConfig } from "@i-harness/compaction"
+import { deriveMessages } from "@i-harness/core-session"
 
 // Poll a read until it returns a defined value (bounded). The subagent
 // persistence wrappers save fire-and-forget (M6), so document reads need to
@@ -233,6 +235,37 @@ describe("headless CLI (M2)", () => {
       expect(result.exitCode).not.toBe(0)
       expect(result.error).toContain("unknown tool: session_search")
       // Without sessionQuery, session_search is unknown because the tool is not mounted.
+    })
+  })
+
+  describe("headless CLI M11 compaction", () => {
+    it("auto-compacts a long session and completes normally", async () => {
+      const compact: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 200 }
+      // Inline structural model: every stream() call (agent turn OR the shared
+      // summarizer call) yields the same long text, so the e2e is deterministic
+      // (a script-based createMockClient would be consumed by the summarizer).
+      const model: ModelClient = {
+        async *stream() {
+          yield { type: "text/chunk", text: "compacted work summary line ".repeat(20) }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("z".repeat(300), { // ~75 tokens ≥ 50 threshold at step 1
+        workspace: dir, approveAll: true, compact, model,
+      })
+      expect(result.exitCode).toBe(0)
+      const summary = result.session!.events.find((e) => e.type === "compaction/summary")
+      expect(summary).toBeDefined()
+      // the summary is model-visible in the final derived surface
+      const msgs = deriveMessages(result.session!)
+      expect(msgs[0]).toEqual({ role: "user", content: (summary as { text: string }).text })
+      expect(result.finalText).toContain("compacted work summary line")
+    })
+
+    it("no compact config → no compaction events, behavior unchanged", async () => {
+      const result = await runHeadless("plain", { workspace: dir, approveAll: true, mockScript: [{ role: "assistant", text: "ok" }] })
+      expect(result.exitCode).toBe(0)
+      expect(result.session!.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
     })
   })
 })

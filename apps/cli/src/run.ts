@@ -2,6 +2,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, type Session } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "@i-harness/core-agent"
+import type { CompactionConfig } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -27,6 +28,7 @@ export interface HeadlessOptions {
   resumeSessionId?: string // resume: load this id, restore history, continue appending
   coordinator?: SessionCoordinator
   sessionQuery?: SessionQuery // M10b: host-provided query surface; when present the session_search + lineage tools are mounted
+  compact?: CompactionConfig // M11: enable context-pressure auto-compaction
 }
 
 export interface HeadlessResult {
@@ -170,7 +172,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         }
       }
     }
-    const agent = createAgent(ctx, { session, tools, model, systemPrompt: "You are a coding agent." })
+    const agent = createAgent(ctx, {
+      session, tools, model,
+      systemPrompt: "You are a coding agent.",
+      ...(opts.compact ? { compact: opts.compact } : {}),
+    })
     const result = await agent.run(task)
     if (opts.coordinator) {
       // flush first: this is the durability-failure signal (rejects on a durable
