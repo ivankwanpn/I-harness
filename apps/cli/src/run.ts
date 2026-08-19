@@ -13,6 +13,7 @@ import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
+import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createProviderRegistry } from "@i-harness/provider"
 
@@ -25,6 +26,7 @@ export interface HeadlessOptions {
   sessionId?: string // new session: persist under this id
   resumeSessionId?: string // resume: load this id, restore history, continue appending
   coordinator?: SessionCoordinator
+  sessionQuery?: SessionQuery // M10b: host-provided query surface; when present the session_search + lineage tools are mounted
 }
 
 export interface HeadlessResult {
@@ -81,6 +83,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // fs-search glob/grep (replaces the deferred grep stub below)
   const execService = ctx.services.get<import("@i-harness/exec").ExecService>("exec/service")
   for (const tool of createFsSearchTools({ exec: execService })) tools.register(tool)
+
+  // M10b: session-query tools (sqlite-only, read-only). No sessionQuery → not
+  // mounted (capability-gated, behavior unchanged).
+  if (opts.sessionQuery) {
+    for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
+  }
 
   const model = opts.model ?? createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
 
