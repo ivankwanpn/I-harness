@@ -193,7 +193,11 @@ same projection `deriveMessages` would produce, token-estimated).
   deps.compact!.auto !== false) await engine.maybeCompact(deps.session)`.
   Compaction only ever runs at a step boundary — no mid-step interleaving.
 - `Agent` interface gains `compact(): Promise<CompactionResult>` (explicit
-  manual compaction, dsh `command-compact` counterpart).
+  manual compaction, dsh `command-compact` counterpart). Declared OPTIONAL
+  (`compact?()`) in the interface so existing `Agent` implementers (e.g.
+  subagent-package fakes) don't break; `createAgent` always returns the method
+  (a no-op `{ compacted: false, shadowedSeqs: [] }` without a config), so the
+  runtime contract is unconditional.
 - `assertMessagesFromLog` still holds: compaction appends events to the log and
   `deriveMessages` derives from the log, so the invariant is preserved.
 - No `compact` config → `engine` undefined → byte-identical behavior to today.
