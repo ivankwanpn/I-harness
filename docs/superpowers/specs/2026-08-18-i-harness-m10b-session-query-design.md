@@ -186,7 +186,9 @@ Semantics:
   substring around the first hit is acceptable. ~160 chars.
 - **Filters**: `sessionId` → `session_id IN (?)`. `subtreeOf` → compute the
   subtree session ids via the lineage descendants query (§3.3), then
-  `session_id IN (...)`. Empty subtree → `[]`.
+  `session_id IN (...)`. Empty subtree → `[]`. When BOTH are provided, the
+  session sets are UNIONED (OR semantics — "search in this session OR within
+  this subtree"); this is the documented behavior, not an intersection.
 - `time` from the FTS `time` column (event creation time).
 
 ### 3.3 Lineage API
