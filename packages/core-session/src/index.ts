@@ -12,6 +12,9 @@ export type SessionEvent =
     | { type: "step/end"; seq?: number }
     | { type: "turn/end"; seq?: number }
     | { type: "subagent/inbox"; messageId: string; message: string; seq?: number }
+    | { type: "compaction/start"; seq?: number }
+    | { type: "compaction/end"; seq?: number }
+    | { type: "compaction/summary"; text: string; shadowedSeqs: number[]; seq?: number }
   )
   & { ignorable?: true }
 
@@ -65,13 +68,24 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // tool_result), regardless of how the session log interleaves them.
   let pendingCalls: { id: string; name: string; args: unknown }[] | undefined
   const pendingResults: LLMMessage[] = []
+  // M11 compaction shadow pre-pass: collect every seq a compaction/summary
+  // replaced on the surface so the render pass skips them. The raw log keeps
+  // all events; only this projection shrinks.
+  const shadowed = new Set<number>()
   for (const ev of session.events) {
+    if (ev.type === "compaction/summary") for (const seq of ev.shadowedSeqs) shadowed.add(seq)
+  }
+  for (const ev of session.events) {
+    if (ev.seq !== undefined && shadowed.has(ev.seq)) continue
     if (ev.type === "user/message") {
       flushToolBlock()
       result.push({ role: "user", content: ev.text })
     } else if (ev.type === "assistant/message") {
       flushToolBlock()
       result.push({ role: "assistant", content: ev.text })
+    } else if (ev.type === "compaction/summary") {
+      flushToolBlock()
+      result.push({ role: "user", content: ev.text })
     } else if (ev.type === "tool/call") {
       pendingCalls ??= []
       pendingCalls.push({ id: ev.callId, name: ev.name, args: ev.args })
@@ -115,6 +129,8 @@ export function deriveSearchText(ev: SessionEvent): string {
       return JSON.stringify(ev.output) ?? ""
     case "subagent/inbox":
       return ev.message
+    case "compaction/summary":
+      return ev.text
     default:
       return ""
   }
