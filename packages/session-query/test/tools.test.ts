@@ -36,6 +36,8 @@ describe("session-query tools", () => {
       const res = await registry.execute({ name: "lineage", args: { session_id: "parent", direction: "children" } })
       const nodes = (res.output as { nodes: { sessionId: string; hasChildren: boolean }[] }).nodes
       expect(nodes.map((n) => n.sessionId)).toEqual(["child"])
+      await expect(registry.execute({ name: "lineage", args: { session_id: "parent", direction: "sideways" } }))
+        .rejects.toThrow(/invalid direction/)
     } finally {
       closeSessionQueries()
       closeSqliteBackends()

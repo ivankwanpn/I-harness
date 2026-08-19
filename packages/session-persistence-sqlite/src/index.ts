@@ -121,31 +121,26 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       const rows = db.prepare("SELECT seq, type, data, ignorable FROM events WHERE session_id = ? ORDER BY seq").all(sessionId) as unknown as EventRow[]
       const events = rows.map((r) => JSON.parse(r.data) as SessionEvent)
       const closers = missingClosers(events)
-      if (closers.length > 0) {
-        const insert = db.prepare(
-          `INSERT INTO events (session_id, seq, type, time, data, ignorable) VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        db.exec("BEGIN")
-        try {
+      db.exec("BEGIN")
+      try {
+        if (closers.length > 0) {
+          const insert = db.prepare(
+            `INSERT INTO events (session_id, seq, type, time, data, ignorable) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
           let seq = (db.prepare("SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM events WHERE session_id = ?").get(sessionId) as { next: number }).next
           for (const closer of closers) {
             insert.run(sessionId, seq, closer.type, Date.now(), JSON.stringify(closer), null)
             seq += 1
           }
           db.prepare("UPDATE sessions SET revision = revision + 1 WHERE id = ?").run(sessionId)
-          db.exec("COMMIT")
-        } catch (err) {
-          db.exec("ROLLBACK")
-          throw err
         }
-      }
-      // FTS re-sync (idempotent): rebuild this session's index rows from events.
-      const evRows = db.prepare("SELECT seq, type, time, data FROM events WHERE session_id = ? ORDER BY seq").all(sessionId) as unknown as
-        { seq: number; type: string; time: number; data: string }[]
-      db.exec("BEGIN")
-      try {
+
+        // FTS re-sync (idempotent): rebuild this session's index rows from the
+        // final event list while the closer inserts are still uncommitted.
         db.prepare("DELETE FROM events_fts WHERE session_id = ?").run(sessionId)
         const insertFts = db.prepare("INSERT INTO events_fts (session_id, seq, event_type, time, text) VALUES (?, ?, ?, ?, ?)")
+        const evRows = db.prepare("SELECT seq, type, time, data FROM events WHERE session_id = ? ORDER BY seq").all(sessionId) as unknown as
+          { seq: number; type: string; time: number; data: string }[]
         for (const r of evRows) {
           const ev = JSON.parse(r.data) as SessionEvent
           insertFts.run(sessionId, r.seq, r.type, r.time, deriveSearchText(ev))

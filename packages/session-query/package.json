@@ -6,11 +6,11 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
-    "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-session": "workspace:*",
     "@i-harness/core-tools": "workspace:*"
   },
   "devDependencies": {
+    "@i-harness/core-plugin": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-persistence-sqlite": "workspace:*"
   }

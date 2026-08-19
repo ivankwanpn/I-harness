@@ -140,6 +140,9 @@ export function createSessionQuery(dbPath: string): SessionQuery {
     ensureFts()
     const match = sanitizeQuery(query)
     if (match === null) return []
+    if (opts?.limit !== undefined && !Number.isInteger(opts.limit)) {
+      throw new Error(`invalid limit: ${opts.limit}`)
+    }
     const limit = Math.min(Math.max(opts?.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT)
     const sessionIds = new Set<string>()
     if (opts?.sessionId !== undefined) sessionIds.add(opts.sessionId)
@@ -181,9 +184,12 @@ export function createSessionQuery(dbPath: string): SessionQuery {
     switch (opts.direction) {
       case "ancestors": {
         const nodes: LineageNodeBase[] = []
+        const visited = new Set<string>([sessionId])
         let cur: string | null = sessionRow(sessionId).parent_session
         let walked = 0
         while (cur !== null && (opts.depth === undefined || walked < opts.depth)) {
+          if (visited.has(cur)) throw new Error(`cycle detected in session lineage at: ${cur}`)
+          visited.add(cur)
           const row = sessionRow(cur)
           nodes.push(baseNode(row))
           cur = row.parent_session
@@ -213,6 +219,8 @@ export function createSessionQuery(dbPath: string): SessionQuery {
         }
         return withChildrenFlag(nodes)
       }
+      default:
+        throw new Error(`invalid direction: ${opts.direction}`)
     }
   }
 
