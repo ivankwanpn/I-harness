@@ -52,9 +52,9 @@ events searchable).
 - Behavior unchanged when compaction is not configured (`compact` absent →
   core-agent runs exactly as today).
 - Config is validated at engine construction (fail loud): `contextWindow`
-  required positive integer; `thresholdRatio ∈ (0, 1]`; `retainTokens` /
-  `maxTokens` non-negative integers. No hardcoded tunables — every default is a
-  Config field.
+  required positive integer; `thresholdRatio ∈ (0, 1]`; `retainTokens`
+  non-negative integer; `maxTokens` positive integer (≥ 1). No hardcoded
+  tunables — every default is a Config field.
 
 ## §1 core-session — event vocabulary + surface projection
 
