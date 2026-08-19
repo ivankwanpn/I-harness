@@ -218,3 +218,5 @@ export function createSessionQuery(dbPath: string): SessionQuery {
 
   return { search, lineage }
 }
+
+export { createSessionQueryTools } from "./tools.ts"
