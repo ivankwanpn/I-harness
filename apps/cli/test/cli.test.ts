@@ -225,10 +225,12 @@ describe("headless CLI (M2)", () => {
       const result = await runHeadless("no query", {
         workspace: dir,
         approveAll: true,
-        mockScript: [{ role: "assistant", text: "ok" }],
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "session_search", args: { query: "x" } }] },
+        ],
       })
-      expect(result.exitCode).toBe(0)
-      // the tool schemas never surface to the model, so a mock call to session_search is an unknown tool
+      expect(result.exitCode).not.toBe(0)
+      // Without sessionQuery, session_search is unknown because the tool is not mounted.
     })
   })
 })
