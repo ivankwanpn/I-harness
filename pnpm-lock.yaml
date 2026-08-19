@@ -104,6 +104,9 @@ importers:
 
   packages/core-agent:
     dependencies:
+      '@i-harness/compaction':
+        specifier: workspace:*
+        version: link:../compaction
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
