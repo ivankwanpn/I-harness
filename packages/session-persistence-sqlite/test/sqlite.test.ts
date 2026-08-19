@@ -22,7 +22,7 @@ describe("sqlite schema", () => {
       expect(user_version).toBe(SCHEMA_VERSION)
       expect(application_id).toBe(APPLICATION_ID)
       const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string }[]
-      expect(tables.map((t) => t.name)).toEqual(["documents", "events", "persistence_state", "sessions"])
+      expect(tables.map((t) => t.name).filter((name) => !name.startsWith("events_fts_"))).toEqual(["documents", "events", "events_fts", "persistence_state", "sessions"])
     } finally {
       db.close()
     }
@@ -38,6 +38,7 @@ describe("sqlite schema", () => {
     db.close()
     const db2 = new DatabaseSync(dbPath)
     db2.exec("DROP TABLE persistence_state")
+    db2.exec("DROP TABLE events_fts")
     db2.exec("PRAGMA application_id = 0")
     db2.exec("PRAGMA user_version = 0")
     db2.close()
@@ -77,6 +78,56 @@ describe("sqlite schema", () => {
     db.exec("CREATE TABLE stray (a TEXT)")
     db.close()
     expect(() => openDatabase(dbPath)).toThrow()
+  })
+})
+
+describe("schema v2 events_fts", () => {
+  it("upgrades a v1 database and backfills existing events into events_fts", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "m10b-mig-"))
+    const path = join(dir, "s.db")
+    // Build a v1 database by hand (the pre-v2 DDL, no events_fts).
+    {
+      const db = new DatabaseSync(path)
+      db.exec(`
+        PRAGMA application_id = ${0x4948524e};
+        PRAGMA user_version = 1;
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, version INTEGER NOT NULL, created_at INTEGER NOT NULL, cwd TEXT, parent_session TEXT, seed_length INTEGER, origin TEXT, delegation_depth INTEGER, agent_preset TEXT, incarnation TEXT NOT NULL, revision INTEGER NOT NULL) STRICT;
+        CREATE TABLE events (session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, seq INTEGER NOT NULL, type TEXT NOT NULL, time INTEGER NOT NULL, data TEXT NOT NULL, source_event_seqs TEXT, surface_op TEXT, ignorable INTEGER, PRIMARY KEY (session_id, seq)) STRICT;
+        CREATE TABLE documents (key TEXT PRIMARY KEY, data TEXT NOT NULL) STRICT;
+      `)
+      db.prepare("INSERT INTO sessions (id, version, created_at, incarnation, revision) VALUES (?, 1, 1, 'x', 0)").run("s-old")
+      db.prepare("INSERT INTO events (session_id, seq, type, time, data) VALUES (?, ?, ?, ?, ?)")
+        .run("s-old", 0, "user/message", 1, JSON.stringify({ type: "user/message", text: "the purple unicorn" }))
+      db.prepare("INSERT INTO events (session_id, seq, type, time, data) VALUES (?, ?, ?, ?, ?)")
+        .run("s-old", 1, "turn/end", 2, JSON.stringify({ type: "turn/end" }))
+      db.close()
+    }
+    const db = openDatabase(path) // should migrate 1 → 2 + backfill
+    try {
+      const { user_version: v } = db.prepare("PRAGMA user_version").get() as { user_version: number }
+      expect(v).toBe(2)
+      const hits = db.prepare("SELECT session_id, seq FROM events_fts WHERE events_fts MATCH ?").all('"unicorn"') as { session_id: string; seq: number }[]
+      expect(hits).toEqual([{ session_id: "s-old", seq: 0 }])
+      // control events are not indexed
+      const endHits = db.prepare("SELECT session_id FROM events_fts WHERE events_fts MATCH ?").all('"turn/end"')
+      expect(endHits).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+
+  it("creates events_fts on a fresh database", () => {
+    const dir = mkdtempSync(join(tmpdir(), "m10b-fresh-"))
+    const path = join(dir, "s.db")
+    const db = openDatabase(path)
+    try {
+      const { user_version: v } = db.prepare("PRAGMA user_version").get() as { user_version: number }
+      expect(v).toBe(2)
+      const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events_fts'").get()
+      expect(row).toBeDefined()
+    } finally {
+      db.close()
+    }
   })
 })
 
