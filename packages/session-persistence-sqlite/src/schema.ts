@@ -1,17 +1,35 @@
 import { copyFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { DatabaseSync } from "node:sqlite"
+import type { SessionEvent } from "@i-harness/core-session"
+import { deriveSearchText } from "@i-harness/core-session"
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 export const APPLICATION_ID = 0x4948524e // "IHRN"
 
 export type JournalMode = "wal" | "delete" | "truncate" | "persist"
 
-// Stepwise schema-migration chain (audit F01-4): key = version TO upgrade
-// FROM. Today only v1 exists, so the chain is empty; the first schema bump
-// registers MIGRATIONS[1] = (db) => { ... }. Each step runs inside its own
-// transaction; a step that throws rolls back to the pre-step schema.
-export const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {}
+// Migration 1→2 (first real migration): create the FTS5 search index over
+// events and backfill existing rows. Runs inside the migration SAVEPOINT.
+export const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
+  1: (db) => {
+    db.exec(`CREATE VIRTUAL TABLE events_fts USING fts5(
+      session_id  UNINDEXED,
+      seq         UNINDEXED,
+      event_type  UNINDEXED,
+      time        UNINDEXED,
+      text,
+      tokenize = 'unicode61'
+    )`)
+    const rows = db.prepare("SELECT session_id, seq, type, time, data FROM events").all() as unknown as
+      { session_id: string; seq: number; type: string; time: number; data: string }[]
+    const insert = db.prepare("INSERT INTO events_fts (session_id, seq, event_type, time, text) VALUES (?, ?, ?, ?, ?)")
+    for (const r of rows) {
+      const ev = JSON.parse(r.data) as SessionEvent
+      insert.run(r.session_id, r.seq, r.type, r.time, deriveSearchText(ev))
+    }
+  },
+}
 
 function validateAndUpgrade(db: DatabaseSync, path: string): void {
   const { user_version: onDisk } = db.prepare("PRAGMA user_version").get() as { user_version: number }
@@ -105,6 +123,14 @@ export function openDatabase(path: string, journalMode: JournalMode = "wal"): Da
           ignorable         INTEGER,
           PRIMARY KEY (session_id, seq)
         ) STRICT;
+        CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+          session_id  UNINDEXED,
+          seq         UNINDEXED,
+          event_type  UNINDEXED,
+          time        UNINDEXED,
+          text,
+          tokenize = 'unicode61'
+        );
         CREATE TABLE IF NOT EXISTS documents (
           key  TEXT PRIMARY KEY,
           data TEXT NOT NULL
