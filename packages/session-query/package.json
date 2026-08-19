@@ -1,0 +1,16 @@
+{
+  "name": "@i-harness/session-query",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/core-tools": "workspace:*"
+  },
+  "devDependencies": {
+    "@i-harness/session-persistence": "workspace:*",
+    "@i-harness/session-persistence-sqlite": "workspace:*"
+  }
+}
