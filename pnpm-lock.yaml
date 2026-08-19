@@ -23,6 +23,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@i-harness/compaction':
+        specifier: workspace:*
+        version: link:../../packages/compaction
       '@i-harness/core-agent':
         specifier: workspace:*
         version: link:../../packages/core-agent
