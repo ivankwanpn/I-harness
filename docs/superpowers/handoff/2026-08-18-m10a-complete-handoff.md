@@ -1,32 +1,35 @@
-# Handoff — I-harness @ M10a Complete (2026-08-18)
+# Handoff — I-harness @ M10a + M10b Complete (2026-08-19)
 
 > Handoff for a new session continuing development of the I-harness project.
 > Repo: `D:\agent-complete\I-harness` (pnpm monorepo, git on `master`).
-> Working tree is clean at this commit: `a6b3a7d`.
+> Working tree is clean at this commit: `2b5540f`.
 
 ## 1. Current State
 
-- **Milestone M10a (guard: tool timeout + repeat reminder) is COMPLETE and on `master`.**
+- **M10a (guards: tool timeout + repeat reminder) — COMPLETE, on `master`.**
+- **M10b (session-query: SQLite FTS + lineage) — COMPLETE, on `master`.**
 - All gates green at HEAD: `pnpm -r test` exit 0, `pnpm -r typecheck` exit 0.
-- No `CURRENT_FORMAT_VERSION` / `SCHEMA_VERSION` bumps; no new external dependencies
-  (all package.json additions are `workspace:*`).
-- 24 packages + 1 app (`apps/cli`). Environment: **Windows (Git Bash)**, Node >=22, ESM + strict TS, vitest.
+- No `CURRENT_FORMAT_VERSION` / event-vocabulary changes. The ONLY schema bump is
+  `session-persistence-sqlite` `SCHEMA_VERSION` 1→2 (M10b, via the M5 migration chain).
+- Root `engines.node` is now `>=22.18` (required by `node:sqlite`'s `readOnly` option).
+- All package.json additions are `workspace:*` — no new external dependencies.
+- 25 packages + 1 app (`apps/cli`). Environment: **Windows (Git Bash)**, Node v24, ESM + strict TS, vitest.
 
-### Recent commit history (M10a, oldest → newest)
+### Recent commits (M10b, oldest → newest)
 ```
-37f81ae docs: M10a guard (tool timeout + repeat reminder) design spec
-3bc4399 docs: M10a guard (tool timeout + repeat reminder) implementation plan
-56aadb2 feat(core-plugin): ctx.cascade around-dispatch primitive
-cb3144d feat(core-tools): tools/execute around-seam via ctx.cascade
-995e5af feat(core-session,core-agent): user/message.source + agent/post-tool
-23967c2 docs: M10a plan — TOOL_TIMEOUT marker at output.code (controller ruling)
-174e53c feat(exec,shell): external abortSignal + tool timeoutMs threading
-1c1efef feat(guard-timeout): cooperative tool timeout via tools/execute cascade
-2a0e36a feat(guard-repeat-tool): advisory consecutive-repeat tool reminder
-5505726 fix(core-agent): emit agent/post-tool after tool/result (ordering)
-0a15688 docs: M10a spec §4 — lock agent/post-tool ordering invariant
-c4d5390 feat(cli): mount guard-timeout + guard-repeat-tool, expose session
-a6b3a7d fix: final-review wave — ancestor-visible cascade, timeout catch, ordering regression test, doc parity
+7d827e2 docs: M10b session-query (SQLite FTS + lineage) design spec
+7ad9c98 docs: M10b session-query (SQLite FTS + lineage) implementation plan
+fd63457 feat(core-session): deriveSearchText canonical event search-text normalizer
+e192708 feat(session-persistence-sqlite): schema v2 + events_fts FTS5 index (migration 1→2 with backfill)
+f37c744 feat(session-persistence-sqlite): same-tx FTS writes in append + repair re-sync
+d6d158f docs: M10b spec §3.2 — pin combined sessionId+subtreeOf filter as union (OR)
+254af17 feat(session-query): FTS5 search + lineage query library over the sqlite session store
+d447b32 feat(session-query): session_search + lineage read-only tools
+6a9c303 docs: M10b spec §3.4 — pin tool output as wrapper objects { hits } / { nodes } (ruling)
+dc3654b feat(cli): mount session_search + lineage tools when a sessionQuery is provided
+483d744 test(cli): cover session-query mount gating
+af79a4a test(cli): distinguish unknown session tool failure
+2b5540f fix: M10b final-review wave - repair atomicity, search/lineage hardening, engines floor, contract tests
 ```
 
 ## 2. Commands
@@ -46,172 +49,169 @@ cd apps/cli && pnpm test && pnpm typecheck
 - ESM + strict TypeScript. `tsconfig.base.json` has `strict`, `noUnusedLocals`, `noUnusedParameters`
   → unused params use the `_name` convention (e.g. `_ctx`).
 - Tests live in `test/*.test.ts` per package, run with vitest (`pnpm test` = `vitest run`).
-- **Cooperative timeout contract**: a tool that declares `timeoutMs` MUST honor `exec.abortSignal`
-  (settle promptly when it fires). The guard never force-cancels or races the tool promise —
-  a hostile tool that ignores the signal hangs by design.
-- No `CURRENT_FORMAT_VERSION` / `SCHEMA_VERSION` bumps without an explicit milestone decision.
-- Existing behavior unchanged when no guards are mounted / no tool declares `timeoutMs`.
+- Node floor `>=22.18` (node:sqlite `readOnly`).
+- **Cooperative timeout contract** (M10a): a tool that declares `timeoutMs` MUST honor
+  `exec.abortSignal`; the guard never force-cancels or races the tool promise.
+- No `CURRENT_FORMAT_VERSION` bumps without an explicit milestone decision.
+  `session-persistence-sqlite` `SCHEMA_VERSION` bumps go through the M5 migration chain
+  (`MIGRATIONS[n]`, SAVEPOINT per step, one backup copy before the chain).
+- Existing behavior unchanged when optional capability surfaces are not mounted.
 
-## 4. What M10a Delivered (architecture tour)
+## 4. M10a Delivered (guard milestone) — architecture tour
 
 ### 4.1 core-plugin — `ctx.cascade` / `ctx.onCascade`
-Koa-style around-dispatch primitive (`packages/core-plugin/src/index.ts`), distinct from the
-value-producing `waterfall`:
-- `cascade<TInput,TOutput>(event, input, final)` runs registered `onCascade` handlers outside-in
-  around `final`; `next()` returns the inner result; skipping `next()` short-circuits (legal);
-  calling `next()` twice throws. Plain listeners do NOT run in a cascade dispatch.
-- **Ancestor-visible** (final-review decision): `dispatchCascade` walks the scope chain
-  ROOT-FIRST → self-last, so root-registered handlers wrap child-scope dispatches (mirrors
-  `emit` propagation / `checkGuards` union-of-ancestors / `resolveDecision` nearest-wins).
-  No handlers anywhere → `final()` runs directly (byte-identical no-op path).
-- Unmount reclamation covers `pluginCascades` (same pattern as listeners/waterfalls).
+Koa-style around-dispatch primitive, distinct from the value-producing `waterfall`:
+`cascade<TInput,TOutput>(event, input, final)` runs `onCascade` handlers outside-in around `final`;
+`next()` returns the inner result; skipping `next()` short-circuits (legal); double-`next` throws.
+**Ancestor-visible** (final-review decision): `dispatchCascade` walks root→self, so root-registered
+handlers wrap child-scope dispatches (mirrors `emit`/`checkGuards`/`resolveDecision`). No handlers
+→ `final()` runs directly.
 
 ### 4.2 core-tools — `tools/execute` around-seam
-`createToolRegistry(ctx)`'s `execute(call)` step 4:
-```ts
-const exec: ToolExec = {}
-const output = await ctx.cascade(
-  "tools/execute",
-  { name: call.name, args: call.args, exec, tool },
-  async () => tool.execute(call.args as never, exec),
-)
-```
-Pre-execute waterfall / `resolveDecision` merge / monotonic guards / approval / post-execute
-are UNCHANGED. `Tool.timeoutMs?` and `ToolExec.abortSignal?` already existed; the guard enforces them.
+`createToolRegistry(ctx).execute(call)` step 4 runs `ctx.cascade("tools/execute",
+{ name, args, exec, tool }, () => tool.execute(args, exec))`. `Tool.timeoutMs?` and
+`ToolExec.abortSignal?` enforced by the timeout guard. Pre-execute / decision / guards /
+approval / post-execute unchanged.
 
-### 4.3 core-session — `user/message.source`
-`SessionEvent` union: `user/message` gains optional `source?: { kind: "plugin"; plugin: string }`.
-Additive, no version bump. `deriveMessages` renders it as plain user text (source is metadata).
+### 4.3 core-session
+- `user/message` gains optional `source?: { kind: "plugin"; plugin: string }` (additive).
+- `deriveSearchText(ev): string` (M10b): user/assistant text, tool/call args JSON, tool/result
+  output JSON (`?? ""` for undefined payloads), subagent/inbox message; control events +
+  assistant/chunk → `""`.
 
 ### 4.4 core-agent — `agent/post-tool` (ordering invariant)
-`runTurn`'s `tool_call` branch order (locking the invariant):
-```ts
-const result = await deps.tools.execute({ name, args })
-if (abort?.aborted) throw new Error("agent aborted")
-append(deps.session, { type: "tool/result", ... })
-await ctx.emit("agent/post-tool", { name, args, output: result.output, session: deps.session })
-```
-**Why after the append**: a listener-appended `user/message` (the reminder) must land AFTER the
-result, so `deriveMessages` renders `assistant(toolCalls) → tool(result) → user(reminder)`.
-A `user` message between an assistant `tool_calls` block and its tool results is rejected by
-OpenAI-style providers. Documented in spec §4.
+`tool_call` branch: `tools.execute` → abort check → append `tool/result` → emit
+`agent/post-tool { name, args, output, session }`. **Emit AFTER the append** — a listener-appended
+`user/message` must land after the result so `deriveMessages` renders
+`assistant(toolCalls) → tool(result) → user(reminder)` (OpenAI-style providers reject a user
+message between a tool_calls block and its results). Documented in spec §4.
 
 ### 4.5 exec — `ExecCommand.abortSignal`
 External cancel kills the process tree via a shared module-level `killTree(child)` (win32
-`taskkill /T /F`, else `process.kill(-pid)`). An abort kill is NOT a timeout (`timedOut` stays false;
-caller sees the real exitCode `-1`). Both `timeoutMs` and `abortSignal` may be present (first wins).
+`taskkill /T /F`, else `process.kill(-pid)`). Abort is NOT a timeout (`timedOut` stays false).
 
 ### 4.6 shell — timeoutMs + signal threading
-`createShellTools({ exec, timeoutMs? })` declares `timeoutMs` on bash/pwsh tools; each tool's
-foreground `execute` forwards `abortSignal: exec.abortSignal` into `exec.run`. Background runs
-unchanged. `registerShell(ctx, registry, opts?: { timeoutMs?: number })`.
+`createShellTools({ exec, timeoutMs? })` declares `timeoutMs` on bash/pwsh; foreground executes
+forward `abortSignal: exec.abortSignal` into `exec.run`. `registerShell(ctx, registry, { timeoutMs })`.
 
-### 4.7 `@i-harness/guard-timeout` (new package)
-`onCascade("tools/execute")` handler. When `tool.timeoutMs` is set:
-- swaps `exec.abortSignal` for a timer-backed derived `AbortController` (linked to upstream: an
-  upstream abort is NOT our timeout), runs `next()`, restores the upstream signal in `finally`.
-- On OUR timer firing: substitutes `{ ...rawResult, error, code: TOOL_TIMEOUT }` at the TOP level.
-  The registry wraps the cascade value in `{ name, output }`, so the marker reads at
-  `result.output.code` (the spec's original `output:` nesting would bury it — documented ruling).
-- `catch` on the inner tool: if `timedOut`, still returns the structured substitution
-  (a rejecting deadline tool must not abort the whole agent run).
-- Upstream abort listener is named + `removeEventListener`'d in `finally` (leak hygiene).
-- `export const TOOL_TIMEOUT = "TOOL_TIMEOUT"`.
+### 4.7 `@i-harness/guard-timeout`
+`onCascade("tools/execute")`: swaps `exec.abortSignal` for a timer-backed derived controller
+(linked to upstream; an upstream abort is NOT our timeout), substitutes `{ ...raw, error,
+code: TOOL_TIMEOUT }` on our timer firing, catches rejecting tools (still substitutes when timed
+out), restores upstream in `finally`. Marker reads at `tool/result.output.code`.
 
-### 4.8 `@i-harness/guard-repeat-tool` (new package)
-`on("agent/post-tool")` listener, advisory (never vetoes):
-- Canonical key = `toolName + JSON.stringify(args)`; per-session counter via
-  `WeakMap<Session, { key, count }>` (Session has no durable in-memory id).
-- `include`/`exclude` are `*`-wildcard patterns (anchored RegExp); exclude is transparent
-  (no count, no reset). Default thresholds `[3, 5, 8]` (validated: non-empty ints ≥ 2, fail loud).
-- On each threshold hit, appends a plugin-source `user/message`
-  (`source: { kind: "plugin", plugin: "guard-repeat-tool" }`).
+### 4.8 `@i-harness/guard-repeat-tool`
+`on("agent/post-tool")` advisory listener: canonical key = `toolName + JSON.stringify(args)`,
+per-session `WeakMap<Session, {key, count}>`, `include`/`exclude` `*`-wildcard patterns,
+thresholds `[3, 5, 8]` (validated), appends plugin-source `user/message` on each hit.
 
-### 4.9 CLI wiring (`apps/cli/src/run.ts`)
-`runHeadless` mounts: `registerShell(ctx, tools, { timeoutMs: opts.shellTimeoutMs ?? 120_000 })`,
-fs tools, `createApprovalPolicy`, `ctx.mount(createTimeoutGuard(ctx))`,
-`ctx.mount(createRepeatToolGuard(ctx))`, tool-search, fs-search. `HeadlessResult` exposes
-`session?` for e2e assertions.
+### 4.9 CLI (`apps/cli/src/run.ts`)
+`runHeadless` mounts: shell (timeoutMs 120s default), fs tools, approval policy,
+`guard-timeout` + `guard-repeat-tool`, tool-search, fs-search, and (M10b) session-query tools
+when `sessionQuery` is provided. `HeadlessResult` exposes `session?`.
 
-### 4.10 subagent (M8/M9) interaction
-Child scopes (subagents) create their own registry/ctx and never `ctx.mount` plugins. Because
-`cascade` is now **ancestor-visible**, the root-mounted `guard-timeout` DOES cover subagent tool
-dispatches (this was the final-review cross-scope gap, fixed by user-approved option (a)).
-`agent/post-tool` already covered subagents via `emit` upward propagation. Both guards are now
-symmetric in scope.
+## 5. M10b Delivered (session-query milestone) — architecture tour
 
-## 5. Execution Rulings Made During M10a (recorded in spec/plan docs)
+### 5.1 `session-persistence-sqlite` schema v2 + FTS
+- `SCHEMA_VERSION` 1→2; `MIGRATIONS[1]` creates `events_fts` (FTS5:
+  `session_id/seq/event_type/time` UNINDEXED, `text` indexed, `unicode61`) and backfills existing
+  events via `deriveSearchText`. Fresh DBs get the table via the `openDatabase` DDL block.
+- `append` writes FTS rows in the SAME transaction as event rows (index never diverges).
+- `repair` runs ONE atomic transaction: closer inserts (if any) + revision bump + FTS
+  DELETE/re-insert from the final event list.
 
-1. **TOOL_TIMEOUT marker location**: top-level `{ ...result, error, code }` (reads at
+### 5.2 `@i-harness/session-query` (new package)
+- `createSessionQuery(dbPath)` opens a READ-ONLY `DatabaseSync`; `closeSessionQueries()` releases
+  handles (Windows file locks).
+- `search(query, { sessionId?, subtreeOf?, limit? })` → BM25-ordered `SearchHit[]` with snippets
+  (`snippet(events_fts, 4, ...)`), FTS5-injection-safe sanitization (every whitespace token →
+  quoted phrase, embedded quotes doubled, implicit AND; blank → `[]`), limit clamp 20/100
+  (validated integer ≥ 1), sessionId/subtreeOf filters (**union/OR** when both, pinned in spec §3.2).
+- `lineage(sessionId, { direction, depth? })` → ancestors (nearest-first, cycle-detected),
+  descendants (BFS, depth = levels below), children; `hasChildren` via one grouped query;
+  unknown session / invalid depth / invalid direction → throw.
+- Capability-gated fail-closed: a DB without `events_fts` throws a clear error.
+- `createSessionQueryTools(query)` → **`session_search`** (output `{ hits: SearchHit[] }`) and
+  **`lineage`** (output `{ nodes: LineageNode[] }`), both `isReadOnly: true`, errors throw
+  (→ CLI exitCode 1).
+
+### 5.3 CLI wiring
+`HeadlessOptions.sessionQuery?: SessionQuery` — when provided, the CLI mounts the two tools
+(sqlite-only fail-closed; absent → tools not mounted, behavior unchanged).
+
+## 6. Execution Rulings Made (recorded in spec/plan docs)
+
+1. **M10a — TOOL_TIMEOUT marker location**: top-level `{ ...result, error, code }` (reads at
    `result.output.code`), not the spec's original `output:` nesting. Spec §5 amended.
-2. **`agent/post-tool` emits AFTER `tool/result` append** (provider message-ordering). Spec §4 amended.
-3. **Cascade is ancestor-visible** (root outermost). User-approved during final review.
+2. **M10a — `agent/post-tool` emits AFTER `tool/result` append** (provider message-ordering). Spec §4 amended.
+3. **M10a — cascade is ancestor-visible** (root outermost). User-approved during final review.
+4. **M10b — combined `sessionId` + `subtreeOf` filters UNION (OR).** Spec §3.2.
+5. **M10b — tool outputs are wrapper objects `{ hits }` / `{ nodes }`** (consistent with existing
+   object-returning tools), not bare arrays. Spec §3.4.
 
-## 6. Deferred Follow-ups (reconstructed from the deleted SDD ledger — carry forward)
+## 7. Deferred Follow-ups (reconstructed from SDD ledgers; triaged by final reviews)
 
-### Code / test hardening (Safe to defer per final review, but worth doing eventually)
-- Export a typed `ToolsExecuteDispatch` (`{ name, args, exec, tool }`) from core-tools so
-  downstream `onCascade("tools/execute")` handlers stop hand-casting `unknown`.
-- core-plugin cascade tests: add input pass-through, error-propagation-through-chain, and
-  mid-dispatch snapshot coverage.
-- core-tools observe test asserts `exec` `toEqual {}` — prefer `toBe` identity (future outer
-  handlers may populate `exec.abortSignal`).
-- guard-timeout: assert spread-preservation of the tool's own fields in the substitution test.
-- guard-repeat-tool: `patternToRegExp` recompiles per emit (precompute at factory);
-  `argumentsPreviewChars` negatives unvalidated (`Math.max(0, …)`); preview `slice` can split
-  surrogate pairs (code-point-aware slice if the product cares).
-- core-agent: directly test "aborted dispatch produces no `agent/post-tool` observation".
-- CLI: repeat e2e only exercises threshold 3 of [3,5,8]; `output.error` assertion couples to
-  guard wording (acceptable).
+### M10a deferred minors (all triaged "Safe to defer" or fixed)
+- FIXED in final wave: upstream abort listener removal; rejecting-tool catch; CLI repeat e2e
+  per-test timeout.
+- Still open (safe to defer): typed `ToolsExecuteDispatch` export from core-tools (downstream
+  handlers hand-cast); cascade tests for input pass-through/error-propagation/mid-dispatch
+  snapshot; guard-timeout spread-preservation test; guard-repeat-tool patternToRegExp
+  precompile + negative previewChars + surrogate-pair slice; "aborted dispatch produces no
+  post-tool" direct test; repeat e2e only exercises threshold 3; `output.error` wording coupling.
 
-### Design-level observations worth documenting/deciding
-- **120s default shell deadline is a shipped behavior change**: bash/pwsh commands > 2 min die
-  unless `shellTimeoutMs` is raised. Worth a harness doc note.
-- **Repeat counter resets on session resume** (WeakMap keyed by session object) — document for
-  `resumeSessionId` flows.
-- **Mid-step reminder splits an assistant tool_calls block**: a threshold hit mid-step flushes
-  the tool block early (protocol-valid but semantically distorts history). Consider buffering
-  reminders to flush at `step/end` later.
-- **Seam contract ambiguity**: `tools/execute` cascade value is the RAW tool output; the Task-2
-  substitute test uses a full `{ name, output }` shaped handler while guard-timeout substitutes
-  the raw value. Pin the raw-value convention (ideally via the typed dispatch export).
-- **Cosmetic**: `guard-timeout/package.json` declares `core-tools` as a runtime dep though `src/`
-  only imports `core-plugin` (test-only); unused `_ctx` params in both guard factories are
-  vestigial symmetry with `createApprovalPolicy`.
-- **Parked (cosmetic doc drift)**: spec §5 snippet still shows an anonymous upstream listener
-  without `removeEventListener`; shipped code uses a named handler + removal.
+### M10b deferred minors (triaged; T3/T4 fixed in final wave)
+- FIXED in final wave: true mid-transaction rollback test; search contract tests (BM25 order,
+  quote escaping, union filter, limit clamp, capability via lineage); invalid-direction tool test;
+  core-plugin → devDependencies; limit finite-integer validation.
+- Still open (safe to defer): deriveSearchText step/start + turn/end direct assertions;
+  migration/fresh tests' temp-dir rmSync hygiene; tool tests for session_id/subtree_of/limit/depth
+  passthrough + inputSchema assertion; CLI e2e sqlite-setup-outside-try (Windows handle risk if
+  setup throws — worth a fixture refactor before relying on Windows CI).
 
-## 7. Next: M10b (session-query / SQLite FTS / lineage)
+### Design-level observations (worth documenting/deciding)
+- **M10a**: 120s default shell deadline is a shipped behavior change (>2min bash dies unless
+  `shellTimeoutMs` raised); repeat counter resets on session resume (WeakMap keyed by session
+  object); mid-step reminder splits an assistant tool_calls block (protocol-valid, semantically
+  distorting — consider buffering to step/end); seam contract ambiguity on `tools/execute`
+  (raw-value convention — pin via the typed dispatch export).
+- **M10b**: the M5 migration backup is `copyFileSync(path, path + ".bak")` which can be
+  incomplete for WAL data — a SQLite backup/checkpoint strategy (`sqlite.backup`) is safer for
+  production recovery. Consider as future hardening.
 
-- Explicitly OUT OF SCOPE of M10a (see spec `docs/superpowers/specs/2026-08-18-i-harness-m10a-guard-design.md` §10):
-  - session-query / SQLite FTS / lineage — separate spec + plan.
-- Other future work the seams now enable:
-  - Retry-on-timeout / sandbox-wrapping tools (the `tools/execute` cascade seam exists).
-  - Agent-aware tool execution (`tools.get(name, agent)`) — explicitly NOT adopted.
+## 8. Next Milestone: M11 (compaction)
+
+- Referenced in the M7 spec ("Jobs service upgrade (M9), guard/session-query (M10),
+  compaction (M11)") and in both M10 specs' §Out-of-Scope: compaction collapses/truncates old
+  session content and is expected to BUILD ON the M10b session-query surface.
+- Other future work the seams now enable: retry-on-timeout / sandbox-wrapping tools
+  (the `tools/execute` cascade seam exists); agent-aware tool execution (explicitly NOT adopted).
 
 ### Process for the next milestone
-- Follow the established pattern: **brainstorming → spec → writing-plans → SDD execution**
-  (subagent per task + per-task review + final whole-branch review), working directly on `master`
+- Established pattern: **brainstorming → spec → writing-plans → SDD execution**
+  (fresh subagent per task + task review + final whole-branch review), working directly on `master`
   (user consent already given for this project).
-- Docs live in `docs/superpowers/specs/` (design specs) and `docs/superpowers/plans/`
-  (implementation plans), named `YYYY-MM-DD-i-harness-<milestone>-design.md` / `-plan.md`.
+- Docs: `docs/superpowers/specs/YYYY-MM-DD-i-harness-<milestone>-design.md` and
+  `docs/superpowers/plans/YYYY-MM-DD-i-harness-<milestone>.md`.
+- SDD workspace lives at `/.superpowers/sdd/<plan-basename>/` (gitignored); a new plan creates its own.
 - **Infrastructure quirk observed**: subagent dispatches occasionally return an EMPTY result
-  (no report file, no commit) even though the task session reports completed — two occurred
-  (Task 3 first dispatch, Task 6 first dispatch). After every implementer dispatch, verify the
-  report file AND a commit exist before reviewing; if not, re-dispatch a fresh subagent.
-- The SDD ledger workspace (`/.superpowers/sdd/<plan>/`) is gitignored scratch; a new plan
-  creates its own.
+  (no report file, no commit) even though the task session reports completed — verify the report
+  file AND a commit exist after every implementer dispatch before reviewing; re-dispatch if empty.
+- Fix loops worked well: Task 6 needed 2 fix rounds (the first "fix" was ambiguous — always
+  verify a negative test actually distinguishes the failure modes it claims to guard).
 
-## 8. Package Map (for orientation)
+## 9. Package Map (for orientation)
 
 - **Core kernel**: `core-plugin` (ctx/scopes/listeners/waterfalls/cascades/guards/services),
   `core-tools` (registry + execute pipeline), `core-agent` (runTurn loop), `core-session`
-  (session events + deriveMessages), `exec` (subprocess), `shell` (bash/pwsh tools).
+  (session events + deriveMessages + deriveSearchText), `exec` (subprocess), `shell` (bash/pwsh).
 - **Policy/guards**: `guard-approval`, `guard-timeout`, `guard-repeat-tool`, `interaction`,
   `preset`, `tool-search`.
-- **Models**: `llm-seam` (interfaces), `llm-openai`, `llm-anthropic`, `llm-openai-compatible`,
-  `llm-mock`, `provider`.
-- **Persistence**: `session-persistence`, `session-persistence-jsonl`, `session-persistence-sqlite`.
+- **Persistence + query**: `session-persistence` (backend seam + coordinator + write-behind),
+  `session-persistence-jsonl`, `session-persistence-sqlite` (schema v2 + events_fts),
+  `session-query` (search + lineage + tools).
+- **Models**: `llm-seam`, `llm-openai`, `llm-anthropic`, `llm-openai-compatible`, `llm-mock`,
+  `provider`.
 - **Filesystem**: `fs`, `fs-search`.
 - **Subagents (M8/M9)**: `subagent` (child scopes, roles, tools, jobs, persistence, cold-resume).
 - **App**: `apps/cli` (`run.ts` = headless runHeadless; `cli.test.ts` = e2e).
