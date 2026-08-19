@@ -224,3 +224,66 @@ describe("session onAppend observer", () => {
     expect(session.events).toHaveLength(1)
   })
 })
+
+describe("compaction events", () => {
+  it("new event types round-trip through JSONL", () => {
+    const s = createSession()
+    append(s, { type: "compaction/start" })
+    append(s, { type: "compaction/summary", text: "summary text", shadowedSeqs: [0, 1, 2] })
+    append(s, { type: "compaction/end" })
+    const restored = fromJSONL(toJSONL(s))
+    expect(restored.events.map((e) => e.type)).toEqual(["compaction/start", "compaction/summary", "compaction/end"])
+    const summary = restored.events.find((e) => e.type === "compaction/summary") as { text: string; shadowedSeqs: number[] }
+    expect(summary.text).toBe("summary text")
+    expect(summary.shadowedSeqs).toEqual([0, 1, 2])
+  })
+
+  it("deriveMessages shadows the replaced seqs and renders the summary as a user message", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "old turn one" })
+    append(s, { type: "assistant/message", text: "old reply" })
+    append(s, { type: "user/message", text: "old turn two" })
+    append(s, { type: "compaction/start" })
+    append(s, { type: "compaction/summary", text: "COMPACTED HISTORY", shadowedSeqs: [0, 1, 2] })
+    append(s, { type: "compaction/end" })
+    append(s, { type: "user/message", text: "new work" })
+    const msgs = deriveMessages(s)
+    expect(msgs).toEqual([
+      { role: "user", content: "COMPACTED HISTORY" },
+      { role: "user", content: "new work" },
+    ])
+  })
+
+  it("deriveMessages without compaction events derives identically to today", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "a" })
+    append(s, { type: "assistant/message", text: "b" })
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "a" },
+      { role: "assistant", content: "b" },
+    ])
+  })
+
+  it("a compaction summary never shadows a later compaction marker (disjoint sets compose)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "turn a" })
+    append(s, { type: "compaction/start" })
+    append(s, { type: "compaction/summary", text: "S1", shadowedSeqs: [0] })
+    append(s, { type: "compaction/end" })
+    append(s, { type: "user/message", text: "turn b" })
+    append(s, { type: "compaction/start" })
+    append(s, { type: "compaction/summary", text: "S2", shadowedSeqs: [4] })
+    append(s, { type: "compaction/end" })
+    const msgs = deriveMessages(s)
+    expect(msgs).toEqual([
+      { role: "user", content: "S1" },
+      { role: "user", content: "S2" },
+    ])
+  })
+
+  it("deriveSearchText: summary → text, start/end → empty", () => {
+    expect(deriveSearchText({ type: "compaction/summary", text: "s", shadowedSeqs: [] })).toBe("s")
+    expect(deriveSearchText({ type: "compaction/start" })).toBe("")
+    expect(deriveSearchText({ type: "compaction/end" })).toBe("")
+  })
+})
