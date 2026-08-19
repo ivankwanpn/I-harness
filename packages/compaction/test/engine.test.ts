@@ -81,4 +81,40 @@ describe("compaction engine", () => {
     expect(result.compacted).toBe(true)
     expect(result.summary!.length).toBeLessThanOrEqual(50 * 4)
   })
+
+  it("maybeCompact does not re-fire after a compaction until new non-marker events arrive", async () => {
+    // Hot-loop shape: `retainTokens 0` + `maxTokens >= threshold` means the
+    // summary alone (~100 tokens) keeps activeTokens above the 50-token
+    // threshold — the re-fire guard, not pressure, must stop the loop.
+    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100 }
+    const s = longSession()
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
+    const first = await engine.maybeCompact(s)
+    expect(first.compacted).toBe(true)
+    const second = await engine.maybeCompact(s)
+    expect(second).toEqual({ compacted: false, shadowedSeqs: [] })
+    expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(1)
+  })
+
+  it("maybeCompact re-fires once new non-marker events are appended past the last compaction/end", async () => {
+    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100 }
+    const s = longSession()
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
+    await engine.maybeCompact(s)
+    expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(1)
+    append(s, { type: "user/message", text: "brand new work after the compaction" })
+    const again = await engine.maybeCompact(s)
+    expect(again.compacted).toBe(true)
+    expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(2)
+  })
+
+  it("compact (explicit) is NOT gated by the re-fire guard", async () => {
+    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100 }
+    const s = longSession()
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
+    await engine.maybeCompact(s) // appends one trio; no new events afterwards
+    const explicit = await engine.compact(s) // still always attempts
+    expect(explicit.compacted).toBe(true)
+    expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(2)
+  })
 })

@@ -33,8 +33,10 @@ export function createCompactionEngine(deps: { model: ModelClient; config: Compa
     let summary: string
     try {
       summary = await summarizeWithModel(model, replayText, config.maxTokens)
-    } catch {
-      // Fail-soft: never block the agent on a summarizer failure.
+    } catch (err) {
+      // Fail-soft: never block the agent on a summarizer failure. The warning
+      // makes the otherwise-silent retry observable under sustained pressure.
+      console.warn("[i-harness] compaction summarizer failed (fail-soft, retrying next step):", err instanceof Error ? err.message : String(err))
       return { compacted: false, shadowedSeqs: [] }
     }
     append(session, { type: "compaction/start" })
@@ -48,10 +50,36 @@ export function createCompactionEngine(deps: { model: ModelClient; config: Compa
       if (activeTokens(session) < config.contextWindow * config.thresholdRatio) {
         return { compacted: false, shadowedSeqs: [] }
       }
+      // Re-fire guard: with `retainTokens 0` and a large `maxTokens`, the
+      // summary alone can re-cross the threshold, re-triggering the summarizer
+      // (and re-rendering the whole non-marker log) at every step boundary.
+      // Only re-compact once NEW non-marker events appear past the last
+      // `compaction/end`. `compact()` (explicit) stays ungated.
+      const last = lastCompactionEndSeq(session)
+      if (last >= 0 && !hasNonMarkerEventsAfter(session, last)) {
+        return { compacted: false, shadowedSeqs: [] } // no new work since the last compaction
+      }
       return compactOnce(session)
     },
     compact: compactOnce,
   }
+}
+
+function lastCompactionEndSeq(session: Session): number {
+  let last = -1
+  for (const ev of session.events) {
+    if (ev.type === "compaction/end" && ev.seq !== undefined) last = ev.seq
+  }
+  return last
+}
+
+function hasNonMarkerEventsAfter(session: Session, seq: number): boolean {
+  for (const ev of session.events) {
+    if (ev.seq === undefined || ev.seq <= seq) continue
+    if (ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary") continue
+    return true
+  }
+  return false
 }
 
 function renderShadowed(session: Session, shadowedSeqs: number[]): string {

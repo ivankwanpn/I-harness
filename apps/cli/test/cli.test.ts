@@ -240,7 +240,9 @@ describe("headless CLI (M2)", () => {
 
   describe("headless CLI M11 compaction", () => {
     it("auto-compacts a long session and completes normally", async () => {
-      const compact: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 200 }
+      // Production-representative shape: maxTokens (20) << threshold (50), so
+      // the summary alone can never re-cross the threshold — no hot loop.
+      const compact: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 20 }
       // Inline structural model: every stream() call (agent turn OR the shared
       // summarizer call) yields the same long text, so the e2e is deterministic
       // (a script-based createMockClient would be consumed by the summarizer).
@@ -260,6 +262,39 @@ describe("headless CLI (M2)", () => {
       const msgs = deriveMessages(result.session!)
       expect(msgs[0]).toEqual({ role: "user", content: (summary as { text: string }).text })
       expect(result.finalText).toContain("compacted work summary line")
+    })
+
+    it("resumes a persisted compacted session (load tolerates compaction events)", async () => {
+      // Seed a compacted session over a temp sqlite DB. Seqs are explicit
+      // because the sqlite backend stores each event payload verbatim; the
+      // summary's shadowedSeqs [0] then hides the old user/message so the
+      // resume surface leads with the summary. Without the KNOWN_EVENT_TYPES
+      // registration this load path hard-fails (SessionFormatUnsupportedError).
+      const dbPath = join(dir, "resume.db")
+      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      await coordinator.create({ sessionId: "main" })
+      await coordinator.append("main", [
+        { type: "user/message", text: "old work", seq: 0 },
+        { type: "compaction/start", seq: 1 },
+        { type: "compaction/summary", text: "COMPACTED HISTORY", shadowedSeqs: [0], seq: 2 },
+        { type: "compaction/end", seq: 3 },
+      ])
+      try {
+        const result = await runHeadless("continue", {
+          workspace: dir,
+          approveAll: true,
+          coordinator,
+          resumeSessionId: "main",
+          mockScript: [{ role: "assistant", text: "continuing" }],
+        })
+        expect(result.exitCode).toBe(0)
+        // C1 regression: the resume load path must tolerate compaction events
+        // (they are registered KNOWN_EVENT_TYPES), and the projection leads
+        // with the restored summary.
+        expect(deriveMessages(result.session!)[0]).toEqual({ role: "user", content: "COMPACTED HISTORY" })
+      } finally {
+        closeSqliteBackends()
+      }
     })
 
     it("no compact config → no compaction events, behavior unchanged", async () => {

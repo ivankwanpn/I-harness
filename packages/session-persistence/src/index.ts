@@ -70,6 +70,7 @@ export function registerUpgrade(from: number, fn: (events: SessionEvent[]) => Se
 const KNOWN_EVENT_TYPES = new Set([
   "turn/start", "step/start", "user/message", "assistant/chunk", "assistant/message",
   "tool/call", "tool/result", "step/end", "turn/end", "subagent/inbox",
+  "compaction/start", "compaction/end", "compaction/summary",
 ])
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {

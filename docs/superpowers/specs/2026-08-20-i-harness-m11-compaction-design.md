@@ -147,6 +147,9 @@ same projection `deriveMessages` would produce, token-estimated).
 `maybeCompact(session)`:
 - `if activeTokens(session) < contextWindow × thresholdRatio → { compacted:
   false, shadowedSeqs: [] }`.
+- Re-fire guard: after a compaction, `maybeCompact` does not re-fire until new
+  non-marker events are appended past the last `compaction/end` (prevents
+  summary-driven hot loops); `compact()` remains ungated.
 - Otherwise run `compact(session)` and return its result.
 
 `compact(session)` (explicit, no pressure check):
@@ -181,6 +184,8 @@ same projection `deriveMessages` would produce, token-estimated).
 - Calls `model.stream(request)`; collects the streamed text; truncates to
   `maxTokens` (approx).
 - Uses `config.summarizationModel ?? deps.model`.
+- Summarizer failures log a `console.warn` and return fail-soft (never block
+  the agent); the engine retries at the next step boundary.
 
 ## §3 core-agent — optional compaction seam
 
