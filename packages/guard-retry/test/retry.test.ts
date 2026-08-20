@@ -141,4 +141,30 @@ describe("guard-retry", () => {
     expect(d).toBeGreaterThanOrEqual(450)
     expect(d).toBeLessThanOrEqual(550)
   })
+
+  it("does not re-dispatch after the caller signal aborts", async () => {
+    const attempts: number[] = []
+    const ctx = createContext()
+    const registry = createToolRegistry(ctx)
+    const ac = new AbortController()
+    registry.register({
+      name: "flaky",
+      description: "f",
+      inputSchema: {},
+      timeoutMs: 10, // first attempt times out (the retry loop only runs on TOOL_TIMEOUT)
+      execute: async () => {
+        attempts.push(attempts.length)
+        await new Promise((r) => setTimeout(r, 30)) // does NOT honor abort: the tool itself keeps running
+        return { stdout: "partial", exitCode: -1 }
+      },
+    })
+    ctx.mount(createRetryGuard(ctx, { maxRetries: 3, initialDelayMs: 40, maxDelayMs: 40, jitterRatio: 0 }))
+    ctx.mount(createTimeoutGuard(ctx))
+    setTimeout(() => ac.abort(), 15) // aborts during the first attempt's run
+    const result = await registry.execute({ name: "flaky", args: {} }, { signal: ac.signal })
+    // The abort stops the retry loop: exactly ONE attempt, and the final
+    // result is the TOOL_TIMEOUT marker (not a retried success).
+    expect(attempts.length).toBe(1)
+    expect((result.output as { code?: string }).code).toBe("TOOL_TIMEOUT")
+  })
 })
