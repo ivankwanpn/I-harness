@@ -16,6 +16,8 @@ import { createSqliteBackend, closeSqliteBackends } from "@i-harness/session-per
 import { createSessionQuery, closeSessionQueries } from "@i-harness/session-query"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { CompactionConfig } from "@i-harness/compaction"
+import type { RetryConfig } from "@i-harness/guard-retry"
+import type { ShellRetentionOptions } from "@i-harness/shell"
 import { deriveMessages } from "@i-harness/core-session"
 
 // Poll a read until it returns a defined value (bounded). The subagent
@@ -977,4 +979,63 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
+})
+
+describe("headless CLI M12 retry + retention", () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "i-harness-m12-"))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it("retries a timed-out bash call and succeeds on the retry", async () => {
+    // Deterministic: the command touches a guard file on the FIRST run and sleeps
+    // (so it times out), then runs fast on later invocations.
+    const flag = join(dir, "attempt")
+    const command = `node -e "const fs=require('fs');const f='${flag.replace(/\\/g, "/")}';if(!fs.existsSync(f)){fs.writeFileSync(f,'1');setTimeout(()=>{},5000)}"`
+    const retry: RetryConfig = { maxRetries: 1, initialDelayMs: 1, maxDelayMs: 5 }
+    const result = await runHeadless("retry", {
+      workspace: dir,
+      approveAll: true,
+      shellTimeoutMs: 200,
+      retry,
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command } }] },
+        { role: "assistant", text: "done" },
+      ],
+    })
+    expect(result.exitCode).toBe(0)
+    const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { stdout?: string; code?: string } } | undefined
+    expect(resultEvent).toBeDefined()
+    // The command ran at least once (the guard file exists), and the final
+    // tool/result is the successful RETRY, not the TOOL_TIMEOUT marker the
+    // first (sleeping) attempt produced. Without M12 retry wiring, output.code
+    // stays "TOOL_TIMEOUT" and this discriminates the feature from
+    // behavior-unchanged.
+    expect(existsSync(flag)).toBe(true)
+    expect(resultEvent!.output.code).toBeUndefined()
+    expect(resultEvent!.output.stdout ?? "").not.toContain("timed out")
+  })
+
+  it("shellRetention caps a verbose bash output with the truncated marker", async () => {
+    const retention: ShellRetentionOptions = { maxBytes: 100 }
+    const result = await runHeadless("verbose", {
+      workspace: dir,
+      approveAll: true,
+      shellRetention: retention,
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "node -e \"process.stdout.write('y'.repeat(5000))\"" } }] },
+        { role: "assistant", text: "ok" },
+      ],
+    })
+    expect(result.exitCode).toBe(0)
+    const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { stdout: string; truncated?: unknown } } | undefined
+    expect(resultEvent!.output.stdout.length).toBeLessThanOrEqual(100)
+    expect(resultEvent!.output.truncated).toBeDefined()
+  })
+
+  it("no retry/shellRetention → existing behavior (regression)", async () => {
+    const result = await runHeadless("plain", { workspace: dir, approveAll: true, mockScript: [{ role: "assistant", text: "ok" }] })
+    expect(result.exitCode).toBe(0)
+  })
 })

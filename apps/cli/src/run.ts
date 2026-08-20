@@ -9,8 +9,10 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { registerShell } from "@i-harness/shell"
 import { createFsTools } from "@i-harness/fs"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
+import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
+import type { ShellRetentionOptions } from "@i-harness/shell"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
@@ -24,6 +26,8 @@ export interface HeadlessOptions {
   model?: ModelClient
   approveAll?: boolean
   shellTimeoutMs?: number // default 120_000; the shipped harness deadline
+  shellRetention?: ShellRetentionOptions // M12: cap bash/pwsh output (default 64_000 headTail)
+  retry?: RetryConfig // M12: opt-in tool retry-on-timeout (re-runs timed-out tools)
   sessionId?: string // new session: persist under this id
   resumeSessionId?: string // resume: load this id, restore history, continue appending
   coordinator?: SessionCoordinator
@@ -65,13 +69,25 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
   // mount the execution environment + policy
   const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
-  registerShell(ctx, tools, { timeoutMs: shellTimeoutMs })
+  // M12: the shipped harness caps shell output at 64_000 bytes headTail unless
+  // the host overrides it (parallel to the shellTimeoutMs default). A host
+  // that wants no cap passes { maxBytes: Number.MAX_SAFE_INTEGER }.
+  registerShell(ctx, tools, {
+    timeoutMs: shellTimeoutMs,
+    retention: opts.shellRetention ?? { maxBytes: 64_000 },
+  })
   for (const tool of createFsTools({ workspace: opts.workspace })) tools.register(tool)
   createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
 
   // M10a guards (part of the shipped harness):
   //  - timeout: cooperative deadline on tools that declare timeoutMs (bash/pwsh).
   //  - repeat-reminder: advisory consecutive-repeat notice for the model.
+  // M12 retry (OPT-IN — re-runs timed-out tools, changing execution semantics):
+  // `ctx.cascade` runs handlers in registration order, FIRST REGISTERED =
+  // OUTERMOST, so createRetryGuard MUST be mounted BEFORE createTimeoutGuard
+  // to observe the timeout wrapper's substituted TOOL_TIMEOUT raw value (retry
+  // outer, timeout inner).
+  if (opts.retry) ctx.mount(createRetryGuard(ctx, opts.retry))
   ctx.mount(createTimeoutGuard(ctx))
   ctx.mount(createRepeatToolGuard(ctx))
 

@@ -53,6 +53,9 @@ importers:
       '@i-harness/guard-repeat-tool':
         specifier: workspace:*
         version: link:../../packages/guard-repeat-tool
+      '@i-harness/guard-retry':
+        specifier: workspace:*
+        version: link:../../packages/guard-retry
       '@i-harness/guard-timeout':
         specifier: workspace:*
         version: link:../../packages/guard-timeout
@@ -65,6 +68,9 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../../packages/llm-seam
+      '@i-harness/output-retention':
+        specifier: workspace:*
+        version: link:../../packages/output-retention
       '@i-harness/preset':
         specifier: workspace:*
         version: link:../../packages/preset
