@@ -12,12 +12,14 @@ export {
   type BatchCall,
   type ExecuteToolCallsOptions,
 } from "./execute-tool-calls.ts"
+import { executeToolCalls, type BatchCall } from "./execute-tool-calls.ts"
 
 export interface AgentConfig {
   systemPrompt: string
   maxTurns?: number
   signal?: AbortSignal
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction (requires contextWindow)
+  maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10; 1 = serial)
   // NOTE: `model?: string` from the task brief collides with `AgentDeps.model`
   // (the ModelClient) under `AgentDeps & AgentConfig`, so the string selector
   // is dropped for M1 — the ModelClient IS the model configuration and the
@@ -47,6 +49,10 @@ export interface Agent {
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
   const maxTurns = deps.maxTurns ?? 20
+  const maxParallel = deps.maxParallelToolCalls ?? 10
+  if (!Number.isInteger(maxParallel) || maxParallel < 1) {
+    throw new Error(`maxParallelToolCalls must be a positive integer (got ${maxParallel})`)
+  }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
   const compactor = deps.compact ? createCompactionEngine({ model: deps.model, config: deps.compact }) : undefined
@@ -93,6 +99,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
 
       let stepText = ""
       let toolCallsThisStep = 0
+      const batch: BatchCall[] = []
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
         switch (ev.type) {
@@ -102,31 +109,29 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
           case "reasoning":
             reasoning.push(ev.text)
             break
-          case "tool_call":
+          case "tool_call": {
             callSeq += 1
             const callId = `call_${callSeq}`
             append(deps.session, { type: "tool/call", callId, name: ev.call.name, args: ev.call.args })
-            const result = await deps.tools.execute({ name: ev.call.name, args: ev.call.args })
-            if (abort?.aborted) throw new Error("agent aborted")
-            append(deps.session, { type: "tool/result", callId, name: ev.call.name, output: result.output })
-            // Observation seam: only completed dispatches are observed (after
-            // the abort check) and only after the result is appended to the
-            // log, so a listener-appended user message lands after the tool
-            // result, keeping assistant(toolCalls) -> tool(result) ordering.
-            // With no listener the emit is a no-op — behavior-preserving.
-            await ctx.emit("agent/post-tool", {
-              name: ev.call.name,
-              args: ev.call.args,
-              output: result.output,
-              session: deps.session,
-            })
+            // M13: collect the call; execution happens after the stream ends so
+            // the step's tool calls can run concurrently (bounded pool).
+            batch.push({ callId, name: ev.call.name, args: ev.call.args })
             toolCallsThisStep += 1
             break
+          }
           case "error":
             throw new Error(`model stream error: ${ev.error.message}`)
           case "end":
             break
         }
+      }
+
+      if (batch.length > 0) {
+        // M13: concurrent execution. The scheduler appends tool/result in model
+        // order and emits agent/post-tool from its commit lane; it throws
+        // "agent aborted" on step abort (draining + synthesizing results for
+        // never-started calls) and rethrows the first tool failure.
+        await executeToolCalls(ctx, deps.session, deps.tools, batch, { maxParallel, signal: abort })
       }
 
       if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
