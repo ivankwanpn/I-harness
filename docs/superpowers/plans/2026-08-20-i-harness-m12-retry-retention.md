@@ -28,7 +28,7 @@
 **Interfaces:**
 - Produces: `RetainedText`, `TextRetainerOptions`, `TextRetainer`, `createTextRetainer(opts): TextRetainer`. Task 3 consumes this.
 
-- [ ] **Step 1: Scaffold the package**
+- [x] **Step 1: Scaffold the package**
 
 `packages/output-retention/package.json`:
 
@@ -54,7 +54,7 @@
 
 Run `cd D:/agent-complete/I-harness && pnpm install` after creating both files.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `packages/output-retention/test/retention.test.ts`:
 
@@ -130,12 +130,12 @@ describe("TextRetainer", () => {
 })
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cd packages/output-retention && pnpm test`
 Expected: FAIL — module not found.
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 `packages/output-retention/src/index.ts`:
 
@@ -227,12 +227,12 @@ Notes:
   upper bound in bytes) then trims to the byte budget — whole-character safe.
 - `omittedBytes` is exact because every byte was observed.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `cd packages/output-retention && pnpm test && pnpm typecheck`
 Expected: PASS. If a test's exact expectation (e.g. `out.text === ""` for the 10-byte emoji case) needs adjustment for the tail-bound rounding, adjust the TEST to assert the invariant (`text.length % 4 === 0`, `truncated`, `omittedBytes` exact) rather than a magic string.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/output-retention
@@ -251,7 +251,7 @@ git commit -m "feat(output-retention): TextRetainer (head/headTail, UTF-8-safe, 
 - Consumes: `ctx.cascade`/`onCascade` (core-plugin), `Tool`/`ToolExec` (core-tools), `TOOL_TIMEOUT` (`@i-harness/guard-timeout`).
 - Produces: `RetryConfig`, `createRetryGuard(ctx, config?): Plugin`. Task 4 consumes this.
 
-- [ ] **Step 1: Scaffold the package**
+- [x] **Step 1: Scaffold the package**
 
 `packages/guard-retry/package.json`:
 
@@ -282,7 +282,7 @@ git commit -m "feat(output-retention): TextRetainer (head/headTail, UTF-8-safe, 
 
 Run `pnpm install` from the repo root.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `packages/guard-retry/test/retry.test.ts`:
 
@@ -397,8 +397,8 @@ describe("guard-retry", () => {
     const ctx = createContext()
     const registry = createToolRegistry(ctx)
     registry.register(flakyTimeoutTool(100, attempts))
-    ctx.mount(createRetryGuard(ctx, { maxRetries: 2, initialDelayMs: 1, maxDelayMs: 5 })) // retry FIRST = inner
-    ctx.mount(createTimeoutGuard(ctx))
+    ctx.mount(createTimeoutGuard(ctx)) // timeout FIRST = outer
+    ctx.mount(createRetryGuard(ctx, { maxRetries: 2, initialDelayMs: 1, maxDelayMs: 5 })) // retry AFTER = inner
     const result = await registry.execute({ name: "flaky", args: { x: 1 } })
     // the inner retry handler sees the raw partial result (no TOOL_TIMEOUT) → no retry
     expect(attempts.length).toBe(1)
@@ -411,12 +411,12 @@ Note: the flaky tool returns `{ stdout: "partial", exitCode: -1 }` AFTER the
 abort fires; the timeout wrapper substitutes `{ ...result, error, code:
 TOOL_TIMEOUT }`, so the retry handler sees `result.code === "TOOL_TIMEOUT"`.
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cd packages/guard-retry && pnpm test`
 Expected: FAIL — `createRetryGuard` not exported.
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 `packages/guard-retry/src/index.ts`:
 
@@ -514,12 +514,12 @@ export function createRetryGuard(ctx: PluginContext, config?: RetryConfig): Plug
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `cd packages/guard-retry && pnpm test && pnpm typecheck`
 Expected: PASS. If the "backoff delay grows" test is too weak, add a unit test on the exported `backoffDelay` (pure function) asserting monotonic growth within the jitter band and the cap — do not assert exact delays.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/guard-retry
@@ -538,11 +538,11 @@ git commit -m "feat(guard-retry): tool retry-on-timeout via tools/execute cascad
 - Consumes: `createTextRetainer` (Task 1); existing `ExecService`, `timeoutMs` threading (M10a).
 - Produces: `ShellRetentionOptions`, `ShellToolDeps.retention?`, and the retained `truncated` marker in bash/pwsh results. Task 4 consumes this.
 
-- [ ] **Step 1: Add the dependency**
+- [x] **Step 1: Add the dependency**
 
 Add `"@i-harness/output-retention": "workspace:*"` to `packages/shell/package.json` `dependencies`. Run `pnpm install`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add to `packages/shell/test/shell.test.ts` (reuse the existing fake/mock ExecService helper):
 
@@ -591,12 +591,12 @@ logic only needs `exec.run` to return `{ stdout, stderr, exitCode }`. The bash
 tool's `execute` must also thread `timeoutMs`/`abortSignal` as already wired in
 M10a — keep that intact.)
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cd packages/shell && pnpm test`
 Expected: FAIL — bash returns the untruncated output.
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 In `packages/shell/src/index.ts`:
 
@@ -672,12 +672,12 @@ export function registerShell(
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `cd packages/shell && pnpm test && pnpm typecheck`
 Expected: PASS; existing shell tests (timeoutMs threading, abortSignal forwarding) still pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/shell
@@ -695,11 +695,11 @@ git commit -m "feat(shell): cap bash/pwsh output with TextRetainer (truncated ma
 **Interfaces:**
 - Consumes: `RetryConfig`/`createRetryGuard` (Task 2), `ShellRetentionOptions` (Task 3).
 
-- [ ] **Step 1: Add the dependencies**
+- [x] **Step 1: Add the dependencies**
 
 Add `"@i-harness/guard-retry": "workspace:*"` and `"@i-harness/output-retention": "workspace:*"` to `apps/cli/package.json` `dependencies`. Run `pnpm install`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Add to `apps/cli/test/cli.test.ts`:
 
@@ -755,12 +755,12 @@ describe("headless CLI M12 retry + retention", () => {
 })
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cd apps/cli && pnpm test`
 Expected: FAIL — `retry`/`shellRetention` are not HeadlessOptions fields (or behavior unchanged).
 
-- [ ] **Step 4: Write minimal implementation**
+- [x] **Step 4: Write minimal implementation**
 
 In `apps/cli/src/run.ts`:
 
@@ -778,7 +778,7 @@ shellRetention?: ShellRetentionOptions // M12: cap bash/pwsh output (default 64_
 retry?: RetryConfig                    // M12: opt-in tool retry-on-timeout (re-runs timed-out tools)
 ```
 
-3. In the mount block, pass retention to `registerShell` and mount retry AFTER the timeout guard:
+3. In the mount block, pass retention to `registerShell` and mount retry BEFORE the timeout guard (per the ruling below):
 
 ```ts
 const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
@@ -806,12 +806,12 @@ behavior), but the CLI applies a 64_000-byte headTail default (the shipped
 harness output budget), exactly like `shellTimeoutMs` defaults to 120_000. A
 host that wants no cap passes `shellRetention: { maxBytes: Number.MAX_SAFE_INTEGER }`.
 
-- [ ] **Step 5: Run test to verify it passes**
+- [x] **Step 5: Run test to verify it passes**
 
 Run: `cd apps/cli && pnpm test && pnpm typecheck`
 Expected: PASS; existing CLI tests still pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/cli
@@ -822,17 +822,17 @@ git commit -m "feat(cli): shellRetention default + opt-in guard-retry"
 
 ### Task 5: Full gates
 
-- [ ] **Step 1: Run the full suite**
+- [x] **Step 1: Run the full suite**
 
 Run: `cd D:/agent-complete/I-harness && pnpm -r test && pnpm -r typecheck`
 Expected: both exit 0.
 
-- [ ] **Step 2: Verify constraints**
+- [x] **Step 2: Verify constraints**
 
 - No `CURRENT_FORMAT_VERSION` / `SCHEMA_VERSION` changes: `git diff HEAD --stat` shows none.
 - No new external deps: `git diff HEAD -- '*/package.json'` shows only `workspace:*` additions.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add -A

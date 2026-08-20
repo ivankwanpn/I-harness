@@ -216,7 +216,8 @@ return {
 - The retry guard is **not mounted by default** in the shipped CLI (unlike
   guard-timeout): retry changes execution semantics (re-runs tools), so it is
   opt-in via `HeadlessOptions.retry?: RetryConfig`. When present, mount
-  `createRetryGuard` AFTER `createTimeoutGuard` (outer).
+  `createRetryGuard` BEFORE `createTimeoutGuard` (retry outer, timeout inner
+  — §1.2).
 
 ## §5 Testing
 
@@ -238,9 +239,9 @@ return {
 - Backoff: delay grows and is capped; jitter stays within
   `[1 - jitterRatio, 1 + jitterRatio]` of the target (assert range, not exact
   timing).
-- Mount ordering: retry registered AFTER timeout → TOOL_TIMEOUT is retried;
-  if registered BEFORE (inner), it would see the raw tool result — assert the
-  documented ordering works.
+- Mount ordering: retry registered BEFORE timeout (outer, §1.2) → the
+  substituted TOOL_TIMEOUT is retried; if registered AFTER (inner), it would
+  see the raw tool result and never fire — assert the documented ordering works.
 
 ### 5.3 shell
 - Large stdout/stderr → truncated with the `truncated` marker and exact byte

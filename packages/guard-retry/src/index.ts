@@ -84,6 +84,11 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
           while (isToolTimeout(result) && attempt < resolved.maxRetries) {
             await sleep(backoffDelay(attempt, resolved))
             attempt += 1
+            // Deliberate seam-bypass: this re-invokes ONLY the cascade
+            // handlers — it skips registry.execute's pre-execute hooks, the
+            // monotonic guards, and post-execute. Approval was already granted
+            // for the original dispatch and only the FINAL (post-retry) result
+            // should reach post-execute, so each attempt must not re-run them.
             result = await ctx.cascade("tools/execute", d, () => d.tool.execute(d.args, d.exec))
           }
           return result

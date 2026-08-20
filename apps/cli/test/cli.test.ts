@@ -997,7 +997,9 @@ describe("headless CLI M12 retry + retention", () => {
     const result = await runHeadless("retry", {
       workspace: dir,
       approveAll: true,
-      shellTimeoutMs: 200,
+      // 300 to match the M10a timeout tests: the RETRY attempt must complete
+      // (node startup + script) inside this budget, and 200ms flakes on slow CI.
+      shellTimeoutMs: 300,
       retry,
       mockScript: [
         { role: "assistant", toolCalls: [{ name: "bash", args: { command } }] },
