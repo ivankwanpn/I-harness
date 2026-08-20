@@ -52,25 +52,38 @@ function isLowSurrogate(c: number): boolean {
 }
 
 // Trim a string to at most `limitBytes` bytes without splitting a UTF-8
-// multi-byte character: binary search the largest whole-character prefix
-// within the byte budget, then back off if the boundary would cut a UTF-16
-// surrogate pair in half (slice() indexes code units, so an odd boundary can
-// land between the two halves of a 4-byte code point).
+// multi-byte character: binary search the largest code-unit prefix within the
+// byte budget, then back off so the kept prefix never ends by splitting a
+// UTF-16 surrogate pair and never carries an unpaired surrogate from malformed
+// input (slice() indexes code units, so an odd boundary can land between the
+// two halves of a 4-byte code point).
 function trimToBytes(text: string, limitBytes: number): string {
   if (text.length === 0 || Buffer.byteLength(text, "utf-8") <= limitBytes) return text
   let low = 0
   let high = text.length
-  // binary search the largest whole-character prefix within the byte budget
+  // binary search the largest code-unit prefix within the byte budget
   while (low < high) {
     const mid = Math.ceil((low + high) / 2)
     if (Buffer.byteLength(text.slice(0, mid), "utf-8") <= limitBytes) low = mid
     else high = mid - 1
   }
-  // If the budget cut between the two halves of a surrogate pair, drop the
-  // dangling high half so the kept prefix stays well-formed.
-  if (low > 0 && low < text.length && isHighSurrogate(text.charCodeAt(low - 1)) && isLowSurrogate(text.charCodeAt(low))) {
-    low -= 1
+  // Back off while the last kept unit is a high surrogate (a split pair, or an
+  // unpaired high from malformed input) or an unpaired low surrogate. A low
+  // surrogate is only paired when the preceding unit is its high half.
+  while (low > 0) {
+    const last = text.charCodeAt(low - 1)
+    if (isHighSurrogate(last)) {
+      low -= 1
+    } else if (isLowSurrogate(last)) {
+      if (low - 2 >= 0 && isHighSurrogate(text.charCodeAt(low - 2))) break
+      low -= 1
+    } else {
+      break
+    }
   }
+  // A prefix always starts at index 0: if the text begins with an unpaired low
+  // surrogate, any non-empty prefix would contain it, so keep nothing.
+  if (low > 0 && isLowSurrogate(text.charCodeAt(0))) low = 0
   return text.slice(0, low)
 }
 
