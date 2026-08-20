@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
 import { existsSync, readdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs"
+import { writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -1039,5 +1040,45 @@ describe("headless CLI M12 retry + retention", () => {
   it("no retry/shellRetention → existing behavior (regression)", async () => {
     const result = await runHeadless("plain", { workspace: dir, approveAll: true, mockScript: [{ role: "assistant", text: "ok" }] })
     expect(result.exitCode).toBe(0)
+  })
+})
+
+describe("headless CLI M13 parallel tool calls", () => {
+  it("M13: runs two parallel-safe read calls of one step and commits both results", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m13-"))
+    try {
+      const target = join(dir, "a.txt")
+      await writeFile(target, "alpha", "utf-8")
+      const result = await runHeadless("read two files", {
+        workspace: dir,
+        approveAll: true,
+        maxParallelToolCalls: 2,
+        mockScript: [
+          { role: "assistant", toolCalls: [
+            { name: "read", args: { path: "a.txt" } },
+            { name: "read", args: { path: "a.txt" } },
+          ]},
+          { role: "assistant", text: "read both" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      const reads = result.session!.events.filter((e) => e.type === "tool/result" && e.name === "read")
+      expect(reads).toHaveLength(2)
+      for (const ev of reads) {
+        expect((ev as { output: { content: string } }).output.content).toBe("alpha")
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("M13: rejects a non-integer maxParallelToolCalls with exitCode 1", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m13-"))
+    try {
+      const result = await runHeadless("hi", { workspace: dir, maxParallelToolCalls: 1.5 })
+      expect(result.exitCode).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

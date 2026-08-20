@@ -28,6 +28,7 @@ export interface HeadlessOptions {
   shellTimeoutMs?: number // default 120_000; the shipped harness deadline
   shellRetention?: ShellRetentionOptions // M12: cap bash/pwsh output (default 64_000 headTail)
   retry?: RetryConfig // M12: opt-in tool retry-on-timeout (re-runs timed-out tools)
+  maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10)
   sessionId?: string // new session: persist under this id
   resumeSessionId?: string // resume: load this id, restore history, continue appending
   coordinator?: SessionCoordinator
@@ -192,6 +193,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       session, tools, model,
       systemPrompt: "You are a coding agent.",
       ...(opts.compact ? { compact: opts.compact } : {}),
+      ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
     })
     const result = await agent.run(task)
     if (opts.coordinator) {
