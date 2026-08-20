@@ -173,4 +173,49 @@ describe("executeToolCalls scheduler", () => {
     expect(seen.map((p) => (p.output as { marker: string }).marker)).toEqual(["first", "second"])
     expect(resultsOf(session).map((r) => r.callId)).toEqual(["c0", "c1"])
   })
+
+  it("abort dominates a throwing finalize: still synthesizes never-started results and throws agent aborted", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const ac = new AbortController()
+    // A throwing post-execute listener must not suppress abort synthesis —
+    // the abort path runs finalize on settled slots while draining.
+    ctx.on("tools/post-execute", () => {
+      throw new Error("post-execute boom")
+    })
+    tools.register({
+      name: "okTool",
+      description: "ok",
+      inputSchema: {},
+      isConcurrencySafe: true,
+      execute: async () => {
+        await new Promise((r) => setTimeout(r, 30))
+        return { ok: true }
+      },
+    })
+    let started = 0
+    tools.register({
+      name: "abortTool",
+      description: "abort",
+      inputSchema: {},
+      isConcurrencySafe: true,
+      execute: async () => {
+        started += 1
+        if (started === 1) ac.abort() // the first started call aborts the step signal
+        throw new Error("aborted by signal")
+      },
+    })
+    await expect(
+      executeToolCalls(ctx, session, tools, [
+        { callId: "c0", name: "okTool", args: {} },
+        { callId: "c1", name: "abortTool", args: {} },
+        { callId: "c2", name: "okTool", args: {} }, // never started (pool full, then aborted)
+      ], { maxParallel: 2, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+    const aborted = session.events.filter(
+      (e) => e.type === "tool/result" && (e as { output?: { code?: string } }).output?.code === TOOL_ABORTED_BEFORE_DISPATCH,
+    )
+    expect(aborted.map((e) => (e as { callId: string }).callId)).toEqual(["c2"])
+  })
 })

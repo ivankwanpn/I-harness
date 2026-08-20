@@ -134,7 +134,17 @@ export async function executeToolCalls(
   if (aborted) {
     await Promise.allSettled([...inFlight.values()])
     inFlight.clear()
-    await commitReady()
+    // Abort dominates a coincident finalize failure: `commitReady` runs
+    // user/policy-controlled tools/post-execute listeners that can throw, and
+    // that must NOT suppress the synthetic TOOL_ABORTED_BEFORE_DISPATCH results
+    // or the "agent aborted" throw — the turn is aborting regardless. The
+    // NON-abort path keeps its throw (it flows into `firstError` via the outer
+    // try → drain + rethrow, which is the correct throw-fails-turn behavior).
+    try {
+      await commitReady()
+    } catch {
+      // swallow — abort dominates
+    }
     for (let i = startedUpTo; i < batch.length; i += 1) {
       const call = batch[i]!
       append(session, {
