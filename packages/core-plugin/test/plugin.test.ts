@@ -429,3 +429,30 @@ describe("emit return value", () => {
     expect(returned).toBe("x")
   })
 })
+
+describe("resolveAncestorDecision", () => {
+  it("skips the self scope (ancestor-only) and falls back to the payload", async () => {
+    const ctx = createContext()
+    ctx.on("t/anc", () => ({ kind: "ask" }))
+    ctx.waterfall("t/anc", async (payload, next) => {
+      await next(payload)
+    })
+    const child = ctx.scope.mount()
+    child.on("t/anc", () => ({ kind: "deny" }))
+    child.waterfall("t/anc", async (payload, next) => {
+      await next(payload)
+    })
+    const raw = { tool: "sh" }
+    await child.emit("t/anc", raw)
+    // self decision is the nearest: resolveDecision returns the child's deny
+    expect(child.resolveDecision("t/anc", raw)).toEqual({ kind: "deny" })
+    // ancestor-only: the child's OWN entry is skipped; the parent's ask wins.
+    // M13 core-tools `prepare` uses this so a concurrent sibling's entry in
+    // the self scope's shared decisions map can never leak into this dispatch.
+    expect(child.resolveAncestorDecision("t/anc", raw)).toEqual({ kind: "ask" })
+    // root context: no ancestor scope → the emitted payload falls through
+    const bare = createContext()
+    await bare.emit("t/anc", raw)
+    expect(bare.resolveAncestorDecision("t/anc", raw)).toBe(raw)
+  })
+})

@@ -296,3 +296,61 @@ describe("exposure and promoted search", () => {
     expect(reg.deferredToolCount()).toBe(1)
   })
 })
+
+describe("M13 staged execution", () => {
+  it("keeps pre-execute decisions independent across concurrent prepares", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    tools.register({
+      name: "ping",
+      description: "p",
+      inputSchema: {},
+      execute: async () => ({ ok: true }),
+    })
+    // A pre-execute producer decides per-call: deny when args.bad is set.
+    ctx.on("tools/pre-execute", (payload: unknown) => {
+      const call = payload as { name: string; args: { bad?: boolean } }
+      return call.args?.bad ? { kind: "deny", reason: "bad args" } : undefined
+    })
+    const p1 = tools.prepare({ name: "ping", args: {} })
+    const p2 = tools.prepare({ name: "ping", args: { bad: true } })
+    const [r1, r2] = await Promise.allSettled([p1, p2])
+    expect(r1.status).toBe("fulfilled")
+    expect(r2.status).toBe("rejected")
+    expect(String((r2 as PromiseRejectedResult).reason)).toMatch(/denied/)
+  })
+
+  it("seeds exec.abortSignal from the passed signal", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    tools.register({ name: "ping", description: "p", inputSchema: {}, execute: async () => ({ ok: true }) })
+    const ac = new AbortController()
+    const prepared = await tools.prepare({ name: "ping", args: {} }, ac.signal)
+    expect(prepared.exec.abortSignal).toBe(ac.signal)
+  })
+
+  it("execute(call, opts) wrapper throws on unknown tool like today", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    await expect(tools.execute({ name: "nope", args: {} })).rejects.toThrow("unknown tool")
+  })
+
+  it("merges an ancestor-scope policy decision into a child-scope dispatch (mechanism B)", async () => {
+    const parent = createContext()
+    const child = parent.scope.mount()
+    const tools = createToolRegistry(child)
+    tools.register({ name: "write", description: "", inputSchema: {}, execute: async () => ({ ok: true }) })
+    // Parent-scope policy (e.g. guard-approval on the root): ask for this
+    // tool. Mirror the real policy shape — a plain-listener seed PLUS a
+    // waterfall handler (emitFn records a scope decision only when a waterfall
+    // exists for the event, so the plain listener can seed the chain).
+    parent.on("tools/pre-execute", () => ({ kind: "ask", reason: "needs approval" }))
+    parent.waterfall("tools/pre-execute", async (payload, next) => {
+      const chainValue = await next(payload)
+      return chainValue
+    })
+    // No answerer → fail closed. The ancestor's decision must gate the child's
+    // dispatch even though the child's own pre-execute chain produced nothing.
+    await expect(tools.execute({ name: "write", args: {} })).rejects.toThrow(/approval|denied/i)
+  })
+})
