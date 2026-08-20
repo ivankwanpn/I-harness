@@ -358,3 +358,58 @@ describe("agent compaction seam", () => {
     expect(deps.session.events.slice(-3).map((e) => e.type)).toEqual(["compaction/start", "compaction/summary", "compaction/end"])
   })
 })
+
+describe("M13 parallel tool calls", () => {
+  function parallelDeps(ctx: import("@i-harness/core-plugin").PluginContext) {
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    let maxConcurrent = 0
+    let inFlight = 0
+    const readTool: Tool<{ path: string }, { content: string }> = {
+      name: "read",
+      description: "read a file",
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      isConcurrencySafe: true,
+      execute: async ({ path }) => {
+        inFlight += 1
+        maxConcurrent = Math.max(maxConcurrent, inFlight)
+        await new Promise((r) => setTimeout(r, 10))
+        inFlight -= 1
+        return { content: `content-of-${path}` }
+      },
+    }
+    tools.register(readTool)
+    return {
+      session,
+      tools,
+      maxConcurrent: () => maxConcurrent,
+      model: undefined as unknown as ReturnType<typeof createMockClient>,
+    }
+  }
+
+  it("executes two tool calls of one step concurrently and commits in call order", async () => {
+    const ctx = createContext()
+    const deps = parallelDeps(ctx)
+    deps.model = createMockClient([
+      { role: "assistant", toolCalls: [
+        { name: "read", args: { path: "a.txt" } },
+        { name: "read", args: { path: "b.txt" } },
+      ]},
+      { role: "assistant", text: "done" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const result = await agent.run("read two files")
+    expect(result.finalText).toBe("done")
+    expect(deps.maxConcurrent()).toBe(2)
+    const results = deps.session.events
+      .filter((e) => e.type === "tool/result")
+      .map((e) => (e as { output: { content: string } }).output.content)
+    expect(results).toEqual(["content-of-a.txt", "content-of-b.txt"])
+  })
+
+  it("rejects a non-integer maxParallelToolCalls", () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    expect(() => createAgent(ctx, { ...deps, systemPrompt: "p", maxParallelToolCalls: 2.5 })).toThrow(/maxParallelToolCalls/)
+  })
+})
