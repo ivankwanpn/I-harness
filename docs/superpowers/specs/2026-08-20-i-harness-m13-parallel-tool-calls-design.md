@@ -186,14 +186,17 @@ a real race, not theoretical.
 
 **Requirement**: the pre-execute decision must be scoped per-dispatch — no
 shared mutable slot. Direction (mechanism chosen in the plan): the registry's
-waterfall handler returns the validated candidate as the chain value, and
-`core-plugin`'s `emitFn` returns the final waterfall chain value to the caller
-(`prepare` reads `const decision = await ctx.emit("tools/pre-execute", call)`;
-the "decision exists only when produced" seeding semantics (core-plugin's
-nearest-wins decision map) are unchanged). `emitFn`'s return is currently
-ignored by all callers, so the change is additive. The plan must keep the
-ancestor/nearest-wins `decisions.set/clear` logic intact and pin it with the
-existing decision tests.
+waterfall handler returns the validated candidate as the chain value only when
+a decision was produced, and `core-plugin`'s `emitFn` returns the final
+waterfall chain value to the caller (`prepare` reads it and normalizes the
+no-decision case to `allow`). **Parent-propagation invariant:** `emitFn`
+propagates the resolved payload parent-ward, and a parent scope's
+guard-approval classifies the ToolCall payload — the handler MUST return
+`undefined` (not `{ kind: "allow" }`) when no decision was produced, so the
+parent still receives the call and approval never fails open for child-scope
+dispatches. `emitFn`'s return is currently ignored by all callers, so the
+change is additive. The plan must keep the ancestor/nearest-wins
+`decisions.set/clear` logic intact and pin it with the existing decision tests.
 
 ### 3.2 Signal threading
 

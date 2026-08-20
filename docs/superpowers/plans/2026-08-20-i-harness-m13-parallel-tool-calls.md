@@ -195,7 +195,7 @@ export interface PreparedCall {
 }
 ```
 
-2. Replace the shared decision slot + waterfall handler. Delete `let decision: ToolDecision = { kind: "allow" }` (line ~111) and change the handler (lines ~113-131) to return the candidate:
+2. Replace the shared decision slot + waterfall handler. Delete `let decision: ToolDecision = { kind: "allow" }` (line ~111) and change the handler (lines ~113-131) to return the candidate ONLY when a decision was produced (otherwise `undefined`, so `runWaterfall` falls back to the chain payload — the call — exactly as the pre-M13 code propagated to parent scopes):
 
 ```ts
   // Per-dispatch pre-execute decision (M13): the handler RETURNS the validated
@@ -203,6 +203,14 @@ export interface PreparedCall {
   // return) instead of writing a shared closure slot — a shared slot races
   // under concurrent prepares. The handler is still registered ONCE at
   // construction so dispatches reuse it (no transient handler churn).
+  //
+  // CRITICAL — return `undefined` (not `{ kind: "allow" }`) when no decision
+  // was produced: emitFn propagates `resolvedPayload` parent-ward, and a
+  // parent scope's guard-approval classifies the ToolCall payload. Returning a
+  // decision object here would make the parent see a decision instead of the
+  // call and skip classification (fail-open for ancestor approval). Returning
+  // undefined falls back to the chain payload (the call) — the pre-M13
+  // semantics. `prepare` normalizes the undefined case to allow.
   ctx.waterfall("tools/pre-execute", async (payload, next) => {
     const chainValue = await next(payload)
     // Closed-vocabulary rules (audit F03-1):
@@ -210,12 +218,12 @@ export interface PreparedCall {
     //   - object WITHOUT a `kind`  → raw ToolCall passthrough → no decision
     //   - object WITH a `kind`     → must be in DECISION_KINDS else HARD error
     //   - any non-object value     → malformed decision, HARD error (never allow)
-    if (chainValue === undefined) return { kind: "allow" }
+    if (chainValue === undefined) return undefined
     if (typeof chainValue !== "object" || chainValue === null) {
       throw new Error(`malformed pre-execute decision: ${JSON.stringify(chainValue)}`)
     }
     const candidate = chainValue as ToolDecision
-    if (!("kind" in candidate)) return { kind: "allow" }
+    if (!("kind" in candidate)) return undefined
     if (!DECISION_KINDS.has(candidate.kind)) {
       throw new Error(`malformed pre-execute decision: ${JSON.stringify(chainValue)}`)
     }
@@ -223,17 +231,24 @@ export interface PreparedCall {
   })
 ```
 
-3. Replace the current `async function execute(call: ToolCall): Promise<ToolResult>` (lines ~158-216) with the three stages + the wrapper. Keep the `register`/`schemas`/`search`/`genToolCatalog` functions untouched. The new code:
+3. Replace the current `async function execute(call: ToolCall): Promise<ToolResult>` (lines ~158-216) with the three stages + the wrapper (keep `register`/`schemas`/`search`/`genToolCatalog` untouched). Add the `isDecision` helper next to `mergeDecision` (near line 79). The block below intentionally starts with the helper and the `prepare` opening — its body continues through the `execute` closing brace at the end of this code block:
 
 ```ts
+function isDecision(value: unknown): value is ToolDecision {
+  return typeof value === "object" && value !== null && "kind" in value && DECISION_KINDS.has((value as ToolDecision).kind)
+}
+
   async function prepare(call: ToolCall, signal?: AbortSignal): Promise<PreparedCall> {
     const tool = tools.get(call.name)
     if (!tool) throw new Error(`unknown tool: ${call.name}`)
 
     // 1. pre-execute waterfall — resolves to a closed-vocabulary decision.
-    //    Per-dispatch (M13): the decision is the emit's chain return; no
-    //    shared slot, so concurrent prepares are independent.
-    const decision = (await ctx.emit("tools/pre-execute", call)) as ToolDecision
+    //    Per-dispatch (M13): the decision is the emit's chain return (or the
+    //    call payload when no decision was produced — see the handler's
+    //    CRITICAL comment); no shared slot, so concurrent prepares are
+    //    independent.
+    const chainValue = await ctx.emit("tools/pre-execute", call)
+    const decision = isDecision(chainValue) ? chainValue : { kind: "allow" }
 
     // 1b. Cross-scope fail-open fix (Task 10 mechanism B): `emit` propagates
     //     CHILD → PARENT, so a policy mounted on an ancestor scope (e.g.
