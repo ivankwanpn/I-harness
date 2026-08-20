@@ -77,8 +77,9 @@ function trimToBytes(text: string, limitBytes: number): string {
 // Keep the LAST whole characters of `text` within `limitBytes` bytes, walking
 // from the end so the result ends with the original final characters whenever
 // they fit in the budget. UTF-16 surrogate pairs are treated atomically (never
-// split), and an unpaired surrogate is skipped. Whole characters are appended
-// to `parts` in reverse order and the array is reversed before joining so the
+// split); an unpaired surrogate (high or low, i.e. malformed input) stops the
+// walk so a lone surrogate is never emitted. Whole characters are appended to
+// `parts` in reverse order and the array is reversed before joining so the
 // walk stays O(1) per character.
 function trimToBytesSuffix(text: string, limitBytes: number): string {
   if (text.length === 0 || Buffer.byteLength(text, "utf-8") <= limitBytes) return text
@@ -96,6 +97,7 @@ function trimToBytesSuffix(text: string, limitBytes: number): string {
       i -= 2
     } else {
       // UTF-8 byte length of a non-surrogate code unit: 1 (ASCII), 2 (<= U+07FF), else 3
+      if (isHighSurrogate(unit)) break // unpaired high — stop the suffix here
       const charBytes = unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3
       if (used + charBytes > limitBytes) break
       parts.push(text[i - 1])
