@@ -16,6 +16,7 @@ export function createSessionQueryTools(query: SessionQuery): Tool[] {
       required: ["query"],
     },
     isReadOnly: true,
+    isConcurrencySafe: true,
     execute: async (args: { query: string; session_id?: string; subtree_of?: string; limit?: number }) => {
       const hits = await query.search(args.query, {
         sessionId: args.session_id,
@@ -39,6 +40,7 @@ export function createSessionQueryTools(query: SessionQuery): Tool[] {
       required: ["session_id"],
     },
     isReadOnly: true,
+    isConcurrencySafe: true,
     execute: async (args: { session_id: string; direction?: "ancestors" | "descendants" | "children"; depth?: number }) => {
       const nodes = await query.lineage(args.session_id, { direction: args.direction ?? "children", depth: args.depth })
       return { nodes }

@@ -53,6 +53,7 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
     exposure: "deferred",
     searchHint: "find files by pattern",
     isReadOnly: true,
+    isConcurrencySafe: true,
     execute: async (args) => {
       if (args.pattern.trim().length === 0) throw new Error("pattern must be a non-empty string")
       try {
@@ -107,6 +108,7 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
     exposure: "deferred",
     searchHint: "search file contents by pattern",
     isReadOnly: true,
+    isConcurrencySafe: true,
     execute: async (args) => {
       if (args.pattern.length === 0) throw new Error("pattern must be a non-empty string")
       try {

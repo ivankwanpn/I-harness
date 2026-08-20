@@ -17,6 +17,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     description: "read a file",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
+    isConcurrencySafe: true,
     execute: async ({ path }) => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") }),
   }
   const write: Tool<{ path: string; text: string }, { ok: boolean }> = {
@@ -34,6 +35,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     description: "list a directory",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
+    isConcurrencySafe: true,
     execute: async ({ path }) => ({ entries: await readdir(resolvePath(deps.workspace, path)) }),
   }
   return [read, write, list_dir]
