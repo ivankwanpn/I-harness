@@ -1,19 +1,37 @@
-# Handoff — I-harness @ M10a + M10b + M11 Complete (2026-08-20)
+# Handoff — I-harness @ M10a + M10b + M11 + M12 Complete (2026-08-20)
 
 > Handoff for a new session continuing development of the I-harness project.
 > Repo: `D:\agent-complete\I-harness` (pnpm monorepo, git on `master`).
-> Working tree is clean at this commit: `2e1e51e`.
+> Working tree is clean at this commit: `16c242d`.
 
 ## 1. Current State
 
 - **M10a (guards: tool timeout + repeat reminder) — COMPLETE, on `master`.**
 - **M10b (session-query: SQLite FTS + lineage) — COMPLETE, on `master`.**
 - **M11 (compaction: context-pressure auto + manual compact) — COMPLETE, on `master`.**
+- **M12 (tool retry-on-timeout + tool-result retention) — COMPLETE, on `master`.**
 - All gates green at HEAD: `pnpm -r test` exit 0, `pnpm -r typecheck` exit 0.
-- No `CURRENT_FORMAT_VERSION` / event-vocabulary changes since M10b's `compaction/*` addition (M11, additive; the M9 `subagent/inbox` and M11 `compaction/*` events ARE registered in `session-persistence`'s `KNOWN_EVENT_TYPES` — this matters for persistence!). The ONLY schema bump is `session-persistence-sqlite` `SCHEMA_VERSION` 1→2 (M10b, via the M5 migration chain).
+- No `CURRENT_FORMAT_VERSION` / event-vocabulary changes since M10b's `compaction/*` addition (M11, additive; M12 adds NO session events — the retry loop is invisible to the session log by design, and the `truncated` marker lives on the tool result, not an event). The ONLY schema bump is `session-persistence-sqlite` `SCHEMA_VERSION` 1→2 (M10b, via the M5 migration chain).
 - Root `engines.node` is `>=22.18` (required by `node:sqlite`'s `readOnly` option).
 - All package.json additions are `workspace:*` — no new external dependencies.
-- 26 packages + 1 app (`apps/cli`). Environment: **Windows (Git Bash)**, Node v24, ESM + strict TS, vitest.
+- 28 packages + 1 app (`apps/cli`). Environment: **Windows (Git Bash)**, Node v24, ESM + strict TS, vitest.
+
+### Recent commits (M12, oldest → newest)
+```
+3759ce8 docs: M12 tool retry-on-timeout + tool-result retention design spec
+493d51a docs: M12 spec §1.2 — retry isToolTimeout checks the cascade raw value's code (fix)
+9abd51b docs: M12 plan + spec re-entrancy guard for retry re-dispatch (nested frames fix)
+3e52aa4 feat(output-retention): TextRetainer (head/headTail, UTF-8-safe, exact omission)
+1aa1ac4 fix(output-retention): byte-aware headTail tail, fail-loud typed validation, capture validated config
+ad0127e fix(output-retention): pin Infinity validation, never emit unpaired high surrogate
+0457442 fix(output-retention): never emit lone surrogates from malformed input on head truncation
+6ead444 feat(guard-retry): tool retry-on-timeout via tools/execute cascade re-dispatch
+6a3d7d2 docs: M12 — correct retry mount order (first-registered = outermost; retry BEFORE timeout)
+c0ae2e3 feat(shell): cap bash/pwsh output with TextRetainer (truncated marker)
+98de1da fix(shell): no-retention path returns exactly today's shape (drop stderr)
+eea508f feat(cli): shellRetention default + opt-in guard-retry
+16c242d chore(m12): final-gate fixes — retry e2e 300ms, spec/plan mount-order wording, seam-bypass comment
+```
 
 ### Recent commits (M11, oldest → newest)
 ```
@@ -197,6 +215,57 @@ when `sessionQuery` is provided. `HeadlessResult` exposes `session?`.
 works headless; resume of a persisted compacted session projects the summary
 (e2e-verified — the C1 regression).
 
+## 5c. M12 Delivered (retry-on-timeout + result retention) — architecture tour
+
+### 5c.1 `@i-harness/output-retention` (new pure library)
+- `TextRetainer` with `head` / `headTail` modes (`headRatio` default 0.5),
+  UTF-8/surrogate-safe trimming (binary search over whole code units; a
+  multi-byte char is never split and unpaired surrogates are never emitted,
+  even from malformed input), exact `truncated` / `omittedBytes`, fail-loud
+  typed config validation (defaults only on `undefined`; `typeof` /
+  `Number.isFinite` checks incl. Infinity pinning).
+- Config snapshot at construction; a 1,800-case invariant sweep pinned
+  head/tail byte-disjointness and whole-character boundaries.
+
+### 5c.2 `@i-harness/guard-retry` (new package)
+- `createRetryGuard(ctx, config?)` — a `tools/execute` cascade handler OUTER
+  to `guard-timeout` that retries ONLY when the CASCADE raw value's
+  `code === TOOL_TIMEOUT` (the M10a marker), with exponential backoff + jitter.
+- **Re-entrancy guard** (WeakSet keyed by the per-execute dispatch object):
+  `next()` is one-shot, so a retry RE-INVOKES `ctx.cascade` with a
+  reconstructed final — the WeakSet bounds attempts to exactly `1 + maxRetries`
+  (nested frames delegate without re-entering the loop; the exhaust test pins
+  3 attempts for `maxRetries: 2`). Concurrency-safe for parallel tool calls.
+- Re-dispatch is a **deliberate seam-bypass**: it re-runs ONLY the cascade
+  handlers, skipping `registry.execute`'s pre-execute hooks, monotonic guards,
+  and post-execute (approval was already granted; only the final result should
+  hit post-execute) — documented in a comment at the call site.
+- Config fail-loud (`maxRetries >= 0` int, delays `>= 0` ints, `jitterRatio`
+  in `[0, 1)`); `backoffDelay` pure with monotonic growth + cap + jitter band.
+
+### 5c.3 shell
+- `createShellTools({ exec, timeoutMs?, retention? })`: exec keeps the FULL
+  stream; the tool-return layer retains stdout/stderr via fresh per-run
+  `TextRetainer`s and adds `truncated: { stdoutBytes, stderrBytes }` only when
+  something was omitted. **No-retention path returns EXACTLY today's shape**
+  `{ stdout, exitCode }` (a fix round dropped an unconditional stderr
+  addition). `registerShell` threads retention.
+- Minor (safe to defer): per-run retainers re-read `deps.retention!.maxBytes`
+  live rather than from the creation-time snapshot; a host mutating deps
+  between creation and execution would see inconsistent config.
+
+### 5c.4 CLI
+- `HeadlessOptions.shellRetention?` — shipped default `{ maxBytes: 64_000 }`
+  headTail (parallel to `shellTimeoutMs` 120s); a host wanting no cap passes
+  `{ maxBytes: Number.MAX_SAFE_INTEGER }`. `retry?: RetryConfig` is OPT-IN
+  (mounted only `if (opts.retry)`) and mounted BEFORE `createTimeoutGuard`
+  (first-registered = OUTERMOST — retry sees the substituted TOOL_TIMEOUT).
+- E2e: a guard-file command times out on the first attempt and succeeds on the
+  retry (`existsSync(flag)` + final `output.code` undefined — genuinely
+  discriminates retry-on from retry-off; the brief's original stdout-only
+  assertion was a false positive); a verbose command is truncated with the
+  marker. Retry e2e uses `shellTimeoutMs: 300` (200 flaked on slow CI).
+
 ## 6. Execution Rulings Made (recorded in spec/plan docs)
 
 1. **M10a — TOOL_TIMEOUT marker location**: top-level `{ ...result, error, code }` (reads at
@@ -212,6 +281,15 @@ works headless; resume of a persisted compacted session projects the summary
 8. **M11 — `maybeCompact` re-fire guard** (no compaction until new non-marker events past the
    last `compaction/end`); `compact()` ungated. Spec §2.3.
 9. **M11 — fail-soft summarizer failures log a `console.warn`.** Spec §2.5.
+10. **M12 — retry mount order**: first-registered = OUTERMOST in `ctx.cascade`
+    (pinned by `cascade.test.ts`); `createRetryGuard` MUST be mounted BEFORE
+    `createTimeoutGuard` (retry outer, timeout inner) to see the substituted
+    `TOOL_TIMEOUT`. Spec §4/§5.2 and the plan's step-3 code block originally
+    said "after" — corrected in the final-gate fix wave.
+11. **M12 — retry is OPT-IN** (`if (opts.retry) ctx.mount(...)`): unconditional
+    mounting would silently re-run timed-out commands for every host.
+12. **M12 — no-retention shell result = today's exact shape** `{ stdout, exitCode }`
+    (no `stderr` key added when retention is off).
 
 ## 7. Deferred Follow-ups (reconstructed from SDD ledgers; triaged by final reviews)
 
@@ -245,6 +323,20 @@ works headless; resume of a persisted compacted session projects the summary
   step (bounded by maxTurns, not infinite); no test pins the fail-soft warn text; sqlite backend
   doesn't merge row seq into parsed events on read (pre-existing).
 
+### M12 deferred minors (triaged by final whole-branch review; C/I fixed in the fix wave)
+- FIXED in final wave: retry e2e `shellTimeoutMs` 200→300 (slow-CI flake risk, matches M10a);
+  spec §4/§5.2 + plan step-3/test-section mount-order wording corrected to "BEFORE / outer";
+  seam-bypass comment at the re-dispatch call site.
+- Still open (safe to defer): `backoffDelay` public signature leaks non-exported
+  `ResolvedRetryConfig` (no declaration emit today; `resolveConfig` is idempotent so
+  `RetryConfig` suffices); `sleep` not abort-aware (one wasted re-dispatch after an upstream
+  cancel — no corruption); shell per-run retainers read `deps.retention` live instead of the
+  creation-time snapshot; unused direct dep `@i-harness/output-retention` in `apps/cli`
+  (`run.ts` only imports the type from `@i-harness/shell`); duplicate `fakeExec` helpers in
+  `packages/shell/test/shell.test.ts`; `trimToBytes` is O(n log n) with per-probe string
+  allocation (fine at 64k, note for multi-MB); two untested edges — surrogate pair split ACROSS
+  chunks and two different tools timing out concurrently (both work by construction).
+
 ### Design-level observations (worth documenting/deciding)
 - **M10a**: 120s default shell deadline is a shipped behavior change (>2min bash dies unless
   `shellTimeoutMs` raised); repeat counter resets on session resume (WeakMap keyed by session
@@ -257,16 +349,26 @@ works headless; resume of a persisted compacted session projects the summary
 - **M11**: the compaction summarizer shares the agent's model client (script-based mocks would
   be consumed by summarizer calls — tests use inline structural ModelClients); the auto-compact
   e2e config must keep `maxTokens < threshold` to stay representative (not the hot-loop shape).
+- **M12**: intermediate retry attempts are INVISIBLE in the session log (no new event types —
+  by design, but spec §5.4 anticipated showing the retry; consider an observability hook such as
+  a listener event or a `retries` count in the tool result for the next milestone); the CLI's
+  default `shellRetention` (64k headTail) means the CLI always changes bash/pwsh tool-result
+  shape for hosts that don't pass `shellRetention` — the plan rules this in (parallel to the
+  120s shellTimeoutMs default) but it sits in tension with the spec's "behavior unchanged when
+  retention is not configured" constraint, which strictly holds only at `createShellTools`.
 
 ## 8. Next Milestones
 
-- The M7 milestone sequence ("jobs upgrade (M9), guard/session-query (M10), compaction (M11)")
-  is now complete. M12 is unassigned.
-- Candidate next work (from the M10a/M11 specs' Out-of-Scope and ledger):
-  - **Retry-on-timeout / sandbox-wrapping tools** — the `tools/execute` cascade seam exists.
+- The M7 milestone sequence ("jobs upgrade (M9), guard/session-query (M10), compaction (M11),
+  retry/retention (M12)") is now complete.
+- Candidate next work (from the M10a/M11/M12 specs' Out-of-Scope and ledger):
+  - **Sandbox-wrapping tools** — the retry guard's re-dispatch machinery (guard-retry M12)
+    is a working example of the `tools/execute` cascade seam.
   - **Context-overflow recovery / remote compaction** (codex-style) — M11's §Out-of-Scope.
   - **Per-model compaction policy routing** (dsh `modelPolicies`).
   - **Compaction progress hooks/UI** (headless library + tools exist).
+  - **Retry observability** (M12 final review): a listener event or `retries` count in the tool
+    result so retried tools are visible in session traces without a new event type.
   - **`KNOWN_EVENT_TYPES` recommendation from the M11 final review**: make registering new
     additive event types a mandatory step with a coordinator round-trip test (would have caught
     the M11 C1 immediately).
