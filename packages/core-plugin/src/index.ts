@@ -34,6 +34,7 @@ export interface PluginContext {
   guard(event: string, fn: GuardFn): void
   checkGuards(event: string, exec: unknown): string | undefined
   resolveDecision(event: string, payload: unknown): unknown
+  resolveAncestorDecision(event: string, payload: unknown): unknown
   mount(plugin: Plugin): void
   unmount(name: string): Promise<void>
 }
@@ -324,6 +325,24 @@ function createScope(
     // chain made one, fall back to the emitted payload.
     resolveDecision(event: string, payload: unknown): unknown {
       let cur: InternalScope | null = ctx
+      while (cur) {
+        const decision = cur.resolveLocalDecision(event)
+        if (decision !== undefined) return decision
+        cur = cur.parentScope
+      }
+      return payload
+    },
+    // I3 decision nearest-wins, ANCESTOR-ONLY: like `resolveDecision` but
+    // starts at the parent scope, skipping `self`. M13 core-tools `prepare`
+    // uses this: the local scope's decision already arrives per-dispatch via
+    // `emit`'s return value, so reading THIS scope's recorded decision here
+    // would surface a CONCURRENT dispatch's entry — the per-scope decisions
+    // map is a shared slot across in-flight emits (the M13 decision-slot race).
+    // Only ancestor decisions cannot be derived from the local emit, so only
+    // they are looked up. Fall back to the emitted payload when no ancestor
+    // made one.
+    resolveAncestorDecision(event: string, payload: unknown): unknown {
+      let cur: InternalScope | null = ctx.parentScope
       while (cur) {
         const decision = cur.resolveLocalDecision(event)
         if (decision !== undefined) return decision

@@ -35,6 +35,12 @@ export interface ToolResult {
   output: unknown
 }
 
+export interface PreparedCall {
+  call: ToolCall
+  tool: Tool
+  exec: ToolExec
+}
+
 export interface ToolSchema {
   name: string
   description: string
@@ -81,13 +87,20 @@ function mergeDecision(local: ToolDecision, candidate: unknown): ToolDecision {
   return DECISION_STRICTNESS[d.kind] > DECISION_STRICTNESS[local.kind] ? d : local
 }
 
+function isDecision(value: unknown): value is ToolDecision {
+  return typeof value === "object" && value !== null && "kind" in value && DECISION_KINDS.has((value as ToolDecision).kind)
+}
+
 type ApprovalAnswerer = (req: { name: string; reason: string }) => Promise<boolean>
 
 export interface ToolRegistry {
   register(tool: Tool): void
   get(name: string): Tool | undefined
   schemas(): ToolSchema[]
-  execute(call: ToolCall): Promise<ToolResult>
+  prepare(call: ToolCall, signal?: AbortSignal): Promise<PreparedCall>
+  dispatch(prepared: PreparedCall): Promise<unknown>
+  finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
+  execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>
   genToolCatalog(): ToolSchema[]
   verifyToolCatalog(expected: Tool[], catalog: ToolSchema[]): void
   installSearch(fn: (query: string, opts?: { limit?: number }) => ToolSchema[]): void
@@ -105,11 +118,19 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   // Pluggable search engine hook, installed via installSearch(). Until then,
   // search() fails loud rather than returning an empty corpus.
   let searchFn: ((query: string, opts?: { limit?: number }) => ToolSchema[]) | undefined
-  // Single pre-execute decision slot. The waterfall handler is registered ONCE
-  // at construction (not per-execute) so dispatches reuse it instead of
-  // accumulating transient handlers in core-plugin's waterfall map.
-  let decision: ToolDecision = { kind: "allow" }
-
+  // Per-dispatch pre-execute decision (M13): the handler RETURNS the validated
+  // candidate as the waterfall chain value (read by `prepare` from emit's
+  // return) instead of writing a shared closure slot — a shared slot races
+  // under concurrent prepares. The handler is still registered ONCE at
+  // construction so dispatches reuse it (no transient handler churn).
+  //
+  // CRITICAL — return `undefined` (not `{ kind: "allow" }`) when no decision
+  // was produced: emitFn propagates `resolvedPayload` parent-ward, and a
+  // parent scope's guard-approval classifies the ToolCall payload. Returning a
+  // decision object here would make the parent see a decision instead of the
+  // call and skip classification (fail-open for ancestor approval). Returning
+  // undefined falls back to the chain payload (the call) — the pre-M13
+  // semantics. `prepare` normalizes the undefined case to allow.
   ctx.waterfall("tools/pre-execute", async (payload, next) => {
     const chainValue = await next(payload)
     // Closed-vocabulary rules (audit F03-1):
@@ -117,16 +138,16 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     //   - object WITHOUT a `kind`  → raw ToolCall passthrough → no decision
     //   - object WITH a `kind`     → must be in DECISION_KINDS else HARD error
     //   - any non-object value     → malformed decision, HARD error (never allow)
-    if (chainValue === undefined) return
+    if (chainValue === undefined) return undefined
     if (typeof chainValue !== "object" || chainValue === null) {
       throw new Error(`malformed pre-execute decision: ${JSON.stringify(chainValue)}`)
     }
     const candidate = chainValue as ToolDecision
-    if (!("kind" in candidate)) return
+    if (!("kind" in candidate)) return undefined
     if (!DECISION_KINDS.has(candidate.kind)) {
       throw new Error(`malformed pre-execute decision: ${JSON.stringify(chainValue)}`)
     }
-    decision = candidate
+    return candidate
   })
 
   function register(tool: Tool): void {
@@ -156,24 +177,37 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       }))
   }
 
-  async function execute(call: ToolCall): Promise<ToolResult> {
+  async function prepare(call: ToolCall, signal?: AbortSignal): Promise<PreparedCall> {
     const tool = tools.get(call.name)
     if (!tool) throw new Error(`unknown tool: ${call.name}`)
 
     // 1. pre-execute waterfall — resolves to a closed-vocabulary decision.
-    decision = { kind: "allow" }
-    await ctx.emit("tools/pre-execute", call)
+    //    Per-dispatch (M13): the decision is the emit's chain return (or the
+    //    call payload when no decision was produced — see the handler's
+    //    CRITICAL comment); no shared slot, so concurrent prepares are
+    //    independent.
+    const chainValue = await ctx.emit("tools/pre-execute", call)
+    const decision: ToolDecision = isDecision(chainValue) ? chainValue : { kind: "allow" }
 
     // 1b. Cross-scope fail-open fix (Task 10 mechanism B): `emit` propagates
-    // CHILD → PARENT, so a policy mounted on an ancestor scope (e.g.
-    // guard-approval on the parent) runs and may decide, but its decision never
-    // flows BACK DOWN into this registry's own waterfall chain — the local
-    // `decision` slot would stay "allow" and a dangerous child-scope dispatch
-    // would execute silently. The scope plumbing records ancestor decisions
-    // (plain-listener seeds, nearest-wins) and exposes them via
-    // `ctx.resolveDecision`; consult it and merge so a stricter ancestor
-    // decision gates this dispatch from any scope in the chain.
-    const ancestorDecision = ctx.resolveDecision("tools/pre-execute", call)
+    //     CHILD → PARENT, so a policy mounted on an ancestor scope (e.g.
+    //     guard-approval on the parent) runs and may decide, but its decision
+    //     never flows BACK DOWN into this registry's own waterfall chain — the
+    //     local `decision` would stay "allow" and a dangerous child-scope
+    //     dispatch would execute silently. The scope plumbing records ancestor
+    //     decisions (plain-listener seeds, nearest-wins) and exposes them via
+    //     `ctx.resolveAncestorDecision`; consult it and merge so a stricter
+    //     ancestor decision gates this dispatch from any scope in the chain.
+    //
+    //     M13: the lookup is ANCESTOR-ONLY (`resolveAncestorDecision` skips
+    //     self). The self decision is already the per-dispatch `decision` above
+    //     (emit's chain return), and core-plugin's per-scope decisions map is a
+    //     SHARED slot across concurrent in-flight emits — reading it here would
+    //     let one dispatch's decision leak into a concurrent sibling's merge
+    //     (the same race the emit-return refactor removes for the closure
+    //     slot). Only ancestor decisions cannot be derived from the local emit,
+    //     so only they are looked up.
+    const ancestorDecision = ctx.resolveAncestorDecision("tools/pre-execute", call)
     const resolved = mergeDecision(decision, ancestorDecision)
 
     // 2. monotonic guards run UNCONDITIONALLY before any dispatch (audit F03-1):
@@ -197,22 +231,39 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       if (!ok) throw new Error(`denied by user: ${resolved.reason}`)
     }
 
-    // 4. dispatch — around-seam: registered `tools/execute` cascade handlers
-    // (e.g. guard approval wrappers) may observe / wrap / substitute the real
-    // tool dispatch. With no handlers, `ctx.cascade` runs `final` directly —
-    // identical behavior to a plain `tool.execute` call. Skipping `next()` in
-    // a handler short-circuits the dispatch (the tool never runs).
+    // M13: seed the per-dispatch exec with the caller signal so in-flight tool
+    // bodies observe a step abort (guard-timeout links its derived controller
+    // to this upstream signal; untimed tools honor exec.abortSignal directly).
     const exec: ToolExec = {}
+    if (signal) exec.abortSignal = signal
+
+    return { call, tool, exec }
+  }
+
+  // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
+  // (`tools/execute` cascade handlers wrap the real tool body). `prepare` and
+  // `finalize` run in the ordered lane so the policy layer stays model-ordered.
+  async function dispatch(prepared: PreparedCall): Promise<unknown> {
     const output = await ctx.cascade(
       "tools/execute",
-      { name: call.name, args: call.args, exec, tool },
-      async () => tool.execute(call.args as never, exec),
+      { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool },
+      async () => prepared.tool.execute(prepared.call.args as never, prepared.exec),
     )
+    return output
+  }
 
+  async function finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult> {
     // 5. post-execute waterfall.
-    await ctx.emit("tools/post-execute", { name: call.name, output })
+    await ctx.emit("tools/post-execute", { name: prepared.call.name, output })
+    return { name: prepared.call.name, output }
+  }
 
-    return { name: call.name, output }
+  // M13: thin sequential wrapper — behavior byte-identical to the pre-M13
+  // `execute` for every existing caller (tests, CLI paths, subagent drivers).
+  async function execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult> {
+    const prepared = await prepare(call, opts?.signal)
+    const output = await dispatch(prepared)
+    return finalize(prepared, output)
   }
 
   // Pluggable search hook (opencode-fork mechanism). installSearch replaces the
@@ -262,6 +313,9 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     register,
     get,
     schemas,
+    prepare,
+    dispatch,
+    finalize,
     execute,
     genToolCatalog,
     verifyToolCatalog,
