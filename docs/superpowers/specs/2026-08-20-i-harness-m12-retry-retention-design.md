@@ -82,8 +82,13 @@ ctx.onCascade("tools/execute", async (dispatch, next) => {
 })
 ```
 
-- `isToolTimeout(result)` = the result's `output.code === TOOL_TIMEOUT` (the
-  M10a marker at `tool/result.output.code`).
+- `isToolTimeout(result)` = the CASCADE value's top-level `code === TOOL_TIMEOUT`
+  (`(result as { code?: string }).code`). The retry handler sits OUTER to the
+  timeout wrapper, so `result` is the raw tool output value the wrapper
+  substituted (`{ ...rawToolFields, error, code: TOOL_TIMEOUT }`) — the registry
+  has NOT yet wrapped it in `{ name, output }`. The same marker reads at
+  `tool/result.output.code` after wrapping; both refer to the one TOOL_TIMEOUT
+  code.
 - **Only `TOOL_TIMEOUT` triggers a retry** (user-confirmed): a tool that timed
   out saw the abort and reached quiescence; re-running it is the safest
   retryable case. Other errors / error-shaped results pass through untouched
