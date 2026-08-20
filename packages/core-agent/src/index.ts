@@ -6,6 +6,13 @@ import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import { assertMessagesFromLog } from "@i-harness/llm-seam"
 
+export {
+  executeToolCalls,
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  type BatchCall,
+  type ExecuteToolCallsOptions,
+} from "./execute-tool-calls.ts"
+
 export interface AgentConfig {
   systemPrompt: string
   maxTurns?: number
