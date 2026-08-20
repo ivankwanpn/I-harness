@@ -8,6 +8,7 @@
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
-    "@i-harness/exec": "workspace:*"
+    "@i-harness/exec": "workspace:*",
+    "@i-harness/output-retention": "workspace:*"
   }
 }

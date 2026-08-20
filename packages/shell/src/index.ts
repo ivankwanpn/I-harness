@@ -4,6 +4,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { ExecService } from "@i-harness/exec"
 import { registerExec } from "@i-harness/exec"
+import { createTextRetainer, type RetentionMode } from "@i-harness/output-retention"
 
 export interface ResolvedShell {
   name: "bash" | "pwsh"
@@ -80,12 +81,46 @@ export function getArgv(command: string): string[] {
   return args
 }
 
+export interface ShellRetentionOptions {
+  maxBytes?: number // default 64_000
+  mode?: RetentionMode
+}
+
 export interface ShellToolDeps {
   exec: ExecService
   timeoutMs?: number // declared on bash/pwsh tools; drives guard-timeout
+  retention?: ShellRetentionOptions
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
+  // Retention is OPT-IN: without `deps.retention` the tools behave exactly as
+  // before. The resolved retainer here is only the "configured" flag — the
+  // per-run helper builds FRESH retainers because they are one-accumulation
+  // stateful objects (never reused across calls).
+  const retention = deps.retention
+    ? createTextRetainer({ maxBytes: deps.retention.maxBytes ?? 64_000, mode: deps.retention.mode })
+    : null
+
+  // Apply retention at the tool-return layer only: exec keeps the full stream.
+  // The `truncated` marker is present ONLY when something was omitted.
+  function retainedRunResult(result: { stdout: string; stderr: string; exitCode: number }) {
+    if (retention === null) return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+    const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
+    const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
+    so.push(result.stdout)
+    se.push(result.stderr)
+    const rs = so.finish()
+    const re = se.finish()
+    return {
+      stdout: rs.text,
+      stderr: re.text,
+      exitCode: result.exitCode,
+      ...(rs.truncated || re.truncated
+        ? { truncated: { stdoutBytes: rs.omittedBytes, stderrBytes: re.omittedBytes } }
+        : {}),
+    }
+  }
+
   const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
     name: "bash",
     description: "run a bash command (background: true returns a job id instead of waiting)",
@@ -107,7 +142,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         return { job_id: jobId }
       }
       const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal })
-      return { stdout: result.stdout, exitCode: result.exitCode }
+      return retainedRunResult(result)
     },
   }
   const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
@@ -127,7 +162,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         return { job_id: jobId }
       }
       const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal })
-      return { stdout: result.stdout, exitCode: result.exitCode }
+      return retainedRunResult(result)
     },
   }
   return [bash, pwsh]
@@ -136,9 +171,9 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
 export function registerShell(
   ctx: PluginContext,
   registry: { register(t: Tool): void },
-  opts?: { timeoutMs?: number },
+  opts?: { timeoutMs?: number; retention?: ShellRetentionOptions },
 ): void {
   registerExec(ctx)
   const exec = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs })) registry.register(tool)
+  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention })) registry.register(tool)
 }

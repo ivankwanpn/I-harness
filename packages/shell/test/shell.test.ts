@@ -186,3 +186,51 @@ describe("registerShell", () => {
     expect(tools.find((t) => t.name === "pwsh")?.timeoutMs).toBe(7000)
   })
 })
+
+// Factory building a fake ExecService whose run() returns the given result
+// (retention logic only needs exec.run to return { stdout, stderr, exitCode }).
+function fakeExec(runResult: { stdout: string; stderr: string; exitCode: number }): ExecService {
+  return {
+    run: async () => ({ ...runResult, timedOut: false }),
+    runBackground: () => ({ jobId: "none" }),
+    getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+    killJob: () => "already-finished",
+    listJobs: () => [],
+  }
+}
+
+describe("shell output retention", () => {
+  it("bash truncates large stdout/stderr with the truncated marker", async () => {
+    // fake exec.run returns a big stdout
+    const big = "x".repeat(1000)
+    const tools = createShellTools({ exec: fakeExec({ stdout: big, stderr: big, exitCode: 0 }), retention: { maxBytes: 100 } })
+    const bash = tools.find((t) => t.name === "bash")!
+    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; truncated?: { stdoutBytes: number; stderrBytes: number } }
+    expect(res.stdout.length).toBeLessThanOrEqual(100)
+    expect(res.truncated).toEqual({ stdoutBytes: 900, stderrBytes: 900 })
+  })
+
+  it("small output is unchanged (no truncated key)", async () => {
+    const tools = createShellTools({ exec: fakeExec({ stdout: "hi", stderr: "", exitCode: 0 }), retention: { maxBytes: 100 } })
+    const bash = tools.find((t) => t.name === "bash")!
+    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; truncated?: unknown }
+    expect(res.stdout).toBe("hi")
+    expect(res.truncated).toBeUndefined()
+  })
+
+  it("no retention config → today's behavior", async () => {
+    const tools = createShellTools({ exec: fakeExec({ stdout: "hi", stderr: "", exitCode: 0 }) })
+    const bash = tools.find((t) => t.name === "bash")!
+    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; truncated?: unknown }
+    expect(res.stdout).toBe("hi")
+    expect(res.truncated).toBeUndefined()
+  })
+
+  it("pwsh also retains", async () => {
+    const tools = createShellTools({ exec: fakeExec({ stdout: "y".repeat(500), stderr: "", exitCode: 0 }), retention: { maxBytes: 50 } })
+    const pwsh = tools.find((t) => t.name === "pwsh")!
+    const res = (await pwsh.execute({ command: "x" }, {} as never)) as { stdout: string; truncated?: { stdoutBytes: number } }
+    expect(res.stdout.length).toBeLessThanOrEqual(50)
+    expect(res.truncated).toBeDefined()
+  })
+})
