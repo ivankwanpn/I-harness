@@ -789,10 +789,17 @@ registerShell(ctx, tools, {
   retention: opts.shellRetention ?? { maxBytes: 64_000 },
 })
 ...
+ctx.mount(createRetryGuard(ctx, opts.retry)) // outer to timeout — REGISTER BEFORE the timeout guard
 ctx.mount(createTimeoutGuard(ctx))
-if (opts.retry) ctx.mount(createRetryGuard(ctx, opts.retry)) // outer to timeout
 ctx.mount(createRepeatToolGuard(ctx))
 ```
+
+**Mount-ordering ruling (corrected during Task 2):** `ctx.cascade` runs handlers in
+registration order — FIRST REGISTERED = OUTERMOST (pinned by `cascade.test.ts`).
+For the retry handler to see the timeout wrapper's substituted `TOOL_TIMEOUT`
+raw value, `createRetryGuard` MUST be mounted BEFORE `createTimeoutGuard`
+(retry outer, timeout inner). The original "after the timeout guard" wording
+was inverted.
 
 This is a RULING: `createShellTools` itself is opt-in (no `retention` → today's
 behavior), but the CLI applies a 64_000-byte headTail default (the shipped

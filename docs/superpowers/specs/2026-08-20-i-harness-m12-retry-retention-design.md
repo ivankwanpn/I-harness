@@ -67,7 +67,12 @@ Config shape mirrors dsh `retryPolicy` backoff conventions.
 ### 1.2 Semantics
 
 Registers an `onCascade("tools/execute")` handler **OUTER to the timeout
-guard** (registered after `createTimeoutGuard`, so it wraps it):
+guard**. Because `ctx.cascade` runs handlers in registration order (first
+registered = outermost, pinned by `cascade.test.ts`), the host MUST mount
+`createRetryGuard` BEFORE `createTimeoutGuard` (retry outer, timeout inner) —
+only then does the retry handler observe the substituted `TOOL_TIMEOUT` raw
+value. Mounting it after (inner) would see the raw tool result instead and
+never retry.
 
 ```ts
 ctx.onCascade("tools/execute", async (dispatch, next) => {
