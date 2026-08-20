@@ -100,6 +100,14 @@ ctx.onCascade("tools/execute", async (dispatch, next) => {
   Each cascade call re-snapshots the handlers, so the full chain — including
   the timeout wrapper's fresh timer — runs again. `exec` is reused (the timeout
   wrapper swaps/restores `exec.abortSignal` per attempt).
+- **Re-entrancy guard (required)**: the re-invoked cascade re-runs the WHOLE
+  chain, including the retry handler itself — without a guard the retry frames
+  would NEST and multiply attempts exponentially (maxRetries=2 → 7 attempts).
+  The handler keeps a `WeakSet<object>` of dispatch contexts currently being
+  retried: a nested frame (its dispatch context is already in the set) returns
+  `next()` directly (delegates, no retry loop); the OUTER frame adds its
+  context, runs the retry loop, and removes it in `finally`. This bounds the
+  tool to at most `1 + maxRetries` attempts.
 - **Backoff**: `initialDelayMs` grows exponentially (×2 per attempt) capped at
   `maxDelayMs`; each delay is multiplied by a uniform sample in
   `[1 - jitterRatio, 1 + jitterRatio]`, then the cap is applied (dsh backoff
