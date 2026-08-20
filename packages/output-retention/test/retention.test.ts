@@ -117,6 +117,21 @@ describe("TextRetainer", () => {
     expect(out.omittedBytes).toBe(Buffer.byteLength(malformed, "utf-8") - Buffer.byteLength(out.text, "utf-8"))
   })
 
+  it("never emits a lone surrogate from malformed input in head mode", () => {
+    // "a\uD800b": an unpaired high surrogate mid-string; head truncation must
+    // not leave it dangling at the prefix boundary.
+    const out = retain(["a\uD800b"], { maxBytes: 4, mode: "head" })
+    expect(hasLoneSurrogate(out.text)).toBe(false)
+    expect(Buffer.byteLength(out.text, "utf-8")).toBeLessThanOrEqual(4)
+    expect(out.truncated).toBe(true)
+    // "\uDC00ab": starts with an unpaired low surrogate; a prefix cannot skip
+    // index 0, so nothing may be kept.
+    const out2 = retain(["\uDC00ab"], { maxBytes: 3, mode: "head" })
+    expect(hasLoneSurrogate(out2.text)).toBe(false)
+    expect(out2.text).toBe("")
+    expect(out2.truncated).toBe(true)
+  })
+
   it("validates config fail-loud", () => {
     expect(() => createTextRetainer({ maxBytes: 0 })).toThrow(/maxBytes/)
     expect(() => createTextRetainer({ maxBytes: -5 })).toThrow(/maxBytes/)
