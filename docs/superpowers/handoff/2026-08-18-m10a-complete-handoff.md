@@ -1,8 +1,8 @@
-# Handoff — I-harness @ M10a + M10b + M11 + M12 Complete (2026-08-20)
+# Handoff — I-harness @ M10a + M10b + M11 + M12 + M13 Complete (2026-08-20)
 
 > Handoff for a new session continuing development of the I-harness project.
 > Repo: `D:\agent-complete\I-harness` (pnpm monorepo, git on `master`).
-> Working tree is clean at this commit: `16c242d`.
+> Working tree is clean at this commit: `ba00fe0`.
 
 ## 1. Current State
 
@@ -10,27 +10,30 @@
 - **M10b (session-query: SQLite FTS + lineage) — COMPLETE, on `master`.**
 - **M11 (compaction: context-pressure auto + manual compact) — COMPLETE, on `master`.**
 - **M12 (tool retry-on-timeout + tool-result retention) — COMPLETE, on `master`.**
+- **M13 (parallel tool-call execution) — COMPLETE, on `master`.**
 - All gates green at HEAD: `pnpm -r test` exit 0, `pnpm -r typecheck` exit 0.
-- No `CURRENT_FORMAT_VERSION` / event-vocabulary changes since M10b's `compaction/*` addition (M11, additive; M12 adds NO session events — the retry loop is invisible to the session log by design, and the `truncated` marker lives on the tool result, not an event). The ONLY schema bump is `session-persistence-sqlite` `SCHEMA_VERSION` 1→2 (M10b, via the M5 migration chain).
+- No `CURRENT_FORMAT_VERSION` / event-vocabulary changes since M10b's `compaction/*` addition (M11, additive; M12 adds NO session events; M13 adds NO session events — the retry loop and the parallel scheduler are invisible to the session log by design, and the `truncated`/`TOOL_ABORTED_BEFORE_DISPATCH` markers live on the tool result, not events). The ONLY schema bump is `session-persistence-sqlite` `SCHEMA_VERSION` 1→2 (M10b, via the M5 migration chain).
 - Root `engines.node` is `>=22.18` (required by `node:sqlite`'s `readOnly` option).
 - All package.json additions are `workspace:*` — no new external dependencies.
 - 28 packages + 1 app (`apps/cli`). Environment: **Windows (Git Bash)**, Node v24, ESM + strict TS, vitest.
 
-### Recent commits (M12, oldest → newest)
+### Recent commits (M13, oldest → newest)
 ```
-3759ce8 docs: M12 tool retry-on-timeout + tool-result retention design spec
-493d51a docs: M12 spec §1.2 — retry isToolTimeout checks the cascade raw value's code (fix)
-9abd51b docs: M12 plan + spec re-entrancy guard for retry re-dispatch (nested frames fix)
-3e52aa4 feat(output-retention): TextRetainer (head/headTail, UTF-8-safe, exact omission)
-1aa1ac4 fix(output-retention): byte-aware headTail tail, fail-loud typed validation, capture validated config
-ad0127e fix(output-retention): pin Infinity validation, never emit unpaired high surrogate
-0457442 fix(output-retention): never emit lone surrogates from malformed input on head truncation
-6ead444 feat(guard-retry): tool retry-on-timeout via tools/execute cascade re-dispatch
-6a3d7d2 docs: M12 — correct retry mount order (first-registered = outermost; retry BEFORE timeout)
-c0ae2e3 feat(shell): cap bash/pwsh output with TextRetainer (truncated marker)
-98de1da fix(shell): no-retention path returns exactly today's shape (drop stderr)
-eea508f feat(cli): shellRetention default + opt-in guard-retry
-16c242d chore(m12): final-gate fixes — retry e2e 300ms, spec/plan mount-order wording, seam-bypass comment
+35e1f90 docs: M13 parallel tool-call execution design spec
+565c6a8 docs: M13 parallel tool-call execution implementation plan
+747146b docs: M13 — fix decision-slot direction (preserve parent-propagation of the call payload; guard-approval must keep classifying child-scope calls)
+8d2e6ed feat(core-plugin): emit returns the waterfall chain value (additive)
+fb3c439 feat(core-tools): staged prepare/dispatch/finalize, per-dispatch decision, signal threading
+49c414e feat(core-agent): bounded rolling-pool tool-call scheduler with model-order commits
+a47a26c fix(core-agent): run staged finalize (post-execute) in the ordered commit lane
+013b6c7 fix(core-agent): swallow abort-path finalize failure (abort dominates a throwing post-execute)
+994e64a feat(core-agent): collect-then-batch tool execution + maxParallelToolCalls config
+91672fa docs: M13 plan — record Task 2 core-plugin addition, Task 3 finalize-in-commit-lane, t.order assertion fix
+eeef865 feat(guard-retry): abort-aware backoff (stop retrying when the caller signal aborts)
+a39e011 feat: opt read-only tools into parallel execution (isConcurrencySafe)
+b495964 feat(cli): maxParallelToolCalls pass-through + M13 e2e
+04b6718 fix(core-agent): final-review wave — serial-regression + Ruling-B pins, abort-before-start synthesis test, truthful startedUpTo, spec export correction
+ba00fe0 docs: M13 plan — sync startedUpTo placement with final-review fix
 ```
 
 ### Recent commits (M11, oldest → newest)
@@ -266,6 +269,61 @@ works headless; resume of a persisted compacted session projects the summary
   assertion was a false positive); a verbose command is truncated with the
   marker. Retry e2e uses `shellTimeoutMs: 300` (200 flaked on slow CI).
 
+## 5d. M13 Delivered (parallel tool-call execution) — architecture tour
+
+### 5d.1 core-plugin (2 additive changes)
+- `ctx.emit(event, payload)` now returns the local scope's final waterfall chain
+  value (additive; callers ignore the return pre-M13). This lets the registry
+  read the pre-execute decision per-dispatch instead of a shared closure slot.
+- `PluginContext.resolveAncestorDecision(event, payload)` — ancestor-only
+  decision lookup (skips self). REQUIRED because `resolveDecision` reads the
+  per-scope `decisions` map, which is itself a shared slot that races under
+  concurrent emits (the M13 decision-slot race); the local decision now arrives
+  per-dispatch from `emit`'s return.
+
+### 5d.2 core-tools — staged execution machinery
+- `prepare(call, signal?)` (policy layer: pre-execute decision from `emit`'s
+  return + `resolveAncestorDecision` merge + monotonic guards + approval +
+  `exec.abortSignal` seeding) / `dispatch(prepared)` (the `tools/execute`
+  cascade over the body — the ONLY overlapping stage) / `finalize(prepared,
+  output)` (post-execute + wrap). `execute(call, opts?)` is a thin sequential
+  wrapper — byte-identical for every existing caller.
+- **Decision-slot fix**: the shared `let decision` closure is gone; the
+  once-registered waterfall handler RETURNS the validated candidate (or
+  `undefined` when no decision — the **parent-propagation invariant**: a parent
+  scope's guard-approval must still receive the ToolCall payload, else it stops
+  classifying child-scope dispatches and approval fails open).
+
+### 5d.3 core-agent — bounded rolling-pool scheduler
+- `executeToolCalls(ctx, session, tools, batch, { maxParallel, signal })`:
+  partitions the batch into groups (maximal runs of `isConcurrencySafe` calls;
+  exclusive calls are singleton groups — they never overlap anything); runs
+  `prepare`/`finalize` in an ORDERED lane with only `dispatch` overlapping up
+  to `maxParallel`; commits results via a **head-of-line cursor** in MODEL
+  order (tool/result + agent/post-tool always model-ordered regardless of
+  settlement order). Failure = drain + rethrow first error (throw-fails-turn,
+  no fabrication). Abort = drain started (commit settled), synthesize
+  `TOOL_ABORTED_BEFORE_DISPATCH` results for never-started calls, then throw
+  `agent aborted` (abort dominates a coincident finalize throw).
+- The agent loop now COLLECTS a step's tool calls (appends `tool/call` during
+  streaming) and hands the batch to the scheduler after the stream ends.
+  `AgentConfig.maxParallelToolCalls?` (default 10, fail-loud integer >= 1; `1`
+  = fully serial).
+
+### 5d.4 guard-retry
+- Abort-aware backoff: captures the ORIGINAL caller signal before `next()` (the
+  timeout guard swaps `exec.abortSignal` to its own controller on timeout) and
+  breaks the retry loop when the step aborts — no re-dispatch under a cancelled
+  step.
+
+### 5d.5 opt-ins + CLI
+- `fs` `read`/`list_dir`, `fs-search` both tools, `session-query`
+  `session_search`/`lineage` set `isConcurrencySafe: true` (fail-closed
+  default: absent/false ⇒ exclusive). `subagent` tools deliberately NOT opted
+  in (parallel subagents are a separate roadmap item).
+- CLI: `HeadlessOptions.maxParallelToolCalls?` pass-through (agent default 10;
+  a shipped default like `shellTimeoutMs` 120s / `shellRetention` 64k).
+
 ## 6. Execution Rulings Made (recorded in spec/plan docs)
 
 1. **M10a — TOOL_TIMEOUT marker location**: top-level `{ ...result, error, code }` (reads at
@@ -290,6 +348,19 @@ works headless; resume of a persisted compacted session projects the summary
     mounting would silently re-run timed-out commands for every host.
 12. **M12 — no-retention shell result = today's exact shape** `{ stdout, exitCode }`
     (no `stderr` key added when retention is off).
+13. **M13 — Ruling A (failure)**: tool failure ⇒ throw-fails-turn (drained);
+    dsh-style `isError` model-visible results deferred to a future robustness
+    milestone.
+14. **M13 — Ruling B (staged scheduler)**: only the tool body overlaps;
+    `prepare`/`finalize` (the policy layer) stay in an ordered lane; `execute`
+    is a thin wrapper over the stages.
+15. **M13 — parent-propagation invariant**: the registry's pre-execute waterfall
+    handler returns `undefined` (NOT `{ kind: "allow" }`) when no decision, so a
+    parent scope's guard-approval keeps classifying child-scope ToolCall
+    payloads (no fail-open for subagent paths).
+16. **M13 — `resolveAncestorDecision`**: ancestor-only decision lookup; the
+    local decision is per-dispatch from `emit`'s return (the per-scope
+    `decisions` map races under concurrent emits).
 
 ## 7. Deferred Follow-ups (reconstructed from SDD ledgers; triaged by final reviews)
 
@@ -356,23 +427,55 @@ works headless; resume of a persisted compacted session projects the summary
   shape for hosts that don't pass `shellRetention` — the plan rules this in (parallel to the
   120s shellTimeoutMs default) but it sits in tension with the spec's "behavior unchanged when
   retention is not configured" constraint, which strictly holds only at `createShellTools`.
+- **M13**: the shared per-scope `decisions` map is read at `prepare` time via
+  `resolveAncestorDecision`; two child scopes sharing a parent (parallel subagents) could
+  interleave ⇒ fail-open window. UNREACHABLE in M13 (subagent tools are exclusive) and
+  pre-existing pre-M13 — but becomes reachable when `parallel-subagent-delegations` (M18+)
+  lands; revisit with per-emit scoping then. Also: intermediate parallel tool attempts are
+  invisible to the session log (same observability gap as M12 retry); multi-call steps change
+  the LOG interleaving from interleaved to batched (model-visible surface byte-identical,
+  verified via `deriveMessages`); abort-during-collection can orphan `tool/call` events
+  (cancellation edge, derived surface tolerates it).
+
+### M13 deferred minors (triaged by final whole-branch review; C/I fixed in the fix wave)
+- FIXED in final wave: `maxParallel: 1` serial-regression test (parallel-safe tools);
+  agent-level Ruling-B policy-lane ordering pin; abort-before-any-start synthesis test;
+  `startedUpTo` advanced after `prepare` succeeds; spec §2.4 `TOOL_ABORTED_BEFORE_DISPATCH`
+  export location corrected to `@i-harness/core-agent`.
+- Still open (safe to defer): `emitFn`'s `?? chainPayload` fallback is provably unreachable
+  (`runWaterfall` self-falls-back); the ancestor `decisions` map cross-child race (see M13
+  design observation — revisit at M18); the agent-level Ruling-B pin uses same-named `read`
+  calls so its ordering assertions are permutation-insensitive (the ordering property is pinned
+  transitively at the scheduler with distinguishable names); guard-retry's comment overstates
+  the timeout-guard restore hazard (capture-before-`next()` is defensively robust) and a
+  mid-backoff abort can still trigger one re-dispatch (brief-mandated placement); session-query
+  flag test spins a real sqlite backend for a construction-time assert; fs-search flag test uses
+  positional destructuring; first CLI e2e test lacks pass-through discriminating power (the
+  rejection test proves wiring); redundant `executeToolCalls` import+re-export in core-agent index.
 
 ## 8. Next Milestones
 
 - The M7 milestone sequence ("jobs upgrade (M9), guard/session-query (M10), compaction (M11),
-  retry/retention (M12)") is now complete.
-- Candidate next work (from the M10a/M11/M12 specs' Out-of-Scope and ledger):
-  - **Sandbox-wrapping tools** — the retry guard's re-dispatch machinery (guard-retry M12)
-    is a working example of the `tools/execute` cascade seam.
+  retry/retention (M12), parallel tool calls (M13)") is now complete. Per the parity audit's
+  user-decided roadmap, **M14 = Token meter service + per-model context catalog** (hardens M11
+  compaction, enables budget checks + overflow recovery) is next.
+- Candidate next work (from the audit roadmap + M10a/M11/M12/M13 specs' Out-of-Scope and ledgers):
+  - **M14: Token meter service + per-model context catalog** — audit roadmap item 3.
+  - **M15: Sandbox** (Linux Landlock/bwrap; Windows restricted token) — audit roadmap item 4;
+    the runtime-design deferred "pluggable later" safety layer.
+  - **M16/M17: MCP client / LSP** — audit roadmap items 5-6 (the opencode-fork plugin ports).
+  - **M18: Subagent teams** — audit roadmap item 7; NOTE the M13 design observation: the shared
+    per-scope `decisions` map's cross-child race becomes reachable with
+    `parallel-subagent-delegations` — revisit `resolveAncestorDecision` with per-emit scoping.
   - **Context-overflow recovery / remote compaction** (codex-style) — M11's §Out-of-Scope.
+  - **Retry/parallel observability** (M12/M13 final reviews): a listener event or `retries` count
+    in the tool result so retried/parallel tools are visible in session traces without a new event
+    type.
   - **Per-model compaction policy routing** (dsh `modelPolicies`).
-  - **Compaction progress hooks/UI** (headless library + tools exist).
-  - **Retry observability** (M12 final review): a listener event or `retries` count in the tool
-    result so retried tools are visible in session traces without a new event type.
   - **`KNOWN_EVENT_TYPES` recommendation from the M11 final review**: make registering new
-    additive event types a mandatory step with a coordinator round-trip test (would have caught
-    the M11 C1 immediately).
+    additive event types a mandatory step with a coordinator round-trip test.
   - Agent-aware tool execution (`tools.get(name, agent)`) — explicitly NOT adopted.
+  - Deferred: TUI/Web/Desktop; llm-gemini/llm-bedrock; workflows; skills-as-plugins; telemetry.
 
 ### Process for the next milestone
 - Established pattern: **brainstorming → spec → writing-plans → SDD execution**
