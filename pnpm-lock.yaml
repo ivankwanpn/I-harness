@@ -237,6 +237,8 @@ importers:
         specifier: workspace:*
         version: link:../core-session
 
+  packages/output-retention: {}
+
   packages/preset:
     dependencies:
       '@i-harness/core-plugin':
