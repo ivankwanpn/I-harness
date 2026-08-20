@@ -127,7 +127,13 @@ Legend: ✅ implemented · ◑ partial · ✖ not built · — out of I-harness 
   DONE as `tool-search`; MCP, skills, workflows, LSP, task/subagent plugins)
   were the *point* of building the foundation — most are not yet ported.
 
-### Recommended next steps (in order of foundation value)
+### Recommended next steps — M12+ roadmap (user-decided 2026-08-20)
+
+Decided direction: parity-audit kernel items first, then the opencode-fork
+plugin ports (MCP, LSP) referencing dsh's design as the primary base combined
+with codex-rust's strengths, then Agent-Teams-style subagent teams. TUI / Web /
+Desktop and llm-gemini / llm-bedrock are explicitly deferred.
+
 1. **M12: Retry-on-timeout (tool + provider) + tool-result retention** — uses the
    existing cascade seam, closes the biggest operational gap, small surface.
 2. **M13: Parallel tool-call execution** in core-agent (dsh `parallel-tool-call-execution`)
@@ -135,7 +141,14 @@ Legend: ✅ implemented · ◑ partial · ✖ not built · — out of I-harness 
 3. **M14: Token meter service + per-model context catalog** — hardens M11
    compaction and enables budget checks + overflow recovery (codex/dsh
    `prompt_too_long` auto-compact).
-4. **Sandbox** (Linux bwrap/Landlock; Windows restricted token) — the deferred
-   runtime-design item; pairs with guard-approval as defense-in-depth.
-5. Then the opencode-fork plugin ports (MCP, skills, LSP, workflows) — the
-   stated end game.
+4. **M15: Sandbox** (Linux Landlock/bwrap; Windows restricted token) — the
+   deferred runtime-design item; pairs with guard-approval as defense-in-depth.
+5. **M16: MCP client** — dsh primary design base, codex-rust advantages where
+   it is stronger.
+6. **M17: LSP** — same reference approach.
+7. **M18: Subagent teams** — research first, referencing dsh's experimental
+   Agent Teams (durable roster / Lead-log mailbox / task board with
+   compare-and-set / wait_agent) adapted to I-harness's substrate.
+8. Deferred: TUI / Web / Desktop front ends; llm-gemini / llm-bedrock adapters;
+   workflows; skills-as-plugins; telemetry. (Agent-Teams experimental-package
+   policy is a useful pattern to adopt when shipping experimental features.)
