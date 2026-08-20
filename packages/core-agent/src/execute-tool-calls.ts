@@ -72,8 +72,13 @@ export async function executeToolCalls(
 
   const startCall = async (index: number): Promise<void> => {
     const call = batch[index]!
-    startedUpTo = index + 1
+    // The never-started boundary (`startedUpTo`) advances only AFTER prepare
+    // succeeds: a call whose `prepare` throws was never dispatched, so it must
+    // not be counted as started — the boundary stays truthful (on abort the
+    // [startedUpTo, batch.length) range decides which calls get synthesized
+    // TOOL_ABORTED_BEFORE_DISPATCH results).
     const prepared = await tools.prepare({ name: call.name, args: call.args }, opts.signal)
+    startedUpTo = index + 1
     const promise = tools
       .dispatch(prepared)
       .then((output) => {

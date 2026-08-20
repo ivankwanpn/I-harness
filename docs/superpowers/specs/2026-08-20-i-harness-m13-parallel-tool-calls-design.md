@@ -155,8 +155,8 @@ On abort the scheduler:
 4. then the loop throws `agent aborted` (today's contract).
 
 Abort marker constant: `TOOL_ABORTED_BEFORE_DISPATCH` exported from
-`@i-harness/core-tools` (parallel to the M10a `TOOL_TIMEOUT` convention: a
-top-level `code` on the output object).
+`@i-harness/core-agent` (the scheduler owns it; parallel to the M10a
+`TOOL_TIMEOUT` convention: a top-level `code` on the output object).
 
 ### 2.5 Agent loop changes
 
