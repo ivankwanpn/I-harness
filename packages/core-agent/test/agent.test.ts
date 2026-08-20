@@ -407,6 +407,35 @@ describe("M13 parallel tool calls", () => {
     expect(results).toEqual(["content-of-a.txt", "content-of-b.txt"])
   })
 
+  it("keeps the policy layer model-ordered under a parallel batch (Ruling B)", async () => {
+    const ctx = createContext()
+    const deps = parallelDeps(ctx)
+    const pre: string[] = []
+    const post: string[] = []
+    const postTool: string[] = []
+    ctx.on("tools/pre-execute", (p) => { pre.push((p as { name: string }).name) })
+    ctx.on("tools/post-execute", (p) => { post.push((p as { name: string }).name) })
+    ctx.on("agent/post-tool", (p) => { postTool.push((p as { name: string }).name) })
+    deps.model = createMockClient([
+      { role: "assistant", toolCalls: [
+        { name: "read", args: { path: "a.txt" } },
+        { name: "read", args: { path: "b.txt" } },
+      ]},
+      { role: "assistant", text: "done" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const result = await agent.run("read two files")
+    expect(result.finalText).toBe("done")
+    expect(deps.maxConcurrent()).toBe(2) // the two bodies really overlap
+    // Ruling B pin: even though the batch runs in parallel, the policy layer —
+    // tools/pre-execute (ordered prepare lane), tools/post-execute (ordered
+    // finalize/commit lane) and agent/post-tool (commit lane) — observes the
+    // calls in MODEL order.
+    expect(pre).toEqual(["read", "read"])
+    expect(post).toEqual(["read", "read"])
+    expect(postTool).toEqual(["read", "read"])
+  })
+
   it("rejects a non-integer maxParallelToolCalls", () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)

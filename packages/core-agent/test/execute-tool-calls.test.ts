@@ -218,4 +218,50 @@ describe("executeToolCalls scheduler", () => {
     )
     expect(aborted.map((e) => (e as { callId: string }).callId)).toEqual(["c2"])
   })
+
+  it("maxParallel 1 runs parallel-safe calls fully serial (maxConcurrent 1, model-order commit)", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const t = makeTracker()
+    tools.register(t.makeTool("safeTool", true, 5))
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "safeTool", args: { id: "a" } },
+      { callId: "c1", name: "safeTool", args: { id: "b" } },
+      { callId: "c2", name: "safeTool", args: { id: "c" } },
+      { callId: "c3", name: "safeTool", args: { id: "d" } },
+    ], { maxParallel: 1 })
+    // The tools are parallel-safe (isConcurrencySafe: true), yet the bound
+    // must force full serialization — the headline backward-compat claim
+    // (maxParallel 1 ≡ today's sequential execution).
+    expect(t.maxConcurrent).toBe(1)
+    // All results committed, and in MODEL order via the session log.
+    expect(resultsOf(session).map((r) => r.callId)).toEqual(["c0", "c1", "c2", "c3"])
+    // Under the serial bound, body settlement order is model order too.
+    expect(t.order).toEqual(["a", "b", "c", "d"])
+  })
+
+  it("abort before any call starts synthesizes TOOL_ABORTED_BEFORE_DISPATCH for every call", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const t = makeTracker()
+    tools.register(t.makeTool("safeTool", true, 5))
+    const ac = new AbortController()
+    ac.abort() // abort the signal BEFORE executeToolCalls is invoked
+    await expect(
+      executeToolCalls(ctx, session, tools, [
+        { callId: "c0", name: "safeTool", args: { id: "a" } },
+        { callId: "c1", name: "safeTool", args: { id: "b" } },
+      ], { maxParallel: 2, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+    // No call ever started ⇒ BOTH calls get the synthetic abort result.
+    const aborted = session.events.filter(
+      (e) => e.type === "tool/result" && (e as { output?: { code?: string } }).output?.code === TOOL_ABORTED_BEFORE_DISPATCH,
+    )
+    expect(aborted.map((e) => (e as { callId: string }).callId)).toEqual(["c0", "c1"])
+    // No tool body ever ran.
+    expect(t.order).toEqual([])
+    expect(t.maxConcurrent).toBe(0)
+  })
 })
