@@ -611,8 +611,12 @@ export async function executeToolCalls(
 
   const startCall = async (index: number): Promise<void> => {
     const call = batch[index]!
-    startedUpTo = index + 1
     const prepared = await tools.prepare({ name: call.name, args: call.args }, opts.signal)
+    // startedUpTo advances only after prepare SUCCEEDS (final-review fix): a
+    // call whose prepare throws was never dispatched, so it must not count as
+    // started — on abort it falls inside [startedUpTo, batch.length) and gets
+    // the synthetic result (no orphaned tool/call).
+    startedUpTo = index + 1
     const promise = tools
       .dispatch(prepared)
       .then((output) => {
