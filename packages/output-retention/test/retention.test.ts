@@ -67,7 +67,23 @@ describe("TextRetainer", () => {
     const emoji = "😀".repeat(20) // 80 bytes
     const out = retain([emoji], { maxBytes: 12, mode: "headTail", headRatio: 0.5 }) // 6 head + 6 tail
     expect(out.text.length % 4).toBe(0)
+    expect(hasLoneSurrogate(out.text)).toBe(false)
+    expect(Buffer.byteLength(out.text, "utf-8")).toBeLessThanOrEqual(12)
+    expect(out.text.endsWith("😀")).toBe(true) // final character kept
     expect(out.truncated).toBe(true)
+  })
+
+  it("headTail ends with the original final characters and stays within budget", () => {
+    // 😀😃😄 = 12 bytes; maxBytes 10 with headRatio 0.5 → headBytes 5, tailBytes 5.
+    // The final character 😄 (4 bytes) fits the tail budget and must be kept,
+    // even though the naive code-unit suffix slice would mis-trim from the head.
+    const out = retain(["😀😃😄"], { maxBytes: 10, mode: "headTail", headRatio: 0.5 })
+    expect(out.text.startsWith("😀")).toBe(true)
+    expect(out.text.endsWith("😄")).toBe(true)
+    expect(Buffer.byteLength(out.text, "utf-8")).toBeLessThanOrEqual(10)
+    expect(hasLoneSurrogate(out.text)).toBe(false)
+    expect(out.truncated).toBe(true)
+    expect(out.omittedBytes).toBe(12 - Buffer.byteLength(out.text, "utf-8"))
   })
 
   it("never emits a lone surrogate when the byte budget splits a surrogate pair", () => {
@@ -96,6 +112,25 @@ describe("TextRetainer", () => {
     expect(() => createTextRetainer({ maxBytes: 10, headRatio: 0 })).toThrow(/headRatio/)
     expect(() => createTextRetainer({ maxBytes: 10, headRatio: 1.5 })).toThrow(/headRatio/)
     expect(() => createTextRetainer({ maxBytes: 10, mode: "bogus" as never })).toThrow(/mode/)
+  })
+
+  it("validates typed-invalid values fail-loud instead of coercing or defaulting", () => {
+    expect(() => createTextRetainer({ maxBytes: 10, headRatio: null as never })).toThrow(/headRatio/)
+    expect(() => createTextRetainer({ maxBytes: 10, headRatio: "0.5" as never })).toThrow(/headRatio/)
+    expect(() => createTextRetainer({ maxBytes: 10, headRatio: true as never })).toThrow(/headRatio/)
+    expect(() => createTextRetainer({ maxBytes: 10, headRatio: NaN })).toThrow(/headRatio/)
+    expect(() => createTextRetainer({ maxBytes: 10, mode: null as never })).toThrow(/mode/)
+  })
+
+  it("mutating the options object after construction does not bypass validation or the budget", () => {
+    const opts = { maxBytes: 10, mode: "head" as const }
+    const r = createTextRetainer(opts)
+    ;(opts as { maxBytes: number }).maxBytes = 1 // tamper after construction
+    r.push("abcdefghijklmnop")
+    const out = r.finish()
+    expect(out.text).toBe("abcdefghij") // still budgeted at the validated 10 bytes
+    expect(out.truncated).toBe(true)
+    expect(out.omittedBytes).toBe(6)
   })
 
   it("defaults: headTail with headRatio 0.5", () => {

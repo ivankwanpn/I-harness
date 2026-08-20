@@ -19,18 +19,28 @@ export interface TextRetainer {
 
 const DEFAULT_HEAD_RATIO = 0.5
 
-function validate(opts: TextRetainerOptions): void {
+interface ResolvedTextRetainerOptions {
+  maxBytes: number
+  mode: RetentionMode
+  headRatio: number
+}
+
+// Validate fail-loud and resolve defaults. Defaults apply ONLY when a field is
+// `undefined`; any other non-conforming runtime value (null, string, boolean,
+// NaN, Infinity, ...) throws instead of being coerced or silently defaulted.
+function resolveOptions(opts: TextRetainerOptions): ResolvedTextRetainerOptions {
   if (!Number.isInteger(opts.maxBytes) || opts.maxBytes < 1) {
     throw new Error(`output-retention: maxBytes must be a positive integer (got ${opts.maxBytes})`)
   }
-  const mode = opts.mode ?? "headTail"
-  if (mode !== "head" && mode !== "headTail") {
+  const mode = opts.mode === undefined ? "headTail" : opts.mode
+  if (typeof mode !== "string" || (mode !== "head" && mode !== "headTail")) {
     throw new Error(`output-retention: mode must be "head" or "headTail" (got ${String(mode)})`)
   }
-  const headRatio = opts.headRatio ?? DEFAULT_HEAD_RATIO
-  if (!(headRatio > 0 && headRatio <= 1)) {
-    throw new Error(`output-retention: headRatio must be in (0, 1] (got ${headRatio})`)
+  const headRatio = opts.headRatio === undefined ? DEFAULT_HEAD_RATIO : opts.headRatio
+  if (typeof headRatio !== "number" || !Number.isFinite(headRatio) || !(headRatio > 0 && headRatio <= 1)) {
+    throw new Error(`output-retention: headRatio must be in (0, 1] (got ${String(headRatio)})`)
   }
+  return { maxBytes: opts.maxBytes, mode, headRatio }
 }
 
 function isHighSurrogate(c: number): boolean {
@@ -64,10 +74,43 @@ function trimToBytes(text: string, limitBytes: number): string {
   return text.slice(0, low)
 }
 
+// Keep the LAST whole characters of `text` within `limitBytes` bytes, walking
+// from the end so the result ends with the original final characters whenever
+// they fit in the budget. UTF-16 surrogate pairs are treated atomically (never
+// split), and an unpaired surrogate is skipped. Whole characters are appended
+// to `parts` in reverse order and the array is reversed before joining so the
+// walk stays O(1) per character.
+function trimToBytesSuffix(text: string, limitBytes: number): string {
+  if (text.length === 0 || Buffer.byteLength(text, "utf-8") <= limitBytes) return text
+  const parts: string[] = []
+  let used = 0
+  let i = text.length
+  while (i > 0) {
+    const unit = text.charCodeAt(i - 1)
+    if (isLowSurrogate(unit)) {
+      // surrogate pair: include both halves atomically
+      if (i - 1 === 0 || !isHighSurrogate(text.charCodeAt(i - 2))) break // unpaired low — skip it
+      if (used + 4 > limitBytes) break
+      parts.push(text.slice(i - 2, i))
+      used += 4
+      i -= 2
+    } else {
+      // UTF-8 byte length of a non-surrogate code unit: 1 (ASCII), 2 (<= U+07FF), else 3
+      const charBytes = unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3
+      if (used + charBytes > limitBytes) break
+      parts.push(text[i - 1])
+      used += charBytes
+      i -= 1
+    }
+  }
+  parts.reverse()
+  return parts.join("")
+}
+
 export function createTextRetainer(opts: TextRetainerOptions): TextRetainer {
-  validate(opts)
-  const mode = opts.mode ?? "headTail"
-  const headRatio = opts.headRatio ?? DEFAULT_HEAD_RATIO
+  // Capture the validated values now so mutating `opts` later cannot bypass
+  // validation or the byte budget.
+  const { maxBytes, mode, headRatio } = resolveOptions(opts)
   const chunks: string[] = []
 
   return {
@@ -77,24 +120,20 @@ export function createTextRetainer(opts: TextRetainerOptions): TextRetainer {
     finish(): RetainedText {
       const full = chunks.join("")
       const fullBytes = Buffer.byteLength(full, "utf-8")
-      if (fullBytes <= opts.maxBytes) {
+      if (fullBytes <= maxBytes) {
         return { text: full, truncated: false, omittedBytes: 0 }
       }
       if (mode === "head") {
-        const kept = trimToBytes(full, opts.maxBytes)
+        const kept = trimToBytes(full, maxBytes)
         return { text: kept, truncated: true, omittedBytes: fullBytes - Buffer.byteLength(kept, "utf-8") }
       }
-      const headBytes = Math.floor(opts.maxBytes * headRatio)
-      const tailBytes = opts.maxBytes - headBytes
+      const headBytes = Math.floor(maxBytes * headRatio)
+      const tailBytes = maxBytes - headBytes
+      // The head prefix and tail suffix are byte-disjoint here because
+      // headBytes + tailBytes === maxBytes < fullBytes, so the kept pieces
+      // can never overlap or repeat characters.
       const head = trimToBytes(full, headBytes)
-      // Start the tail on a whole character: if the computed start would begin
-      // with the low half of a surrogate pair, include the high half too (the
-      // byte trim below still keeps the result within the tail budget).
-      let tailStart = Math.max(0, full.length - Math.floor(tailBytes))
-      if (tailStart > 0 && isLowSurrogate(full.charCodeAt(tailStart)) && isHighSurrogate(full.charCodeAt(tailStart - 1))) {
-        tailStart -= 1
-      }
-      const tail = trimToBytes(full.slice(tailStart), tailBytes)
+      const tail = trimToBytesSuffix(full, tailBytes)
       const keptBytes = Buffer.byteLength(head, "utf-8") + Buffer.byteLength(tail, "utf-8")
       return { text: head + tail, truncated: true, omittedBytes: fullBytes - keptBytes }
     },
