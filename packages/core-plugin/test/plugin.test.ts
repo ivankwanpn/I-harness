@@ -410,3 +410,22 @@ describe("I3 scope propagation", () => {
     })
   })
 })
+
+describe("emit return value", () => {
+  it("returns the final waterfall chain value to the caller", async () => {
+    const ctx = createContext()
+    ctx.waterfall("probe", async (payload, next) => {
+      const chainValue = await next(payload)
+      return chainValue === "seed" ? "decided" : chainValue
+    })
+    const returned = await ctx.emit("probe", "seed")
+    expect(returned).toBe("decided")
+  })
+
+  it("falls back to the chain payload when no waterfall handler returns a value", async () => {
+    const ctx = createContext()
+    ctx.waterfall("probe", async (_payload, next) => next("x"))
+    const returned = await ctx.emit("probe", "seed")
+    expect(returned).toBe("x")
+  })
+})

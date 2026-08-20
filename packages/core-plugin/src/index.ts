@@ -23,7 +23,7 @@ export interface PluginContext {
     unmount(): void
   }
   on(event: string, handler: Listener): void
-  emit(event: string, payload: unknown): Promise<void>
+  emit(event: string, payload: unknown): Promise<unknown>
   waterfall(event: string, handler: WaterfallHandler): void
   cascade<TInput, TOutput>(
     event: string,
@@ -72,7 +72,7 @@ interface OwnedCascade {
 function createScope(
   parentStore: ServiceStore | null,
   parentScope: InternalScope | null,
-  parentEmit: (event: string, payload: unknown) => Promise<void>,
+  parentEmit: (event: string, payload: unknown) => Promise<unknown>,
 ): PluginContext {
   const store: ServiceStore = new Map()
   const listeners = new Map<string, Listener[]>()
@@ -242,7 +242,7 @@ function createScope(
   // cleared at the start of every emit so a scope's decision never leaks
   // across repeated emits: a pass-through emit reads the parent's FRESH
   // decision recorded during the same emit's propagation, not a stale one.
-  async function emitFn(event: string, payload: unknown): Promise<void> {
+  async function emitFn(event: string, payload: unknown): Promise<unknown> {
     decisions.delete(event)
     const plainListeners = [...(listeners.get(event) ?? [])]
     const waterfallHandlers = [...(waterfalls.get(event) ?? [])]
@@ -262,6 +262,7 @@ function createScope(
     }
     if (seeded) decisions.set(event, chainPayload)
     await parentEmit(event, resolvedPayload)
+    return resolvedPayload
   }
 
   const ctx: PluginContext & InternalScope = {
