@@ -145,4 +145,32 @@ describe("executeToolCalls scheduler", () => {
     expect(aborted.length).toBe(1) // c1 never started (c0 started and aborted the signal)
     expect(aborted[0]).toMatchObject({ callId: "c1" })
   })
+
+  it("runs the staged finalize (post-execute) seam on the parallel path in model order", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const seen: { name: string; output: unknown }[] = []
+    ctx.on("tools/post-execute", (payload) => {
+      seen.push(payload as { name: string; output: unknown })
+    })
+    tools.register({
+      name: "finTool",
+      description: "fin",
+      inputSchema: {},
+      isConcurrencySafe: true,
+      execute: async ({ tag }: { tag: string }) => {
+        await new Promise((r) => setTimeout(r, tag === "first" ? 30 : 5))
+        return { marker: tag }
+      },
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "finTool", args: { tag: "first" } },
+      { callId: "c1", name: "finTool", args: { tag: "second" } },
+    ], { maxParallel: 2 })
+    // finalize (post-execute) runs in the ordered commit lane: both dispatches
+    // are observed in MODEL order even though the second body settles first.
+    expect(seen.map((p) => (p.output as { marker: string }).marker)).toEqual(["first", "second"])
+    expect(resultsOf(session).map((r) => r.callId)).toEqual(["c0", "c1"])
+  })
 })
