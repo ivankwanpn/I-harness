@@ -106,6 +106,17 @@ describe("TextRetainer", () => {
     expect(out.omittedBytes).toBe(80 - Buffer.byteLength(out.text, "utf-8"))
   })
 
+  it("never emits an unpaired high surrogate from malformed input", () => {
+    // "abc\uD800" ends in an unpaired high surrogate (3 bytes as a UTF-8
+    // replacement). headTail truncation must stop before it, not keep it.
+    const malformed = "abc\uD800"
+    const out = retain([malformed], { maxBytes: 5, mode: "headTail", headRatio: 0.5 })
+    expect(hasLoneSurrogate(out.text)).toBe(false)
+    expect(Buffer.byteLength(out.text, "utf-8")).toBeLessThanOrEqual(5)
+    expect(out.truncated).toBe(true)
+    expect(out.omittedBytes).toBe(Buffer.byteLength(malformed, "utf-8") - Buffer.byteLength(out.text, "utf-8"))
+  })
+
   it("validates config fail-loud", () => {
     expect(() => createTextRetainer({ maxBytes: 0 })).toThrow(/maxBytes/)
     expect(() => createTextRetainer({ maxBytes: -5 })).toThrow(/maxBytes/)
@@ -119,6 +130,7 @@ describe("TextRetainer", () => {
     expect(() => createTextRetainer({ maxBytes: 10, headRatio: "0.5" as never })).toThrow(/headRatio/)
     expect(() => createTextRetainer({ maxBytes: 10, headRatio: true as never })).toThrow(/headRatio/)
     expect(() => createTextRetainer({ maxBytes: 10, headRatio: NaN })).toThrow(/headRatio/)
+    expect(() => createTextRetainer({ maxBytes: 10, headRatio: Infinity as never })).toThrow(/headRatio/)
     expect(() => createTextRetainer({ maxBytes: 10, mode: null as never })).toThrow(/mode/)
   })
 
