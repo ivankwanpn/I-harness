@@ -185,6 +185,18 @@ importers:
         specifier: workspace:*
         version: link:../core-session
 
+  packages/guard-retry:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/guard-timeout':
+        specifier: workspace:*
+        version: link:../guard-timeout
+
   packages/guard-timeout:
     dependencies:
       '@i-harness/core-plugin':
