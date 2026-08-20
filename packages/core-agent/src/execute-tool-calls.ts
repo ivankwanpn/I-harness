@@ -1,7 +1,7 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append } from "@i-harness/core-session"
-import type { ToolRegistry } from "@i-harness/core-tools"
+import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
 
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
 
@@ -42,7 +42,7 @@ export async function executeToolCalls(
   batch: BatchCall[],
   opts: ExecuteToolCallsOptions,
 ): Promise<void> {
-  interface Slot { name: string; callId: string; output: unknown }
+  interface Slot { name: string; callId: string; prepared: PreparedCall; output: unknown }
   const slots: (Slot | undefined)[] = batch.map(() => undefined)
   const inFlight = new Map<number, Promise<number>>()
   let startedUpTo = 0 // next batch index that has NOT started (never-started boundary)
@@ -57,11 +57,14 @@ export async function executeToolCalls(
       const slot = slots[committed]
       if (slot === undefined) break
       const call = batch[committed]!
-      append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: slot.output })
+      // finalize runs in the ordered commit lane (post-execute + wrap) — the
+      // parallel path must not skip the staged post-execute seam.
+      const finalized = await tools.finalize(slot.prepared, slot.output)
+      append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: finalized.output })
       // M10a ordering ruling: post-tool only for completed dispatches and only
       // when not aborted (the abort check precedes the observation).
       if (!aborted) {
-        await ctx.emit("agent/post-tool", { name: call.name, args: call.args, output: slot.output, session })
+        await ctx.emit("agent/post-tool", { name: call.name, args: call.args, output: finalized.output, session })
       }
       committed += 1
     }
@@ -74,7 +77,7 @@ export async function executeToolCalls(
     const promise = tools
       .dispatch(prepared)
       .then((output) => {
-        slots[index] = { name: call.name, callId: call.callId, output }
+        slots[index] = { name: call.name, callId: call.callId, prepared, output }
       })
       .catch((err: unknown) => {
         firstError ??= err
