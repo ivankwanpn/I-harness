@@ -55,6 +55,12 @@ describe("fs-search glob", () => {
     }
   }, 20_000)
 
+  it("marks both tools isConcurrencySafe", () => {
+    const [glob, grep] = createFsSearchTools({ exec: createExecService() })
+    expect(glob.isConcurrencySafe).toBe(true)
+    expect(grep.isConcurrencySafe).toBe(true)
+  })
+
   it("reports an error when the search path does not exist", async () => {
     if (!rgAvailable) return
     const missingDir = join(tmpdir(), `fs-search-missing-${Date.now()}`)

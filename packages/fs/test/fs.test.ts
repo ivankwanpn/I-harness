@@ -41,6 +41,16 @@ describe("fs tools", () => {
     expect(tools.find((t) => t.name === "write")!.isReadOnly).toBe(false)
   })
 
+  it("marks read-only tools isConcurrencySafe", () => {
+    const tools = createFsTools({ workspace: process.cwd() })
+    const read = tools.find((t) => t.name === "read")!
+    const list = tools.find((t) => t.name === "list_dir")!
+    const write = tools.find((t) => t.name === "write")!
+    expect(read.isConcurrencySafe).toBe(true)
+    expect(list.isConcurrencySafe).toBe(true)
+    expect(write.isConcurrencySafe).toBeUndefined()
+  })
+
   it("resolvePath resolves relative paths inside the workspace", () => {
     expect(resolvePath(dir, "a.txt")).toBe(join(dir, "a.txt"))
     expect(resolvePath(dir, "sub/b.txt")).toBe(join(dir, "sub", "b.txt"))

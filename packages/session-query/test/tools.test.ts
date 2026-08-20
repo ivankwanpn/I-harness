@@ -45,6 +45,24 @@ describe("session-query tools", () => {
     }
   })
 
+  it("marks session_search and lineage isConcurrencySafe", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "m10b-tools-cc-"))
+    try {
+      const dbPath = join(dir, "sessions.db")
+      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      await coordinator.create({ sessionId: "parent" })
+      const tools = createSessionQueryTools(createSessionQuery(dbPath))
+      const search = tools.find((t) => t.name === "session_search")!
+      const lineage = tools.find((t) => t.name === "lineage")!
+      expect(search.isConcurrencySafe).toBe(true)
+      expect(lineage.isConcurrencySafe).toBe(true)
+    } finally {
+      closeSessionQueries()
+      closeSqliteBackends()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it("propagates errors as tool failures (unknown session)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools2-"))
     try {
