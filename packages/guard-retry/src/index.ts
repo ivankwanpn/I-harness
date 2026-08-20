@@ -79,9 +79,16 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
         if (retrying.has(d)) return next() // nested re-dispatch frame: delegate, no retry loop
         retrying.add(d)
         try {
+          // M13: capture the ORIGINAL caller signal BEFORE the inner timeout
+          // guard swaps d.exec.abortSignal to its own controller — after a
+          // TOOL_TIMEOUT that controller is aborted (that is how the timeout
+          // fired), so reading it here would falsely stop retry. The caller
+          // signal being aborted means the STEP is being cancelled.
+          const upstream = d.exec.abortSignal
           let result = await next()
           let attempt = 0
           while (isToolTimeout(result) && attempt < resolved.maxRetries) {
+            if (upstream?.aborted) break // step aborted during backoff — no re-dispatch
             await sleep(backoffDelay(attempt, resolved))
             attempt += 1
             // Deliberate seam-bypass: this re-invokes ONLY the cascade
