@@ -329,6 +329,9 @@ importers:
       '@i-harness/exec':
         specifier: workspace:*
         version: link:../exec
+      '@i-harness/output-retention':
+        specifier: workspace:*
+        version: link:../output-retention
 
   packages/subagent:
     dependencies:
