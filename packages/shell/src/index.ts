@@ -104,7 +104,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   // Apply retention at the tool-return layer only: exec keeps the full stream.
   // The `truncated` marker is present ONLY when something was omitted.
   function retainedRunResult(result: { stdout: string; stderr: string; exitCode: number }) {
-    if (retention === null) return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+    if (retention === null) return { stdout: result.stdout, exitCode: result.exitCode }
     const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     so.push(result.stdout)

@@ -218,12 +218,12 @@ describe("shell output retention", () => {
     expect(res.truncated).toBeUndefined()
   })
 
-  it("no retention config → today's behavior", async () => {
-    const tools = createShellTools({ exec: fakeExec({ stdout: "hi", stderr: "", exitCode: 0 }) })
+  it("no retention config → today's behavior (exact shape, no stderr)", async () => {
+    const tools = createShellTools({ exec: fakeExec({ stdout: "hi", stderr: "err", exitCode: 0 }) })
     const bash = tools.find((t) => t.name === "bash")!
-    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; truncated?: unknown }
-    expect(res.stdout).toBe("hi")
-    expect(res.truncated).toBeUndefined()
+    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; exitCode: number }
+    // Exactly today's shape: stderr is dropped entirely, no truncated marker.
+    expect(res).toEqual({ stdout: "hi", exitCode: 0 })
   })
 
   it("pwsh also retains", async () => {
