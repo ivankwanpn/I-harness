@@ -66,9 +66,16 @@ export function append(session: Session, event: SessionEvent): void {
   // M14 image intake (fail-loud): images first attach to an event here, so this
   // is the boundary that validates them. deriveMessages stays a pure projection.
   const maybeImages = (event as { images?: unknown }).images
+  const maybeOutputImages = event.type === "tool/result"
+    ? (event as { output?: { images?: unknown } }).output?.images
+    : undefined
   if (maybeImages !== undefined) {
     if (!Array.isArray(maybeImages)) throw new Error("image attachment: images must be an array")
     validateImages(maybeImages as ImageInput[], event.type)
+  }
+  if (maybeOutputImages !== undefined) {
+    if (!Array.isArray(maybeOutputImages)) throw new Error("image attachment: images must be an array")
+    validateImages(maybeOutputImages as ImageInput[], event.type)
   }
   const ev = { ...event, seq: session.events.length }
   session.events.push(ev)
@@ -190,8 +197,15 @@ export function deriveSearchText(ev: SessionEvent): string {
       return ev.text
     case "tool/call":
       return JSON.stringify(ev.args) ?? ""
-    case "tool/result":
-      return (JSON.stringify(ev.output) ?? "") + imageDescriptor((ev.output as { images?: ImageInput[] } | null | undefined)?.images)
+    case "tool/result": {
+      // Images never enter the FTS index: strip `output.images` before
+      // stringifying so base64 payloads stay out of search text.
+      const raw = ev.output
+      if (raw === undefined) return ""
+      if (typeof raw !== "object" || raw === null) return JSON.stringify(raw)
+      const { images, ...rest } = raw as Record<string, unknown>
+      return JSON.stringify(rest) + imageDescriptor(images as ImageInput[] | undefined)
+    }
     case "subagent/inbox":
       return ev.message
     case "compaction/summary":

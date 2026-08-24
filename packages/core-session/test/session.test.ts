@@ -339,4 +339,20 @@ describe("M14 multimodal", () => {
     const many = Array.from({ length: 21 }, () => ({ mediaType: "image/png" as const, dataBase64: PNG }))
     expect(() => append(s, { type: "user/message", text: "t", images: many })).toThrow(/20 images/)
   })
+
+  it("append applies the same image hardcaps to tool/result output.images", () => {
+    const s = createSession()
+    expect(() => append(s, { type: "tool/result", callId: "c1", name: "shot", output: { ok: true, images: [{ mediaType: "image/bmp" as never, dataBase64: PNG }] } })).toThrow(/media type/)
+    const many = Array.from({ length: 21 }, () => ({ mediaType: "image/png" as const, dataBase64: PNG }))
+    expect(() => append(s, { type: "tool/result", callId: "c2", name: "shot", output: { ok: true, images: many } })).toThrow(/20 images/)
+  })
+
+  it("deriveSearchText never emits tool/result base64, descriptor line present", () => {
+    const ev = { type: "tool/result", callId: "c1", name: "shot", output: { ok: true, images: [{ mediaType: "image/png", dataBase64: PNG, name: "shot.png", width: 10, height: 10 }] } }
+    const txt = deriveSearchText(ev as never)
+    expect(txt).toContain('{"ok":true}')
+    expect(txt).toContain("image: shot.png 10x10 ")
+    expect(txt).not.toContain(PNG.slice(10, 30))
+    expect(txt).not.toContain(PNG)
+  })
 })
