@@ -13,6 +13,7 @@ export interface ProviderProfile {
   apiKey?: string
   models?: string[]
   defaultModel?: string
+  inputModalities?: ("text" | "image")[] // M14: absent = text-only (negative capability)
 }
 
 export interface ProviderRegistry {

@@ -47,6 +47,15 @@ describe("buildModelClient defaults and extra", () => {
     await it.return?.()
   })
 
+  it("stores inputModalities and treats absence as text-only", () => {
+    const reg = createProviderRegistry()
+    reg.register({ name: "vision", displayName: "V", protocol: "openai-compatible", inputModalities: ["text", "image"] })
+    reg.register({ name: "plain", displayName: "P", protocol: "openai-compatible" })
+    expect(reg.get("vision")!.inputModalities).toEqual(["text", "image"])
+    const plain = reg.get("plain")!.inputModalities
+    expect(plain === undefined || !plain.includes("image")).toBe(true)
+  })
+
   it("passes extra through to the request body", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
