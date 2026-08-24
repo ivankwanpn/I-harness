@@ -1,10 +1,38 @@
-import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
+import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
   baseUrl?: string
   model: string
   options?: Record<string, unknown>
+  // M14: mirrors ProviderProfile.inputModalities — when the route lacks
+  // "image", images are projected out before wire mapping. Forwarded by
+  // buildModelClient (Task 6).
+  inputModalities?: ("text" | "image")[]
+}
+
+function toInputContent(content: string | LLMContentPart[]): unknown {
+  if (typeof content === "string") return content
+  return content.map((part) =>
+    part.type === "text"
+      ? { type: "input_text", text: part.text }
+      : { type: "input_image", image_url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` },
+  )
+}
+
+// M14 direct-path collapse: a host hand-built tool message with image parts
+// becomes a function_call_output carrying only the text, followed by a user
+// item carrying the images (matching what deriveMessages emits for the agent
+// path). Returns undefined when there is nothing to split.
+function splitToolContent(content: string | LLMContentPart[]): { text: string; images: Extract<LLMContentPart, { type: "image" }>[] } {
+  if (typeof content === "string") return { text: content, images: [] }
+  let text = ""
+  const images: Extract<LLMContentPart, { type: "image" }>[] = []
+  for (const part of content) {
+    if (part.type === "text") text += part.text
+    else images.push(part)
+  }
+  return { text, images }
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -23,13 +51,21 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
   const baseUrl = config.baseUrl ?? "https://api.openai.com"
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      // M14 negative capability: text-only routes never see image bytes.
+      const vision = config.inputModalities?.includes("image") ?? false
+      const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
       const body = {
         model: config.model,
         instructions: request.systemPrompt,
-        input: request.messages
+        input: messages
           .map((m) => {
-            if (m.role === "user") return { role: "user", content: m.content }
-            if (m.role === "tool") return { type: "function_call_output", call_id: m.toolCallId, output: m.content }
+            if (m.role === "user") return { role: "user", content: toInputContent(m.content) }
+            if (m.role === "tool") {
+              const { text, images } = splitToolContent(m.content)
+              const output = { type: "function_call_output", call_id: m.toolCallId, output: text }
+              if (images.length === 0) return output
+              return [output, { role: "user", content: images.map((part) => ({ type: "input_image", image_url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` })) }]
+            }
             // assistant
             if (m.toolCalls && m.toolCalls.length > 0) {
               return m.toolCalls.map((c) => ({

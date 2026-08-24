@@ -1,6 +1,8 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createOpenAIClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 describe("llm-openai protocol", () => {
   it("translates LLMRequest to the OpenAI Responses request body", async () => {
@@ -154,5 +156,96 @@ describe("llm-openai protocol", () => {
     expect(secondEvents).toEqual(["t:ok"])
     const secondBody = bodies[1] as { input: unknown[] }
     expect(secondBody.input.some((i) => (i as { type?: string }).type === "function_call_output")).toBe(true)
+  })
+})
+
+describe("M14 openai responses wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("shapes image parts as input_image with a data URL", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ id: "r", type: "response.completed", response: { output: [] } }), { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", model: "m", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      model: "m",
+      messages: [{ role: "user", content: [{ type: "text", text: "look" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] }],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { input: { role: string; content: { type: string; text?: string; image_url?: string }[] }[] }
+    const user = body.input.find((i) => i.role === "user")!
+    expect(user.content).toEqual([
+      { type: "input_text", text: "look" },
+      { type: "input_image", image_url: `data:image/png;base64,${PNG}` },
+    ])
+  })
+
+  it("keeps string content as the legacy string shape (byte-identical)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", model: "m", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      model: "m",
+      messages: [{ role: "user", content: "hi, plain string" }],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { input: { role: string; content: unknown }[] }
+    expect(body.input).toEqual([{ role: "user", content: "hi, plain string" }])
+  })
+
+  it("projects images out when the route lacks the image modality", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ id: "r", type: "response.completed", response: { output: [] } }), { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", model: "m", inputModalities: ["text"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      model: "m",
+      messages: [
+        { role: "user", content: [{ type: "text", text: "look" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] },
+        { role: "user", content: "plain" },
+      ],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { input: { role: string; content: unknown }[] }
+    expect(body.input[0]).toEqual({ role: "user", content: [{ type: "input_text", text: "look" }, { type: "input_text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
+    expect(body.input[1]).toEqual({ role: "user", content: "plain" })
+  })
+
+  it("collapses a vision tool message with image parts into function_call_output + following user item", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response(JSON.stringify({ id: "r", type: "response.completed", response: { output: [] } }), { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", model: "m", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      model: "m",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }] },
+        { role: "tool", toolCallId: "call_1", content: [{ type: "text", text: "saw this:" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] },
+      ],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { input: { type?: string; role?: string; output?: string; content?: unknown }[] }
+    expect(body.input).toEqual([
+      { role: "user", content: "hi" },
+      { type: "function_call", call_id: "call_1", name: "read", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "saw this:" },
+      { role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${PNG}` }] },
+    ])
   })
 })
