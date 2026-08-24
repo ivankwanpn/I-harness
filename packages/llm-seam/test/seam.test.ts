@@ -16,3 +16,30 @@ describe("llm-seam invariant (audit F01-3)", () => {
     expect(() => assertMessagesFromLog(foreign, s)).toThrow(/log/i)
   })
 })
+
+import { projectImagesForTextModel } from "../src/index.ts"
+
+describe("M14 projectImagesForTextModel", () => {
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+  it("replaces image parts with a text placeholder and keeps text parts", () => {
+    const out = projectImagesForTextModel([
+      { role: "user", content: [
+        { type: "text", text: "look" },
+        { type: "image", image: { mediaType: "image/png", dataBase64: PNG } },
+      ]},
+    ])
+    expect(out[0]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "look" },
+        { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" },
+      ],
+    })
+  })
+
+  it("leaves string content untouched", () => {
+    const out = projectImagesForTextModel([{ role: "user", content: "plain" }])
+    expect(out).toEqual([{ role: "user", content: "plain" }])
+  })
+})
