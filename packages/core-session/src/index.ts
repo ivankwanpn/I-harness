@@ -4,7 +4,7 @@ export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
     | { type: "step/start"; seq?: number }
-    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string } }
+    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; images?: ImageInput[] }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
@@ -26,6 +26,20 @@ export interface SessionHeader {
   delegationDepth?: number
   origin?: string
 }
+
+export type ImageMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+
+export interface ImageInput {
+  mediaType: ImageMediaType
+  dataBase64: string // canonical base64 — NO `data:` prefix, NO whitespace
+  name?: string
+  width?: number // host-provided informational metadata (NOT verified in v0)
+  height?: number
+}
+
+export type LLMContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; image: ImageInput }
 
 export interface Session {
   formatVersion: number
@@ -49,15 +63,49 @@ export function append(session: Session, event: SessionEvent): void {
   if (event.type === "assistant/message" && (event as { source?: string }).source !== undefined) {
     throw new Error("assistant/message must originate from the log, not an external source")
   }
+  // M14 image intake (fail-loud): images first attach to an event here, so this
+  // is the boundary that validates them. deriveMessages stays a pure projection.
+  const maybeImages = (event as { images?: unknown }).images
+  if (maybeImages !== undefined) {
+    if (!Array.isArray(maybeImages)) throw new Error("image attachment: images must be an array")
+    validateImages(maybeImages as ImageInput[], event.type)
+  }
   const ev = { ...event, seq: session.events.length }
   session.events.push(ev)
   appendHooks.get(session)?.(ev)
 }
 
+const IMAGE_MEDIA_TYPES = new Set<ImageMediaType>(["image/png", "image/jpeg", "image/webp", "image/gif"])
+const MAX_IMAGES_PER_MESSAGE = 20
+const MAX_IMAGE_BYTES_PER_MESSAGE = 200 * 1024 * 1024
+
+function isValidBase64(s: string): boolean {
+  return /^[A-Za-z0-9+/]*={0,2}$/.test(s) && s.length % 4 === 0 && !s.includes(" ")
+}
+
+function validateImages(images: ImageInput[], evType: string): void {
+  if (images.length > MAX_IMAGES_PER_MESSAGE) {
+    throw new Error(`image attachment: at most ${MAX_IMAGES_PER_MESSAGE} images per ${evType}`)
+  }
+  let bytes = 0
+  for (const img of images) {
+    if (!IMAGE_MEDIA_TYPES.has(img.mediaType)) {
+      throw new Error(`image attachment: unsupported media type ${String(img.mediaType)}`)
+    }
+    if (!isValidBase64(img.dataBase64)) {
+      throw new Error(`image attachment: dataBase64 must be canonical base64 (no data: prefix, no whitespace)`)
+    }
+    bytes += Math.ceil((img.dataBase64.length * 3) / 4)
+  }
+  if (bytes > MAX_IMAGE_BYTES_PER_MESSAGE) {
+    throw new Error(`image attachment: aggregate bytes exceed ${MAX_IMAGE_BYTES_PER_MESSAGE}`)
+  }
+}
+
 export type LLMMessage =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string | LLMContentPart[] }
   | { role: "assistant"; content: string; toolCalls?: { id: string; name: string; args: unknown }[] }
-  | { role: "tool"; toolCallId: string; content: string }
+  | { role: "tool"; toolCallId: string; content: string | LLMContentPart[] }
 
 export function deriveMessages(session: Session): LLMMessage[] {
   const result: LLMMessage[] = []
@@ -79,7 +127,12 @@ export function deriveMessages(session: Session): LLMMessage[] {
     if (ev.seq !== undefined && shadowed.has(ev.seq)) continue
     if (ev.type === "user/message") {
       flushToolBlock()
-      result.push({ role: "user", content: ev.text })
+      const images = ev.images as ImageInput[] | undefined
+      result.push(
+        images && images.length > 0
+          ? { role: "user", content: [{ type: "text", text: ev.text }, ...images.map((image) => ({ type: "image" as const, image }))] }
+          : { role: "user", content: ev.text },
+      )
     } else if (ev.type === "assistant/message") {
       flushToolBlock()
       result.push({ role: "assistant", content: ev.text })
@@ -90,7 +143,18 @@ export function deriveMessages(session: Session): LLMMessage[] {
       pendingCalls ??= []
       pendingCalls.push({ id: ev.callId, name: ev.name, args: ev.args })
     } else if (ev.type === "tool/result") {
+      const out = ev.output as { images?: ImageInput[] } | null | undefined
+      const images = out?.images
       pendingResults.push({ role: "tool", toolCallId: ev.callId, content: JSON.stringify(ev.output) })
+      if (images && images.length > 0) {
+        pendingResults.push({
+          role: "user",
+          content: [
+            { type: "text", text: "Attached image(s) from tool result:" },
+            ...images.map((image) => ({ type: "image" as const, image })),
+          ],
+        })
+      }
     } else if (ev.type === "step/end") {
       // Each step is a self-contained [assistant toolCalls -> tool results]
       // unit; flushing at step/end keeps per-turn tool blocks separate so the
@@ -121,12 +185,13 @@ export function deriveMessages(session: Session): LLMMessage[] {
 export function deriveSearchText(ev: SessionEvent): string {
   switch (ev.type) {
     case "user/message":
+      return ev.text + imageDescriptor((ev as { images?: ImageInput[] }).images)
     case "assistant/message":
       return ev.text
     case "tool/call":
       return JSON.stringify(ev.args) ?? ""
     case "tool/result":
-      return JSON.stringify(ev.output) ?? ""
+      return (JSON.stringify(ev.output) ?? "") + imageDescriptor((ev.output as { images?: ImageInput[] } | null | undefined)?.images)
     case "subagent/inbox":
       return ev.message
     case "compaction/summary":
@@ -134,6 +199,14 @@ export function deriveSearchText(ev: SessionEvent): string {
     default:
       return ""
   }
+}
+
+function imageDescriptor(images: ImageInput[] | undefined): string {
+  if (!images || images.length === 0) return ""
+  return (
+    "\n" +
+    images.map((i) => `image: ${i.name ?? "unnamed"} ${i.width ?? "?"}x${i.height ?? "?"} ${Math.ceil((i.dataBase64.length * 3) / 4)}B base64:${i.dataBase64.slice(0, 8)}`).join("\n")
+  )
 }
 
 export function toJSONL(session: Session): string {

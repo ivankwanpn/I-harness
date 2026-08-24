@@ -287,3 +287,56 @@ describe("compaction events", () => {
     expect(deriveSearchText({ type: "compaction/end" })).toBe("")
   })
 })
+
+describe("M14 multimodal", () => {
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+  it("projects a user/message with images into parts (text first)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "hey", images: [{ mediaType: "image/png", dataBase64: PNG }] })
+    const msgs = deriveMessages(s)
+    expect(msgs[0]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "hey" },
+        { type: "image", image: { mediaType: "image/png", dataBase64: PNG } },
+      ],
+    })
+  })
+
+  it("keeps user/message content a plain string when no images", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "hi" })
+    expect(deriveMessages(s)[0]).toEqual({ role: "user", content: "hi" })
+  })
+
+  it("flushes tool-result images into a synthetic user message after the tool result", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "go" })
+    append(s, { type: "tool/call", callId: "c1", name: "shot", args: {} })
+    append(s, { type: "tool/result", callId: "c1", name: "shot", output: { ok: true, images: [{ mediaType: "image/png", dataBase64: PNG }] } })
+    append(s, { type: "step/end" })
+    const msgs = deriveMessages(s)
+    const results = msgs.filter((m) => m.role === "user" || m.role === "tool")
+    expect(results.some((m) => m.role === "tool" && m.content === '{"ok":true,"images":[{"mediaType":"image/png","dataBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}]}')).toBe(true)
+    const synthetic = results.find((m) => m.role === "user" && Array.isArray(m.content) && m.content.length === 2)! as { content: { type: string; text?: string; image?: unknown }[] }
+    expect(synthetic.content[0]).toEqual({ type: "text", text: "Attached image(s) from tool result:" })
+    expect(synthetic.content[1]).toMatchObject({ type: "image", image: { mediaType: "image/png" } })
+  })
+
+  it("deriveSearchText emits an image descriptor, never base64", () => {
+    const ev = { type: "user/message", text: "look", images: [{ mediaType: "image/png", dataBase64: PNG, name: "diagram.png", width: 100, height: 50 }] }
+    const txt = deriveSearchText(ev as never)
+    expect(txt).toContain("look")
+    expect(txt).toContain("image: diagram.png 100x50 ")
+    expect(txt).not.toContain(PNG.slice(10, 30))
+  })
+
+  it("append validates images at intake (mediaType, base64, count, bytes)", () => {
+    const s = createSession()
+    expect(() => append(s, { type: "user/message", text: "t", images: [{ mediaType: "image/bmp" as never, dataBase64: PNG }] })).toThrow(/media type/)
+    expect(() => append(s, { type: "user/message", text: "t", images: [{ mediaType: "image/png", dataBase64: "not!base64!" }] })).toThrow(/base64/)
+    const many = Array.from({ length: 21 }, () => ({ mediaType: "image/png" as const, dataBase64: PNG }))
+    expect(() => append(s, { type: "user/message", text: "t", images: many })).toThrow(/20 images/)
+  })
+})
