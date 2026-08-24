@@ -146,7 +146,14 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     }
 
     append(deps.session, { type: "turn/end" })
-    const finalText = deriveMessages(deps.session).at(-1)?.content ?? ""
+    // M14: content may be a parts array (image-bearing); extract text parts
+    // only. The final message is an assistant text message, but be robust.
+    const last = deriveMessages(deps.session).at(-1)
+    const finalText = typeof last?.content === "string"
+      ? last.content
+      : Array.isArray(last?.content)
+        ? last.content.filter((p) => p.type === "text").map((p) => p.text).join("")
+        : ""
     return { finalText, turns: steps, reasoning }
   }
 
