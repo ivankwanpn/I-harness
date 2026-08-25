@@ -1,0 +1,65 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js"
+import { z } from "zod"
+import { createTransport } from "./transport.ts"
+import type { McpServerConfig } from "./types.ts"
+
+export interface McpTool {
+  name: string
+  description?: string
+  inputSchema?: unknown
+}
+
+export interface McpCallResult {
+  content: unknown[]
+  isError?: boolean
+  structuredContent?: unknown
+}
+
+const RawCallToolResultSchema = z.object({
+  content: z.array(z.unknown()),
+  isError: z.boolean().optional(),
+  structuredContent: z.unknown().optional(),
+})
+
+export interface ConnectedMcpClient {
+  listTools(cursor?: string): Promise<{ tools: McpTool[]; nextCursor?: string }>
+  callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpCallResult>
+  close(): Promise<void>
+}
+
+export async function createConnectedClient(config: McpServerConfig): Promise<ConnectedMcpClient> {
+  const transport = await createTransport(config)
+  const client = new Client({ name: "i-harness-mcp-client", version: "0.1.0" })
+  await client.connect(transport)
+  const timeout = config.toolCallTimeoutMs ?? 60_000
+
+  return {
+    // Paginated shape (nextCursor) so syncTools can loop on cursor (Task 4).
+    async listTools(cursor) {
+      const response = await client.request(
+        { method: "tools/list", params: cursor !== undefined ? { cursor } : {} } as never,
+        ListToolsResultSchema,
+      )
+      return {
+        tools: response.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
+        ...(response.nextCursor !== undefined ? { nextCursor: response.nextCursor } : {}),
+      }
+    },
+    async callTool(name, args, signal) {
+      const response = await client.request(
+        { method: "tools/call", params: { name, arguments: args } } as never,
+        RawCallToolResultSchema,
+        { timeout, signal },
+      )
+      return {
+        content: response.content,
+        ...(response.isError !== undefined ? { isError: response.isError } : {}),
+        ...(response.structuredContent !== undefined ? { structuredContent: response.structuredContent } : {}),
+      }
+    },
+    async close() {
+      await client.close()
+    },
+  }
+}
