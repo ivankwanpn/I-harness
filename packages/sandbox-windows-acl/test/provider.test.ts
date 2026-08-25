@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { tmpdir } from "node:os"
+import { SandboxUnavailableError } from "@i-harness/sandbox"
 import { createWindowsAclSandbox } from "../src/index.ts"
 import type { SandboxPolicy } from "@i-harness/sandbox"
 
@@ -14,7 +15,10 @@ describe("createWindowsAclSandbox", () => {
   it("read-only confine wraps the command under the runner (enforcing argv, partial)", () => {
     const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "read-only" })
     const confined = provider.confine(["pwsh", "/Command", "x"], readOnly)
-    // [node, --import, tsx/esm, <runner entry>, ...] — the source-launch prefix.
+    // The argv prefix is the source-launch runner invocation (dsh's dev flow:
+    // [node, --import tsx/esm, <runner entry>, ...]). If a built-entry launch
+    // path is ever adopted, argv[3] becomes the built lib/runner.js — this
+    // assertion (and the /runner\.ts$/ match below) must then be relaxed.
     expect(confined.argv.slice(0, 4)).toEqual([process.execPath, "--import", "tsx/esm", confined.argv[3]])
     expect(confined.argv[3]).toMatch(/runner\.ts$/)
     expect(confined.argv.slice(4)).toEqual([
@@ -46,7 +50,18 @@ describe("createWindowsAclSandbox", () => {
   })
 
   it("constructions with a missing writable dir fail closed", () => {
-    expect(() => createWindowsAclSandbox({ writableDirs: ["Z:\\definitely-missing-dir-$$"], mode: "read-only" }))
+    expect(() => createWindowsAclSandbox({ writableDirs: ["Z:\\definitely-missing-dir-$"], mode: "read-only" }))
       .toThrow(/is not a directory/)
+  })
+
+  it("dispose() then confine() throws SandboxUnavailableError (fail-closed)", () => {
+    const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "read-only" })
+    provider.dispose()
+    expect(() => provider.confine(["echo", "hi"], readOnly)).toThrow(SandboxUnavailableError)
+  })
+
+  it("dispose() is idempotent (double dispose does not throw, even with no materialized grants)", () => {
+    const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "read-only" })
+    expect(() => { provider.dispose(); provider.dispose() }).not.toThrow()
   })
 })

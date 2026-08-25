@@ -491,11 +491,23 @@ interface AclTempCapability {
  * ambient temp entries untouched (writes there are denied anyway).
  *
  * Fail-closed at every level: construction requires existing writable
- * directories; confinement of an unresolvable policy throws
- * {@link SandboxUnavailableError} — a child is NEVER spawned unrestricted.
+ * directories; confinement fails closed by throwing (the seam contract at
+ * {@link SandboxProvider} — the thrown error may be a
+ * {@link SandboxUnavailableError}, a {@link Win32Error}, a generic Error (a
+ * failed grant materialization), or the raw ENOENT from
+ * `assertTempRootOutsideWorkspace` — a child is NEVER spawned unrestricted.
  *
- * @param options - the workspace/temp allowlists and the mode this provider confines under.
- * @returns the enclosing {@link SandboxProvider}.
+ * NOTE: only `writableDirs` is consumed by the factory (its existence is
+ * validated at construction). `mode`, `tempDir`, `writeSid`,
+ * `tempWriteSid`, and `manageDacls` are NOT read here — they exist because
+ * spec §5.1 mandates {@link AclSandboxOptions} as the construction type, and
+ * the per-call `SandboxPolicy` (mode, workspaceRoot, sessionId) is the actual
+ * enforcement input. A confinement's mode therefore comes from the policy,
+ * never from the construction options.
+ * @param options - the construction options; only `writableDirs` is
+ *   consumed (validated to exist). The per-call policy governs confinement.
+ * @returns the enclosing {@link SandboxProvider} (with a `dispose()` that
+ *   revokes the provider's temp grants and removes its private temp dirs).
  */
 export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProvider & { dispose(): void } {
   // Fail closed at composition: declared writable directories must exist.
