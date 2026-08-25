@@ -4,7 +4,7 @@
 
 **Goal:** Add `@i-harness/mcp-client` — a core MCP client bridge (tools discover/register/call + resources list/read helpers, stdio + streamable HTTP) that mounts into the CLI via `HeadlessOptions.mcp`.
 
-**Architecture:** dsh-structural primary (TS + `@modelcontextprotocol/sdk` bridge/lifecycle) with codex design shapes for gaps (resources pattern, naming sanitize/hash). The package connects to one MCP server per `McpServerConfig`, discovers tools (`tools/list` cursor pagination), registers them into the existing `ToolRegistry` under `mcp__<serverName>__<rawName>` public names (raw name only on the wire), forwards calls (`tools/call` + timeout/abort), and exposes resources as helper tools (`list_mcp_resources`/`read_mcp_resource`). The CLI mounts each server config before the agent run and unmounts in the runHeadless cleanup.
+**Architecture:** dsh-structural primary (TS + `@modelcontextprotocol/sdk` bridge/lifecycle) with codex design shapes for gaps (resources pattern, naming sanitize/hash). The package connects to one MCP server per `McpServerConfig`, discovers tools (`tools/list` cursor pagination), registers them into the existing `ToolRegistry` under `mcp__<serverName>__<rawName>` public names (raw name only on the wire), forwards calls (`tools/call` + timeout/abort), and exposes resources as helper tools (`list_mcp_resources__<serverName>`/`read_mcp_resource__<serverName>`). The CLI mounts each server config before the agent run and unmounts in the runHeadless cleanup.
 
 **Tech Stack:** TypeScript strict ESM (pnpm workspaces, vitest), `@modelcontextprotocol/sdk` (new external — official MCP SDK, dsh same), `zod` (SDK dep, used for call/result schema validation). No dsh/codex private packages.
 
@@ -687,7 +687,7 @@ git commit -m "feat(M17): MCP tool bridge + two-phase sync"
 
 **Interfaces:**
 - Consumes: `ConnectedMcpClient` (Task 3), `@i-harness/core-tools` (`Tool`).
-- Produces (used by Task 6): `createResourceTools(client, serverName, config): Tool[]` — the `list_mcp_resources` + `read_mcp_resource` helpers.
+- Produces (used by Task 6): `createResourceTools(client, serverName, config): Tool[]` — the `list_mcp_resources__<serverName>` + `read_mcp_resource__<serverName>` helpers (server-qualified — see the Task 5/6 naming note).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -722,7 +722,7 @@ describe("createResourceTools", () => {
       async readResource(server: string, uri: string) { called = { server, uri }; return { text: "content" } },
     } as unknown as ConnectedMcpClient
     const tools = createResourceTools(client, "files", { transport: "stdio", serverName: "files", command: "x", args: [] })
-    const readTool = tools.find((t) => t.name === "read_mcp_resource")!
+    const readTool = tools.find((t) => t.name === "read_mcp_resource__files")!
     await readTool.execute({ server: "files", uri: "file:///a.txt" }, {} as never)
     expect(called).toEqual({ server: "files", uri: "file:///a.txt" })
   })
@@ -766,7 +766,7 @@ export function createResourceTools(
 ): Tool[] {
   return [
     {
-      name: "list_mcp_resources",
+      name: `list_mcp_resources__${serverName}`,
       description: `List MCP resources from server "${serverName}" (optional server filter)`,
       inputSchema: { type: "object", properties: { server: { type: "string" } } },
       timeoutMs: config.toolCallTimeoutMs,
@@ -775,7 +775,7 @@ export function createResourceTools(
       },
     },
     {
-      name: "read_mcp_resource",
+      name: `read_mcp_resource__${serverName}`,
       description: `Read an MCP resource from server "${serverName}" by uri`,
       inputSchema: {
         type: "object",

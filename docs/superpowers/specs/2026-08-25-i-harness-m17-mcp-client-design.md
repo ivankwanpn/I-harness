@@ -44,8 +44,8 @@ Add one package — `@i-harness/mcp-client` (core scope) — that:
    (raw name only ever on the wire).
 3. Forwards tool calls (`tools/call`, raw name) with timeout + abort signal,
    and surfaces `isError: true` as a tool-layer error.
-4. Exposes resources as I-harness helper tools (`list_mcp_resources`,
-   `read_mcp_resource`) per server.
+4. Exposes resources as I-harness helper tools (`list_mcp_resources__<serverName>`,
+   `read_mcp_resource__<serverName>` — server-qualified, no multi-server conflict) per server.
 5. Mounts/unmounts cleanly (register → run → disconnect + unregister +
    namespace release) via the CLI's `mcp` option.
 
@@ -72,7 +72,7 @@ Add one package — `@i-harness/mcp-client` (core scope) — that:
 | SDK | `@modelcontextprotocol/sdk` (official, dsh same) + zod |
 | Naming | dsh `mcp__<server>__<raw>` (64-char contract) + codex sanitize/hash dedup |
 | Tool identity | `(serverName, rawName)` stable; raw name only on the wire; public name never parsed back |
-| Resources | codex pattern: list_resources/read_resource per server; exposed as `list_mcp_resources`/`read_mcp_resource` |
+| Resources | codex pattern: list_resources/read_resource per server; exposed as `list_mcp_resources__<serverName>`/`read_mcp_resource__<serverName>` |
 | Registration | Two-phase sync (fetch → swap); conflict → rollback (zero tools) + log; duplicate raw → throw |
 | Lifecycle | mount: connect → sync → register (disposers map); unmount: unregister → disconnect → namespace release |
 | Integration | `HeadlessOptions.mcp?: McpServerConfig[]`; mount before agent run; unmount in cleanup |
@@ -88,7 +88,7 @@ src/transport.ts     # StdioClientTransport / StreamableHTTPClientTransport sele
 src/naming.ts        # publicToolName(serverName, rawName) — dsh contract + codex sanitize/hash
 src/bridge.ts        # MCP tool ↔ I-harness Tool adapter: createDefinition + call→tools/call
                      #   + two-phase syncTools (fetch → swap) + conflict handling
-src/resources.ts     # list_mcp_resources / read_mcp_resource helper tools (per server)
+src/resources.ts     # list_mcp_resources__<serverName> / read_mcp_resource__<serverName> helper tools (server-qualified, per server)
 src/types.ts         # McpServerConfig (stdio | streamable-http), error types
 src/client.ts        # ConnectedMcpClient wrapper: tools/list (cursor) / tools/call /
                      #   resources/list / resources/read with timeout + signal
@@ -160,14 +160,14 @@ export function publicToolName(serverName: string, rawName: string): string {
 
 ```ts
 // per-server routing (serverName + uri)
-list_mcp_resources({ server?: string })  // tools/resources/list across servers (or one)
-read_mcp_resource({ server: string, uri: string })
+list_mcp_resources__<serverName>({ server?: string })  // tools/resources/list (per server)
+read_mcp_resource__<serverName>({ server: string, uri: string })
 ```
 
-- `list_mcp_resources`: lists resource definitions per server (optional
+- `list_mcp_resources__<serverName>`: lists resource definitions per server (optional
   `server` filter); returns the resource list. Uses `client.request(
   { method: "resources/list", params }, schema, { timeout: cfg.toolCallTimeoutMs })` (per-server timeout).
-- `read_mcp_resource`: reads one resource (`server` + `uri`); returns the
+- `read_mcp_resource__<serverName>`: reads one resource (`server` + `uri`); returns the
   content (text or base64 image). Uses `resources/read` with the same timeout + signal.
 - Uses the same `ConnectedMcpClient` (resources/list, resources/read) with
   timeout + signal.
@@ -216,7 +216,7 @@ apps/cli/src/run.ts:
    - fetch failure → previous generation untouched; duplicate raw → throw;
      conflict → rollback (zero tools) + log; cursor pagination.
 4. **resources** (`packages/mcp-client/test/resources.test.ts`):
-   - `list_mcp_resources` (per-server + filter); `read_mcp_resource`
+   - `list_mcp_resources__<serverName>` (per-server + filter); `read_mcp_resource__<serverName>`
      (text + image content).
 5. **transport** (`packages/mcp-client/test/transport.test.ts`):
    - stdio: fake MCP server subprocess (script) connect; call works (real
