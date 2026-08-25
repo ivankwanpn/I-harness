@@ -21,7 +21,7 @@ import type { NativePtr, Win32Bindings } from './ffi.ts'
 import * as abi from './win32-abi.ts'
 
 /**
- * Pack one EXPLICIT_ACCESS_W (48 bytes, layout verified by abi-probe.cpp):
+ * Pack one EXPLICIT_ACCESS_W (48 bytes, layout pinned by win32-abi.ts):
  * perms@0, mode@4, inheritance@8, Trustee@16 { pMultipleTrustee@16,
  * MultipleTrusteeOperation@24, TrusteeForm@28, TrusteeType@32, ptstrName@40 }.
  * `permissions` is the access mask; the POC passes 0 for REVOKE_ACCESS, which

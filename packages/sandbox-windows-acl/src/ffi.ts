@@ -4,7 +4,8 @@
  * below was verified against the MinGW Windows headers on this machine
  * (winnt.h / accctrl.h / aclapi.h / securitybaseapi.h / sddl.h /
  * processthreadsapi.h / fileapi.h / namedpipeapi.h / synchapi.h / winbase.h);
- * struct layouts are asserted at load time against verify/abi-probe.cpp.
+ * the two struct layouts are asserted at load time against the sizes exported
+ * by ./win32-abi.ts (and pinned by test/abi.test.ts).
  * @module @i-harness/sandbox-windows-acl/ffi
  */
 
@@ -168,7 +169,7 @@ export const PROCESS_INFORMATION = koffi.struct('PROCESS_INFORMATION', {
   dwThreadId: 'uint32',
 })
 
-/* v8 ignore start -- layout-mismatch guards fire only on ABI breakage; verify/abi-probe.cpp pins both sizes. */
+/* v8 ignore start -- layout-mismatch guards fire only on ABI breakage; ./win32-abi.ts pins both sizes. */
 if (STARTUPINFOW.size !== abi.STARTUPINFOW_SIZE) {
   throw new Error(`STARTUPINFOW layout mismatch: koffi computed ${STARTUPINFOW.size}, header probe says ${abi.STARTUPINFOW_SIZE}`)
 }
@@ -375,9 +376,10 @@ function bindings(): Win32Bindings {
   const kernel32 = koffi.load('kernel32.dll')
   const advapi32 = koffi.load('advapi32.dll')
 
-  // Each binding shape is verified by verify/abi-probe.cpp against the real
-  // Windows headers and exercised end-to-end by tests/probe.spec.ts; the
-  // single cast keeps the per-binding noise out of this table.
+  // Each binding shape is verified against the real Windows headers (see the
+  // module doc) and exercised end-to-end by test/win32.e2e.ts and
+  // test/ffi.test.ts; the single cast keeps the per-binding noise out of this
+  // table.
   const bind = (lib: ReturnType<typeof koffi.load>, name: string, result: Ptr | string, args: Array<Ptr | string>): unknown =>
     lib.func('__stdcall', name, result, args)
 

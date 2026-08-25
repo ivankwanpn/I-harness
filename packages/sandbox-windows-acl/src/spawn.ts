@@ -105,7 +105,8 @@ export function spawnSandboxed(
   const stdIn = createPipe(api)
   const stdOut = createPipe(api)
   const stdErr = createPipe(api)
-  // Child side of each pipe must be inheritable (POC lines 262-268).
+  // Child side of each pipe must be inheritable (the stdio-redirection
+  // contract: the child inherits the write ends; the host keeps the read ends).
   setInheritable(api, stdIn.read, 'stdin read end')
   setInheritable(api, stdOut.write, 'stdout write end')
   setInheritable(api, stdErr.write, 'stderr write end')
@@ -130,8 +131,10 @@ export function spawnSandboxed(
     startupInfo, processInfo,
   )
   // Capture the failure before CloseHandle calls clobber GetLastError, then
-  // close every pipe handle created so far — the six-close contract this test
-  // surface pins (tests/failure-paths.spec.ts).
+  // close every pipe handle created so far — the six-close contract: a
+  // CreateProcessAsUserW failure must not leak any of the three pipe pairs'
+  // handles (the fail-closed error path is exercised indirectly by the
+  // win32.e2e denial cases).
   if (created === 0) {
     const win32Code = api.getLastError()
     api.closeHandle(stdIn.read)
@@ -223,9 +226,10 @@ export function waitForExit(api: Win32Bindings, process: NativePtr): number {
 /**
  * Create a kill-on-close job object (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE at
  * LimitFlags offset 16 of JOBOBJECT_EXTENDED_LIMIT_INFORMATION, layout
- * verified by abi-probe.cpp). When the caller dies with the job handle open,
- * Windows terminates every process in the job — the orphan-child backstop.
- * The caller keeps the returned handle open for the child's lifetime.
+ * verified against the headers and pinned by win32-abi.ts). When the caller
+ * dies with the job handle open, Windows terminates every process in the job
+ * — the orphan-child backstop. The caller keeps the returned handle open for
+ * the child's lifetime.
  */
 function createKillOnCloseJob(api: Win32Bindings): NativePtr {
   const job = api.createJobObjectW(null, null)

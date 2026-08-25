@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { workspaceWriteSid, tempWriteSid } from "../src/workspace-sid.ts"
-import { assertTempRootOutsideWorkspace } from "../src/path-boundary.ts"
+import { assertTempRootOutsideWorkspace, assertPrivateTempDisjoint } from "../src/path-boundary.ts"
 
 describe("workspaceWriteSid / tempWriteSid", () => {
   it("is deterministic and distinct between workspace and temp", () => {
@@ -80,5 +80,56 @@ describe("assertTempRootOutsideWorkspace", () => {
     const ws = join(tempRoot, "workspace")
     mkdirSync(ws)
     expect(() => assertTempRootOutsideWorkspace(ws, tempRoot)).not.toThrow()
+  })
+})
+
+describe("assertPrivateTempDisjoint", () => {
+  const scratchDirs: string[] = []
+  afterEach(() => {
+    for (const dir of scratchDirs.splice(0)) rmSync(dir, { recursive: true, force: true })
+  })
+  function scratch(): string {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-acl-disjoint-"))
+    scratchDirs.push(dir)
+    return dir
+  }
+
+  it("throws when temp is inside a writable dir", () => {
+    const writable = scratch()
+    const temp = join(writable, "temp-123")
+    mkdirSync(temp)
+    expect(() => assertPrivateTempDisjoint([writable], temp)).toThrow(/disjoint|writable/i)
+  })
+
+  it("throws when a writable dir is inside the temp dir", () => {
+    const temp = scratch()
+    const writable = join(temp, "sub")
+    mkdirSync(writable)
+    expect(() => assertPrivateTempDisjoint([writable], temp)).toThrow(/disjoint|writable/i)
+  })
+
+  it("throws when temp equals a writable dir", () => {
+    const dir = scratch()
+    expect(() => assertPrivateTempDisjoint([dir], dir)).toThrow(/disjoint|writable/i)
+  })
+
+  it("passes for disjoint directories (siblings)", () => {
+    const root = scratch()
+    const writable = join(root, "w")
+    const temp = join(root, "t")
+    mkdirSync(writable)
+    mkdirSync(temp)
+    expect(() => assertPrivateTempDisjoint([writable], temp)).not.toThrow()
+  })
+
+  it("passes for multiple disjoint writable dirs", () => {
+    const root = scratch()
+    const writableOne = join(root, "w1")
+    const writableTwo = join(root, "w2")
+    const temp = join(root, "t")
+    mkdirSync(writableOne)
+    mkdirSync(writableTwo)
+    mkdirSync(temp)
+    expect(() => assertPrivateTempDisjoint([writableOne, writableTwo], temp)).not.toThrow()
   })
 })

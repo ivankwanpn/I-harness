@@ -26,6 +26,7 @@
     "@i-harness/sandbox": "workspace:*",
     "@i-harness/sandbox-local": "workspace:*",
     "@i-harness/sandbox-policy": "workspace:*",
+    "@i-harness/sandbox-windows-acl": "workspace:*",
     "@i-harness/fs": "workspace:*",
     "@i-harness/guard-approval": "workspace:*",
     "@i-harness/guard-retry": "workspace:*",

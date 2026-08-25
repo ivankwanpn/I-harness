@@ -20,6 +20,7 @@ import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-q
 import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
+import { createWindowsAclSandbox } from "@i-harness/sandbox-windows-acl"
 import { createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
 import type { SandboxMode } from "@i-harness/sandbox"
 
@@ -81,8 +82,19 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // M16: a confined mode composes the platform-local sandbox provider (bwrap
   // on Linux, ACL fabric on win32) and hands it to exec through registerShell;
   // unset or danger-full-access compose NO provider (exec stays passthrough).
+  // M16w final review (win32 composition): the sandbox-local wrapper returns a
+  // bare SandboxProvider and DROPS the backend's dispose(), so this compose
+  // site keeps the raw backend and tears it down in the finally below —
+  // otherwise the ACL temp grants would leak in composed use. The construction
+  // `mode` is only the type; the per-call policy (resolved below) governs.
+  const winSandbox =
+    process.platform !== "win32" || opts.sandbox === undefined || opts.sandbox === "danger-full-access"
+      ? undefined
+      : createWindowsAclSandbox({ writableDirs: [opts.workspace], mode: "read-only" })
   const sandboxProvider =
-    opts.sandbox === undefined || opts.sandbox === "danger-full-access" ? undefined : createLocalSandbox()
+    opts.sandbox === undefined || opts.sandbox === "danger-full-access"
+      ? undefined
+      : createLocalSandbox({ ...(winSandbox !== undefined ? { windowsAclBackend: winSandbox } : {}) })
   // M16 final-review (C1): resolve the effective policy ONCE and pass the SAME
   // resolved value to the enforce step (registerShell → exec confines at
   // spawn) and to the prompt renderer, so the prompt and the enforcement can
@@ -243,5 +255,16 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   } catch (err) {
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
+  } finally {
+    // M16w final-review: the sandbox-local wrapper dropped the win32 backend's
+    // dispose() (it returns a bare SandboxProvider), so the compose site owns
+    // teardown — otherwise the backend's revocable ACL temp grants would leak
+    // past a composed run. Best-effort like the coordinator close above: a
+    // teardown failure must not mask the run's own result.
+    try {
+      winSandbox?.dispose()
+    } catch {
+      // cleanup failure on teardown: the run result stands
+    }
   }
 }

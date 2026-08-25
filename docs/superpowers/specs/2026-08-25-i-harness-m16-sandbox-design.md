@@ -280,7 +280,7 @@ export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProv
 export function workspaceWriteSid(path: string): string
 export function tempWriteSid(...): string
 export function quoteArg(arg: string): string           // Windows argv quoting
-export class Win32Error extends Error { code: number; api: string }
+export class Win32Error extends Error { api: string; win32Code: number }
 export class AclWriteGrant { ... }
 ```
 

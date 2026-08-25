@@ -1219,5 +1219,37 @@ describe("M16 CLI sandbox wiring", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  // M16w final-review (win32 composition): on a Windows host the CLI must
+  // compose the REAL windows-acl backend (createLocalSandbox throws
+  // SandboxUnavailableError("no windows ACL backend composed") without it),
+  // so ANY confined bash/pwsh dispatch aborts the run — this guards the
+  // compose wiring (a bash-less run would not discriminate: confine is only
+  // reached at shell-tool dispatch). One bash call is the minimal probe: the
+  // backend is composed and the runner starts (the deny behavior itself is
+  // e2e'd inside the windows-acl package). The win32 backend requires koffi,
+  // which cannot load off Windows, so the test skips everywhere else.
+  it.skipIf(process.platform !== "win32")("win32: composes the windows-acl backend — confined run completes without SandboxUnavailableError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m16w-"))
+    try {
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        sandbox: "read-only",
+        approveAll: true,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      // The confined command may fail on THIS host (the tool result carries
+      // the failure) — the assertion is the harness run completing, i.e. the
+      // composition never turned confinement into SandboxUnavailableError.
+      expect(result.exitCode).toBe(0)
+      expect(result.error ?? "").not.toContain("sandbox")
+      expect(result.finalText).toBe("done")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 

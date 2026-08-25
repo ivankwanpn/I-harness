@@ -160,7 +160,8 @@ export interface RestrictingSidSet {
 
 /**
  * Create the write-restricted token with the mode-selected restricting list
- * (verified on Win11 26200, see the POC-worktree restrict-variant harness):
+ * (verified on Win11 26200, see the README's boundary notes and this
+ * package's win32.e2e tests):
  *  - read-only:       [logon SID, EVERYONE]
  *  - workspace-write: [logon SID, EVERYONE, workspace SID, optional temp SID]
  *

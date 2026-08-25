@@ -34,7 +34,7 @@
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces (used by Tasks 2-8): every `win32-abi.ts` constant/struct size; `Win32Error` (class with `.code`, `.api`, `.message` format).
+- Produces (used by Tasks 2-8): every `win32-abi.ts` constant/struct size; `Win32Error` (class with `.win32Code`, `.api`, `.message` format).
 
 - [ ] **Step 1: Create the package scaffold**
 
@@ -63,7 +63,7 @@ Copy `packages/sandbox/sandbox-windows-acl/src/win32-abi.ts` from dsh source (th
 
 - [ ] **Step 3: Port `errors.ts` verbatim**
 
-Copy dsh's `errors.ts` (Win32Error class: `.code`, `.api`, formatted message via FormatMessage). Adjust nothing — the API name + code + system text format is the audit-critical surface.
+Copy dsh's `errors.ts` (Win32Error class: `.win32Code`, `.api`, formatted message via FormatMessage). Adjust nothing — the API name + code + system text format is the audit-critical surface.
 
 - [ ] **Step 4: Write the tests**
 
@@ -103,9 +103,9 @@ describe("win32-abi constants (spot-check against winnt.h)", () => {
 })
 
 describe("Win32Error", () => {
-  it("carries code + api", () => {
-    const err = new Win32Error(5, "Access is denied.", "CreateRestrictedToken")
-    expect(err.code).toBe(5)
+  it("carries api + win32Code", () => {
+    const err = new Win32Error("CreateRestrictedToken", 5, "Access is denied.")
+    expect(err.win32Code).toBe(5)
     expect(err.api).toBe("CreateRestrictedToken")
     expect(err.message).toContain("CreateRestrictedToken")
     expect(err.message).toContain("5")
