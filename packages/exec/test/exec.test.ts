@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createExecService, type ExecService } from "../src/index.ts"
-import type { SandboxProvider, SandboxPolicy } from "@i-harness/sandbox"
+import { SandboxUnavailableError, type SandboxProvider, type SandboxPolicy } from "@i-harness/sandbox"
 
 // Poll-wait helper: avoids raw fixed sleeps (flake-prone under parallel load).
 async function waitForStatus(exec: ExecService, jobId: string, pred: (status: string) => boolean, timeoutMs = 5000): Promise<void> {
@@ -169,5 +169,43 @@ describe("exec sandbox", () => {
     const exec = createExecService() // no provider
     const result = await exec.run({ argv: [process.execPath, "-e", "process.stdout.write('full')"], sandbox: { mode: "danger-full-access", workspaceRoot: "/" } })
     expect(result.stdout).toBe("full")
+  })
+
+  it("runner failure (nonzero exit + fatal signature) → SandboxUnavailableError (I3)", async () => {
+    // Simulates bwrap's exec-refusal shape: the runner exits 125 with
+    // "bwrap: failed to ..." (user namespaces blocked). The provider confines
+    // to `sh -c` with the exact stderr; exec must translate it to
+    // SandboxUnavailableError instead of returning an ordinary failure.
+    const provider: SandboxProvider = {
+      confine(argv, _policy) {
+        return {
+          argv: [process.execPath, "-e", `console.error("bwrap: failed to create namespace: Permission denied"); process.exit(125)`, ...argv],
+          enforcement: "full",
+          denialSignatures: ["read-only file system"],
+          runnerFailureRules: [{ allowedExitCodes: [125], fatalSignatures: ["bwrap: failed to"] }],
+        }
+      },
+    }
+    const exec = createExecService({ sandbox: provider })
+    await expect(exec.run({ argv: ["echo", "hi"], sandbox: policy })).rejects.toThrow(SandboxUnavailableError)
+    await expect(exec.run({ argv: ["echo", "hi"], sandbox: policy })).rejects.toThrow(/bwrap: failed to/)
+  })
+
+  it("nonzero exit WITHOUT a matching runner-failure rule stays an ordinary failure", async () => {
+    const provider: SandboxProvider = {
+      confine(argv, _policy) {
+        // Exit 125 but no fatal signature → NOT a runner failure.
+        return {
+          argv: [process.execPath, "-e", "console.error('command body failed'); process.exit(125)", ...argv],
+          enforcement: "full",
+          denialSignatures: ["read-only file system"],
+          runnerFailureRules: [{ allowedExitCodes: [125], fatalSignatures: ["bwrap: failed to"] }],
+        }
+      },
+    }
+    const exec = createExecService({ sandbox: provider })
+    const result = await exec.run({ argv: ["echo", "hi"], sandbox: policy })
+    expect(result.exitCode).toBe(125)
+    expect(result.stderr).toContain("command body failed")
   })
 })

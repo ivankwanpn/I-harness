@@ -84,7 +84,10 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
   }
 }
 
-function probeBwrap(timeoutMs?: number): boolean {
+// M16 final-review (I2): exported so tests/e2e guards probe the SAME gate
+// that createLocalSandbox actually uses (bwrap --version alone passes on hosts
+// where user namespaces are blocked, so the e2e would run RED instead of SKIP).
+export function probeBwrap(timeoutMs?: number): boolean {
   // spawnSync is correct here: a one-shot bounded probe, not a long-lived process.
   const probe = spawnSync("bwrap", [...bwrapProfileArgs({ mode: "read-only", workspaceRoot: "/" }), "--", "true"], {
     timeout: timeoutMs ?? 5000,

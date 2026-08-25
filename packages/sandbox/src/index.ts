@@ -46,6 +46,7 @@ export class SandboxUnavailableError extends Error {
   }
 }
 
+export { classifyRunnerFailure, matchesSignature, type ShellLikeResult } from "./runner-failures.ts"
 export { canonicalPath, writableRoots } from "./roots.ts"
 export {
   WIDER_MODES,
