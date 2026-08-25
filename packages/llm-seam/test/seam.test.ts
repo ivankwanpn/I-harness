@@ -42,4 +42,34 @@ describe("M14 projectImagesForTextModel", () => {
     const out = projectImagesForTextModel([{ role: "user", content: "plain" }])
     expect(out).toEqual([{ role: "user", content: "plain" }])
   })
+
+  it("masks dataBase64 inside tool-role string content (M15 I3 close)", () => {
+    const payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    const out = projectImagesForTextModel([
+      { role: "tool", toolCallId: "c1", content: `{"ok":true,"images":[{"mediaType":"image/png","dataBase64":"${payload}"}]}` },
+    ])
+    const content = out[0]!.content as string
+    expect(content).not.toContain(payload) // raw bytes never reach a text-only model
+    expect(content).toContain(`"dataBase64":"[image omitted: base64:${payload.slice(0, 8)}]"`)
+    expect(content).toContain(`"ok":true`) // the rest of the JSON survives
+  })
+
+  it("masks multiple base64 occurrences in one tool string", () => {
+    const p1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    const p2 = "aGVsbG8gd29ybGQgdGhpcyBpcyBhIHNlY29uZCBpbWFnZSBwYXlsb2FkISEh"
+    const out = projectImagesForTextModel([
+      { role: "tool", toolCallId: "c2", content: `[{"dataBase64":"${p1}"},{"dataBase64":"${p2}"}]` },
+    ])
+    const content = out[0]!.content as string
+    expect(content).not.toContain(p1)
+    expect(content).not.toContain(p2)
+    expect(content).toContain(`base64:${p1.slice(0, 8)}]`)
+    expect(content).toContain(`base64:${p2.slice(0, 8)}]`)
+  })
+
+  it("leaves user/assistant string content untouched even when it resembles base64", () => {
+    const sneaky = `{"dataBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}`
+    const out = projectImagesForTextModel([{ role: "user", content: sneaky }])
+    expect(out[0]!.content).toBe(sneaky)
+  })
 })
