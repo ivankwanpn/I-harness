@@ -529,19 +529,22 @@ import { workspaceWriteSid, tempWriteSid } from "../src/workspace-sid.ts"
 // They mirror dsh's windows-acl e2e pattern: assert the confinement outcome,
 // not a precise error string, because the exact Win32 denial text varies.
 describe.skipIf(process.platform !== "win32")("windows-acl e2e (Windows only)", () => {
-  it("read-only: a write inside the workspace is allowed (writableDirs grant)", async () => {
+  it("read-only: ALL writes denied — the workspace included, standing grant or not", async () => {
     const workspace = process.cwd()
     const sandbox = createWindowsAclSandbox({ writableDirs: [workspace], mode: "read-only" })
-    const confined = sandbox.confine(["node", "-e", "require('node:fs').writeFileSync('m16-e2e.txt','x')"], { mode: "read-only", workspaceRoot: workspace })
-    // The wrapped argv is spawned; the runner exits 0 when the write succeeds
-    // (the workspace ACE grant). Cleanup after.
+    // NOTE: dsh's ACTUAL runner contract (verified against dsh's own
+    // runner.spec.ts mode-downgrade pin) is that read-only denies EVERY
+    // write — even inside the workspace, and even when a standing workspace
+    // write-SID ACE is present (the read-only token's restricting list carries
+    // NO capability SID, so the standing ACE is inert). The ORIGINAL Task 9
+    // snippet was WRONG on this point and was corrected here: a workspace
+    // write under read-only is DENIED, not allowed.
+    const confined = sandbox.confine(["node", "-e", "1"], { mode: "read-only", workspaceRoot: workspace })
     expect(confined.argv.length).toBeGreaterThan(0)
-    // NOTE: full spawn + assertion is the host handshake:
-    //  - create a temp file inside `workspace` via the confined runner
-    //  - expect exit code 0 (allowed)
-    //  - delete the file
-    // The exact spawn harness mirrors dsh's `acl.e2e.ts`; implement it with the
-    // runner's spawnSandboxedInherited + waitForExit, asserting exit 0.
+    // The full denial e2e: spawn the confined runner writing into the
+    // workspace under the read-only token; expect nonzero exit + denial
+    // signature (Node surfaces EPERM: operation not permitted). Mirrors dsh's
+    // runner suites; the exact assertion is the nonzero exit + deny marker.
   })
 
   it("read-only: a write OUTSIDE the writable set is denied", async () => {
@@ -561,7 +564,7 @@ describe.skipIf(process.platform !== "win32")("windows-acl e2e (Windows only)", 
 })
 ```
 
-NOTE for the implementer: the two confinement e2e tests ("allowed" / "denied") require actually spawning a process under the restricted token and asserting the exit/stderr — this is the core M16w validation. Mirror dsh's `packages/sandbox/sandbox-windows-acl/tests/acl.e2e.ts` exactly (spawn under the token, write inside workspace → 0; write outside → nonzero + denial signature). If the local Windows host cannot run it (no permission), the test asserts `confined.argv` shape only and the e2e is documented as Windows-host-only.
+NOTE for the implementer: the two confinement e2e tests ("allowed" / "denied") require actually spawning a process under the restricted token and asserting the exit/stderr — this is the core M16w validation. Mirror dsh's windows-acl e2e pattern (`packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts` — spawn the REAL runner entry under the token, write inside workspace → 0; write outside → nonzero + denial signature; and `packages/shell/pwsh-sandbox/tests/acl.e2e.ts` for the full-chain shape). dsh has NO `tests/acl.e2e.ts` under sandbox-windows-acl; the runner spec is the closest pattern. If the local Windows host cannot run it (no permission), the test asserts `confined.argv` shape only and the e2e is documented as Windows-host-only.
 
 - [ ] **Step 2: Run the tests**
 
@@ -590,7 +593,7 @@ git commit -m "test(M16w): windows-acl e2e — restricted-token confinement (Win
 ## Self-Review Notes (already resolved during planning)
 
 - **Port-verbatim strategy**: M16w ports dsh's `sandbox-windows-acl` source files nearly as-is (adjusting `@deepseek-ai/*` imports to `@i-harness/*` and package paths). The Win32 mechanism is the audited-good design (T26/T27) — do NOT redesign. Every task ports one or two source files and keeps the audit-critical details (error labels, fail-closed checks, SID derivation).
-- **CI reality**: most windows-acl behavior is win32-only and CANNOT run on non-Windows CI (koffi native load + restricted token). The unit tests (abi constants, quoteArg, SID derivation, EXPLICIT_ACCESS packing, provider shape) run everywhere; the win32 e2e is `skipIf(win32)` — it only runs on a Windows host. The M16 core's `createLocalSandbox({ windowsAclBackend })` consumption is tested on win32 only.
+- **CI reality**: most windows-acl behavior is win32-only and CANNOT run on non-Windows CI (koffi native load + restricted token). The unit tests (abi constants, quoteArg, SID derivation, EXPLICIT_ACCESS packing, provider shape) run everywhere; the win32 e2e is `skipIf(process.platform !== "win32")` — it only runs on a Windows host. The M16 core's `createLocalSandbox({ windowsAclBackend })` consumption is tested on win32 only.
 - **koffi version**: `koffi@^3.1.0` — matching dsh's binding surface (koffi 3 pointer brand, `koffi.pointer`/`koffi.struct`). Do NOT use koffi 2 (different API).
 - **The `writableDirs` integration note**: M16 core's `createLocalSandbox` win32 path uses `writableDirs: []` as a skeleton; the actual dirs derive from the per-call policy in M16w's `confine` (the provider resolves workspaceRoot + temp dir per execution). This is the one intentional glue point between the two plans.
 - **Fail-closed invariant**: M16w's `runner.ts` reports `runnerFailed` (stderr `windows-acl-run:` + exit 127); M16 core's `runner-failures.ts` classifier handles it. A runner failure is NEVER treated as a denial or a silent unconfined run.
