@@ -29,7 +29,7 @@ export interface ProviderProfile {
 export function resolveModelContext(
   profile: ProviderProfile,
   modelId: string,
-): { contextWindow?: number; maxContextWindow?: number } {
+): ProviderModelContext {
   const override = profile.modelContexts?.[modelId]
   return {
     contextWindow: override?.contextWindow ?? profile.contextWindow,

@@ -36,13 +36,15 @@ export function assertMessagesFromLog(messages: LLMMessage[], session: Session):
   if (msgJson !== logJson) throw new Error("model-visible messages must derive from the session log (audit F01-3)")
 }
 
-// M14/M15 negative capability: text-only models never see image bytes.
-// Part-level: every image part is replaced with a deterministic text
-// placeholder (the base64 prefix is a stable correlation hint, not the bytes).
-// M15 I3 close: tool-role STRING content (tool results are
-// JSON.stringify(output) and can carry output.images → dataBase64 fields) is
-// masked so raw base64 bytes never reach a text-only model. User/assistant
-// string content is untouched — the projection never embeds images there.
+// M14/M15 negative capability: part-level image parts are replaced with a
+// deterministic text placeholder (the base64 prefix is a stable correlation
+// hint, not the bytes). M15 I3 close: canonical `"dataBase64":"<base64>"`
+// occurrences inside tool-role STRING content (≥8-char values) are masked so
+// raw base64 bytes from tool results (JSON.stringify(output) can carry
+// output.images → dataBase64 fields) don't reach a text-only model — the regex
+// matches canonical single-encoded occurrences only, not arbitrary encodings.
+// User/assistant string content is untouched — the projection never embeds
+// images there.
 function maskToolBase64(content: string): string {
   return content.replace(/\"dataBase64\":\"([A-Za-z0-9+/]{8})[A-Za-z0-9+/=]*\"/g, '\"dataBase64\":\"[image omitted: base64:$1]\"')
 }
