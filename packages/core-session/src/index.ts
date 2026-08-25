@@ -15,6 +15,10 @@ export type SessionEvent =
     | { type: "compaction/start"; seq?: number }
     | { type: "compaction/end"; seq?: number }
     | { type: "compaction/summary"; text: string; shadowedSeqs: number[]; seq?: number }
+    // M16: log-only sandbox session-mode marker (approval/* precedent) — mode is
+    // a local union so core-session stays dependency-free (sandbox-policy owns
+    // the real SandboxMode type; a sandbox import here would create a cycle).
+    | { type: "sandbox/mode"; mode: "read-only" | "workspace-write" | "danger-full-access"; source?: "delegation"; seq?: number }
   )
   & { ignorable?: true }
 

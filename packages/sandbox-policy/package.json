@@ -1,0 +1,12 @@
+{
+  "name": "@i-harness/sandbox-policy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/sandbox": "workspace:*",
+    "@i-harness/core-session": "workspace:*"
+  }
+}
