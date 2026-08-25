@@ -29,8 +29,14 @@ export function createMcpTool(
 }
 
 // Two-phase sync: fetch (drain cursor, no registry touch) → swap (dispose
-// previous generation, register the new one). A registry conflict (foreign
-// squat on mcp__<serverName>__) rolls back to zero tools + logs.
+// previous generation, register the new one).
+//
+// Registry-conflict behavior (spec §3.4, fail-closed):
+// - initial sync (`previous` empty — no prior generation of this server): the
+//   register throw PROPAGATES so the caller (mount, parent agent) can reject —
+//   a squatted name must not be silently ignored at startup.
+// - re-sync (`previous` populated): roll back to zero tools + log a warning and
+//   return an empty map so an ordinary client keeps working.
 export async function syncTools(
   client: ConnectedMcpClient,
   tools: ToolRegistry,
@@ -68,6 +74,11 @@ export async function syncTools(
     // rollback: unregister everything registered so far in this generation
     for (const d of disposers.values()) d()
     console.warn(`mcp-client(${serverName}): registry conflict, rolled back — ${String(err)}`)
+    if (previous.size === 0) {
+      // Initial sync: fail closed per spec §3.4 — the conflict propagates so
+      // the parent mount/agent rejects instead of silently running empty.
+      throw err instanceof Error ? err : new Error(String(err))
+    }
     return new Map()
   }
   return disposers

@@ -25,6 +25,13 @@ describe("publicToolName", () => {
     const name = publicToolName("s", dirty)
     expect(name).toMatch(/^mcp__s__tool_with_spaces____[0-9a-f]{12}$/)
   })
+
+  it("hashes when the whole parse would be ambiguous (__ in either segment)", () => {
+    const a = publicToolName("a", "b__c")
+    const b = publicToolName("a__b", "c")
+    expect(a).not.toBe(b)
+    expect(a).toMatch(/[0-9a-f]{12}$/)
+  })
 })
 
 describe("assertServerName", () => {
