@@ -153,7 +153,11 @@ export function deriveMessages(session: Session): LLMMessage[] {
       const out = ev.output as { images?: ImageInput[] } | null | undefined
       const images = out?.images
       pendingResults.push({ role: "tool", toolCallId: ev.callId, content: JSON.stringify(ev.output) })
-      if (images && images.length > 0) {
+      // Defensive (M14 spec §8): persisted logs bypass append validation (CLI
+      // resume merges via events.push; fromJSONL does not validate), so a
+      // truthy non-array `output.images` must NOT throw — treat the output as
+      // plain data and flush no synthetic user message.
+      if (Array.isArray(images) && images.length > 0) {
         pendingResults.push({
           role: "user",
           content: [
@@ -203,6 +207,9 @@ export function deriveSearchText(ev: SessionEvent): string {
       const raw = ev.output
       if (raw === undefined) return ""
       if (typeof raw !== "object" || raw === null) return JSON.stringify(raw)
+      // Array-shaped outputs (host-defined tool output) are opaque — never
+      // destructure them into `{0:1,1:2}`; stringify the array as-is.
+      if (Array.isArray(raw)) return JSON.stringify(raw)
       const { images, ...rest } = raw as Record<string, unknown>
       return JSON.stringify(rest) + imageDescriptor(images as ImageInput[] | undefined)
     }
@@ -216,7 +223,8 @@ export function deriveSearchText(ev: SessionEvent): string {
 }
 
 function imageDescriptor(images: ImageInput[] | undefined): string {
-  if (!images || images.length === 0) return ""
+  // Defensive: malformed persisted events may carry a truthy non-array here.
+  if (!Array.isArray(images) || images.length === 0) return ""
   return (
     "\n" +
     images.map((i) => `image: ${i.name ?? "unnamed"} ${i.width ?? "?"}x${i.height ?? "?"} ${Math.ceil((i.dataBase64.length * 3) / 4)}B base64:${i.dataBase64.slice(0, 8)}`).join("\n")
