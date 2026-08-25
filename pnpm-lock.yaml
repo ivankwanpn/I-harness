@@ -287,6 +287,8 @@ importers:
         specifier: workspace:*
         version: link:../llm-seam
 
+  packages/sandbox: {}
+
   packages/session-persistence:
     dependencies:
       '@i-harness/core-session':
