@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { bwrapProfileArgs } from "../src/profiles.ts"
 import { classifyDenial, classifyRunnerFailure, isRunnerSpawnFailure } from "../src/runner-failures.ts"
 import { createLocalSandbox } from "../src/index.ts"
-import type { SandboxPolicy } from "@i-harness/sandbox"
+import { SandboxUnavailableError, type SandboxPolicy, type SandboxProvider } from "@i-harness/sandbox"
 
 const readOnly: SandboxPolicy = { mode: "read-only", workspaceRoot: "/" }
 const workspaceWrite: SandboxPolicy = { mode: "workspace-write", workspaceRoot: "/proj" }
@@ -62,6 +62,31 @@ describe("runner failure classification", () => {
 })
 
 describe("createLocalSandbox platform selection", () => {
+  it("win32 absent-backend → fail-closed SandboxUnavailableError", () => {
+    // No platform guard: the win32 branch (the live one on this host) fails
+    // closed when no windowsAclBackend is composed.
+    const provider = createLocalSandbox({ windowsAclBackend: undefined })
+    expect(() => provider.confine(["echo", "hi"], readOnly)).toThrow(SandboxUnavailableError)
+  })
+
+  it("win32 with injected stub → delegates and pins enforcement partial", () => {
+    const stub: SandboxProvider = {
+      confine(argv, _policy) {
+        return {
+          argv: ["stub", ...argv],
+          enforcement: "full",
+          denialSignatures: ["stub denial"],
+          runnerFailureRules: [],
+        }
+      },
+    }
+    const provider = createLocalSandbox({ windowsAclBackend: stub })
+    const confined = provider.confine(["echo", "hi"], readOnly)
+    expect(confined.argv).toEqual(["stub", "echo", "hi"])
+    expect(confined.enforcement).toBe("partial")
+    expect(confined.denialSignatures).toContain("stub denial")
+  })
+
   it("linux → bwrap runner (probe path)", () => {
     // On linux, without a windowsAclBackend, confinement requires bwrap present.
     // We assert the provider exists and confine() gives a ConfinedArgv (bwrap probe

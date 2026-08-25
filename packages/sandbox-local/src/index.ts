@@ -30,19 +30,16 @@ const DENIAL_SIGNATURES: Record<Runner, readonly string[]> = {
 }
 
 export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProvider {
-  let selected: { runner: Runner; enforcement: SandboxEnforcement } | undefined
-
   if (process.platform === "win32") {
     if (!config.windowsAclBackend) {
       // M16 core: silent absence of the koffi backend means fail-closed
       // (the real backend ships in M16w).
       return {
-        confine() {
-          throw new SandboxUnavailableError(modeOf(), "no windows ACL backend composed (M16w)")
+        confine(_argv, policy) {
+          throw new SandboxUnavailableError(policy.mode, "no windows ACL backend composed (M16w)")
         },
       }
     }
-    selected = { runner: "windows-acl", enforcement: STATIC_ENFORCEMENT["windows-acl"] }
     const backend = config.windowsAclBackend
     return {
       confine(argv, policy) {
@@ -54,23 +51,22 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
 
   if (process.platform === "linux") {
     const probe = probeBwrap(config.probeTimeoutMs)
-    selected = probe ? { runner: "bwrap", enforcement: STATIC_ENFORCEMENT.bwrap } : undefined
-    if (!selected) {
+    if (!probe) {
       return {
-        confine() {
-          throw new SandboxUnavailableError("read-only", "bwrap probe failed")
+        confine(_argv, policy) {
+          throw new SandboxUnavailableError(policy.mode, "bwrap probe failed")
         },
       }
     }
     return {
       confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
         const runner = config.runnerCommand ?? ["bwrap"]
-        if (config.runnerCommand === undefined && runner[0] !== "bwrap") {
-          throw new SandboxUnavailableError(policy.mode, "runner override must be bwrap")
+        if (runner[0] !== "bwrap") {
+          throw new SandboxUnavailableError(policy.mode, `runner override must be bwrap (got ${runner[0]})`)
         }
         return {
           argv: [...runner, ...bwrapProfileArgs(policy), "--", ...argv],
-          enforcement: selected!.enforcement,
+          enforcement: STATIC_ENFORCEMENT.bwrap,
           denialSignatures: DENIAL_SIGNATURES.bwrap,
           runnerFailureRules: [
             { allowedExitCodes: [125], fatalSignatures: ["bwrap: failed to"] },
@@ -82,14 +78,10 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
 
   // Other platforms: fail closed.
   return {
-    confine() {
-      throw new SandboxUnavailableError("read-only", "unsupported platform")
+    confine(_argv, policy) {
+      throw new SandboxUnavailableError(policy.mode, "unsupported platform")
     },
   }
-}
-
-function modeOf(): "read-only" | "workspace-write" {
-  return "read-only"
 }
 
 function probeBwrap(timeoutMs?: number): boolean {
