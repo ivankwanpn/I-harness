@@ -121,6 +121,28 @@ describe("M14 openai-compatible wire", () => {
     ])
   })
 
+  it("shapes parts-array tool content and keeps assistant toolCalls intact", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [DONE]", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      messages: [
+        { role: "assistant", content: "planned", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "tool", toolCallId: "call_1", content: [{ type: "text", text: "tool says hi" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] },
+      ],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    expect(body.messages).toEqual([
+      { role: "assistant", content: "planned", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"path":"a.txt"}' } }] },
+      { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "tool says hi" }, { type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }] },
+    ])
+  })
+
   it("projects images out when the route lacks the image modality", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [DONE]", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)

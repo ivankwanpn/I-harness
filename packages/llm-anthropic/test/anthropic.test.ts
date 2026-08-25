@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAnthropicClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
@@ -183,6 +183,10 @@ describe("llm-anthropic protocol", () => {
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 describe("M14 anthropic wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it("shapes image parts as image source blocks", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [{}]", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
@@ -223,7 +227,7 @@ describe("M14 anthropic wire", () => {
     expect(body.messages[1]).toEqual({ role: "user", content: "plain" })
   })
 
-  it("keeps tool_result content as the (string) tool text when image parts flow", async () => {
+  it("keeps tool_result text even under the widened tool/content branch", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [{}]", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
     const client = createAnthropicClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text", "image"] })

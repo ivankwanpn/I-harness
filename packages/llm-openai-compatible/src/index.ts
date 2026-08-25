@@ -41,11 +41,11 @@ function toWireMessage(m: {
   toolCalls?: { id: string; name: string; args: unknown }[]
   toolCallId?: string
 }): Record<string, unknown> {
-  if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId!, content: m.content }
+  if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId!, content: toContent(m.content) }
   if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
     return {
       role: "assistant",
-      content: m.content,
+      content: toContent(m.content),
       tool_calls: m.toolCalls.map((c) => ({
         id: c.id,
         type: "function",

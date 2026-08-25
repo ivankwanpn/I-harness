@@ -355,4 +355,29 @@ describe("M14 multimodal", () => {
     expect(txt).not.toContain(PNG.slice(10, 30))
     expect(txt).not.toContain(PNG)
   })
+
+  it("deriveSearchText stringifies array-shaped tool output as-is (I1)", () => {
+    expect(deriveSearchText({ type: "tool/result", callId: "c", name: "t", output: [1, 2] })).toBe("[1,2]")
+    // array items are opaque to image extraction — images inside an array
+    // stay inside the stringified array, no descriptor is extracted
+    expect(deriveSearchText({ type: "tool/result", callId: "c", name: "t", output: [{ mediaType: "image/png", dataBase64: PNG }] })).toBe(`[{"mediaType":"image/png","dataBase64":"${PNG}"}]`)
+  })
+
+  it("deriveMessages tolerates a truthy non-array output.images (I2, malformed persisted event)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "go" })
+    append(s, { type: "tool/call", callId: "c1", name: "shot", args: {} })
+    // bypass append validation, simulating a persisted log that resume merged
+    // via events.push (or fromJSONL, which does not validate)
+    s.events.push({ type: "tool/result", callId: "c1", name: "shot", output: { images: "not-an-array" }, seq: 2 })
+    const msgs = deriveMessages(s)
+    expect(msgs).toEqual([
+      { role: "user", content: "go" },
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "shot", args: {} }] },
+      { role: "tool", toolCallId: "c1", content: '{"images":"not-an-array"}' },
+    ])
+    // deriveSearchText likewise stays pure data (no throw; the images key is
+    // stripped as usual and no descriptor is tacked on)
+    expect(deriveSearchText(s.events[2]!)).toBe("{}")
+  })
 })
