@@ -1,10 +1,27 @@
-import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
+import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 
 export interface AnthropicConfig {
   apiKey: string
   baseUrl?: string
   model: string
   options?: Record<string, unknown>
+  // M14: mirrors ProviderProfile.inputModalities — when the route lacks
+  // "image", images are projected out before wire mapping. Forwarded by
+  // buildModelClient (Task 6).
+  inputModalities?: ("text" | "image")[]
+}
+
+// Shape LLM content parts into Anthropic Messages content blocks. String
+// content stays the legacy string (byte-identical). Tool results are NOT
+// passed through here (Anthropic does not accept image blocks inside
+// tool_result; the synthetic user message carries them).
+function toAnthropicContent(content: string | LLMContentPart[]): unknown {
+  if (typeof content === "string") return content
+  return content.map((part) =>
+    part.type === "text"
+      ? { type: "text", text: part.text }
+      : { type: "image", source: { type: "base64", media_type: part.image.mediaType, data: part.image.dataBase64 } },
+  )
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -21,10 +38,13 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
   const baseUrl = config.baseUrl ?? "https://api.anthropic.com"
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      // M14 negative capability: text-only routes never see image bytes.
+      const vision = config.inputModalities?.includes("image") ?? false
+      const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
       const body = {
         model: config.model,
         system: request.systemPrompt,
-        messages: request.messages.map((m) => {
+        messages: messages.map((m) => {
           if (m.role === "tool") {
             return { role: "user", content: [{ type: "tool_result", tool_use_id: m.toolCallId, content: m.content }] }
           }
@@ -34,7 +54,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
               content: m.toolCalls.map((c) => ({ type: "tool_use", id: c.id, name: c.name, input: c.args })),
             }
           }
-          return { role: m.role, content: m.content }
+          return { role: m.role, content: toAnthropicContent(m.content) }
         }),
         tools: request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
         stream: true,
