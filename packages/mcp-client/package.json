@@ -1,0 +1,14 @@
+{
+  "name": "@i-harness/mcp-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/core-tools": "workspace:*",
+    "@i-harness/core-plugin": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^4.4.3"
+  }
+}
