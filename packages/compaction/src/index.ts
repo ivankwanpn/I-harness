@@ -1,14 +1,15 @@
 import type { Session } from "@i-harness/core-session"
 import { append, deriveSearchText } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { resolveConfig, type CompactionConfig } from "./config.ts"
+import type { ProviderProfile } from "@i-harness/provider"
+import { resolveConfig, resolveContextWindow, type CompactionConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
 
 export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
-export { resolveConfig } from "./config.ts"
+export { resolveConfig, resolveContextWindow } from "./config.ts"
 export type { CompactionConfig, ResolvedCompactionConfig } from "./config.ts"
 
 export interface CompactionResult {
@@ -22,8 +23,16 @@ export interface CompactionEngine {
   compact(session: Session): Promise<CompactionResult>
 }
 
-export function createCompactionEngine(deps: { model: ModelClient; config: CompactionConfig }): CompactionEngine {
+export function createCompactionEngine(deps: {
+  model: ModelClient
+  config: CompactionConfig
+  profile?: ProviderProfile // M15: optional context catalog
+  modelId?: string          // M15: the resolved model id for catalog lookup
+}): CompactionEngine {
   const config = resolveConfig(deps.config)
+  // M15: catalog-first (profile.modelContexts[modelId] → profile.contextWindow
+  // → config.contextWindow). No profile/modelId → config → M11/M14 behavior.
+  const contextWindow = resolveContextWindow(deps.profile, deps.modelId, config)
 
   async function compactOnce(session: Session): Promise<CompactionResult> {
     const shadowedSeqs = selectShadowableRange(session, config.retainTokens)
@@ -47,7 +56,7 @@ export function createCompactionEngine(deps: { model: ModelClient; config: Compa
 
   return {
     async maybeCompact(session: Session): Promise<CompactionResult> {
-      if (activeTokens(session) < config.contextWindow * config.thresholdRatio) {
+      if (activeTokens(session) < contextWindow * config.thresholdRatio) {
         return { compacted: false, shadowedSeqs: [] }
       }
       // Re-fire guard: with `retainTokens 0` and a large `maxTokens`, the

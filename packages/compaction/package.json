@@ -7,6 +7,8 @@
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@i-harness/core-session": "workspace:*",
-    "@i-harness/llm-seam": "workspace:*"
+    "@i-harness/llm-seam": "workspace:*",
+    "@i-harness/provider": "workspace:*",
+    "@i-harness/token-meter": "workspace:*"
   }
 }
