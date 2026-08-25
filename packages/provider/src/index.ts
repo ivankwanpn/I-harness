@@ -45,11 +45,11 @@ export function buildModelClient(profile: ProviderProfile, model?: string, extra
   const resolved = model ?? profile.defaultModel ?? "gpt-4o"
   switch (profile.protocol) {
     case "openai-responses":
-      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra })
+      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra, inputModalities: profile.inputModalities })
     case "openai-compatible":
-      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra })
+      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra, inputModalities: profile.inputModalities })
     case "anthropic-messages":
-      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra })
+      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model: resolved, options: extra, inputModalities: profile.inputModalities })
     default:
       throw new Error(`unknown provider protocol: ${String((profile as { protocol?: unknown }).protocol)}`)
   }

@@ -179,3 +179,68 @@ describe("llm-anthropic protocol", () => {
     expect(JSON.stringify(last.content)).toContain("tool_result")
   })
 })
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+describe("M14 anthropic wire", () => {
+  it("shapes image parts as image source blocks", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [{}]", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      messages: [{ role: "user", content: [{ type: "text", text: "look" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] }],
+    } as LLMRequest)) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    const user = body.messages.find((m) => m.role === "user")!
+    expect(user.content).toEqual([
+      { type: "text", text: "look" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: PNG } },
+    ])
+  })
+
+  it("projects images out when the route lacks the image modality", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [{}]", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "look" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] },
+        { role: "user", content: "plain" },
+      ],
+    } as LLMRequest)) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    expect(body.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
+    expect(body.messages[1]).toEqual({ role: "user", content: "plain" })
+  })
+
+  it("keeps tool_result content as the (string) tool text when image parts flow", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [{}]", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
+      ],
+    } as LLMRequest)) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    const last = body.messages[body.messages.length - 1]!
+    expect(last).toEqual({ role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: '{"content":"data"}' }] })
+  })
+})
