@@ -1,5 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
-import { ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js"
+import { ListResourcesResultSchema, ListToolsResultSchema, ReadResourceResultSchema } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import { createTransport } from "./transport.ts"
 import type { McpServerConfig } from "./types.ts"
@@ -25,6 +25,8 @@ const RawCallToolResultSchema = z.object({
 export interface ConnectedMcpClient {
   listTools(cursor?: string): Promise<{ tools: McpTool[]; nextCursor?: string }>
   callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpCallResult>
+  listResources(server?: string, signal?: AbortSignal): Promise<unknown[]>
+  readResource(server: string, uri: string, signal?: AbortSignal): Promise<unknown>
   close(): Promise<void>
 }
 
@@ -57,6 +59,22 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
         ...(response.isError !== undefined ? { isError: response.isError } : {}),
         ...(response.structuredContent !== undefined ? { structuredContent: response.structuredContent } : {}),
       }
+    },
+    async listResources(_server, signal) {
+      const response = await client.request(
+        { method: "resources/list", params: {} } as never,
+        ListResourcesResultSchema,
+        { timeout, signal },
+      )
+      return response.resources
+    },
+    async readResource(_server, uri, signal) {
+      const response = await client.request(
+        { method: "resources/read", params: { uri } } as never,
+        ReadResourceResultSchema,
+        { timeout, signal },
+      )
+      return response.contents
     },
     async close() {
       await client.close()

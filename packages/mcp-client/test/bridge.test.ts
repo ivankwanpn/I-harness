@@ -10,6 +10,12 @@ function fakeClient(result: { content: unknown[]; isError?: boolean }): Connecte
     async callTool() {
       return result
     },
+    async listResources() {
+      return []
+    },
+    async readResource() {
+      return []
+    },
     async close() {},
   } as ConnectedMcpClient
 }

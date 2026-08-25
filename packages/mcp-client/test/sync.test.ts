@@ -37,6 +37,12 @@ describe("syncTools", () => {
       async callTool() {
         return { content: [] }
       },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
       async close() {},
     }
     const disposers = await syncTools(client, tools, { transport: "stdio", serverName: "files", command: "x", args: [] })
@@ -62,6 +68,12 @@ describe("syncTools", () => {
       async callTool() {
         return { content: [] }
       },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
       async close() {},
     }
     await expect(syncTools(client, tools, { transport: "stdio", serverName: "s", command: "x", args: [] })).rejects.toThrow(/more than once/)
@@ -80,6 +92,12 @@ describe("syncTools", () => {
       },
       async callTool() {
         return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
       },
       async close() {},
     }
