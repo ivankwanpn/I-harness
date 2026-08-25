@@ -2,14 +2,16 @@
  * Windows ABI constants for the ACL-sandbox backend.
  *
  * Every value was verified against the actual MinGW Windows headers on this
- * machine (C:\Strawberry\c\x86_64-w64-mingw32\include\) and cross-checked at
- * runtime by verify/abi-probe.cpp (same numbers; static_asserts passed).
- * Regenerate the probe with:
- *   g++ -std=c++20 -municode -O2 -o abi-probe.exe abi-probe.cpp -ladvapi32 && .\abi-probe.exe
+ * machine (C:\Strawberry\c\x86_64-w64-mingw32\include\); the koffi layout
+ * guards in ffi.ts assert the struct sizes this module exports against
+ * koffi's own layout at load time, and the values are pinned by
+ * test/abi.test.ts. Win32Error (see ./errors.ts) is the package's failure
+ * surface: every API failure throws with the API name and exact Win32 code.
  *
- * The port intentionally excludes two pieces of the original POC
- * (github.com/huoyaoyuan/windows-acl-restrict-poc @ 10e4dfb), both verified
- * empirically on Windows 11 build 26200:
+ * Two pieces of the original reference implementation
+ * (github.com/huoyaoyuan/windows-acl-restrict-poc @ 10e4dfb) were
+ * deliberately NOT ported, both verified empirically on Windows 11 build
+ * 26200:
  *  - S-1-2-1 (console logon SID) in the restricting list: the POC created it
  *    via CreateWellKnownSid(WinLocalLogonSid) which fails here with
  *    ERROR_INVALID_PARAMETER (87), leaving a garbage SID that makes
@@ -225,20 +227,20 @@ export const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 // JOBOBJECTINFOCLASS: JobObjectBasicAccountingInformation=1, ..., ExtendedLimit=9.
 /** JobObjectExtendedLimitInformation: JOBOBJECTINFOCLASS for the extended limit structure. */
 export const JobObjectExtendedLimitInformation = 9
-// sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION), verified by abi-probe.
-/** sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION), verified by abi-probe. */
+// sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION), verified against the headers.
+/** sizeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION), verified against the headers. */
 export const JOBOBJECT_EXTENDED_LIMIT_SIZE = 144
 // LimitFlags offset inside JOBOBJECT_EXTENDED_LIMIT_INFORMATION
 // (BasicLimitInformation@0 + PerProcessUserTimeLimit@0 + PerJobUserTimeLimit@8),
-// verified by abi-probe.
+// verified against the headers.
 /**
  * LimitFlags offset inside JOBOBJECT_EXTENDED_LIMIT_INFORMATION
  * (BasicLimitInformation@0 + PerProcessUserTimeLimit@0 +
- * PerJobUserTimeLimit@8), verified by abi-probe.
+ * PerJobUserTimeLimit@8), verified against the headers.
  */
 export const JOBOBJECT_EXTENDED_LIMIT_FLAGS_OFFSET = 16
 
-// ---- ABI layout, verified by verify/abi-probe.cpp (x64) --------------------
+// ---- ABI layout, pinned by the koffi guards in ffi.ts (x64) ----------------
 
 /** SECURITY_MAX_SID_SIZE: maximum SID byte size. */
 export const SECURITY_MAX_SID_SIZE = 68
@@ -252,7 +254,7 @@ export const EXPLICIT_ACCESS_W_SIZE = 48
 export const TRUSTEE_W_OFFSET = 16
 /** ptstrName offset inside TRUSTEE_W (=> 40 inside EXPLICIT_ACCESS_W). */
 export const TRUSTEE_W_PTSTRNAME_OFFSET = 24
-/** sizeof(STARTUPINFOW), verified by abi-probe. */
+/** sizeof(STARTUPINFOW), verified against the headers. */
 export const STARTUPINFOW_SIZE = 104
-/** sizeof(PROCESS_INFORMATION), verified by abi-probe. */
+/** sizeof(PROCESS_INFORMATION), verified against the headers. */
 export const PROCESS_INFORMATION_SIZE = 24
