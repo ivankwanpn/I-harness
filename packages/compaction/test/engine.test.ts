@@ -117,4 +117,16 @@ describe("compaction engine", () => {
     expect(explicit.compacted).toBe(true)
     expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(2)
   })
+
+  it("maybeCompact uses the catalog window when profile+modelId are provided (M15)", async () => {
+    const s = longSession() // ~2000 tokens
+    // config says window 1000 (threshold 500) → would fire; catalog says 10000
+    // (threshold 5000) → must NOT fire.
+    const engine = createCompactionEngine({
+      model: mockModel("x"), config,
+      profile: { name: "p", displayName: "P", protocol: "openai-compatible", contextWindow: 10_000 },
+      modelId: "some-model",
+    })
+    expect((await engine.maybeCompact(s)).compacted).toBe(false)
+  })
 })

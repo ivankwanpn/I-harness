@@ -110,6 +110,12 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/core-agent:
     dependencies:

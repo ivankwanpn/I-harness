@@ -37,3 +37,18 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
   const auto = config.auto ?? true
   return { contextWindow: config.contextWindow, thresholdRatio, retainTokens, maxTokens, auto, summarizationModel: config.summarizationModel }
 }
+
+import { resolveModelContext, type ProviderProfile } from "@i-harness/provider"
+
+// M15: catalog-first window resolution — per-model override → profile-level →
+// config. Pure and exported so tests (and hosts) can assert it directly.
+export function resolveContextWindow(
+  profile: ProviderProfile | undefined,
+  modelId: string | undefined,
+  config: { contextWindow: number },
+): number {
+  const catalogWindow = profile && modelId
+    ? resolveModelContext(profile, modelId).contextWindow
+    : undefined
+  return catalogWindow ?? config.contextWindow
+}

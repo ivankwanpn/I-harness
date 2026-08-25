@@ -1,9 +1,15 @@
 import type { LLMContentPart, Session } from "@i-harness/core-session"
-import { deriveMessages } from "@i-harness/core-session"
+import { activeTokens as meterActiveTokens, IMAGE_TOKEN_ESTIMATE } from "@i-harness/token-meter"
 
-// M14: fixed per-image estimate (no re-encode/pixel math in v0)
-export const IMAGE_TOKEN_ESTIMATE = 1024
+// M15: single source of truth moved to @i-harness/token-meter; kept here as a
+// re-export so the M14 public surface is unchanged.
+export { IMAGE_TOKEN_ESTIMATE }
 
+// M15: content-only single-blob estimate — string → ceil(chars/4); parts →
+// Σ (text: ceil/4, image: IMAGE_TOKEN_ESTIMATE). NO block/role overhead.
+// Consumers (region.ts shadow selection, summarizer.ts trimming) price single
+// blobs, not full messages; estimateContent (token-meter) is the full-message
+// price used by activeTokens.
 export function approxTokens(content: string | LLMContentPart[]): number {
   if (typeof content === "string") return Math.ceil(content.length / 4)
   let total = 0
@@ -13,13 +19,9 @@ export function approxTokens(content: string | LLMContentPart[]): number {
   return total
 }
 
+// M15: full-message pricing (block/role overhead included). The single
+// projection rule: deriveMessages(session) is what the model sees, so the
+// meter prices exactly that. Delegates to @i-harness/token-meter.
 export function activeTokens(session: Session): number {
-  let total = 0
-  for (const m of deriveMessages(session)) {
-    // M14: content may be a parts array (image-bearing); approxTokens now
-    // counts text parts as ceil(chars/4) and each image part at the fixed
-    // IMAGE_TOKEN_ESTIMATE. Behavior for text-only messages is unchanged.
-    total += approxTokens(m.content)
-  }
-  return total
+  return meterActiveTokens(session)
 }

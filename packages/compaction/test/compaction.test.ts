@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
-import { IMAGE_TOKEN_ESTIMATE, approxTokens, activeTokens, selectShadowableRange, resolveConfig } from "../src/index.ts"
+import { IMAGE_TOKEN_ESTIMATE, approxTokens, activeTokens, selectShadowableRange, resolveConfig, resolveContextWindow, type ResolvedCompactionConfig } from "../src/index.ts"
 
 describe("compaction config", () => {
   it("validates fail-loud and applies defaults", () => {
@@ -31,11 +31,32 @@ describe("token estimation", () => {
     expect(approxTokens(parts)).toBe(1 + IMAGE_TOKEN_ESTIMATE)
   })
 
-  it("activeTokens sums the derived message contents", () => {
+  it("activeTokens prices full messages (M15: ceil/4 + ROLE_OVERHEAD per message)", () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "x".repeat(400) }) // ~100 tokens
-    append(s, { type: "assistant/message", text: "y".repeat(400) }) // ~100 tokens
-    expect(activeTokens(s)).toBe(200)
+    append(s, { type: "user/message", text: "x".repeat(400) }) // ~100 tokens + ROLE_OVERHEAD
+    append(s, { type: "assistant/message", text: "y".repeat(400) }) // ~100 tokens + ROLE_OVERHEAD
+    expect(activeTokens(s)).toBe(200 + 2 * 4)
+  })
+})
+
+describe("M15 resolveContextWindow", () => {
+  const config: ResolvedCompactionConfig = { contextWindow: 1000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, auto: true }
+
+  it("catalog-first: per-model override beats profile-level beats config", () => {
+    const profile = {
+      name: "p", displayName: "P", protocol: "openai-compatible" as const,
+      contextWindow: 10_000,
+      modelContexts: { big: { contextWindow: 200_000 } },
+    }
+    expect(resolveContextWindow(profile, "big", config)).toBe(200_000)
+    expect(resolveContextWindow(profile, "other", config)).toBe(10_000)
+    expect(resolveContextWindow(undefined, "m", config)).toBe(1000)
+  })
+
+  it("falls back to config when the profile has no window for the model", () => {
+    const profile = { name: "p", displayName: "P", protocol: "openai-compatible" as const }
+    expect(resolveContextWindow(profile, "m", config)).toBe(1000)
+    expect(resolveContextWindow(profile, undefined, config)).toBe(1000)
   })
 })
 
