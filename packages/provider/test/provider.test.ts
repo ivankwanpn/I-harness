@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, resolveModelContext, type ProviderProfile } from "../src/index.ts"
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -69,5 +69,40 @@ describe("buildModelClient defaults and extra", () => {
     const [, init] = fetchMock.mock.calls[0]!
     expect(JSON.parse(init.body as string).reasoning_effort).toBe("high")
     await it.return?.()
+  })
+})
+
+describe("M15 context catalog", () => {
+  it("resolveModelContext: per-model override wins over profile-level", () => {
+    const profile: ProviderProfile = {
+      name: "p", displayName: "P", protocol: "openai-compatible",
+      contextWindow: 10_000,
+      modelContexts: { big: { contextWindow: 200_000 } },
+    }
+    expect(resolveModelContext(profile, "big")).toEqual({ contextWindow: 200_000 })
+    expect(resolveModelContext(profile, "other")).toEqual({ contextWindow: 10_000 })
+  })
+
+  it("resolves maxContextWindow independently with the same precedence", () => {
+    const profile: ProviderProfile = {
+      name: "p", displayName: "P", protocol: "openai-compatible",
+      maxContextWindow: 200_000,
+      modelContexts: { big: { maxContextWindow: 218_000 } },
+    }
+    expect(resolveModelContext(profile, "big").maxContextWindow).toBe(218_000)
+    expect(resolveModelContext(profile, "x").maxContextWindow).toBe(200_000)
+  })
+
+  it("returns undefined fields when nothing is configured", () => {
+    const profile: ProviderProfile = { name: "p", displayName: "P", protocol: "openai-compatible" }
+    expect(resolveModelContext(profile, "m")).toEqual({})
+  })
+
+  it("register fails loud on non-positive or non-integer windows", () => {
+    const reg = createProviderRegistry()
+    expect(() => reg.register({ name: "a", displayName: "A", protocol: "openai-compatible", contextWindow: 0 })).toThrow(/contextWindow/i)
+    expect(() => reg.register({ name: "b", displayName: "B", protocol: "openai-compatible", contextWindow: -5 })).toThrow(/contextWindow/i)
+    expect(() => reg.register({ name: "c", displayName: "C", protocol: "openai-compatible", contextWindow: 1.5 })).toThrow(/contextWindow/i)
+    expect(() => reg.register({ name: "d", displayName: "D", protocol: "openai-compatible", modelContexts: { m: { contextWindow: 0 } } })).toThrow(/modelContexts/i)
   })
 })
