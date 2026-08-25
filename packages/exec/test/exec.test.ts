@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createExecService, type ExecService } from "../src/index.ts"
+import type { SandboxProvider, SandboxPolicy } from "@i-harness/sandbox"
 
 // Poll-wait helper: avoids raw fixed sleeps (flake-prone under parallel load).
 async function waitForStatus(exec: ExecService, jobId: string, pred: (status: string) => boolean, timeoutMs = 5000): Promise<void> {
@@ -129,4 +130,44 @@ describe("exec background jobs", () => {
     expect(done.status).toBe("completed")
     expect(done.stdout).toContain("late")
   }, 10_000)
+})
+
+describe("exec sandbox", () => {
+  const policy: SandboxPolicy = { mode: "read-only", workspaceRoot: "/" }
+
+  it("confines argv when a provider AND a per-command policy exist", async () => {
+    // Portable "confiner": re-exec the original argv under process.execPath. It
+    // stands in for bwrap/ACL so the test runs on any host (incl. win32).
+    const wrapper = "const{spawn}=require('node:child_process');const c=spawn(process.argv[1],process.argv.slice(2),{stdio:'inherit'});c.on('error',()=>process.exit(1));c.on('exit',(code)=>process.exit(code??1));"
+    const provider: SandboxProvider = {
+      confine(argv, _policy) {
+        return {
+          argv: [process.execPath, "-e", wrapper, ...argv],
+          enforcement: "full",
+          denialSignatures: ["read-only file system"],
+          runnerFailureRules: [],
+        }
+      },
+    }
+    const exec = createExecService({ sandbox: provider })
+    const result = await exec.run({ argv: [process.execPath, "-e", "process.stdout.write('ok')"], sandbox: policy })
+    expect(result.stdout).toBe("ok")
+  })
+
+  it("throws when cmd.sandbox is set but the service has no provider (fail-closed)", async () => {
+    const exec = createExecService() // no provider
+    await expect(exec.run({ argv: ["echo", "hi"], sandbox: policy })).rejects.toThrow(/no sandbox provider/)
+  })
+
+  it("runs unconfined when no policy (existing behavior)", async () => {
+    const exec = createExecService()
+    const result = await exec.run({ argv: [process.execPath, "-e", "process.stdout.write('plain')"] })
+    expect(result.stdout).toBe("plain")
+  })
+
+  it("danger-full-access policy runs unconfined (passthrough)", async () => {
+    const exec = createExecService() // no provider
+    const result = await exec.run({ argv: [process.execPath, "-e", "process.stdout.write('full')"], sandbox: { mode: "danger-full-access", workspaceRoot: "/" } })
+    expect(result.stdout).toBe("full")
+  })
 })

@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
+import type { SandboxExecutionPolicy, SandboxPolicy, SandboxProvider } from "@i-harness/sandbox"
+import { SandboxUnavailableError } from "@i-harness/sandbox"
 
 export interface ExecCommand {
   argv: string[]
@@ -8,6 +10,7 @@ export interface ExecCommand {
   timeoutMs?: number
   input?: string
   abortSignal?: AbortSignal // NEW: external cancel → kill the process tree
+  sandbox?: SandboxExecutionPolicy // M16: command-carried policy
 }
 
 export interface ExecResult {
@@ -45,8 +48,31 @@ function killTree(child: ChildProcess): void {
   }
 }
 
-function spawnChild(cmd: ExecCommand): SpawnHandle {
-  const child = spawn(cmd.argv[0]!, cmd.argv.slice(1), {
+// The seam types SandboxPolicy as confined-only (mode ≠ danger-full-access),
+// while ExecCommand.sandbox is the request-side SandboxExecutionPolicy (which
+// may be danger-full-access, resolved by the policy owner in Task 3). A runtime
+// type predicate is the sound way to narrow it to the provider contract.
+function isConfinedPolicy(sandbox: SandboxExecutionPolicy): sandbox is SandboxPolicy {
+  return sandbox.mode !== "danger-full-access"
+}
+
+// M16: confine at spawn. No policy → passthrough; danger-full-access →
+// passthrough; confined policy but no provider → fail closed (throw). This is
+// a deliberate sandbox boundary: a command with a confined policy must never
+// run unconfined just because a backend is missing.
+function resolveArgv(cmd: ExecCommand, sandboxProvider?: SandboxProvider): string[] {
+  if (cmd.sandbox === undefined) return cmd.argv
+  const sandbox = cmd.sandbox
+  if (!isConfinedPolicy(sandbox)) return cmd.argv // passthrough
+  if (sandboxProvider === undefined) {
+    throw new SandboxUnavailableError(sandbox.mode, "no sandbox provider composed (createExecService({ sandbox }))")
+  }
+  return sandboxProvider.confine(cmd.argv, sandbox).argv
+}
+
+function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnHandle {
+  const argv = resolveArgv(cmd, sandboxProvider)
+  const child = spawn(argv[0]!, argv.slice(1), {
     cwd: cmd.cwd,
     env: { ...process.env, ...cmd.env },
     stdio: ["pipe", "pipe", "pipe"],
@@ -109,19 +135,20 @@ export interface ExecService {
   killJob(jobId: string): "cancellation-requested" | "already-finished"
 }
 
-export function createExecService(): ExecService {
+export function createExecService(deps?: { sandbox?: SandboxProvider }): ExecService {
   let bashCounter = 0
   const jobs = new Map<string, BackgroundJobView & { handle: SpawnHandle }>()
+  const provider = deps?.sandbox
 
   return {
-    run(cmd: ExecCommand): Promise<ExecResult> {
-      const h = spawnChild(cmd)
+    async run(cmd: ExecCommand): Promise<ExecResult> {
+      const h = spawnChild(cmd, provider)
       return h.done.then(({ stdout, stderr, exitCode, timedOut }) => ({ stdout, stderr, exitCode, timedOut }))
     },
     runBackground(cmd: ExecCommand): { jobId: string } {
       bashCounter += 1
       const jobId = `bash-${bashCounter}`
-      const handle = spawnChild(cmd)
+      const handle = spawnChild(cmd, provider)
       const job: BackgroundJobView & { handle: SpawnHandle } = { id: jobId, status: "running", stdout: "", stderr: "", handle }
       jobs.set(jobId, job)
       handle.child.stdout?.on("data", (d: Buffer) => { job.stdout += d.toString("utf-8").replace(/\r\n/g, "\n") })
@@ -155,6 +182,6 @@ export function createExecService(): ExecService {
   }
 }
 
-export function registerExec(ctx: PluginContext): void {
-  ctx.services.register("exec/service", createExecService())
+export function registerExec(ctx: PluginContext, deps?: { sandbox?: SandboxProvider }): void {
+  ctx.services.register("exec/service", createExecService(deps))
 }
