@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
-import { approxTokens, activeTokens, selectShadowableRange, resolveConfig } from "../src/index.ts"
+import { IMAGE_TOKEN_ESTIMATE, approxTokens, activeTokens, selectShadowableRange, resolveConfig } from "../src/index.ts"
 
 describe("compaction config", () => {
   it("validates fail-loud and applies defaults", () => {
@@ -20,6 +20,15 @@ describe("token estimation", () => {
     expect(approxTokens("abcd")).toBe(1)
     expect(approxTokens("abcde")).toBe(2)
     expect(approxTokens("")).toBe(0)
+  })
+
+  it("estimates an image part at the fixed token count", () => {
+    expect(approxTokens("abcd")).toBe(1)
+    const parts = [
+      { type: "text" as const, text: "abcd" },
+      { type: "image" as const, image: { mediaType: "image/png" as const, dataBase64: "aGVsbG8=" } },
+    ]
+    expect(approxTokens(parts)).toBe(1 + IMAGE_TOKEN_ESTIMATE)
   })
 
   it("activeTokens sums the derived message contents", () => {

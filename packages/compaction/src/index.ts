@@ -6,7 +6,7 @@ import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
 
-export { approxTokens, activeTokens } from "./tokens.ts"
+export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
 export { resolveConfig } from "./config.ts"
 export type { CompactionConfig, ResolvedCompactionConfig } from "./config.ts"
