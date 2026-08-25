@@ -373,6 +373,12 @@ importers:
         specifier: workspace:*
         version: link:../llm-mock
 
+  packages/token-meter:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+
   packages/tool-search:
     dependencies:
       '@i-harness/core-plugin':
