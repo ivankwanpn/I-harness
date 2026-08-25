@@ -19,6 +19,9 @@ import { createFsSearchTools } from "@i-harness/fs-search"
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createProviderRegistry } from "@i-harness/provider"
+import { createLocalSandbox } from "@i-harness/sandbox-local"
+import { createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
+import type { SandboxMode } from "@i-harness/sandbox"
 
 export interface HeadlessOptions {
   workspace: string
@@ -35,6 +38,7 @@ export interface HeadlessOptions {
   coordinator?: SessionCoordinator
   sessionQuery?: SessionQuery // M10b: host-provided query surface; when present the session_search + lineage tools are mounted
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction
+  sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
 }
 
 export interface HeadlessResult {
@@ -74,9 +78,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // M12: the shipped harness caps shell output at 64_000 bytes headTail unless
   // the host overrides it (parallel to the shellTimeoutMs default). A host
   // that wants no cap passes { maxBytes: Number.MAX_SAFE_INTEGER }.
+  // M16: a confined mode composes the platform-local sandbox provider (bwrap
+  // on Linux, ACL fabric on win32) and hands it to exec through registerShell;
+  // unset or danger-full-access compose NO provider (exec stays passthrough).
+  const sandboxProvider =
+    opts.sandbox === undefined || opts.sandbox === "danger-full-access" ? undefined : createLocalSandbox()
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
+    ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
   })
   for (const tool of createFsTools({ workspace: opts.workspace })) tools.register(tool)
   createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
@@ -195,9 +205,20 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         }
       }
     }
+    // M16: when a sandbox mode is configured, the policy owner resolves the
+    // effective policy (deployment default; mode requested may be overridden
+    // by a sandbox/mode session event) and its rendered context is injected
+    // into the system prompt so the agent knows the standing file policy.
+    // Unset → no policy, prompt unchanged.
+    const sandboxPolicy =
+      opts.sandbox === undefined ? undefined : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace })
+    let systemPrompt = "You are a coding agent."
+    if (sandboxPolicy) {
+      systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicy.resolve())}`
+    }
     const agent = createAgent(ctx, {
       session, tools, model,
-      systemPrompt: "You are a coding agent.",
+      systemPrompt,
       ...(opts.compact ? { compact: opts.compact } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
     })

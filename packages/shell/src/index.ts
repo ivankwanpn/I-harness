@@ -171,9 +171,9 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
 export function registerShell(
   ctx: PluginContext,
   registry: { register(t: Tool): void },
-  opts?: { timeoutMs?: number; retention?: ShellRetentionOptions },
+  opts?: { timeoutMs?: number; retention?: ShellRetentionOptions; sandbox?: import("@i-harness/sandbox").SandboxProvider },
 ): void {
-  registerExec(ctx)
+  registerExec(ctx, { sandbox: opts?.sandbox })
   const exec = ctx.services.get<ExecService>("exec/service")
   for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention })) registry.register(tool)
 }
