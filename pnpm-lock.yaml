@@ -295,6 +295,15 @@ importers:
         specifier: workspace:*
         version: link:../sandbox
 
+  packages/sandbox-policy:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+
   packages/session-persistence:
     dependencies:
       '@i-harness/core-session':

@@ -288,6 +288,24 @@ describe("compaction events", () => {
   })
 })
 
+describe("sandbox/mode session event (M16, log-only)", () => {
+  it("is accepted, model-hidden, search-text-empty, and round-trips through JSONL", () => {
+    const s = createSession()
+    append(s, { type: "sandbox/mode", mode: "workspace-write" })
+    append(s, { type: "sandbox/mode", mode: "read-only", source: "delegation" })
+    append(s, { type: "user/message", text: "hi" })
+    // log-only: never in the model transcript
+    const msgs = deriveMessages(s)
+    expect(msgs).toEqual([{ role: "user", content: "hi" }])
+    // control event → no search text
+    expect(deriveSearchText(s.events[0]!)).toBe("")
+    // durable and replayable: survives the JSONL round-trip with mode + source
+    const restored = fromJSONL(toJSONL(s))
+    expect(restored.events[0]).toMatchObject({ type: "sandbox/mode", mode: "workspace-write" })
+    expect(restored.events[1]).toMatchObject({ type: "sandbox/mode", mode: "read-only", source: "delegation" })
+  })
+})
+
 describe("M14 multimodal", () => {
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
