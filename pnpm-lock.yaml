@@ -157,6 +157,9 @@ importers:
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
 
   packages/fs:
     dependencies:
