@@ -19,7 +19,8 @@ import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { CompactionConfig } from "@i-harness/compaction"
 import type { RetryConfig } from "@i-harness/guard-retry"
 import type { ShellRetentionOptions } from "@i-harness/shell"
-import { deriveMessages } from "@i-harness/core-session"
+import { createSession, append, deriveMessages } from "@i-harness/core-session"
+import { createMockClient } from "@i-harness/llm-mock"
 
 // Poll a read until it returns a defined value (bounded). The subagent
 // persistence wrappers save fire-and-forget (M6), so document reads need to
@@ -1077,6 +1078,49 @@ describe("headless CLI M13 parallel tool calls", () => {
     try {
       const result = await runHeadless("hi", { workspace: dir, maxParallelToolCalls: 1.5 })
       expect(result.exitCode).toBe(1)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("headless CLI M14 multimodal (image-bearing user message)", () => {
+  it("M14: agent completes when the session starts with an image-bearing user message", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m14-"))
+    try {
+      const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+      // Drive the agent with a pre-seeded session carrying an image-bearing
+      // user/message (the host owns the session; the harness is headless).
+      const session = createSession()
+      append(session, { type: "user/message", text: "describe this", images: [{ mediaType: "image/png", dataBase64: PNG }] })
+      // Pin the model-visible surface: the seeded image must reach the request
+      // as an image part. A fresh-session run (no `session` option) would drop
+      // the seed — the model would only see the bare task text — so this is
+      // what makes the test discriminate the host-seeded path. The mock client
+      // beneath stays the scripted cassette for the run itself.
+      const seen: LLMRequest[] = []
+      const recordingModel: ModelClient = {
+        async *stream(request: LLMRequest) {
+          seen.push(request)
+          yield* createMockClient([{ role: "assistant", text: "a tiny png" }]).stream(request)
+        },
+      }
+      const result = await runHeadless("describe this", {
+        workspace: dir,
+        approveAll: true,
+        model: recordingModel,
+        session,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.finalText).toBe("a tiny png")
+      const firstUser = seen[0]!.messages.find((m) => m.role === "user")
+      const parts = Array.isArray(firstUser!.content) ? firstUser!.content : []
+      const imagePart = parts.find((p) => p.type === "image")
+      expect(imagePart).toBeDefined()
+      expect((imagePart as { image: { mediaType: string; dataBase64: string } }).image).toEqual({
+        mediaType: "image/png",
+        dataBase64: PNG,
+      })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

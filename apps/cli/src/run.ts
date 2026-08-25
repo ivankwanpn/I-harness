@@ -31,6 +31,7 @@ export interface HeadlessOptions {
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10)
   sessionId?: string // new session: persist under this id
   resumeSessionId?: string // resume: load this id, restore history, continue appending
+  session?: Session // M14: host-provided pre-seeded session (the harness is headless; a host can seed a session with image-bearing user/message events before the run)
   coordinator?: SessionCoordinator
   sessionQuery?: SessionQuery // M10b: host-provided query surface; when present the session_search + lineage tools are mounted
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction
@@ -115,8 +116,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // durable on flush). One durability point per turn; the 200 ms deadline
   // coalesces intra-turn events. Without a coordinator the events stay in the
   // in-memory session only.
+  // M14: when the host passes a pre-seeded `session`, use it as-is — the
+  // onAppend coordinator hook lives ONLY on this internal createSession, so a
+  // host-provided session carries no write-behind (the host owns durability;
+  // a coordinator passed alongside is still used for the flush-on-turn/end and
+  // resume/load paths below).
   const activeId = opts.resumeSessionId ?? opts.sessionId
-  const session = createSession((ev) => {
+  const session = opts.session ?? createSession((ev) => {
     if (!opts.coordinator || !activeId) return
     opts.coordinator.enqueue(activeId, [ev])
     if (ev.type === "turn/end") void opts.coordinator.flush(activeId).catch(() => {})
