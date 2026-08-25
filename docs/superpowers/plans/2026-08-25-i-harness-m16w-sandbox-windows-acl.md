@@ -196,7 +196,7 @@ git commit -m "feat(M16w): koffi Win32 bindings + pointer helpers"
 
 **Interfaces:**
 - Consumes: nothing (node:crypto, node:path).
-- Produces (used by Task 7-8): `workspaceWriteSid(workspaceRoot): string` (`S-1-4-x-y`), `tempWriteSid(tempDir): string` (`S-1-4-x-y-1`), `assertTempRootOutsideWorkspace(tempDir, workspaceRoot): void`.
+- Produces (used by Task 7-8): `workspaceWriteSid(workspaceRoot): string` (`S-1-4-x-y`), `tempWriteSid(tempDir): string` (`S-1-4-x-y-1`), `assertTempRootOutsideWorkspace(workspaceRoot, tempRoot): void` (CANONICAL ORDER — dsh verbatim: workspaceRoot FIRST, tempRoot second. A caller using (temp, workspace) order would silently false-pass the containment check — wrong order is security-relevant, must NOT be swapped).
 
 - [ ] **Step 1: Port both files verbatim**
 
@@ -230,11 +230,11 @@ describe("workspaceWriteSid / tempWriteSid", () => {
 
 describe("assertTempRootOutsideWorkspace", () => {
   it("throws when temp is inside workspace", () => {
-    expect(() => assertTempRootOutsideWorkspace("C:\\work\\proj\\temp-123", "C:\\work\\proj")).toThrow(/outside|workspace/i)
+    expect(() => assertTempRootOutsideWorkspace("C:\\work\\proj", "C:\\work\\proj\\temp-123")).toThrow(/outside|workspace/i)
   })
 
   it("passes when temp is elsewhere", () => {
-    expect(() => assertTempRootOutsideWorkspace("C:\\Users\\x\\AppData\\Local\\Temp\\m16", "C:\\work\\proj")).not.toThrow()
+    expect(() => assertTempRootOutsideWorkspace("C:\\work\\proj", "C:\\Users\\x\\AppData\\Local\\Temp\\m16")).not.toThrow()
   })
 })
 ```
