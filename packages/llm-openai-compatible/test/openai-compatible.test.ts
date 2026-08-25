@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createOpenAICompatibleClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
@@ -67,5 +67,77 @@ describe("llm-openai-compatible protocol", () => {
       if (ev.type === "error") events.push("error")
     }
     expect(events).toEqual(["error"])
+  })
+})
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+describe("M14 openai-compatible wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("shapes image parts as image_url array", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [DONE]", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      messages: [{ role: "user", content: [{ type: "text", text: "look" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] }],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    const user = body.messages.find((m) => m.role === "user")!
+    expect(user.content).toEqual([
+      { type: "text", text: "look" },
+      { type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } },
+    ])
+  })
+
+  it("keeps string content as the legacy string shape (byte-identical)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [DONE]", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text", "image"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      messages: [
+        { role: "user", content: "hi, plain string" },
+        { role: "assistant", content: "" },
+        { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
+      ],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    expect(body.messages).toEqual([
+      { role: "user", content: "hi, plain string" },
+      { role: "assistant", content: "" },
+      { role: "tool", tool_call_id: "call_1", content: '{"content":"data"}' },
+    ])
+  })
+
+  it("projects images out when the route lacks the image modality", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("data: [DONE]", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", model: "m", baseUrl: "http://x", inputModalities: ["text"] })
+    for await (const _ of client.stream({
+      systemPrompt: "s",
+      tools: [],
+      messages: [
+        { role: "user", content: [{ type: "text", text: "look" }, { type: "image", image: { mediaType: "image/png", dataBase64: PNG } }] },
+        { role: "user", content: "plain" },
+      ],
+    })) {
+      /* drain */
+    }
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    expect(body.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
+    expect(body.messages[1]).toEqual({ role: "user", content: "plain" })
   })
 })
