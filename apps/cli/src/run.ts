@@ -18,6 +18,7 @@ import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
+import { mountMcpClient, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { createWindowsAclSandbox } from "@i-harness/sandbox-windows-acl"
@@ -40,6 +41,7 @@ export interface HeadlessOptions {
   sessionQuery?: SessionQuery // M10b: host-provided query surface; when present the session_search + lineage tools are mounted
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
+  mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
 }
 
 export interface HeadlessResult {
@@ -191,7 +193,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
   }
 
+  const mcpHandles: McpMountHandle[] = []
+
   try {
+    // M17: mount MCP servers into the registry before the agent can see them
+    // (each handle is pushed only after a successful mount; a failed mount
+    // cleans itself up, so the finally below only releases live handles).
+    for (const cfg of opts.mcp ?? []) {
+      mcpHandles.push(await mountMcpClient(ctx, tools, cfg))
+    }
     // Mount the subagent + job tools so the main agent can delegate.
     // M8: persist child sessions through the same coordinator (child lineage
     // records the main session id) and on resume load each restored child's
@@ -256,6 +266,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {
+    // M17: unmount MCP servers after the run (reverse mount order), best-effort
+    // like the sandbox teardown: an unmount failure must not mask the run result.
+    for (const handle of mcpHandles.reverse()) {
+      try {
+        await handle.unmount()
+      } catch {
+        // cleanup failure on unmount: the run result stands
+      }
+    }
     // M16w final-review: the sandbox-local wrapper dropped the win32 backend's
     // dispose() (it returns a bare SandboxProvider), so the compose site owns
     // teardown — otherwise the backend's revocable ACL temp grants would leak

@@ -1253,3 +1253,92 @@ describe("M16 CLI sandbox wiring", () => {
   })
 })
 
+// M17: the fake MCP server runs as a REAL subprocess (SDK Server +
+// StdioServerTransport), so its .mjs script imports the SDK by absolute file
+// URL — the handshake (initialize → tools/list → tools/call) is the real
+// protocol, not a mock (same approach as packages/mcp-client/test/client.test.ts
+// Task 3). The SDK is installed under @i-harness/mcp-client (pnpm-symlinked to
+// packages/mcp-client/node_modules), NOT under apps/cli, so the URL resolves
+// from the package's own install dir rather than ../node_modules.
+const MCP_SDK_BASE_URL = new URL("../../../packages/mcp-client/node_modules/@modelcontextprotocol/sdk/dist/esm/", import.meta.url)
+const MCP_SDK_SERVER_URL = new URL("server/index.js", MCP_SDK_BASE_URL).href
+const MCP_SDK_STDIO_URL = new URL("server/stdio.js", MCP_SDK_BASE_URL).href
+const MCP_SDK_TYPES_URL = new URL("types.js", MCP_SDK_BASE_URL).href
+
+// Minimal MCP server exposing one echo tool (SDK 1.30: setRequestHandler
+// requires real zod schemas from types.js, not plain objects).
+const MCP_FAKE_SERVER = `
+import { Server } from ${JSON.stringify(MCP_SDK_SERVER_URL)}
+import { StdioServerTransport } from ${JSON.stringify(MCP_SDK_STDIO_URL)}
+import { CallToolRequestSchema, ListToolsRequestSchema } from ${JSON.stringify(MCP_SDK_TYPES_URL)}
+const server = new Server({ name: "fake", version: "0.1.0" }, { capabilities: { tools: {} } })
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    { name: "echo", description: "echo text", inputSchema: { type: "object", properties: { text: { type: "string" } } } },
+  ],
+}))
+server.setRequestHandler(CallToolRequestSchema, async (req) => ({
+  content: [{ type: "text", text: "ok:" + req.params.arguments?.text }],
+}))
+await server.connect(new StdioServerTransport())
+`
+
+function writeFakeMcpServer(): string {
+  const dir = mkdtempSync(join(tmpdir(), "i-harness-m17-"))
+  const script = join(dir, "fake-mcp-server.mjs")
+  writeFileSync(script, MCP_FAKE_SERVER)
+  return script
+}
+
+describe("M17 CLI mcp integration", () => {
+  // Real end-to-end: runHeadless mounts the stdio server (real subprocess),
+  // the mock model calls the registered mcp__fake__echo tool, and the echo
+  // response must land in the session's tool/result event — mount → register
+  // → dispatch → call, all through the real protocol. RED phase: HeadlessOptions.mcp
+  // is unknown, so the tool call fails with "unknown tool" → exitCode 1.
+  it("runHeadless mounts mcp servers and the agent can use an mcp tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m17-"))
+    try {
+      const result = await runHeadless("use the mcp echo tool", {
+        workspace: dir,
+        approveAll: true, // mcp tools are non-readOnly → ask → auto-approve
+        mcp: [{ transport: "stdio", serverName: "fake", command: process.execPath, args: [writeFakeMcpServer()] }],
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "mcp__fake__echo", args: { text: "hello mcp" } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.finalText).toBe("done")
+      const echo = result.session!.events.find((e) => e.type === "tool/result" && e.name === "mcp__fake__echo")
+      expect(echo).toBeDefined()
+      expect(JSON.stringify((echo as { output: unknown }).output)).toContain("ok:hello mcp")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  // Unmount observable: the mcp-client reservation on serverName dies only in
+  // runHeadless's finally. A second run with the SAME serverName must mount
+  // cleanly; if the first run leaked the mount, run 2 throws "already
+  // reserved" → exitCode 1. (RED phase: mounts are ignored, so both runs
+  // trivially succeed — this test only discriminates once wiring exists.)
+  it("unmounts the mcp server after the run (serverName reservation released)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m17-"))
+    try {
+      const cfg = { transport: "stdio" as const, serverName: "fake", command: process.execPath, args: [writeFakeMcpServer()] }
+      const first = await runHeadless("one", {
+        workspace: dir, approveAll: true, mcp: [cfg], mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(first.exitCode).toBe(0)
+      const second = await runHeadless("two", {
+        workspace: dir, approveAll: true, mcp: [cfg], mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(second.exitCode).toBe(0)
+      expect(second.error).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+})
+
