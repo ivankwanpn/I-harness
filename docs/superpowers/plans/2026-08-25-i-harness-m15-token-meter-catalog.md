@@ -18,7 +18,8 @@
 - Pricing rules (per message, recursive):
   - `user`/`tool` string content: `ceil(len/4) + ROLE_OVERHEAD`.
   - `user`/`tool` parts array: `ROLE_OVERHEAD + Σ per part` — text part `ceil(text/4) + BLOCK_OVERHEAD`; image part `IMAGE_TOKEN_ESTIMATE + BLOCK_OVERHEAD`.
-  - `assistant` message: `ROLE_OVERHEAD + (content non-empty ? ceil(content/4) + BLOCK_OVERHEAD : 0) + Σ per toolCall: ceil(name/4) + ceil(argsJson/4) + BLOCK_OVERHEAD` where `argsJson = JSON.stringify(call.args) ?? ""` (`JSON.stringify` can return `undefined`).
+  - `assistant` message with NO toolCalls (plain string): `ceil(len/4) + ROLE_OVERHEAD` (single text block; NO extra BLOCK_OVERHEAD — M15 spec §3.1).
+  - `assistant` message WITH toolCalls: `ROLE_OVERHEAD + (content non-empty ? ceil(content/4) + BLOCK_OVERHEAD : 0) + Σ per toolCall: ceil(name/4) + ceil(argsJson/4) + BLOCK_OVERHEAD` where `argsJson = JSON.stringify(call.args) ?? ""` (`JSON.stringify` can return `undefined`).
 - `approxTokens` (public, M14) keeps its content-only semantics: string → `ceil(len/4)`; parts → Σ (`text: ceil/4`, `image: IMAGE_TOKEN_ESTIMATE`). NO block/role overhead. Callers: `region.ts`, `summarizer.ts`, `compaction.test.ts`.
 - `activeTokens` semantics CHANGE (M14 → M15): from content-only sum to full-message estimate via token-meter. This is intentional (dsh parity); existing equality assertions must be updated (see Task 4).
 - Behavior unchanged when no catalog is provided: `createCompactionEngine` without `profile`/`modelId` is byte-identical to M11/M14 (config-fallback).
