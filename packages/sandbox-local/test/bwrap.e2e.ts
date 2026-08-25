@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest"
-import { execSync } from "node:child_process"
-import { createLocalSandbox } from "../src/index.ts"
+import { createLocalSandbox, probeBwrap } from "../src/index.ts"
 import type { SandboxPolicy } from "@i-harness/sandbox"
 
+// M16 final-review (I2): the guard must match the ACTUAL confinement gate in
+// createLocalSandbox. `bwrap --version` alone passes on hosts where user
+// namespaces are blocked — the real probe runs the full profile
+// (--ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent --
+// true) so a blocked-namespaces host SKIPs instead of running RED.
 function hasBwrap(): boolean {
   if (process.platform !== "linux") return false
-  try { execSync("bwrap --version", { stdio: "ignore" }); return true } catch { return false }
+  return probeBwrap()
 }
 
 const skip = hasBwrap() ? it : it.skip

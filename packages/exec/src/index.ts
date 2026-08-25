@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { SandboxExecutionPolicy, SandboxPolicy, SandboxProvider } from "@i-harness/sandbox"
-import { SandboxUnavailableError } from "@i-harness/sandbox"
+import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy, SandboxProvider } from "@i-harness/sandbox"
+import { SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
 
 export interface ExecCommand {
   argv: string[]
@@ -35,6 +35,16 @@ interface SpawnHandle {
   done: Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>
 }
 
+// M16 final-review (I3): the result of confine() is kept on the handle so the
+// done path can translate a runner failure (bwrap exec-refusal, exit 125 with
+// "bwrap: failed to ...") into SandboxUnavailableError instead of surfacing it
+// as an ordinary command failure. `mode` is the narrowed ConfinedSandboxMode
+// (confined is only ever produced for confined policies).
+interface ResolvedSpawn {
+  confined?: ConfinedArgv
+  mode?: import("@i-harness/sandbox").ConfinedSandboxMode
+}
+
 // Kill the entire process tree of `child`. Shared by the timeout timer, the
 // returned kill(), and the external abort listener — one implementation, three
 // call sites. Windows uses taskkill /T /F; elsewhere we signal the process
@@ -60,18 +70,24 @@ function isConfinedPolicy(sandbox: SandboxExecutionPolicy): sandbox is SandboxPo
 // passthrough; confined policy but no provider → fail closed (throw). This is
 // a deliberate sandbox boundary: a command with a confined policy must never
 // run unconfined just because a backend is missing.
-function resolveArgv(cmd: ExecCommand, sandboxProvider?: SandboxProvider): string[] {
-  if (cmd.sandbox === undefined) return cmd.argv
+// M16 final-review (I3): keep the ConfinedArgv (denialSignatures,
+// runnerFailureRules, enforcement) so the spawn/done path can translate a
+// runner failure into SandboxUnavailableError (legible + spec-conformant)
+// instead of an ordinary command failure.
+function resolveArgv(cmd: ExecCommand, sandboxProvider?: SandboxProvider): ResolvedSpawn {
+  if (cmd.sandbox === undefined) return {}
   const sandbox = cmd.sandbox
-  if (!isConfinedPolicy(sandbox)) return cmd.argv // passthrough
+  if (!isConfinedPolicy(sandbox)) return {} // passthrough
   if (sandboxProvider === undefined) {
     throw new SandboxUnavailableError(sandbox.mode, "no sandbox provider composed (createExecService({ sandbox }))")
   }
-  return sandboxProvider.confine(cmd.argv, sandbox).argv
+  const confined = sandboxProvider.confine(cmd.argv, sandbox)
+  return { confined, mode: sandbox.mode }
 }
 
 function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnHandle {
-  const argv = resolveArgv(cmd, sandboxProvider)
+  const { confined, mode } = resolveArgv(cmd, sandboxProvider)
+  const argv = confined?.argv ?? cmd.argv
   const child = spawn(argv[0]!, argv.slice(1), {
     cwd: cmd.cwd,
     env: { ...process.env, ...cmd.env },
@@ -82,7 +98,8 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnH
   let timedOut = false
   let settled = false
   let resolveDone!: (v: { exitCode: number; stdout: string; stderr: string; timedOut: boolean }) => void
-  const done = new Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>((res) => { resolveDone = res })
+  let rejectDone!: (err: Error) => void
+  const done = new Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>((res, rej) => { resolveDone = res; rejectDone = rej })
 
   const timer = cmd.timeoutMs !== undefined ? setTimeout(() => {
     timedOut = true
@@ -110,9 +127,27 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnH
     // Leak hygiene: drop the abort listener once the process settles before
     // the abort ever fires (the `once` flag already handles the fired case).
     cmd.abortSignal?.removeEventListener("abort", abortListener)
+    const cleanStderr = stderr.replace(/\r\n/g, "\n")
+    // M16 final-review (I3): a runner failure (e.g. bwrap exit 125 with
+    // "bwrap: failed to ..." — user namespaces blocked) is NOT an ordinary
+    // command failure: the sandbox runner itself could not start. Translate it
+    // into SandboxUnavailableError (spec-conformant, legible) so consumers see
+    // "sandbox unavailable" instead of a confusing nonzero exit. The child
+    // exited with the runner's code but the denial-signature scanner never ran
+    // (the command body itself never executed).
+    if (!timedOut && code !== 0 && confined && mode !== undefined && confined.runnerFailureRules.length > 0) {
+      const failure = classifyRunnerFailure(
+        { exitCode: code, stderr: { text: cleanStderr } },
+        confined.runnerFailureRules,
+      )
+      if (failure) {
+        rejectDone(new SandboxUnavailableError(mode, failure.detail))
+        return
+      }
+    }
     resolveDone({
       stdout: stdout.replace(/\r\n/g, "\n"),
-      stderr: stderr.replace(/\r\n/g, "\n"),
+      stderr: cleanStderr,
       exitCode: code,
       timedOut,
     })
@@ -153,14 +188,24 @@ export function createExecService(deps?: { sandbox?: SandboxProvider }): ExecSer
       jobs.set(jobId, job)
       handle.child.stdout?.on("data", (d: Buffer) => { job.stdout += d.toString("utf-8").replace(/\r\n/g, "\n") })
       handle.child.stderr?.on("data", (d: Buffer) => { job.stderr += d.toString("utf-8").replace(/\r\n/g, "\n") })
-      handle.done.then(({ stdout, stderr, exitCode, timedOut }) => {
-        const j = jobs.get(jobId)
-        if (!j || j.status !== "running") return
-        j.stdout = stdout
-        j.stderr = stderr
-        j.exitCode = exitCode
-        j.status = timedOut ? "killed" : exitCode === 0 ? "completed" : "error"
-      })
+      handle.done.then(
+        ({ stdout, stderr, exitCode, timedOut }) => {
+          const j = jobs.get(jobId)
+          if (!j || j.status !== "running") return
+          j.stdout = stdout
+          j.stderr = stderr
+          j.exitCode = exitCode
+          j.status = timedOut ? "killed" : exitCode === 0 ? "completed" : "error"
+        },
+        // M16 final-review (I3): a runner-failure rejection (SandboxUnavailableError)
+        // must land as an errored job, not an unhandled rejection.
+        (err: Error) => {
+          const j = jobs.get(jobId)
+          if (!j || j.status !== "running") return
+          j.stderr = err.message
+          j.status = "error"
+        },
+      )
       return { jobId }
     },
     getOutput(jobId: string): BackgroundJobView {

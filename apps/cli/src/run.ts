@@ -83,10 +83,21 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // unset or danger-full-access compose NO provider (exec stays passthrough).
   const sandboxProvider =
     opts.sandbox === undefined || opts.sandbox === "danger-full-access" ? undefined : createLocalSandbox()
+  // M16 final-review (C1): resolve the effective policy ONCE and pass the SAME
+  // resolved value to the enforce step (registerShell → exec confines at
+  // spawn) and to the prompt renderer, so the prompt and the enforcement can
+  // never drift. The requested mode is the policy; a host calling
+  // resolve({ session }) can override it — the CLI passes opts.session here,
+  // so a host-seeded sandbox/mode session event actually applies.
+  const sandboxPolicy =
+    opts.sandbox === undefined
+      ? undefined
+      : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace }).resolve({ session: opts.session })
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
     ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
+    ...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}),
   })
   for (const tool of createFsTools({ workspace: opts.workspace })) tools.register(tool)
   createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
@@ -205,16 +216,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         }
       }
     }
-    // M16: when a sandbox mode is configured, the policy owner resolves the
-    // effective policy (deployment default; mode requested may be overridden
-    // by a sandbox/mode session event) and its rendered context is injected
-    // into the system prompt so the agent knows the standing file policy.
-    // Unset → no policy, prompt unchanged.
-    const sandboxPolicy =
-      opts.sandbox === undefined ? undefined : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace })
+    // M16: when a sandbox mode is configured, the rendered policy context is
+    // injected into the system prompt so the agent knows the standing file
+    // policy. Unset → no policy, prompt unchanged.
+    // M16 final-review (C1): the policy is the SAME value that registerShell
+    // attached to every bash/pwsh execution — resolved once above — so the
+    // prompt and the enforce step can never drift.
     let systemPrompt = "You are a coding agent."
     if (sandboxPolicy) {
-      systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicy.resolve())}`
+      systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicy)}`
     }
     const agent = createAgent(ctx, {
       session, tools, model,

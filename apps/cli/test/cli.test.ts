@@ -21,6 +21,7 @@ import type { RetryConfig } from "@i-harness/guard-retry"
 import type { ShellRetentionOptions } from "@i-harness/shell"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
+import { probeBwrap } from "@i-harness/sandbox-local"
 
 // Poll a read until it returns a defined value (bounded). The subagent
 // persistence wrappers save fire-and-forget (M6), so document reads need to
@@ -1182,6 +1183,38 @@ describe("M16 CLI sandbox wiring", () => {
       })
       expect(result.exitCode).toBe(0)
       expect(seen[0]!.systemPrompt).toContain("danger-full-access")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  // M16 final-review C1(b): end-to-end confinement — on a Linux host with a
+  // working bwrap, a read-only sandbox must make a workspace write FAIL (the
+  // bash tool's command runs confined; denial signatures mark it). Same
+  // skip-guard pattern as bwrap.e2e.ts (the probe is the REAL gate
+  // createLocalSandbox uses, so blocked-namespaces hosts skip instead of RED).
+  it.skipIf(!(process.platform === "linux" && probeBwrap()))("sandbox read-only denies a workspace write end-to-end", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m16-c1-"))
+    try {
+      const result = await runHeadless("write in the workspace", {
+        workspace: dir,
+        sandbox: "read-only",
+        approveAll: true,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "bash", args: { command: `echo hi > "${dir}/c1.txt"` } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0) // the tool failed, but the harness run completes
+      const bashResult = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash")
+      const output = (bashResult as { output: { stdout?: string; stderr?: string; error?: string; exitCode?: number } } | undefined)?.output
+      // The deny observable: the confined command exited nonzero (the write was
+      // refused), and the bwrap deny marker is present on the tool stderr (same
+      // marker the bwrap.e2e asserts).
+      expect(output?.exitCode).not.toBe(0)
+      const text = `${output?.stdout ?? ""}\n${output?.stderr ?? ""}\n${output?.error ?? ""}`
+      expect(text.toLowerCase()).toContain("read-only file system")
+      expect(existsSync(join(dir, "c1.txt"))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

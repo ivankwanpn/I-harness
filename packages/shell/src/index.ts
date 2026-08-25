@@ -90,6 +90,10 @@ export interface ShellToolDeps {
   exec: ExecService
   timeoutMs?: number // declared on bash/pwsh tools; drives guard-timeout
   retention?: ShellRetentionOptions
+  // M16 final-review (C1): when set, every bash/pwsh execution carries this
+  // policy so exec confines at spawn. Absent → no sandbox field (passthrough,
+  // pre-M16 behavior).
+  sandboxPolicy?: import("@i-harness/sandbox").SandboxExecutionPolicy
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
@@ -138,10 +142,10 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
       const argv = ["bash", "-c", args.command]
       if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv })
+        const { jobId } = deps.exec.runBackground({ argv, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
       return retainedRunResult(result)
     },
   }
@@ -158,10 +162,10 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
       const argv = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
       if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv })
+        const { jobId } = deps.exec.runBackground({ argv, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
       return retainedRunResult(result)
     },
   }
@@ -171,9 +175,14 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
 export function registerShell(
   ctx: PluginContext,
   registry: { register(t: Tool): void },
-  opts?: { timeoutMs?: number; retention?: ShellRetentionOptions; sandbox?: import("@i-harness/sandbox").SandboxProvider },
+  opts?: {
+    timeoutMs?: number
+    retention?: ShellRetentionOptions
+    sandbox?: import("@i-harness/sandbox").SandboxProvider
+    sandboxPolicy?: import("@i-harness/sandbox").SandboxExecutionPolicy
+  },
 ): void {
   registerExec(ctx, { sandbox: opts?.sandbox })
   const exec = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention })) registry.register(tool)
+  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention, sandboxPolicy: opts?.sandboxPolicy })) registry.register(tool)
 }

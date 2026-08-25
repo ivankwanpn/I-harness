@@ -3,6 +3,7 @@ import { resolveShell, getArgv, createShellTools, registerShell } from "../src/i
 import type { ExecService, ExecCommand } from "@i-harness/exec"
 import type { Tool } from "@i-harness/core-tools"
 import { createContext } from "@i-harness/core-plugin"
+import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
 
 describe("resolveShell", () => {
   it("resolves to a shell (bash or pwsh) with a -c/-Command prefix", () => {
@@ -166,6 +167,53 @@ describe("createShellTools", () => {
     await bash.execute({ command: "sleep 5", background: true }, { abortSignal: new AbortController().signal })
     expect(captured).toBeDefined()
     expect(captured!.abortSignal).toBeUndefined()
+  })
+
+  // M16 final-review C1(a): the load-bearing fix — the CLI previously composed
+  // the provider via registerShell({ sandbox }) but NEVER attached a policy to
+  // a command, so every bash/pwsh run was unconfined. Pin that execute() now
+  // forwards the sandboxPolicy into exec.run / exec.runBackground for BOTH
+  // tools (and that the field is absent when no policy is configured).
+  it("sandboxPolicy: bash/pwsh attach policy to run + runBackground; absent → no sandbox field", async () => {
+    const policy: SandboxExecutionPolicy = { mode: "read-only", workspaceRoot: "/" }
+    const foreground: ExecCommand[] = []
+    const background: ExecCommand[] = []
+    const recordingExec: ExecService = {
+      run: async (cmd) => {
+        foreground.push(cmd)
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: (cmd) => {
+        background.push(cmd)
+        return { jobId: "bash-1" }
+      },
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const [bash, pwsh] = createShellTools({ exec: recordingExec, sandboxPolicy: policy })
+    await bash.execute({ command: "echo hi" }, {})
+    await pwsh.execute({ command: "Get-Date" }, {})
+    await bash.execute({ command: "echo bg", background: true }, {})
+    expect(foreground[0]!.sandbox).toBe(policy)
+    expect(foreground[1]!.sandbox).toBe(policy)
+    expect(background[0]!.sandbox).toBe(policy)
+
+    // Absent policy → exactly the pre-M16 shape (no sandbox field).
+    const plainForeground: ExecCommand[] = []
+    const noPolicyExec: ExecService = {
+      run: async (cmd) => {
+        plainForeground.push(cmd)
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: () => ({ jobId: "bash-1" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const [plainBash] = createShellTools({ exec: noPolicyExec })
+    await plainBash.execute({ command: "echo hi" }, {})
+    expect(plainForeground[0]!.sandbox).toBeUndefined()
   })
 })
 

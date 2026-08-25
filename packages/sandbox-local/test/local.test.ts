@@ -62,14 +62,16 @@ describe("runner failure classification", () => {
 })
 
 describe("createLocalSandbox platform selection", () => {
-  it("win32 absent-backend → fail-closed SandboxUnavailableError", () => {
-    // No platform guard: the win32 branch (the live one on this host) fails
-    // closed when no windowsAclBackend is composed.
+  // M16 final-review (I1): these two tests exercise the win32 branch only; on
+  // Linux with bwrap the branch returns a confined bwrap argv instead of
+  // throwing/delegating, so they must be win32-only (skipIf, not remove).
+  it.skipIf(process.platform !== "win32")("win32 absent-backend → fail-closed SandboxUnavailableError", () => {
+    // Fail closed when no windowsAclBackend is composed.
     const provider = createLocalSandbox({ windowsAclBackend: undefined })
     expect(() => provider.confine(["echo", "hi"], readOnly)).toThrow(SandboxUnavailableError)
   })
 
-  it("win32 with injected stub → delegates and pins enforcement partial", () => {
+  it.skipIf(process.platform !== "win32")("win32 with injected stub → delegates and pins enforcement partial", () => {
     const stub: SandboxProvider = {
       confine(argv, _policy) {
         return {
