@@ -6,3 +6,5 @@ export {
   estimateContent,
   estimateMessage,
 } from "./estimate.ts"
+export { activeTokens, breakdown } from "./breakdown.ts"
+export type { TokenBreakdown } from "./breakdown.ts"
