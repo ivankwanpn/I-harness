@@ -32,4 +32,13 @@ describe("llm-mock", () => {
     }
     expect(events).toEqual(["error"])
   })
+
+  it("tolerates a user message with images and yields the text chunk", async () => {
+    const client = createMockClient([{ role: "assistant", text: "done" }])
+    const events: string[] = []
+    for await (const ev of client.stream({ systemPrompt: "s", tools: [], messages: [{ role: "user", content: [{ type: "text", text: "look" }, { type: "image", image: { mediaType: "image/png", dataBase64: "aGVsbG8=" } }] }] })) {
+      if (ev.type === "text/chunk") events.push(ev.text)
+    }
+    expect(events).toEqual(["done"])
+  })
 })
