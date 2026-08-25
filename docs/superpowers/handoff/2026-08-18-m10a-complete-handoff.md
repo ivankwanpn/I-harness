@@ -1,8 +1,8 @@
-# Handoff — I-harness @ M10a + M10b + M11 + M12 + M13 Complete (2026-08-20)
+# Handoff — I-harness @ M10a + M10b + M11 + M12 + M13 + M14 Complete (2026-08-25)
 
 > Handoff for a new session continuing development of the I-harness project.
 > Repo: `D:\agent-complete\I-harness` (pnpm monorepo, git on `master`).
-> Working tree is clean at this commit: `ba00fe0`.
+> Working tree is clean at this commit: `67814aa`.
 
 ## 1. Current State
 
@@ -11,29 +11,27 @@
 - **M11 (compaction: context-pressure auto + manual compact) — COMPLETE, on `master`.**
 - **M12 (tool retry-on-timeout + tool-result retention) — COMPLETE, on `master`.**
 - **M13 (parallel tool-call execution) — COMPLETE, on `master`.**
+- **M14 (multimodal image input v0) — COMPLETE, on `master`.**
 - All gates green at HEAD: `pnpm -r test` exit 0, `pnpm -r typecheck` exit 0.
-- No `CURRENT_FORMAT_VERSION` / event-vocabulary changes since M10b's `compaction/*` addition (M11, additive; M12 adds NO session events; M13 adds NO session events — the retry loop and the parallel scheduler are invisible to the session log by design, and the `truncated`/`TOOL_ABORTED_BEFORE_DISPATCH` markers live on the tool result, not events). The ONLY schema bump is `session-persistence-sqlite` `SCHEMA_VERSION` 1→2 (M10b, via the M5 migration chain).
+- No `CURRENT_FORMAT_VERSION` / event-vocabulary changes since M10b's `compaction/*` addition (M11 additive; M12-M14 add NO session event types — M14 adds `images?:` fields to `user/message` and tool/result `output`). The ONLY schema bump is `session-persistence-sqlite` `SCHEMA_VERSION` 1→2 (M10b, via the M5 migration chain).
 - Root `engines.node` is `>=22.18` (required by `node:sqlite`'s `readOnly` option).
 - All package.json additions are `workspace:*` — no new external dependencies.
 - 28 packages + 1 app (`apps/cli`). Environment: **Windows (Git Bash)**, Node v24, ESM + strict TS, vitest.
 
-### Recent commits (M13, oldest → newest)
+### Recent commits (M14, oldest → newest)
 ```
-35e1f90 docs: M13 parallel tool-call execution design spec
-565c6a8 docs: M13 parallel tool-call execution implementation plan
-747146b docs: M13 — fix decision-slot direction (preserve parent-propagation of the call payload; guard-approval must keep classifying child-scope calls)
-8d2e6ed feat(core-plugin): emit returns the waterfall chain value (additive)
-fb3c439 feat(core-tools): staged prepare/dispatch/finalize, per-dispatch decision, signal threading
-49c414e feat(core-agent): bounded rolling-pool tool-call scheduler with model-order commits
-a47a26c fix(core-agent): run staged finalize (post-execute) in the ordered commit lane
-013b6c7 fix(core-agent): swallow abort-path finalize failure (abort dominates a throwing post-execute)
-994e64a feat(core-agent): collect-then-batch tool execution + maxParallelToolCalls config
-91672fa docs: M13 plan — record Task 2 core-plugin addition, Task 3 finalize-in-commit-lane, t.order assertion fix
-eeef865 feat(guard-retry): abort-aware backoff (stop retrying when the caller signal aborts)
-a39e011 feat: opt read-only tools into parallel execution (isConcurrencySafe)
-b495964 feat(cli): maxParallelToolCalls pass-through + M13 e2e
-04b6718 fix(core-agent): final-review wave — serial-regression + Ruling-B pins, abort-before-start synthesis test, truthful startedUpTo, spec export correction
-ba00fe0 docs: M13 plan — sync startedUpTo placement with final-review fix
+3f4d3fd docs: M14 multimodal (image input) v0 design spec
+4032f2c docs: M14 multimodal (image input) v0 implementation plan
+787ffbc feat(core-session): image parts projection, tool-result image flush, search descriptors, intake validation
+ccb684f fix(core-session): tool/result image intake hardcaps, strip base64 from search text, adapt finalText + token estimate to parts
+7b5a2d7 feat(llm-seam): projectImagesForTextModel (negative-capability placeholder)
+5678598 feat(provider): ProviderProfile.inputModalities (negative capability)
+1890092 feat(llm-openai): image wire shaping (input_image) + text-only projection
+4af42a2 feat(llm-openai-compatible): image wire shaping (image_url array)
+70631e9 feat(llm-anthropic): image wire shaping (image source blocks) + provider inputModalities forward
+30ff23d feat: mock tolerates image messages; compaction estimates image tokens
+35d4183 feat(cli): host-seeded session option + M14 image e2e
+67814aa fix(M14): deriveSearchText array tool outputs + defensive non-array images (final-review fixes)
 ```
 
 ### Recent commits (M11, oldest → newest)
@@ -324,6 +322,58 @@ works headless; resume of a persisted compacted session projects the summary
 - CLI: `HeadlessOptions.maxParallelToolCalls?` pass-through (agent default 10;
   a shipped default like `shellTimeoutMs` 120s / `shellRetention` 64k).
 
+## 5e. M14 Delivered (multimodal image input v0) — architecture tour
+
+### 5e.1 core-session — message model + projection (audit seam F01-3 intact)
+- New types: `ImageMediaType` (png/jpeg/webp/gif), `ImageInput` (canonical
+  base64, no `data:` prefix), `LLMContentPart` (text | image). `LLMMessage`
+  stays owned by core-session; `user`/`tool` content widened to
+  `string | LLMContentPart[]` (string preserved when no image — the no-image
+  path is byte-identical); `assistant` stays text-only.
+- `SessionEvent`: `user/message` gains `images?: ImageInput[]`; `tool/result`
+  images live inside `output.images` (opaque output). Same event types, no
+  vocabulary growth.
+- `deriveMessages`: user images → parts (text first, event order); tool-result
+  images → tool message stays `JSON.stringify(output)` text + a synthetic user
+  message `Attached image(s) from tool result:` flushed inside `flushToolBlock`
+  (projection artifact, never a session event; role alternation legal).
+- `deriveSearchText`: one-line `image: <name> <w>x<h> <bytes>B base64:<8>`
+  descriptor per image — bytes are NEVER indexed (array-shaped outputs
+  stringify as-is; object outputs strip `images`).
+- `append` intake validation (fail-loud): mediaType whitelist, canonical
+  base64, ≤20 images, ≤200MiB aggregate — for BOTH `user/message.images` and
+  `tool/result.output.images`. `deriveMessages` is a pure projection (does not
+  throw on malformed persisted fields; `Array.isArray` gates).
+
+### 5e.2 llm-seam + provider — negative capability
+- `projectImagesForTextModel(messages)`: replaces every image part with
+  `[image omitted: model is text-only; base64:<8>]` (user + tool synthetic
+  messages; text survives). String content passes through.
+- `ProviderProfile.inputModalities?: ("text" | "image")[]` — ABSENT = text-only
+  (negative capability); `buildModelClient` forwards it to all three adapters.
+
+### 5e.3 adapters — wire shaping + projection before mapping
+- `llm-openai` (Responses): `{ role:"user", content: [{type:"input_text"} |
+  {type:"input_image", image_url:"data:..."}] }`; direct-path tool-image split
+  (`splitToolContent` → function_call_output + user item).
+- `llm-openai-compatible` (chat): `content: [{type:"text"} | {type:"image_url",
+  image_url:{url:"data:..."}}]` (tool/assistant branches route through
+  `toContent` — identity on strings).
+- `llm-anthropic`: `content: [{type:"text"} | {type:"image", source:{type:
+  "base64", media_type, data}}]`; `tool_result` stays text.
+- All three: `vision = inputModalities?.includes("image")` gate; projection
+  runs BEFORE wire mapping; string content stays legacy byte-identical.
+
+### 5e.4 compaction + CLI
+- `IMAGE_TOKEN_ESTIMATE = 1024` per image part; `approxTokens` parts-aware
+  (string → ceil/4; text part → ceil/4; image part → 1024). Summarizer stays
+  text-only (descriptors from `deriveSearchText`) — the documented v0 deviation
+  from dsh (which replays shadowed images through the route policy).
+- `HeadlessOptions.session?: Session` — a host can pre-seed a session (e.g.
+  with an image-bearing `user/message`) and run the agent over it; absent =
+  the internal fresh session (byte-identical). Write-behind hook lives only on
+  the internal session (host owns durability for a seeded session).
+
 ## 6. Execution Rulings Made (recorded in spec/plan docs)
 
 1. **M10a — TOOL_TIMEOUT marker location**: top-level `{ ...result, error, code }` (reads at
@@ -361,6 +411,15 @@ works headless; resume of a persisted compacted session projects the summary
 16. **M13 — `resolveAncestorDecision`**: ancestor-only decision lookup; the
     local decision is per-dispatch from `emit`'s return (the per-scope
     `decisions` map races under concurrent emits).
+17. **M14 — parts union seam**: `LLMMessage.content` widened to
+    `string | LLMContentPart[]` with the string preserved when no image —
+    the audit seam F01-3 stays intact and the no-image path is byte-identical.
+18. **M14 — negative capability**: `ProviderProfile.inputModalities` ABSENT =
+    text-only; adapters project images to placeholders BEFORE wire mapping.
+19. **M14 — v0 scope**: inline-base64 (no normalization/store/request-version
+    cache/provider-file lifecycle/output image generation/audio); compaction
+    summarizer stays text-only (descriptors) — the documented deviation from
+    dsh's image replay.
 
 ## 7. Deferred Follow-ups (reconstructed from SDD ledgers; triaged by final reviews)
 
@@ -453,24 +512,56 @@ works headless; resume of a persisted compacted session projects the summary
   positional destructuring; first CLI e2e test lacks pass-through discriminating power (the
   rejection test proves wiring); redundant `executeToolCalls` import+re-export in core-agent index.
 
+### M14 deferred minors (triaged by final whole-branch review; C/I fixed in the fix wave)
+- FIXED in final wave: `deriveSearchText` array-output guard (I1); `Array.isArray(images)`
+  gates in tool/result projection + `imageDescriptor` (I2) + malformed-persisted-event test;
+  openai-compatible tool/assistant branches route through `toContent` (T5 symmetry);
+  anthropic test-3 rename + `afterEach(vi.unstubAllGlobals())`.
+- **I3 (HARD GATE follow-up)**: `projectImagesForTextModel` passes the tool-content STRING
+  untouched, and `deriveMessages` stringifies the full tool output (incl. `dataBase64`) into
+  the `role:"tool"` message — a text-only provider (the DEFAULT when `inputModalities` absent)
+  receives complete image bytes as tool text. Reviewer accepted deferral FOR MERGE because no
+  in-repo provider consumes tool-image sessions today, but: **no real text-only provider may
+  be wired with tool-image sessions until the tool-string base64 is masked** (or the
+  llm-seam comment corrected to "part-level"). Fix sketch: mask `"dataBase64":"..."` inside
+  tool-content strings in `projectImagesForTextModel`, or pre-wire strip in each adapter's
+  tool branch.
+- Still open (safe to defer): `output.images: null` fail-loud at append (fail-loud-consistent,
+  no in-repo tool emits null); array-shaped tool output base64 enters FTS search text
+  (deliberate I1 tradeoff — arrays are opaque to image extraction); deriveMessages `user/message`
+  branch lacks `Array.isArray(images)` (out of scope, `append` blocks at intake; only raw
+  `events.push`/`fromJSONL` could hit it); `activeTokens` image-bearing session never directly
+  tested; `approxTokens` else-branch implicitly treats non-text parts as images (fine today);
+  llm-openai stale comment ("Returns undefined") + `unknown` return + task-number drift;
+  anthropic test 2 fixture sends two consecutive user messages (WIRE-LEGAL — Anthropic combines
+  same-role turns, does not reject); anthropic `tool_result` content uncoerced (brief-mandated
+  shape); provider registry test in the wrong describe + cannot go red at runtime (TS-enforced);
+  llm-seam test import mid-file; run.ts comment overstates flush-on-turn/end for host sessions
+  + host session/resumeSessionId merge unguarded (documented intended); recorder fresh mock per
+  stream call (single-step only).
+
 ## 8. Next Milestones
 
 - The M7 milestone sequence ("jobs upgrade (M9), guard/session-query (M10), compaction (M11),
-  retry/retention (M12), parallel tool calls (M13)") is now complete. Per the parity audit's
-  user-decided roadmap, **M14 = Token meter service + per-model context catalog** (hardens M11
-  compaction, enables budget checks + overflow recovery) is next.
-- Candidate next work (from the audit roadmap + M10a/M11/M12/M13 specs' Out-of-Scope and ledgers):
-  - **M14: Token meter service + per-model context catalog** — audit roadmap item 3.
-  - **M15: Sandbox** (Linux Landlock/bwrap; Windows restricted token) — audit roadmap item 4;
-    the runtime-design deferred "pluggable later" safety layer.
+  retry/retention (M12), parallel tool calls (M13), multimodal image input v0 (M14)") is now
+  complete. M14 redirected from the audit roadmap's token-meter item to multimodal (user-decided
+  2026-08-24) — the roadmap's remaining items shift forward by one.
+- Candidate next work (from the audit roadmap + M10a-M14 specs' Out-of-Scope and ledgers):
+  - **Token meter service + per-model context catalog** (audit roadmap item 3; now the natural
+    M15) — hardens M11 compaction, enables budget checks + overflow recovery.
+  - **Sandbox** (Linux Landlock/bwrap; Windows restricted token) — audit roadmap item 4; the
+    runtime-design deferred "pluggable later" safety layer.
   - **M16/M17: MCP client / LSP** — audit roadmap items 5-6 (the opencode-fork plugin ports).
   - **M18: Subagent teams** — audit roadmap item 7; NOTE the M13 design observation: the shared
     per-scope `decisions` map's cross-child race becomes reachable with
     `parallel-subagent-delegations` — revisit `resolveAncestorDecision` with per-emit scoping.
+  - **Multimodal follow-ups (M14 ledger)**: I3 HARD GATE — mask tool-content base64 before any
+    real text-only provider is wired with tool-image sessions; later, the attachment store +
+    normalization/request-version pipeline (dsh `unified-image-request-pipeline` is the
+    reference), and image-aware compaction replay.
   - **Context-overflow recovery / remote compaction** (codex-style) — M11's §Out-of-Scope.
-  - **Retry/parallel observability** (M12/M13 final reviews): a listener event or `retries` count
-    in the tool result so retried/parallel tools are visible in session traces without a new event
-    type.
+  - **Retry/parallel/multimodal observability** — a listener event or `retries` count in the tool
+    result so retried/parallel tools are visible in session traces without a new event type.
   - **Per-model compaction policy routing** (dsh `modelPolicies`).
   - **`KNOWN_EVENT_TYPES` recommendation from the M11 final review**: make registering new
     additive event types a mandatory step with a coordinator round-trip test.
