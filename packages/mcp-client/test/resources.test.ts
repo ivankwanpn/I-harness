@@ -6,28 +6,44 @@ function fakeClient(): ConnectedMcpClient {
   return {
     async listTools() { return { tools: [] } },
     async callTool() { return { content: [] } },
+    async listResources() { return [] },
+    async readResource() { return {} },
     async close() {},
   } as unknown as ConnectedMcpClient
 }
 
 describe("createResourceTools", () => {
-  it("creates list_mcp_resources (optional server filter) and read_mcp_resource (server + uri)", () => {
+  it("creates server-qualified list_mcp_resources__files and read_mcp_resource__files", () => {
     const client = fakeClient()
     const tools = createResourceTools(client, "files", { transport: "stdio", serverName: "files", command: "x", args: [] })
     const names = tools.map((t) => t.name)
-    expect(names).toContain("list_mcp_resources")
-    expect(names).toContain("read_mcp_resource")
+    expect(names).toContain("list_mcp_resources__files")
+    expect(names).toContain("read_mcp_resource__files")
   })
 
-  it("read_mcp_resource calls resources/read with the uri", async () => {
-    let called: { server: string; uri: string } | undefined
+  it("list_mcp_resources lists with the server filter and forwards abortSignal", async () => {
+    let called: { server: string; signal?: AbortSignal } | undefined
     const client: ConnectedMcpClient = {
       ...fakeClient(),
-      async readResource(server: string, uri: string) { called = { server, uri }; return { text: "content" } },
+      async listResources(server: string, signal?: AbortSignal) { called = { server, signal }; return [] },
     } as unknown as ConnectedMcpClient
     const tools = createResourceTools(client, "files", { transport: "stdio", serverName: "files", command: "x", args: [] })
-    const readTool = tools.find((t) => t.name === "read_mcp_resource")!
-    await readTool.execute({ server: "files", uri: "file:///a.txt" }, {} as never)
-    expect(called).toEqual({ server: "files", uri: "file:///a.txt" })
+    const listTool = tools.find((t) => t.name === "list_mcp_resources__files")!
+    const signal = new AbortController().signal
+    await listTool.execute({}, { abortSignal: signal } as never)
+    expect(called).toEqual({ server: "files", signal })
+  })
+
+  it("read_mcp_resource calls resources/read with the uri and forwards abortSignal", async () => {
+    let called: { server: string; uri: string; signal?: AbortSignal } | undefined
+    const client: ConnectedMcpClient = {
+      ...fakeClient(),
+      async readResource(server: string, uri: string, signal?: AbortSignal) { called = { server, uri, signal }; return { text: "content" } },
+    } as unknown as ConnectedMcpClient
+    const tools = createResourceTools(client, "files", { transport: "stdio", serverName: "files", command: "x", args: [] })
+    const readTool = tools.find((t) => t.name === "read_mcp_resource__files")!
+    const signal = new AbortController().signal
+    await readTool.execute({ server: "files", uri: "file:///a.txt" }, { abortSignal: signal } as never)
+    expect(called).toEqual({ server: "files", uri: "file:///a.txt", signal })
   })
 })
