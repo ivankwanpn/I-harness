@@ -18,8 +18,8 @@ const SDK_TYPES_URL = new URL("../node_modules/@modelcontextprotocol/sdk/dist/es
 const FAKE_SERVER = `
 import { Server } from ${JSON.stringify(SDK_SERVER_URL)}
 import { StdioServerTransport } from ${JSON.stringify(SDK_STDIO_URL)}
-import { CallToolRequestSchema, ListToolsRequestSchema } from ${JSON.stringify(SDK_TYPES_URL)}
-const server = new Server({ name: "fake", version: "0.1.0" }, { capabilities: { tools: {} } })
+import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from ${JSON.stringify(SDK_TYPES_URL)}
+const server = new Server({ name: "fake", version: "0.1.0" }, { capabilities: { tools: {}, resources: {} } })
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     { name: "echo", description: "echo text", inputSchema: { type: "object", properties: { text: { type: "string" } } } },
@@ -29,6 +29,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
   const p = req.params
   return { content: [{ type: "text", text: "ok:" + p.arguments?.text }] }
 })
+server.setRequestHandler(ListResourcesRequestSchema, async () => ({
+  resources: [{ uri: "note://a", name: "a", description: "note a" }],
+}))
+server.setRequestHandler(ReadResourceRequestSchema, async (req) => ({
+  contents: [{ uri: req.params.uri, mimeType: "text/plain", text: "hello resource" }],
+}))
 await server.connect(new StdioServerTransport())
 `
 
@@ -52,6 +58,20 @@ describe("createConnectedClient", () => {
     const client = await createConnectedClient({ transport: "stdio", serverName: "fake", command: execPath, args: [writeFakeServer()] })
     const result = await client.callTool("echo", { text: "hello" }, undefined)
     expect(JSON.stringify(result.content)).toContain("ok:hello")
+    await client.close()
+  })
+
+  it("listResources returns the server's resources via resources/list", async () => {
+    const client = await createConnectedClient({ transport: "stdio", serverName: "fake", command: execPath, args: [writeFakeServer()] })
+    const resources = await client.listResources()
+    expect(resources).toEqual([{ uri: "note://a", name: "a", description: "note a" }])
+    await client.close()
+  })
+
+  it("readResource reads a resource via resources/read with the uri", async () => {
+    const client = await createConnectedClient({ transport: "stdio", serverName: "fake", command: execPath, args: [writeFakeServer()] })
+    const result = await client.readResource("fake", "note://a")
+    expect(result).toEqual([{ uri: "note://a", mimeType: "text/plain", text: "hello resource" }])
     await client.close()
   })
 })
