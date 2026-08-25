@@ -279,6 +279,18 @@ importers:
         specifier: workspace:*
         version: link:../core-session
 
+  packages/lsp:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   packages/mcp-client:
     dependencies:
       '@i-harness/core-plugin':
