@@ -38,6 +38,10 @@ describe("estimateMessage", () => {
     // JSON.stringify(undefined) === undefined → `?? ""` → 0 chars
     expect(estimateMessage(msg)).toBe(ROLE_OVERHEAD + (Math.ceil(1 / CHARS_PER_TOKEN) + 0 + BLOCK_OVERHEAD))
   })
+
+  it("prices an assistant message with an empty toolCalls array as a plain string", () => {
+    expect(estimateMessage({ role: "assistant", content: "abcd", toolCalls: [] })).toBe(Math.ceil(4 / CHARS_PER_TOKEN) + ROLE_OVERHEAD)
+  })
 })
 
 describe("estimateContent", () => {
