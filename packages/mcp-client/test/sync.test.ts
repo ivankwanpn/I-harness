@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest"
-import { syncTools } from "../src/index.ts"
+import { describe, expect, it, vi } from "vitest"
+import { syncTools, type McpServerConfig } from "../src/index.ts"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import type { ConnectedMcpClient } from "../src/index.ts"
 
@@ -20,6 +20,28 @@ function registry(): ToolRegistry {
       if (i >= 0) tools.splice(i, 1)
     },
   } as unknown as ToolRegistry
+}
+
+// Like the real ToolRegistry: registering an already-present name throws. The
+// shared registry() stub above never throws, so conflict tests need this one.
+function throwingRegistry(): { store: Map<string, Tool>; tools: ToolRegistry } {
+  const store = new Map<string, Tool>()
+  const tools = {
+    register(t: Tool) {
+      if (store.has(t.name)) throw new Error(`duplicate tool registration: ${t.name}`)
+      store.set(t.name, t)
+    },
+    get(name: string) {
+      return store.get(name)
+    },
+    schemas() {
+      return [...store.values()].map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema }))
+    },
+    unregister(name: string) {
+      store.delete(name)
+    },
+  } as unknown as ToolRegistry
+  return { store, tools }
 }
 
 describe("syncTools", () => {
@@ -106,5 +128,125 @@ describe("syncTools", () => {
     expect(tools.get("mcp__files__a")).toBeDefined()
     expect(tools.get("mcp__files__b")).toBeDefined()
     expect(disposers.size).toBe(2)
+  })
+
+  it("rolls back to zero tools and logs a warning on a registry conflict (re-sync)", async () => {
+    const { tools } = throwingRegistry()
+    const client: ConnectedMcpClient = {
+      async listTools() {
+        return { tools: [{ name: "read_file", description: "read", inputSchema: {} }] }
+      },
+      async callTool() {
+        return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
+      async close() {},
+    }
+    // Sticky foreign squat: a tool with this server's public name is already
+    // registered (by another mount), so register throws on the first (and
+    // only) tool of this generation.
+    const foreign: Tool = {
+      name: "mcp__files__read_file",
+      description: "foreign",
+      inputSchema: {},
+      async execute() {
+        return []
+      },
+    }
+    tools.register(foreign)
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const disposers = await syncTools(client, tools, { transport: "stdio", serverName: "files", command: "x", args: [] }, new Map([["old-gen", () => {}]]))
+      expect(disposers.size).toBe(0)
+      expect(disposers).toEqual(new Map())
+      expect(warnSpy).toHaveBeenCalled()
+      // zero tools from this server registered — only the foreign one remains
+      expect(tools.get("mcp__files__read_file")).toBeDefined()
+      expect(tools.schemas()).toHaveLength(1)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it("swaps generations: previous disposers called and new generation registered", async () => {
+    const tools = registry()
+    const client: ConnectedMcpClient = {
+      async listTools() {
+        return {
+          tools: [
+            { name: "read_file", description: "gen1", inputSchema: {} },
+            { name: "write_file", description: "gen2", inputSchema: {} },
+          ],
+        }
+      },
+      async callTool() {
+        return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
+      async close() {},
+    }
+    const config: McpServerConfig = { transport: "stdio", serverName: "files", command: "x", args: [] }
+    // Gen 1
+    const disposers1 = await syncTools(client, tools, config)
+    expect(tools.get("mcp__files__read_file")).toBeDefined()
+    expect(tools.get("mcp__files__write_file")).toBeDefined()
+    expect(disposers1.size).toBe(2)
+    // Gen 2, populated previous map
+    const disposers2 = await syncTools(client, tools, config, disposers1)
+    expect(disposers2.size).toBe(2)
+    expect(tools.get("mcp__files__read_file")).toBeDefined()
+    expect(tools.get("mcp__files__write_file")).toBeDefined()
+    // still exactly one generation registered (old tools gone — schemas count
+    // equals the new generation, not two generations stacked)
+    expect(tools.schemas()).toHaveLength(2)
+  })
+
+  it("propagates the registry conflict on the initial sync (no previous generation)", async () => {
+    const { tools } = throwingRegistry()
+    const client: ConnectedMcpClient = {
+      async listTools() {
+        return { tools: [{ name: "read_file", description: "read", inputSchema: {} }] }
+      },
+      async callTool() {
+        return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
+      async close() {},
+    }
+    // Sticky foreign squat before the first sync of this server.
+    tools.register({
+      name: "mcp__files__read_file",
+      description: "foreign",
+      inputSchema: {},
+      async execute() {
+        return []
+      },
+    })
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      // Initial sync: the conflict must reject (spec §3.4, fail-closed) — not
+      // silently return an empty map. The foreign tool stays untouched.
+      await expect(syncTools(client, tools, { transport: "stdio", serverName: "files", command: "x", args: [] })).rejects.toThrow(/duplicate tool registration/)
+      expect(tools.get("mcp__files__read_file")).toBeDefined() // foreign tool kept
+      // rollback happened: no duplicate of this server's tool is registered
+      expect(tools.schemas()).toHaveLength(1)
+    } finally {
+      warnSpy.mockRestore()
+    }
   })
 })
