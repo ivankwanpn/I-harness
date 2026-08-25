@@ -38,6 +38,25 @@ describe("tool registry", () => {
     expect(reg.get("nope")).toBeUndefined()
   })
 
+  it("unregister(name) removes the tool from get/schemas and drops its promotion", () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "read", description: "read", inputSchema: {}, exposure: "direct", execute: async () => ({}) })
+    reg.register({ name: "grep", description: "search", inputSchema: {}, exposure: "deferred", execute: async () => ({}) })
+    reg.installSearch((_q, _o) => [{ name: "grep", description: "search", inputSchema: {}, exposure: "deferred" as const }])
+    reg.search("grep")
+    expect(reg.schemas().map((s) => s.name)).toEqual(["read", "grep"])
+    reg.unregister("grep")
+    expect(reg.get("grep")).toBeUndefined()
+    expect(reg.schemas().map((s) => s.name)).toEqual(["read"])
+    reg.unregister("read")
+    expect(reg.get("read")).toBeUndefined()
+    expect(reg.schemas()).toEqual([])
+    // unregistering an unknown name is a no-op
+    reg.unregister("nope")
+    expect(reg.schemas()).toEqual([])
+  })
+
   it("shadows tool in child scope and restores on unmount", () => {
     const ctx = makeCtx()
     const reg = createToolRegistry(ctx)

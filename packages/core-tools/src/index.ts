@@ -96,6 +96,7 @@ type ApprovalAnswerer = (req: { name: string; reason: string }) => Promise<boole
 export interface ToolRegistry {
   register(tool: Tool): void
   get(name: string): Tool | undefined
+  unregister(name: string): void
   schemas(): ToolSchema[]
   prepare(call: ToolCall, signal?: AbortSignal): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
@@ -162,6 +163,14 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   // can fail closed instead of throwing.
   function get(name: string): Tool | undefined {
     return tools.get(name)
+  }
+
+  // Removes the tool and its promotion state — the clean ownership boundary so
+  // a mount (e.g. MCP) can take back the tools it registered. Unknown names are
+  // a no-op so disposers can run twice safely.
+  function unregister(name: string): void {
+    tools.delete(name)
+    promoted.delete(name)
   }
 
   function schemas(): ToolSchema[] {
@@ -312,6 +321,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   return {
     register,
     get,
+    unregister,
     schemas,
     prepare,
     dispatch,
