@@ -1126,3 +1126,65 @@ describe("headless CLI M14 multimodal (image-bearing user message)", () => {
     }
   })
 })
+
+describe("M16 CLI sandbox wiring", () => {
+  it("runHeadless accepts --sandbox read-only and mounts the policy (no crash)", async () => {
+    // The real bwrap deny e2e lives in Task 6; here we assert the wiring:
+    // the sandbox option is accepted, the CLI mounts the sandbox provider and
+    // policy without crashing, and a simple run completes. The rendered policy
+    // context is pinned on the model request too — that is the only observable
+    // wiring effect on this host, and it keeps the RED phase a real runtime
+    // failure (vitest transpiles TS without typechecking, so an unknown
+    // HeadlessOptions field alone would silently pass).
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m16-"))
+    try {
+      const seen: LLMRequest[] = []
+      const recordingModel: ModelClient = {
+        async *stream(request: LLMRequest) {
+          seen.push(request)
+          yield { type: "text/chunk", text: "ok" }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        sandbox: "read-only",
+        approveAll: true,
+        model: recordingModel,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.finalText).toBe("ok")
+      expect(seen[0]!.systemPrompt).toContain("read-only")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("runHeadless accepts --sandbox danger-full-access (passthrough, no provider composed)", async () => {
+    // The fail-closed counterpart: danger-full-access must NOT compose a
+    // provider (exec passthrough) — the prompt tells the model the sandbox is
+    // off, and the run completes like the unconfigured path.
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m16-"))
+    try {
+      const seen: LLMRequest[] = []
+      const recordingModel: ModelClient = {
+        async *stream(request: LLMRequest) {
+          seen.push(request)
+          yield { type: "text/chunk", text: "ok" }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        sandbox: "danger-full-access",
+        approveAll: true,
+        model: recordingModel,
+      })
+      expect(result.exitCode).toBe(0)
+      expect(seen[0]!.systemPrompt).toContain("danger-full-access")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+

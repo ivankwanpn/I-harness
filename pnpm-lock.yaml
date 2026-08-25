@@ -77,6 +77,15 @@ importers:
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../../packages/provider
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../../packages/sandbox
+      '@i-harness/sandbox-local':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-local
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../../packages/sandbox-policy
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../../packages/session-persistence
@@ -364,6 +373,9 @@ importers:
       '@i-harness/output-retention':
         specifier: workspace:*
         version: link:../output-retention
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
 
   packages/subagent:
     dependencies:
