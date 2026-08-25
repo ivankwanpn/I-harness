@@ -1,10 +1,25 @@
-import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
+import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 
 export interface OpenAICompatibleConfig {
   apiKey: string
   baseUrl?: string
   model: string
   options?: Record<string, unknown>
+  // M14: mirrors ProviderProfile.inputModalities — when the route lacks
+  // "image", images are projected out before wire mapping. Forwarded by
+  // buildModelClient (Task 6).
+  inputModalities?: ("text" | "image")[]
+}
+
+// Shape LLM content parts into the Chat Completions `content` array. String
+// content stays the legacy string (byte-identical).
+function toContent(content: string | LLMContentPart[]): unknown {
+  if (typeof content === "string") return content
+  return content.map((part) =>
+    part.type === "text"
+      ? { type: "text", text: part.text }
+      : { type: "image_url", image_url: { url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` } },
+  )
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -22,7 +37,7 @@ export function parseSSE(text: string): Record<string, unknown>[] {
 // Translate the neutral LLMMessage union into Chat Completions wire messages.
 function toWireMessage(m: {
   role: "user" | "assistant" | "tool"
-  content: string
+  content: string | LLMContentPart[]
   toolCalls?: { id: string; name: string; args: unknown }[]
   toolCallId?: string
 }): Record<string, unknown> {
@@ -38,16 +53,18 @@ function toWireMessage(m: {
       })),
     }
   }
-  return { role: m.role, content: m.content }
+  return { role: m.role, content: toContent(m.content) }
 }
 
 export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): ModelClient {
   const baseUrl = config.baseUrl ?? "https://api.openai.com"
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      // M14 negative capability: text-only routes never see image bytes.
+      const messages = config.inputModalities?.includes("image") ?? false ? request.messages : projectImagesForTextModel(request.messages)
       const body = {
         model: config.model,
-        messages: request.messages.map(toWireMessage),
+        messages: messages.map(toWireMessage),
         tools: request.tools.map((t) => ({
           type: "function",
           function: { name: t.name, description: t.description, parameters: t.inputSchema },
