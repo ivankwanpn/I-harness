@@ -5,6 +5,11 @@ import { createAnthropicClient } from "@i-harness/llm-anthropic"
 
 export type ProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic-messages"
 
+export interface ProviderModelContext {
+  contextWindow?: number
+  maxContextWindow?: number
+}
+
 export interface ProviderProfile {
   name: string
   displayName: string
@@ -14,6 +19,22 @@ export interface ProviderProfile {
   models?: string[]
   defaultModel?: string
   inputModalities?: ("text" | "image")[] // M14: absent = text-only (negative capability)
+  contextWindow?: number                // M15: default window (tokens) for this provider
+  maxContextWindow?: number             // M15: absolute ceiling; budget-enforcement hook (no enforcement in M15)
+  modelContexts?: Record<string, ProviderModelContext> // M15: per-model overrides
+}
+
+// M15: per-model override wins → profile-level → undefined. Pure; the values
+// were already validated at registration, so no validation happens here.
+export function resolveModelContext(
+  profile: ProviderProfile,
+  modelId: string,
+): { contextWindow?: number; maxContextWindow?: number } {
+  const override = profile.modelContexts?.[modelId]
+  return {
+    contextWindow: override?.contextWindow ?? profile.contextWindow,
+    maxContextWindow: override?.maxContextWindow ?? profile.maxContextWindow,
+  }
 }
 
 export interface ProviderRegistry {
@@ -28,11 +49,31 @@ export function createProviderRegistry(): ProviderRegistry {
   return {
     register(profile) {
       if (profiles.has(profile.name)) throw new Error(`duplicate provider: ${profile.name}`)
+      validateModelContext(profile)
       profiles.set(profile.name, profile)
     },
     get(name) { return profiles.get(name) },
     list() { return [...profiles.values()] },
     remove(name) { profiles.delete(name) },
+  }
+}
+
+// M15: context windows fail loud at registration (no defaults injected —
+// absence means "unknown, fall back to config").
+function validateWindow(value: number, label: string): void {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`provider: ${label} must be a positive integer (got ${value})`)
+  }
+}
+
+function validateModelContext(profile: ProviderProfile): void {
+  if (profile.contextWindow !== undefined) validateWindow(profile.contextWindow, "contextWindow")
+  if (profile.maxContextWindow !== undefined) validateWindow(profile.maxContextWindow, "maxContextWindow")
+  if (profile.modelContexts) {
+    for (const [modelId, mc] of Object.entries(profile.modelContexts)) {
+      if (mc.contextWindow !== undefined) validateWindow(mc.contextWindow, `modelContexts["${modelId}"].contextWindow`)
+      if (mc.maxContextWindow !== undefined) validateWindow(mc.maxContextWindow, `modelContexts["${modelId}"].maxContextWindow`)
+    }
   }
 }
 
