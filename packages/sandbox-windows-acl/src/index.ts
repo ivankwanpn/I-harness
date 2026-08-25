@@ -495,7 +495,7 @@ interface AclTempCapability {
  * {@link SandboxProvider} — the thrown error may be a
  * {@link SandboxUnavailableError}, a {@link Win32Error}, a generic Error (a
  * failed grant materialization), or the raw ENOENT from
- * `assertTempRootOutsideWorkspace` — a child is NEVER spawned unrestricted.
+ * `assertTempRootOutsideWorkspace`) — a child is NEVER spawned unrestricted.
  *
  * NOTE: only `writableDirs` is consumed by the factory (its existence is
  * validated at construction). `mode`, `tempDir`, `writeSid`,
