@@ -73,6 +73,27 @@ const KNOWN_EVENT_TYPES = new Set([
   "compaction/start", "compaction/end", "compaction/summary",
 ])
 
+// M19: extensible event-type registry (fixes the M16 closed-set gap). The
+// builtin set above stays for backward compat; the load gate consults
+// builtin ∪ extra, so new event types (e.g. team/*) can cross the
+// guardIgnorable gate even when only this package is loaded.
+const extraEventTypes = new Set<string>()
+export function registerEventType(type: string): void {
+  extraEventTypes.add(type)
+}
+
+const isKnownEventType = (type: string): boolean =>
+  KNOWN_EVENT_TYPES.has(type) || extraEventTypes.has(type)
+
+// M19: register the 4 team/* session event types at module init so a plain
+// session-persistence load accepts them standalone (no agent-team import —
+// core-session would be the cycle, and this package must not depend on
+// agent-team either).
+registerEventType("team/member")
+registerEventType("team/task")
+registerEventType("team/message/queued")
+registerEventType("team/message/delivered")
+
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
@@ -128,7 +149,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   function guardIgnorable(events: SessionEvent[]): SessionEvent[] {
     const kept: SessionEvent[] = []
     for (const ev of events) {
-      if (KNOWN_EVENT_TYPES.has(ev.type)) { kept.push(ev); continue }
+      if (isKnownEventType(ev.type)) { kept.push(ev); continue }
       if ((ev as { ignorable?: true }).ignorable === true) continue // safely dropped
       throw new SessionFormatUnsupportedError(`unknown event type '${ev.type}' without ignorable marker`)
     }
