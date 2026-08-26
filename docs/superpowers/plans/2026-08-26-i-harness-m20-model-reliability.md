@@ -4,7 +4,7 @@
 
 **Goal:** 讓 I-harness 的模型層可靠——provider 請求失敗自動重試、context budget 超限自動壓縮、M14 多模態遺留項（attachment store + I3 遮罩 + image-aware replay）完成。
 
-**Architecture:** 三子系統：(1) provider retry——`llm-seam` 加 `RetryPolicyConfig`/`resolveRetryPolicy`，`provider` 的 `buildModelClient` 接 `retryPolicy`，包一層 retry wrapper 在 `ModelClient.stream`；(2) budget/overflow——`token-meter` 加 budget 檢查 fn，`core-agent` runTurn 的 step 前加 overflow 觸發（超限 → auto-compact → 仍超 → `prompt_too_long`）；(3) M14 遺留——新 `@i-harness/attachment` 包（opaque id + validate-before-publish + limits），`core-session` 加 ref 型別，`llm-seam` 補 I3 遮罩，`compaction` 補 image-aware replay。
+**Architecture:** 三子系統：(1) provider retry——`llm-seam` 加 `RetryPolicyConfig`/`resolveRetryPolicy`，`provider` 的 `buildModelClient` 接 `retryPolicy`，包一層 retry wrapper 在 `ModelClient.stream`；(2) budget/overflow——`token-meter` 加 budget 檢查 fn，`core-agent` runTurn 的 step 前加 overflow 觸發（**三層：compact → reset（吸收 codex token-budget pure-reset）→ prompt_too_long fail-closed**）；(3) M14 遺留——新 `@i-harness/attachment` 包（opaque id + validate-before-publish + limits），`core-session` 加 ref 型別，`llm-seam` 補 I3 遮罩，`compaction` 補 image-aware replay。
 
 **Tech Stack:** TypeScript ESM, pnpm workspace, vitest, zod（已有）；無新外部依賴。dsh/codex 參考（吸收而非移植，見 `.superpowers/research/2026-08-26-m20-model-reliability-research.md`）。
 
@@ -533,27 +533,27 @@ git add packages/token-meter/src/budget.ts packages/token-meter/src/index.ts pac
 git commit -m "feat(M20): token-meter budget check (contextWindow * reserveRatio)"
 ```
 
-### Task 5: core-agent runTurn 加 overflow 觸發
+### Task 5: core-agent runTurn 加 overflow 觸發（三層：compact→reset→fail-closed）
 
 **Files:**
+- Modify: `packages/compaction/src/index.ts`（`CompactionEngine` 加 `resetWindow`）
 - Modify: `packages/core-agent/src/index.ts`（AgentConfig 加 `AgentBudgetConfig`；runTurn step 迴圈加 `enforceBudget()`）
 - Test: `packages/core-agent/test/overflow.test.ts`（新）
 
 **Interfaces:**
-- Consumes: `checkBudget`（Task 4）、`CompactionEngine.compact`（既有 `createCompactionEngine`）、`ModelClient`（既有）
-- Produces: `AgentBudgetConfig = { contextWindow: number; reserveRatio?: number }`；`AgentConfig.budget?: AgentBudgetConfig`；overflow 行為——step 前 checkBudget → overflow → `compactor.compact()` → 仍 overflow → throw `prompt_too_long`
-- Note: `AgentConfig.budget.contextWindow` 是必要欄位（不是 `reserveRatio?` 單獨——budget 計算需要 contextWindow）；若無 `compact` 配置且 overflow → 直接 throw（fail-closed）
+- Consumes: `checkBudget`（Task 4）、`CompactionEngine.compact`/`CompactionResult`（既有）、`append`（core-session）、`ModelClient`（既有）
+- Produces: `AgentBudgetConfig = { contextWindow: number; reserveRatio?: number }`；`AgentConfig.budget?: AgentBudgetConfig`；`CompactionEngine.resetWindow(session: Session, retainLast: number): Promise<CompactionResult>`（新——吸收 codex pure-reset：清 log 除最近 retainLast 條，附 compaction/reset marker，無摘要）
+- Note: `AgentConfig.budget.contextWindow` 是必要欄位；無 `compact` 配置 → overflow 直接 throw（fail-closed）；有 `compact` 配置 → 三層（compact→reset→fail-closed）
 
 - [ ] **Step 1: 寫失敗測試**
 
 ```ts
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
-import { createAgentRegistry, createAgent } from "../src/index.ts"
+import { createAgent } from "../src/index.ts"
 
-// 用真實 compaction engine（M11）+ 真實 token-meter budget（M20）測試 overflow 觸發。
-// summarizer 用 spy model 直接回傳簡短摘要——compact 會被觸發但 fail-soft 的
-// summarizer 例外不會發生（這裡回傳成功）。
+// 用真實 compaction engine（M11）+ 真實 token-meter budget（M20）+ 新 resetWindow
+// 測試三層 overflow 觸發。summarizer 用 spy model 直接回傳簡短摘要。
 function makeModel(text: string) {
   return { stream: async () => (async function* () {
     yield { type: "text/chunk", text } as never
@@ -562,11 +562,11 @@ function makeModel(text: string) {
 }
 const ctx = { emit: async () => undefined, on: () => {}, waterfall: async (_e: string, n: () => unknown) => n(), checkGuards: () => undefined, resolveAncestorDecision: () => undefined, services: { get: () => undefined }, plugin: () => {} } as never
 
-describe("overflow budget enforcement", () => {
-  it("compacts then continues when under budget after compact", async () => {
+describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
+  it("layer 1: compact then continues when under budget after compact", async () => {
     const session = createSession()
-    // 塞到超過 budget：budget = contextWindow(200) * resizeRatio(0.5) = 100
-    // 約 2400 字元（CHARS_PER_TOKEN=4 → ~600 tokens）> 100 → overflow
+    // budget = contextWindow(200) * reserveRatio(0.5) = 100
+    // ~600 chars / 4 per token = ~150 tokens > 100 → overflow
     append(session, { type: "user/message", text: "x".repeat(2400) })
     const agent = createAgent(ctx, {
       session,
@@ -574,20 +574,37 @@ describe("overflow budget enforcement", () => {
       model: makeModel("answer"),
       systemPrompt: "",
       maxTurns: 10,
-      // M11 compact + M20 budget 合併：compact 用相同 contextWindow（200）
+      // compact 有效（保留 50 + 摘要 16 → 仍在 100 內）
       compact: { contextWindow: 200, thresholdRatio: 0.5, retainTokens: 50, maxTokens: 16 },
       budget: { contextWindow: 200, reserveRatio: 0.5 },
     } as never)
     const r = await agent.run("work", undefined)
-    // compact 成功 → 摘要寫入 session → run 繼續 → 最終 "answer"
-    // （總結後 tokens 仍可能 > budget? compact retainTokens=50 + maxTokens=16
-    //   → 摘要 16 tokens + 保留 50 → 仍在 100 內 → 不 throw）
     expect(r.finalText).toBe("answer")
+    // verify: compaction/end 已寫入（compact 被觸發）
+    expect(session.events.some((e) => e.type === "compaction/end")).toBe(true)
   })
-  it("throws prompt_too_long when compact cannot bring it under budget", async () => {
+  it("layer 2: reset when compact cannot bring it under budget", async () => {
     const session = createSession()
     append(session, { type: "user/message", text: "y".repeat(2400) })
-    // retainTokens 極大 → compact 後仍 > budget
+    const agent = createAgent(ctx, {
+      session,
+      tools: createEmptyRegistry(),
+      model: makeModel("nope"),
+      systemPrompt: "",
+      maxTurns: 10,
+      // retainTokens 極大 → compact 後仍 > budget → resetWindow 被觸發
+      compact: { contextWindow: 200, thresholdRatio: 0.5, retainTokens: 100_000, maxTokens: 16 },
+      budget: { contextWindow: 200, reserveRatio: 0.5, resetWindow: true, resetRetainLast: 20 },
+    } as never)
+    // reset 保留 20 條（含 compaction/reset marker）→ 不 throw
+    const r = await agent.run("work", undefined)
+    expect(r.finalText).toBe("nope")
+    // verify: resetWindow 寫入（compaction/reset 事件，非 compaction/end）
+    expect(session.events.some((e) => e.type === "compaction/reset")).toBe(true)
+  })
+  it("layer 3: fail-closed when reset disabled or insufficient", async () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "z".repeat(2400) })
     const agent = createAgent(ctx, {
       session,
       tools: createEmptyRegistry(),
@@ -595,12 +612,13 @@ describe("overflow budget enforcement", () => {
       systemPrompt: "",
       maxTurns: 10,
       compact: { contextWindow: 200, thresholdRatio: 0.5, retainTokens: 100_000, maxTokens: 16 },
-      budget: { contextWindow: 200, reserveRatio: 0.5 },
+      budget: { contextWindow: 1, reserveRatio: 1.0, resetWindow: false }, // reset 關閉 → fail-closed
     } as never)
     await expect(agent.run("work", undefined)).rejects.toThrow(/prompt_too_long/)
   })
 })
 
+// 測試 helper
 function createEmptyRegistry() {
   return {
     schemas: () => [], prepare: async () => ({ exec: {}, call: { name: "", args: {} }, tool: {} as never }),
@@ -615,48 +633,92 @@ function createEmptyRegistry() {
 - [ ] **Step 2: 跑測試確認失敗**
 
 Run: `cd packages/core-agent && pnpm vitest run test/overflow.test.ts`
-Expected: FAIL（`AgentConfig.budget` 型別不存在——TS 型別錯誤；測試中 `budget` 傳入被 `as never` 掩蓋，實際失敗為「`checkBudget` 未匯入/未使用」——**Step 1 測試會先因為編譯錯誤失敗**，因此 Step 2 確認其 fail）
+Expected: FAIL（`AgentConfig.budget`/`CompactionEngine.resetWindow` 型別不存在——TS 型別錯誤；Step 1 測試先因編譯錯誤失敗）
 
 - [ ] **Step 3: 實現**
 
 ```ts
-// packages/core-agent/src/index.ts（相關部分）
+// packages/compaction/src/index.ts — CompactionEngine 加 resetWindow（吸收 codex pure-reset）
+export interface CompactionResult {
+  compacted: boolean
+  shadowedSeqs: number[]
+  summary?: string
+  reset?: boolean   // M20: resetWindow 用（true = 純 reset，無摘要）
+}
+
+export interface CompactionEngine {
+  maybeCompact(session: Session): Promise<CompactionResult>
+  compact(session: Session): Promise<CompactionResult>
+  // M20（吸收 codex token-budget）：新 context window——清 log 除最近 retainLast 條，
+  // 附 compaction/reset marker，無摘要。當 compact（摘要）失敗/不足以回到 budget 時用。
+  resetWindow(session: Session, retainLast: number): Promise<CompactionResult>
+}
+
+// createCompactionEngine 內：
+async function resetWindowOnce(session: Session, retainLast: number): Promise<CompactionResult> {
+  const lastSeq = session.events.at(-1)?.seq ?? 0
+  const keepSeqs = new Set(session.events.slice(-retainLast).map((e) => e.seq).filter((s): s is number => s !== undefined))
+  const removed = session.events.filter((e) => e.seq !== undefined && !keepSeqs.has(e.seq)).length
+  if (removed === 0) return { compacted: false, shadowedSeqs: [], reset: false }
+  // 從頭重建 log：保留最近 retainLast 條 + 新 compaction/reset marker
+  const kept = session.events.filter((e) => e.seq === undefined || keepSeqs.has(e.seq))
+  session.events.length = 0
+  session.events.push(...kept)
+  append(session, { type: "compaction/reset", seq: lastSeq + 1 })
+  return { compacted: true, shadowedSeqs: [], reset: true }
+}
+
+// core-agent/src/index.ts（相關部分）
 import { checkBudget } from "@i-harness/token-meter"
-import type { CompactionEngine } from "@i-harness/compaction"
 
 export interface AgentBudgetConfig {
-  // M20 overflow 觸發：contextWindow 是 budget 計算的總窗口（與 compact
-  // 獨立——即使無 compact 配置，也可只做「超限即 fail-closed throw」）。
-  contextWindow: number
-  reserveRatio?: number  // 保留給輸出的比例（預設 0.9）；budget = contextWindow * reserveRatio
+  contextWindow: number       // 必要：budget 計算的總窗口
+  reserveRatio?: number       // 預設 0.9；budget = contextWindow * reserveRatio
+  resetWindow?: boolean       // 預設 true（允許 layer 2 pure-reset；false → 直接 fail-closed）
 }
 
 export interface AgentConfig {
   // ...既有欄位
-  budget?: AgentBudgetConfig  // M20: 若無 compact 配置且 overflow → throw prompt_too_long（fail-closed）
+  budget?: AgentBudgetConfig  // M20
 }
 
 // createAgent 內（在 `const compactor` 之後）：
 const budgetCfg = deps.budget
-// ...（完整版見下方 enforceBudget）
+const resetAllowed = budgetCfg?.resetWindow ?? true
+const resetRetainLast = budgetCfg?.resetRetainLast ?? 20
 
-// createAgent 內新增私有函式（在 runTurn 前）：
 async function enforceBudget(): Promise<void> {
   if (budgetCfg === undefined) return
   const before = checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio)
   if (before.state === "ok") return
+  // Layer 1: M11 compact（shadow-projection+摘要）
   if (compactor) {
     await compactor.compact(deps.session)
-    const after = checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio)
-    if (after.state === "ok") return
+    if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio).state === "ok") return
   }
+  // Layer 2: pure reset（吸收 codex token-budget）——保留最近 resetRetainLast 條
+  if (compactor && resetAllowed) {
+    await compactor.resetWindow(deps.session, resetRetainLast)
+    if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio).state === "ok") return
+  }
+  // Layer 3: fail-closed
   throw new Error(`prompt_too_long: context budget exceeded (${before.tokens} tokens > ${before.budget} budget)`)
+}
+
+// AgentBudgetConfig（完整版）：
+export interface AgentBudgetConfig {
+  contextWindow: number       // 必要：budget 計算的總窗口
+  reserveRatio?: number       // 預設 0.9；budget = contextWindow * reserveRatio
+  resetWindow?: boolean       // 預設 true（允許 layer 2 pure-reset；false → 直接 fail-closed）
+  resetRetainLast?: number    // 預設 20（resetWindow 保留最近 N 條事件）
 }
 
 // runTurn step 迴圈內，在 `if (compactor && compactEnabled) await compactor.maybeCompact(deps.session)` 之後、
 // `assertMessagesFromLog` 之前插入：
 await enforceBudget()
 ```
+
+注意：`resetWindow(deps.session, 0)`（保留 0 條）會把整個 session log 清空（含 turn/start、user/message）——這不正確（agent loop 需保留當前 user message 供 deriveMessages）。**實際設計**：`resetWindow(session, retainLast, preserve?)` 保留最後 N 條（`resetRetainLast` 預設 20），含當前 user/message 與最近 assistant/tool result。
 
 - [ ] **Step 4: 跑測試確認通過**
 
@@ -666,8 +728,8 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add packages/core-agent/src/index.ts packages/core-agent/test/overflow.test.ts
-git commit -m "feat(M20): core-agent budget enforcement — overflow triggers auto-compact, prompt_too_long fail-closed"
+git add packages/compaction/src/index.ts packages/core-agent/src/index.ts packages/core-agent/test/overflow.test.ts
+git commit -m "feat(M20): three-layer overflow — compact→reset(absorb codex token-budget)→prompt_too_long fail-closed"
 ```
 
 ---
