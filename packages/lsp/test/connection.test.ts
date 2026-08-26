@@ -156,6 +156,17 @@ describe("LspConnection server->client requests", () => {
       error: { code: -32601, message: expect.stringContaining("no onServerRequest") },
     })
   })
+
+  it("serializes an undefined handler result as result: null (JSON-RPC mandates a result member)", async () => {
+    const fake = createFakeChild()
+    const conn = spawnLspConnection(spec(), fake.spawner, async () => undefined)
+    fake.pushMessage({ jsonrpc: "2.0", id: 13, method: "workspace/configuration", params: {} })
+    void conn
+    await new Promise((r) => setTimeout(r, 10))
+    const sent = decodeLast(fake)
+    expect(sent).toEqual({ jsonrpc: "2.0", id: 13, result: null })
+    expect((sent as { error?: unknown }).error).toBeUndefined()
+  })
 })
 
 describe("LspConnection failAll", () => {

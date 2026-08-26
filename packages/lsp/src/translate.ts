@@ -1,6 +1,6 @@
 // Normalization seam: raw LSP wire payloads → the package's Lsp types.
-// Pure functions (no instance/connection coupling). instance.ts keeps its own
-// inline wire conversion; these helpers are for tools that receive raw payloads.
+// Pure functions (no instance/connection coupling); used by instance.ts for
+// query conversions (doQuery) and by tools that receive raw payloads.
 import type { LspHover, LspLocation, LspPosition } from "./instance.ts"
 
 function isPosition(v: unknown): v is LspPosition {

@@ -94,7 +94,7 @@ export class LspConnection {
         throw new Error(`no onServerRequest handler for "${m.method}"`)
       }
       const result = await this.onServerRequest(m.method, m.params)
-      this.write({ jsonrpc: "2.0", id: m.id, result })
+      this.write({ jsonrpc: "2.0", id: m.id, result: result ?? null })
     } catch (e) {
       this.write({
         jsonrpc: "2.0",

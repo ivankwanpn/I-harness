@@ -10,10 +10,12 @@ export interface LspServerConfig {
   maxStderrBytes?: number
   killGraceMs?: number
   shutdownTimeoutMs?: number
+  /** Bound for the initialize handshake during mount (a hung initialize rejects with LSP_INITIALIZE_TIMEOUT). Default 10_000. */
+  startupTimeoutMs?: number
 }
 
 const SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/
-const BOUND_FIELDS = ["maxMessageBytes", "maxStderrBytes", "killGraceMs", "shutdownTimeoutMs"] as const
+const BOUND_FIELDS = ["maxMessageBytes", "maxStderrBytes", "killGraceMs", "shutdownTimeoutMs", "startupTimeoutMs"] as const
 
 function validatePositiveBound(config: LspServerConfig, field: (typeof BOUND_FIELDS)[number]): void {
   const value = config[field]
