@@ -18,6 +18,12 @@ export interface Tool<Args = unknown, Output = unknown> {
 
 export interface ToolExec {
   abortSignal?: AbortSignal
+  // M19 (Ruling 24): caller/session identity for tool executions that carry
+  // one — the agent loop seeds it from the executing session id. Additive: a
+  // prepared call without it behaves exactly as before. The agent-team
+  // scheduler resolves team tool callers from this (a teammate's child-session
+  // id → that member; the parent session id → the Lead).
+  sessionId?: string
 }
 
 export type ToolDecision =
@@ -98,7 +104,7 @@ export interface ToolRegistry {
   get(name: string): Tool | undefined
   unregister(name: string): void
   schemas(): ToolSchema[]
-  prepare(call: ToolCall, signal?: AbortSignal): Promise<PreparedCall>
+  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string }): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>
@@ -186,7 +192,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       }))
   }
 
-  async function prepare(call: ToolCall, signal?: AbortSignal): Promise<PreparedCall> {
+  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string }): Promise<PreparedCall> {
     const tool = tools.get(call.name)
     if (!tool) throw new Error(`unknown tool: ${call.name}`)
 
@@ -243,8 +249,12 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     // M13: seed the per-dispatch exec with the caller signal so in-flight tool
     // bodies observe a step abort (guard-timeout links its derived controller
     // to this upstream signal; untimed tools honor exec.abortSignal directly).
+    // M19 (Ruling 24): optionally seed the executing session identity so the
+    // dispatch path can attribute the caller (agent-team resolves team-tool
+    // callers from it). Additive: no identity → the exec is exactly as before.
     const exec: ToolExec = {}
     if (signal) exec.abortSignal = signal
+    if (identity?.sessionId !== undefined) exec.sessionId = identity.sessionId
 
     return { call, tool, exec }
   }

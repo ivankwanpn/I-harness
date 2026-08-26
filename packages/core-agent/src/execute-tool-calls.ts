@@ -14,6 +14,11 @@ export interface BatchCall {
 export interface ExecuteToolCallsOptions {
   maxParallel: number
   signal?: AbortSignal
+  // M19 (Ruling 24): the identity of the session whose agent is executing the
+  // batch — seeded onto each prepared ToolExec so tool bodies can attribute
+  // the caller (the agent-team scheduler resolves team-tool callers from it).
+  // Additive: absent → ToolExec.sessionId stays undefined (pre-M19 behavior).
+  sessionId?: string
 }
 
 // M13 bounded rolling-pool scheduler. Model-order guarantees:
@@ -77,7 +82,7 @@ export async function executeToolCalls(
     // not be counted as started — the boundary stays truthful (on abort the
     // [startedUpTo, batch.length) range decides which calls get synthesized
     // TOOL_ABORTED_BEFORE_DISPATCH results).
-    const prepared = await tools.prepare({ name: call.name, args: call.args }, opts.signal)
+    const prepared = await tools.prepare({ name: call.name, args: call.args }, opts.signal, { sessionId: opts.sessionId })
     startedUpTo = index + 1
     const promise = tools
       .dispatch(prepared)

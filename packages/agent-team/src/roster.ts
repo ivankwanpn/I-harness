@@ -12,8 +12,11 @@ export interface RosterDeps {
   // roster's readers and the transact observe the same object.
   state: TeamFoldState
   transact: TeamTransaction
-  // subagent integration (injected; internally spawns the durable child)
-  spawnChild: (name: string, prompt: string, context: "fresh" | "fork") => Promise<{ path: string; jobId: string; sessionId?: string }>
+  // subagent integration (injected; internally spawns the durable child).
+  // The 4th arg threads op-level spawn options to the bridge; the TEAM
+  // scheduler derives the subagent forkTurns from context + opts.forkTurns
+  // (M19 Ruling 27: fork_turns was previously dropped at this boundary).
+  spawnChild: (name: string, prompt: string, context: "fresh" | "fork", opts?: { forkTurns?: "none" | "all" | number }) => Promise<{ path: string; jobId: string; sessionId?: string }>
   childSessionHoldsPrompt: (sessionId: string, signal?: AbortSignal) => Promise<boolean>
   interruptChild: (path: string) => Promise<string>
   closeChild: (path: string) => Promise<void>
@@ -88,7 +91,12 @@ export function createRoster(deps: RosterDeps) {
     // the initial prompt within startupTimeoutMs.
     let spawned: { path: string; jobId: string; sessionId?: string } | undefined
     try {
-      spawned = await deps.spawnChild(name, opts.prompt, provisioning.context)
+      // M19 Ruling 27: thread fork_turns to the spawn bridge (it was dropped at
+      // this boundary before). The tool forwards a plain string; normalize it
+      // into the subagent SpawnOptions shape ("none"|"all"|N) so the bridge
+      // receives forkTurns: N for fork_turns: "3".
+      const forkTurns = normalizeForkTurns(opts.forkTurns)
+      spawned = await deps.spawnChild(name, opts.prompt, provisioning.context, forkTurns !== undefined ? { forkTurns } : undefined)
       if (!spawned.sessionId) throw new Error(`child session id missing for "${name}" (durable child sessions required)`)
       const timeout = new Promise<boolean>((resolve) => {
         const timer = setTimeout(() => resolve(false), startupTimeoutMs)
@@ -167,10 +175,28 @@ export function createRoster(deps: RosterDeps) {
 
   function resolveCaller(id: string, name: string): TeamCaller {
     if (id === deps.teamId) return { id, name: "lead", role: "lead" }
-    const m = [...deps.state.members.values()].find((m) => m.id === id)
-    if (m) return { id, name: m.name, role: "teammate" }
+    // M19 Ruling 24: the caller id may be the member's durable child SESSION id
+    // (ToolExec.sessionId) rather than the roster-generated member id — map
+    // both. Return the canonical ROSTER member id so the lead log records the
+    // member identity (mailbox membership checks key on caller.name and the
+    // self-message guard compares caller.id to the target's member id).
+    const m = [...deps.state.members.values()].find((m) => m.id === id || m.sessionId === id)
+    if (m) return { id: m.id, name: m.name, role: "teammate" }
     return { id, name, role: "teammate" }
   }
 
   return { listMembers, spawnTeammate, interrupt, resolveCaller, reconcileProvisioning }
+}
+
+// M19 Ruling 27: normalize the tool-level fork_turns value ("none" | "all" |
+// "3" | 3 | undefined) into the subagent SpawnOptions shape. Undefined →
+// undefined (the bridge applies its context default); anything else passes
+// through as "none" | "all" | a positive integer, else undefined (fail-safe:
+// an unparseable value falls back to the context default rather than spawning
+// with garbage).
+function normalizeForkTurns(value: "none" | "all" | number | string | undefined): "none" | "all" | number | undefined {
+  if (value === undefined) return undefined
+  if (value === "none" || value === "all") return value
+  const n = typeof value === "number" ? value : Number(value)
+  return Number.isInteger(n) && n > 0 ? n : undefined
 }

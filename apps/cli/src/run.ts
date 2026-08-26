@@ -256,15 +256,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
     // M19: mount the agent-team domain when the host asks for a team run. The
     // mount sits AFTER registerSubagent (it needs the live registries) and
-    // AFTER the resume restore loop above (on resume the agents registry is
-    // freshly restored from the durable snapshot here — the loop rebuilds the
-    // child mirror sessions first, so team recovery probes see live mirrors).
-    // The team's parentScope is the SAME ctx the subagent machinery uses, and
-    // the shared exec service / provider registry bind the real spawn bridge.
-    // Note (Minor 4 deferred): on resume the mirror sessions are rebuilt but
-    // the Agent registry entries live only from this mount on — a pre-resume
-    // wakeup for an already-running teammate would miss its agent; the e2e
-    // runs fresh, so this is out of scope for M19 (see task 11 report).
+    // AFTER the resume restore loop above — the loop rebuilds the child mirror
+    // sessions from durable logs first, so team recovery probes see live
+    // mirrors. The team's parentScope is the SAME ctx the subagent machinery
+    // uses, and the shared exec service / provider registry bind the real
+    // spawn bridge.
+    // Note (Minor 4 deferred): on resume only the table/jobs/roles registries
+    // are rebuilt from the durable snapshot; the subagent Agent registry is
+    // fresh-empty at this point (entries are registered per spawn/turn), so a
+    // pre-resume wakeup for an already-running teammate finds no resident
+    // agent and drops the drive. The e2e runs fresh, so out of scope for M19
+    // (see task 11 report).
     if (opts.team !== undefined) {
       teamHandles.push(await mountAgentTeams(ctx, tools, {
         parentSession: session,
@@ -296,6 +298,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     const agent = createAgent(ctx, {
       session, tools, model,
       systemPrompt,
+      // M19 (Ruling 24): attribute the lead's tool calls to the Lead — the
+      // agent-team scheduler's resolveCaller maps the parent session id to
+      // the team's canonical lead id.
+      ...(activeId ? { sessionId: activeId } : {}),
       ...(opts.compact ? { compact: opts.compact } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
     })

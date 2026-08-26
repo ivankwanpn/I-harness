@@ -5,23 +5,23 @@
 // via coordinator.load, interrupt/close via the agent table, and message
 // delivery through the child's durable session mirror.
 import { randomUUID } from "node:crypto"
-import { append, type Session, type SessionEvent } from "@i-harness/core-session"
+import { append, type Session } from "@i-harness/core-session"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { ToolRegistry } from "@i-harness/core-tools"
+import type { ToolRegistry, ToolExec } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { ExecService } from "@i-harness/exec"
 import type { ProviderRegistry } from "@i-harness/provider"
 import {
+  driveFollowups,
   spawnChild,
   type AgentTable,
-  type ChildAgentEntry,
   type JobRegistry,
   type RoleRegistry,
   type SubagentRole,
 } from "@i-harness/subagent"
-import { validateTeamConfig, type TeamConfig, type TeamEvent } from "./types.ts"
+import { validateTeamConfig, type TeamConfig, type TeamEvent, type TeamCaller } from "./types.ts"
 import { foldTeam } from "./fold.ts"
 import { createTeamTransact, type TeamLead } from "./transact.ts"
 import { createRoster } from "./roster.ts"
@@ -58,7 +58,7 @@ export interface TeamDeps {
   // Test-only override seams (Ruling 20): the scheduler uses the REAL subagent
   // binding when an override is absent. They keep the lifecycle test real
   // without spawning processes.
-  spawnChild?: (name: string, prompt: string, context: "fresh" | "fork") => Promise<{ path: string; jobId: string; sessionId?: string }>
+  spawnChild?: (name: string, prompt: string, context: "fresh" | "fork", opts?: { forkTurns?: "none" | "all" | number }) => Promise<{ path: string; jobId: string; sessionId?: string }>
   childSessionHoldsPrompt?: (sessionId: string, signal?: AbortSignal) => Promise<boolean>
   childSessionIsDurable?: (sessionId: string, signal?: AbortSignal) => Promise<boolean>
   interruptChild?: (path: string) => Promise<string>
@@ -145,11 +145,14 @@ export async function mountAgentTeams(
       // mirror hook (run.ts createSession(onAppend)) persists it through the
       // write-behind, so the team log is durable WITH the parent session log.
       append: (e) => append(deps.parentSession, e),
-      flush: async () => {
-        // The durability point for the parent log is the coordinator's
-        // flush-on-turn/end; the mirror hook persists each append immediately,
-        // so there is no extra coordinator handle to flush at this layer.
-      },
+      // M19 Ruling 25: the coordinator's flush on the parent session IS the
+      // durability point — mirror the child-message deliver branch (below) so
+      // onCommit fires only after a REAL flush. Without childSessions (no
+      // coordinator) there is nothing to flush; the mirror hook is the write
+      // through the write-behind and the flush is a no-op there.
+      flush: () => sub.childSessions
+        ? sub.childSessions.coordinator.flush(sub.childSessions.parentSessionId)
+        : Promise.resolve(),
       // onCommit is invoked by the transact AFTER lead.flush() resolves, i.e.
       // at the durable-commit point — mirror dsh's journal onCommit rule:
       // waiters may only be woken for committed state (spec §4.4/§4.7).
@@ -161,10 +164,15 @@ export async function mountAgentTeams(
 
     // spawnChild: map the roster call onto the subagent's spawnChild with the
     // lead lineage (path lead/<name>, durable child-<uuid> session).
-    // forkTurns derives from the roster's context selector: "fresh" → none,
-    // "fork" → all.
-    const realSpawnChild = async (name: string, prompt: string, context: "fresh" | "fork"): Promise<{ path: string; jobId: string; sessionId?: string }> => {
+    // M19 Ruling 27: forkTurns derives from the roster's context selector PLUS
+    // the op-level fork_turns opt — "fresh" → none (regardless), "fork" →
+    // opts.forkTurns ?? "all" (number or "none" pass through).
+    const realSpawnChild = async (name: string, prompt: string, context: "fresh" | "fork", opts?: { forkTurns?: "none" | "all" | number }): Promise<{ path: string; jobId: string; sessionId?: string }> => {
       const role = sub.roles.get(TEAMMATE_ROLE_NAME) ?? teammateRole(teamRoleTools)
+      let forkTurns: "none" | "all" | number
+      if (context === "fresh") forkTurns = "none"
+      else if (opts?.forkTurns === undefined || opts.forkTurns === "all") forkTurns = "all"
+      else forkTurns = opts.forkTurns
       return spawnChild({
         taskName: name,
         message: prompt,
@@ -178,8 +186,18 @@ export async function mountAgentTeams(
         jobs: sub.jobs,
         table: sub.table,
         agents: sub.agents,
-        forkTurns: context === "fresh" ? "none" : "all",
+        forkTurns,
         childSessions: sub.childSessions,
+      }).then((out) => {
+        // M19 Ruling 26 (status edge): the child's INITIAL turn completing after
+        // spawn flips its status running→waiting (see child.ts) WITHOUT
+        // appending any team event — the roster's spawn call had already
+        // returned. A wait_agent waiter registered during the turn would never
+        // be woken by the event stream, so wake it on the followup chain's
+        // settle (the status handler is registered before the chain resolves).
+        const spawnedEntry = sub.table.get(out.path)
+        if (spawnedEntry?.followupChain) void spawnedEntry.followupChain.then(() => activity.notify()).catch(() => {})
+        return out
       })
     }
     const spawnChildFn = deps.spawnChild ?? realSpawnChild
@@ -208,6 +226,9 @@ export async function mountAgentTeams(
       if (!entry) return "inactive"
       const previous = entry.status
       entry.controller.abort()
+      // M19 Ruling 26 (status edge): the aborted turn rejects and flips the
+      // child's status → waiting without a team event; wake wait_agent waiters.
+      if (entry.followupChain) void entry.followupChain.then(() => activity.notify()).catch(() => {})
       return previous
     }
     const realCloseChild = async (path: string): Promise<void> => {
@@ -291,10 +312,15 @@ export async function mountAgentTeams(
         }
       }
       if (delivery === "wakeup" && entry.sessionId) {
-        // Wake: drive the serialized followup chain (same as subagent's
-        // followup_task) — only AFTER the append above, so the message is
-        // durably in the target's session before the child sees it.
-        void driveFollowups(sub, entry, entry.sessionId)
+        // Wake: drive the serialized followup chain (shared with subagent via
+        // the exported driveFollowups, M19 Ruling 28 — NOT a duplicate vendor)
+        // — only AFTER the append above, so the message is durably in the
+        // target's session before the child sees it.
+        const chain = driveFollowups(sub, entry, entry.sessionId)
+        // M19 Ruling 26: the followup drain flips the child's status
+        // (waiting→running→waiting); a wait_agent waiter must wake on that
+        // edge even though no team event is appended.
+        void chain.then(() => activity.notify()).catch(() => {})
       }
       return true
     }
@@ -325,13 +351,24 @@ export async function mountAgentTeams(
     })
     const taskBoard = createTaskBoard({ teamId, state, transact: tx, maxTasks: cfg.maxTasks })
 
-    // Exact calling identity: the lead by default. The current tool runtime
-    // carries no caller/session identity on ToolExec (only abortSignal), so
-    // every team-tool dispatch resolves to the Lead — the brief's skeleton does
-    // the same. The domain layer's authority checks (Lead-only spawn/interrupt,
-    // mailbox membership) remain the enforcement point.
+    // Exact calling identity (Ruling 24): the ToolExec sessionId is now wired
+    // through child.ts (seedToolExecs) for every agent — the lead runs with the
+    // parent (active) session id, a teammate with its durable child session id.
+    // Resolve THAT to the exact caller: the parent session id → Lead; a known
+    // member session id → that member (roster id + name); anything else has no
+    // team-scoped identity and falls back to the Lead (an unknown domain must
+    // never impersonate a phantom teammate). The old behavior — every call
+    // resolving to the Lead — misattributed teammate tool calls to the lead and
+    // made "lead" look like a teammate's self-target (false TEAM_SELF_MESSAGE).
     const toolDeps = {
-      resolveCaller: () => roster.resolveCaller(teamId, "lead"),
+      resolveCaller: (exec: ToolExec): TeamCaller => {
+        const sid = exec.sessionId
+        if (sid === undefined) return roster.resolveCaller(teamId, "lead")
+        if (sub.childSessions && sid === sub.childSessions.parentSessionId) return roster.resolveCaller(teamId, "lead")
+        const member = [...state.members.values()].find((m) => m.id === sid || m.sessionId === sid)
+        if (member) return roster.resolveCaller(member.id, member.name)
+        return roster.resolveCaller(teamId, "lead")
+      },
       roster,
       mailbox,
       taskBoard,
@@ -447,38 +484,7 @@ async function probeChildDurable(
 }
 
 // Drain all unconsumed durable inbox events as serialized turns on the child —
-// the team wakeup equivalent of subagent tools.ts driveFollowups. Inlined here
-// so the scheduler owns the team's followup policy without widening the
-// subagent API surface.
-function driveFollowups(deps: TeamSubagentDeps, entry: ChildAgentEntry, sessionId: string): Promise<void> {
-  const prev = entry.followupChain ?? Promise.resolve()
-  const next = prev.then(async () => {
-    const agent = deps.agents.get(sessionId)
-    if (!agent) return
-    const pending = entry.session.events.filter(
-      (e): e is SessionEvent & { type: "subagent/inbox" } =>
-        e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
-    )
-    for (const ev of pending) {
-      if (!deps.table.get(entry.path)) return // closed mid-drain → stop
-      entry.lastInboxSeq = ev.seq ?? 0
-      entry.status = "running"
-      entry.controller = new AbortController() // fresh signal per turn (interrupt targets this)
-      if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
-      try {
-        const result = await agent.followup(ev.message, entry.controller.signal)
-        entry.error = undefined
-        entry.status = "waiting"
-        entry.finalText = result.finalText
-        if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: result.finalText })
-      } catch (err) {
-        const aborted = entry.controller.signal.aborted
-        entry.status = "waiting"
-        entry.error = aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
-        if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
-      }
-    }
-  })
-  entry.followupChain = next.catch(() => {})
-  return next
-}
+// the team wakeup policy is the SAME serialized drain as subagent tools.ts,
+// shared via the exported driveFollowups (M19 Ruling 28 — NOT a duplicate
+// vendor). The scheduler's TeamSubagentDeps is structurally a FollowupDeps
+// (agents/table/jobs), so the shared drain operates on the live child directly.
