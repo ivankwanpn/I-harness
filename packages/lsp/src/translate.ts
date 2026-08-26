@@ -34,6 +34,9 @@ export function normalizeHover(payload: unknown): LspHover | null {
   if (payload === null || typeof payload !== "object") return null
   const h = payload as Record<string, unknown>
   if (!("contents" in h)) return null
+  // LSP hover contents is never null/undefined; both are malformed → null
+  // (JSON.stringify(null) would produce the string "null", so guard first)
+  if (h.contents === null || h.contents === undefined) return null
   const contents = typeof h.contents === "string" ? h.contents : JSON.stringify(h.contents)
   if (typeof contents !== "string") return null
   const range = h.range !== undefined && isPosition((h.range as { start?: unknown })?.start) && isPosition((h.range as { end?: unknown })?.end)

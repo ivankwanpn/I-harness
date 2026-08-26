@@ -17,12 +17,14 @@ export function formatLocations(result: Extract<LspQueryResult, { kind: "locatio
   if (result.locations.length === 0) return "No results."
   const shown = result.locations.slice(0, maxLocations)
   const omitted = result.locations.length - shown.length
-  const root = opts.workspaceRoot !== undefined ? opts.workspaceRoot.replace(/\\/g, "/") : undefined
+  const root = opts.workspaceRoot !== undefined ? opts.workspaceRoot.replace(/\\/g, "/").replace(/\/+$/, "") : undefined
   // group by file path (insertion order preserved)
   const byFile = new Map<string, string[]>()
   for (const loc of shown) {
     const path = loc.uri.replace(/^file:\/\//, "")
-    const rel = root !== undefined && path.startsWith(root) ? path.slice(root.length + 1) : path
+    // slice the workspace-root prefix only for files under it (boundary-safe:
+    // exact root and sibling dirs like /w2 under root /w are left as-is)
+    const rel = root !== undefined && path.startsWith(root + "/") ? path.slice(root.length + 1) : path
     const line = `${loc.range.start.line + 1}:${loc.range.start.character + 1}-${loc.range.end.line + 1}:${loc.range.end.character + 1}`
     const arr = byFile.get(rel) ?? []
     arr.push(line)

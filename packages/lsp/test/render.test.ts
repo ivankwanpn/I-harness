@@ -37,6 +37,13 @@ describe("render", () => {
     expect(out).toMatch(/^\/w\/a\.ts:1:1-1:2/)
   })
 
+  it("formatLocations slices a workspaceRoot with a trailing slash without truncating", () => {
+    const out = formatLocations({ kind: "locations", locations: [
+      { uri: "file:///w/a.ts", range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } },
+    ] }, { workspaceRoot: "/w/", maxLocations: 100, maxResultChars: 16000 })
+    expect(out).toBe("a.ts:1:4-1:8")
+  })
+
   it("formatDiagnostics renders a 1-based position for a multi-line range", () => {
     const out = formatDiagnostics([
       { range: { start: { line: 1, character: 2 }, end: { line: 3, character: 9 } }, severity: 2, message: "unused var", source: "tsc" },
@@ -87,5 +94,10 @@ describe("translate", () => {
     expect(normalizeHover({ contents: { value: "x" } })).toEqual({ contents: JSON.stringify({ value: "x" }) })
     expect(normalizeHover({ contents: "hello", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }))
       .toEqual({ contents: "hello", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } })
+  })
+
+  it("normalizeHover treats null contents as malformed", () => {
+    expect(normalizeHover({ contents: null })).toBeNull()
+    expect(normalizeHover({ contents: undefined })).toBeNull()
   })
 })
