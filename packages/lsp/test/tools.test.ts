@@ -160,6 +160,29 @@ describe("createLspTools", () => {
     expect(charOnly).toContain("spans-2-4")
   })
 
+  it("lsp_diagnostics character filter: with line+character, the exact cursor range must contain the cursor in BOTH dimensions", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    // Both diagnostics sit on line 0; the cursor on line 1 (0-based 0).
+    const all: LspDiagnostic[] = [
+      // Character range 0-2: contains cursor char 1 (1-based line 1, char 2 → 0-based 1) → kept
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 2 } }, severity: 1, message: "wide-tight" },
+      // Character range 5-8: does NOT contain cursor char 1 → filtered out when character given
+      { range: { start: { line: 0, character: 5 }, end: { line: 0, character: 8 } }, severity: 2, message: "wide-not-at-cursor" },
+    ]
+    const { instance, diagnostics } = makeStub()
+    diagnostics.mockResolvedValue(all)
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const diagTool = tools.find((t) => t.name === "lsp_diagnostics")!
+
+    const withChar = await diagTool.execute({ file_path: "a.ts", line: 1, character: 2 }, {})
+    expect(withChar).toContain("wide-tight")
+    expect(withChar).not.toContain("wide-not-at-cursor")
+
+    const lineOnly = await diagTool.execute({ file_path: "a.ts", line: 1 }, {}) // line-only keeps both
+    expect(lineOnly).toContain("wide-tight")
+    expect(lineOnly).toContain("wide-not-at-cursor")
+  })
+
   it("forwards the abortSignal to instance.query and instance.diagnostics", async () => {
     writeFileSync(join(dir, "a.ts"), "const x = 1\n")
     const { instance, query, diagnostics } = makeStub()

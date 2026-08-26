@@ -87,12 +87,20 @@ export function createLspTools(instance: LspInstance, config: LspToolConfig, wor
         assertServesFile(config, filePath)
         const source = await readFile(filePath, "utf-8")
         const diagnostics = await instance.diagnostics(filePath, source, exec.abortSignal)
-        // Cursor-line filter (1-based line → 0-based cursor): keep diagnostics
-        // whose range overlaps the cursor line; character alone is ignored.
+        // Cursor filter (1-based args → 0-based cursor): line present → keep
+        // diagnostics whose range overlaps the cursor line; when character is
+        // ALSO present → exact cursor-range filter, inclusive containment in
+        // BOTH dimensions (the diagnostic must span the cursor character);
+        // character alone is ignored.
         const cursorLine = args.line !== undefined ? args.line - 1 : undefined
+        const cursorChar = args.line !== undefined && args.character !== undefined ? args.character - 1 : undefined
         const filtered =
           cursorLine !== undefined
-            ? diagnostics.filter((d) => d.range.start.line <= cursorLine && d.range.end.line >= cursorLine)
+            ? diagnostics.filter((d) => {
+                if (d.range.start.line > cursorLine || d.range.end.line < cursorLine) return false
+                if (cursorChar === undefined) return true
+                return d.range.start.character <= cursorChar && d.range.end.character >= cursorChar
+              })
             : diagnostics
         return formatDiagnostics(filtered, { workspaceRoot })
       },
