@@ -53,6 +53,10 @@ export function createActivity(cfg: ActivityConfig) {
       throw new TeamError(TEAM_CODES.INVALID_TIMEOUT, `timeout must be ${cfg.waitMinMs}-${cfg.waitMaxMs} ms`)
     }
     if (closed) return { timedOut: false }
+    // Ruling 16 (binding): a pre-aborted signal's addEventListener never fires
+    // → the wait would run a full timeout. Check BEFORE registering the
+    // listener and return immediately.
+    if (signal?.aborted) return { timedOut: false }
     // Domain-level noProgress shortcut: no other active member → immediate.
     if (hasActivePeer && !hasActivePeer()) {
       return {

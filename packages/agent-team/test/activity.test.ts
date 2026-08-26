@@ -65,6 +65,18 @@ describe("TeamActivity", () => {
     expect(await p).toEqual({ timedOut: false })
   })
 
+  // Ruling 16 (binding): a PRE-aborted signal must resolve immediately
+  // ({ timedOut: false }) — an aborted signal's addEventListener never fires,
+  // so without the pre-check the wait would run a full timeout.
+  it("pre-aborted signal resolves immediately { timedOut: false }", async () => {
+    const act = createActivity(CFG)
+    const ac = new AbortController()
+    ac.abort()
+    const t0 = Date.now()
+    expect(await act.waitForChange(CALLER, 30_000, ac.signal)).toEqual({ timedOut: false })
+    expect(Date.now() - t0).toBeLessThan(1_000)
+  })
+
   it("throws TEAM_INVALID_TIMEOUT below min / above max / non-integer", async () => {
     const act = createActivity(CFG)
     await expect(act.waitForChange(CALLER, 5)).rejects.toThrow(/INVALID_TIMEOUT/)
