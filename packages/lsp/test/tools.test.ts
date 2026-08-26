@@ -1,0 +1,175 @@
+// Tools tests for createLspTools: stub LspInstance (spies for query/diagnostics),
+// REAL temp files for the readFile path (Ruling 24), extension routing (Ruling 23),
+// and the diagnostics line filter (Ruling 22).
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { createLspTools, type LspDiagnostic, type LspInstance, type LspQueryResult, type LspToolConfig } from "../src/index.ts"
+
+function makeConfig(languages: string[] = [".ts"]): LspToolConfig {
+  return { serverName: "ts", command: "ts-lsp", args: [], cwd: ".", languages }
+}
+
+/** Stub instance with call spies for query/diagnostics/dispose (Ruling 27). */
+function makeStub() {
+  const query = vi.fn(async () => ({ kind: "empty" } as LspQueryResult))
+  const diagnostics = vi.fn(async () => [] as LspDiagnostic[])
+  const dispose = vi.fn(async () => {})
+  const instance = { query, diagnostics, dispose } as unknown as LspInstance
+  return { instance, query, diagnostics, dispose }
+}
+
+describe("createLspTools", () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "i-harness-lsp-"))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("creates the lsp + lsp_diagnostics tools (read-only, concurrency-safe)", () => {
+    const { instance } = makeStub()
+    const tools = createLspTools(instance, makeConfig(), dir)
+    expect(tools.map((t) => t.name)).toEqual(["lsp", "lsp_diagnostics"])
+    for (const t of tools) {
+      // Ruling 25: LSP queries are idempotent reads of the workspace; the instance
+      // serializes internally so both tools are marked read-only + concurrency-safe.
+      expect(t.isReadOnly).toBe(true)
+      expect(t.isConcurrencySafe).toBe(true)
+    }
+  })
+
+  it("lsp tool forwards the operation + 1-based position (absolute path) and renders empty as 'No results.'", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const { instance, query } = makeStub()
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    const out = await lsp.execute({ operation: "goToDefinition", file_path: "a.ts", line: 2, character: 4 }, {})
+    expect(query).toHaveBeenCalledWith(
+      { operation: "goToDefinition", filePath: join(dir, "a.ts"), line: 2, character: 4 },
+      "const x = 1\n",
+      undefined,
+    )
+    expect(out).toBe("No results.")
+  })
+
+  it("lsp tool routes locations through formatLocations (workspace-relative, 1-based)", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const locations = [
+      { uri: `file://${dir.replace(/\\/g, "/")}/a.ts`, range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } },
+    ]
+    const { instance, query } = makeStub()
+    query.mockResolvedValue({ kind: "locations", locations })
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    const out = await lsp.execute({ operation: "goToDefinition", file_path: "a.ts", line: 1, character: 4 }, {})
+    expect(out).toBe("a.ts:1:4-1:8")
+  })
+
+  it("lsp tool routes hover through formatHover", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const { instance, query } = makeStub()
+    query.mockResolvedValue({ kind: "hover", hover: { contents: "hello doc" } })
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    const out = await lsp.execute({ operation: "hover", file_path: "a.ts", line: 1, character: 1 }, {})
+    expect(out).toBe("hello doc")
+    expect(query).toHaveBeenCalledWith(
+      { operation: "hover", filePath: join(dir, "a.ts"), line: 1, character: 1 },
+      "const x = 1\n",
+      undefined,
+    )
+  })
+
+  it("lsp tool throws LSP_NO_SERVER_FOR_FILE for an unmounted extension before reading/querying", async () => {
+    writeFileSync(join(dir, "b.js"), "var x = 1\n")
+    const { instance, query } = makeStub()
+    const tools = createLspTools(instance, makeConfig([".ts"]), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    await expect(lsp.execute({ operation: "hover", file_path: "b.js", line: 1, character: 1 }, {})).rejects.toThrow(
+      /LSP_NO_SERVER_FOR_FILE/,
+    )
+    expect(query).not.toHaveBeenCalled()
+  })
+
+  it("language routing strips a leading dot and compares case-insensitively", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const { instance, query } = makeStub()
+    const tools = createLspTools(instance, makeConfig([".TS"]), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    await lsp.execute({ operation: "hover", file_path: "a.ts", line: 1, character: 1 }, {})
+    expect(query).toHaveBeenCalled()
+  })
+
+  it("lsp_diagnostics calls instance.diagnostics with the file path + source and renders severity/source", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const diags: LspDiagnostic[] = [
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, severity: 1, message: "boom", source: "ts" },
+    ]
+    const { instance, diagnostics } = makeStub()
+    diagnostics.mockResolvedValue(diags)
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const diagTool = tools.find((t) => t.name === "lsp_diagnostics")!
+    const out = await diagTool.execute({ file_path: "a.ts" }, {})
+    expect(diagnostics).toHaveBeenCalledWith(join(dir, "a.ts"), "const x = 1\n", undefined)
+    expect(out).toBe("1:1 [Error] ts: boom")
+  })
+
+  it("lsp_diagnostics renders 'No diagnostics.' when the server returns none", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const { instance, diagnostics } = makeStub()
+    diagnostics.mockResolvedValue([])
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const diagTool = tools.find((t) => t.name === "lsp_diagnostics")!
+    const out = await diagTool.execute({ file_path: join(dir, "a.ts") }, {})
+    expect(diagnostics).toHaveBeenCalledWith(join(dir, "a.ts"), "const x = 1\n", undefined)
+    expect(out).toBe("No diagnostics.")
+  })
+
+  it("lsp_diagnostics line filter: only diagnostics overlapping the cursor line; character alone is ignored", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const all: LspDiagnostic[] = [
+      { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, severity: 1, message: "on-line-1" },
+      { range: { start: { line: 4, character: 0 }, end: { line: 4, character: 5 } }, severity: 2, message: "on-line-5" },
+      { range: { start: { line: 1, character: 0 }, end: { line: 3, character: 5 } }, severity: 3, message: "spans-2-4" },
+    ]
+    const { instance, diagnostics } = makeStub()
+    diagnostics.mockResolvedValue(all)
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const diagTool = tools.find((t) => t.name === "lsp_diagnostics")!
+
+    const line1 = await diagTool.execute({ file_path: "a.ts", line: 1 }, {}) // 0-based cursor 0
+    expect(line1).toContain("on-line-1")
+    expect(line1).not.toContain("on-line-5")
+    expect(line1).not.toContain("spans-2-4")
+
+    const line3 = await diagTool.execute({ file_path: "a.ts", line: 3 }, {}) // 0-based cursor 2: overlaps spans-2-4
+    expect(line3).toContain("spans-2-4")
+    expect(line3).not.toContain("on-line-1")
+    expect(line3).not.toContain("on-line-5")
+
+    const noLine = await diagTool.execute({ file_path: "a.ts" }, {}) // all shown
+    expect(noLine).toContain("on-line-1")
+    expect(noLine).toContain("on-line-5")
+    expect(noLine).toContain("spans-2-4")
+
+    const charOnly = await diagTool.execute({ file_path: "a.ts", character: 3 }, {}) // character alone ignored
+    expect(charOnly).toContain("on-line-5")
+    expect(charOnly).toContain("spans-2-4")
+  })
+
+  it("forwards the abortSignal to instance.query and instance.diagnostics", async () => {
+    writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+    const { instance, query, diagnostics } = makeStub()
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    const diagTool = tools.find((t) => t.name === "lsp_diagnostics")!
+    const ac = new AbortController()
+    await lsp.execute({ operation: "hover", file_path: "a.ts", line: 1, character: 1 }, { abortSignal: ac.signal })
+    expect(query).toHaveBeenCalledWith(expect.anything(), expect.anything(), ac.signal)
+    await diagTool.execute({ file_path: "a.ts" }, { abortSignal: ac.signal })
+    expect(diagnostics).toHaveBeenCalledWith(expect.anything(), expect.anything(), ac.signal)
+  })
+})
