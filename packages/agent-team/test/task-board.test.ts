@@ -109,6 +109,42 @@ describe("TaskBoard", () => {
     expect(state.tasks.get(t.id)?.status).toBe("completed")
   })
 
+  it("claim requires pending: a completed unowned task cannot be claimed", async () => {
+    const { board, state } = makeBoard()
+    const t = await board.createTask(LEAD, { subject: "s", description: "d" })
+    // Lead completes an unowned pending task (authorized); it stays unowned.
+    const done = await board.updateTask(LEAD, { taskId: t.id, expectedRevision: 1, action: "complete" })
+    expect(done.status).toBe("completed")
+    expect(done.ownerId).toBeUndefined()
+    // claim on a completed task would bypass the reopen path — rejected.
+    await expect(board.updateTask(HELPER, { taskId: t.id, expectedRevision: 2, action: "claim" })).rejects.toThrow(/invalid_transition|claim/i)
+    expect(state.tasks.get(t.id)?.status).toBe("completed")
+    expect(state.tasks.get(t.id)?.ownerId).toBeUndefined()
+  })
+
+  it("create rejects empty or whitespace-only subject/description", async () => {
+    const { board, state } = makeBoard()
+    await expect(board.createTask(LEAD, { subject: "", description: "d" })).rejects.toThrow(/invalid_argument/i)
+    await expect(board.createTask(LEAD, { subject: "  ", description: "d" })).rejects.toThrow(/invalid_argument/i)
+    await expect(board.createTask(LEAD, { subject: "s", description: "" })).rejects.toThrow(/invalid_argument/i)
+    expect(state.tasks.size).toBe(0)
+  })
+
+  it("edit rejects empty subject/description but keeps existing values when omitted", async () => {
+    const { board, state } = makeBoard()
+    const t = await board.createTask(LEAD, { subject: "s", description: "d" })
+    await expect(board.updateTask(LEAD, { taskId: t.id, expectedRevision: 1, action: "edit", description: "" })).rejects.toThrow(/invalid_argument/i)
+    await expect(board.updateTask(LEAD, { taskId: t.id, expectedRevision: 1, action: "edit", subject: " " })).rejects.toThrow(/invalid_argument/i)
+    // rejection commits nothing; task unchanged at revision 1
+    expect(state.tasks.get(t.id)?.subject).toBe("s")
+    expect(state.tasks.get(t.id)?.revision).toBe(1)
+    // omitted fields keep existing values; trimmed values are persisted
+    const edited = await board.updateTask(LEAD, { taskId: t.id, expectedRevision: 1, action: "edit", subject: " s2 ", description: " d2 " })
+    expect(edited.subject).toBe("s2")
+    expect(edited.description).toBe("d2")
+    expect(state.tasks.get(t.id)?.subject).toBe("s2")
+  })
+
   it("tombstone: deleted task hidden from listTasks but returned by getTask", async () => {
     const { board } = makeBoard()
     const t = await board.createTask(LEAD, { subject: "s", description: "d" })
