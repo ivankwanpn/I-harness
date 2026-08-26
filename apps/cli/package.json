@@ -42,6 +42,7 @@
     "@i-harness/session-query": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
     "@i-harness/subagent": "workspace:*",
+    "@i-harness/agent-team": "workspace:*",
     "@vscode/ripgrep": "^1.18.0"
   }
 }

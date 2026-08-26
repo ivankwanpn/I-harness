@@ -1493,3 +1493,74 @@ describe("M18 CLI lsp integration", () => {
   }, 30_000)
 })
 
+describe("M19 CLI team integration", () => {
+  // Real end-to-end: runHeadless mounts the agent-team domain (mountAgentTeams
+  // from Task 10) with a coordinator so teammates get durable child-<uuid>
+  // sessions. The mock model (SHARED with the child) calls spawn_teammate; the
+  // roster → realSpawnChild bridge → subagent spawnChild creates a REAL child
+  // agent that runs its own (mock-model) turn — the happy-path real spawn that
+  // Task 10's lifecycle test only stubbed. The child shares the model client,
+  // so its initial turn consumes the NEXT script step (M3-C race — same as
+  // M8's durable-child test), then the lead produces its final message.
+  // RED phase: HeadlessOptions.team is unknown → spawn_teammate never mounts
+  // → the call fails with "unknown tool" → exitCode 1.
+  it("runHeadless mounts team tools and the agent can use spawn_teammate", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m19-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { id } = await coordinator.create()
+      const result = await runHeadless("use the team", {
+        workspace: dir,
+        approveAll: true,
+        team: {},
+        sessionId: id,
+        coordinator,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
+          // step consumed by the spawned child's own (mock-model) turn
+          { role: "assistant", text: "child done" },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.finalText).toBe("done")
+      const spawn = result.session!.events.find((e) => e.type === "tool/result" && e.name === "spawn_teammate")
+      expect(spawn).toBeDefined()
+      expect(JSON.stringify((spawn as { output: unknown }).output)).toContain("helper")
+      // The spawned teammate is a REAL durable child session (lineage header).
+      const childIds = (await coordinator.list()).filter((sid) => sid.startsWith("child-"))
+      expect(childIds.length).toBe(1)
+      // Drain the trailing fire-and-forget subagent-state save (triggered by
+      // the team unmount's table.remove right after close()) before rmSync —
+      // otherwise the temp dir vanishes under the pending putDocument rename
+      // and the background-failure reporter spams stderr ENOENT noise.
+      await coordinator.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  // Unmount observable: the agent-team reservation (one team per run lives in
+  // a module-level set) dies only in runHeadless's finally. A second run with
+  // team mounted must mount cleanly; if the first run leaked the mount, run 2
+  // throws "only one team per run" → exitCode 1. (RED phase: no wiring → the
+  // team never mounts and both runs trivially succeed — this test only
+  // discriminates once wiring exists.)
+  it("unmounts the team after the run (team reservation released)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m19-"))
+    try {
+      const first = await runHeadless("one", {
+        workspace: dir, approveAll: true, team: {}, mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(first.exitCode).toBe(0)
+      const second = await runHeadless("two", {
+        workspace: dir, approveAll: true, team: {}, mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(second.exitCode).toBe(0)
+      expect(second.error).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+})
+

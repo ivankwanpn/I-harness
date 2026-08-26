@@ -20,6 +20,7 @@ import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-q
 import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { mountMcpClient, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
 import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
+import { mountAgentTeams, type TeamDeps, type TeamMountHandle, type TeamConfig } from "@i-harness/agent-team"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { createWindowsAclSandbox } from "@i-harness/sandbox-windows-acl"
@@ -44,6 +45,7 @@ export interface HeadlessOptions {
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
+  team?: Partial<TeamConfig> // M19: mount the agent-team domain (10 team tools replace the colliding subagent surface)
 }
 
 export interface HeadlessResult {
@@ -197,6 +199,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
   const mcpHandles: McpMountHandle[] = []
   const lspHandles: LspMountHandle[] = []
+  const teamHandles: TeamMountHandle[] = []
 
   try {
     // M17: mount MCP servers into the registry before the agent can see them
@@ -251,6 +254,35 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         }
       }
     }
+    // M19: mount the agent-team domain when the host asks for a team run. The
+    // mount sits AFTER registerSubagent (it needs the live registries) and
+    // AFTER the resume restore loop above (on resume the agents registry is
+    // freshly restored from the durable snapshot here — the loop rebuilds the
+    // child mirror sessions first, so team recovery probes see live mirrors).
+    // The team's parentScope is the SAME ctx the subagent machinery uses, and
+    // the shared exec service / provider registry bind the real spawn bridge.
+    // Note (Minor 4 deferred): on resume the mirror sessions are rebuilt but
+    // the Agent registry entries live only from this mount on — a pre-resume
+    // wakeup for an already-running teammate would miss its agent; the e2e
+    // runs fresh, so this is out of scope for M19 (see task 11 report).
+    if (opts.team !== undefined) {
+      teamHandles.push(await mountAgentTeams(ctx, tools, {
+        parentSession: session,
+        parentRegistry: tools,
+        subagents: {
+          table: subagent.table,
+          jobs: subagent.jobs,
+          roles: subagent.roles,
+          agents: subagent.agents,
+          exec: execService,
+          providers: createProviderRegistry(),
+          childSessions: opts.coordinator && activeId
+            ? { coordinator: opts.coordinator, parentSessionId: activeId }
+            : undefined,
+        },
+        parentModel: model,
+      } satisfies TeamDeps, opts.team))
+    }
     // M16: when a sandbox mode is configured, the rendered policy context is
     // injected into the system prompt so the agent knows the standing file
     // policy. Unset → no policy, prompt unchanged.
@@ -279,12 +311,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {
-    // M17+M18: unmount MCP AND LSP servers after the run — the handles unify
-    // into ONE array and unmount in reverse mount order (LSP last-mounted
-    // unmounts first), best-effort like the sandbox teardown: an unmount
-    // failure must not mask the run result. The arrays are NOT reversed in
-    // place (a shared-array reverse would be remount-unsafe); the copy is.
-    const mounts = [...mcpHandles, ...lspHandles]
+    // M17+M18+M19: unmount MCP, LSP AND team servers after the run — the
+    // handles unify into ONE array and unmount in reverse mount order (the
+    // last-mounted handle unmounts first), best-effort like the sandbox
+    // teardown: an unmount failure must not mask the run result. The arrays
+    // are NOT reversed in place (a shared-array reverse would be
+    // remount-unsafe); the copy is.
+    const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]
     for (const handle of mounts.reverse()) {
       try {
         await handle.unmount()
