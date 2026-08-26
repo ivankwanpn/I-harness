@@ -1342,3 +1342,154 @@ describe("M17 CLI mcp integration", () => {
   }, 30_000)
 })
 
+// M18: the fake LSP server also runs as a REAL subprocess (like M17's fake
+// MCP), speaking the LSP Content-Length framing over stdio: parse
+// "Content-Length: N\r\n\r\n<json>" frames from stdin, answer requests with
+// the same framing on stdout, and exit after the `exit` notification. The
+// script is fully self-contained (no imports — Buffer/TextDecoder/process are
+// globals) and prints NOTHING else to stdout, so the client's frame parser
+// never sees stray bytes (the lsp package's MessageDecoder would fail-closed
+// and tear the connection down on undecodable data).
+const FAKE_LSP_SERVER = `
+const decoder = new TextDecoder("utf-8")
+let buffer = Buffer.alloc(0)
+
+function send(msg) {
+  const body = Buffer.from(JSON.stringify(msg), "utf-8")
+  const header = Buffer.from("Content-Length: " + body.length + "\\r\\n\\r\\n", "ascii")
+  process.stdout.write(Buffer.concat([header, body]))
+}
+
+function handle(msg) {
+  if (typeof msg.method !== "string") return
+  if (msg.id === undefined || msg.id === null) {
+    // notification: didOpen/didClose/initialized need no response; exit ends us
+    if (msg.method === "exit") setImmediate(() => process.exit(0))
+    return
+  }
+  const id = msg.id
+  const params = msg.params ?? {}
+  if (msg.method === "initialize") {
+    send({ jsonrpc: "2.0", id, result: {
+      capabilities: {
+        definitionProvider: true,
+        referencesProvider: true,
+        hoverProvider: true,
+        diagnosticProvider: { interFileDependencies: false, workspaceDiagnostics: false },
+      },
+    } })
+    return
+  }
+  if (msg.method === "shutdown") {
+    send({ jsonrpc: "2.0", id, result: null })
+    return
+  }
+  if (msg.method === "textDocument/definition") {
+    // ECHO the requested uri back so the rendered (workspace-relative) path
+    // matches the temp file the client actually queried.
+    const uri = params?.textDocument?.uri ?? "file:///unknown"
+    send({ jsonrpc: "2.0", id, result: {
+      locations: [{ uri, range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } }],
+    } })
+    return
+  }
+  if (msg.method === "textDocument/hover") {
+    send({ jsonrpc: "2.0", id, result: { contents: { kind: "markdown", value: "--- hover: TYPE ---" } } })
+    return
+  }
+  if (msg.method === "textDocument/references") {
+    send({ jsonrpc: "2.0", id, result: { locations: [] } })
+    return
+  }
+  if (msg.method === "textDocument/diagnostic") {
+    send({ jsonrpc: "2.0", id, result: {
+      items: [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } }, severity: 1, message: "syntax error", source: "fake" }],
+    } })
+    return
+  }
+  send({ jsonrpc: "2.0", id, error: { code: -32601, message: "method not found: " + msg.method } })
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk])
+  for (;;) {
+    const headerEnd = buffer.indexOf("\\r\\n\\r\\n")
+    if (headerEnd === -1) break
+    const headerText = buffer.subarray(0, headerEnd).toString("ascii")
+    const m = /^Content-Length:\\s*(\\d+)$/im.exec(headerText)
+    if (!m) process.exit(1)
+    const length = Number(m[1])
+    if (buffer.length < headerEnd + 4 + length) break
+    const body = buffer.subarray(headerEnd + 4, headerEnd + 4 + length)
+    buffer = buffer.subarray(headerEnd + 4 + length)
+    let msg
+    try { msg = JSON.parse(decoder.decode(body)) } catch { process.exit(1) }
+    handle(msg)
+  }
+})
+`
+
+function writeFakeLspServer(): string {
+  const dir = mkdtempSync(join(tmpdir(), "i-harness-m18-server-"))
+  const script = join(dir, "fake-lsp-server.mjs")
+  writeFileSync(script, FAKE_LSP_SERVER)
+  return script
+}
+
+describe("M18 CLI lsp integration", () => {
+  // Real end-to-end: runHeadless mounts the LSP server (real stdio subprocess
+  // speaking Content-Length framing), the mock model calls the registered lsp
+  // tool, and the definition location must land in the session's tool/result
+  // event — mount → register → dispatch → query, all through the real
+  // protocol. The fake server echoes the requested uri back, so the rendered,
+  // workspace-relative path matches the temp file (a.ts). RED phase:
+  // HeadlessOptions.lsp is unknown → the lsp tool never mounts → the mock call
+  // fails with "unknown tool" → exitCode 1.
+  it("runHeadless mounts lsp servers and the agent can use the lsp tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m18-"))
+    try {
+      writeFileSync(join(dir, "a.ts"), "const x = 1\n")
+      const result = await runHeadless("use the lsp tool", {
+        workspace: dir,
+        approveAll: true, // keep approveAll like M17: the agent calls through dispatch
+        lsp: [{ serverName: "fake", command: process.execPath, args: [writeFakeLspServer()], cwd: dir, languages: [".ts"] }],
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "lsp", args: { operation: "goToDefinition", file_path: "a.ts", line: 1, character: 4 } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.finalText).toBe("done")
+      const lsp = result.session!.events.find((e) => e.type === "tool/result" && e.name === "lsp")
+      expect(lsp).toBeDefined()
+      // range start 0:3 → 1:4; end 0:7 → 1:8 (1-based render), path relative to workspace
+      expect(JSON.stringify((lsp as { output: unknown }).output)).toContain("a.ts:1:4-1:8")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  // Unmount observable: the lsp module-level serverName reservation dies only
+  // in runHeadless's finally. A second run with the SAME serverName must mount
+  // cleanly; if the first run leaked the mount, run 2 throws "already
+  // reserved" → exitCode 1. (RED phase: mounts are ignored, so both runs
+  // trivially succeed — this test only discriminates once wiring exists.)
+  it("unmounts the lsp server after the run (serverName reservation released)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m18-"))
+    try {
+      const cfg = { serverName: "fake", command: process.execPath, args: [writeFakeLspServer()], cwd: dir, languages: [".ts"] as string[] }
+      const first = await runHeadless("one", {
+        workspace: dir, approveAll: true, lsp: [cfg], mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(first.exitCode).toBe(0)
+      const second = await runHeadless("two", {
+        workspace: dir, approveAll: true, lsp: [cfg], mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(second.exitCode).toBe(0)
+      expect(second.error).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+})
+
