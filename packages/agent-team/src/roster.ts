@@ -22,6 +22,10 @@ export interface RosterDeps {
   // live child status accessor (subagent table entry status by member id);
   // used to map active members: running->running, waiting->idle, else->inactive.
   memberStatus?: (id: string) => string
+  // recovery probe: does the child session durably exist with the initial
+  // prompt? Any failure (unknown session, lost log, truncated prompt) returns
+  // false. Used by reconcileProvisioning (spec §4.1 step 6 / §8.3).
+  childSessionIsDurable?: (sessionId: string, signal?: AbortSignal) => Promise<boolean>
 }
 
 // Ruling 10(c): every fn passed to deps.transact is PURE-READ — it inspects the
@@ -118,6 +122,38 @@ export function createRoster(deps: RosterDeps) {
     return { id: active.id, name: active.name, role: "teammate", status: liveStatus(active.id), description: active.description, context: active.context, diagnostics: [] }
   }
 
+  // Recovery path (spec §4.1 step 6 / §8.3): a crash between the provisioning
+  // append and the active/failed append leaves a member stuck in
+  // "provisioning" forever (also counting against maxMembers). On mount/restore
+  // the caller invokes this once: probes every provisioning member's child
+  // session for durability — durable → provisioning→active, else →
+  // provisioning→failed. All transitions go through the same pure-read transact
+  // fns as spawnTeammate (the PROVISIONING_CONFLICT guards also make a
+  // creator-vs-reconcile race lose cleanly: whoever settles the member first
+  // wins; the other sees a non-provisioning phase and throws, which is
+  // swallowed here as best-effort — the member is never double-settled).
+  async function reconcileProvisioning(): Promise<void> {
+    const pending = [...deps.state.members.values()].filter((m) => m.phase === "provisioning")
+    for (const m of pending) {
+      const durable = deps.childSessionIsDurable
+        ? await deps.childSessionIsDurable(m.id, new AbortController().signal).catch(() => false)
+        : false // no probe: cannot prove durability → fail closed (member without a live child must not go active)
+      if (durable) {
+        const active: TeamMemberSnapshot = { ...m, phase: "active" }
+        await deps.transact.transact((state) => {
+          if (state.members.get(m.name)?.phase !== "provisioning") throw new TeamError(TEAM_CODES.PROVISIONING_CONFLICT, `member "${m.name}" already reconciled`)
+          return { events: [{ type: "team/member", version: 1, teamId: deps.teamId, member: active }], result: undefined }
+        }).catch(() => {}) // creator settled it first (idempotent active→active) or a race lost: nothing to do
+      } else {
+        const failed: TeamMemberSnapshot = { ...m, phase: "failed", error: "reconciled: child not durable" }
+        await deps.transact.transact((state) => {
+          if (state.members.get(m.name)?.phase !== "provisioning") throw new TeamError(TEAM_CODES.PROVISIONING_CONFLICT, `member "${m.name}" already reconciled`)
+          return { events: [{ type: "team/member", version: 1, teamId: deps.teamId, member: failed }], result: undefined }
+        }).catch(() => {})
+      }
+    }
+  }
+
   async function interrupt(caller: TeamCaller, target: string): Promise<{ previousStatus: string }> {
     if (!callerIsLead(caller)) throw new TeamError(TEAM_CODES.LEAD_REQUIRED, "only the Team Lead may interrupt")
     if (target === "lead") throw new TeamError(TEAM_CODES.INVALID_ARGUMENT, "cannot interrupt the lead")
@@ -134,5 +170,5 @@ export function createRoster(deps: RosterDeps) {
     return { id, name, role: "teammate" }
   }
 
-  return { listMembers, spawnTeammate, interrupt, resolveCaller }
+  return { listMembers, spawnTeammate, interrupt, resolveCaller, reconcileProvisioning }
 }
