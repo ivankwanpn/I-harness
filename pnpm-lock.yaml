@@ -120,6 +120,27 @@ importers:
         specifier: ^1.18.0
         version: 1.18.0
 
+  packages/agent-team:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+      '@i-harness/subagent':
+        specifier: workspace:*
+        version: link:../subagent
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+
   packages/compaction:
     dependencies:
       '@i-harness/core-session':
