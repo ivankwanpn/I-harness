@@ -19,6 +19,15 @@ export type SessionEvent =
     // a local union so core-session stays dependency-free (sandbox-policy owns
     // the real SandboxMode type; a sandbox import here would create a cycle).
     | { type: "sandbox/mode"; mode: "read-only" | "workspace-write" | "danger-full-access"; source?: "delegation"; seq?: number }
+    // M19 subagent teams: team/* log events (version 1). The snapshot shapes
+    // are INLINED (not imported from agent-team) — core-session must stay
+    // dependency-free; agent-team imports core-session, so a reverse import
+    // would create a cycle. Keep structurally identical to TeamEvent in
+    // agent-team/src/types.ts.
+    | { type: "team/member"; version: 1; teamId: string; member: { id: string; name: string; description: string; provider: string; context: "fresh" | "fork"; phase: "provisioning" | "active" | "failed"; error?: string }; seq?: number }
+    | { type: "team/task"; version: 1; teamId: string; task: { id: string; revision: number; subject: string; description: string; status: "pending" | "in_progress" | "completed" | "deleted"; ownerId?: string; blockedBy: string[]; writeScopes: string[] }; seq?: number }
+    | { type: "team/message/queued"; version: 1; teamId: string; message: { id: string; senderId: string; senderName: string; targetId: string; delivery: "quiet" | "wakeup"; content: string }; seq?: number }
+    | { type: "team/message/delivered"; version: 1; teamId: string; messageId: string; targetId: string; seq?: number }
   )
   & { ignorable?: true }
 
@@ -221,6 +230,13 @@ export function deriveSearchText(ev: SessionEvent): string {
       return ev.message
     case "compaction/summary":
       return ev.text
+    // M19: only the two content-bearing team events are FTS-searchable
+    // (team/member and team/message/delivered carry no user-facing text —
+    // they stay unindexed via default "").
+    case "team/task":
+      return ev.task.subject + " " + ev.task.description
+    case "team/message/queued":
+      return ev.message.content
     default:
       return ""
   }

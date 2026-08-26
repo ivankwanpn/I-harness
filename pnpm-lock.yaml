@@ -387,6 +387,10 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+    devDependencies:
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
 
   packages/session-persistence-jsonl:
     dependencies:

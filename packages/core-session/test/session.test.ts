@@ -185,6 +185,23 @@ describe("deriveSearchText", () => {
     expect(deriveSearchText({ type: "assistant/chunk", text: "partial" })).toBe("")
     expect(deriveSearchText({ type: "assistant/message", text: "x", seq: 1 })).toBe("x") // seq is irrelevant
   })
+  it("M19: team/task subject+description and team/message/queued content are searchable", () => {
+    expect(deriveSearchText({
+      type: "team/task", version: 1, teamId: "t", seq: 1,
+      task: { id: "t-1", revision: 1, subject: "Fix the thing", description: "step-by-step", status: "pending", blockedBy: [], writeScopes: [] },
+    })).toBe("Fix the thing step-by-step")
+    expect(deriveSearchText({
+      type: "team/message/queued", version: 1, teamId: "t", seq: 2,
+      message: { id: "m-1", senderId: "child-1", senderName: "helper", targetId: "t", delivery: "quiet", content: "status: done" },
+    })).toBe("status: done")
+  })
+  it("M19: team/member and team/message/delivered stay unindexed (empty)", () => {
+    expect(deriveSearchText({
+      type: "team/member", version: 1, teamId: "t", seq: 3,
+      member: { id: "child-1", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active" },
+    })).toBe("")
+    expect(deriveSearchText({ type: "team/message/delivered", version: 1, teamId: "t", messageId: "m-1", targetId: "child-1", seq: 4 })).toBe("")
+  })
 })
 
 describe("append validation", () => {
