@@ -29,6 +29,7 @@
     "@i-harness/sandbox-windows-acl": "workspace:*",
     "@i-harness/fs": "workspace:*",
     "@i-harness/mcp-client": "workspace:*",
+    "@i-harness/lsp": "workspace:*",
     "@i-harness/guard-approval": "workspace:*",
     "@i-harness/guard-retry": "workspace:*",
     "@i-harness/guard-repeat-tool": "workspace:*",

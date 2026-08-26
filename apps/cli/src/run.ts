@@ -19,6 +19,7 @@ import { createFsSearchTools } from "@i-harness/fs-search"
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { mountMcpClient, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
+import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { createWindowsAclSandbox } from "@i-harness/sandbox-windows-acl"
@@ -42,6 +43,7 @@ export interface HeadlessOptions {
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
+  lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
 }
 
 export interface HeadlessResult {
@@ -194,6 +196,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   }
 
   const mcpHandles: McpMountHandle[] = []
+  const lspHandles: LspMountHandle[] = []
 
   try {
     // M17: mount MCP servers into the registry before the agent can see them
@@ -201,6 +204,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // cleans itself up, so the finally below only releases live handles).
     for (const cfg of opts.mcp ?? []) {
       mcpHandles.push(await mountMcpClient(ctx, tools, cfg))
+    }
+    // M18: mount LSP servers the same way (same reservation semantics, same
+    // best-effort teardown) — the handles unify with MCP's for the reverse
+    // unmount below.
+    for (const cfg of opts.lsp ?? []) {
+      lspHandles.push(await mountLspClient(ctx, tools, cfg))
     }
     // Mount the subagent + job tools so the main agent can delegate.
     // M8: persist child sessions through the same coordinator (child lineage
@@ -266,9 +275,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {
-    // M17: unmount MCP servers after the run (reverse mount order), best-effort
-    // like the sandbox teardown: an unmount failure must not mask the run result.
-    for (const handle of mcpHandles.reverse()) {
+    // M17+M18: unmount MCP AND LSP servers after the run — the handles unify
+    // into ONE array and unmount in reverse mount order (MCP first if both
+    // were mounted), best-effort like the sandbox teardown: an unmount failure
+    // must not mask the run result. The arrays are NOT reversed in place (a
+    // shared-array reverse would be remount-unsafe); the copy is.
+    const mounts = [...mcpHandles, ...lspHandles]
+    for (const handle of mounts.reverse()) {
       try {
         await handle.unmount()
       } catch {

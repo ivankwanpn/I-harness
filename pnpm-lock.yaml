@@ -68,6 +68,9 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../../packages/llm-seam
+      '@i-harness/lsp':
+        specifier: workspace:*
+        version: link:../../packages/lsp
       '@i-harness/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client
