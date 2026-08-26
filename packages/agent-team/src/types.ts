@@ -34,6 +34,9 @@ export interface TeamMemberSnapshot {
   id: string; name: string; description: string
   provider: string; context: "fresh" | "fork"
   phase: TeamMemberPhase; error?: string
+  // durable child session id (set once the child is spawned; the member id is a
+  // roster-generated UUID, so recovery probes must key on this).
+  sessionId?: string
 }
 export interface TeamMemberView {
   id: string; name: string; role: "lead" | "teammate"

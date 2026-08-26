@@ -86,7 +86,7 @@ export function createRoster(deps: RosterDeps) {
 
     // Spawn the durable child, then checkpoint that its session durably holds
     // the initial prompt within startupTimeoutMs.
-    let spawned: { path: string; jobId: string; sessionId?: string }
+    let spawned: { path: string; jobId: string; sessionId?: string } | undefined
     try {
       spawned = await deps.spawnChild(name, opts.prompt, provisioning.context)
       if (!spawned.sessionId) throw new Error(`child session id missing for "${name}" (durable child sessions required)`)
@@ -102,8 +102,9 @@ export function createRoster(deps: RosterDeps) {
     } catch (e) {
       // Failed event (best-effort; keeps the roster authoritative for recovery)
       // — pure-read fn again: the transition guard is applied by the transact's
-      // applyTeamEvent validation.
-      const failed: TeamMemberSnapshot = { ...provisioning, phase: "failed", error: e instanceof Error ? e.message : String(e) }
+      // applyTeamEvent validation. Persist the sessionId when the child was
+      // created but the checkpoint failed, so recovery can still find it.
+      const failed: TeamMemberSnapshot = { ...provisioning, phase: "failed", error: e instanceof Error ? e.message : String(e), sessionId: spawned?.sessionId }
       await deps.transact.transact((state) => {
         if (state.members.get(name)?.phase !== "provisioning") throw new TeamError(TEAM_CODES.PROVISIONING_CONFLICT, `member "${name}" already reconciled`)
         return { events: [{ type: "team/member", version: 1, teamId: deps.teamId, member: failed }], result: undefined }
@@ -112,7 +113,8 @@ export function createRoster(deps: RosterDeps) {
       throw e
     }
 
-    const active: TeamMemberSnapshot = { ...provisioning, phase: "active" }
+    // after the try completed without throw, spawned is defined (catch rethrows)
+    const active: TeamMemberSnapshot = { ...provisioning, phase: "active", sessionId: spawned.sessionId }
     // Active event: pure-read fn; identity immutability + transition validity
     // are enforced by the transact's validation against the snapshot.
     await deps.transact.transact((state) => {
@@ -136,7 +138,7 @@ export function createRoster(deps: RosterDeps) {
     const pending = [...deps.state.members.values()].filter((m) => m.phase === "provisioning")
     for (const m of pending) {
       const durable = deps.childSessionIsDurable
-        ? await deps.childSessionIsDurable(m.id, new AbortController().signal).catch(() => false)
+        ? await deps.childSessionIsDurable(m.sessionId ?? m.id, new AbortController().signal).catch(() => false)
         : false // no probe: cannot prove durability → fail closed (member without a live child must not go active)
       if (durable) {
         const active: TeamMemberSnapshot = { ...m, phase: "active" }

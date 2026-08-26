@@ -24,7 +24,7 @@ export type SessionEvent =
     // dependency-free; agent-team imports core-session, so a reverse import
     // would create a cycle. Keep structurally identical to TeamEvent in
     // agent-team/src/types.ts.
-    | { type: "team/member"; version: 1; teamId: string; member: { id: string; name: string; description: string; provider: string; context: "fresh" | "fork"; phase: "provisioning" | "active" | "failed"; error?: string }; seq?: number }
+    | { type: "team/member"; version: 1; teamId: string; member: { id: string; name: string; description: string; provider: string; context: "fresh" | "fork"; phase: "provisioning" | "active" | "failed"; error?: string; sessionId?: string }; seq?: number }
     | { type: "team/task"; version: 1; teamId: string; task: { id: string; revision: number; subject: string; description: string; status: "pending" | "in_progress" | "completed" | "deleted"; ownerId?: string; blockedBy: string[]; writeScopes: string[] }; seq?: number }
     | { type: "team/message/queued"; version: 1; teamId: string; message: { id: string; senderId: string; senderName: string; targetId: string; delivery: "quiet" | "wakeup"; content: string }; seq?: number }
     | { type: "team/message/delivered"; version: 1; teamId: string; messageId: string; targetId: string; seq?: number }
