@@ -3,3 +3,5 @@ export type { TeamConfig, TeamMemberPhase, TeamMemberSnapshot, TeamMemberView, T
 export { validateTeamConfig, TeamError, TEAM_CODES } from "./types.ts"
 export { foldTeam, applyTeamEvent, createFoldState } from "./fold.ts"
 export type { TeamFoldState } from "./fold.ts"
+export { createTeamTransact } from "./transact.ts"
+export type { TeamLead, TeamTransaction } from "./transact.ts"
