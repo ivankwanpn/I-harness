@@ -41,12 +41,17 @@ describe("TeamRoster", () => {
     const memberEvents = events.filter((e) => e.type === "team/member")
     expect(memberEvents.map((e) => e.member.phase)).toEqual(["provisioning", "active"])
     expect(member.role).toBe("teammate")
+    // the child's real session id is persisted on the member (ruling-12): the
+    // active snapshot carries the spawnChild return's sessionId
+    expect(state.members.get("helper")?.sessionId).toBe("child-helper")
   })
 
   it("fails provisioning when the child never holds the prompt", async () => {
     const { roster, state } = makeRoster({ childSessionHoldsPrompt: async () => false })
     await expect(roster.spawnTeammate(LEAD, "helper", OPTS)).rejects.toThrow(/durably held|failed/i)
     expect(state.members.get("helper")?.phase).toBe("failed")
+    // sessionId persisted on the failed snapshot too (child was created, only the checkpoint failed)
+    expect(state.members.get("helper")?.sessionId).toBe("child-helper")
     expect(roster.listMembers().find((m) => m.name === "helper")?.status).toBe("failed")
   })
 
@@ -102,24 +107,25 @@ describe("TeamRoster", () => {
 describe("reconcileProvisioning", () => {
   // Seed a shared state containing a provisioning member exactly like a crash
   // would leave it: provisioning event folded into the live state via the real
-  // transact (event is in the log AND the state). member.phase === "provisioning"
-  // and `child-helper` is the (simulated) durable child session id.
-  function seedProvisioning(overrides?: Partial<RosterDeps>) {
-    const { roster, state, events } = makeRoster(overrides)
+  // transact (event is in the log AND the state). `sessionId` on the seeded
+  // snapshot mimics the real spawn return (member id child-helper, child
+  // session child-9f...) so the durability probe must key on it.
+  function seedProvisioning(opts?: { sessionId?: string; deps?: Partial<RosterDeps> }) {
+    const { roster, state, events } = makeRoster(opts?.deps)
     const tx = createTeamTransact(
       { append: (e: TeamEvent) => events.push(e), flush: async () => {} },
       state,
     )
     return new Promise<{ roster: ReturnType<typeof createRoster>; state: typeof state; events: TeamEvent[]; memberId: string }>((resolve) => {
       tx.transact(() => ({
-        events: [{ type: "team/member", version: 1, teamId: "lead-1", member: { id: "child-helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } }],
+        events: [{ type: "team/member", version: 1, teamId: "lead-1", member: { id: "child-helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "provisioning", ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) } }],
         result: undefined,
       })).then(() => resolve({ roster, state, events, memberId: "child-helper" }))
     })
   }
 
   it("activates a provisioning member when the child session is durable", async () => {
-    const { roster, state, events, memberId } = await seedProvisioning({ childSessionIsDurable: async (id) => id === memberId })
+    const { roster, state, events, memberId } = await seedProvisioning({ deps: { childSessionIsDurable: async (id) => id === memberId } })
     await roster.reconcileProvisioning()
     expect(state.members.get("helper")?.phase).toBe("active")
     const memberEvents = events.filter((e) => e.type === "team/member")
@@ -127,7 +133,7 @@ describe("reconcileProvisioning", () => {
   })
 
   it("fails a provisioning member when the child session is not durable", async () => {
-    const { roster, state, events } = await seedProvisioning({ childSessionIsDurable: async () => false })
+    const { roster, state, events } = await seedProvisioning({ deps: { childSessionIsDurable: async () => false } })
     await roster.reconcileProvisioning()
     expect(state.members.get("helper")?.phase).toBe("failed")
     expect(state.members.get("helper")?.error).toMatch(/not durable/i)
@@ -136,7 +142,7 @@ describe("reconcileProvisioning", () => {
   })
 
   it("leaves already-settled members untouched (idempotent; no conflict)", async () => {
-    const { roster, state, events } = await seedProvisioning({ childSessionIsDurable: async () => true })
+    const { roster, state, events } = await seedProvisioning({ deps: { childSessionIsDurable: async () => true } })
     await roster.reconcileProvisioning()
     const before = events.filter((e) => e.type === "team/member").length
     await expect(roster.reconcileProvisioning()).resolves.toBeUndefined() // second reconcile: no pending members
@@ -171,8 +177,33 @@ describe("reconcileProvisioning", () => {
     expect(memberEvents.map((e) => e.member.phase)).toEqual(["provisioning", "active"]) // exactly one settle
   })
 
+  it("probes by the persisted child sessionId, not the member id (ruling-12 regression)", async () => {
+    // Real spawn-return shape: member id child-helper, child session child-9f... —
+    // DIFFERENT ids. The probe must key on sessionId, else a durable member is
+    // wrongly failed on recover.
+    const { roster, state, events } = await seedProvisioning({
+      sessionId: "child-9f3b2a",
+      deps: { childSessionIsDurable: async (sid) => sid === "child-9f3b2a", childSessionHoldsPrompt: async () => true },
+    })
+    await roster.reconcileProvisioning()
+    expect(state.members.get("helper")?.phase).toBe("active")
+    expect(state.members.get("helper")?.sessionId).toBe("child-9f3b2a")
+    const memberEvents = events.filter((e) => e.type === "team/member")
+    expect(memberEvents.map((e) => e.member.phase)).toEqual(["provisioning", "active"])
+  })
+
+  it("fails closed when the durability probe is absent (no probe prove => failed)", async () => {
+    // No childSessionIsDurable dep at all: reconcile cannot prove durability and
+    // must NOT mark the member active (a provisioning member without a verified
+    // child session is treated as a lost child).
+    const { roster, state } = await seedProvisioning()
+    await roster.reconcileProvisioning()
+    expect(state.members.get("helper")?.phase).toBe("failed")
+    expect(state.members.get("helper")?.error).toMatch(/not durable/i)
+  })
+
   it("reconciles a mix: durable → active, not durable → failed", async () => {
-    const { roster, state, events } = await seedProvisioning({ childSessionIsDurable: async () => false })
+    const { roster, state, events } = await seedProvisioning({ deps: { childSessionIsDurable: async () => false } })
     // add a second provisioning member that IS durable
     await createTeamTransact({ append: (e: TeamEvent) => events.push(e), flush: async () => {} }, state).transact(() => ({
       events: [{ type: "team/member", version: 1, teamId: "lead-1", member: { id: "child-helper2", name: "helper2", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } }],

@@ -22,6 +22,7 @@ const TEAM_EVENT_SCHEMA = z.discriminatedUnion("type", [
       id: z.string(), name: z.string(), description: z.string(),
       provider: z.string(), context: z.enum(["fresh", "fork"]),
       phase: z.enum(["provisioning", "active", "failed"]), error: z.string().optional(),
+      sessionId: z.string().optional(),
     }),
     seq: z.number().optional(), ignorable: z.boolean().optional(),
   }),
