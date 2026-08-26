@@ -163,9 +163,40 @@ describe("TeamMailbox", () => {
     expect(events.filter((e) => e.type === "team/message/queued")).toHaveLength(2)
   })
 
+  it("enforces maxPending atomically under concurrent sends (in-fn re-check, not only the live pre-check)", async () => {
+    const { mailbox, state, events } = makeMailbox({ maxPendingMessagesPerMember: 1, deliver: async () => false })
+    // Both sends start synchronously with 0 pending, so BOTH pass the live
+    // pre-check before either commits — the race the pre-check alone misses.
+    // The transact chain serializes; the second send's fn re-checks against the
+    // clone (which already contains the first send's committed message) and
+    // throws MAILBOX_FULL.
+    const results = await Promise.allSettled([
+      mailbox.sendMessage(LEAD, "helper", "one", "quiet"),
+      mailbox.sendMessage(LEAD, "helper", "two", "quiet"),
+    ])
+    expect(results[0].status).toBe("fulfilled")
+    expect((results[0] as PromiseFulfilledResult<{ status: string }>).value.status).toBe("queued")
+    expect(results[1].status).toBe("rejected")
+    expect(String((results[1] as PromiseRejectedResult).reason)).toMatch(/TEAM_MAILBOX_FULL|full/i)
+    // exactly ONE message entered the queue — the limit held atomically
+    expect(state.queued.get("child-1")?.length).toBe(1)
+    expect(events.filter((e) => e.type === "team/message/queued")).toHaveLength(1)
+  })
+
   it("rejects oversized messages before queueing", async () => {
     const { mailbox, state, events } = makeMailbox({ maxMessageBytes: 16 })
     await expect(mailbox.sendMessage(LEAD, "helper", "x".repeat(64), "quiet")).rejects.toThrow(/TEAM_MESSAGE_TOO_LARGE|exceeds/i)
+    expect(state.queued.size).toBe(0)
+    expect(events).toHaveLength(0)
+  })
+
+  it("byte limit uses spec framing with message id and 'from'", async () => {
+    // Old framing `Team message <lead>:\n` + 10 content bytes ~= 31 total —
+    // PASSES maxMessageBytes 50. Spec framing `Team message <msg-<uuid>> from
+    // <lead>:\n` + 10 content bytes exceeds 50 — must REJECT. Proves the limit
+    // measures the spec framing (message id + from), not a short form.
+    const { mailbox, state, events } = makeMailbox({ maxMessageBytes: 50 })
+    await expect(mailbox.sendMessage(LEAD, "helper", "x".repeat(10), "quiet")).rejects.toThrow(/TEAM_MESSAGE_TOO_LARGE|exceeds/i)
     expect(state.queued.size).toBe(0)
     expect(events).toHaveLength(0)
   })

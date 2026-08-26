@@ -44,16 +44,23 @@ export function createMailbox(deps: MailboxDeps) {
     if (!targetId) throw new TeamError(TEAM_CODES.MEMBER_NOT_FOUND, `unknown target "${target}"`)
     if (caller.id === targetId) throw new TeamError(TEAM_CODES.SELF_MESSAGE, "cannot message yourself")
     const snapshot: TeamMessageSnapshot = { id: `msg-${randomUUID()}`, senderId: caller.id, senderName: caller.name, targetId, delivery, content: message }
-    const framing = `Team message <${caller.name}>:\n${message}`
+    // Spec byte-limit framing: `Team message <id> from <name>:` + content.
+    const framing = `Team message <${snapshot.id}> from <${caller.name}>:\n${message}`
     if (Buffer.byteLength(framing, "utf-8") > maxBytes) throw new TeamError(TEAM_CODES.MESSAGE_TOO_LARGE, `message exceeds ${maxBytes} bytes`)
     if (pendingCount(targetId) >= maxPending) throw new TeamError(TEAM_CODES.MAILBOX_FULL, `target queue full (${maxPending} pending)`)
 
-    // Queue insert: pure-read fn — the transact's applyTeamEvent performs the
-    // actual push against the live state (duplicate-id guarded there).
-    await deps.transact.transact(() => ({
-      events: [{ type: "team/message/queued", version: 1, teamId: deps.teamId, message: snapshot }],
-      result: undefined,
-    }))
+    // Queue insert: pure-read fn — the transact runs it against a clone and
+    // the authoritative MAILBOX_FULL re-check happens HERE, on the fn's state
+    // param (the serialized chain means a concurrent send committed before us
+    // is visible in the clone). The pre-check above is only a hot-path fast
+    // fail; this in-fn check makes the limit atomic. The actual push is done
+    // by the transact's applyTeamEvent against the live state (duplicate-id
+    // guarded there).
+    await deps.transact.transact((state) => {
+      const pending = (state.queued.get(targetId) ?? []).filter((m) => !state.delivered.has(m.id)).length
+      if (pending >= maxPending) throw new TeamError(TEAM_CODES.MAILBOX_FULL, `target queue full (${maxPending} pending)`)
+      return { events: [{ type: "team/message/queued", version: 1, teamId: deps.teamId, message: snapshot }], result: undefined }
+    })
     // Deliver on the actual channel; the ack is appended ONLY after the target
     // holds the message (deliver resolved true) — a false keeps it queued and
     // recoverRoot retries it.
@@ -76,7 +83,10 @@ export function createMailbox(deps: MailboxDeps) {
   // between deliver success and the ack replays the entry (at-least-once).
   async function recoverRoot(): Promise<void> {
     for (const [targetId, msgs] of [...deps.state.queued.entries()]) {
-      for (const m of msgs) {
+      // Snapshot the array: a concurrent sendMessage pushes into the live
+      // array mid-sweep (while we await deliver), and iterating it live would
+      // double-process the new entry in this pass.
+      for (const m of [...msgs]) {
         if (deps.state.delivered.has(m.id)) continue
         if (m.delivery === "quiet" && deps.memberStatus(targetId) === "inactive") continue // quiet never wakes inactive
         const ok = await deps.deliver(targetId, m.id, m.content, m.delivery)
