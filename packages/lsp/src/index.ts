@@ -1,3 +1,5 @@
 export { encodeMessage, MessageDecoder } from "./protocol.ts"
 export type { ConnectionSpec, ServerRequestHandler } from "./connection.ts"
 export { LspConnection, spawnLspConnection } from "./connection.ts"
+export type { InstanceSpec, LspQuery, LspLocation, LspHover, LspQueryResult, LspOperation, LspRange, LspPosition } from "./instance.ts"
+export { LspInstance } from "./instance.ts"

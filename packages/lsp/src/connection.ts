@@ -144,6 +144,15 @@ export class LspConnection {
     this.write({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id: requestId } })
   }
 
+  /** Best-effort kill of the child process (used by the bounded teardown's kill escalation). */
+  kill(): void {
+    try {
+      this.child?.kill()
+    } catch {
+      // best-effort: a kill on an already-dead process is a no-op
+    }
+  }
+
   fail(err: Error): void {
     // The first failure is the recorded reason (a later close event keeps the
     // root cause), but every call rejects whatever is pending — a request made
