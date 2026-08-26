@@ -74,11 +74,15 @@ export function createTaskBoard(deps: TaskBoardDeps) {
         const t = state.tasks.get(b)
         if (!t || t.status === "deleted") throw new TeamError(TEAM_CODES.TASK_NOT_FOUND, `blocker "${b}" does not exist`)
       }
+      // spec §4.3: create — subject/description 非空 (trimmed values persisted)
+      const subject = opts.subject.trim()
+      const description = opts.description.trim()
+      if (subject.length === 0 || description.length === 0) throw new TeamError(TEAM_CODES.INVALID_ARGUMENT, "subject and description must be non-empty")
       committed = {
         id,
         revision: 1,
-        subject: opts.subject,
-        description: opts.description,
+        subject,
+        description,
         status: "pending",
         blockedBy,
         writeScopes: normalizeWriteScopes(opts.writeScopes ?? []),
@@ -151,6 +155,9 @@ export function createTaskBoard(deps: TaskBoardDeps) {
       switch (req.action) {
         case "claim": {
           if (existing.ownerId !== undefined) throw new TeamError(TEAM_CODES.TASK_ALREADY_CLAIMED, `task "${req.taskId}" already claimed`)
+          // spec §4.3: claim = pending + ready + 無 owner — a completed (or
+          // in_progress-unowned) task must go through reopen, not claim.
+          if (existing.status !== "pending") throw new TeamError(TEAM_CODES.TASK_INVALID_TRANSITION, `cannot claim a "${existing.status}" task`)
           const ready = existing.blockedBy.every((b) => {
             const t = state.tasks.get(b)
             return t !== undefined && t.status === "completed"
@@ -176,10 +183,15 @@ export function createTaskBoard(deps: TaskBoardDeps) {
         }
         case "edit": {
           if (!isOwner && !isLead) throw unauthorized()
+          // spec §4.3: edit — if provided, subject/description must be non-empty
+          // after trim; if not provided, the existing value is kept.
+          const subject = req.subject !== undefined ? req.subject.trim() : existing.subject
+          const description = req.description !== undefined ? req.description.trim() : existing.description
+          if (subject.length === 0 || description.length === 0) throw new TeamError(TEAM_CODES.INVALID_ARGUMENT, "subject and description must be non-empty")
           next = {
             ...existing,
-            subject: req.subject ?? existing.subject,
-            description: req.description ?? existing.description,
+            subject,
+            description,
             writeScopes: req.writeScopes !== undefined ? normalizeWriteScopes(req.writeScopes) : existing.writeScopes,
           }
           break
