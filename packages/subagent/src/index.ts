@@ -22,7 +22,7 @@ import { createJobRegistry, type JobRegistry } from "./jobs.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
 import { createAgentTable, type AgentTable } from "./agent-table.ts"
 import { createSubagentTools } from "./tools.ts"
-import { createAgentRegistry } from "@i-harness/core-agent"
+import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
 import { restoreState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 
@@ -45,6 +45,11 @@ export interface RegisterSubagentResult {
   roles: RoleRegistry
   jobs: JobRegistry
   table: AgentTable
+  // M19 (Ruling 17): the live Agent instances registry — the team scheduler
+  // (agent-team) uses it to wake spawned child agents (followup re-drives).
+  // Additive: existing consumers destructure { roles, jobs, table } and are
+  // unaffected.
+  agents: AgentRegistry
 }
 
 // Mount entry point (spec §1.1.6 / §2.3): seeds the role registry with the
@@ -85,5 +90,5 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   for (const tool of tools) {
     if (!parentRegistry.get(tool.name)) parentRegistry.register(tool)
   }
-  return { roles, jobs, table }
+  return { roles, jobs, table, agents }
 }

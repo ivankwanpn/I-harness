@@ -122,6 +122,9 @@ importers:
 
   packages/agent-team:
     dependencies:
+      '@i-harness/core-agent':
+        specifier: workspace:*
+        version: link:../core-agent
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
@@ -131,6 +134,15 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
