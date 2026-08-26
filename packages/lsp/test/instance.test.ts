@@ -221,6 +221,79 @@ describe("LspInstance query", () => {
       "textDocument/didClose",
     ])
   })
+
+  it("a capability-throwing query does not stall the queue", async () => {
+    // referencesProvider is absent: the first query rejects at the capability check
+    // (before didOpen); the queued definition query must still run (queue continuation).
+    const server = createFakeLspServer({
+      initialize: { capabilities: { definitionProvider: true } },
+      [DEF]: { locations: RESULT_LOCS },
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    const p1 = inst.query({ operation: "findReferences", filePath: "/w/a.ts", line: 1, character: 1 }, "x")
+    const p2 = inst.query(definition(), "x")
+    await expect(p1).rejects.toThrow(/UNSUPPORTED|not support/i)
+    await expect(p2).resolves.toEqual({ kind: "locations", locations: RESULT_LOCS })
+    // findReferences never reached the wire (capability check precedes didOpen);
+    // only the definition query touched the server, in strict order.
+    expect(server.server.methods).toEqual([
+      "initialize",
+      "initialized",
+      "textDocument/didOpen",
+      "textDocument/definition",
+      "textDocument/didClose",
+    ])
+  })
+})
+
+describe("LspInstance abort", () => {
+  it("aborts a query: rejects it, sends $/cancelRequest with its id, still sends didClose, and the next queued query proceeds", async () => {
+    let defCalls = 0
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((res) => {
+      release = res
+    })
+    const server = createFakeLspServer({
+      initialize: { capabilities: CAPS },
+      [DEF]: () => {
+        defCalls += 1
+        // First definition hangs until the test decides; later ones answer immediately.
+        return defCalls === 1 ? gate.then(() => ({ locations: RESULT_LOCS })) : { locations: RESULT_LOCS }
+      },
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    const ac = new AbortController()
+    const p1 = inst.query(definition(), "const x = 1", ac.signal)
+    const p2 = inst.query(definition({ line: 2 }), "const x = 1")
+    // Wait until the first (hung) definition request is in flight, then abort it.
+    await waitFor(() => server.server.methods.filter((m) => m === DEF).length === 1)
+    ac.abort()
+    // (a) the aborted query rejects
+    await expect(p1).rejects.toThrow(/aborted/i)
+    // (b) $/cancelRequest arrived, carrying the aborted request's id
+    const defReq = server.server.requests.find((r) => methodOf(r) === DEF)
+    const cancel = server.server.messages.find((m) => methodOf(m) === "$/cancelRequest")
+    expect(cancel).toBeDefined()
+    expect(paramsOf(cancel).id).toBe(defReq?.id)
+    // (d) the next queued query proceeds to a successful result
+    await expect(p2).resolves.toEqual({ kind: "locations", locations: RESULT_LOCS })
+    // (c) the aborted query still closed its transient document; the queue stayed strictly serialized:
+    // didOpen/definition/cancel/didClose of query 1 all precede query 2's didOpen.
+    expect(server.server.methods).toEqual([
+      "initialize",
+      "initialized",
+      "textDocument/didOpen",
+      DEF,
+      "$/cancelRequest",
+      "textDocument/didClose",
+      "textDocument/didOpen",
+      DEF,
+      "textDocument/didClose",
+    ])
+    release?.() // let the hung script promise settle — its late response is ignored by the connection
+  })
 })
 
 describe("LspInstance dispose", () => {
