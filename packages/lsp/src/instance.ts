@@ -23,6 +23,15 @@ export interface LspPosition { line: number; character: number }
 export interface LspRange { start: LspPosition; end: LspPosition }
 export interface LspLocation { uri: string; range: LspRange }
 export interface LspHover { contents: string; range?: LspRange }
+/** A diagnostic as reported by a language server (textDocument/diagnostic).
+ *  Ranges stay 0-based LSP coordinates; the 1-based conversion happens at render time. */
+export interface LspDiagnostic {
+  range: LspRange
+  severity?: number
+  message: string
+  source?: string
+  code?: string
+}
 
 export type LspQueryResult =
   | { kind: "locations"; locations: LspLocation[] }
@@ -43,6 +52,38 @@ const OP_TO_CAPABILITY: Record<LspOperation, keyof { definitionProvider: unknown
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function isPos(v: unknown): v is LspPosition {
+  if (typeof v !== "object" || v === null) return false
+  const p = v as Record<string, unknown>
+  return typeof p.line === "number" && typeof p.character === "number"
+}
+
+/** textDocument/diagnostic wire result → LspDiagnostic[]: unwrap `{ items }`
+ *  (null/undefined → []; plain array → as-is); keep entries with a string
+ *  message and a well-formed range, discarding the rest (fail-closed). */
+export function normalizeDiagnostics(payload: unknown): LspDiagnostic[] {
+  const items = Array.isArray(payload) ? payload : (payload as { items?: unknown } | null)?.items
+  if (!Array.isArray(items)) return []
+  const out: LspDiagnostic[] = []
+  for (const item of items) {
+    if (typeof item !== "object" || item === null) continue
+    const d = item as Record<string, unknown>
+    if (typeof d.message !== "string") continue
+    const range = d.range
+    if (typeof range !== "object" || range === null) continue
+    const r = range as Record<string, unknown>
+    if (!isPos(r.start) || !isPos(r.end)) continue
+    out.push({
+      range: { start: r.start, end: r.end },
+      ...(typeof d.severity === "number" ? { severity: d.severity } : {}),
+      message: d.message,
+      ...(typeof d.source === "string" ? { source: d.source } : {}),
+      ...(typeof d.code === "string" ? { code: d.code } : {}),
+    })
+  }
+  return out
 }
 
 export class LspInstance {
@@ -83,6 +124,37 @@ export class LspInstance {
     return next
   }
 
+  /** Pull ALL diagnostics for a file (textDocument/diagnostic) with the same
+   *  transient didOpen → request → didClose lifecycle and the same serialized
+   *  queue as query() (one at a time, abortable). No position params: the
+   *  tool-side cursor filter happens in packages/lsp/src/tools.ts. */
+  diagnostics(filePath: string, source: string, signal?: AbortSignal): Promise<LspDiagnostic[]> {
+    const run = () => this.doDiagnostics(filePath, source, signal)
+    const next = this.queue.then(run, run) // continuation form: rejections never break the chain
+    this.queue = next.catch(() => undefined)
+    return next
+  }
+
+  private async doDiagnostics(filePath: string, source: string, signal?: AbortSignal): Promise<LspDiagnostic[]> {
+    if (this.disposed) throw new Error("LSP instance was disposed")
+    const uri = this.fileUri(filePath)
+    return this.withOpenDocument(uri, filePath, source, async () => {
+      const result = await this.conn.request("textDocument/diagnostic", { textDocument: { uri } }, signal)
+      return normalizeDiagnostics(result)
+    })
+  }
+
+  /** Shared transient didOpen → fn() → didClose(finally) lifecycle used by both
+   *  query() and diagnostics() (previously inlined in doQuery). */
+  private async withOpenDocument<T>(uri: string, filePath: string, source: string, fn: () => Promise<T>): Promise<T> {
+    await this.conn.notify("textDocument/didOpen", { textDocument: { uri, languageId: this.languageId(filePath), version: 1, text: source } })
+    try {
+      return await fn()
+    } finally {
+      await this.conn.notify("textDocument/didClose", { textDocument: { uri } })
+    }
+  }
+
   private async doQuery(query: LspQuery, source: string, signal?: AbortSignal): Promise<LspQueryResult> {
     if (this.disposed) throw new Error("LSP instance was disposed")
     const capKey = OP_TO_CAPABILITY[query.operation]
@@ -90,9 +162,7 @@ export class LspInstance {
       throw new Error(`LSP_UNSUPPORTED_OPERATION: server does not support ${query.operation}`)
     }
     const uri = this.fileUri(query.filePath)
-    // transient didOpen
-    await this.conn.notify("textDocument/didOpen", { textDocument: { uri, languageId: this.languageId(query.filePath), version: 1, text: source } })
-    try {
+    return this.withOpenDocument(uri, query.filePath, source, async () => {
       const method = OP_TO_METHOD[query.operation]
       const params = {
         textDocument: { uri },
@@ -109,9 +179,7 @@ export class LspInstance {
       const locations = (result as { locations?: unknown[] } | LspLocation[] | null) ?? []
       const locs = Array.isArray(locations) ? locations : (locations as { locations: LspLocation[] }).locations
       return locs.length === 0 ? { kind: "empty" } : { kind: "locations", locations: locs }
-    } finally {
-      await this.conn.notify("textDocument/didClose", { textDocument: { uri } })
-    }
+    })
   }
 
   private fileUri(filePath: string): string {

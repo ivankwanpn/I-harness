@@ -247,6 +247,97 @@ describe("LspInstance query", () => {
   })
 })
 
+describe("LspInstance diagnostics", () => {
+  const DIAG = "textDocument/diagnostic"
+  const ITEM = {
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+    severity: 1,
+    message: "boom",
+    source: "ts",
+    code: "2322",
+  }
+
+  it("performs transient didOpen→diagnostic→didClose and unwraps { items } (discarding entries without a message)", async () => {
+    const server = createFakeLspServer({
+      initialize: { capabilities: CAPS },
+      [DIAG]: () => ({
+        items: [
+          ITEM,
+          { range: { start: { line: 3, character: 0 }, end: { line: 3, character: 1 } } }, // no message → discarded
+          "junk", // non-object → discarded
+        ],
+      }),
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    const diags = await inst.diagnostics("/w/a.ts", "const x = 1")
+    expect(diags).toEqual([ITEM])
+    expect(server.server.methods).toEqual([
+      "initialize",
+      "initialized",
+      "textDocument/didOpen",
+      DIAG,
+      "textDocument/didClose",
+    ])
+    const req = server.server.requests.find((r) => methodOf(r) === DIAG)!
+    expect(paramsOf(req).textDocument).toEqual({ uri: "file:///w/a.ts" })
+  })
+
+  it("normalizes null / plain-array payloads (fail-closed)", async () => {
+    const server = createFakeLspServer({
+      initialize: { capabilities: CAPS },
+      [DIAG]: (params: unknown) => {
+        const uri = (params as { textDocument: { uri: string } }).textDocument.uri
+        return uri.endsWith("null.json") ? null : [ITEM]
+      },
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    await expect(inst.diagnostics("/w/null.json", "x")).resolves.toEqual([])
+    // plain-array form: passthrough (no { items } wrapper)
+    await expect(inst.diagnostics("/w/a.ts", "x")).resolves.toEqual([ITEM])
+  })
+
+  it("serializes diagnostics with the queue (didOpen/didClose never interleave with a query)", async () => {
+    let defCalls = 0
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((res) => {
+      release = res
+    })
+    const server = createFakeLspServer({
+      initialize: { capabilities: CAPS },
+      [DEF]: () => {
+        defCalls += 1
+        if (defCalls === 1) return gate.then(() => ({ locations: [] }))
+        return { locations: [] }
+      },
+      [DIAG]: () => ({ items: [] }),
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    const p1 = inst.diagnostics("/w/a.ts", "x")
+    const p2 = inst.query(definition(), "x")
+    // Release the second response only after the first (diagnostics) request has
+    // fully closed — with a serialized queue the queued query's didOpen cannot
+    // start before that.
+    await waitFor(() => server.server.methods.filter((m) => m === "textDocument/didClose").length === 1)
+    release?.()
+    const [d1, d2] = await Promise.all([p1, p2])
+    expect(d1).toEqual([])
+    expect(d2.kind).toBe("empty")
+    expect(server.server.methods).toEqual([
+      "initialize",
+      "initialized",
+      "textDocument/didOpen",
+      DIAG,
+      "textDocument/didClose",
+      "textDocument/didOpen",
+      DEF,
+      "textDocument/didClose",
+    ])
+  })
+})
+
 describe("LspInstance abort", () => {
   it("aborts a query: rejects it, sends $/cancelRequest with its id, still sends didClose, and the next queued query proceeds", async () => {
     let defCalls = 0
