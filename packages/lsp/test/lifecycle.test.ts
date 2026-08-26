@@ -65,6 +65,23 @@ describe("mountLspClient lifecycle", () => {
     await first.unmount()
   })
 
+  it("throws the explicit one-server error when a second mount uses a DIFFERENT serverName", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const first = await mountLspClient(ctx, tools, config({ serverName: "ts" }), {
+      spawner: createFakeLspServer({ initialize: { capabilities: CAPS }, shutdown: null }).spawner,
+    })
+    await expect(
+      mountLspClient(ctx, tools, config({ serverName: "py" }), {
+        spawner: createFakeLspServer({ initialize: { capabilities: CAPS }, shutdown: null }).spawner,
+      }),
+    ).rejects.toThrow(/only one LSP server per run is supported \(M18 core\)/)
+    // The first mount stays live and functional; only ONE tool pair exists.
+    expect(tools.get("lsp")).toBeDefined()
+    expect(tools.get("lsp_diagnostics")).toBeDefined()
+    await first.unmount()
+  })
+
   it("a throwing spawner fails the mount, releases the reservation and leaves no tools", async () => {
     const ctx = createContext()
     const tools = createToolRegistry(ctx)
@@ -139,6 +156,8 @@ describe("validateLspConfig", () => {
     expect(() => validateLspConfig(config({ maxStderrBytes: -1 }))).toThrow(/maxStderrBytes/)
     expect(() => validateLspConfig(config({ killGraceMs: 1.5 }))).toThrow(/killGraceMs/)
     expect(() => validateLspConfig(config({ shutdownTimeoutMs: 0 }))).toThrow(/shutdownTimeoutMs/)
+    expect(() => validateLspConfig(config({ startupTimeoutMs: -5 }))).toThrow(/startupTimeoutMs/)
+    expect(() => validateLspConfig(config({ startupTimeoutMs: 5.5 }))).toThrow(/startupTimeoutMs/)
   })
 })
 

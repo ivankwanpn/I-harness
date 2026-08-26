@@ -1,13 +1,17 @@
 // LSP instance: initialize handshake + transient didOpen lifecycle with a
 // serialized abortable query queue + bounded teardown (shutdown → exit →
 // grace → kill).
+import { pathToFileURL } from "node:url"
 import type { ConnectionSpec } from "./connection.ts"
 import { spawnLspConnection, type LspConnection } from "./connection.ts"
+import { normalizeHover, normalizeLocations } from "./translate.ts"
 
 export interface InstanceSpec extends ConnectionSpec {
   initializeOptions?: unknown
   /** Bound for the shutdown request during dispose (a hung request is treated as "shutdown failed"). */
   shutdownTimeoutMs: number
+  /** Bound for the initialize request during startup (a hung initialize rejects ready). Default 10_000. */
+  startupTimeoutMs?: number
 }
 
 export type LspOperation = "goToDefinition" | "findReferences" | "hover"
@@ -93,21 +97,34 @@ export class LspInstance {
   private disposed = false
   private queue: Promise<unknown> = Promise.resolve()
   readonly ready: Promise<void>
+  private readonly startupTimeoutMs: number
 
   constructor(spec: InstanceSpec, spawner?: (s: ConnectionSpec) => ReturnType<typeof import("node:child_process").spawn>) {
     this.conn = spawnLspConnection(spec, spawner)
     this.shutdownTimeoutMs = spec.shutdownTimeoutMs
     this.killGraceMs = spec.killGraceMs
+    this.startupTimeoutMs = spec.startupTimeoutMs ?? 10_000
     this.ready = this.initialize(spec.initializeOptions)
   }
 
   private async initialize(initOptions: unknown): Promise<void> {
-    const result = await this.conn.request("initialize", {
+    // Bound the startup handshake: a hung initialize must reject ready (the
+    // scheduler then disposes the instance) instead of hanging forever.
+    // The request's own rejection swallows if the timeout already won (the
+    // timeout's error is the one that surfaces to ready).
+    const init = this.conn.request("initialize", {
       processId: process.pid,
       rootUri: null,
       capabilities: {},
       ...(initOptions !== undefined ? { initializationOptions: initOptions } : {}),
     })
+    init.catch(() => undefined) // late rejection after a timeout win: not unhandled
+    const result = await Promise.race([
+      init,
+      sleep(this.startupTimeoutMs).then(() => {
+        throw new Error(`LSP_INITIALIZE_TIMEOUT: server did not answer initialize within ${this.startupTimeoutMs}ms`)
+      }),
+    ])
     this.capabilities = (result as { capabilities?: Record<string, unknown> }).capabilities ?? {}
     await this.conn.notify("initialized", {})
   }
@@ -171,24 +188,21 @@ export class LspInstance {
       }
       const result = await this.conn.request(method, params, signal)
       if (query.operation === "hover") {
-        if (result === null) return { kind: "hover", hover: null }
-        const h = result as { contents: unknown; range?: LspRange }
-        const contents = typeof h.contents === "string" ? h.contents : JSON.stringify(h.contents)
-        return { kind: "hover", hover: { contents, ...(h.range !== undefined ? { range: h.range } : {}) } }
+        const hover = normalizeHover(result)
+        return { kind: "hover", hover }
       }
-      const locations = (result as { locations?: unknown[] } | LspLocation[] | null) ?? []
-      const locs = Array.isArray(locations) ? locations : (locations as { locations: LspLocation[] }).locations
+      const locs = normalizeLocations(result)
       return locs.length === 0 ? { kind: "empty" } : { kind: "locations", locations: locs }
     })
   }
 
   private fileUri(filePath: string): string {
-    return `file://${filePath.replace(/\\/g, "/")}`
+    return pathToFileURL(filePath).href
   }
 
   private languageId(filePath: string): string {
     const ext = filePath.split(".").pop() ?? ""
-    return ext
+    return ext.toLowerCase()
   }
 
   /** Bounded teardown (spec §3.4): shutdown request (best-effort, bound by

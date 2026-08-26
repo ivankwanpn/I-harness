@@ -209,7 +209,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // best-effort teardown) — the handles unify with MCP's for the reverse
     // unmount below.
     for (const cfg of opts.lsp ?? []) {
-      lspHandles.push(await mountLspClient(ctx, tools, cfg))
+      // M18 final-review (cwd-vs-workspaceRoot): resolve file_path against the
+      // harness workspace when the config doesn't set cwd explicitly — the lsp
+      // tools are mounted with cwd = config.cwd ?? opts.workspace so they read
+      // files under the same root the fs tools expose.
+      lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
     // Mount the subagent + job tools so the main agent can delegate.
     // M8: persist child sessions through the same coordinator (child lineage
@@ -276,10 +280,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {
     // M17+M18: unmount MCP AND LSP servers after the run — the handles unify
-    // into ONE array and unmount in reverse mount order (MCP first if both
-    // were mounted), best-effort like the sandbox teardown: an unmount failure
-    // must not mask the run result. The arrays are NOT reversed in place (a
-    // shared-array reverse would be remount-unsafe); the copy is.
+    // into ONE array and unmount in reverse mount order (LSP last-mounted
+    // unmounts first), best-effort like the sandbox teardown: an unmount
+    // failure must not mask the run result. The arrays are NOT reversed in
+    // place (a shared-array reverse would be remount-unsafe); the copy is.
     const mounts = [...mcpHandles, ...lspHandles]
     for (const handle of mounts.reverse()) {
       try {

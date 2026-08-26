@@ -17,7 +17,11 @@ export interface LspMountHandle {
 
 // Module-level reservation so a serverName can only ever be live once (a
 // second mount with the same name is a hard error, not a silent shadow).
+// M18 core supports ONE LSP server per run: a second mount with a DIFFERENT
+// serverName is also a hard error (fail-loud, explicit — multi-server is an
+// M18 non-goal).
 const liveServerNames = new Set<string>()
+const ONE_SERVER_MESSAGE = "lsp: only one LSP server per run is supported (M18 core)"
 
 export async function mountLspClient(
   _ctx: PluginContext,
@@ -28,6 +32,11 @@ export async function mountLspClient(
   validateLspConfig(config)
   if (liveServerNames.has(config.serverName)) {
     throw new Error(`lsp: serverName "${config.serverName}" is already reserved by a live instance`)
+  }
+  // Any live instance already mounted → reject (the duplicate-name check above
+  // wins for the same name; this covers two DIFFERENT names).
+  if (liveServerNames.size > 0) {
+    throw new Error(ONE_SERVER_MESSAGE)
   }
   liveServerNames.add(config.serverName)
 
@@ -40,11 +49,14 @@ export async function mountLspClient(
     maxStderrBytes: config.maxStderrBytes ?? 1_000_000,
     killGraceMs: config.killGraceMs ?? 5_000,
     shutdownTimeoutMs: config.shutdownTimeoutMs ?? 4_000,
+    startupTimeoutMs: config.startupTimeoutMs,
   }
   // The instance's spawner slot takes a ConnectionSpec (broader param); the
-  // injected deps.spawner narrows it to InstanceSpec — safe contravariance.
+  // injected deps.spawner narrows it to InstanceSpec — a convenience
+  // downcast, runtime-safe because InstanceSpec extends ConnectionSpec.
   const spawner = deps?.spawner as ((s: ConnectionSpec) => ReturnType<typeof import("node:child_process").spawn>) | undefined
   let instance: LspInstance | undefined
+  let toolNames: string[] = []
   try {
     // Constructed inside the try: a synchronously-throwing spawner escapes the
     // constructor before an instance exists — nothing to dispose, but the
@@ -53,11 +65,16 @@ export async function mountLspClient(
     await instance.ready
     const toolConfig = { ...config, cwd: config.cwd ?? "." }
     const toolsList = createLspTools(instance, toolConfig, toolConfig.cwd)
+    toolNames = toolsList.map((t) => t.name)
     for (const t of toolsList) tools.register(t)
   } catch (err) {
     // Fail-closed process hygiene: a server that got as far as spawning is
     // disposed (best-effort) before the reservation is released.
     if (instance) await instance.dispose().catch(() => undefined)
+    // Half-mount cleanup (best-effort like M17): a mid-registration failure
+    // (e.g. lsp_diagnostics register throws after lsp was registered) must not
+    // leave orphaned tools behind.
+    for (const name of toolNames) tools.unregister(name)
     liveServerNames.delete(config.serverName)
     throw err
   }
@@ -73,7 +90,7 @@ export async function mountLspClient(
         await instance!.dispose()
       } finally {
         liveServerNames.delete(config.serverName)
-        for (const name of ["lsp", "lsp_diagnostics"] as const) tools.unregister(name)
+        for (const name of toolNames) tools.unregister(name)
       }
     },
   }

@@ -3,7 +3,7 @@
 // Both tools read the workspace only (no mutation) — marked isReadOnly +
 // isConcurrencySafe (the instance serializes its own queue).
 import { readFile } from "node:fs/promises"
-import { resolve } from "node:path"
+import { basename, resolve } from "node:path"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { LspInstance, LspQuery } from "./instance.ts"
 import { formatDiagnostics, formatHover, formatLocations } from "./render.ts"
@@ -26,8 +26,11 @@ function servesExtension(filePath: string, languages: string[]): boolean {
 
 function assertServesFile(config: LspToolConfig, filePath: string): void {
   if (!servesExtension(filePath, config.languages)) {
-    const dot = filePath.lastIndexOf(".")
-    const ext = dot >= 0 ? filePath.slice(dot + 1) : filePath
+    // Derive the extension from the BASENAME so extensionless files error with
+    // ".<no extension>" instead of the whole path's last dot segment.
+    const base = basename(filePath)
+    const dot = base.lastIndexOf(".")
+    const ext = dot >= 0 ? base.slice(dot + 1) : "no extension"
     throw new Error(`LSP_NO_SERVER_FOR_FILE: no mounted server handles .${ext} files`)
   }
 }
@@ -46,8 +49,8 @@ export function createLspTools(instance: LspInstance, config: LspToolConfig, wor
         properties: {
           operation: { type: "string", enum: ["goToDefinition", "findReferences", "hover"] },
           file_path: { type: "string" },
-          line: { type: "number" },
-          character: { type: "number" },
+          line: { type: "number", minimum: 1 },
+          character: { type: "number", minimum: 1 },
         },
         required: ["operation", "file_path", "line", "character"],
       },
@@ -75,8 +78,8 @@ export function createLspTools(instance: LspInstance, config: LspToolConfig, wor
         type: "object",
         properties: {
           file_path: { type: "string" },
-          line: { type: "number" },
-          character: { type: "number" },
+          line: { type: "number", minimum: 1 },
+          character: { type: "number", minimum: 1 },
         },
         required: ["file_path"],
       },

@@ -21,6 +21,29 @@ describe("render", () => {
     expect(formatHover({ kind: "hover", hover: null }, { maxResultChars: 16000 })).toContain("No hover information")
   })
 
+  it("formatHover renders the hover range as a trailing 1-based range line", () => {
+    const out = formatHover(
+      { kind: "hover", hover: { contents: "doc", range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } } },
+      { maxResultChars: 16000 },
+    )
+    expect(out).toBe("doc\n1:4-1:8")
+  })
+
+  it("formatHover truncates at maxResultChars with the … marker", () => {
+    const out = formatHover({ kind: "hover", hover: { contents: "x".repeat(200) } }, { maxResultChars: 100 })
+    expect(out.length).toBe(102) // 100 chars + "\n…"
+    expect(out.endsWith("…")).toBe(true)
+  })
+
+  it("formatDiagnostics truncates at maxResultChars with the … marker", () => {
+    const out = formatDiagnostics(
+      [{ range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, severity: 1, message: "m".repeat(200) }],
+      { maxResults: 50, maxResultChars: 100 },
+    )
+    expect(out.length).toBe(102) // 100 chars + "\n…"
+    expect(out.endsWith("…")).toBe(true)
+  })
+
   it("formatDiagnostics renders severity + position + message", () => {
     const out = formatDiagnostics([
       { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, severity: 1, message: "syntax error", source: "tsc" },
@@ -42,6 +65,20 @@ describe("render", () => {
       { uri: "file:///w/a.ts", range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } },
     ] }, { workspaceRoot: "/w/", maxLocations: 100, maxResultChars: 16000 })
     expect(out).toBe("a.ts:1:4-1:8")
+  })
+
+  it("formatLocations slices canonical win32 file:///C:/... URIs relative to a C:/ws-style root (drive-insensitive)", () => {
+    const out = formatLocations({ kind: "locations", locations: [
+      { uri: "file:///C:/ws/a.ts", range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } },
+    ] }, { workspaceRoot: "c:/ws", maxLocations: 100, maxResultChars: 16000 })
+    expect(out).toBe("a.ts:1:4-1:8")
+  })
+
+  it("formatLocations renders a canonical file:///D:/... URI workspace-relative under a D:/ws root and decodes percent-escapes", () => {
+    const out = formatLocations({ kind: "locations", locations: [
+      { uri: "file:///D:/ws/b%20c.ts", range: { start: { line: 0, character: 3 }, end: { line: 0, character: 7 } } },
+    ] }, { workspaceRoot: "D:/ws", maxLocations: 100, maxResultChars: 16000 })
+    expect(out).toBe("b c.ts:1:4-1:8")
   })
 
   it("formatDiagnostics renders a 1-based position for a multi-line range", () => {

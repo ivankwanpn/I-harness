@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { pathToFileURL } from "node:url"
 import { LspInstance, type InstanceSpec, type LspQuery } from "../src/index.ts"
 import { createFakeLspServer } from "./fake-server.ts"
 
@@ -6,8 +7,9 @@ const DEF = "textDocument/definition"
 const HOVER = "textDocument/hover"
 
 const CAPS = { definitionProvider: true, referencesProvider: true, hoverProvider: true }
+const FILE_A_TS = pathToFileURL("/w/a.ts").href // canonical form (win32: file:///D:/w/a.ts)
 const RESULT_LOCS = [
-  { uri: "file:///w/a.ts", range: { start: { line: 0, character: 2 }, end: { line: 0, character: 7 } } },
+  { uri: FILE_A_TS, range: { start: { line: 0, character: 2 }, end: { line: 0, character: 7 } } },
 ]
 
 function spec(overrides?: Partial<InstanceSpec>): InstanceSpec {
@@ -64,6 +66,16 @@ describe("LspInstance ready", () => {
     expect(methodOf(initializedMsg)).toBe("initialized")
     expect((initializedMsg as { id?: number }).id).toBeUndefined()
   })
+
+  it("rejects ready with LSP_INITIALIZE_TIMEOUT when initialize is never answered (bounded startup)", async () => {
+    const server = createFakeLspServer({}) // no initialize script entry → request hangs
+    const inst = new LspInstance(spec({ startupTimeoutMs: 50 }), server.spawner)
+    const start = Date.now()
+    await expect(inst.ready).rejects.toThrow(/LSP_INITIALIZE_TIMEOUT.*50/)
+    expect(Date.now() - start).toBeGreaterThanOrEqual(40)
+    expect(Date.now() - start).toBeLessThan(2_000)
+    await inst.dispose().catch(() => undefined) // cleanup: bounded teardown of the hung server
+  })
 })
 
 describe("LspInstance query", () => {
@@ -85,12 +97,12 @@ describe("LspInstance query", () => {
     ])
     const open = server.server.notifications.find((n) => n.method === "textDocument/didOpen")!
     const td = paramsOf(open).textDocument as { uri: string; languageId: string; version: number; text: string }
-    expect(td.uri).toBe("file:///w/a.ts")
+    expect(td.uri).toBe(FILE_A_TS)
     expect(td.languageId).toBe("ts")
     expect(td.version).toBe(1)
     expect(td.text).toBe("const x = 1")
     const close = server.server.notifications.find((n) => n.method === "textDocument/didClose")!
-    expect(paramsOf(close).textDocument).toEqual({ uri: "file:///w/a.ts" })
+    expect(paramsOf(close).textDocument).toEqual({ uri: FILE_A_TS })
   })
 
   it("maps 1-based query positions to 0-based wire positions", async () => {
@@ -147,6 +159,23 @@ describe("LspInstance query", () => {
       kind: "hover",
       hover: null,
     })
+  })
+
+  it("normalizes malformed hover (undefined contents) to hover: null instead of JSON.stringify(undefined)", async () => {
+    const server = createFakeLspServer({ initialize: { capabilities: CAPS }, [HOVER]: {} })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    await expect(inst.query({ operation: "hover", filePath: "/w/a.ts", line: 1, character: 1 }, "x")).resolves.toEqual({
+      kind: "hover",
+      hover: null,
+    })
+  })
+
+  it("normalizes { locations: null } to empty instead of throwing (locs.length on null)", async () => {
+    const server = createFakeLspServer({ initialize: { capabilities: CAPS }, [DEF]: { locations: null } })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    await expect(inst.query(definition(), "x")).resolves.toEqual({ kind: "empty" })
   })
 
   it("normalizes string hover contents", async () => {
@@ -280,7 +309,7 @@ describe("LspInstance diagnostics", () => {
       "textDocument/didClose",
     ])
     const req = server.server.requests.find((r) => methodOf(r) === DIAG)!
-    expect(paramsOf(req).textDocument).toEqual({ uri: "file:///w/a.ts" })
+    expect(paramsOf(req).textDocument).toEqual({ uri: FILE_A_TS })
   })
 
   it("normalizes null / plain-array payloads (fail-closed)", async () => {
