@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@i-harness/agent-team": "workspace:*",
     "@i-harness/compaction": "workspace:*",
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-session": "workspace:*",
@@ -42,7 +43,6 @@
     "@i-harness/session-query": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
     "@i-harness/subagent": "workspace:*",
-    "@i-harness/agent-team": "workspace:*",
     "@vscode/ripgrep": "^1.18.0"
   }
 }

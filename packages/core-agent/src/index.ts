@@ -30,6 +30,11 @@ export interface AgentDeps {
   session: Session
   tools: ToolRegistry
   model: ModelClient
+  // M19 (Ruling 24): the executing session's id, seeded onto every prepared
+  // ToolExec so tool bodies can attribute the caller (agent-team resolves
+  // team-tool callers from it). Additive: absent → ToolExec.sessionId stays
+  // undefined (pre-M19 behavior).
+  sessionId?: string
 }
 
 export interface AgentResult {
@@ -131,7 +136,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // order and emits agent/post-tool from its commit lane; it throws
         // "agent aborted" on step abort (draining + synthesizing results for
         // never-started calls) and rethrows the first tool failure.
-        await executeToolCalls(ctx, deps.session, deps.tools, batch, { maxParallel, signal: abort })
+        await executeToolCalls(ctx, deps.session, deps.tools, batch, { maxParallel, signal: abort, sessionId: deps.sessionId })
       }
 
       if (stepText) append(deps.session, { type: "assistant/message", text: stepText })

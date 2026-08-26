@@ -203,6 +203,9 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       const agent = createAgent(childCtx, {
         session: existing.session, tools: childReg, model,
         systemPrompt: role.systemPrompt, signal: controller.signal,
+        // M19 (Ruling 24): attribute the resumed child's tool calls to its
+        // team member via the durable session id.
+        ...(existing.sessionId ? { sessionId: existing.sessionId } : {}),
       })
       if (existing.sessionId) deps.agents.register(existing.sessionId, agent)
       existing.status = "waiting"
@@ -282,7 +285,14 @@ function parseForkTurns(value: string | number | undefined): "none" | "all" | nu
 // fresh AbortController is minted per turn so interrupt_agent targets the
 // current turn, and each turn re-opens the entry's job (running -> completed /
 // killed / error) so wait_agent/job_output observe the followup lifecycle.
-function driveFollowups(deps: SubagentToolDeps, entry: ChildAgentEntry, sessionId: string): Promise<void> {
+// Exported for the agent-team scheduler (M19 Ruling 28): the team wakeup
+// policy is the SAME serialized drain, shared instead of vendored.
+export interface FollowupDeps {
+  agents: AgentRegistry
+  table: AgentTable
+  jobs: JobRegistry
+}
+export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessionId: string): Promise<void> {
   const prev = entry.followupChain ?? Promise.resolve()
   const next = prev.then(async () => {
     const agent = deps.agents.get(sessionId)

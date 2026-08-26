@@ -90,6 +90,10 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     model,
     systemPrompt: opts.role.systemPrompt,
     signal: controller.signal,
+    // M19 (Ruling 24): the child's durable session id is seeded onto every
+    // prepared ToolExec so the agent-team scheduler can attribute the child's
+    // tool calls to its team member (the roster maps sessionId → member).
+    ...(sessionId !== undefined ? { sessionId } : {}),
   })
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName)

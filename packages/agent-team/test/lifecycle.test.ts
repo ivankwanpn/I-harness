@@ -14,7 +14,7 @@ import { describe, expect, it } from "vitest"
 import { mountAgentTeams, type TeamDeps } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { createSession } from "@i-harness/core-session"
+import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
 import { createAgentRegistry } from "@i-harness/core-agent"
 import { createExecService } from "@i-harness/exec"
@@ -133,8 +133,13 @@ describe("mountAgentTeams lifecycle", () => {
     const table = createAgentTable()
     const entrySession = createSession()
     table.add("lead/helper", { path: "lead/helper", status: "waiting", session: entrySession, controller: new AbortController(), mailbox: [], sessionId: "sess-1" })
-    // coordinator whose flush ALWAYS throws (write-behind durability failure)
-    const failingCoordinator = { flush: async () => { throw new Error("disk full") } } as unknown as SessionCoordinator
+    // coordinator whose flush fails ONLY on the CHILD session ("sess-1") —
+    // the parent session log must still commit (that is the queue's
+    // durability), while the deliver write-behind durability point fails
+    // (write-behind durability failure on the target).
+    const failingCoordinator = {
+      flush: async (sessionId: string) => { if (sessionId === "sess-1") throw new Error("disk full") },
+    } as unknown as SessionCoordinator
     const deps = makeDeps({
       parentSession,
       subagents: {
@@ -221,6 +226,161 @@ describe("mountAgentTeams lifecycle", () => {
       const deliv = parentSession.events.filter((e) => e.type === "team/message/delivered")
       expect(deliv).toHaveLength(0)
       expect(parentSession.events.filter((e) => e.type === "team/message/queued")).toHaveLength(1)
+    } finally {
+      await handle.unmount()
+    }
+  })
+
+  it("resolveCaller maps a teammate ToolExec.sessionId to the exact member identity", async () => {
+    // M19 Ruling 24: a teammate's tool call carries the durable child session
+    // id on ToolExec.sessionId. The scheduler must resolve it to the MEMBER
+    // (roster id + name), never to the lead — otherwise a teammate's
+    // send_message to "lead" is falsely rejected as TEAM_SELF_MESSAGE (the
+    // old resolve-callers-to-lead behavior), and a message to another
+    // teammate is recorded with the LEAD's senderId/senderName.
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const parentSession = createSession()
+    parentSession.events.push(
+      { type: "team/member", version: 1, teamId: "lead-123", member: { id: "child-a", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } },
+      { type: "team/member", version: 1, teamId: "lead-123", member: { id: "child-a", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "sess-helper" } },
+      { type: "team/member", version: 1, teamId: "lead-123", member: { id: "child-b", name: "worker", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } },
+      { type: "team/member", version: 1, teamId: "lead-123", member: { id: "child-b", name: "worker", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "sess-worker" } },
+    )
+    const table = createAgentTable()
+    const entryHelper = createSession()
+    const entryWorker = createSession()
+    table.add("lead/helper", { path: "lead/helper", status: "waiting", session: entryHelper, controller: new AbortController(), mailbox: [], sessionId: "sess-helper" })
+    table.add("lead/worker", { path: "lead/worker", status: "waiting", session: entryWorker, controller: new AbortController(), mailbox: [], sessionId: "sess-worker" })
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({ parentSession, subagents: { ...makeDeps().subagents, table } }))
+    try {
+      const send = tools.get("send_message")!
+      // 1) helper → lead: succeeds (no TEAM_SELF_MESSAGE) and is recorded with
+      //    the MEMBER's identity, not teamId/"lead".
+      const out1 = (await send.execute({ target: "lead", message: "status" }, { sessionId: "sess-helper" })) as { status: string }
+      expect(out1.status).toBe("accepted")
+      const m1 = parentSession.events.find((e) => e.type === "team/message/queued")?.message as { senderId: string; senderName: string; targetId: string }
+      expect(m1.senderId).toBe("child-a")
+      expect(m1.senderName).toBe("helper")
+      expect(m1.targetId).toBe("lead-123")
+      // 2) helper → worker: member-to-member message carries the member ids.
+      const out2 = (await send.execute({ target: "worker", message: "task" }, { sessionId: "sess-helper" })) as { status: string }
+      expect(out2.status).toBe("accepted")
+      const m2 = parentSession.events.filter((e) => e.type === "team/message/queued")[1]?.message as { senderId: string; senderName: string; targetId: string }
+      expect(m2.senderId).toBe("child-a")
+      expect(m2.senderName).toBe("helper")
+      expect(m2.targetId).toBe("child-b")
+      // 3) helper → helper (self): the member identity is EXACT, so it is
+      //    rejected — with caller.id = teamId this check could never fire.
+      await expect(send.execute({ target: "helper", message: "self" }, { sessionId: "sess-helper" })).rejects.toThrow(/cannot message yourself/)
+      // 4) the LEAD's session id (parent) resolves to the lead, not a member.
+      const out4 = (await send.execute({ target: "helper", message: "go" }, { sessionId: "sess-parent" })) as { status: string }
+      expect(out4.status).toBe("accepted")
+      const m4 = parentSession.events.filter((e) => e.type === "team/message/queued").at(-1)?.message as { senderId: string; senderName: string }
+      expect(m4.senderId).toBe("lead-123")
+      expect(m4.senderName).toBe("lead")
+    } finally {
+      await handle.unmount()
+    }
+  })
+
+  it("spawn_teammate threads fork_turns to the spawn bridge", async () => {
+    // M19 Ruling 27: the roster bound fork_turns to the tool but the bridge
+    // call dropped it. With the seam override we observe the LAST argument:
+    // fork_turns: "3" (string from the tool) must reach the bridge normalized
+    // to forkTurns: 3 with context "fork".
+    let seen: { context: string; opts?: { forkTurns?: "none" | "all" | number } } | undefined
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({
+      childSessionHoldsPrompt: async () => true,
+      spawnChild: async (name, _prompt, context, opts) => {
+        seen = { context, opts }
+        return { path: `lead/${name}`, jobId: `j-${name}`, sessionId: `s-${name}` }
+      },
+    }))
+    try {
+      const spawn = tools.get("spawn_teammate")!
+      const out = (await spawn.execute({ name: "helper", description: "d", prompt: "work", context: "fork", fork_turns: "3" }, {})) as { member: { name: string } }
+      expect(out.member.name).toBe("helper")
+      expect(seen).toEqual({ context: "fork", opts: { forkTurns: 3 } })
+    } finally {
+      await handle.unmount()
+    }
+  })
+
+  it("wait_agent wakes on the spawn-completion status edge (running→waiting)", async () => {
+    // M19 Ruling 26: a child's initial turn completing after spawn flips its
+    // status running→waiting WITHOUT appending any team event — a wait_agent
+    // waiter registered during the turn would otherwise sleep until timeout.
+    // The REAL spawn bridge + REAL agent loop are used with a gated mock
+    // model: the child's turn is HELD (table status "running") until the wait
+    // has registered, then released — the edge fires while the waiter is
+    // inside its wait, deterministically. The roster's durability checkpoint
+    // is satisfied by an in-memory coordinator (write-behind mirror
+    // semantics: enqueue + flush + load).
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const parentSession = createSession()
+
+    const memSessions = new Map<string, SessionEvent[]>()
+    const coordinator = {
+      create: async (meta?: { sessionId?: string }) => {
+        const id = meta?.sessionId ?? `mem-${memSessions.size}`
+        memSessions.set(id, [])
+        return { id }
+      },
+      append: async (sessionId: string, events: SessionEvent[]) => { memSessions.get(sessionId)?.push(...events) },
+      enqueue: (sessionId: string, events: SessionEvent[]) => {
+        const list = memSessions.get(sessionId) ?? []
+        list.push(...events)
+        memSessions.set(sessionId, list)
+      },
+      load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(memSessions.get(sessionId) ?? [])] } }),
+      list: async () => [...memSessions.keys()],
+      flush: async () => {},
+      close: async () => {},
+      putDocument: async () => {},
+      getDocument: async () => undefined,
+    } as unknown as SessionCoordinator
+
+    // The child's turn blocks on the gate, so it is provably still RUNNING
+    // while wait_agent below registers (spawn returns after the agent started,
+    // not after it finished).
+    let releaseTurn!: () => void
+    const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve })
+    const gatedModel: ModelClient = {
+      async *stream() {
+        await turnGate
+        yield { type: "text/chunk", text: "child turn done" }
+        yield { type: "end" }
+      },
+    }
+
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({
+      parentSession,
+      parentModel: gatedModel,
+      subagents: {
+        table: createAgentTable(),
+        jobs: createJobRegistry(),
+        roles: createRoleRegistry(),
+        agents: createAgentRegistry(),
+        exec: createExecService(),
+        providers: createProviderRegistry(),
+        childSessions: { coordinator, parentSessionId: "sess-parent" },
+      },
+    }))
+    try {
+      const spawn = tools.get("spawn_teammate")!
+      const out = (await spawn.execute({ name: "helper", description: "d", prompt: "work" }, {})) as { member: { name: string } }
+      expect(out.member.name).toBe("helper")
+      // The default timeout is 30s; the wait MUST resolve on the edge long
+      // before it.
+      const wait = tools.get("wait_agent")!
+      const waitP = wait.execute({ timeout_ms: 30_000 }, {})
+      releaseTurn() // now the child's turn completes → running→waiting edge
+      const res = (await waitP) as { timedOut: boolean }
+      expect(res.timedOut).toBe(false)
     } finally {
       await handle.unmount()
     }
