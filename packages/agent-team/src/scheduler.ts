@@ -107,7 +107,26 @@ export async function mountAgentTeams(
   if (liveTeams.size > 0) {
     throw new Error("agent-team: only one team per run is supported (M19)")
   }
-  const teamId = `lead-${randomUUID()}`
+
+  // ---- domain over the SHARED folded state (restore path) ----
+  // The team log lives in the parent (lead) session events. foldTeam is a
+  // full replay (spec §3.4) so a crash-recovered mount sees every committed
+  // member/message/task; the transact is seeded with that same state so
+  // recovery transitions re-validate against prior events. The CANONICAL
+  // teamId is derived from the log: on restore the first team/* event's
+  // teamId is authoritative (member ids and old-lead-targeted queued message
+  // keys are stable; only a freshly minted lead id would strand them).
+  const ledger = deps.parentSession.events as unknown as TeamEvent[]
+  const state = foldTeam(ledger).state
+  let canonicalTeamId: string | undefined
+  for (const e of ledger) {
+    const t = (e as { type?: unknown }).type
+    if (typeof t === "string" && t.startsWith("team/")) {
+      canonicalTeamId = (e as TeamEvent).teamId
+      break
+    }
+  }
+  const teamId = canonicalTeamId ?? `lead-${randomUUID()}`
   liveTeams.add(teamId)
   let unmounted = false
   // Every failure path below must release the reservation — the idempotent
@@ -115,13 +134,11 @@ export async function mountAgentTeams(
   try {
     const sub = deps.subagents
     let teamToolNames: string[] = []
-
-    // ---- domain over the SHARED folded state (restore path) ----
-    // The team log lives in the parent (lead) session events. foldTeam is a
-    // full replay (spec §3.4) so a crash-recovered mount sees every committed
-    // member/message/task; the transact is seeded with that same state so
-    // recovery transitions re-validate against prior events.
-    const state = foldTeam(deps.parentSession.events as unknown as TeamEvent[]).state
+    // Teammate role tool surface (Minor 5): derived from the CREATED team tools
+    // (Ruling 19 discipline) minus the Lead-only ones; populated right after
+    // createTeamTools below — spawns only ever happen post-mount, so the
+    // closure reads the final value.
+    let teamRoleTools: string[] = [...TEAMMATE_BASE_TOOLS]
     const activity = createActivity({ waitMinMs: cfg.waitMinMs, waitMaxMs: cfg.waitMaxMs, waitDefaultMs: cfg.waitDefaultMs })
     const lead: TeamLead = {
       // every team event is appended into the parent session log; the parent's
@@ -147,7 +164,7 @@ export async function mountAgentTeams(
     // forkTurns derives from the roster's context selector: "fresh" → none,
     // "fork" → all.
     const realSpawnChild = async (name: string, prompt: string, context: "fresh" | "fork"): Promise<{ path: string; jobId: string; sessionId?: string }> => {
-      const role = sub.roles.get(TEAMMATE_ROLE_NAME) ?? teammateRole()
+      const role = sub.roles.get(TEAMMATE_ROLE_NAME) ?? teammateRole(teamRoleTools)
       return spawnChild({
         taskName: name,
         message: prompt,
@@ -234,7 +251,16 @@ export async function mountAgentTeams(
         // Flush the parent's write-behind so the ack means on-disk.
         append(deps.parentSession, { type: "subagent/inbox", messageId, message: content })
         if (sub.childSessions) {
-          try { await sub.childSessions.coordinator.flush(sub.childSessions.parentSessionId) } catch { /* best-effort: the mirror retries at the next flush point */ }
+          try {
+            await sub.childSessions.coordinator.flush(sub.childSessions.parentSessionId)
+          } catch {
+            // FAIL CLOSED (Ruling 22): the flush is the durability point — a
+            // rejection means the message may still be in the volatile
+            // write-behind. Returning true would let the mailbox append
+            // delivered and recoverRoot skip this id forever. False keeps it
+            // queued (at-least-once) for a recoverRoot retry.
+            return false
+          }
         }
         activity.notify()
         return true
@@ -256,7 +282,13 @@ export async function mountAgentTeams(
       // true"). A crash right after this returns true must not lose it — the
       // mailbox's delivered marker is only appended after this resolves.
       if (entry.sessionId && sub.childSessions) {
-        try { await sub.childSessions.coordinator.flush(entry.sessionId) } catch { /* best-effort: the mirror retains + retries */ }
+        try {
+          await sub.childSessions.coordinator.flush(entry.sessionId)
+        } catch {
+          // FAIL CLOSED (Ruling 22): see the lead branch — flush rejection ⇒
+          // not durably delivered ⇒ return false so the message stays queued.
+          return false
+        }
       }
       if (delivery === "wakeup" && entry.sessionId) {
         // Wake: drive the serialized followup chain (same as subagent's
@@ -309,6 +341,10 @@ export async function mountAgentTeams(
     // Tool names DERIVED from the created tools (Ruling 19) — mount and
     // unmount can never drift from each other or from Task 9's surface.
     teamToolNames = teamTools.map((t) => t.name)
+    // Minor 5: the teammate role's tool surface derives from the SAME tool
+    // list — all team tools minus the two Lead-only ones (spawn_teammate /
+    // interrupt_agent). Never hardcode the 10 names in two places.
+    teamRoleTools = [...TEAMMATE_BASE_TOOLS, ...teamToolNames.filter((n) => n !== "spawn_teammate" && n !== "interrupt_agent")]
 
     // ---- recovery (crash restore), BEFORE the tools are live ----
     // (a) reconcile stuck provisioning members (provisioning→active if the
@@ -372,14 +408,14 @@ export async function mountAgentTeams(
 }
 
 // Default teammate role (synthesized, NOT registered — the shared role
-// registry stays untouched): working tools + the 10 team tools, resolved from
-// the parent registry at spawnChild time.
-function teammateRole(): SubagentRole {
+// registry stays untouched): working tools + the team tool surface derived at
+// mount (Minor 5), resolved from the parent registry at spawnChild time.
+function teammateRole(teamToolNames: string[]): SubagentRole {
   return {
     name: TEAMMATE_ROLE_NAME,
-    description: "Team member with the 10 team tools (no spawn/interrupt authority — the domain layer enforces Lead-only).",
+    description: "Team member with the team tools (no spawn/interrupt authority — the domain layer enforces Lead-only).",
     systemPrompt: "You are a teammate in an agent team. Work on the assigned task, keep the shared task board current, and communicate with the Lead or other members through the team send/followup tools.",
-    tools: [...TEAMMATE_BASE_TOOLS, "list_members", "send_message", "followup_task", "wait_agent", "team_task_create", "team_task_list", "team_task_get", "team_task_update"],
+    tools: [...teamToolNames],
   }
 }
 
