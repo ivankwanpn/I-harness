@@ -12,6 +12,115 @@ export type LLMStreamEvent =
 // log); llm-seam re-exports it rather than re-declaring a duplicate type.
 export type { LLMMessage, LLMContentPart, ImageInput, ImageMediaType } from "@i-harness/core-session"
 
+export type RetryableErrorCode =
+  | "RATE_LIMIT"
+  | "SERVER"
+  | "TIMEOUT"
+  | "TRANSPORT"
+  | "EMPTY_RESPONSE"
+  | "CONTEXT_WINDOW_EXCEEDED"
+  | "QUOTA"
+
+export interface RetryBackoffConfig {
+  initialDelayMs?: number
+  maxDelayMs?: number
+  jitterRatio?: number
+}
+
+export interface NormalRetryPolicyConfig {
+  mode: "normal"
+  maxRetries?: number
+  retryableCodes?: string[]
+  backoff?: RetryBackoffConfig
+}
+
+export interface AlwaysRetryPolicyConfig {
+  mode: "always"
+  backoff?: RetryBackoffConfig
+}
+
+export type RetryPolicyConfig = NormalRetryPolicyConfig | AlwaysRetryPolicyConfig
+
+export interface ResolvedRetryBackoff {
+  readonly initialDelayMs: number
+  readonly maxDelayMs: number
+  readonly jitterRatio: number
+}
+
+export interface ResolvedNormalRetryPolicy extends ResolvedRetryBackoff {
+  readonly mode: "normal"
+  readonly maxRetries: number
+  readonly retryableCodes: readonly string[]
+}
+
+export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {
+  readonly mode: "always"
+}
+
+export type ResolvedRetryPolicy = ResolvedNormalRetryPolicy | ResolvedAlwaysRetryPolicy
+
+const DEFAULT_MAX_RETRIES = 5
+const DEFAULT_INITIAL_DELAY_MS = 500
+const DEFAULT_MAX_DELAY_MS = 10_000
+const DEFAULT_JITTER_RATIO = 0.1
+const DEFAULT_RETRYABLE_CODES = Object.freeze(["RATE_LIMIT", "SERVER", "TIMEOUT", "TRANSPORT", "EMPTY_RESPONSE"])
+
+function resolveBackoff(config: RetryBackoffConfig | undefined, path: string): ResolvedRetryBackoff {
+  const initialDelayMs = config?.initialDelayMs ?? DEFAULT_INITIAL_DELAY_MS
+  const maxDelayMs = config?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS
+  const jitterRatio = config?.jitterRatio ?? DEFAULT_JITTER_RATIO
+  if (!Number.isFinite(initialDelayMs) || initialDelayMs <= 0) throw new Error(`${path}.initialDelayMs must be a positive finite number`)
+  if (!Number.isFinite(maxDelayMs) || maxDelayMs <= 0) throw new Error(`${path}.maxDelayMs must be a positive finite number`)
+  if (initialDelayMs > maxDelayMs) throw new Error(`${path}.initialDelayMs must be <= maxDelayMs`)
+  if (!Number.isFinite(jitterRatio) || jitterRatio < 0 || jitterRatio > 1) throw new Error(`${path}.jitterRatio must be between 0 and 1`)
+  return Object.freeze({ initialDelayMs, maxDelayMs, jitterRatio })
+}
+
+export function resolveRetryPolicy(config: RetryPolicyConfig | undefined, path = "retryPolicy"): ResolvedRetryPolicy {
+  if (config === undefined) {
+    return Object.freeze({ mode: "normal", maxRetries: DEFAULT_MAX_RETRIES, retryableCodes: [...DEFAULT_RETRYABLE_CODES], ...resolveBackoff(undefined, `${path}.backoff`) })
+  }
+  if (config.mode === "normal") {
+    const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES
+    if (!Number.isSafeInteger(maxRetries) || maxRetries < 0) throw new Error(`${path}.maxRetries must be a non-negative safe integer`)
+    const retryableCodes = config.retryableCodes ?? [...DEFAULT_RETRYABLE_CODES]
+    if (retryableCodes.length === 0) throw new Error(`${path}.retryableCodes must not be empty`)
+    if (new Set(retryableCodes).size !== retryableCodes.length) throw new Error(`${path}.retryableCodes must not contain duplicates`)
+    return Object.freeze({ mode: "normal", maxRetries, retryableCodes: Object.freeze([...retryableCodes]), ...resolveBackoff(config.backoff, `${path}.backoff`) })
+  }
+  if (config.mode === "always") {
+    return Object.freeze({ mode: "always", ...resolveBackoff(config.backoff, `${path}.backoff`) })
+  }
+  throw new Error(`${path}.mode must be "normal" or "always"`)
+}
+
+// Error classification: prefer a stable code (err.code / err.cause), then a
+// message regex fallback.
+const CONTEXT_OVERFLOW_RE = /(?:^|[^a-z0-9])context[\s_-]?(?:length|window)[\s_-]?(?:exceed|overflow)/i
+const QUOTA_RE = /(?:quota|balance|credit|budget|usage[\s_-]limit)[\s_-]?(?:exceeded|exhausted|reached|depleted)/i
+const RATE_RE = /429|rate[\s_-]limit|too many requests/i
+const TIMEOUT_RE = /timeout|timed?\s?out|ETIMEDOUT|ECONNRESET/i
+const SERVER_RE = /5\d\d|internal server|bad gateway|service unavailable/i
+
+export function retryErrorCode(err: unknown): string | undefined {
+  // Walk the cause chain for a structured code.
+  let cur: unknown = err
+  for (let i = 0; i < 5 && cur != null; i++) {
+    if (cur instanceof Error) {
+      const code = (cur as { code?: unknown }).code
+      if (typeof code === "string") return code
+    }
+    cur = (cur as { cause?: unknown }).cause
+  }
+  const msg = err instanceof Error ? `${err.message} ${err.cause instanceof Error ? err.cause.message : ""}` : String(err)
+  if (CONTEXT_OVERFLOW_RE.test(msg)) return "CONTEXT_WINDOW_EXCEEDED"
+  if (QUOTA_RE.test(msg)) return "QUOTA"
+  if (RATE_RE.test(msg)) return "RATE_LIMIT"
+  if (TIMEOUT_RE.test(msg)) return "TIMEOUT"
+  if (SERVER_RE.test(msg)) return "SERVER"
+  return undefined
+}
+
 export interface ToolSchema {
   name: string
   description: string
