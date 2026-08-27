@@ -118,18 +118,42 @@ describe("compaction engine", () => {
     expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(2)
   })
 
-  it("resetWindow keeps the last retainLast events and appends a compaction/reset marker (M20)", async () => {
+  // Fix round 1 (M20 Ruling 4): resetWindow MUST be append-only. Persistence
+  // backends are append-only (sqlite/JSONL mirror via onAppend), so in-place
+  // truncation never reached disk — durable log and in-memory truth diverged.
+  // The removal is instead recorded as a `compaction/reset` marker carrying
+  // `removedSeqs`; deriveMessages shadows exactly those seqs (same mechanism
+  // as M11 `compaction/summary.shadowedSeqs`). Recovery replays the log ⇒
+  // nothing lost: every raw event stays durably recorded.
+  it("resetWindow is append-only: log keeps ALL events, marker carries removedSeqs, surface drops them (Ruling 4)", async () => {
     const s = createSession()
     for (let i = 0; i < 10; i++) append(s, { type: "user/message", text: `msg ${i}` })
     const engine = createCompactionEngine({ model: mockModel("x"), config })
     const result = await engine.resetWindow(s, 4)
-    expect(result).toEqual({ compacted: true, shadowedSeqs: [], reset: true })
-    // kept: last 4 events by seq + the new marker
-    expect(s.events.map((e) => e.type)).toEqual(["user/message", "user/message", "user/message", "user/message", "compaction/reset"])
-    expect(s.events.map((e) => (e as { text?: string }).text)).toEqual(["msg 6", "msg 7", "msg 8", "msg 9", undefined])
+    expect(result.compacted).toBe(true)
+    expect(result.reset).toBe(true)
+    // durability invariant: NOTHING was removed from the log — recovery replays ⇒ nothing lost
+    expect(s.events.map((e) => e.type)).toEqual([
+      "user/message", "user/message", "user/message", "user/message", "user/message",
+      "user/message", "user/message", "user/message", "user/message", "user/message",
+      "compaction/reset",
+    ])
+    expect(s.events.map((e) => (e as { text?: string }).text)).toEqual([
+      "msg 0", "msg 1", "msg 2", "msg 3", "msg 4", "msg 5", "msg 6", "msg 7", "msg 8", "msg 9",
+      undefined,
+    ])
+    const marker = s.events.at(-1) as unknown as { removedSeqs: number[] }
+    expect(marker.removedSeqs).toEqual([0, 1, 2, 3, 4, 5]) // everything except the retained tail {6,7,8,9}
+    // projection: the model sees ONLY the retained tail
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "msg 6" },
+      { role: "user", content: "msg 7" },
+      { role: "user", content: "msg 8" },
+      { role: "user", content: "msg 9" },
+    ])
   })
 
-  it("resetWindow keeps seq-undefined events even when outside the retained tail (controller rule)", async () => {
+  it("resetWindow keeps seq-undefined events (in log AND on the surface) even outside the retained tail (controller rule)", async () => {
     const s = createSession()
     for (let i = 0; i < 5; i++) append(s, { type: "user/message", text: `msg ${i}` })
     // externally-injected event WITHOUT seq (plugin lane) — must survive the reset
@@ -137,9 +161,14 @@ describe("compaction engine", () => {
     const engine = createCompactionEngine({ model: mockModel("x"), config })
     const result = await engine.resetWindow(s, 3)
     expect(result.compacted).toBe(true)
-    const texts = s.events.filter((e) => e.type === "user/message").map((e) => (e as { text: string }).text)
-    // retained tail by seq = msg2..msg4; the seq-less injected event survives too
-    expect(texts).toEqual(["injected-without-seq", "msg 2", "msg 3", "msg 4"])
+    expect(result.reset).toBe(true)
+    // durability: the whole raw log stays intact (injected + msg0..msg4 + marker)
+    expect(s.events).toHaveLength(7)
+    const marker = s.events.at(-1) as unknown as { removedSeqs: number[] }
+    expect(marker.removedSeqs).toEqual([0, 1]) // only seq-keyed events are removable
+    // surface: retained tail by seq = msg2..msg4; the seq-less injected event survives too
+    const surfaceTexts = deriveMessages(s).map((m) => m.content)
+    expect(surfaceTexts).toEqual(["injected-without-seq", "msg 2", "msg 3", "msg 4"])
   })
 
   it("resetWindow returns compacted:false when nothing is removable", async () => {

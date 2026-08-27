@@ -3,7 +3,10 @@ import { deriveSearchText } from "@i-harness/core-session"
 import { approxTokens } from "./tokens.ts"
 
 function isCompactionMarker(ev: SessionEvent): boolean {
-  return ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary"
+  // M20 fix round 1: a pure reset is also a compaction marker — it must never
+  // be shadow-summarized, priced into the shadow-range tail walk (it carries
+  // no text), and alone must not re-arm maybeCompact's re-fire guard.
+  return ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset"
 }
 
 // Events strictly before the first event whose cumulative tail crosses the

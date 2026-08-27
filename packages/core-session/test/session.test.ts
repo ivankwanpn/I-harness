@@ -258,14 +258,36 @@ describe("compaction events", () => {
   it("compaction/reset (M20 pure-reset marker) round-trips and contributes no model-visible text", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" })
-    append(s, { type: "compaction/reset" })
+    append(s, { type: "compaction/reset", removedSeqs: [] })
     // additive event type: format version must stay 1 (no bump)
     expect(s.formatVersion).toBe(1)
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events.map((e) => e.type)).toEqual(["user/message", "compaction/reset"])
+    // removedSeqs survives persistence (recovery replays the log ⇒ nothing lost)
+    expect((restored.events[1] as unknown as { removedSeqs?: number[] }).removedSeqs).toEqual([])
     // not a model-visible role and not FTS text
     expect(deriveMessages(restored)).toEqual([{ role: "user", content: "hi" }])
     expect(deriveSearchText(restored.events[1]!)).toBe("")
+  })
+
+  it("deriveMessages shadows compaction/reset removedSeqs (fix round 1 — Ruling 4 append-only reset)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "old 1" })
+    append(s, { type: "assistant/message", text: "old reply" })
+    append(s, { type: "user/message", text: "new work" })
+    append(s, { type: "compaction/reset", removedSeqs: [0, 1] })
+    // raw log keeps everything (durable append-only record)
+    expect(s.events).toHaveLength(4)
+    // ...while the derived surface excludes exactly the removed seqs
+    expect(deriveMessages(s)).toEqual([{ role: "user", content: "new work" }])
+  })
+
+  it("deriveMessages treats compaction/reset with no/unknown removedSeqs as a no-op shadow", () => {
+    // defensive for malformed persisted logs (persisted events bypass append validation)
+    const s = createSession()
+    append(s, { type: "user/message", text: "kept" })
+    s.events.push({ type: "compaction/reset" } as never) // missing removedSeqs
+    expect(deriveMessages(s)).toEqual([{ role: "user", content: "kept" }])
   })
 
   it("deriveMessages shadows the replaced seqs and renders the summary as a user message", () => {

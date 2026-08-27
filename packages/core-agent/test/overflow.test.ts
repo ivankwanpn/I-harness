@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { createSession, append } from "@i-harness/core-session"
+import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createAgent } from "../src/index.ts"
 
 // 用真實 compaction engine（M11）+ 真實 token-meter budget（M20）+ 新 resetWindow
@@ -55,8 +55,8 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     const session = createSession()
     // 96 條 "hi"（每條 ceil(2/4)+4 = 5 tokens）→ 96*5 + "work" 5 = 485 > 100 →
     // overflow。retainTokens 100_000 → 尾巴累計永不達標 → compact no-op。
-    // resetWindow(true) + resetRetainLast 20 → 保留最後 17 條 prefill + turn/start
-    // + "work" + step/start → 17*5 + 5 = 90 ≤ 100 → 繼續（不 throw）。
+    // resetWindow(true) + resetRetainLast 20 → 可見表面保留最後 17 條 prefill
+    // + "work" → 18*5 = 90 ≤ 100 → 繼續（不 throw）。
     for (let i = 0; i < 96; i++) append(session, { type: "user/message", text: "hi" })
     const agent = createAgent(ctx, {
       session,
@@ -72,8 +72,67 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     expect(r.finalText).toBe("nope")
     // verify: resetWindow 寫入（compaction/reset 事件，非 compaction/end）
     expect(session.events.some((e) => e.type === "compaction/reset")).toBe(true)
-    // 舊歷史被截斷：整段 log 只有保留的尾巴 + marker
-    expect(session.events.filter((e) => e.type === "user/message")).toHaveLength(18)
+    expect(session.events.some((e) => e.type === "compaction/end")).toBe(false) // 純 reset，無摘要
+    // 修復輪（Ruling 4）：durable log 不截斷——全部 97 條 user/message 都留在 log
+    // （96 條 prefill + work），恢復重放 ⇒ 無資料遺失。
+    expect(session.events.filter((e) => e.type === "user/message")).toHaveLength(97)
+    // marker 攜帶被移除的 seq 清單：seq 0..78（可移除的最舊 79 條）
+    const marker = session.events.find((e) => e.type === "compaction/reset") as unknown as { removedSeqs?: number[] }
+    expect(marker.removedSeqs).toEqual(Array.from({ length: 79 }, (_, i) => i))
+    // 模型可見表面＝shadow 後投影：保留尾 17 條 "hi" + work + 新回覆，
+    // 與舊「截斷」語義的可見結果等價。
+    const dm = deriveMessages(session)
+    expect(dm).toHaveLength(19)
+    expect(dm.at(-1)).toEqual({ role: "assistant", content: "nope" })
+    expect(dm[0]).toEqual({ role: "user", content: "hi" }) // retained tail starts here
+  })
+
+  // Minor-5 coverage (fix round 1): layer-2 runs but the RETAINED TAIL itself is
+  // oversized (resetRetainLast keeps the giant current message) → still over
+  // budget → the ladder falls through to layer-3 fail-closed.
+  it("layer 2 insufficient: reset runs (marker recorded) but oversized tail stays over budget → prompt_too_long", async () => {
+    const session = createSession()
+    // 小型舊歷史（seq-keyed、可被 reset 移除）；當前訊息本身巨大（604 tokens）
+    // ——resetRetainLast 2 必然把它留在尾部 → reset 後仍在 budget 之上。
+    for (let i = 0; i < 5; i++) append(session, { type: "user/message", text: "hi" })
+    const agent = createAgent(ctx, {
+      session,
+      tools: createEmptyRegistry(),
+      model: makeModel("never"),
+      systemPrompt: "",
+      maxTurns: 10,
+      compact: { contextWindow: 200, thresholdRatio: 0.5, retainTokens: 100_000, maxTokens: 16 },
+      budget: { contextWindow: 200, reserveRatio: 0.5, resetWindow: true, resetRetainLast: 2 },
+    } as never)
+    await expect(agent.run("z".repeat(2400), undefined)).rejects.toThrow(/prompt_too_long/)
+    // reset 確實執行過：marker 已寫入且攜帶 removedSeqs——retainRetainLast 2 只
+    // 保留 {seq6 巨型訊息, seq7 step/start}，故 seq0..5（含 turn/start）全被移除
+    const marker = session.events.find((e) => e.type === "compaction/reset") as unknown as { removedSeqs?: number[] }
+    expect(marker.removedSeqs).toEqual([0, 1, 2, 3, 4, 5])
+    expect(session.events.some((e) => e.type === "compaction/end")).toBe(false)
+    // Ruling 4 不變式：durability——失敗路徑也不刪原始事件
+    expect(session.events.filter((e) => e.type === "user/message")).toHaveLength(6)
+  })
+
+  // Minor-5 coverage (fix round 1): `budget` WITHOUT any `compact` config — no
+  // engine exists, so the ladder has no layers 1/2 and must fail closed
+  // directly on overflow.
+  it("budget without compact config fails closed directly (prompt_too_long, no compaction attempted)", async () => {
+    const session = createSession()
+    // 6 × (ceil(150/4)+4) = 252 tokens > floor(200*1.0)=200 → overflow at the first boundary
+    for (let i = 0; i < 6; i++) append(session, { type: "user/message", text: "y".repeat(150) })
+    const agent = createAgent(ctx, {
+      session,
+      tools: createEmptyRegistry(),
+      model: makeModel("no"),
+      systemPrompt: "",
+      maxTurns: 10,
+      // NO `compact` config → no engine → straight to fail-closed
+      budget: { contextWindow: 200, reserveRatio: 1 },
+    } as never)
+    await expect(agent.run("work", undefined)).rejects.toThrow(/prompt_too_long/)
+    // 沒有 engine → 完全沒有 compaction 動作寫入 log
+    expect(session.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
   })
 
   it("layer 3: fail-closed when reset disabled or insufficient", async () => {
