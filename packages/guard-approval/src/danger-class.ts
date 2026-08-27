@@ -120,6 +120,25 @@ function hasCmdForceDelete(tokens: string[]): boolean {
 
 // PowerShell force-delete cmdlet（吸收 codex `has_force_delete_cmdlet`）：
 // remove-item/ri/rm/del/erase/rd/rmdir 的下一個 token 是 -force 或 -force:<x>。
+// cmd.exe 刪除家族的斜線開關字母（依命令精確列舉）。刻意不用 `/^\/[a-z]{1,3}$/`
+// 通配——那會把 /tmp、/etc 等單層 POSIX 頂層路徑誤濾成旗標（fail-open 方向，
+// 比現況更糟）；逐字元比對實際支援的開關字母才不漏真路徑。
+const CMD_SWITCH_LETTERS: Record<string, Set<string>> = {
+  del: new Set(["f", "p", "s", "q", "a"]),
+  erase: new Set(["f", "p", "s", "q", "a"]),
+  rd: new Set(["s", "q"]),
+  rmdir: new Set(["s", "q"]),
+}
+
+// `/f` `/s` `/q` 是開關而非 operand；`/a:<attrs>` 的值也是開關參數而非路徑。
+// 合併形態（`del /fs`）逐字元比對；大小寫不敏感（cmd 開關不分大小寫）。
+function isCmdSwitch(token: string, head: string): boolean {
+  const letters = CMD_SWITCH_LETTERS[head]
+  if (letters === undefined) return false
+  const m = /^\/([a-z]+)(?::.*)?$/i.exec(token)
+  return m !== null && m[1].toLowerCase().split("").every((ch) => letters.has(ch))
+}
+
 function hasPsForceDelete(tokens: string[]): boolean {
   return tokens.some((t, i) => {
     const lower = t.replace(/['"]/g, "").toLowerCase()
@@ -166,7 +185,9 @@ function leafVerdict(cmd: string, rest: string[], workspace: string): Verdict {
     if (!hasForce) return null
     // workspace 逃逸判定：任何 operate 路徑不在 workspace 內或為系統頂層 → extreme；
     // 全部在 workspace 內 → "force"（現行一層 ask 的 dangerous 層，保護正常 agent 清理）。
-    const targets = rest.filter((a) => !a.startsWith("-"))
+    // 排除 cmd.exe 家族斜線開關（del /f /s /q…）：否則 `cmd /c del /f <workspace 內>`
+    // 的 /f 被誤當 target，resolve 到目前磁碟根（workspace 外）→ 假 extreme。
+    const targets = rest.filter((a) => !a.startsWith("-") && !isCmdSwitch(a, cmd))
     const escaped = targets.some((t) => !isInsideWorkspace(workspace, t) || isTopLevelSystemPath(t))
     return escaped ? "extreme" : "force"
   }
@@ -203,14 +224,17 @@ function scanStatement(rawTokens: string[], workspace: string, depth: number): V
 
     if (cmd === "cmd") {
       const i = findFlagIndex(rest, ["/c", "/k", "/r", "-c"])
-      if (i < 0) return null
+      // 找不到 /c 等旗標時不可整串放棄（fail-open）：argv 形態仍把 rest 續掃到底
+      if (i < 0) return deepScanTokens(rest, workspace, d + 1)
       return deepScanTokens(rest.slice(i + 1), workspace, d + 1)
     }
 
     if (cmd === "pwsh" || cmd === "powershell") {
       // 大小寫不敏感：-Command / -Command:<inline> / -c
       const script = inlineAfterFlag(rest, ["-command", "-c"], "-command:")
-      if (script.trim() === "") return null
+      // 無 -Command 時也掃 rest（如 `powershell Remove-Item a.txt -Force`：
+      // token 流以 cmdlet 開頭）——不可讓整段靜默逃逸
+      if (script.trim() === "") return deepScanTokens(rest, workspace, d + 1)
       return deepScanScript(script, workspace, d + 1)
     }
 
