@@ -12,7 +12,8 @@ export interface ApprovalConfig {
   approvalPolicy?: "ask" | "never"
 }
 
-const DEFAULT_DANGEROUS_COMMANDS = [
+// 匯出供測試與呼叫端重用/檢視（分類器對清單做 case-insensitive 比對）。
+export const DEFAULT_DANGEROUS_COMMANDS = [
   "rm",
   "Remove-Item",
   "del",
@@ -22,7 +23,7 @@ const DEFAULT_DANGEROUS_COMMANDS = [
   "wipe",
   "taskkill",
 ]
-const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
+export const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 
 const SHELL_TOOLS = new Set(["bash", "pwsh"])
 const WRITE_TOOLS = new Set(["write"])
@@ -87,7 +88,7 @@ function decide(
       const danger = classifyDanger(argv, workspace, dangerousCommands, dangerousFlags)
       if (danger !== "none") {
         const reason = danger === "extreme"
-          ? `EXTREME DISTRUCTIVE command: ${argv.join(" ")} — approval requires explicit confirmation`
+          ? `EXTREME DESTRUCTIVE command: ${argv.join(" ")} — approval requires explicit confirmation`
           : `dangerous command requires approval: ${argv.join(" ") || command}`
         return { kind: "ask", reason }
       }

@@ -73,5 +73,5 @@ the per-call `SandboxPolicy` is the actual enforcement input.
 
 **已知不可保護向量（pin 成活文檔）**：全域任意路徑讀取不受限；外部 Everyone-ACL 物件寫入；
 NUL 裝置（`cmd > NUL`）；hard link 外部別名寫；FAT 無 SD；console 隔離不可得；named-pipe 孫進程。
-（M22 另發現：confined target 無法 spawn 子進程——EPERM；此為比計劃更強的寫隔離副效果，
-詳見 test/kill-on-close.e2e.ts 的 descendant-denial pin。）
+（M22 另發現：confined target 無法 spawn 子進程（EPERM）——observed；root cause 未調查
+（M25 前 follow-up；見 test/kill-on-close.e2e.ts 的 descendant-denial pin）。）
