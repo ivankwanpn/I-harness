@@ -23,6 +23,24 @@ import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { probeBwrap } from "@i-harness/sandbox-local"
 
+// M23: observe — without altering — the createSessionCoordinator call surface
+// so the CLI's ownership-lock wiring is assertable. The wrapper DELEGATES to
+// the real factory (every other test in this file keeps the genuine
+// implementation and behavior); it only records the arguments index.ts passes.
+// The full two-process conflict e2e lands in M25 (per plan).
+const coordinatorFactoryCalls = vi.hoisted(() => ({ list: [] as unknown[][] }))
+vi.mock("@i-harness/session-persistence", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@i-harness/session-persistence")>()
+  const real = actual.createSessionCoordinator as (...args: unknown[]) => unknown
+  return {
+    ...actual,
+    createSessionCoordinator: (...args: unknown[]) => {
+      coordinatorFactoryCalls.list.push(args)
+      return real(...args)
+    },
+  }
+})
+
 // Poll a read until it returns a defined value (bounded). The subagent
 // persistence wrappers save fire-and-forget (M6), so document reads need to
 // wait for eventual durability. A read that throws (e.g. JSON.parse on a file
@@ -1562,5 +1580,46 @@ describe("M19 CLI team integration", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   }, 30_000)
+})
+
+describe("M23 CLI session ownership lock wiring", () => {
+  // Wiring observable (per brief: the two-process conflict e2e is M25): main()
+  // must pass the coordinator's opt-in ownership lease to BOTH backends, with
+  // lockRoot = the session STORE directory (not the workspace) so lock files
+  // share the store's lifecycle. The delegating module mock records the real
+  // factory's arguments; the coordinator itself is genuine, so this test also
+  // proves a lock-enabled run completes (jsonl create → acquire → close →
+  // release) instead of failing on its own wiring.
+  it("main wires lock { enabled: true, lockRoot: <store dir> } into both coordinator backends", async () => {
+    const jsonlDir = mkdtempSync(join(tmpdir(), "i-harness-m23-"))
+    const sqliteDir = mkdtempSync(join(tmpdir(), "i-harness-m23-"))
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {})
+      const err = vi.spyOn(console, "error").mockImplementation(() => {})
+      const before = coordinatorFactoryCalls.list.length
+      try {
+        expect(await main(["node", "i-harness", "run", "hello", "--session-dir", jsonlDir])).toBe(0)
+        expect(await main(["node", "i-harness", "run", "hello", "--session-dir", sqliteDir, "--session-backend", "sqlite"])).toBe(0)
+      } finally {
+        log.mockRestore()
+        err.mockRestore()
+      }
+      const calls = coordinatorFactoryCalls.list.slice(before) as [unknown, { lock?: { enabled?: boolean; lockRoot?: string } } | undefined][]
+      expect(calls).toHaveLength(2)
+      for (const [backend, opts] of calls) {
+        expect(backend).toBeDefined()
+        expect(opts?.lock?.enabled).toBe(true)
+      }
+      // lockRoot = the session store dir (jsonl store root / sqlite db dir), NOT the workspace
+      expect(calls[0]![1]?.lock?.lockRoot).toBe(jsonlDir)
+      expect(calls[1]![1]?.lock?.lockRoot).toBe(sqliteDir)
+    } finally {
+      // The sqlite backend holds an open DatabaseSync connection; close it
+      // before removing the dir, otherwise rmSync fails on Windows (EPERM).
+      closeSqliteBackends()
+      rmSync(jsonlDir, { recursive: true, force: true })
+      rmSync(sqliteDir, { recursive: true, force: true })
+    }
+  }, 10_000)
 })
 
