@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy, SandboxProvider } from "@i-harness/sandbox"
 import { SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
+import { OutputCollector } from "./spill.ts"
 
 export interface ExecCommand {
   argv: string[]
@@ -18,7 +19,28 @@ export interface ExecResult {
   stderr: string
   exitCode: number
   timedOut: boolean
+  // M21 A-tier spill: present only on runs where something was actually
+  // truncated. `stdout`/`stderr` keep tail semantics — they are always the
+  // in-memory tail or full output; the complete content lives in the spill file.
+  stdoutSpillPath?: string
+  stderrSpillPath?: string
+  truncated?: { stdout: boolean; stderr: boolean }
 }
+
+// M21 A-tier spill knobs (memory-tail threshold + optional disk-spill cap).
+export interface ExecSpillOptions {
+  maxOutputBytes?: number // default 64_000
+  maxSpillBytes?: number
+}
+
+// Deps for createExecService/registerExec. Both optional; adding `spill`
+// switches foreground run() capture over to OutputCollector spilling.
+export interface ExecServiceOptions {
+  sandbox?: SandboxProvider
+  spill?: ExecSpillOptions
+}
+
+const DEFAULT_MAX_OUTPUT_BYTES = 64_000
 
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
 export interface BackgroundJobView {
@@ -32,7 +54,9 @@ export interface BackgroundJobView {
 interface SpawnHandle {
   child: ChildProcess
   kill(): void
-  done: Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>
+  // Same members as ExecResult (spill fields attach conditionally at resolve
+  // time) — structurally assignable to ExecResult so run() can return h.done.
+  done: Promise<ExecResult>
 }
 
 // M16 final-review (I3): the result of confine() is kept on the handle so the
@@ -85,7 +109,7 @@ function resolveArgv(cmd: ExecCommand, sandboxProvider?: SandboxProvider): Resol
   return { confined, mode: sandbox.mode }
 }
 
-function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnHandle {
+function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?: ExecSpillOptions): SpawnHandle {
   const { confined, mode } = resolveArgv(cmd, sandboxProvider)
   const argv = confined?.argv ?? cmd.argv
   const child = spawn(argv[0]!, argv.slice(1), {
@@ -95,11 +119,17 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnH
   })
   let stdout = ""
   let stderr = ""
+  // M21 A-tier spill: when configured, capture through OutputCollector (memory
+  // tail + complete-stream disk spill). Otherwise keep plain string accumulation
+  // — byte-identical to the pre-spill behavior.
+  const maxOut = spill?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+  const stdoutCollector = spill ? new OutputCollector({ maxBytes: maxOut, maxSpillBytes: spill.maxSpillBytes, label: "stdout" }) : undefined
+  const stderrCollector = spill ? new OutputCollector({ maxBytes: maxOut, maxSpillBytes: spill.maxSpillBytes, label: "stderr" }) : undefined
   let timedOut = false
   let settled = false
-  let resolveDone!: (v: { exitCode: number; stdout: string; stderr: string; timedOut: boolean }) => void
+  let resolveDone!: (v: ExecResult) => void
   let rejectDone!: (err: Error) => void
-  const done = new Promise<{ exitCode: number; stdout: string; stderr: string; timedOut: boolean }>((res, rej) => { resolveDone = res; rejectDone = rej })
+  const done = new Promise<ExecResult>((res, rej) => { resolveDone = res; rejectDone = rej })
 
   const timer = cmd.timeoutMs !== undefined ? setTimeout(() => {
     timedOut = true
@@ -115,8 +145,8 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnH
     else cmd.abortSignal.addEventListener("abort", abortListener, { once: true })
   }
 
-  child.stdout?.on("data", (d: Buffer) => { stdout += d.toString("utf-8") })
-  child.stderr?.on("data", (d: Buffer) => { stderr += d.toString("utf-8") })
+  child.stdout?.on("data", (d: Buffer) => { if (stdoutCollector) stdoutCollector.push(d); else stdout += d.toString("utf-8") })
+  child.stderr?.on("data", (d: Buffer) => { if (stderrCollector) stderrCollector.push(d); else stderr += d.toString("utf-8") })
   if (cmd.input !== undefined) child.stdin?.write(cmd.input)
   child.stdin?.end()
 
@@ -127,7 +157,13 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnH
     // Leak hygiene: drop the abort listener once the process settles before
     // the abort ever fires (the `once` flag already handles the fired case).
     cmd.abortSignal?.removeEventListener("abort", abortListener)
-    const cleanStderr = stderr.replace(/\r\n/g, "\n")
+    // M21 A-tier spill: collect retained text (+ complete-stream spill files)
+    // once the process settles. Without collectors this falls back to the exact
+    // pre-spill accumulation path (byte-identical).
+    const sOut = stdoutCollector ? stdoutCollector.finalize() : { text: stdout, spillPath: undefined, truncated: false, lossy: false }
+    const sErr = stderrCollector ? stderrCollector.finalize() : { text: stderr, spillPath: undefined, truncated: false, lossy: false }
+    const cleanOut = sOut.text.replace(/\r\n/g, "\n")
+    const cleanErr = sErr.text.replace(/\r\n/g, "\n")
     // M16 final-review (I3): a runner failure (e.g. bwrap exit 125 with
     // "bwrap: failed to ..." — user namespaces blocked) is NOT an ordinary
     // command failure: the sandbox runner itself could not start. Translate it
@@ -135,9 +171,11 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnH
     // "sandbox unavailable" instead of a confusing nonzero exit. The child
     // exited with the runner's code but the denial-signature scanner never ran
     // (the command body itself never executed).
+    // If spill was enabled, already-written spill files stay behind as orphans
+    // on this reject path — accepted by Task 6's design note.
     if (!timedOut && code !== 0 && confined && mode !== undefined && confined.runnerFailureRules.length > 0) {
       const failure = classifyRunnerFailure(
-        { exitCode: code, stderr: { text: cleanStderr } },
+        { exitCode: code, stderr: { text: cleanErr } },
         confined.runnerFailureRules,
       )
       if (failure) {
@@ -146,10 +184,17 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider): SpawnH
       }
     }
     resolveDone({
-      stdout: stdout.replace(/\r\n/g, "\n"),
-      stderr: cleanStderr,
+      stdout: cleanOut,
+      stderr: cleanErr,
       exitCode: code,
       timedOut,
+      // Spill fields only surface when something actually overflowed — an
+      // under-limit run with spill configured reports nothing extra.
+      ...(sOut.truncated || sErr.truncated ? {
+        stdoutSpillPath: sOut.spillPath,
+        stderrSpillPath: sErr.spillPath,
+        truncated: { stdout: sOut.truncated, stderr: sErr.truncated },
+      } : {}),
     })
   }
   child.on("close", (code) => doneFn(code ?? -1))
@@ -170,19 +215,25 @@ export interface ExecService {
   killJob(jobId: string): "cancellation-requested" | "already-finished"
 }
 
-export function createExecService(deps?: { sandbox?: SandboxProvider }): ExecService {
+export function createExecService(deps?: ExecServiceOptions): ExecService {
   let bashCounter = 0
   const jobs = new Map<string, BackgroundJobView & { handle: SpawnHandle }>()
   const provider = deps?.sandbox
+  // M21 A-tier spill is foreground-only: run() spills via OutputCollector while
+  // runBackground keeps plain stream-observable accumulation into job.stdout.
+  const spill = deps?.spill
 
   return {
     async run(cmd: ExecCommand): Promise<ExecResult> {
-      const h = spawnChild(cmd, provider)
-      return h.done.then(({ stdout, stderr, exitCode, timedOut }) => ({ stdout, stderr, exitCode, timedOut }))
+      // Return the promise directly — mapping out four fields would drop the
+      // optional M21 spill fields (stdoutSpillPath/stderrSpillPath/truncated).
+      return spawnChild(cmd, provider, spill).done
     },
     runBackground(cmd: ExecCommand): { jobId: string } {
       bashCounter += 1
       const jobId = `bash-${bashCounter}`
+      // No spill for background jobs (M21 scope: foreground run only) —
+      // background semantics stay stream-observable via job.stdout/stderr.
       const handle = spawnChild(cmd, provider)
       const job: BackgroundJobView & { handle: SpawnHandle } = { id: jobId, status: "running", stdout: "", stderr: "", handle }
       jobs.set(jobId, job)
@@ -227,6 +278,6 @@ export function createExecService(deps?: { sandbox?: SandboxProvider }): ExecSer
   }
 }
 
-export function registerExec(ctx: PluginContext, deps?: { sandbox?: SandboxProvider }): void {
+export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): void {
   ctx.services.register("exec/service", createExecService(deps))
 }
