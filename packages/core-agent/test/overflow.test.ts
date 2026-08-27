@@ -153,6 +153,69 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
   })
 })
 
+describe("budget config validation (fail-loud at creation, Ruling 8a)", () => {
+  // FINAL REVIEW (Ruling 8a): `checkBudget` validates reserveRatio but never
+  // contextWindow — a NaN contextWindow made every comparison
+  // `tokens > NaN === false` → state "ok" forever → the whole
+  // compact→reset→fail-closed ladder silently dead (fail-closed violation).
+  // Validation must fail loud at agent creation instead.
+  it("throws at creation when budget.contextWindow is NaN", () => {
+    const session = createSession()
+    expect(() =>
+      createAgent(ctx, {
+        session,
+        tools: createEmptyRegistry(),
+        model: makeModel("x"),
+        systemPrompt: "",
+        budget: { contextWindow: Number.NaN },
+      } as never),
+    ).toThrow(/contextWindow/)
+  })
+
+  it("throws at creation when budget.contextWindow is 0", () => {
+    const session = createSession()
+    expect(() =>
+      createAgent(ctx, {
+        session,
+        tools: createEmptyRegistry(),
+        model: makeModel("x"),
+        systemPrompt: "",
+        budget: { contextWindow: 0 },
+      } as never),
+    ).toThrow(/contextWindow/)
+  })
+
+  it("throws at creation when resetRetainLast is provided but not a non-negative integer", () => {
+    const session = createSession()
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      expect(() =>
+        createAgent(ctx, {
+          session,
+          tools: createEmptyRegistry(),
+          model: makeModel("x"),
+          systemPrompt: "",
+          budget: { contextWindow: 200, resetRetainLast: bad },
+        } as never),
+      ).toThrow(/resetRetainLast/)
+    }
+  })
+
+  it("accepts a valid budget config and runs normally", async () => {
+    const session = createSession()
+    const agent = createAgent(ctx, {
+      session,
+      tools: createEmptyRegistry(),
+      model: makeModel("ok"),
+      systemPrompt: "",
+      budget: { contextWindow: 10_000, resetRetainLast: 20 },
+    } as never)
+    const r = await agent.run("work", undefined)
+    expect(r.finalText).toBe("ok")
+    // Valid budget but tiny usage → no ladder action ever fired.
+    expect(session.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+  })
+})
+
 // 測試 helper（此處的工具永不觸發 dispatch——模型只回 text/chunk）
 function createEmptyRegistry() {
   return {
