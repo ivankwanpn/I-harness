@@ -505,6 +505,15 @@ importers:
         specifier: workspace:*
         version: link:../llm-mock
 
+  packages/todo:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+
   packages/token-meter:
     dependencies:
       '@i-harness/core-session':
