@@ -17,6 +17,8 @@ import {
   driveFollowups,
   spawnChild,
   type AgentTable,
+  type ChildAgentEntry,
+  type FollowupDeps,
   type JobRegistry,
   type RoleRegistry,
   type SubagentRole,
@@ -46,6 +48,14 @@ export interface TeamSubagentDeps {
   // their inbox appends go through the write-behind mirror. WITHOUT it the
   // roster's durability gate fails closed (no sessionId → no durable proof).
   childSessions?: { coordinator: SessionCoordinator; parentSessionId: string }
+  // M23 (Minor 4): lazy resident rebuild injection — wired by run.ts from
+  // registerSubagent's ensureResident closure (TeamSubagentDeps has NO
+  // parentCtx/parentRegistry/parentModel, so the scheduler cannot rebuild a
+  // teammate itself). When present, realDeliver may rebuild a post-resume
+  // teammate (restoreState maps running/waiting → "error" and the Agent
+  // registry is fresh-empty) instead of dropping the drive; absent keeps the
+  // conservative behavior (message stays queued).
+  ensureResident?: (entry: ChildAgentEntry) => Promise<boolean>
 }
 
 export interface TeamDeps {
@@ -292,7 +302,18 @@ export async function mountAgentTeams(
       // No live child (or a dead one): return false so the mailbox keeps the
       // message queued — recoverRoot re-delivers once the child is alive again
       // (e.g. after resume_agent).
-      if (!entry || entry.status === "killed" || entry.status === "error") return false
+      // M23 (Minor 4): a post-resume teammate carries status "error"
+      // (restoreState maps running/waiting → "error") with a fresh-empty
+      // Agent registry. With the rebuild seam injected, rebuild the resident
+      // agent FIRST and proceed only on success; without the seam keep the
+      // conservative message-stays-queued behavior.
+      if (!entry) return false
+      if (entry.status === "error") {
+        if (!sub.ensureResident) return false
+        const ok = await sub.ensureResident(entry)
+        if (!ok) return false
+      }
+      if (entry.status === "killed") return false
       // Durable inbox write: append through the child's mirror (spawnChild's
       // session hook enqueues every append to the coordinator write-behind),
       // then update the live mailbox mirror.
@@ -316,7 +337,15 @@ export async function mountAgentTeams(
         // the exported driveFollowups, M19 Ruling 28 — NOT a duplicate vendor)
         // — only AFTER the append above, so the message is durably in the
         // target's session before the child sees it.
-        const chain = driveFollowups(sub, entry, entry.sessionId)
+        // M23 (Minor 4): pass the rebuild seam through as driveFollowups'
+        // optional `rebuild` so the drain recovers a missing resident agent
+        // even when the gate above did not rebuild (e.g. a waiting entry whose
+        // registry entry was dropped). Without the seam this is the unchanged
+        // sub object (structural FollowupDeps).
+        const wakeDeps: FollowupDeps = sub.ensureResident
+          ? { ...sub, rebuild: (e: ChildAgentEntry) => sub.ensureResident!(e) }
+          : sub
+        const chain = driveFollowups(wakeDeps, entry, entry.sessionId)
         // M19 Ruling 26: the followup drain flips the child's status
         // (waiting→running→waiting); a wait_agent waiter must wake on that
         // edge even though no team event is appended.

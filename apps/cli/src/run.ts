@@ -269,12 +269,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // mirrors. The team's parentScope is the SAME ctx the subagent machinery
     // uses, and the shared exec service / provider registry bind the real
     // spawn bridge.
-    // Note (Minor 4 deferred): on resume only the table/jobs/roles registries
-    // are rebuilt from the durable snapshot; the subagent Agent registry is
-    // fresh-empty at this point (entries are registered per spawn/turn), so a
-    // pre-resume wakeup for an already-running teammate finds no resident
-    // agent and drops the drive. The e2e runs fresh, so out of scope for M19
-    // (see task 11 report).
+    // M23 (Minor 4 fix): the subagent Agent registry is fresh-empty after a
+    // resume (entries are registered per spawn/turn), so a pre-resume wakeup
+    // for a restored teammate used to find no resident agent and drop the
+    // drive. ensureResident (registerSubagent's lazy rebuild over the REAL
+    // subagent deps) is injected here so realDeliver/driveFollowups can
+    // rebuild the resident agent and the wakeup actually runs.
     if (opts.team !== undefined) {
       teamHandles.push(await mountAgentTeams(ctx, tools, {
         parentSession: session,
@@ -289,6 +289,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           childSessions: opts.coordinator && activeId
             ? { coordinator: opts.coordinator, parentSessionId: activeId }
             : undefined,
+          ensureResident: subagent.ensureResident,
         },
         parentModel: model,
       } satisfies TeamDeps, opts.team))

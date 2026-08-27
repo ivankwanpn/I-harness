@@ -10,13 +10,13 @@
 // real subagent processes; fix-round-1 tests (Ruling 22) additionally verify
 // the REAL deliver bridge (fail-closed flush) and the canonical-teamId
 // restore path.
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { mountAgentTeams, type TeamDeps } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
-import { createAgentRegistry } from "@i-harness/core-agent"
+import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import { createExecService } from "@i-harness/exec"
 import { createProviderRegistry } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -381,6 +381,115 @@ describe("mountAgentTeams lifecycle", () => {
       releaseTurn() // now the child's turn completes → running→waiting edge
       const res = (await waitP) as { timedOut: boolean }
       expect(res.timedOut).toBe(false)
+    } finally {
+      await handle.unmount()
+    }
+  })
+
+  // M23 (Minor 4): after a resume the subagent Agent registry is fresh-empty
+  // and restoreState maps a running/waiting teammate to status "error" — the
+  // old realDeliver gate rejected such targets outright, so a pre-resume
+  // wakeup stayed queued forever (recoverRoot retried into the same gate).
+  // With TeamSubagentDeps.ensureResident injected (run.ts wires registerSubagent's
+  // lazy rebuild), the gate rebuilds the resident agent first and the wakeup
+  // drive actually runs.
+  function errorTeammateFixture() {
+    const parentSession = createSession()
+    parentSession.events.push(
+      { type: "team/member", version: 1, teamId: "lead-t", member: { id: "child-abc", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } },
+      { type: "team/member", version: 1, teamId: "lead-t", member: { id: "child-abc", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "sess-1" } },
+    )
+    const table = createAgentTable()
+    const entrySession = createSession()
+    // restoreState shape: running/waiting → "error", no resident agent.
+    table.add("lead/helper", { path: "lead/helper", status: "error", session: entrySession, controller: new AbortController(), mailbox: [], sessionId: "sess-1", roleName: "general" })
+    return { parentSession, table, entrySession }
+  }
+
+  it("realDeliver keeps the conservative queue behavior for an error-status teammate WITHOUT the rebuild seam", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const { parentSession, table, entrySession } = errorTeammateFixture()
+    const deps = makeDeps({ parentSession, subagents: { ...makeDeps().subagents, table } })
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    try {
+      const follow = tools.get("followup_task")!
+      const out = (await follow.execute({ target: "helper", message: "wake" }, { sessionId: "sess-parent" })) as { status: string }
+      expect(out.status).toBe("queued") // not delivered → recoverRoot retries
+      expect(entrySession.events.filter((e) => e.type === "subagent/inbox")).toHaveLength(0)
+      expect(parentSession.events.filter((e) => e.type === "team/message/delivered")).toHaveLength(0)
+    } finally {
+      await handle.unmount()
+    }
+  })
+
+  it("realDeliver rebuilds an error-status teammate via ensureResident and the wakeup drive runs", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const { parentSession, table, entrySession } = errorTeammateFixture()
+    const agents = createAgentRegistry()
+    // The lazy rebuild (mirrors registerSubagent's ensureResident): registers
+    // a live agent whose followup runs the wakeup turn.
+    const followup = vi.fn().mockResolvedValue({ finalText: "woken", turns: 1, reasoning: [] })
+    const fakeAgent: Agent = { run: vi.fn(), followup }
+    const ensureResident = async (entry: { sessionId?: string }) => {
+      if (!entry.sessionId) return false
+      agents.register(entry.sessionId, fakeAgent)
+      return true
+    }
+    const deps = makeDeps({ parentSession, subagents: { ...makeDeps().subagents, table, agents, ensureResident } })
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    try {
+      const follow = tools.get("followup_task")!
+      const out = (await follow.execute({ target: "helper", message: "wake" }, { sessionId: "sess-parent" })) as { status: string }
+      expect(out.status).toBe("accepted") // delivered after the rebuild
+      // the inbox append went through the child's session mirror
+      expect(entrySession.events.filter((e) => e.type === "subagent/inbox")).toHaveLength(1)
+      expect(parentSession.events.filter((e) => e.type === "team/message/delivered")).toHaveLength(1)
+      // the wakeup drive ran a followup turn on the REBUILT resident agent
+      await vi.waitFor(() => expect(followup).toHaveBeenCalledWith(expect.stringContaining("wake"), expect.any(AbortSignal)))
+    } finally {
+      await handle.unmount()
+    }
+  })
+
+  it("realDeliver keeps the message queued when ensureResident cannot rebuild", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const { parentSession, table, entrySession } = errorTeammateFixture()
+    const deps = makeDeps({
+      parentSession,
+      subagents: { ...makeDeps().subagents, table, ensureResident: async () => false },
+    })
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    try {
+      const follow = tools.get("followup_task")!
+      const out = (await follow.execute({ target: "helper", message: "wake" }, { sessionId: "sess-parent" })) as { status: string }
+      expect(out.status).toBe("queued")
+      expect(entrySession.events.filter((e) => e.type === "subagent/inbox")).toHaveLength(0)
+      expect(parentSession.events.filter((e) => e.type === "team/message/delivered")).toHaveLength(0)
+    } finally {
+      await handle.unmount()
+    }
+  })
+
+  it("realDeliver still refuses a killed teammate even with the rebuild seam", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const { parentSession, table, entrySession } = errorTeammateFixture()
+    table.get("lead/helper")!.status = "killed"
+    let rebuildCalls = 0
+    const deps = makeDeps({
+      parentSession,
+      subagents: { ...makeDeps().subagents, table, ensureResident: async () => { rebuildCalls++; return true } },
+    })
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    try {
+      const follow = tools.get("followup_task")!
+      const out = (await follow.execute({ target: "helper", message: "wake" }, { sessionId: "sess-parent" })) as { status: string }
+      expect(out.status).toBe("queued")
+      expect(rebuildCalls).toBe(0) // killed short-circuits BEFORE any rebuild attempt
+      expect(entrySession.events.filter((e) => e.type === "subagent/inbox")).toHaveLength(0)
     } finally {
       await handle.unmount()
     }
