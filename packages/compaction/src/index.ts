@@ -1,4 +1,4 @@
-import type { Session } from "@i-harness/core-session"
+import type { Session, SessionEvent } from "@i-harness/core-session"
 import { append, deriveSearchText } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
@@ -143,9 +143,32 @@ function renderShadowed(session: Session, shadowedSeqs: number[]): string {
   const parts: string[] = []
   for (const ev of session.events) {
     if (ev.seq !== undefined && set.has(ev.seq)) {
-      const t = deriveSearchText(ev)
+      // M20 image-aware replay: events carrying images are replayed as a
+      // descriptor rather than text-only — so the summary records WHICH
+      // visuals were in context, not just their surrounding prose. The real
+      // byte-level replay needs a multimodal summarizer + store ref (deferred);
+      // this is the descriptor path. Sessions without `images` keep the exact
+      // previous behavior (byte-identical for text-only sessions).
+      const desc = imageDescriptor(ev)
+      const t = desc ?? deriveSearchText(ev)
       if (t.length > 0) parts.push(t)
     }
   }
+  return parts.join("\n")
+}
+
+// M20 Task 8: render shadowed events' images as compact descriptors, e.g.
+// `[image: png, 8 bytes]`. Returns undefined when the event carries no usable
+// `images` array (including malformed persisted shapes), so the caller falls
+// back to the unchanged `deriveSearchText` replay.
+function imageDescriptor(ev: SessionEvent): string | undefined {
+  const images = (ev as { images?: unknown }).images
+  if (!Array.isArray(images) || images.length === 0) return undefined
+  const parts = images.map((img) => {
+    const mediaType = (img as { mediaType?: string }).mediaType
+    const dataBase64 = (img as { dataBase64?: string }).dataBase64
+    const label = mediaType !== undefined ? mediaType.replace(/^image\//, "") : "unknown"
+    return `[image: ${label}, ${dataBase64 !== undefined ? dataBase64.length : "?"} bytes]`
+  })
   return parts.join("\n")
 }
