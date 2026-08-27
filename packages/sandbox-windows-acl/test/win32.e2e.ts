@@ -145,6 +145,23 @@ describe.skipIf(process.platform !== "win32")("windows-acl e2e (Windows only)", 
     }
   })
 
+  it("headless smoke: workspace-write confined command runs", () => {
+    // M25 headless-e2e precursor: one trivial confined command through the
+    // real provider → runner → restricted token pipeline must simply succeed.
+    const provider = createWindowsAclSandbox({ writableDirs: [workspace], mode: "workspace-write" })
+    try {
+      const confined = provider.confine(
+        ["node", "-e", "console.log('M22-OK')"],
+        { mode: "workspace-write", workspaceRoot: workspace, sessionId: "headless-e2e" },
+      )
+      const result = runConfined(confined.argv)
+      expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+      expect(result.stdout).toContain("M22-OK")
+    } finally {
+      provider.dispose()
+    }
+  })
+
   it("SID derivation is deterministic with the distinct workspace/temp domain separation (plan pin)", () => {
     expect(workspaceWriteSid("C:\\work\\proj")).toMatch(/^S-1-4-\d+-\d+$/)
     expect(tempWriteSid("C:\\temp\\x")).toMatch(/^S-1-4-\d+-\d+-1$/)
