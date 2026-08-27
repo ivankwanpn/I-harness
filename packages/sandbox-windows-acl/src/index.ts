@@ -62,6 +62,7 @@ export { AclWriteGrant } from './grant.ts'
 export { assertTempRootOutsideWorkspace } from './path-boundary.ts'
 export { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
 export { Win32Error } from './errors.ts'
+export { scanWorldWritable, type WorldWritableFinding, type ScanOptions } from './audit.ts'
 
 /** Construction options: the workspace/temp allowlists and their distinct SID identities. */
 export interface AclSandboxOptions {
