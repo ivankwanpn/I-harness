@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises"
 import type { LLMMessage, Session } from "@i-harness/core-session"
 import { deriveMessages } from "@i-harness/core-session"
 
@@ -119,6 +120,73 @@ export function retryErrorCode(err: unknown): string | undefined {
   if (TIMEOUT_RE.test(msg)) return "TIMEOUT"
   if (SERVER_RE.test(msg)) return "SERVER"
   return undefined
+}
+
+// Exponential backoff with symmetric jitter. attemptNo starts at 1 for the
+// wait AFTER the first failed attempt; the delay is capped at maxDelayMs and
+// never negative (jitter is ±jitterRatio of the capped base).
+export function backoffDelay(policy: ResolvedRetryBackoff, attemptNo: number): number {
+  const base = policy.initialDelayMs * 2 ** (attemptNo - 1)
+  const capped = Math.min(base, policy.maxDelayMs)
+  const jitter = (Math.random() * 2 - 1) * policy.jitterRatio * capped
+  return Math.max(0, Math.round(capped + jitter))
+}
+
+// Retry wrapper (M20). Two provider failure styles must be handled (controller
+// Ruling 3): a THROWN error, or an `{ type: "error", error }` event yielded by
+// the stream. Retry happens only when all of: the error is retryable
+// (code-classified in normal mode, or always-mode), nothing has been produced
+// yet (text/chunk, reasoning or tool_call yielded → a restarted stream would
+// duplicate output, so the error surfaces instead), and a retry budget
+// remains. Retries are silent: the failed attempt's error event is never
+// leaked to the consumer. Budget exhaustion is ALWAYS a hard failure (throw),
+// whichever style the provider used. A give-up that is NOT exhaustion
+// (non-retryable code, or output already produced) preserves the provider's
+// surface style: an error event yields as a terminal event (anything after it
+// is not consumed) and ends the stream; a thrown error is rethrown.
+export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy): ModelClient {
+  async function* wrapped(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+    let attemptNo = 0
+    while (true) {
+      attemptNo++
+      let produced = false
+      let failure: unknown // set by an error event or a throw
+      let failureEvent: { type: "error"; error: Error } | undefined // set only by an error event
+      try {
+        for await (const ev of client.stream(request)) {
+          if (ev.type === "text/chunk" || ev.type === "reasoning" || ev.type === "tool_call") produced = true
+          if (ev.type === "error") {
+            // Provider signaled failure via an error EVENT. It is a terminal
+            // event for the attempt: stop consuming (don't leak events after
+            // the error), decide below whether to retry silently or surface.
+            failure = ev.error
+            failureEvent = ev
+            break
+          }
+          yield ev
+          if (ev.type === "end") return // attempt completed normally
+        }
+        // Fall through: normal completion (no failure) or an error event broke
+        // the attempt out of the for-await — both handled below.
+      } catch (err) {
+        failure = err // provider signaled failure via a THROW
+      }
+      if (failure === undefined && failureEvent === undefined) return // completed normally
+      const code = retryErrorCode(failure ?? failureEvent!.error)
+      const retryable = policy.mode === "always" || (policy.mode === "normal" && policy.retryableCodes.includes(code ?? ""))
+      const budgetExhausted = policy.mode === "normal" && attemptNo > policy.maxRetries
+      if (retryable && !produced && !budgetExhausted) {
+        await delay(backoffDelay(policy, attemptNo))
+        continue
+      }
+      if (failureEvent !== undefined && !budgetExhausted) {
+        yield failureEvent // preserve the provider's event surface: terminal
+        return
+      }
+      throw failure ?? failureEvent!.error
+    }
+  }
+  return { stream: wrapped }
 }
 
 export interface ToolSchema {
