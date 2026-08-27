@@ -111,7 +111,11 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
 
   // Apply retention at the tool-return layer only: exec keeps the full stream.
   // The `truncated` marker is present ONLY when something was omitted.
-  async function retainedRunResult(result: { stdout: string; stderr: string; exitCode: number }) {
+  // label: per-tool spill 檔前綴（bash → "bash-stdout"、pwsh → "pwsh-stdout"）。
+  async function retainedRunResult(
+    result: { stdout: string; stderr: string; exitCode: number },
+    label: string,
+  ) {
     if (retention === null) return { stdout: result.stdout, exitCode: result.exitCode } // 現有 shape 不變
     const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
@@ -121,9 +125,11 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     const re = se.finish()
     const truncated = rs.truncated || re.truncated
     let stdout = rs.text
-    if (truncated && spillStore) {
-      // 完整內容 = result.stdout（retain 前）——spill 檔保留全量
-      const spillPath = await spillStore.saveText(result.stdout, "bash-stdout")
+    if (rs.truncated && spillStore) {
+      // 完整內容 = result.stdout（retain 前）——spill 檔保留全量。
+      // 只在 STDOUT 被截斷時 spill+notice：僅 stderr 截斷時 stdout 原樣（未被
+      // 省略），spill/notice 反而會把未截斷的 stdout 加上 "(Omitted 0 bytes…)"。
+      const spillPath = await spillStore.saveText(result.stdout, label)
       stdout = rs.text + "\n" + spillNotice(rs.omittedBytes, spillPath)
     }
     return {
@@ -156,7 +162,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         return { job_id: jobId }
       }
       const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
-      return retainedRunResult(result)
+      return retainedRunResult(result, "bash-stdout")
     },
   }
   const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
@@ -176,7 +182,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         return { job_id: jobId }
       }
       const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
-      return retainedRunResult(result)
+      return retainedRunResult(result, "pwsh-stdout")
     },
   }
   return [bash, pwsh]
