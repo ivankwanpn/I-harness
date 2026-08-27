@@ -230,6 +230,12 @@ importers:
         specifier: workspace:*
         version: link:../core-tools
 
+  packages/fs-lock:
+    dependencies:
+      koffi:
+        specifier: ^3.1.0
+        version: 3.1.6
+
   packages/fs-search:
     dependencies:
       '@i-harness/core-tools':
