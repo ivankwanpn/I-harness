@@ -112,8 +112,19 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   // Apply retention at the tool-return layer only: exec keeps the full stream.
   // The `truncated` marker is present ONLY when something was omitted.
   // label: per-tool spill 檔前綴（bash → "bash-stdout"、pwsh → "pwsh-stdout"）。
+  // M21 A/B bridge：exec 層若啟用 spill，超限輸出已落檔且 `stdout` 只回 tail。
+  // 此處的 retainer 只看到 tail（通常 ≤ 預算）→ 自身判 truncated:false；若不
+  // 橋接 exec 的截斷狀態，A+B 同開會「静默截斷、無 notice」。因此輸入型別吃進
+  // exec 的 stdoutSpillPath/truncated：任一標記視同截斷；有 exec spill 檔時
+  // notice 直接指向該檔（完整原文已在），絕不再重複寫一份 shell spill。
   async function retainedRunResult(
-    result: { stdout: string; stderr: string; exitCode: number },
+    result: {
+      stdout: string
+      stderr: string
+      exitCode: number
+      stdoutSpillPath?: string
+      truncated?: { stdout: boolean; stderr: boolean }
+    },
     label: string,
   ) {
     if (retention === null) return { stdout: result.stdout, exitCode: result.exitCode } // 現有 shape 不變
@@ -123,14 +134,22 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     se.push(result.stderr)
     const rs = so.finish()
     const re = se.finish()
-    const truncated = rs.truncated || re.truncated
+    // 截斷判定＝exec 層（spill 落檔或明確標記）與 retainer 層取聯集。
+    const execTruncated = result.truncated?.stdout === true || result.stdoutSpillPath !== undefined
+    const truncated = execTruncated || rs.truncated || re.truncated
     let stdout = rs.text
-    if (rs.truncated && spillStore) {
-      // 完整內容 = result.stdout（retain 前）——spill 檔保留全量。
-      // 只在 STDOUT 被截斷時 spill+notice：僅 stderr 截斷時 stdout 原樣（未被
-      // 省略），spill/notice 反而會把未截斷的 stdout 加上 "(Omitted 0 bytes…)"。
-      const spillPath = await spillStore.saveText(result.stdout, label)
-      stdout = rs.text + "\n" + spillNotice(rs.omittedBytes, spillPath)
+    // Spill 檔優先用 exec 既有的（完整原文）；否則僅在 retainer 自身截斷 stdout
+    // 且有設定 store 時寫一份。只在「真省略」時加 notice——僅 stderr 截斷時
+    // stdout 原樣（未被省略），spill/notice 反而會把未截斷的 stdout 加上
+    // "(Omitted 0 bytes…)"。
+    const spillPathForNotice =
+      result.stdoutSpillPath ??
+      (rs.truncated && spillStore ? await spillStore.saveText(result.stdout, label) : undefined)
+    if (spillPathForNotice !== undefined && (rs.truncated || execTruncated)) {
+      // exec tail-only 時完整省略位元組數未知（exec 只回 tail）→ 以 0 標記並指向
+      // 完整 spill 檔；retainer 自身截斷則回報精確省略數。
+      const omittedForNotice = rs.truncated ? rs.omittedBytes : execTruncated ? 0 : 0
+      stdout = rs.text + "\n" + spillNotice(omittedForNotice, spillPathForNotice)
     }
     return {
       stdout,

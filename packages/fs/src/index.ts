@@ -121,7 +121,9 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     inputSchema: { type: "object", properties: { patch_content: { type: "string" } }, required: ["patch_content"] },
     isReadOnly: false,
     execute: async ({ patch_content }) => {
-      const hunks = parsePatch(patch_content)
+      // CRLF 正規化：patch 內容若帶 \r，parsePatch 會把 \r 當行內容 → replace 誤報
+      // FS_EDIT_NOT_FOUND、純 add 寫入字面 \r。先統一成 LF 再解析。
+      const hunks = parsePatch(normalizeLineEndings(patch_content))
       // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入
       const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks)
       if (errors.length > 0) {
