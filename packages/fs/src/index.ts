@@ -3,10 +3,12 @@ import { resolve, relative, isAbsolute } from "node:path"
 import type { Tool } from "@i-harness/core-tools"
 import { FsToolError } from "./error.ts"
 import { writeFileAtomic } from "./atomic.ts"
+import { assertSnapshotFresh } from "./version.ts"
 import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit } from "./text.ts"
 
 export { FsToolError, type FsToolErrorCode } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
+export { assertSnapshotFresh, type FileSnapshot } from "./version.ts"
 export {
   normalizeLineEndings,
   detectLineEndings,
@@ -77,6 +79,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isReadOnly: false,
     execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs }) => {
       const target = resolvePath(deps.workspace, path)
+      if (old_string === "") throw new FsToolError("FS_AMBIGUOUS_EDIT", "ambiguous: old_string must not be empty")
       const { stat, readFile } = await import("node:fs/promises")
       let st
       try {
@@ -99,6 +102,14 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         throw new FsToolError("FS_AMBIGUOUS_EDIT", `ambiguous: matched ${result.count} times in ${path}; provide more specific old_string or set replace_all`)
       }
       const finalText = restoreLineEndings(result.text, style)
+      // TOCTOU re-check：read 後、rename 前 re-stat，比對 {mtimeMs,size} 快照（M21 §4.2）
+      let stAfter
+      try {
+        stAfter = await stat(target)
+      } catch {
+        throw new FsToolError("FS_NOT_FOUND", `file disappeared during edit: ${path}`)
+      }
+      assertSnapshotFresh({ mtimeMs: st.mtimeMs, size: st.size }, { mtimeMs: stAfter.mtimeMs, size: stAfter.size })
       await writeFileAtomic(target, finalText)
       return { ok: true, path, replacements: result.replacements }
     },
