@@ -75,4 +75,24 @@ describe("apply_patch tool", () => {
       patch_content: `*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-x\n+y\n*** End Patch\n`,
     }, {})).rejects.toThrow(/Move to|not supported/i)
   })
+  it("applies replacements by document order when pure-append precedes replace (regression)", async () => {
+    // 合法補丁：純插入 chunk（+X，落檔尾）在文件序上先出現，後面才是指向較早行的 replace。
+    // 記錄序＝[append(idx2), replace(idx0)] ≠ 文件序 → 未排序直接倒序會把 X 插到 A1/A2 與 b 之間。
+    await writeFile(join(dir, "a.txt"), "a\nb\n")
+    const out = (await tool().execute({
+      patch_content: `*** Begin Patch\n*** Update File: a.txt\n@@\n+X\n*** End of File\n@@\n-a\n+A1\n+A2\n*** End Patch\n`,
+    }, {})) as { ok: boolean }
+    expect(out.ok).toBe(true)
+    const content = await readFile(join(dir, "a.txt"), "utf-8")
+    expect(content).toBe("A1\nA2\nb\nX\n")
+    expect(content).not.toBe("A1\nA2\nX\nb\n") // 原錯誤結果（静默損壞）不得復發
+  })
+  it("rejects *** Add File: on an existing file without overwriting (fail-closed)", async () => {
+    await writeFile(join(dir, "new.txt"), "original")
+    const out = (await tool().execute({ patch_content: PATCH_ADD }, {})) as { ok: boolean; errors: { path: string; message: string }[] }
+    expect(out.ok).toBe(false)
+    expect(out.errors.some((e) => e.path === "new.txt")).toBe(true)
+    expect(out.errors[0]?.message).toMatch(/already exists/i)
+    expect(await readFile(join(dir, "new.txt"), "utf-8")).toBe("original") // 內容未被覆寫
+  })
 })

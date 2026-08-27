@@ -135,9 +135,14 @@ export function computeReplacements(text: string, chunks: PatchChunk[]): { text:
     replacements.push({ index: found, oldLen: old.length, newLines: chunk.newLines })
     lineIndex = found + old.length
   }
-  // 倒序套用（避免 offset 漂移——codex apply_replacements 同款）
+  // 倒序套用前，先依 index「穩定」排序（tie-break：相等 index 保持記錄序）：
+  // 記錄順 ≠ 文件序——純插入一律記在 index=lines.length（EOF），若它在補丁中先出現、
+  // 後面還有指向較早行號的 replace chunk，直接 reverse 會把插入 splice 到錯位置
+  // （例：append 記 idx2、replace 記 idx0；倒序＝先 splice(0)、再 splice(2)，插入落到改寫後的中間）。
+  // ES2019 起 native sort 為 stable → 相等 index（兩個純插入）維持記錄序，倒序後仍按原相對次序落地。
+  const ordered = [...replacements].sort((x, y) => x.index - y.index)
   let result = [...lines]
-  for (const r of [...replacements].reverse()) {
+  for (const r of [...ordered].reverse()) {
     result.splice(r.index, r.oldLen, ...r.newLines)
   }
   return { text: result.join("\n") + "\n" }
@@ -163,6 +168,11 @@ export async function applyPatch(resolve: PathResolver, hunks: PatchHunk[]): Pro
     const target = resolve(hunk.path)
     try {
       if (hunk.kind === "add") {
+        // fail-closed：Add 到已存在路徑＝静默破壞性覆寫 → 先 stat，存在即報錯且不寫入
+        const existing = await stat(target).catch(() => null)
+        if (existing !== null) {
+          throw new FsToolError("FS_ALREADY_EXISTS", `Add File: target already exists: ${hunk.path}`)
+        }
         await writeFileAtomic(target, hunk.contents ?? "")
         applied.push({ path: hunk.path, action: "added" })
       } else if (hunk.kind === "delete") {
