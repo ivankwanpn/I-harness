@@ -94,6 +94,20 @@ export const CURRENT_FORMAT_VERSION = 1
 // WeakMap so the Session shape itself is unchanged.
 const appendHooks = new WeakMap<Session, (ev: SessionEvent) => void>()
 
+// M23 G1 streaming base: multi-listener append subscription. Subscribers
+// receive the SAME event object as the log (with seq) — no clone; clone
+// semantics are decided by the subscriber (matches onAppend semantics —
+// write-behind clones separately). Subscriptions take effect for appends
+// AFTER subscribe (no replay of past events); unsubscribe stops delivery.
+const subscribers = new WeakMap<Session, Set<(ev: SessionEvent) => void>>()
+
+export function subscribe(session: Session, listener: (ev: SessionEvent) => void): () => void {
+  let set = subscribers.get(session)
+  if (!set) { set = new Set(); subscribers.set(session, set) }
+  set.add(listener)
+  return () => { subscribers.get(session)?.delete(listener) }
+}
+
 export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
   const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: [] }
   if (onAppend) appendHooks.set(session, onAppend)
@@ -121,6 +135,7 @@ export function append(session: Session, event: SessionEvent): void {
   const ev = { ...event, seq: session.events.length }
   session.events.push(ev)
   appendHooks.get(session)?.(ev)
+  subscribers.get(session)?.forEach((l) => l(ev))
 }
 
 const IMAGE_MEDIA_TYPES = new Set<ImageMediaType>(["image/png", "image/jpeg", "image/webp", "image/gif"])
