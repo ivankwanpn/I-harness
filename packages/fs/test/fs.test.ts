@@ -55,4 +55,13 @@ describe("fs tools", () => {
     expect(resolvePath(dir, "a.txt")).toBe(join(dir, "a.txt"))
     expect(resolvePath(dir, "sub/b.txt")).toBe(join(dir, "sub", "b.txt"))
   })
+
+  it("resolvePath rejects .. escape (fail-closed)", () => {
+    expect(() => resolvePath(dir, "../outside.txt")).toThrow(/escapes workspace/)
+    expect(() => resolvePath(dir, "sub/../../outside.txt")).toThrow(/escapes workspace/)
+  })
+  it("resolvePath still allows absolute inputs (M1 behavior)", () => {
+    // 絕對路徑原樣允許（read 可用於 workspace 外；containment 只擋相對 .. 逃逸）
+    expect(resolvePath(dir, dir)).toBe(dir)
+  })
 })
