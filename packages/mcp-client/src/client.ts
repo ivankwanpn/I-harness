@@ -28,6 +28,14 @@ export interface ConnectedMcpClient {
   listResources(server?: string, signal?: AbortSignal): Promise<unknown[]>
   readResource(server: string, uri: string, signal?: AbortSignal): Promise<unknown>
   close(): Promise<void>
+  /**
+   * Generation-death observation point: register a callback fired when the
+   * underlying transport closes ON ITS OWN (server death). The SDK Client also
+   * fires it for a deliberate close() — the reconnect supervisor distinguishes
+   * those with its own guards. Optional so test fakes and custom clients can
+   * omit it.
+   */
+  onDisconnect?(cb: () => void): void
 }
 
 export async function createConnectedClient(config: McpServerConfig): Promise<ConnectedMcpClient> {
@@ -35,6 +43,13 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
   const client = new Client({ name: "i-harness-mcp-client", version: "0.1.0" })
   await client.connect(transport)
   const timeout = config.toolCallTimeoutMs ?? 60_000
+  // SDK Client (Protocol) fires `onclose` both when the transport dies on its
+  // own and when close() is called deliberately — the supervisor treats
+  // deliberate closes via its own guards, so this simply notifies observers.
+  const disconnectCallbacks: Array<() => void> = []
+  client.onclose = () => {
+    for (const cb of [...disconnectCallbacks]) cb()
+  }
 
   return {
     // Paginated shape (nextCursor) so syncTools can loop on cursor (Task 4).
@@ -78,6 +93,9 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
     },
     async close() {
       await client.close()
+    },
+    onDisconnect(cb) {
+      disconnectCallbacks.push(cb)
     },
   }
 }
