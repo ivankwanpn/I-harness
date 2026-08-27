@@ -1,12 +1,15 @@
 import { isAbsolute, relative, resolve } from "node:path"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolCall, ToolDecision, ToolRegistry } from "@i-harness/core-tools"
+import { classifyDanger } from "./danger-class.ts"
 
 export interface ApprovalConfig {
   workspace: string
   dangerousCommands?: string[]
   dangerousFlags?: string[]
   askForNonReadOnly?: boolean
+  // M22: 分類器判 ask 即達 deny-with-reason（headless 安全姿態）
+  approvalPolicy?: "ask" | "never"
 }
 
 const DEFAULT_DANGEROUS_COMMANDS = [
@@ -21,36 +24,15 @@ const DEFAULT_DANGEROUS_COMMANDS = [
 ]
 const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 
-// Shell metacharacter sequences that carry control flow the argv parser
-// cannot faithfully represent (Task 3 review: getArgv is ADVISORY, not
-// authoritative — `; rm -rf /` parses to argv[0] === ";"). Presence anywhere
-// in any token ⇒ the raw command string needs human approval.
-const METACHAR_SEQUENCES = [";", "&&", "|", "$(", "`"]
-
 const SHELL_TOOLS = new Set(["bash", "pwsh"])
 const WRITE_TOOLS = new Set(["write"])
 
-function basename(token: string): string {
-  return token.split(/[\\/]/).pop() ?? ""
-}
-
-function hasMetachar(token: string): boolean {
-  return METACHAR_SEQUENCES.some((m) => token.includes(m))
-}
-
-function isDangerousArgv(
-  argv: string[],
-  dangerousCommands: string[],
-  dangerousFlags: string[],
-): boolean {
-  // deny-on-metachar: a metachar token anywhere ⇒ approval required, even if
-  // every parsed basename looks harmless.
-  if (argv.some(hasMetachar)) return true
-  // Scan EVERY token's basename, not just argv[0], so `; rm -rf /` cannot
-  // slip through when the parser lands argv[0] on the separator.
-  if (argv.some((a) => dangerousCommands.includes(basename(a)))) return true
-  if (argv.some((a) => dangerousFlags.includes(a))) return true
-  return false
+// M22: 'never' policy — an ask-decision (danger classifier or whitelist) is
+// promoted to deny-with-reason instead of consulting the approval answerer
+// (headless posture: no interactive prompt can ever approve execution).
+function applyNever(decision: ToolDecision | undefined, approvalPolicy: "ask" | "never" | undefined): ToolDecision | undefined {
+  if (approvalPolicy !== "never" || decision === undefined || decision.kind !== "ask") return decision
+  return { kind: "deny", reason: `approval policy is 'never'; ${decision.reason}` }
 }
 
 function isInsideWorkspace(workspace: string, p: string): boolean {
@@ -97,12 +79,17 @@ function decide(
       return { kind: "ask", reason: `tool '${name}' is not registered; approval required` }
     }
     if (SHELL_TOOLS.has(name)) {
-      // Layer 3: dangerous shell command, classified on parsed argv via
-      // the tool's getArgv (advisory input, metachar-denying on top).
+      // Layer 3: dangerous shell command, classified on parsed argv via the
+      // tool's getArgv (advisory input) + the danger-class classifier —
+      // metachar-denying, OS-level/escape escalation to "extreme" (M22).
       const command = (call.args as { command?: string } | undefined)?.command ?? ""
       const argv = tool.getArgv?.(call.args) ?? command.split(/\s+/).filter((s) => s.length > 0)
-      if (isDangerousArgv(argv, dangerousCommands, dangerousFlags)) {
-        return { kind: "ask", reason: `dangerous command requires approval: ${argv.join(" ") || command}` }
+      const danger = classifyDanger(argv, workspace, dangerousCommands, dangerousFlags)
+      if (danger !== "none") {
+        const reason = danger === "extreme"
+          ? `EXTREME DISTRUCTIVE command: ${argv.join(" ")} — approval requires explicit confirmation`
+          : `dangerous command requires approval: ${argv.join(" ") || command}`
+        return { kind: "ask", reason }
       }
     } else if (WRITE_TOOLS.has(name)) {
       // Layer 2: directory whitelist — write inside workspace allows,
@@ -147,11 +134,17 @@ export function createApprovalPolicy(
   const askForNonReadOnly = config.askForNonReadOnly ?? true
 
   ctx.on("tools/pre-execute", (payload) =>
-    decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly),
+    applyNever(
+      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly),
+      config.approvalPolicy,
+    ),
   )
 
   ctx.waterfall("tools/pre-execute", async (payload, next) => {
-    const decision = decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly)
+    const decision = applyNever(
+      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly),
+      config.approvalPolicy,
+    )
     // Always release the chain; veto by returning our decision object.
     const chainValue = await next(payload)
     return decision ?? chainValue
