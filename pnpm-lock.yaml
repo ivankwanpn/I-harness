@@ -417,6 +417,9 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
     devDependencies:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*

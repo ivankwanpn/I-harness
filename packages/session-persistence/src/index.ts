@@ -1,7 +1,13 @@
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent, type SessionHeader } from "@i-harness/core-session"
+import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
+
+// M23: the ownership lease's typed errors are part of the coordinator's
+// fail-closed surface (create/append/adopt/load/flush propagate them), so
+// consumers can catch them without depending on @i-harness/fs-lock directly.
+export { SessionLockConflictError, SessionLockUnsupportedError } from "@i-harness/fs-lock"
 
 export interface SessionMeta extends SessionHeader {
   formatVersion: number
@@ -24,6 +30,12 @@ export interface PersistenceBackend {
   // the subagent registry snapshot. Session-event semantics unchanged.
   putDocument(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
+  /**
+   * Optional (M23): where this store's lock files live — jsonl returns its
+   * root, sqlite the db's directory. The coordinator's ownership lease uses
+   * it as the default lock root when `lock.lockRoot` is not given.
+   */
+  lockRoot?: string
 }
 
 export interface CoordinatorOptions {
@@ -31,6 +43,17 @@ export interface CoordinatorOptions {
   maxDelayMs?: number
   /** Observe a detached background document/write-behind failure. Default console.warn. */
   reportBackgroundFailure?: (error: unknown) => void
+  /**
+   * Ownership lease (M23), backed by @i-harness/fs-lock process-level locks.
+   * `enabled` defaults to FALSE — opt-in (ruling M23-P2); the CLI wiring turns
+   * it on. `lockRoot` defaults to the backend's `lockRoot` (jsonl: store root;
+   * sqlite: the db's directory) or process.cwd().
+   */
+  lock?: { enabled?: boolean; lockRoot?: string }
+  /** Passed through to acquireSessionLock: initial backoff between acquire attempts. */
+  acquireRetryMs?: number
+  /** Passed through to acquireSessionLock: total budget before declaring a conflict. */
+  acquireDeadlineMs?: number
 }
 
 export interface SessionCoordinator {
@@ -44,11 +67,21 @@ export interface SessionCoordinator {
    * Drain all live write-behinds best-effort (flush failures are swallowed) and
    * stop their automatic timers. Write-behinds stay in the map after close(),
    * so a later enqueue still works; a session whose flush failed here retains
-   * its batch for a future enqueue/flush.
+   * its batch for a future enqueue/flush. When the ownership lease is enabled,
+   * every held lease is released after the drain (M23).
    */
   close(): Promise<void>
   putDocument(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
+  /** Whether this coordinator holds the session's write ownership lease (M23, opt-in lock). */
+  ownerOf(sessionId: string): boolean
+  /**
+   * Acquire the session's ownership lease and hold it until close() — the CLI
+   * resume path calls this after a successful load(). Throws
+   * SessionLockConflictError when another live writer owns the session
+   * (fail-closed); throws SessionLockUnsupportedError off-Windows in M23.
+   */
+  adoptOwnership(sessionId: string): Promise<void>
 }
 
 // F01-7: refusal before structural decode — "upgrade the harness", never a
@@ -109,17 +142,80 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   const writeBehinds = new Map<string, SessionWriteBehind>()
   let docChain: Promise<void> = Promise.resolve()
 
+  // M23 ownership lease (opt-in — ruling M23-P2: lock.enabled defaults to
+  // false). When enabled, every mutating path runs under the session's
+  // ownership lease from @i-harness/fs-lock: create/append acquire at first
+  // use and hold for the whole live cycle (acquire-at-live), the write-behind
+  // callback acquires inside the flush so enqueue keeps its sync surface
+  // (ruling M23-P4), load borrows the lease only around the mutating repair,
+  // and close() releases everything after the drain. Readers (list/
+  // getDocument) never lock. Conflicts throw SessionLockConflictError —
+  // fail-closed, no queueing.
+  const lockEnabled = opts?.lock?.enabled ?? false
+  const resolvedLockRoot = opts?.lock?.lockRoot ?? backend.lockRoot ?? process.cwd()
+  const heldLocks = new Map<string, SessionLock>() // sessionId → held lease
+
+  const acquireLease = (leaseId: string): Promise<SessionLock> =>
+    acquireSessionLock({
+      lockPath: lockPathFor(resolvedLockRoot, leaseId),
+      retryMs: opts?.acquireRetryMs,
+      deadlineMs: opts?.acquireDeadlineMs,
+    })
+
+  async function ensureOwnership(sessionId: string): Promise<void> {
+    if (!lockEnabled || heldLocks.has(sessionId)) return
+    const lock = await acquireLease(sessionId)
+    heldLocks.set(sessionId, lock)
+  }
+
+  // Borrow semantics for mutating-but-not-owning paths (load's repair):
+  // acquire only when not already held; the caller releases when `true` comes
+  // back (a borrowed lease must never outlive the operation).
+  async function borrowOwnership(sessionId: string): Promise<boolean> {
+    if (!lockEnabled || heldLocks.has(sessionId)) return false
+    await ensureOwnership(sessionId)
+    return true
+  }
+
+  async function releaseOwnership(sessionId: string): Promise<void> {
+    const lock = heldLocks.get(sessionId)
+    if (!lock) return
+    heldLocks.delete(sessionId)
+    await lock.release()
+  }
+
   const writeBehindFor = (sessionId: string): SessionWriteBehind => {
     let wb = writeBehinds.get(sessionId)
     if (!wb) {
       wb = new SessionWriteBehind({
         maxDelayMs,
-        write: (events) => backend.append(sessionId, events),
+        // M23-P4 (binding): enqueue stays synchronous — the lease is acquired
+        // inside the write callback (flush → backend.append). A failed acquire
+        // retains the batch for the next enqueue/flush attempt; a held lease
+        // survives background write failures for the same reason.
+        write: async (events) => {
+          await ensureOwnership(sessionId)
+          await backend.append(sessionId, events)
+        },
         reportBackgroundFailure: report,
       })
       writeBehinds.set(sessionId, wb)
     }
     return wb
+  }
+
+  // Documents are per-key (not per-session) mutating state: under the lease,
+  // each write runs inside a borrowed per-key lease namespaced "doc:<key>" in
+  // the same lock root (disjoint from session leases). Fail-closed: a conflict
+  // skips the write; the M6 contract (report, never reject) is preserved.
+  async function putDocumentWithLease(key: string, data: unknown): Promise<void> {
+    if (!lockEnabled) return backend.putDocument(key, data)
+    const lock = await acquireLease(`doc:${key}`)
+    try {
+      await backend.putDocument(key, data)
+    } finally {
+      await lock.release()
+    }
   }
 
   async function migrate(version: number, events: SessionEvent[]): Promise<SessionEvent[]> {
@@ -167,6 +263,10 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   return {
     async create(meta) {
       const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
+      // conflicting writer can never clobber the session; the typed Conflict/
+      // Unsupported error propagates fail-closed.
+      await ensureOwnership(id)
       const fullMeta: SessionMeta = {
         formatVersion: CURRENT_FORMAT_VERSION,
         sessionId: id,
@@ -177,6 +277,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       return { id }
     },
     async append(sessionId, events) {
+      await ensureOwnership(sessionId) // acquire-at-first-use (M23)
       await backend.append(sessionId, events)
     },
     enqueue(sessionId, events) {
@@ -189,7 +290,19 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       // file, and it must never touch bytes the current build cannot decode.
       const peeked = await backend.read(sessionId)
       assertVersionSupported(peeked.version)
-      const { version, events, meta } = await backend.repair(sessionId)
+      // M23 repair guard: repair is mutating, so it runs under a borrowed
+      // lease (codex maintenance-lock concept). A live session's own lease is
+      // reused and never released here; a borrowed lease is released right
+      // after repair — load never holds long-term (the CLI resume path adopts
+      // ownership explicitly via adoptOwnership).
+      const borrowed = await borrowOwnership(sessionId)
+      let repaired: { version: number; events: SessionEvent[]; meta?: SessionMeta }
+      try {
+        repaired = await backend.repair(sessionId)
+      } finally {
+        if (borrowed) await releaseOwnership(sessionId)
+      }
+      const { version, events, meta } = repaired
       const guarded = guardIgnorable(events)
       const migrated = await migrate(version, guarded)
       const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: migrated }
@@ -215,14 +328,26 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       await Promise.allSettled([...writeBehinds.values()].map((wb) => wb.flush()))
       for (const wb of writeBehinds.values()) wb.cancelAutomaticWait()
       await docChain
+      // M23: the live cycle ends after the drain — release every held lease
+      // (best-effort so one failed release cannot strand the others).
+      await Promise.allSettled([...heldLocks.values()].map((lock) => lock.release()))
+      heldLocks.clear()
     },
     async putDocument(key, data) {
-      const p = docChain.then(() => backend.putDocument(key, data))
+      const p = docChain.then(() => putDocumentWithLease(key, data))
       docChain = p.catch(() => {}) // keep the chain alive after a failure
       return p.catch((error: unknown) => { report(error) }) // report; never rejects the caller
     },
     async getDocument(key) {
       return backend.getDocument(key)
+    },
+    ownerOf(sessionId) {
+      return heldLocks.has(sessionId)
+    },
+    async adoptOwnership(sessionId) {
+      // CLI resume path: after a successful load(), hold the lease until
+      // close(). Conflict → SessionLockConflictError (fail-closed).
+      await ensureOwnership(sessionId)
     },
   }
 }

@@ -82,6 +82,8 @@ function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enque
     async close() {},
     async putDocument() {},
     async getDocument() { return undefined },
+    ownerOf() { return false },
+    async adoptOwnership() {},
   }
 }
 
