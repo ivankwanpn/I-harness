@@ -19,4 +19,5 @@ I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v
   - `packages/sandbox-windows-acl/` — 同源移植（M16w；機制同 huoyaoyuan/windows-acl-restrict-poc@10e4dfb）
   - `packages/fs-lock/src/win32.ts` — LockFileEx 非阻塞綁定形狀（同源之 sandbox-windows-acl ffi.ts win32Bindings + acl.ts:75-110 withPathLock，含 zeroed OVERLAPPED gotcha；機制同 huoyaoyuan/windows-acl-restrict-poc@10e4dfb）
   - `packages/guard-approval/` 與 `packages/interaction/` — user-approval one-shot 語義（allowed-once/rejected/cancelled/unavailable）
+  - `packages/mcp-client/src/supervisor.ts` — generation-based reconnect supervisor（packages/mcp/mcp-client/src/connection.ts absorb：generation 重建 + onclose→generationDown isCurrent 冪等、退避 min(maxDelayMs, initialDelayMs*2^(n-1))、stability window 重置 attempt budget、逾 maxRetries → unregister+lost、5s overlap guard 防 stdio 子進程重疊）
 - License: MIT
