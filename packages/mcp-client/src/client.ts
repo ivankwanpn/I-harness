@@ -41,15 +41,18 @@ export interface ConnectedMcpClient {
 export async function createConnectedClient(config: McpServerConfig): Promise<ConnectedMcpClient> {
   const transport = await createTransport(config)
   const client = new Client({ name: "i-harness-mcp-client", version: "0.1.0" })
-  await client.connect(transport)
   const timeout = config.toolCallTimeoutMs ?? 60_000
   // SDK Client (Protocol) fires `onclose` both when the transport dies on its
   // own and when close() is called deliberately — the supervisor treats
   // deliberate closes via its own guards, so this simply notifies observers.
+  // Assigned BEFORE connect(): Protocol only reads `onclose` at fire time
+  // (never overwrites it during connect), so installing it first leaves no
+  // window in which an early transport death goes unobserved.
   const disconnectCallbacks: Array<() => void> = []
   client.onclose = () => {
     for (const cb of [...disconnectCallbacks]) cb()
   }
+  await client.connect(transport)
 
   return {
     // Paginated shape (nextCursor) so syncTools can loop on cursor (Task 4).

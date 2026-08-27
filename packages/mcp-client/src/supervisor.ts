@@ -171,6 +171,7 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
   // Terminal state: stop reconnecting, drop every tool of this server, emit
   // "lost" (once — guarded by closed/state transitions in the callers).
   const goLost = (err?: unknown): void => {
+    if (state === "lost") return // idempotent: "lost" is terminal — never emitted twice
     clearRetry()
     clearStability()
     current = undefined
@@ -183,7 +184,8 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
   // Failure of the CURRENT cycle (the generation is already down or never
   // came up): decide retry-vs-lost and schedule the next attempt with
   // exponential backoff. Exactly one caller per cycle — the generationDown
-  // isCurrent guard and the attempt flow guarantee that.
+  // isCurrent guard and attempt's ownership guard guarantee that;
+  // clearRetry keeps the scheduling idempotent even if that were violated.
   const failCycle = (err: unknown | undefined): void => {
     if (closed) return
     if (err !== undefined) lastError = errText(err)
@@ -194,6 +196,12 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     }
     state = "reconnecting"
     emitStatus("reconnecting", next, lastError)
+    // Idempotent scheduling: drop any pending retry timer BEFORE arming the
+    // next one — two failCycle runs for one failed cycle must never leave two
+    // armed timers (both would fire → attempt(n+1) runs twice → deps.connect
+    // spawns two overlapping generations, exactly what the overlap guard
+    // forbids).
+    clearRetry()
     const delay = Math.min(maxDelayMs, initialDelayMs * 2 ** (next - 1))
     retryTimer = setTimeout(() => {
       retryTimer = undefined
@@ -264,9 +272,22 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
         await closeWithin(gen, OVERLAP_GUARD_MS)
         return
       }
-      // The failed generation must be closed before the next one spawns — if
-      // it cannot close within the overlap guard, stop reconnecting rather
-      // than risk two overlapping stdio child processes.
+      // Ownership guard (mid-resync death race): if the transport died while
+      // resync was in flight, the synchronous generationDown path has already
+      // claimed this generation (gen !== current), run failCycle and scheduled
+      // the retry. Running failCycle again here would double-schedule the
+      // retry (leaked timer → attempt(n+1) fires twice → two overlapping
+      // generations) or emit "lost" twice. generationDown owns this failure —
+      // only make sure the dead generation is closed and let the
+      // already-scheduled retry proceed.
+      if (gen !== current) {
+        await closeWithin(gen, OVERLAP_GUARD_MS)
+        return
+      }
+      // We still own the generation (its death has not been observed): fail
+      // this cycle. The failed generation must be closed before the next one
+      // spawns — if it cannot close within the overlap guard, stop
+      // reconnecting rather than risk two overlapping stdio child processes.
       current = undefined
       const didClose = await closeWithin(gen, OVERLAP_GUARD_MS)
       if (closed) return
@@ -275,6 +296,17 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
         return
       }
       failCycle(err)
+      return
+    }
+    // Ready guard: the generation may die while resync is in flight even
+    // though resync itself completes — generationDown has then already
+    // claimed the death (gen !== current), run failCycle and scheduled the
+    // retry. Declaring "ready" here would emit ready while the server is
+    // actually down (current undefined, retry pending); treat the attempt as
+    // failed instead — same ownership path as the catch above (no second
+    // failCycle).
+    if (gen !== current) {
+      await closeWithin(gen, OVERLAP_GUARD_MS)
       return
     }
     state = "ready"
