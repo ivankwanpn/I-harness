@@ -156,6 +156,12 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages/attachment:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+
   packages/compaction:
     dependencies:
       '@i-harness/core-session':
