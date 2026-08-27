@@ -191,6 +191,9 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/core-plugin: {}
 

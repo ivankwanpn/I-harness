@@ -93,6 +93,10 @@ registerEventType("team/member")
 registerEventType("team/task")
 registerEventType("team/message/queued")
 registerEventType("team/message/delivered")
+// M20: compaction pure-reset marker (compaction.resetWindow) — same reasoning:
+// core-session must stay dependency-free, session-persistence owns the load
+// gate, so the new type registers here (M19 pattern).
+registerEventType("compaction/reset")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure

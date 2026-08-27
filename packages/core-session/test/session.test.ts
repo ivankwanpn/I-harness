@@ -255,6 +255,19 @@ describe("compaction events", () => {
     expect(summary.shadowedSeqs).toEqual([0, 1, 2])
   })
 
+  it("compaction/reset (M20 pure-reset marker) round-trips and contributes no model-visible text", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "hi" })
+    append(s, { type: "compaction/reset" })
+    // additive event type: format version must stay 1 (no bump)
+    expect(s.formatVersion).toBe(1)
+    const restored = fromJSONL(toJSONL(s))
+    expect(restored.events.map((e) => e.type)).toEqual(["user/message", "compaction/reset"])
+    // not a model-visible role and not FTS text
+    expect(deriveMessages(restored)).toEqual([{ role: "user", content: "hi" }])
+    expect(deriveSearchText(restored.events[1]!)).toBe("")
+  })
+
   it("deriveMessages shadows the replaced seqs and renders the summary as a user message", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "old turn one" })
