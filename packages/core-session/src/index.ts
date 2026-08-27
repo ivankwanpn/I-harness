@@ -15,6 +15,10 @@ export type SessionEvent =
     | { type: "compaction/start"; seq?: number }
     | { type: "compaction/end"; seq?: number }
     | { type: "compaction/summary"; text: string; shadowedSeqs: number[]; seq?: number }
+    // M20: pure-reset marker (compaction.resetWindow — absorb codex token-budget:
+    // 新 context window、保留最近 N 條、無摘要)。Additive event type, format v1
+    // stays. Carries no user-facing text → deliberately unindexed (default "").
+    | { type: "compaction/reset"; seq?: number }
     // M16: log-only sandbox session-mode marker (approval/* precedent) — mode is
     // a local union so core-session stays dependency-free (sandbox-policy owns
     // the real SandboxMode type; a sandbox import here would create a cycle).

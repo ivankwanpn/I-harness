@@ -5,6 +5,7 @@ import { append, deriveMessages } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import { assertMessagesFromLog } from "@i-harness/llm-seam"
+import { checkBudget } from "@i-harness/token-meter"
 
 export {
   executeToolCalls,
@@ -14,11 +15,25 @@ export {
 } from "./execute-tool-calls.ts"
 import { executeToolCalls, type BatchCall } from "./execute-tool-calls.ts"
 
+// M20 budget/overflow control (absorb codex token-budget): `contextWindow` is
+// the absolute context window; the agent budget is `contextWindow *
+// reserveRatio` (default 0.9). Overflow at a step boundary triggers the
+// three-layer ladder: layer 1 compact (M11 summary) → layer 2 pure reset
+// (compaction.resetWindow, only when enabled) → layer 3 `prompt_too_long`
+// fail-closed throw.
+export interface AgentBudgetConfig {
+  contextWindow: number // REQUIRED: total window the budget is computed against
+  reserveRatio?: number // default 0.9; budget = contextWindow * reserveRatio
+  resetWindow?: boolean // default true (allow layer 2 pure reset; false → straight to fail-closed)
+  resetRetainLast?: number // default 20 (resetWindow keeps the last N events)
+}
+
 export interface AgentConfig {
   systemPrompt: string
   maxTurns?: number
   signal?: AbortSignal
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction (requires contextWindow)
+  budget?: AgentBudgetConfig // M20: absolute context budget + overflow ladder (requires contextWindow)
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10; 1 = serial)
   // NOTE: `model?: string` from the task brief collides with `AgentDeps.model`
   // (the ModelClient) under `AgentDeps & AgentConfig`, so the string selector
@@ -62,6 +77,39 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // behaves byte-identically to before this milestone.
   const compactor = deps.compact ? createCompactionEngine({ model: deps.model, config: deps.compact }) : undefined
   const compactEnabled = deps.compact?.auto ?? true
+  // M20: budget ladder config. `resetRetainLast` is enforced at call time
+  // (resetWindow validation); the default here matches the engine convention.
+  const budgetCfg = deps.budget
+  const resetAllowed = budgetCfg?.resetWindow ?? true
+  const resetRetainLast = budgetCfg?.resetRetainLast ?? 20
+
+  // M20: absolute-budget enforcement, called at every step boundary after
+  // maybeCompact (pressure check) and before the model sees the derived
+  // surface. Three layers:
+  //  1. M11 compact (shadow-projection + summary) — fail-soft, never throws,
+  //     falls through to layer 2 when compacted:false or still overflow.
+  //  2. pure reset (absorption of codex token-budget) — ONLY when enabled
+  //     (`budget.resetWindow !== false`); keeps the last resetRetainLast
+  //     events, no summary.
+  //  3. fail-closed: throw `prompt_too_long` — the session cannot be brought
+  //     under budget. No budget config → no-op (pre-M20 behavior).
+  async function enforceBudget(): Promise<void> {
+    if (budgetCfg === undefined) return
+    const before = checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio)
+    if (before.state === "ok") return
+    // Layer 1: M11 compact (shadow-projection + summary).
+    if (compactor) {
+      await compactor.compact(deps.session)
+      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio).state === "ok") return
+    }
+    // Layer 2: pure reset (absorb codex token-budget) — keep the recent tail.
+    if (compactor && resetAllowed) {
+      await compactor.resetWindow(deps.session, resetRetainLast)
+      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio).state === "ok") return
+    }
+    // Layer 3: fail-closed.
+    throw new Error(`prompt_too_long: context budget exceeded (${before.tokens} tokens > ${before.budget} budget)`)
+  }
   // `steps`/`callSeq`/`reasoning` are shared across the agent's lifetime so a
   // followup continues the same step budget, call-id sequence and reasoning
   // trail as the original run.
@@ -86,6 +134,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // M11 compaction: pressure check at the step boundary, before the model sees
       // the derived surface. Compaction only ever runs between steps.
       if (compactor && compactEnabled) await compactor.maybeCompact(deps.session)
+
+      // M20 budget enforcement: absolute-budget check (compact→reset→fail-closed)
+      // at the same boundary, after the pressure check and before the model sees
+      // the surface.
+      await enforceBudget()
 
       await ctx.emit("agent/pre-step", { task: message, session: deps.session })
 

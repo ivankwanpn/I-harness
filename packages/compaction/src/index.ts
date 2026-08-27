@@ -16,11 +16,19 @@ export interface CompactionResult {
   compacted: boolean
   shadowedSeqs: number[]
   summary?: string
+  reset?: boolean // M20: true only for a pure resetWindow (no summary)
 }
 
 export interface CompactionEngine {
   maybeCompact(session: Session): Promise<CompactionResult>
   compact(session: Session): Promise<CompactionResult>
+  // M20 (absorbs codex token-budget `start_new_context_window`): new context
+  // window — drop everything except the last `retainLast` events, append a
+  // `compaction/reset` marker, NO summary. Used when compact (summary) fails
+  // or cannot bring the session back under budget. Pure-reset is more reliable
+  // than summarization at the hard cap: the model cannot read a full context
+  // it has already overflowed.
+  resetWindow(session: Session, retainLast: number): Promise<CompactionResult>
 }
 
 export function createCompactionEngine(deps: {
@@ -71,7 +79,31 @@ export function createCompactionEngine(deps: {
       return compactOnce(session)
     },
     compact: compactOnce,
+    resetWindow: resetWindowOnce,
   }
+}
+
+// M20: pure reset (absorbs codex token-budget `start_new_context_window`) —
+// new context window: keeps the last `retainLast` events (by seq), drops
+// everything older, appends a `compaction/reset` marker, no summary. Events
+// with `seq === undefined` are always kept: they cannot be keyed for removal
+// and include externally-injected user messages the agent loop must retain.
+// Nothing removable → `{ compacted: false, reset: false }` (caller falls
+// through to fail-closed).
+async function resetWindowOnce(session: Session, retainLast: number): Promise<CompactionResult> {
+  if (!Number.isInteger(retainLast) || retainLast < 1) {
+    throw new Error(`compaction: resetWindow retainLast must be a positive integer (got ${retainLast})`)
+  }
+  const keepSeqs = new Set(
+    session.events.slice(-retainLast).map((e) => e.seq).filter((s): s is number => s !== undefined),
+  )
+  const kept = session.events.filter((e) => e.seq === undefined || keepSeqs.has(e.seq))
+  const removed = session.events.length - kept.length
+  if (removed === 0) return { compacted: false, shadowedSeqs: [], reset: false }
+  session.events.length = 0
+  session.events.push(...kept)
+  append(session, { type: "compaction/reset" })
+  return { compacted: true, shadowedSeqs: [], reset: true }
 }
 
 function lastCompactionEndSeq(session: Session): number {

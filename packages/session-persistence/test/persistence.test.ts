@@ -114,6 +114,19 @@ describe("session coordinator", () => {
     await expect(coordinator.load("s1")).rejects.toThrow(/unknown event type/i)
   })
 
+  it("M20 compaction/reset marker crosses the load gate (registered event type)", async () => {
+    const backend = fakeBackend()
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
+    await backend.append("s1", [
+      { type: "turn/start" },
+      { type: "compaction/reset" },
+      { type: "user/message", text: "hi" },
+    ] as SessionEvent[])
+    const coordinator = createSessionCoordinator(backend)
+    const { session } = await coordinator.load("s1")
+    expect(session.events.map((e) => e.type)).toEqual(["turn/start", "compaction/reset", "user/message"])
+  })
+
   it("flush on a session with no write-behind resolves (no pending writes)", async () => {
     const coordinator = createSessionCoordinator(fakeBackend())
     const { id } = await coordinator.create()

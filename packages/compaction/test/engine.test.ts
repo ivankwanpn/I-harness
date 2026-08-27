@@ -118,6 +118,40 @@ describe("compaction engine", () => {
     expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(2)
   })
 
+  it("resetWindow keeps the last retainLast events and appends a compaction/reset marker (M20)", async () => {
+    const s = createSession()
+    for (let i = 0; i < 10; i++) append(s, { type: "user/message", text: `msg ${i}` })
+    const engine = createCompactionEngine({ model: mockModel("x"), config })
+    const result = await engine.resetWindow(s, 4)
+    expect(result).toEqual({ compacted: true, shadowedSeqs: [], reset: true })
+    // kept: last 4 events by seq + the new marker
+    expect(s.events.map((e) => e.type)).toEqual(["user/message", "user/message", "user/message", "user/message", "compaction/reset"])
+    expect(s.events.map((e) => (e as { text?: string }).text)).toEqual(["msg 6", "msg 7", "msg 8", "msg 9", undefined])
+  })
+
+  it("resetWindow keeps seq-undefined events even when outside the retained tail (controller rule)", async () => {
+    const s = createSession()
+    for (let i = 0; i < 5; i++) append(s, { type: "user/message", text: `msg ${i}` })
+    // externally-injected event WITHOUT seq (plugin lane) — must survive the reset
+    s.events.unshift({ type: "user/message", text: "injected-without-seq" })
+    const engine = createCompactionEngine({ model: mockModel("x"), config })
+    const result = await engine.resetWindow(s, 3)
+    expect(result.compacted).toBe(true)
+    const texts = s.events.filter((e) => e.type === "user/message").map((e) => (e as { text: string }).text)
+    // retained tail by seq = msg2..msg4; the seq-less injected event survives too
+    expect(texts).toEqual(["injected-without-seq", "msg 2", "msg 3", "msg 4"])
+  })
+
+  it("resetWindow returns compacted:false when nothing is removable", async () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "only message" })
+    const engine = createCompactionEngine({ model: mockModel("x"), config })
+    const result = await engine.resetWindow(s, 20) // every event is in the retained tail
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reset: false })
+    // no marker was appended
+    expect(s.events.some((e) => e.type === "compaction/reset")).toBe(false)
+  })
+
   it("maybeCompact uses the catalog window when profile+modelId are provided (M15)", async () => {
     const s = longSession() // ~2000 tokens
     // config says window 1000 (threshold 500) → would fire; catalog says 10000
