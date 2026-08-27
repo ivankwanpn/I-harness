@@ -143,14 +143,31 @@ function renderShadowed(session: Session, shadowedSeqs: number[]): string {
   const parts: string[] = []
   for (const ev of session.events) {
     if (ev.seq !== undefined && set.has(ev.seq)) {
-      // M20 image-aware replay: events carrying images are replayed as a
-      // descriptor rather than text-only — so the summary records WHICH
-      // visuals were in context, not just their surrounding prose. The real
-      // byte-level replay needs a multimodal summarizer + store ref (deferred);
-      // this is the descriptor path. Sessions without `images` keep the exact
-      // previous behavior (byte-identical for text-only sessions).
+      // M20 image-aware replay: events carrying images are replayed with a
+      // descriptor so the summary records WHICH visuals were in context. The
+      // real byte-level replay needs a multimodal summarizer + store ref
+      // (deferred); this is the descriptor path.
+      // FINAL REVIEW (Ruling 8b): UNION, not replace. Pre-M20 an image-bearing
+      // event replayed as its surrounding text + image info; a replace-only
+      // descriptor path silently dropped that prose from the summarizer input.
+      // Replay `descriptor\n<derived search text>`; no-image events keep the
+      // exact previous behavior (desc === undefined → fallback unchanged,
+      // byte-identical for text-only sessions).
       const desc = imageDescriptor(ev)
-      const t = desc ?? deriveSearchText(ev)
+      // Ruling 7 kept intact under the 8b union: `deriveSearchText` re-derives
+      // core-session's OWN text contribution — including its legacy FTS image
+      // descriptor, which assumes well-formed ImageInput fields
+      // (`dataBase64.slice`). A malformed persisted shape must degrade to "no
+      // derived text" instead of escaping compaction (renderShadowed runs
+      // outside compact()'s fail-soft try); the descriptor above still records
+      // the visual. Well-formed events take the exact same path as before.
+      let base = ""
+      try {
+        base = deriveSearchText(ev)
+      } catch {
+        base = ""
+      }
+      const t = desc ? `${desc}\n${base}` : base
       if (t.length > 0) parts.push(t)
     }
   }
@@ -168,7 +185,19 @@ function renderShadowed(session: Session, shadowedSeqs: number[]): string {
 // of throwing: renderShadowed runs OUTSIDE compact()'s fail-soft try, so a
 // TypeError here would escape compaction entirely (Ruling 7).
 function imageDescriptor(ev: SessionEvent): string | undefined {
-  const images = (ev as { images?: unknown }).images
+  // FINAL REVIEW (Ruling 8b): the probe covers BOTH image locations —
+  // user-message images live at the top level (`event.images`), while
+  // tool-result images ride inside the opaque output payload (`output.images`,
+  // the same shape deriveMessages probes). Probing only the top level made a
+  // tool/result fall through to the legacy FTS descriptor line, leaving two
+  // descriptor styles in one replay. Malformed persisted shapes (non-array /
+  // empty at both locations) still degrade to `undefined` → plain
+  // `deriveSearchText` replay (Ruling 7 guards intact).
+  const direct = (ev as { images?: unknown }).images
+  const nested = ev.type === "tool/result"
+    ? (ev as { output?: { images?: unknown } }).output?.images
+    : undefined
+  const images = Array.isArray(direct) ? direct : Array.isArray(nested) ? nested : undefined
   if (!Array.isArray(images) || images.length === 0) return undefined
   const parts = (images as unknown[]).map((raw): string => {
     const img = typeof raw === "object" && raw !== null ? (raw as { mediaType?: unknown; dataBase64?: unknown }) : undefined

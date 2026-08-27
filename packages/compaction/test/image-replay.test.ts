@@ -31,6 +31,36 @@ describe("compaction image-aware replay", () => {
     // size is the decoded-byte estimate per core-session's convention
     // (ceil(base64.length * 3 / 4): "aGVsbG8=" has length 8 → ceil(24/4) = 6).
     expect(inputs[0]).toContain("[image: image/png, 6 bytes]")
+    // FINAL REVIEW (Ruling 8b): the descriptor must UNION with the event text,
+    // not replace it — pre-M20 an image-bearing event replayed as text + image
+    // info; a replace-only path drops the surrounding prose ("pic") from the
+    // summary input entirely.
+    expect(inputs[0]).toContain("pic")
+  })
+
+  it("replays tool/result output.images with the same [image:] descriptor style", async () => {
+    const s = createSession()
+    append(s, { type: "tool/call", callId: "call_1", name: "screenshot", args: {} })
+    append(s, {
+      type: "tool/result",
+      callId: "call_1",
+      name: "screenshot",
+      output: { ok: true, images: [{ mediaType: "image/png", dataBase64: "aGVsbG8=" }] },
+    })
+    append(s, { type: "assistant/message", text: "done" })
+    const inputs: string[] = []
+    const config: CompactionConfig = { contextWindow: 10, thresholdRatio: 0.9, auto: false }
+    const engine = createCompactionEngine({ model: spyModel(inputs), config })
+    const r = await engine.compact(s)
+    expect(r.compacted).toBe(true)
+    // FINAL REVIEW (Ruling 8b): the descriptor probe must cover BOTH top-level
+    // `event.images` AND `output.images` — user-message images use the bracket
+    // style; tool-result images previously fell through to the legacy FTS
+    // descriptor line, leaving two styles in one replay.
+    expect(inputs[0]).toContain("[image: image/png, 6 bytes]")
+    // Union with derived text: the non-image part of the tool result stays.
+    expect(inputs[0]).toContain('"ok":true')
+    expect(inputs[0]).toContain("done")
   })
 
   it("replays text-only sessions unchanged (no descriptor, no regression)", async () => {

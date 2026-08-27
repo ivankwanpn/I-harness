@@ -73,12 +73,29 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   if (!Number.isInteger(maxParallel) || maxParallel < 1) {
     throw new Error(`maxParallelToolCalls must be a positive integer (got ${maxParallel})`)
   }
+  // M20 final review (Ruling 8a): budget config validation must fail LOUD here,
+  // at agent creation. `checkBudget` validates `reserveRatio` but never
+  // `contextWindow`: a non-finite one (e.g. a computed catalog value) made every
+  // comparison `tokens > NaN === false` → state "ok" forever → the entire
+  // compact→reset→fail-closed ladder silently dead. `resetRetainLast` already
+  // failed closed at resetWindow time, but late/mislabeled — reject invalid
+  // values at creation too. Absent optional fields keep their defaults; no
+  // change to `resetWindow` runtime behavior.
+  if (deps.budget !== undefined) {
+    const { contextWindow, resetRetainLast } = deps.budget
+    if (!(Number.isFinite(contextWindow) && contextWindow > 0)) {
+      throw new Error(`budget.contextWindow must be a finite positive number (got ${contextWindow})`)
+    }
+    if (resetRetainLast !== undefined && (!Number.isInteger(resetRetainLast) || resetRetainLast < 0)) {
+      throw new Error(`budget.resetRetainLast must be a non-negative integer (got ${resetRetainLast})`)
+    }
+  }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
   const compactor = deps.compact ? createCompactionEngine({ model: deps.model, config: deps.compact }) : undefined
   const compactEnabled = deps.compact?.auto ?? true
-  // M20: budget ladder config. `resetRetainLast` is enforced at call time
-  // (resetWindow validation); the default here matches the engine convention.
+  // M20: budget ladder config (`contextWindow`/`resetRetainLast` are validated
+  // at creation above); the default matches the engine convention.
   const budgetCfg = deps.budget
   const resetAllowed = budgetCfg?.resetWindow ?? true
   const resetRetainLast = budgetCfg?.resetRetainLast ?? 20
