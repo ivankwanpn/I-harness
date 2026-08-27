@@ -119,7 +119,7 @@ describe("session coordinator", () => {
     await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
     await backend.append("s1", [
       { type: "turn/start" },
-      { type: "compaction/reset" },
+      { type: "compaction/reset", removedSeqs: [] },
       { type: "user/message", text: "hi" },
     ] as SessionEvent[])
     const coordinator = createSessionCoordinator(backend)
