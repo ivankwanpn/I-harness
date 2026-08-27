@@ -1,10 +1,30 @@
 import { readFile, writeFile, readdir } from "node:fs/promises"
-import { resolve } from "node:path"
+import { resolve, relative, isAbsolute } from "node:path"
 import type { Tool } from "@i-harness/core-tools"
+import { FsToolError } from "./error.ts"
 
+export { FsToolError, type FsToolErrorCode } from "./error.ts"
+export { writeFileAtomic } from "./atomic.ts"
+export {
+  normalizeLineEndings,
+  detectLineEndings,
+  restoreLineEndings,
+  assertTextData,
+  applyLiteralEdit,
+  type LiteralEditResult,
+} from "./text.ts"
+
+// 既有行為：絕對輸入原樣（讀取 workspace 外檔案——read 保留）；`..` 逃逸 → 現在拒
 export function resolvePath(workspace: string, path: string): string {
   const isAbsoluteInput = path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)
-  return isAbsoluteInput ? resolve(path) : resolve(workspace, path)
+  const resolved = isAbsoluteInput ? resolve(path) : resolve(workspace, path)
+  if (!isAbsoluteInput) {
+    const rel = relative(workspace, resolved)
+    if (rel.startsWith("..") || isAbsolute(rel)) {
+      throw new FsToolError("FS_NOT_FOUND", `path escapes workspace: ${path}`)
+    }
+  }
+  return resolved
 }
 
 export interface FsToolDeps {
