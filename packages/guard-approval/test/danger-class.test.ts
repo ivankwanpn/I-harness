@@ -41,4 +41,16 @@ describe("classifyDanger", () => {
   it("dangerous: custom dangerousCommands still works", () => {
     expect(classifyDanger(["myrm", "-x"], WS, ["myrm"])).toBe("dangerous")
   })
+  it("cmd del /f INSIDE workspace is dangerous (slash-flag not target)", () => {
+    expect(classifyDanger(["cmd", "/c", "del", "/f", `${WS}/t.txt`], WS)).toBe("dangerous")
+  })
+  it("cmd rd /s /q INSIDE workspace is dangerous", () => {
+    expect(classifyDanger(["cmd", "/c", "rd", "/s", "/q", `${WS}/build`], WS)).toBe("dangerous")
+  })
+  it("powershell without -Command scans rest (fail-closed)", () => {
+    expect(classifyDanger(["powershell", "Remove-Item", "C:/system/x.txt", "-Recurse", "-Force"], WS)).toBe("extreme")
+  })
+  it("powershell without -Command in-workspace is dangerous", () => {
+    expect(classifyDanger(["powershell", "Remove-Item", `${WS}/build`, "-Recurse", "-Force"], WS)).toBe("dangerous")
+  })
 })
