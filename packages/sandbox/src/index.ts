@@ -6,6 +6,10 @@ export interface SandboxExecutionPolicy {
   mode: SandboxMode
   workspaceRoot: string
   sessionId?: string
+  // M22 enforcement gate: when true, this policy demands a read-isolated
+  // backend. default false — opting in is what turns capability absence into
+  // a refuse-to-run.
+  requireReadIsolation?: boolean
 }
 
 export interface SandboxPolicy extends SandboxExecutionPolicy {
@@ -28,6 +32,10 @@ export interface ConfinedArgv {
 // Abstract process-sandbox seam. confine() must return enforcing argv or fail
 // closed by throwing; silent unconfined passthrough is forbidden.
 export interface SandboxProvider {
+  // M22 capability contract: optional. An undefined/missing declaration is
+  // treated as `{ readIsolation: false }` (capabilities unknown = NOT
+  // read-isolated) — fail closed, never fail open.
+  capabilities?: { readIsolation: boolean }
   confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv
 }
 
@@ -43,6 +51,21 @@ export class SandboxUnavailableError extends Error {
       + (detail === undefined ? "" : ` Runner failure: ${detail}`),
     )
     this.name = "SandboxUnavailableError"
+  }
+}
+
+// M22 enforcement gate: absorb codex windows.rs's "policy requires it but the
+// backend can't deliver it → refuse to run" shape (refusing to run
+// unsandboxed; windows.rs:121-129) — shape-level absorb (today every provider
+// is readIsolation:false, so this gate is a fail-closed contract left for
+// future account-style backends). Only confined modes reach this check:
+// danger-full-access passthrough happens upstream in exec's resolveArgv.
+export function assertSandboxCapable(policy: SandboxExecutionPolicy, provider: SandboxProvider): void {
+  if (policy.requireReadIsolation === true && provider.capabilities?.readIsolation !== true) {
+    throw new SandboxUnavailableError(
+      (policy as SandboxPolicy).mode,
+      "policy requires read isolation but this backend provides none (WRITE_RESTRICTED is read-visible on Windows; the codex-style elevated backend is not implemented in this build)",
+    )
   }
 }
 
