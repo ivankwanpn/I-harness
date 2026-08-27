@@ -97,6 +97,10 @@ registerEventType("team/message/delivered")
 // core-session must stay dependency-free, session-persistence owns the load
 // gate, so the new type registers here (M19 pattern).
 registerEventType("compaction/reset")
+// M21: todo tool list-write events (todo/write) — same
+// reasoning as above: only this package loads on a plain persistence-only path,
+// so without registration guardIgnorable would refuse the type at load.
+registerEventType("todo/write")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
