@@ -60,6 +60,7 @@ export class SandboxUnavailableError extends Error {
 // is readIsolation:false, so this gate is a fail-closed contract left for
 // future account-style backends). Only confined modes reach this check:
 // danger-full-access passthrough happens upstream in exec's resolveArgv.
+// 形狀吸收（MIT；見 THIRD_PARTY_NOTICES——OpenAI codex-rs）。
 export function assertSandboxCapable(policy: SandboxExecutionPolicy, provider: SandboxProvider): void {
   if (policy.requireReadIsolation === true && provider.capabilities?.readIsolation !== true) {
     throw new SandboxUnavailableError(

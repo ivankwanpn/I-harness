@@ -1,0 +1,20 @@
+# Third-Party Notices
+
+I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v0.149.1）之設計/代碼片段。
+所有來源皆為 MIT License；吸收片段保留原版權聲明。
+
+## OpenAI codex-rs (MIT)
+- 來源：https://github.com/openai/codex (codex-rs/windows-sandbox-rs, sandboxing, shell-command)
+- 吸收：
+  - `packages/sandbox-windows-acl/src/audit.ts` — 世界可寫掃描（audit.rs 之限時限量 gather/cwd 先行構想）
+  - `packages/guard-approval/src/danger-class.ts` — 危險命令分類器（is_dangerous_command.rs + windows_dangerous_commands.rs 語義）
+  - `packages/guard-approval/src/remember.ts` — prefix rules 與 BANNED_PREFIX_SUGGESTIONS（exec_policy.rs）
+  - `packages/sandbox/src/index.ts` — enforcement gate refuse-to-run 形狀（sandboxing/windows.rs）
+- License: MIT
+
+## deepseek-harness (dsh) (MIT)
+- 來源：https://github.com/deepseek-ai/deepseek-harness (packages/sandbox/sandbox-windows-acl, interaction/user-approval)
+- 吸收：
+  - `packages/sandbox-windows-acl/` — 同源移植（M16w；機制同 huoyaoyuan/windows-acl-restrict-poc@10e4dfb）
+  - `packages/guard-approval/` 與 `packages/interaction/` — user-approval one-shot 語義（allowed-once/rejected/cancelled/unavailable）
+- License: MIT

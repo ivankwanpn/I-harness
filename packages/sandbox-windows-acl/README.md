@@ -50,3 +50,28 @@ Writable directories must be caller-owned (owner-implicit `WRITE_DAC`).
 compose site owns the backend and must call `dispose()` at teardown to revoke
 the revocable temp grants). Only `writableDirs` is consumed by the factory;
 the per-call `SandboxPolicy` is the actual enforcement input.
+
+## Read-side confinement (M22 結論)
+
+> **本 sandbox 不提供讀隔離。** WRITE_RESTRICTED 限制**只對寫型存取**做 restricting-SID 檢查；
+> 讀存取走正常 token 檢查，而 deny-read ACE 其 deny 主體必須出現於做檢查的 token 的 SIDs——
+> 但本 sandbox 的 token 只含 caller 的 ambient 身分（user/groups/logon SID），對其打 deny-read
+> 會毒化同一登入工作階段的所有其他進程（含 host CLI、編輯器）。
+> 此限制為 **partial（write-only）**——`enforcement: 'partial'`，與 codex/dsh 同源基準一致。
+
+**雙證據**：
+- codex 自己寫死（codex-rs/sandboxing/src/windows.rs:110-127）：「WRITE_RESTRICTED token does
+  not make capability SID deny-read ACEs participate in read access checks. Read restrictions
+  therefore require the elevated backend…」——且 config 要求讀分割而只有 unelevated 後端時拒跑。
+- dsh README：「Writes are restricted; reads, network, and process visibility are not. …pair it
+  with a read-side policy or an AppContainer/S-1-15-2 capability token for stronger confinement.」
+  Known Limitations：「Read-side confinement and network policy are out of scope.」
+
+**未來（M26+ 候選）**：codex 式「帳號式 elevated 後端」（專用本地組/帳號 + DPAPI 存密 +
+背景授讀 helper + 提權 setup）——可讓 deny-read ACE 落在專用身分的 SIDs 上。M22 未實作，
+因為需管理員安裝期權限與數百行 FFI，且 Windows 環境變數（域控/提權許可）不可控。
+
+**已知不可保護向量（pin 成活文檔）**：全域任意路徑讀取不受限；外部 Everyone-ACL 物件寫入；
+NUL 裝置（`cmd > NUL`）；hard link 外部別名寫；FAT 無 SD；console 隔離不可得；named-pipe 孫進程。
+（M22 另發現：confined target 無法 spawn 子進程——EPERM；此為比計劃更強的寫隔離副效果，
+詳見 test/kill-on-close.e2e.ts 的 descendant-denial pin。）
