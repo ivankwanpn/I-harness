@@ -1305,7 +1305,6 @@ Expected: FAIL（欄位不存在）
 - [ ] **Step 3: 實現**
 
 ```ts
-```ts
 // packages/exec/src/index.ts（相關部分，完整改寫點）
 import { OutputCollector } from "./spill.ts"
 
