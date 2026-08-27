@@ -8,3 +8,5 @@ export {
 } from "./estimate.ts"
 export { activeTokens, breakdown } from "./breakdown.ts"
 export type { TokenBreakdown } from "./breakdown.ts"
+export { checkBudget } from "./budget.ts"
+export type { BudgetResult } from "./budget.ts"
