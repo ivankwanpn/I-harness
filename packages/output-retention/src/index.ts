@@ -154,3 +154,41 @@ export function createTextRetainer(opts: TextRetainerOptions): TextRetainer {
     },
   }
 }
+
+import { mkdtempSync, openSync, writeSync, closeSync, mkdirSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { randomBytes } from "node:crypto"
+
+export interface SpillStoreOptions {
+  root?: string
+}
+export interface SpillStore {
+  saveText(text: string, label: string): Promise<string>
+}
+
+// 吸收 dsh tool-output-spill-files B 層：完整原文落檔（0700 per-process temp root，
+// 絕不寫 workspace——研究決策；不清理（已知 limitation））。
+export function createSpillStore(opts?: SpillStoreOptions): SpillStore {
+  const root = opts?.root ?? mkdtempSync(join(tmpdir(), "i-harness-retention-spill-"))
+  mkdirSync(root, { recursive: true })
+  return {
+    async saveText(text: string, label: string): Promise<string> {
+      const name = `${label}-${randomBytes(6).toString("hex")}.log`
+      const p = join(root, name)
+      const fd = openSync(p, "wx", 0o600)
+      try {
+        writeSync(fd, Buffer.from(text, "utf-8"))
+        closeSync(fd)
+      } catch (err) {
+        try { closeSync(fd) } catch { /* ignore */ }
+        throw err
+      }
+      return p
+    },
+  }
+}
+
+export function spillNotice(omittedBytes: number, path: string): string {
+  return `(Omitted ${omittedBytes} bytes. Full result stored at: ${path}. Use read with offset/limit, or grep this path to search within it.)`
+}

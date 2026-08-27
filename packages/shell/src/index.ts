@@ -4,7 +4,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { ExecService } from "@i-harness/exec"
 import { registerExec } from "@i-harness/exec"
-import { createTextRetainer, type RetentionMode } from "@i-harness/output-retention"
+import { createTextRetainer, createSpillStore, spillNotice, type RetentionMode, type SpillStore, type SpillStoreOptions } from "@i-harness/output-retention"
 
 export interface ResolvedShell {
   name: "bash" | "pwsh"
@@ -84,6 +84,8 @@ export function getArgv(command: string): string[] {
 export interface ShellRetentionOptions {
   maxBytes?: number // default 64_000
   mode?: RetentionMode
+  // M21 B 層：truncated 時把完整輸出寫 spill + 併 notice（additive——不設=同前）
+  spill?: SpillStoreOptions
 }
 
 export interface ShellToolDeps {
@@ -104,26 +106,34 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   const retention = deps.retention
     ? createTextRetainer({ maxBytes: deps.retention.maxBytes ?? 64_000, mode: deps.retention.mode })
     : null
+  // spillStore 一次建、跨呼叫重用（寫檔無狀態；root 固定）
+  const spillStore: SpillStore | undefined = deps.retention?.spill ? createSpillStore(deps.retention.spill) : undefined
 
   // Apply retention at the tool-return layer only: exec keeps the full stream.
   // The `truncated` marker is present ONLY when something was omitted.
-  function retainedRunResult(result: { stdout: string; stderr: string; exitCode: number }) {
-    if (retention === null) return { stdout: result.stdout, exitCode: result.exitCode }
+  async function retainedRunResult(result: { stdout: string; stderr: string; exitCode: number }) {
+    if (retention === null) return { stdout: result.stdout, exitCode: result.exitCode } // 現有 shape 不變
     const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     so.push(result.stdout)
     se.push(result.stderr)
     const rs = so.finish()
     const re = se.finish()
+    const truncated = rs.truncated || re.truncated
+    let stdout = rs.text
+    if (truncated && spillStore) {
+      // 完整內容 = result.stdout（retain 前）——spill 檔保留全量
+      const spillPath = await spillStore.saveText(result.stdout, "bash-stdout")
+      stdout = rs.text + "\n" + spillNotice(rs.omittedBytes, spillPath)
+    }
     return {
-      stdout: rs.text,
+      stdout,
       stderr: re.text,
       exitCode: result.exitCode,
-      ...(rs.truncated || re.truncated
-        ? { truncated: { stdoutBytes: rs.omittedBytes, stderrBytes: re.omittedBytes } }
-        : {}),
+      ...(truncated ? { truncated: { stdoutBytes: rs.omittedBytes, stderrBytes: re.omittedBytes } } : {}),
     }
   }
+  // execute: `return retainedRunResult(result)`——async fn 回 promise 自動展平（既有呼叫面不變）
 
   const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
     name: "bash",
