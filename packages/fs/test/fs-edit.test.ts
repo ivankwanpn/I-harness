@@ -50,4 +50,10 @@ describe("edit tool", () => {
     await writeFile(join(dir, "a.txt"), "new content")
     await expect(tool().execute({ path: "a.txt", old_string: "old", new_string: "NEW", observedMtimeMs: observed }, {})).rejects.toThrow(/changed|stale/i)
   })
+  it("rejects empty old_string (with and without replace_all), file unchanged", async () => {
+    await writeFile(join(dir, "a.txt"), "abc")
+    await expect(tool().execute({ path: "a.txt", old_string: "", new_string: "X" }, {})).rejects.toThrow(/empty|ambiguous/i)
+    await expect(tool().execute({ path: "a.txt", old_string: "", new_string: "X", replace_all: true }, {})).rejects.toThrow(/empty|ambiguous/i)
+    expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("abc")
+  })
 })
