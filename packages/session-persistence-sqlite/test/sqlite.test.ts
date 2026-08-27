@@ -3,6 +3,7 @@ import { mkdtempSync, existsSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createRequire } from "node:module"
+import { performance } from "node:perf_hooks"
 import { openDatabase, SCHEMA_VERSION, MIGRATIONS, APPLICATION_ID } from "../src/schema.ts"
 import { createSqliteBackend, closeSqliteBackends } from "../src/index.ts"
 
@@ -83,6 +84,18 @@ describe("sqlite schema", () => {
     db.exec("CREATE TABLE stray (a TEXT)")
     db.close()
     expect(() => openDatabase(dbPath)).toThrow()
+  })
+
+  it("openDatabase sets busy_timeout=5000", () => {
+    const db = openDatabase(join(dir, "sessions.db"))
+    try {
+      // Column name varies across bundled SQLite versions ("busy_timeout" on
+      // newer, "timeout" on older) — read either key.
+      const row = db.prepare("PRAGMA busy_timeout").get() as { busy_timeout?: number; timeout?: number }
+      expect(row.busy_timeout ?? row.timeout).toBe(5000)
+    } finally {
+      db.close()
+    }
   })
 })
 
@@ -263,5 +276,39 @@ describe("sqlite documents", () => {
     await backend.putDocument("subagent-state", { roles: [{ name: "x" }] })
     expect(await backend.getDocument("subagent-state")).toEqual({ roles: [{ name: "x" }] })
     expect(await backend.getDocument("missing")).toBeUndefined()
+  })
+})
+
+describe("busy_timeout cross-connection contention", () => {
+  // Deterministic busy-wait proof: while A holds an uncommitted write
+  // transaction, B's write must NOT fail instantly (SQLITE_BUSY at
+  // busy_timeout=0) — it retries until the 200ms deadline. The elapsed
+  // lower bound can only grow under load, so it cannot flake; the loose
+  // upper bound proves the short deadline (not the default 5000) applied.
+  it("a write blocked by an open transaction waits, then succeeds after rollback", () => {
+    const path = join(dir, "contention.db")
+    const a = openDatabase(path)
+    const b = openDatabase(path)
+    try {
+      const insert = "INSERT INTO documents (key, data) VALUES ('lock', '{}') ON CONFLICT(key) DO UPDATE SET data = excluded.data"
+
+      a.exec("BEGIN IMMEDIATE")
+      a.exec(insert) // uncommitted write: A holds the WAL write lock
+
+      b.exec("PRAGMA busy_timeout = 200")
+      const start = performance.now()
+      expect(() => b.exec(insert)).toThrow(/locked|busy/i)
+      const elapsed = performance.now() - start
+      expect(elapsed).toBeGreaterThanOrEqual(150) // deferred, not instant SQLITE_BUSY
+      expect(elapsed).toBeLessThan(4000) // deadline is B's 200ms, not the default 5000
+
+      a.exec("ROLLBACK")
+      b.exec(insert) // lock released: the same write now succeeds
+      const n = (b.prepare("SELECT COUNT(*) AS c FROM documents WHERE key = 'lock'").get() as { c: number }).c
+      expect(n).toBe(1)
+    } finally {
+      a.close()
+      b.close()
+    }
   })
 })

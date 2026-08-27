@@ -66,7 +66,7 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
     lockRoot: dirname(dbPath),
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
-      db.exec("BEGIN")
+      db.exec("BEGIN IMMEDIATE")
       try {
         db.prepare(
           `INSERT INTO sessions (id, version, created_at, parent_session, seed_length, origin, delegation_depth, incarnation, revision)
@@ -91,7 +91,7 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       const insertFts = db.prepare(
         `INSERT INTO events_fts (session_id, seq, event_type, time, text) VALUES (?, ?, ?, ?, ?)`,
       )
-      db.exec("BEGIN")
+      db.exec("BEGIN IMMEDIATE")
       try {
         let seq = db.prepare("SELECT COALESCE(MAX(seq), -1) + 1 AS next FROM events WHERE session_id = ?").get(sessionId) as { next: number }
         for (const ev of events) {
@@ -124,7 +124,7 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
       const rows = db.prepare("SELECT seq, type, data, ignorable FROM events WHERE session_id = ? ORDER BY seq").all(sessionId) as unknown as EventRow[]
       const events = rows.map((r) => JSON.parse(r.data) as SessionEvent)
       const closers = missingClosers(events)
-      db.exec("BEGIN")
+      db.exec("BEGIN IMMEDIATE")
       try {
         if (closers.length > 0) {
           const insert = db.prepare(
