@@ -37,8 +37,22 @@ export type SessionEvent =
     | { type: "team/task"; version: 1; teamId: string; task: { id: string; revision: number; subject: string; description: string; status: "pending" | "in_progress" | "completed" | "deleted"; ownerId?: string; blockedBy: string[]; writeScopes: string[] }; seq?: number }
     | { type: "team/message/queued"; version: 1; teamId: string; message: { id: string; senderId: string; senderName: string; targetId: string; delivery: "quiet" | "wakeup"; content: string }; seq?: number }
     | { type: "team/message/delivered"; version: 1; teamId: string; messageId: string; targetId: string; seq?: number }
+    // M21 todo tool: whole-list snapshot writes (version 1). INLINED like
+    // team/* above so core-session stays dependency-free (the todo tool owns
+    // the richer shape and reuses these names). No model-visible text →
+    // deliberately unindexed (deriveMessages/deriveSearchText defaults).
+    | { type: "todo/write"; version: 1; items: TodoItem[]; seq?: number }
   )
   & { ignorable?: true }
+
+// M21 todo tool item shape (snapshot carried by every todo/write event). Each
+// write REPLACES the visible list wholesale; status lives on the item, not the
+// session, so the harness never derives todo progress from the log itself.
+export type TodoItemStatus = "pending" | "in_progress" | "completed"
+export interface TodoItem {
+  content: string
+  status: TodoItemStatus
+}
 
 // Lineage/identity carried on a session (M8): who spawned it and how deep in
 // the subagent delegation chain it sits. Optional — a root session has none.
