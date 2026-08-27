@@ -33,6 +33,11 @@ describe("retryErrorCode", () => {
     e.code = "RATE_LIMIT"
     expect(retryErrorCode(e)).toBe("RATE_LIMIT")
   })
+  it("prefers structured code over message regex", () => {
+    const e = new Error("timeout") as Error & { code?: string }
+    e.code = "RATE_LIMIT"
+    expect(retryErrorCode(e)).toBe("RATE_LIMIT") // code wins over regex (regex would say TIMEOUT)
+  })
   it("classifies by message regex fallback", () => {
     const e = new Error("429: context length exceeded")
     expect(retryErrorCode(e)).toBe("CONTEXT_WINDOW_EXCEEDED")
