@@ -353,7 +353,6 @@ export function createRetryingClient(client: ModelClient, policy: ResolvedRetryP
 ```
 
 （這是在 plan 中明確標示的「實作需知」——非 placeholder，是讓實作者處理 error-event-vs-throw 的兩種 provider 風格。）
-```
 
 - [ ] **Step 4: 跑測試確認通過**
 
