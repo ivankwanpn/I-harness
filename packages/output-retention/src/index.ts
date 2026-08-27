@@ -174,7 +174,9 @@ export function createSpillStore(opts?: SpillStoreOptions): SpillStore {
   mkdirSync(root, { recursive: true })
   return {
     async saveText(text: string, label: string): Promise<string> {
-      const name = `${label}-${randomBytes(6).toString("hex")}.log`
+      // label 先做 injective 段編碼再進檔名：含 "/"、".."、"\"、空白等也不會逃出
+      // root 或產生歧義路徑（in-tree labels "bash-stdout"/"pwsh-stdout" 不受影響）。
+      const name = `${sanitizeSegment(label)}-${randomBytes(6).toString("hex")}.log`
       const p = join(root, name)
       const fd = openSync(p, "wx", 0o600)
       try {
@@ -187,6 +189,17 @@ export function createSpillStore(opts?: SpillStoreOptions): SpillStore {
       return p
     },
   }
+}
+
+// injective 安全段編碼（吸收 dsh encodeSegment，同 packages/exec/src/spill.ts）：
+// [A-Za-z0-9._-] 原樣，其餘字元 → ~<codePoint hex>；空 label → "~"（占位防撞根目錄）
+function sanitizeSegment(s: string): string {
+  let out = ""
+  for (const ch of s) {
+    if (/[A-Za-z0-9._-]/.test(ch)) out += ch
+    else out += `~${ch.codePointAt(0)!.toString(16)}`
+  }
+  return out || "~"
 }
 
 export function spillNotice(omittedBytes: number, path: string): string {

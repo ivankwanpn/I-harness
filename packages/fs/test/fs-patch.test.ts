@@ -19,6 +19,18 @@ describe("apply_patch tool", () => {
     expect(out.ok).toBe(true)
     expect(await readFile(join(dir, "new.txt"), "utf-8")).toBe("hello\nworld\n")
   })
+  it("normalizes CRLF patch_content (\r not treated as line content)", async () => {
+    // Regression (M21 final-review Fix 3)：patch 內容帶 CRLF 時，parsePatch 曾把
+    // \r 當行內容 → Add 寫入字面 \r、Update 誤報 FS_EDIT_NOT_FOUND。正規化成
+    // LF 後：ok:true 且檔案內容為 LF 結尾。
+    const out = (await tool().execute({
+      patch_content: "*** Begin Patch\r\n*** Add File: new.txt\r\n+hi\r\n*** End Patch\r\n",
+    }, {})) as { ok: boolean }
+    expect(out.ok).toBe(true)
+    const content = await readFile(join(dir, "new.txt"), "utf-8")
+    expect(content).toBe("hi\n")
+    expect(content).not.toContain("\r")
+  })
   it("updates with context", async () => {
     await writeFile(join(dir, "a.txt"), "a\nold\nb\n")
     const out = (await tool().execute({ patch_content: PATCH_UPDATE }, {})) as { ok: boolean }
@@ -94,5 +106,17 @@ describe("apply_patch tool", () => {
     expect(out.errors.some((e) => e.path === "new.txt")).toBe(true)
     expect(out.errors[0]?.message).toMatch(/already exists/i)
     expect(await readFile(join(dir, "new.txt"), "utf-8")).toBe("original") // 內容未被覆寫
+  })
+  it("@@ <context> seeks forward past an earlier match of oldLines (cursor-advance)", async () => {
+    // 檔案 `old\nheader\nold\n`：oldLines 的 `old` 在 anchor `header`「之前」也
+    // 出現過——cursor 只前進 + 先定位 context 再找 oldLines，保證只替換 header
+    // 「之後」那個 old；若回歸成從檔頭搜尋，第一個 old 會被錯誤改寫。
+    await writeFile(join(dir, "a.txt"), "old\nheader\nold\n")
+    const out = (await tool().execute({
+      patch_content: "*** Begin Patch\n*** Update File: a.txt\n@@ header\n-old\n+new\n*** End Patch\n",
+    }, {})) as { ok: boolean }
+    expect(out.ok).toBe(true)
+    expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("old\nheader\nnew\n")
+    expect(await readFile(join(dir, "a.txt"), "utf-8")).not.toBe("new\nheader\nold\n") // 錯位結果不得復發
   })
 })

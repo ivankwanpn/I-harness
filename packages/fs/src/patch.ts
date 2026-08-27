@@ -1,6 +1,7 @@
 // 不 import index.ts（循環）——resolve 函數由 index.ts 傳入（見 createFsTools）。
 import { readFile, stat, unlink } from "node:fs/promises"
 import { writeFileAtomic } from "./atomic.ts"
+import { assertSnapshotFresh } from "./version.ts"
 import { assertTextData, normalizeLineEndings, detectLineEndings, restoreLineEndings } from "./text.ts"
 import { FsToolError } from "./error.ts"
 
@@ -183,6 +184,16 @@ export async function applyPatch(resolve: PathResolver, hunks: PatchHunk[]): Pro
         const st = await stat(target).catch(() => { throw new FsToolError("FS_NOT_FOUND", `file not found: ${hunk.path}`) })
         if (!st.isFile()) throw new FsToolError("FS_NOT_REGULAR_FILE", `not a regular file: ${hunk.path}`)
         const raw = await readFile(target)
+        // TOCTOU 防護（M21 §4.2，edit tool 同款）：read 後、計算/寫回前 re-stat
+        // 比對 {mtimeMs,size} 快照——read 與寫入之間檔案被併發修改即拒絕。
+        // mismatch → throw，由外層收集進 errors 並停止。
+        let stAfter
+        try {
+          stAfter = await stat(target)
+        } catch {
+          throw new FsToolError("FS_NOT_FOUND", `file disappeared during update: ${hunk.path}`)
+        }
+        assertSnapshotFresh({ mtimeMs: st.mtimeMs, size: st.size }, { mtimeMs: stAfter.mtimeMs, size: stAfter.size })
         const text = assertTextData(raw)
         const style = detectLineEndings(text)
         const normalized = normalizeLineEndings(text)
