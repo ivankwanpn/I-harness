@@ -157,18 +157,26 @@ function renderShadowed(session: Session, shadowedSeqs: number[]): string {
   return parts.join("\n")
 }
 
-// M20 Task 8: render shadowed events' images as compact descriptors, e.g.
-// `[image: png, 8 bytes]`. Returns undefined when the event carries no usable
-// `images` array (including malformed persisted shapes), so the caller falls
-// back to the unchanged `deriveSearchText` replay.
+// M20 Task 8 (+ Fix Round 1, Rulings 6+7): render shadowed events' images as
+// compact descriptors, e.g. `[image: image/png, 6 bytes]` — mediaType keeps
+// its full IANA form (no `image/` strip) and bytes are the decoded count,
+// core-session's convention (src/index.ts:138/277):
+// Math.ceil(dataBase64.length * 3 / 4). Returns undefined when the event
+// carries no usable `images` array (including malformed persisted shapes),
+// so the caller falls back to the unchanged `deriveSearchText` replay.
+// Malformed per-image fields degrade to `unknown` / `?` placeholders instead
+// of throwing: renderShadowed runs OUTSIDE compact()'s fail-soft try, so a
+// TypeError here would escape compaction entirely (Ruling 7).
 function imageDescriptor(ev: SessionEvent): string | undefined {
   const images = (ev as { images?: unknown }).images
   if (!Array.isArray(images) || images.length === 0) return undefined
-  const parts = images.map((img) => {
-    const mediaType = (img as { mediaType?: string }).mediaType
-    const dataBase64 = (img as { dataBase64?: string }).dataBase64
-    const label = mediaType !== undefined ? mediaType.replace(/^image\//, "") : "unknown"
-    return `[image: ${label}, ${dataBase64 !== undefined ? dataBase64.length : "?"} bytes]`
+  const parts = (images as unknown[]).map((raw): string => {
+    const img = typeof raw === "object" && raw !== null ? (raw as { mediaType?: unknown; dataBase64?: unknown }) : undefined
+    const mediaType = img?.mediaType
+    const dataBase64 = img?.dataBase64
+    const label = typeof mediaType === "string" ? mediaType : "unknown"
+    const bytes = typeof dataBase64 === "string" ? Math.ceil((dataBase64.length * 3) / 4) : "?"
+    return `[image: ${label}, ${bytes} bytes]`
   })
   return parts.join("\n")
 }

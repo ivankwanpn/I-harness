@@ -27,8 +27,10 @@ describe("compaction image-aware replay", () => {
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s)
     expect(r.compacted).toBe(true)
-    // The shadowed image event is replayed as a descriptor, not dropped.
-    expect(inputs[0]).toContain("[image: png, 8 bytes]")
+    // FIX ROUND 1 (Ruling 6): mediaType stays in its full IANA form and the
+    // size is the decoded-byte estimate per core-session's convention
+    // (ceil(base64.length * 3 / 4): "aGVsbG8=" has length 8 → ceil(24/4) = 6).
+    expect(inputs[0]).toContain("[image: image/png, 6 bytes]")
   })
 
   it("replays text-only sessions unchanged (no descriptor, no regression)", async () => {
@@ -57,5 +59,22 @@ describe("compaction image-aware replay", () => {
     expect(r.compacted).toBe(true)
     expect(inputs[0]).toContain("broken-a") // non-array images ⇒ plain text path
     expect(inputs[0]).toContain("still-text")
+  })
+
+  it("tolerates malformed per-image fields without crashing compact()", async () => {
+    // FIX ROUND 1 (Ruling 7): renderShadowed runs OUTSIDE the fail-soft try in
+    // compact(), so a non-string mediaType (`5.replace` TypeError) or
+    // non-string dataBase64 escaped compaction entirely. Malformed per-image
+    // fields must degrade gracefully (unknown descriptor), never throw.
+    const s = createSession()
+    s.events.push({ type: "user/message", text: "pic-ish", images: [{ mediaType: 7, dataBase64: {} }], seq: 0 } as never)
+    s.events.push({ type: "assistant/message", text: "ok", seq: 1 })
+    const inputs: string[] = []
+    const config: CompactionConfig = { contextWindow: 10, thresholdRatio: 0.9, auto: false }
+    const engine = createCompactionEngine({ model: spyModel(inputs), config })
+    const r = await engine.compact(s)
+    expect(r.compacted).toBe(true)
+    // Non-string fields ⇒ `[image: unknown, ? bytes]`, not a TypeError.
+    expect(inputs[0]).toContain("[image: unknown, ? bytes]")
   })
 })
