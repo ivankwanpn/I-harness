@@ -17,8 +17,13 @@ export type SessionEvent =
     | { type: "compaction/summary"; text: string; shadowedSeqs: number[]; seq?: number }
     // M20: pure-reset marker (compaction.resetWindow — absorb codex token-budget:
     // 新 context window、保留最近 N 條、無摘要)。Additive event type, format v1
-    // stays. Carries no user-facing text → deliberately unindexed (default "").
-    | { type: "compaction/reset"; seq?: number }
+    // stays. FIX ROUND 1 (Ruling 4): append-only durability — the marker does
+    // NOT accompany a truncation; it RECORDS the removed seqs so deriveMessages
+    // can shadow them (same mechanism as compaction/summary.shadowedSeqs).
+    // Persistence backends are append-only, and recovery replays the log ⇒
+    // nothing lost: every raw event stays durably recorded. Carries no
+    // user-facing text → deliberately unindexed (default "").
+    | { type: "compaction/reset"; removedSeqs: number[]; seq?: number }
     // M16: log-only sandbox session-mode marker (approval/* precedent) — mode is
     // a local union so core-session stays dependency-free (sandbox-policy owns
     // the real SandboxMode type; a sandbox import here would create a cycle).
@@ -143,9 +148,16 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // M11 compaction shadow pre-pass: collect every seq a compaction/summary
   // replaced on the surface so the render pass skips them. The raw log keeps
   // all events; only this projection shrinks.
+  // M20 fix round 1 (Ruling 4): `compaction/reset` markers join the SAME
+  // shadow mechanism — their `removedSeqs` are collected additively, so an
+  // append-only resetWindow hides exactly its removed tail without ever
+  // truncating the durable log.
   const shadowed = new Set<number>()
   for (const ev of session.events) {
     if (ev.type === "compaction/summary") for (const seq of ev.shadowedSeqs) shadowed.add(seq)
+    // defensive `?? []`: persisted logs bypass append validation, so a
+    // malformed marker without removedSeqs must not throw here
+    else if (ev.type === "compaction/reset") for (const seq of ev.removedSeqs ?? []) shadowed.add(seq)
   }
   for (const ev of session.events) {
     if (ev.seq !== undefined && shadowed.has(ev.seq)) continue

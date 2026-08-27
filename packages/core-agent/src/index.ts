@@ -90,7 +90,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   //     falls through to layer 2 when compacted:false or still overflow.
   //  2. pure reset (absorption of codex token-budget) — ONLY when enabled
   //     (`budget.resetWindow !== false`); keeps the last resetRetainLast
-  //     events, no summary.
+  //     events visible, no summary. Fix round 1 (Ruling 4): append-only —
+  //     the durable log is never truncated; checkBudget sees the post-reset
+  //     surface because activeTokens prices exactly deriveMessages, which
+  //     shadows the reset marker's removedSeqs (M11 shadow mechanism).
   //  3. fail-closed: throw `prompt_too_long` — the session cannot be brought
   //     under budget. No budget config → no-op (pre-M20 behavior).
   async function enforceBudget(): Promise<void> {
