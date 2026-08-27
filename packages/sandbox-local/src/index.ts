@@ -42,7 +42,13 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
     }
     const backend = config.windowsAclBackend
     return {
+      // M22: honest capability declaration — the Windows ACL backend has no
+      // read isolation (WRITE_RESTRICTED is read-visible on Windows).
+      capabilities: { readIsolation: false },
       confine(argv, policy) {
+        if (policy.requireReadIsolation === true) {
+          throw new SandboxUnavailableError(policy.mode, "local sandbox backends provide no read isolation (capability: none)")
+        }
         // On win32, delegate to the injected backend.
         return { ...backend.confine(argv, policy), enforcement: STATIC_ENFORCEMENT["windows-acl"] }
       },
@@ -59,10 +65,17 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
       }
     }
     return {
+      // M22: honest capability declaration — bwrap isolates the filesystem
+      // for writes but does not hide/read-block filesystem content, so it has
+      // no read isolation either.
+      capabilities: { readIsolation: false },
       confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
         const runner = config.runnerCommand ?? ["bwrap"]
         if (runner[0] !== "bwrap") {
           throw new SandboxUnavailableError(policy.mode, `runner override must be bwrap (got ${runner[0]})`)
+        }
+        if (policy.requireReadIsolation === true) {
+          throw new SandboxUnavailableError(policy.mode, "local sandbox backends provide no read isolation (capability: none)")
         }
         return {
           argv: [...runner, ...bwrapProfileArgs(policy), "--", ...argv],

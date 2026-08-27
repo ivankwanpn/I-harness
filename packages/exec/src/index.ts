@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy, SandboxProvider } from "@i-harness/sandbox"
-import { SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
+import { assertSandboxCapable, SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
 import { OutputCollector } from "./spill.ts"
 
 export interface ExecCommand {
@@ -105,6 +105,9 @@ function resolveArgv(cmd: ExecCommand, sandboxProvider?: SandboxProvider): Resol
   if (sandboxProvider === undefined) {
     throw new SandboxUnavailableError(sandbox.mode, "no sandbox provider composed (createExecService({ sandbox }))")
   }
+  // M22 enforcement gate: a policy that demands read isolation must never run
+  // on a backend that does not (or cannot) declare it — refuse to run, fail closed.
+  assertSandboxCapable(sandbox, sandboxProvider)
   const confined = sandboxProvider.confine(cmd.argv, sandbox)
   return { confined, mode: sandbox.mode }
 }
