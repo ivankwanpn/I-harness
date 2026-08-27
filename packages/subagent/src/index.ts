@@ -8,7 +8,7 @@ export { forkTurns } from "./fork.ts"
 export { spawnChild } from "./child.ts"
 export type { SpawnOptions } from "./child.ts"
 export { createSubagentTools } from "./tools.ts"
-export { driveFollowups, type FollowupDeps } from "./tools.ts"
+export { driveFollowups, ensureResidentAgent, type FollowupDeps } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
 export { restoreState, wireSubagentPersistence } from "./persist.ts"
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
@@ -21,8 +21,9 @@ import type { ProviderRegistry } from "@i-harness/provider"
 import type { ExecService } from "@i-harness/exec"
 import { createJobRegistry, type JobRegistry } from "./jobs.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
-import { createAgentTable, type AgentTable } from "./agent-table.ts"
-import { createSubagentTools } from "./tools.ts"
+import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent-table.ts"
+import { createSubagentTools, ensureResidentAgent } from "./tools.ts"
+import type { SubagentToolDeps } from "./tools.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
 import { restoreState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
@@ -51,6 +52,11 @@ export interface RegisterSubagentResult {
   // Additive: existing consumers destructure { roles, jobs, table } and are
   // unaffected.
   agents: AgentRegistry
+  // M23 (Minor 4): lazy resident rebuild closure over this mount's REAL
+  // SubagentToolDeps. registerSubagent encapsulates the deps object, so hosts
+  // (run.ts → mountAgentTeams) wire this into the agent-team deliver gate to
+  // fix the post-resume wakeup no-op without duplicating the deps shape.
+  ensureResident: (entry: ChildAgentEntry) => Promise<boolean>
 }
 
 // Mount entry point (spec §1.1.6 / §2.3): seeds the role registry with the
@@ -76,7 +82,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     roles = wired.roles
   }
   const agents = createAgentRegistry()
-  const tools = createSubagentTools({
+  // M23 (Minor 4): the deps object is kept in a named variable so the
+  // ensureResident closure below closes over the SAME (persist-wrapped)
+  // registries the tools use.
+  const subagentDeps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, providers: opts.providers, exec: opts.exec,
     agents,
@@ -85,11 +94,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     ...(opts.persist
       ? { childSessions: { coordinator: opts.persist.coordinator, parentSessionId: opts.persist.parentSessionId } }
       : {}),
-  })
+  }
+  const tools = createSubagentTools(subagentDeps)
   // ToolRegistry.register throws on duplicate names, so skip tools the parent
   // already has — makes registerSubagent idempotent for repeat mounts.
   for (const tool of tools) {
     if (!parentRegistry.get(tool.name)) parentRegistry.register(tool)
   }
-  return { roles, jobs, table, agents }
+  return { roles, jobs, table, agents, ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry) }
 }

@@ -143,7 +143,10 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       // Durable inbox + wake: queue the message and drive a turn on the child.
       append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message })
       entry.mailbox.push(args.message)
-      if (entry.sessionId) void driveFollowups(deps, entry, entry.sessionId)
+      // M23 (Minor 4): inject the lazy rebuild so a wakeup for a restored
+      // (fresh-registry) entry rebuilds the resident agent instead of
+      // silently dropping the drive.
+      if (entry.sessionId) void driveFollowups(followupDepsWithRebuild(deps), entry, entry.sessionId)
       return { delivered: true }
     },
   }
@@ -175,43 +178,29 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       const existing = deps.table.get(args.target)
       if (!existing) throw new Error(`unknown subagent: ${args.target}`)
       if (existing.status === "running") throw new Error(`subagent already running: ${args.target}`)
-      if (existing.sessionId) {
-        const resident = deps.agents.get(existing.sessionId)
-        if (resident) {
-          // already resident (e.g. a waiting child) → just re-drive pending inbox
-          void driveFollowups(deps, existing, existing.sessionId)
-          return { resumed: true }
+      if (existing.sessionId && deps.agents.get(existing.sessionId)) {
+        // already resident (e.g. a waiting child) → just re-drive pending inbox
+        void driveFollowups(followupDepsWithRebuild(deps), existing, existing.sessionId)
+        return { resumed: true }
+      }
+      // M23 (Minor 4): the rebuild body moved into ensureResidentAgent so the
+      // wakeup paths (driveFollowups / agent-team deliver gate) can lazily
+      // rebuild a fresh-registry (post-resume) resident agent too. As an
+      // explicit tool call, resume_agent still ERRORS on an unrebuildable
+      // target instead of tolerating the false return like the wakeup paths.
+      const roleName = existing.roleName ?? "general"
+      const role = deps.roles.get(roleName)
+      if (!role) throw new Error(`unknown role: ${roleName}`)
+      if (!(await ensureResidentAgent(deps, existing))) {
+        // After the role check the only remaining failure mode is the role's
+        // model-provider resolution — mirror spawnChild's error shape so the
+        // resume diagnostics match the spawn path.
+        if (role.model && !deps.providers.get(role.model.provider)) {
+          throw new Error(`role '${role.name}' references unknown provider '${role.model.provider}'`)
         }
+        throw new Error(`could not resume subagent: ${args.target}`)
       }
-      const role = deps.roles.get(existing.roleName ?? "general")
-      if (!role) throw new Error(`unknown role: ${existing.roleName ?? "general"}`)
-      const childCtx = deps.parentCtx.scope.mount()
-      const childReg = createToolRegistry(childCtx)
-      for (const name of role.tools) {
-        const tool = deps.parentRegistry.get(name)
-        if (tool) childReg.register(tool)
-      }
-      // model resolution identical to spawnChild (child.ts): role.model →
-      // provider → buildModelClient; else inherit the parent model.
-      let model = deps.parentModel
-      if (role.model) {
-        const profile = deps.providers.get(role.model.provider)
-        if (!profile) throw new Error(`role '${role.name}' references unknown provider '${role.model.provider}'`)
-        model = buildModelClient(profile, role.model.model, role.model.extra)
-      }
-      const controller = new AbortController()
-      const agent = createAgent(childCtx, {
-        session: existing.session, tools: childReg, model,
-        systemPrompt: role.systemPrompt, signal: controller.signal,
-        // M19 (Ruling 24): attribute the resumed child's tool calls to its
-        // team member via the durable session id.
-        ...(existing.sessionId ? { sessionId: existing.sessionId } : {}),
-      })
-      if (existing.sessionId) deps.agents.register(existing.sessionId, agent)
-      existing.status = "waiting"
-      existing.controller = controller
-      existing.unmount = () => childCtx.scope.unmount()
-      if (existing.sessionId) void driveFollowups(deps, existing, existing.sessionId)
+      if (existing.sessionId) void driveFollowups(followupDepsWithRebuild(deps), existing, existing.sessionId)
       return { resumed: true }
     },
   }
@@ -273,6 +262,58 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
   return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool, jobOutputTool, jobListTool, jobKillTool]
 }
 
+// M23 (Minor 4): lazy resident rebuild, extracted verbatim from resume_agent's
+// rebuild body (M19). On resume the subagent Agent registry is fresh-empty
+// (entries are registered per spawn/turn), so a wakeup for a restored teammate
+// found no resident agent and silently dropped the drive. This rebuilds the
+// resident agent from the restored entry (durable session + role + model):
+//   - returns true when the entry is already resident OR the rebuild succeeded
+//   - returns false when it cannot rebuild (unknown role / unknown provider) —
+//     the CALLER decides the fail behavior (resume_agent throws; the wakeup
+//     paths just drop the drive like before)
+export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAgentEntry): Promise<boolean> {
+  if (entry.sessionId) {
+    const resident = deps.agents.get(entry.sessionId)
+    if (resident) return true
+  }
+  const role = deps.roles.get(entry.roleName ?? "general")
+  if (!role) return false
+  const childCtx = deps.parentCtx.scope.mount()
+  const childReg = createToolRegistry(childCtx)
+  for (const name of role.tools) {
+    const tool = deps.parentRegistry.get(name)
+    if (tool) childReg.register(tool)
+  }
+  // model resolution identical to spawnChild (child.ts): role.model →
+  // provider → buildModelClient; else inherit the parent model.
+  let model = deps.parentModel
+  if (role.model) {
+    const profile = deps.providers.get(role.model.provider)
+    if (!profile) return false
+    model = buildModelClient(profile, role.model.model, role.model.extra)
+  }
+  const controller = new AbortController()
+  const agent = createAgent(childCtx, {
+    session: entry.session, tools: childReg, model,
+    systemPrompt: role.systemPrompt, signal: controller.signal,
+    // M19 (Ruling 24): attribute the resumed child's tool calls to its
+    // team member via the durable session id.
+    ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+  })
+  if (entry.sessionId) deps.agents.register(entry.sessionId, agent)
+  entry.status = "waiting"
+  entry.controller = controller
+  entry.unmount = () => childCtx.scope.unmount()
+  return true
+}
+
+// M23 (Minor 4): the FollowupDeps passed to driveFollowups from the subagent
+// tools carries the lazy rebuild so a wakeup for a restored (fresh-registry)
+// entry recovers the resident agent instead of silently dropping the drive.
+function followupDepsWithRebuild(deps: SubagentToolDeps): FollowupDeps {
+  return { agents: deps.agents, table: deps.table, jobs: deps.jobs, rebuild: (entry) => ensureResidentAgent(deps, entry) }
+}
+
 function parseForkTurns(value: string | number | undefined): "none" | "all" | number {
   if (value === undefined || value === "all") return "all"
   if (value === "none") return "none"
@@ -291,12 +332,23 @@ export interface FollowupDeps {
   agents: AgentRegistry
   table: AgentTable
   jobs: JobRegistry
+  // M23 (Minor 4): optional lazy rebuild — called when the resident agent is
+  // missing (e.g. a restored entry after resume) so the wakeup drive recovers
+  // it instead of silently no-oping. Backward-compatible: absent (the default,
+  // e.g. the agent-team scheduler without the seam) keeps the old no-op.
+  rebuild?: (entry: ChildAgentEntry) => Promise<boolean>
 }
 export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessionId: string): Promise<void> {
   const prev = entry.followupChain ?? Promise.resolve()
   const next = prev.then(async () => {
-    const agent = deps.agents.get(sessionId)
-    if (!agent) return
+    let agent = deps.agents.get(sessionId)
+    if (!agent) {
+      if (!deps.rebuild) return // no rebuild ability → keep the old no-op
+      const ok = await deps.rebuild(entry)
+      if (!ok) return
+      agent = deps.agents.get(sessionId)
+      if (!agent) return
+    }
     const pending = entry.session.events.filter(
       (e): e is Extract<SessionEvent, { type: "subagent/inbox" }> =>
         e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
