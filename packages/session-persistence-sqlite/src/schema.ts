@@ -87,6 +87,9 @@ export function openDatabase(path: string, journalMode: JournalMode = "wal"): Da
   try {
     db.exec(`PRAGMA journal_mode = ${journalMode}`)
     db.exec("PRAGMA foreign_keys = ON")
+    // M23: cross-process lock contention waits up to 5s instead of failing
+    // instantly with SQLITE_BUSY (codex state/sqlite.rs same discipline).
+    db.exec("PRAGMA busy_timeout = 5000")
     // Validation + migration + DDL run under ONE write-lock transaction. Each
     // migration step uses a SAVEPOINT (node:sqlite rejects nested BEGIN:
     // "cannot start a transaction within a transaction"), so a failed step
