@@ -12,6 +12,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
   return {
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
+    // M23: the coordinator's ownership lease defaults to the store root.
+    lockRoot: root,
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
       await mkdir(root, { recursive: true })

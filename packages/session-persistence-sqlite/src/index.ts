@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { dirname } from "node:path"
 import type { DatabaseSync } from "node:sqlite"
 import { deriveSearchText, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
@@ -61,6 +62,8 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
   return {
     id: "sqlite",
     capabilities: { seekableRead: true, rawArtifacts: false },
+    // M23: the coordinator's ownership lease defaults to the db's directory.
+    lockRoot: dirname(dbPath),
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
       db.exec("BEGIN")
