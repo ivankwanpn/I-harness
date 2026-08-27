@@ -67,9 +67,14 @@ the per-call `SandboxPolicy` is the actual enforcement input.
   with a read-side policy or an AppContainer/S-1-15-2 capability token for stronger confinement.」
   Known Limitations：「Read-side confinement and network policy are out of scope.」
 
-**未來（M26+ 候選）**：codex 式「帳號式 elevated 後端」（專用本地組/帳號 + DPAPI 存密 +
-背景授讀 helper + 提權 setup）——可讓 deny-read ACE 落在專用身分的 SIDs 上。M22 未實作，
-因為需管理員安裝期權限與數百行 FFI，且 Windows 環境變數（域控/提權許可）不可控。
+**未來（讀隔離──若比 partial 更強的可選項）**：codex 的「帳號式 elevated 後端」（專用本地
+組/帳號 + DPAPI 存密 + 背景授讀 helper）是其**產品架構選擇**——它把 sandbox 命令當成大規模
+服務跑在受管帳號下；**I-harness 是跑在使用者自己機器上的 agent runtime，不做帳號登入/安裝權限
+模型**。因此該路徑對本項目是範疇外（out of scope），現記錄為「未來若有明確需求再評估」，而非
+「M26+ 候選」。讀隔離的替代方向（若未來需要且成本可接受）：
+- 作業系統級容器化（Linux bwrap 已 full；Windows 層的 container/WSL 限制）；
+- 純 consent/環境層（approval gate 作為實際安全邊界——本里程碑主軸）。
+若無此類需求，M22 的**誠實 partial 標籤 + consent 強化**即為最終姿態。
 
 **已知不可保護向量（pin 成活文檔）**：全域任意路徑讀取不受限；外部 Everyone-ACL 物件寫入；
 NUL 裝置（`cmd > NUL`）；hard link 外部別名寫；FAT 無 SD；console 隔離不可得；named-pipe 孫進程。
