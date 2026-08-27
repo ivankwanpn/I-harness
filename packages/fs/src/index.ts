@@ -5,6 +5,7 @@ import { FsToolError } from "./error.ts"
 import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit } from "./text.ts"
+import { parsePatch, applyPatch } from "./patch.ts"
 
 export { FsToolError, type FsToolErrorCode } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
@@ -114,5 +115,21 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       return { ok: true, path, replacements: result.replacements }
     },
   }
-  return [read, edit, write, list_dir]
+  const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string }[]; errors: { path: string; message: string }[] }> = {
+    name: "apply_patch",
+    description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update + @@ context)",
+    inputSchema: { type: "object", properties: { patch_content: { type: "string" } }, required: ["patch_content"] },
+    isReadOnly: false,
+    execute: async ({ patch_content }) => {
+      const hunks = parsePatch(patch_content)
+      // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入
+      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks)
+      if (errors.length > 0) {
+        // 回報已應用清單 + 錯誤（不 throw——讓模型看到進行到哪）
+        return { ok: false, applied, errors }
+      }
+      return { ok: true, applied, errors: [] }
+    },
+  }
+  return [read, edit, write, apply_patch, list_dir]
 }
