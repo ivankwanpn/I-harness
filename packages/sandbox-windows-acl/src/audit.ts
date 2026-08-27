@@ -7,9 +7,12 @@
 // 枚舉（GetAce/GetExplicitEntriesFromAclW 未綁定）；本模組以「掃描驅動 +
 // 注入式 DACL probe」交付——probe 注入補全時（未來里程碑）即得真 ACL 判定。
 import { readdirSync } from "node:fs"
+import { join } from "node:path"
 
 export interface WorldWritableFinding {
   path: string
+  // future probe may return the granting principal; today only "Everyone" is
+  // reported（注入式 probe 尚無 principal 溝通能力——先行假設最廣）。
   who: "Everyone" | "Authenticated-Users"
 }
 
@@ -37,18 +40,15 @@ export async function scanWorldWritable(
     if (Date.now() > deadline) break
     try {
       let seen = 0
+      // 非遞迴列舉：seed 目錄平鋪掃描，深度由 caller 控制（dirs 傳入哪些就掃哪些）
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         if (Date.now() > deadline || ++seen > maxItems) break
-        const child = entry.isDirectory() ? dir + "\\" + entry.name : dir + "\\" + entry.name
+        const child = join(dir, entry.name)
         const verdict = probe(child)
         if (verdict === "world-writable") {
           findings.push({ path: child, who: "Everyone" })
-        } else if (verdict === "unknown") {
-          // 不判定——由呼叫端（文檔/未來）決定可擴充
         }
-        if (entry.isDirectory()) {
-          // 遞迴一層（預設：掃描 seed 目錄的子目錄）——depth 由 caller 控制（dirs 傳入深度）
-        }
+        // verdict === "unknown"：不判定——由呼叫端（文檔/未來）決定可擴充
       }
     } catch {
       // unreadable dir → skip（fail-open 到「此 dir 無發現」——audit 是監視非 enforcement）

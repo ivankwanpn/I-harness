@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { DEFAULT_DANGEROUS_COMMANDS } from "../src/index.ts"
 import { classifyDanger } from "../src/danger-class.ts"
 
 const WS = "C:/repo/work"
@@ -52,5 +53,17 @@ describe("classifyDanger", () => {
   })
   it("powershell without -Command in-workspace is dangerous", () => {
     expect(classifyDanger(["powershell", "Remove-Item", `${WS}/build`, "-Recurse", "-Force"], WS)).toBe("dangerous")
+  })
+  // M22 final-review F1 回歸：預設清單含混合大小寫 "Remove-Item"，而 basenamePath
+  // 一律 lowercase——兩側未 normalize 時這兩例回傳 "none"（force-less 刪除 fail-open）。
+  it("mixed-case Remove-Item (no force) → dangerous (default list case-insensitive)", () => {
+    expect(
+      classifyDanger(["Remove-Item", "C:/Users/x/f.txt"], WS, [...DEFAULT_DANGEROUS_COMMANDS]),
+    ).toBe("dangerous")
+  })
+  it("mixed-case Remove-Item in-workspace (no force) → dangerous", () => {
+    expect(
+      classifyDanger(["Remove-Item", `${WS}/f.txt`], WS, [...DEFAULT_DANGEROUS_COMMANDS]),
+    ).toBe("dangerous")
   })
 })

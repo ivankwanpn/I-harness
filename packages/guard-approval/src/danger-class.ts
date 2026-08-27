@@ -305,8 +305,13 @@ export function classifyDanger(
   // deny-on-metachar ⇒ approval required even when every basename looks harmless。
   const METACHAR = [";", "&&", "|", "$(", "`"]
   if (argv.some((t) => METACHAR.some((m) => t.includes(m)))) return "dangerous"
-  if (argv.some((a) => dangerousCommands.includes(basenamePath(a)))) return "dangerous"
-  if (argv.some((a) => dangerousFlags.includes(a))) return "dangerous"
+  // M22 final-review F1：兩側都 normalize 成 lowercase——basenamePath 已將 argv
+  // token lowercase，但呼叫端清單（預設含混合大小寫的 "Remove-Item"）若原樣比對
+  // 會 miss → force-less PowerShell 刪除靜默放行（fail-open，恰為本 milestone 要防的家族）。
+  const cmdSet = new Set(dangerousCommands.map((c) => c.toLowerCase()))
+  const flagSet = new Set(dangerousFlags.map((f) => f.toLowerCase()))
+  if (argv.some((a) => cmdSet.has(basenamePath(a)))) return "dangerous"
+  if (argv.some((a) => flagSet.has(a.toLowerCase()))) return "dangerous"
   return "none"
 }
 
