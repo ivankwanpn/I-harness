@@ -5,6 +5,11 @@ import type { PluginContext } from "@i-harness/core-plugin"
 export interface ApprovalRequest {
   name: string
   reason: string
+  // M22: echo-consent 承載（全 optional——向後相容）
+  command?: string
+  argv?: string[]
+  dangerClass?: "extreme" | "dangerous" | "none"
+  pathSummary?: string
 }
 
 export interface ApprovalDecision {
