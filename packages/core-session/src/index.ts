@@ -54,6 +54,11 @@ export type ImageMediaType = "image/png" | "image/jpeg" | "image/webp" | "image/
 export interface ImageInput {
   mediaType: ImageMediaType
   dataBase64: string // canonical base64 — NO `data:` prefix, NO whitespace
+  // M20: optional durable store ref (`att-<uuid>` from @i-harness/attachment).
+  // Purely additive — refs coexist with inline bytes: dataBase64 stays REQUIRED
+  // (v0 does NOT migrate bytes out of the log), and store-less sessions keep
+  // working. Validation: non-empty string when present (never required).
+  attachmentId?: string
   name?: string
   width?: number // host-provided informational metadata (NOT verified in v0)
   height?: number
@@ -123,6 +128,12 @@ function validateImages(images: ImageInput[], evType: string): void {
     }
     if (!isValidBase64(img.dataBase64)) {
       throw new Error(`image attachment: dataBase64 must be canonical base64 (no data: prefix, no whitespace)`)
+    }
+    // M20: light check on the optional store ref — never required, but if a
+    // caller attaches one it must be usable (an empty id would silently break
+    // @i-harness/attachment store lookups).
+    if (img.attachmentId !== undefined && (typeof img.attachmentId !== "string" || img.attachmentId.length === 0)) {
+      throw new Error(`image attachment: attachmentId must be a non-empty string`)
     }
     bytes += Math.ceil((img.dataBase64.length * 3) / 4)
   }
