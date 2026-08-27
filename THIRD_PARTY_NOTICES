@@ -10,11 +10,13 @@ I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v
   - `packages/guard-approval/src/danger-class.ts` — 危險命令分類器（is_dangerous_command.rs + windows_dangerous_commands.rs 語義）
   - `packages/guard-approval/src/remember.ts` — prefix rules 與 BANNED_PREFIX_SUGGESTIONS（exec_policy.rs）
   - `packages/sandbox/src/index.ts` — enforcement gate refuse-to-run 形狀（sandboxing/windows.rs）
+  - `packages/fs-lock/src/win32.ts` — 所有權租約 fail-closed 衝突語意（thread-store/src/local/writer_lock.rs 之 try_lock + WouldBlock→Conflict）
 - License: MIT
 
 ## deepseek-harness (dsh) (MIT)
 - 來源：https://github.com/deepseek-ai/deepseek-harness (packages/sandbox/sandbox-windows-acl, interaction/user-approval)
 - 吸收：
   - `packages/sandbox-windows-acl/` — 同源移植（M16w；機制同 huoyaoyuan/windows-acl-restrict-poc@10e4dfb）
+  - `packages/fs-lock/src/win32.ts` — LockFileEx 非阻塞綁定形狀（同源之 sandbox-windows-acl ffi.ts win32Bindings + acl.ts:75-110 withPathLock，含 zeroed OVERLAPPED gotcha；機制同 huoyaoyuan/windows-acl-restrict-poc@10e4dfb）
   - `packages/guard-approval/` 與 `packages/interaction/` — user-approval one-shot 語義（allowed-once/rejected/cancelled/unavailable）
 - License: MIT
