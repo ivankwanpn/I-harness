@@ -176,6 +176,14 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       const { session: restored } = await opts.coordinator.load(opts.resumeSessionId)
       session.events.push(...restored.events)
       session.formatVersion = restored.formatVersion
+      // M23: after a successful load the resumed CLI IS this session's active
+      // writer (it keeps appending below), so it adopts the ownership lease
+      // long-term — held until the run's coordinator.close(). Conflict (another
+      // live writer still owns the session) or an unsupported platform fails
+      // closed here and surfaces through the same clean exitCode-1 shape as a
+      // failed load. When the coordinator's lock is disabled (tests/hosts that
+      // create their own), adoptOwnership is a no-op.
+      await opts.coordinator.adoptOwnership(opts.resumeSessionId)
     } catch (err) {
       return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
     }

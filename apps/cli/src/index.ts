@@ -57,9 +57,13 @@ export async function main(argv: string[]): Promise<number> {
       return Promise.resolve(1)
     }
     if (sessionBackend === "sqlite") {
-      coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")))
+      // M23: the CLI opts into the session ownership lease with lockRoot = the
+      // session STORE directory (jsonl store root / sqlite db dir) — lock files
+      // share the store's lifecycle, and a conflicting live writer fails the
+      // create below (fail-closed) instead of silently double-writing.
+      coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")), { lock: { enabled: true, lockRoot: dir } })
     } else {
-      coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
     }
     if (resumeIdx !== -1) {
       resumeSessionId = args[resumeIdx + 1]
@@ -68,8 +72,18 @@ export async function main(argv: string[]): Promise<number> {
         return Promise.resolve(1)
       }
     } else {
-      const { id } = await coordinator.create()
-      sessionId = id
+      try {
+        const { id } = await coordinator.create()
+        sessionId = id
+      } catch (err) {
+        // M23: with the lock enabled, create() fails closed —
+        // SessionLockConflictError (another live writer owns the lease, message
+        // carries the lock path + deadline diagnostics) or
+        // SessionLockUnsupportedError off-Windows (M24 boundary). Surface the
+        // message cleanly (exitCode 1) instead of an unhandled rejection.
+        console.error(err instanceof Error ? err.message : String(err))
+        return Promise.resolve(1)
+      }
     }
   }
 
