@@ -62,6 +62,31 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
   }
 }
 
+// Bug 1 regression fake: listTools hangs in flight until die() is called,
+// mirroring the real interleaving where the transport dies with a request
+// pending — the SDK fires onclose (synchronous generationDown → failCycle)
+// BEFORE the rejected-request continuation runs. die() reproduces that exact
+// ordering: listeners first, then the listTools rejection. listCalls lets the
+// test wait until the resync fetch is genuinely in flight.
+function makeMidResyncDeathGen(id: string, toolNames: string[]): FakeGen & { listCalls: number } {
+  const gen = makeFakeGen(id, toolNames) as FakeGen & { listCalls: number }
+  gen.listCalls = 0
+  let rejectPending: ((err: unknown) => void) | undefined
+  gen.listTools = () => {
+    gen.listCalls += 1
+    return new Promise((_resolve, reject) => {
+      rejectPending = reject
+    })
+  }
+  const dieOwn = gen.die.bind(gen)
+  gen.die = () => {
+    dieOwn() // synchronous generationDown → failCycle (retry scheduled)
+    rejectPending?.(new Error(`${id}: transport died with a request in flight`))
+    rejectPending = undefined
+  }
+  return gen
+}
+
 const exec: ToolExec = {}
 
 describe("mcp reconnect supervisor", () => {
@@ -106,6 +131,67 @@ describe("mcp reconnect supervisor", () => {
 
     await handle.unmount()
     expect(gens[1]!.closed).toBe(true)
+  })
+
+  it("mid-resync death: failCycle runs exactly once (no double retry, no duplicate events)", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const config: McpServerConfig = {
+      transport: "stdio",
+      serverName: "rr",
+      command: "x",
+      args: [],
+      reconnect: { enabled: true, initialDelayMs: 5, maxDelayMs: 50, maxRetries: 3 },
+    }
+    const events: McpServerStatusEvent[] = []
+    let connectCount = 0
+    const gens: FakeGen[] = []
+    const handle = await mountMcpClient({} as never, tools, config, {
+      connect: async () => {
+        connectCount += 1
+        // Generation 2 (the first retry) dies while its listTools — the resync
+        // fetch of attempt(n) — is in flight; that is the attempt-level race
+        // (start() has no failCycle path). Other generations are ordinary.
+        const gen =
+          connectCount === 2
+            ? makeMidResyncDeathGen(`gen${connectCount}`, ["echo"])
+            : makeFakeGen(`gen${connectCount}`, ["echo"])
+        gens.push(gen)
+        return gen
+      },
+      onStatus: (ev) => events.push(ev),
+    })
+    expect(connectCount).toBe(1)
+    expect(tools.get("mcp__rr__echo")).toBeDefined()
+
+    // Clean death of generation 1 → reconnecting → attempt(1) spawns gen2.
+    gens[0]!.die()
+    await waitFor(() => connectCount === 2)
+
+    // Wait until gen2's resync fetch is genuinely in flight, then kill it:
+    // onclose fires (synchronous generationDown → failCycle #1, retry
+    // scheduled) BEFORE the rejected listTools continuation reaches attempt's
+    // catch — which must NOT run failCycle a second time.
+    await waitFor(() => (gens[1] as FakeGen & { listCalls: number }).listCalls === 1)
+    gens[1]!.die()
+
+    await waitFor(() => events.filter((e) => e.state === "ready").length >= 2)
+    // Settle: a buggy duplicate retry arms a second timer that fires attempt(n+1)
+    // again within milliseconds of the first — let it surface before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    // The bug double-ran failCycle: 3× "reconnecting", attempt(n+1) armed twice
+    // → 4 connects and an orphaned live generation. Fixed: one cycle per death.
+    expect(events.filter((e) => e.state === "ready").length).toBe(2)
+    expect(events.filter((e) => e.state === "reconnecting").length).toBe(2)
+    expect(connectCount).toBe(3)
+    // Dead generation closed via the ownership path; the retry generation
+    // serves the public tool name.
+    expect(gens[1]!.closed).toBe(true)
+    await expect(tools.get("mcp__rr__echo")!.execute({}, exec)).resolves.toBeDefined()
+    expect(gens[2]!.callCount).toBe(1)
+
+    await handle.unmount()
+    expect(gens[2]!.closed).toBe(true)
   })
 
   it("exceeds maxRetries → tools unregistered + lost event emitted", async () => {
