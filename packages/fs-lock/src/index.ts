@@ -14,8 +14,9 @@
  * in THIRD_PARTY_NOTICES (OpenAI codex-rs + huoyaoyuan windows-acl-restrict-poc).
  *
  * Structure: errors live in ./errors.ts; this module re-exports them and
- * dynamically imports ./win32.ts (which imports ONLY errors.ts at runtime) so
- * non-Windows processes never load koffi and no runtime import cycle forms.
+ * dynamically imports ./win32.ts or ./linux.ts (each imports ONLY errors.ts
+ * at runtime) so every other platform never loads koffi and no runtime import
+ * cycle forms.
  * @module @i-harness/fs-lock
  */
 import { mkdirSync } from "node:fs"
@@ -59,24 +60,32 @@ export function lockPathFor(storeRoot: string, sessionId: string): string {
 
 /**
  * Acquire the session's exclusive ownership lease. Non-blocking at the OS
- * level (LOCKFILE_FAIL_IMMEDIATELY) with a JS backoff retry loop: retryMs →
+ * level (win32 LOCKFILE_FAIL_IMMEDIATELY / linux flock LOCK_NB) with a JS
+ * backoff retry loop: retryMs →
  * retryMaxMs (doubling) until deadlineMs, then {@link SessionLockConflictError}
  * (fail-closed — a conflicting holder means another live writer owns the
  * session). The lease releases on `release()`, on process death, or on handle
  * close — whichever comes first.
  * @param opts - the lock path plus backoff/deadline tuning.
  * @returns the held lease.
- * @throws {SessionLockUnsupportedError} on non-Windows platforms (M23 boundary;
- * Linux flock lands in M24 — no weaker lockfile+PID fallback is shipped).
+ * @throws {SessionLockUnsupportedError} on platforms other than Windows/Linux
+ * (darwin stays fail-closed in this build — no weaker lockfile+PID fallback is
+ * shipped).
  * @throws {SessionLockConflictError} when another holder keeps the lease past deadlineMs.
  */
 export async function acquireSessionLock(opts: AcquireOptions): Promise<SessionLock> {
-  if (process.platform !== "win32") {
-    // M23 platform boundary: Linux flock-via-koffi belongs to M24. Fail loud
-    // today rather than shipping a weaker lockfile+PID fallback (orphan trap).
-    throw new SessionLockUnsupportedError("session ownership locks are Windows-only in M23 (Linux flock lands in M24)")
+  const platform = process.platform
+  if (platform !== "win32" && platform !== "linux") {
+    // Platform boundary: only Windows (LockFileEx) and Linux (flock) ship
+    // bindings. Fail loud elsewhere rather than shipping a weaker
+    // lockfile+PID fallback (orphan trap); darwin stays fail-closed.
+    throw new SessionLockUnsupportedError(`session ownership locks are unsupported on ${platform} in this build (Windows/Linux only)`)
   }
   mkdirSync(dirname(opts.lockPath), { recursive: true })
-  const { acquireWin32 } = await import("./win32.ts")
-  return acquireWin32(opts)
+  if (platform === "win32") {
+    const { acquireWin32 } = await import("./win32.ts")
+    return acquireWin32(opts)
+  }
+  const { acquireLinux } = await import("./linux.ts")
+  return acquireLinux(opts)
 }
