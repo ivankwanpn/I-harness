@@ -553,6 +553,24 @@ importers:
         specifier: workspace:*
         version: link:../core-tools
 
+  packages/workflow:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
+      '@i-harness/shell':
+        specifier: workspace:*
+        version: link:../shell
+      yaml:
+        specifier: ^2.4.2
+        version: 2.9.0
+
 packages:
 
   '@esbuild/aix-ppc64@0.28.2':

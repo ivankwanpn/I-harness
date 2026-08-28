@@ -23,6 +23,7 @@ I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v
   - `packages/guard-approval/` 與 `packages/interaction/` — user-approval one-shot 語義（allowed-once/rejected/cancelled/unavailable）
   - `packages/mcp-client/src/supervisor.ts` — generation-based reconnect supervisor（packages/mcp/mcp-client/src/connection.ts absorb：generation 重建 + onclose→generationDown isCurrent 冪等、退避 min(maxDelayMs, initialDelayMs*2^(n-1))、stability window 重置 attempt budget、逾 maxRetries → unregister+lost、5s overlap guard 防 stdio 子進程重疊）
   - `packages/skills/src/{registry,tool}.ts` — skill name kebab 文法 `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`（≤64）+ `<skill_content>` render 語彙（packages/skill/{skill,tool-skill}/src/index.ts）
+  - `packages/workflow/src/{definition,runner,tool}.ts` — workflow meta 語彙（name/description/whenToUse，phases v0 省）、step 進度行 `[step i/N <name>] started/ok/failed(exit=N)/skipped` 進 headless 文本輸出流、失敗紀律（任何 step 失敗 → 非 completed/error，絕不 partial-as-success）、背景優先 + 可選 wait、per-step timeout/retry backoff caps 語彙（packages/workflow/{workflow,tool-workflow}/src/*；靜態 YAML registry + single-job 執行為 I-harness 新空間，僅吸收設計形狀）
 - License: MIT
 
 ## opencode (MIT)
