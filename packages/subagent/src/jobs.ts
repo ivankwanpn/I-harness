@@ -30,6 +30,17 @@ export function createJobRegistry(): JobRegistry {
       // post-resume jobId links (agent-table entries + followups).
       if (records.has(resolved)) throw new Error(`duplicate job id: ${resolved}`)
       records.set(resolved, { id: resolved, kind, label, status: "running", output: "", owner, terminal: false })
+      // Ruling M24a-T1a: seed the per-kind counter from an explicitly
+      // registered id ("<kind>-<n>"), so the auto generator continues AFTER
+      // the highest known id. Without this, restoring a snapshot that
+      // contains "subagent-1..N" leaves counters empty and the next auto id
+      // is "subagent-1", colliding with the restored job and throwing
+      // "duplicate job id" on every post-resume spawn. Chosen over making
+      // nextId skip occupied ids: a single Math.max here keeps nextId pure,
+      // preserves fail-loud for genuine duplicate claims (the collision
+      // check above runs first), and is O(1) instead of scan-per-spawn.
+      const m = id !== undefined ? new RegExp(`^${kind}-(\\d+)$`).exec(id) : null
+      if (m) counters.set(kind, Math.max(counters.get(kind) ?? 0, Number(m[1])))
       return { id: resolved }
     },
     updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output">>): boolean {
