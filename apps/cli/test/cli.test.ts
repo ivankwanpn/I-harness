@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
-import { existsSync, readdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -366,7 +366,85 @@ describe("CLI main + entry guard", () => {
   })
 })
 
+// M24b (spec §5 integration): the two e2e probes — skills (deferred retrieval)
+// and workflows (single background job observed through the existing job_output)
+// — driven through the REAL headless pipeline (run.ts wiring included).
+describe("headless CLI M24b skills + workflow mount", () => {
+  it("skill_search + skill_get work in a real run (deferred retrieval)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m24b-skills-"))
+    try {
+      mkdirSync(join(dir, "skills", "alpha"), { recursive: true })
+      writeFileSync(
+        join(dir, "skills", "alpha", "SKILL.md"),
+        "---\nname: alpha\ndescription: Rebuild the search indexer cache.\n---\n\nRun scripts/rebuild.sh first, then warm the cache with scripts/warm.js.",
+      )
+      const result = await runHeadless("apply the alpha skill", {
+        workspace: dir,
+        approveAll: true,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "skill_search", args: { query: "rebuild indexer" } }] },
+          { role: "assistant", toolCalls: [{ name: "skill_get", args: { name: "alpha" } }] },
+          { role: "assistant", text: "skill applied" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      // The tool RESULTS are observable on the session log — the search found
+      // the sample skill and skill_get returned its usable body.
+      const results = result.session!.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      const search = results.find((e) => e.name === "skill_search")
+      expect(JSON.stringify(search?.output)).toContain("alpha")
+      const get = results.find((e) => e.name === "skill_get")
+      expect(JSON.stringify(get?.output)).toContain("scripts/rebuild.sh")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("workflow_run returns a job_id; job_output observes it (M24b)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m24b-wf-"))
+    try {
+      mkdirSync(join(dir, "workflow"))
+      // Windows-safe step command: node is on PATH (the .cmd-shim concern from
+      // T2 review rules out pnpm/other .cmd shims); the command is TOKENIZED
+      // (no shell syntax) — see the workflow_run tool description.
+      writeFileSync(
+        join(dir, "workflow", "hello.yml"),
+        [
+          "name: hello",
+          "description: Print a greeting then finish.",
+          "steps:",
+          "  - name: greet",
+          `    command: node -e "console.log('wf hello from step')"`,
+        ].join("\n"),
+      )
+      const result = await runHeadless("run the hello workflow", {
+        workspace: dir,
+        approveAll: true,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "workflow_run", args: { name: "hello" } }] },
+          { role: "assistant", toolCalls: [{ name: "job_output", args: { job_id: "workflow-1", wait: true, timeout_ms: 10_000 } }] },
+          { role: "assistant", text: "workflow finished" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      const results = result.session!.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      // workflow_run returned the single-job id for the run.
+      const run = results.find((e) => e.name === "workflow_run")
+      expect(JSON.stringify(run?.output)).toContain("workflow-1")
+      // job_output collected it: step stdout + progress line + final status.
+      const out = results.find((e) => e.name === "job_output")
+      const outJson = JSON.stringify(out?.output)
+      expect(outJson).toContain("wf hello from step")
+      expect(outJson).toContain("[step 1/1 greet] ok")
+      expect(outJson).toContain("[status: completed]")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+})
+
 describe("headless CLI subagent + fs-search mount (M3-C finish)", () => {
+
   it("mounts the subagent tools into the harness registry (job_list callable)", async () => {
     // Deterministic mount probe: drive a headless run whose only tool call is
     // job_list (a read-only subagent tool, no child spawn, so no shared-model

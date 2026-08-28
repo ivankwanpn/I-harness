@@ -65,7 +65,7 @@ export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; execut
   return {
     name: workflowRunName,
     description:
-      "Run a named workflow (a static multi-step command sequence from the workspace's workflow/ directory) as ONE background job. Returns {run_id, job_id} immediately — collect with job_output(job_id, wait: true), cancel with job_kill. wait: true blocks until the run finishes (short workflows only).",
+      "Run a named workflow (a static multi-step command sequence from the workspace's workflow/ directory) as ONE background job. Returns {run_id, job_id} immediately — collect with job_output(job_id, wait: true), cancel with job_kill. wait: true blocks until the run finishes (short workflows only). Step commands are TOKENIZED, NOT shell-interpreted: no &&, pipes, redirects, or globs — each command is split as POSIX shell-quote tokens (quotes group; backslash escapes are consumed, so write Windows paths with forward slashes like C:/src, never C:\\src).",
     inputSchema: {
       type: "object",
       properties: {

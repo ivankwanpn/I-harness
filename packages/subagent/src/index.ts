@@ -19,6 +19,9 @@ import { createSession } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderRegistry } from "@i-harness/provider"
 import type { ExecService } from "@i-harness/exec"
+// M24b (spec §3.3): optional workflow executor threaded into SubagentToolDeps
+// (type-only here — the runtime object flows from the host).
+import type { WorkflowExecutor } from "@i-harness/workflow"
 import { createJobRegistry, type JobRegistry } from "./jobs.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
 import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent-table.ts"
@@ -41,6 +44,11 @@ export interface RegisterSubagentOptions {
   // already contains the builtins (possibly user-edited) plus any custom roles,
   // and RoleRegistry.register throws on duplicates.
   restoredState?: SubagentStateSnapshot
+  // M24b (spec §3.3): the workflow executor (run-level singleton, ruling
+  // M24b-P3) whose job store backs the job_* third layer — `workflow-`
+  // prefixed ids route to it. Optional: absent = current behavior (the chain
+  // stays subagent → exec).
+  workflow?: WorkflowExecutor
 }
 
 export interface RegisterSubagentResult {
@@ -103,6 +111,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, providers: opts.providers, exec: opts.exec,
     agents,
+    // M24b (spec §3.3): thread the optional workflow executor through so the
+    // job_* tools see the third layer. Omitted when the host didn't pass one —
+    // additive, zero behavior change.
+    ...(opts.workflow ? { workflow: opts.workflow } : {}),
     // M8: when persistence has a known main-session id, spawns get durable
     // child-<uuid> sessions with the lineage header.
     ...(opts.persist

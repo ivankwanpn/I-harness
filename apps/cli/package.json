@@ -42,7 +42,9 @@
     "@i-harness/session-persistence-sqlite": "workspace:*",
     "@i-harness/session-query": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
+    "@i-harness/skills": "workspace:*",
     "@i-harness/subagent": "workspace:*",
+    "@i-harness/workflow": "workspace:*",
     "@vscode/ripgrep": "^1.18.0"
   }
 }
