@@ -17,6 +17,7 @@
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/llm-mock": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
-    "@i-harness/token-meter": "workspace:*"
+    "@i-harness/token-meter": "workspace:*",
+    "@i-harness/telemetry": "workspace:*"
   }
 }

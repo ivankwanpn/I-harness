@@ -1733,3 +1733,110 @@ describe("M23 CLI session ownership lock wiring", () => {
   }, 10_000)
 })
 
+// M25 (spec §2.2): --telemetry enables the independent host event stream as
+// JSONL lines on stdout (default off). Telemetry is SEPARATE from the session
+// log and agent-invisible; the CLI assembles createTelemetry([createJsonlSink(
+// process.stdout)]) in run.ts and routes mcp onStatus through the same stream.
+describe("M25 --telemetry (JSONL host event stream)", () => {
+  // e2e: the real CLI process runs with --telemetry → JSONL lines on stdout.
+  it("--telemetry writes JSONL telemetry lines to stdout", () => {
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
+    const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url))
+    const res = spawnSync(process.execPath, ["--import", "tsx", entry, "run", "hello", "--telemetry"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+    })
+    expect(res.status).toBe(0)
+    expect(res.stdout).toContain('"type":"session/start"') // JSONL 行
+    expect(res.stdout).toContain('"type":"turn/start"')
+    expect(res.stdout).toContain('"type":"turn/end"')
+  }, 30_000)
+
+  // Full event-stream shape through runHeadless with the stdout JSONL sink.
+  it("runHeadless telemetry:'jsonl' emits session/turn/provider/tool/token events to stdout", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m25-tele-"))
+    writeFileSync(join(dir, "data.txt"), "old line")
+    const chunks: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      chunks.push(String(chunk))
+      return true
+    }) as typeof process.stdout.write)
+    try {
+      const result = await runHeadless("read data.txt", {
+        workspace: dir,
+        approveAll: true,
+        telemetry: "jsonl",
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "read", args: { path: "data.txt" } }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+    } finally {
+      spy.mockRestore()
+      rmSync(dir, { recursive: true, force: true })
+    }
+    const events = chunks.join("").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l) as { type: string; data: Record<string, unknown> })
+    const types = events.map((e) => e.type)
+    expect(types[0]).toBe("session/start")
+    expect(types).toContain("turn/start")
+    expect(types).toContain("provider/call")
+    expect(types).toContain("tool/start")
+    expect(types).toContain("tool/end")
+    expect(types).toContain("turn/end")
+    expect(types).toContain("token/usage")
+    expect(types[types.length - 1]).toBe("session/end")
+    expect(events[events.length - 1]!.data).toMatchObject({ exitCode: 0 })
+  })
+
+  // Default-off: without the flag (or option) no telemetry JSONL is written.
+  it("without --telemetry the run emits no telemetry lines (default off)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m25-tele-off-"))
+    const chunks: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      chunks.push(String(chunk))
+      return true
+    }) as typeof process.stdout.write)
+    try {
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        approveAll: true,
+        mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(result.exitCode).toBe(0)
+    } finally {
+      spy.mockRestore()
+      rmSync(dir, { recursive: true, force: true })
+    }
+    expect(chunks.join("")).not.toContain('"type":"session/start"')
+    expect(chunks.join("")).not.toContain('"type":"turn/start"')
+  })
+
+  // mcp onStatus wire: the supervisor's host events flow through the same
+  // telemetry stream as mcp/server-status (real stdio subprocess, like M17).
+  it("mcp server status flows through the telemetry stream (mcp/server-status)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m25-tele-mcp-"))
+    const chunks: string[] = []
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+      chunks.push(String(chunk))
+      return true
+    }) as typeof process.stdout.write)
+    try {
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        approveAll: true,
+        telemetry: "jsonl",
+        mcp: [{ transport: "stdio", serverName: "tele", command: process.execPath, args: [writeFakeMcpServer()] }],
+        mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(result.exitCode).toBe(0)
+    } finally {
+      spy.mockRestore()
+      rmSync(dir, { recursive: true, force: true })
+    }
+    const status = chunks.join("").split("\n").filter((l) => l.includes("mcp/server-status")).map((l) => JSON.parse(l) as { data: { server: string; state: string } })
+    expect(status.length).toBeGreaterThan(0)
+    expect(status.some((s) => s.data.server === "tele" && s.data.state === "ready")).toBe(true)
+  }, 30_000)
+})
+

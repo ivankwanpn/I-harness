@@ -24,6 +24,7 @@ import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagen
 import { registerSkills } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import { mountMcpClient, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
+import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
 import { mountAgentTeams, type TeamDeps, type TeamMountHandle, type TeamConfig } from "@i-harness/agent-team"
 import { createProviderRegistry } from "@i-harness/provider"
@@ -51,6 +52,7 @@ export interface HeadlessOptions {
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
   team?: Partial<TeamConfig> // M19: mount the agent-team domain (10 team tools replace the colliding subagent surface)
+  telemetry?: "jsonl" // M25: enable the independent host event stream as JSONL on stdout (default off)
 }
 
 export interface HeadlessResult {
@@ -173,6 +175,22 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // a coordinator passed alongside is still used for the flush-on-turn/end and
   // resume/load paths below).
   const activeId = opts.resumeSessionId ?? opts.sessionId
+  // M25 (spec §2.2): the independent host event stream, assembled ONLY when the
+  // host asks for it (`--telemetry` → opts.telemetry === "jsonl"). JSONL sink
+  // on stdout; absent → no telemetry object, no events, zero behavior change.
+  const telemetry: Telemetry | undefined = opts.telemetry === "jsonl" ? createTelemetry([createJsonlSink(process.stdout)]) : undefined
+  if (telemetry) {
+    telemetry.emit({
+      type: "session/start",
+      ts: Date.now(),
+      data: { task, ...(activeId ? { sessionId: activeId } : {}) },
+    })
+  }
+  // session/end marks the run's end at every exit path (success, error,
+  // resume-load failure); close() flushes sinks (v0 no-op) after the run.
+  const emitSessionEnd = (exitCode: number): void => {
+    telemetry?.emit({ type: "session/end", ts: Date.now(), data: { ...(activeId ? { sessionId: activeId } : {}), exitCode } })
+  }
   const session = opts.session ?? createSession((ev) => {
     if (!opts.coordinator || !activeId) return
     opts.coordinator.enqueue(activeId, [ev])
@@ -202,6 +220,8 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // create their own), adoptOwnership is a no-op.
       await opts.coordinator.adoptOwnership(opts.resumeSessionId)
     } catch (err) {
+      emitSessionEnd(1)
+      telemetry?.close()
       return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
     }
   }
@@ -235,7 +255,9 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // (each handle is pushed only after a successful mount; a failed mount
     // cleans itself up, so the finally below only releases live handles).
     for (const cfg of opts.mcp ?? []) {
-      mcpHandles.push(await mountMcpClient(ctx, tools, cfg))
+      // M25: when telemetry is on, route the supervisor's host events through
+      // the telemetry stream (mcp/server-status); absent → default logger.
+      mcpHandles.push(await mountMcpClient(ctx, tools, cfg, telemetry ? { onStatus: (ev) => telemetry.emit({ type: "mcp/server-status", ts: Date.now(), data: { ...ev } }) } : undefined))
     }
     // M18: mount LSP servers the same way (same reservation semantics, same
     // best-effort teardown) — the handles unify with MCP's for the reverse
@@ -331,6 +353,9 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(activeId ? { sessionId: activeId } : {}),
       ...(opts.compact ? { compact: opts.compact } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
+      // M25: the agent emits turn/tool/provider/token host events through the
+      // same stream (AgentDeps.telemetry? — absent here = silent agent).
+      ...(telemetry ? { telemetry } : {}),
     })
     const result = await agent.run(task)
     if (opts.coordinator) {
@@ -339,8 +364,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       if (activeId) await opts.coordinator.flush(activeId)
       await opts.coordinator.close()
     }
+    emitSessionEnd(0)
+    telemetry?.close()
     return { finalText: result.finalText, exitCode: 0, session }
   } catch (err) {
+    emitSessionEnd(1)
+    telemetry?.close()
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {

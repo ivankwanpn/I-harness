@@ -5,7 +5,8 @@ import { append, deriveMessages } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import { assertMessagesFromLog } from "@i-harness/llm-seam"
-import { checkBudget } from "@i-harness/token-meter"
+import { activeTokens, checkBudget } from "@i-harness/token-meter"
+import type { Telemetry } from "@i-harness/telemetry"
 
 export {
   executeToolCalls,
@@ -50,6 +51,11 @@ export interface AgentDeps {
   // team-tool callers from it). Additive: absent → ToolExec.sessionId stays
   // undefined (pre-M19 behavior).
   sessionId?: string
+  // M25 (Ruling M25-P3): optional independent host telemetry stream — SEPARATE
+  // from the session log (events here are never appended to it; the agent and
+  // its tools cannot see them). Absent = no events at all (backward compat:
+  // every pre-M25 deps object behaves byte-identically).
+  telemetry?: Telemetry
 }
 
 export interface AgentResult {
@@ -140,6 +146,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   async function runTurn(message: string, signal?: AbortSignal): Promise<AgentResult> {
     const abort = signal ?? deps.signal
     append(deps.session, { type: "turn/start" })
+    // M25: host telemetry beside the session-log append (independent stream —
+    // the session log itself is untouched; agent-invisible).
+    deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
     append(deps.session, { type: "user/message", text: message })
 
     let needsContinuation = true
@@ -175,6 +184,15 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         systemPrompt: deps.systemPrompt,
       }
 
+      // M25: provider/call before the model stream opens.
+      // NOTE (retry/start deferral): M12 tool retry (guard-retry) and M20
+      // provider retry (llm-seam createRetryingClient) are both SILENT by
+      // design and expose no callback/event seam — neither is wired into the
+      // core-agent loop, so a retry is not observable from this layer. v0
+      // emits no retry/start (a failed call still surfaces as provider/error
+      // or tool/error); adding a retry hook to those packages is follow-up.
+      deps.telemetry?.emit({ type: "provider/call", ts: Date.now(), data: { step: steps, messages: messages.length, tools: request.tools.length } })
+
       let stepText = ""
       let toolCallsThisStep = 0
       const batch: BatchCall[] = []
@@ -198,6 +216,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             break
           }
           case "error":
+            deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
             throw new Error(`model stream error: ${ev.error.message}`)
           case "end":
             break
@@ -209,7 +228,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // order and emits agent/post-tool from its commit lane; it throws
         // "agent aborted" on step abort (draining + synthesizing results for
         // never-started calls) and rethrows the first tool failure.
-        await executeToolCalls(ctx, deps.session, deps.tools, batch, { maxParallel, signal: abort, sessionId: deps.sessionId })
+        await executeToolCalls(ctx, deps.session, deps.tools, batch, {
+          maxParallel,
+          signal: abort,
+          sessionId: deps.sessionId,
+          // M25: tool/start|end|error host telemetry rides the scheduler.
+          ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
+        })
       }
 
       if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
@@ -224,6 +249,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     }
 
     append(deps.session, { type: "turn/end" })
+    // M25: turn/end + token/usage at the turn boundary. The token count is the
+    // SAME estimate the M20 budget check uses (activeTokens over the derived
+    // surface); guarded so an absent telemetry never pays for it.
+    if (deps.telemetry) {
+      deps.telemetry.emit({ type: "turn/end", ts: Date.now(), data: { turns: steps } })
+      deps.telemetry.emit({ type: "token/usage", ts: Date.now(), data: { tokens: activeTokens(deps.session) } })
+    }
     // M14: content may be a parts array (image-bearing); extract text parts
     // only. The final message is an assistant text message, but be robust.
     const last = deriveMessages(deps.session).at(-1)
