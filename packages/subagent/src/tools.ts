@@ -28,6 +28,11 @@ export interface SubagentToolDeps {
   // M8: when present, spawned children get durable child-<uuid> sessions with
   // the parent-session lineage header (P1).
   childSessions?: { coordinator: SessionCoordinator; parentSessionId: string }
+  // M24a (B2): max subagent nesting depth for spawn_agent — a caller whose
+  // session header records delegationDepth >= maxDepth is rejected. Default 1
+  // (zero behavior change: top-level callers are depth 0 and can spawn, but
+  // subagents cannot nest) — only a host that raises maxDepth enables nesting.
+  maxDepth?: number
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
@@ -48,6 +53,14 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     execute: async (args) => {
       const role = deps.roles.get(args.agent_type ?? "general")
       if (!role) throw new Error(`unknown role: ${args.agent_type}`)
+      // M24a (B2): max_depth guard — reject spawning once the caller is already
+      // at (or beyond) the nesting limit. Default 1 keeps today's behavior
+      // (top-level callers are depth 0; subagents cannot nest).
+      const callerDepth = deps.parentSession.header?.delegationDepth ?? 0
+      const maxDepth = deps.maxDepth ?? 1
+      if (callerDepth >= maxDepth) {
+        throw new Error(`subagent nesting depth limit reached (max ${maxDepth}) — cannot spawn from depth ${callerDepth}`)
+      }
       const turns = parseForkTurns(args.fork_turns)
       const { path, jobId } = await spawnChild({
         taskName: args.task_name,
@@ -69,14 +82,33 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  const waitTool: Tool<{ timeout_ms?: number }, { message: string; timed_out: boolean }> = {
+  const waitTool: Tool<{ timeout_ms?: number; target?: string }, { message: string; timed_out: boolean; path?: string; status?: string; finalText?: string; error?: string }> = {
     name: "wait_agent",
-    description: "Wait for any live subagent to reach a terminal status. Returns a brief summary and whether it timed out.",
-    inputSchema: { type: "object", properties: { timeout_ms: { type: "number", description: "Max wait in ms (default 30000)." } } },
+    description: "Wait for subagents to reach a terminal status. With target, waits for THAT subagent and returns its summary (path, status, finalText?, error?); otherwise waits for all live subagents to settle. Returns whether it timed out.",
+    inputSchema: { type: "object", properties: { timeout_ms: { type: "number", description: "Max wait in ms (default 30000, clamped to 100..300000)." }, target: { type: "string", description: "Optional agent path — wait for this specific subagent instead of all." } } },
     isReadOnly: true,
     execute: async (args) => {
-      const timeoutMs = args.timeout_ms ?? 30_000
+      // M24a (B4): clamp the wait to [100ms, 300s] for both modes.
+      const timeoutMs = Math.min(300_000, Math.max(100, args.timeout_ms ?? 30_000))
       const deadline = Date.now() + timeoutMs
+      if (args.target !== undefined) {
+        // M24a (B4): wait for THAT child's terminal status (not-running) and
+        // return its summary.
+        const entry = deps.table.get(args.target)
+        if (!entry) throw new Error(`unknown subagent: ${args.target}`)
+        while (Date.now() < deadline && entry.status === "running") {
+          await new Promise((r) => setTimeout(r, 20))
+        }
+        const settled = entry.status !== "running"
+        return {
+          path: entry.path,
+          status: entry.status,
+          ...(entry.finalText !== undefined ? { finalText: entry.finalText } : {}),
+          ...(entry.error !== undefined ? { error: entry.error } : {}),
+          message: settled ? `subagent ${entry.path} settled: ${entry.status}` : `wait timed out for ${entry.path} (still running)`,
+          timed_out: !settled,
+        }
+      }
       while (Date.now() < deadline) {
         const running = [...deps.table.entries().values()].some((e) => e.status === "running")
         if (!running) {
@@ -89,16 +121,38 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  const listTool: Tool<{ path_prefix?: string }, { agents: { path: string; status: string }[] }> = {
+  const listTool: Tool<{ path_prefix?: string; scope?: "children" | "descendants" }, { agents: { path: string; status: string; roleName?: string; jobId?: string; sessionId?: string; finalText?: string; error?: string }[] }> = {
     name: "list_agents",
-    description: "List live subagents in the current tree, optionally filtered by path prefix.",
-    inputSchema: { type: "object", properties: { path_prefix: { type: "string" } } },
+    description: "List live subagents in the current tree with their role/job/session details. scope 'children' lists only direct children of the prefix (default base 'root'), 'descendants' the whole subtree; without scope, path_prefix keeps the legacy startsWith filter.",
+    inputSchema: { type: "object", properties: { path_prefix: { type: "string" }, scope: { type: "string", enum: ["children", "descendants"], description: "children = direct children only; descendants = the whole subtree below the prefix." } } },
     isReadOnly: true,
     execute: async (args) => {
       const prefix = args.path_prefix ?? ""
       const agents = [...deps.table.entries().values()]
-        .filter((e) => e.path.startsWith(prefix))
-        .map((e) => ({ path: e.path, status: e.status }))
+        .filter((e) => {
+          // M24a (B5): scope filters the tree by depth. Paths look like
+          // root/a/b — descendants of a base are everything under base/,
+          // children only the next segment.
+          if (args.scope === "descendants") {
+            const base = args.path_prefix ?? "root"
+            return e.path.startsWith(base + "/")
+          }
+          if (args.scope === "children") {
+            const base = args.path_prefix ?? "root"
+            if (!e.path.startsWith(base + "/")) return false
+            return !e.path.slice(base.length + 1).includes("/")
+          }
+          return e.path.startsWith(prefix) // legacy behavior (backward compat)
+        })
+        .map((e) => ({
+          path: e.path,
+          status: e.status,
+          ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
+          ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
+          ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
+          ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
+          ...(e.error !== undefined ? { error: e.error } : {}),
+        }))
       return { agents }
     },
   }
