@@ -63,7 +63,10 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
     id: "sqlite",
     capabilities: { seekableRead: true, rawArtifacts: false },
     // M23: the coordinator's ownership lease defaults to the db's directory.
-    lockRoot: dirname(dbPath),
+    // dirname(":memory:") === dirname("relative.db") === "." would scatter a
+    // lock file in cwd (or fail to create it) — degenerate defaults resolve to
+    // cwd itself, matching the CLI's explicit lockRoot for file-backed paths.
+    lockRoot: dirname(dbPath) === "." ? process.cwd() : dirname(dbPath),
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
       db.exec("BEGIN IMMEDIATE")

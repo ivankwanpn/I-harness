@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, existsSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 import { createRequire } from "node:module"
 import { performance } from "node:perf_hooks"
 import { openDatabase, SCHEMA_VERSION, MIGRATIONS, APPLICATION_ID } from "../src/schema.ts"
@@ -202,6 +202,32 @@ describe("sqlite backend", () => {
     expect(meta).toMatchObject({ parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0 })
     const { meta: repairedMeta } = await backend.repair("child-abc")
     expect(repairedMeta).toMatchObject({ parentSession: "sess-p", seedLength: 3 })
+  })
+})
+
+describe("sqlite backend lockRoot (M23: ownership-lease default)", () => {
+  it("defaults lockRoot for :memory: to cwd — never '.'", () => {
+    const backend = createSqliteBackend(":memory:")
+    expect(backend.lockRoot).not.toBe(".")
+    expect(isAbsolute(backend.lockRoot!)).toBe(true)
+    expect(backend.lockRoot).toBe(process.cwd())
+  })
+
+  it("defaults lockRoot for a bare relative dbPath to cwd", () => {
+    // Bare filename → dirname "." would scatter a lock file in cwd; the
+    // default must resolve to cwd itself (matching the CLI's explicit dir).
+    const backend = createSqliteBackend("relative.db")
+    try {
+      expect(backend.lockRoot).toBe(process.cwd())
+    } finally {
+      closeSqliteBackends() // release before deleting the stray db file (Windows)
+      for (const suffix of ["", "-wal", "-shm"]) rmSync(`${resolve("relative.db")}${suffix}`, { force: true })
+    }
+  })
+
+  it("keeps the db's directory as lockRoot for an absolute path", () => {
+    const backend = createSqliteBackend(join(dir, "sub.db"))
+    expect(backend.lockRoot).toBe(dir)
   })
 })
 
