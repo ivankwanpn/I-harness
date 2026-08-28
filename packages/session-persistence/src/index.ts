@@ -162,10 +162,24 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       deadlineMs: opts?.acquireDeadlineMs,
     })
 
+  // I1 single-flight: concurrent mutating paths for the SAME session share
+  // one acquireLease promise. Without it the coordinator races against
+  // itself — the second OS acquire conflicts with the first (process-level
+  // exclusive lock) and fails closed after the retry deadline. Every caller
+  // awaits the SAME promise, so a shared conflict propagates to all of them
+  // (fail-closed) and a shared success sets heldLocks exactly once.
+  const inflightAcquires = new Map<string, Promise<SessionLock>>()
+
   async function ensureOwnership(sessionId: string): Promise<void> {
     if (!lockEnabled || heldLocks.has(sessionId)) return
-    const lock = await acquireLease(sessionId)
-    heldLocks.set(sessionId, lock)
+    let pending = inflightAcquires.get(sessionId)
+    if (!pending) {
+      pending = acquireLease(sessionId)
+        .then((lock) => { heldLocks.set(sessionId, lock); return lock })
+        .finally(() => { inflightAcquires.delete(sessionId) })
+      inflightAcquires.set(sessionId, pending)
+    }
+    await pending
   }
 
   // Borrow semantics for mutating-but-not-owning paths (load's repair):
@@ -173,6 +187,17 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   // back (a borrowed lease must never outlive the operation).
   async function borrowOwnership(sessionId: string): Promise<boolean> {
     if (!lockEnabled || heldLocks.has(sessionId)) return false
+    // I1 interplay: never "borrow" a lease another path is acquiring —
+    // joining the in-flight flight and returning `true` would make load
+    // release a lease the seeding path (append/create/adopt) still needs.
+    // Await the shared flight instead: on success the seeder owns the lease
+    // (we merely observe, borrowed=false); on failure its rejection
+    // propagates fail-closed.
+    const pending = inflightAcquires.get(sessionId)
+    if (pending) {
+      await pending
+      return false
+    }
     await ensureOwnership(sessionId)
     return true
   }
@@ -266,6 +291,10 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
       // conflicting writer can never clobber the session; the typed Conflict/
       // Unsupported error propagates fail-closed.
+      // M2 precision: remember whether THIS call takes the lease, so a failed
+      // backend.create releases only a lease it acquired — a pre-existing
+      // lease (duplicate create on an already-owned session) must survive.
+      const acquired = lockEnabled && !heldLocks.has(id)
       await ensureOwnership(id)
       const fullMeta: SessionMeta = {
         formatVersion: CURRENT_FORMAT_VERSION,
@@ -273,7 +302,16 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
         createdAt: new Date().toISOString(),
         ...meta,
       }
-      await backend.create(id, fullMeta)
+      try {
+        await backend.create(id, fullMeta)
+      } catch (err) {
+        // M2: the session was never created — don't strand the lease. A
+        // failed release must not mask the original backend error.
+        if (acquired) {
+          try { await releaseOwnership(id) } catch { /* keep the original error */ }
+        }
+        throw err
+      }
       return { id }
     },
     async append(sessionId, events) {
@@ -329,8 +367,13 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       for (const wb of writeBehinds.values()) wb.cancelAutomaticWait()
       await docChain
       // M23: the live cycle ends after the drain — release every held lease
-      // (best-effort so one failed release cannot strand the others).
-      await Promise.allSettled([...heldLocks.values()].map((lock) => lock.release()))
+      // (best-effort so one failed release cannot strand the others). M1:
+      // fs-lock's release() is sync-throwing, so a bare `lock.release()` in
+      // the map callback would escape Promise.allSettled's argument
+      // evaluation — stranding every later lease and skipping heldLocks
+      // .clear(). Promise.resolve().then() turns a sync throw into a
+      // rejection allSettled swallows: every lease is attempted.
+      await Promise.allSettled([...heldLocks.values()].map((lock) => Promise.resolve().then(() => lock.release())))
       heldLocks.clear()
     },
     async putDocument(key, data) {

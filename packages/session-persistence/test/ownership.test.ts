@@ -158,6 +158,100 @@ describe("session ownership lease", () => {
       expect(b.ownerOf(id)).toBe(false)
     })
 
+    // I1: concurrent mutating calls for the SAME session on ONE coordinator
+    // must share a single acquireLease flight. Before single-flight, the two
+    // concurrent acquires raced each other at the OS level (process-level
+    // exclusive lock) — the loser hit the retry deadline and the coordinator
+    // threw SessionLockConflictError against itself.
+    it("I1 single-flight: two concurrent appends to a fresh session both succeed (no self-conflict)", async () => {
+      const shared = fakeBackend()
+      const seed = tracked(shared) // lock-disabled: only seeds the store record
+      const id = "sess-i1-race"
+      await seed.create({ sessionId: id })
+      const a = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await expect(Promise.all([
+        a.append(id, [{ type: "turn/start" }]),
+        a.append(id, [{ type: "turn/start" }]),
+      ])).resolves.toBeDefined()
+      expect(a.ownerOf(id)).toBe(true) // exactly one lease, held live
+      await a.append(id, [{ type: "step/start" }]) // ownership keeps working
+    })
+
+    // I1 × borrow: load's borrow must never "borrow" (and later release) a
+    // lease that a concurrent mutating path's in-flight acquire is seeding —
+    // the shared flight belongs to the seeding caller (adopt here).
+    it("I1 borrow guard: concurrent adopt + load keep the adopt's lease (no cross-release)", async () => {
+      const shared = fakeBackend()
+      const seed = tracked(shared)
+      const id = "sess-i1-borrow"
+      await seed.create({ sessionId: id })
+      const a = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      // adopt seeds the single-flight acquire synchronously; load's borrow
+      // joins it and must come back borrowed=false (observe, don't release).
+      await Promise.all([a.adoptOwnership(id), a.load(id)])
+      expect(a.ownerOf(id)).toBe(true)
+    })
+
+    // M1: close() must attempt EVERY held lease's release (all-settled shape)
+    // and always clear the map. Note: the sync-throw path inside release() is
+    // defensive hardening — fs-lock's real release only throws on OS unlock
+    // failure, which cannot be forced cleanly here — so this test guards the
+    // observable contract (multi-lease close releases all, no rejection)
+    // rather than the throw path itself.
+    it("M1: close() with multiple held leases releases every one of them", async () => {
+      const shared = fakeBackend()
+      const a = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await a.create({ sessionId: "sess-m1-a" })
+      await a.create({ sessionId: "sess-m1-b" })
+      expect(a.ownerOf("sess-m1-a")).toBe(true)
+      expect(a.ownerOf("sess-m1-b")).toBe(true)
+      await a.close()
+      expect(a.ownerOf("sess-m1-a")).toBe(false)
+      expect(a.ownerOf("sess-m1-b")).toBe(false)
+      // OS-level proof both leases are gone: fresh coordinators can take them
+      const b = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await b.adoptOwnership("sess-m1-a")
+      await b.adoptOwnership("sess-m1-b")
+    })
+
+    // M2: create takes the lease BEFORE the store write (acquire-at-live), so
+    // a failing backend.create must not strand the lease on a session that
+    // was never created — fail-closed means fail-clean.
+    it("M2: a failed create releases the lease it took (ownerOf false, OS lease free)", async () => {
+      const shared = fakeBackend()
+      const boom = new Error("EEXIST: duplicate create (simulated)")
+      const failing: PersistenceBackend = { ...shared, async create() { throw boom } }
+      const a = tracked(failing, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await expect(a.create({ sessionId: "sess-m2" })).rejects.toThrow(boom)
+      expect(a.ownerOf("sess-m2")).toBe(false)
+      // OS-level proof the lease was truly released (not just dropped from
+      // the map): another coordinator can acquire it.
+      const b = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await b.adoptOwnership("sess-m2")
+      expect(b.ownerOf("sess-m2")).toBe(true)
+    })
+
+    // M2 precision: only a lease acquired by THIS create call is released on
+    // failure — a duplicate create on an already-owned session keeps the
+    // pre-existing (live) lease.
+    it("M2 precision: failed duplicate create keeps the already-owned lease", async () => {
+      const shared = fakeBackend()
+      let failCreate = false
+      const flaky: PersistenceBackend = {
+        ...shared,
+        async create(sessionId, meta) {
+          if (failCreate) throw new Error("EEXIST: duplicate create (simulated)")
+          return shared.create(sessionId, meta)
+        },
+      }
+      const a = tracked(flaky, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      const { id } = await a.create({ sessionId: "sess-m2-keep" })
+      expect(a.ownerOf(id)).toBe(true)
+      failCreate = true
+      await expect(a.create({ sessionId: id })).rejects.toThrow()
+      expect(a.ownerOf(id)).toBe(true) // the live lease survives the failed re-create
+    })
+
     it("putDocument is fail-closed — a conflicting doc lease skips the write and reports it", async () => {
       const shared = fakeBackend()
       const report = vi.fn()
