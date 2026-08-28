@@ -47,11 +47,21 @@ describe("job registry", () => {
     const jobs = createJobRegistry()
     expect(jobs.registerJob("root", "subagent", "h", "subagent-7").id).toBe("subagent-7")
     expect(() => jobs.registerJob("root", "subagent", "dup", "subagent-7")).toThrow(/duplicate job id/)
-    // Explicit ids do not advance the per-kind auto counter.
-    expect(jobs.registerJob("root", "subagent", "next").id).toBe("subagent-1")
+    // Ruling M24a-T1a: explicit ids seed the per-kind counter, so the auto
+    // generator continues AFTER the highest known id (skips occupied ids).
+    expect(jobs.registerJob("root", "subagent", "next").id).toBe("subagent-8")
     expect(jobs.updateJob("subagent-7", { status: "completed", output: "done" })).toBe(true)
     expect(jobs.read("subagent-7").status).toBe("completed")
     expect(jobs.updateJob("unknown-id", { status: "completed" })).toBe(false)
+  })
+
+  // Ruling M24a-T1a: an explicit-id registration seeds the per-kind counter,
+  // so the auto generator skips occupied ids instead of colliding post-resume.
+  it("registerJob with explicit id seeds the counter (auto next skips occupied)", () => {
+    const reg = createJobRegistry()
+    reg.registerJob("root", "subagent", "a", "subagent-7")
+    const { id } = reg.registerJob("root", "subagent", "b") // auto
+    expect(id).toBe("subagent-8")
   })
 
   it("updateJob re-opens a terminal job when set to running again", () => {
