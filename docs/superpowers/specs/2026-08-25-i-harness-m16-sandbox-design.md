@@ -1,6 +1,6 @@
 # M16 Design — Sandbox (file-effect confinement)
 
-Date: 2026-08-25. Milestone: M16. Status: design.
+Date: 2026-08-25. Milestone: M16. Status: implemented (complete).
 
 ## 1. Framing
 
