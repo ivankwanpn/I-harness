@@ -468,6 +468,38 @@ describe("headless CLI persistence (M4)", () => {
     }
   })
 
+  it("resume restores the session header alongside the history (G7)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-g7-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      // Seed the lineage header through the coordinator's create meta (the
+      // coordinator rebuilds session.header from it on load — same path the
+      // main resume uses).
+      const { id } = await coordinator.create({ parentSession: "main-0", delegationDepth: 0, origin: "subagent" })
+      await coordinator.append(id, [
+        { type: "turn/start" },
+        { type: "user/message", text: "old question" },
+        { type: "turn/end" },
+      ])
+      const result = await runHeadless("continue", {
+        workspace: dir,
+        approveAll: true,
+        resumeSessionId: id,
+        coordinator,
+        mockScript: [{ role: "assistant", text: "ok" }],
+      })
+      expect(result.exitCode).toBe(0)
+      // G7: the resumed run's session adopts the persisted lineage header —
+      // without it the subagent max_depth guard would always read depth 0
+      // after a resume.
+      expect(result.session!.header).toMatchObject({ parentSession: "main-0", origin: "subagent" })
+      // the history is still restored alongside the header
+      expect(result.session!.events.some((e) => e.type === "user/message" && e.text === "old question")).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it("resume with a missing session id resolves cleanly instead of throwing", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {

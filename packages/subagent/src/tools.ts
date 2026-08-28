@@ -56,6 +56,23 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       // M24a (B2): max_depth guard — reject spawning once the caller is already
       // at (or beyond) the nesting limit. Default 1 keeps today's behavior
       // (top-level callers are depth 0; subagents cannot nest).
+      //
+      // M24a (Ruling M24a-T2a, carried finding — DEPTH-BINDING LIMITATION,
+      // documented per the minimal-diff ruling): this guard reads
+      // deps.parentSession.header.delegationDepth, but the tool mount is
+      // SHARED — registerSubagent mounts createSubagentTools ONCE on the host
+      // registry with ONE bound parent session (the root; index.ts and
+      // run.ts both mount the root session), so through today's mount every
+      // caller resolves callerDepth from the ROOT session (depth 0). A
+      // subagent that somehow reached this tool would therefore be measured at
+      // depth 0, and a host-raised maxDepth > 1 would under-enforce. A
+      // per-session createSubagentTools mount (rebinding deps.parentSession
+      // per child scope) was evaluated and rejected for M24a: it restructures
+      // tool mounting for every consumer. This is MOOT in the shipped surface:
+      // the builtin roles (roles.ts) do not include spawn_agent in their
+      // tools, so no subagent can reach this guard until a custom role adds
+      // it — exactly the configuration a host must pair with a maxDepth
+      // review.
       const callerDepth = deps.parentSession.header?.delegationDepth ?? 0
       const maxDepth = deps.maxDepth ?? 1
       if (callerDepth >= maxDepth) {
@@ -97,6 +114,10 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         const entry = deps.table.get(args.target)
         if (!entry) throw new Error(`unknown subagent: ${args.target}`)
         while (Date.now() < deadline && entry.status === "running") {
+          // M24a (minor hardening): the target can be closed mid-wait
+          // (close_agent removes it from the table while its status object is
+          // still "running") — stop polling instead of spinning to the deadline.
+          if (deps.table.get(args.target) !== entry) break
           await new Promise((r) => setTimeout(r, 20))
         }
         const settled = entry.status !== "running"
@@ -435,4 +456,39 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
   // later followups for this child.
   entry.followupChain = next.catch(() => {})
   return next
+}
+
+// M24a (G4): pending-inbox sweep for cold resume. After the sync restoreState
+// rebuilds the agent table (Ruling M24a-P2) and the G1a mirror step has
+// reloaded each child's durable log into a live mirror (index.ts
+// restoreMirrorsAndSweep), entries that were WAITING with a queued-but-
+// unconsumed durable inbox event (seq > lastInboxSeq) get the same serialized
+// followup drain a live wakeup would have given them. Guards:
+//   - ONLY "waiting" entries are swept (Ruling M24a-P6): entries that were
+//     running were already mapped to "error" by restoreState and need an
+//     explicit resume_agent; completed/killed/error entries have no live
+//     conversation to resume.
+//   - A failed resident rebuild is skipped conservatively (the followup
+//     wakeup paths rebuild lazily later; the sweep itself must never throw).
+// Exported for direct testing: the drive is fire-and-forget (same semantics
+// as followup_task), so a caller asserting the OUTCOME awaits
+// entry.followupChain.
+export async function sweepPendingInbox(deps: SubagentToolDeps, table: AgentTable): Promise<void> {
+  for (const entry of table.entries().values()) {
+    if (entry.status !== "waiting" || !entry.sessionId) continue
+    const hasPending = entry.session.events.some(
+      (e) => e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
+    )
+    if (!hasPending) continue
+    if (!deps.agents.get(entry.sessionId)) {
+      const ok = await ensureResidentAgent(deps, entry)
+      if (!ok) continue // rebuild failed → skip (conservative; wakeup paths may retry lazily)
+    }
+    void driveFollowups(followupDepsWithRebuild(deps), entry, entry.sessionId).catch(() => {
+      // fail-visible log, not throw: one child's failed sweep must not break
+      // the host resume (the error stays on the entry for wait_agent /
+      // job_output to surface).
+      console.warn(`[subagent] pending inbox sweep failed for ${entry.sessionId}`)
+    })
+  }
 }
