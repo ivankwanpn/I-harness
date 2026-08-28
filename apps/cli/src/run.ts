@@ -18,6 +18,11 @@ import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
+// M24b (spec §4): skills + workflow mounts. Skills sits beside registerToolSearch
+// (the deferred-retrieval family); workflow sits beside registerSubagent (its
+// executor is the run-level job store the subagent job_* third layer consults).
+import { registerSkills } from "@i-harness/skills"
+import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import { mountMcpClient, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
 import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
 import { mountAgentTeams, type TeamDeps, type TeamMountHandle, type TeamConfig } from "@i-harness/agent-team"
@@ -139,6 +144,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
   registerToolSearch(ctx, tools)
 
+  // M24b (spec §4): skills mount beside registerToolSearch — the deferred-
+  // retrieval family (skill_search/skill_get scan <workspace>/skills/**/SKILL.md).
+  // Mounted ONCE per ctx (ruling M24b-T1a: the "skills" service has no
+  // unregister seam, so a remount on the same ctx would throw on duplicate
+  // tool registration); the finally below reclaims the tools via the handle.
+  const skillsMount = registerSkills(ctx, tools, { workspace: opts.workspace })
+
   // fs-search glob/grep (replaces the deferred grep stub below)
   const execService = ctx.services.get<import("@i-harness/exec").ExecService>("exec/service")
   for (const tool of createFsSearchTools({ exec: execService })) tools.register(tool)
@@ -213,6 +225,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   const mcpHandles: McpMountHandle[] = []
   const lspHandles: LspMountHandle[] = []
   const teamHandles: TeamMountHandle[] = []
+  // M24b: the workflow mount handle is assigned inside the try (it must sit
+  // beside registerSubagent, after the MCP/LSP failures that would throw
+  // early) and reclaimed in the finally below, same best-effort discipline.
+  let workflowMount: WorkflowMountHandle | undefined
 
   try {
     // M17: mount MCP servers into the registry before the agent can see them
@@ -231,6 +247,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // files under the same root the fs tools expose.
       lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
+    // M24b (spec §4): registerWorkflow sits beside registerSubagent — it
+    // scans <workspace>/workflow/*.yml into the definitions registry, mounts
+    // workflow_run/workflow_list, and returns the run-level executor whose
+    // job store IS the job_* third layer. The executor is threaded into
+    // registerSubagent so the subagent's job_output/job_list/job_kill route
+    // `workflow-` ids to it (ruling M24b-P5).
+    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService })
     // Mount the subagent + job tools so the main agent can delegate.
     // M8: persist child sessions through the same coordinator (child lineage
     // records the main session id) and on resume load each restored child's
@@ -240,6 +263,8 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       exec: ctx.services.get<import("@i-harness/exec").ExecService>("exec/service"),
       parentModel: model,
       parentSession: session,
+      // M24b (spec §3.3): the workflow executor backs the job_* third layer.
+      workflow: workflowMount.executor,
       // M7: the coordinator owns document-write serialization, failure
       // reporting (reportBackgroundFailure), and run-end draining.
       ...(opts.coordinator && activeId
@@ -329,6 +354,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     for (const handle of mounts.reverse()) {
       try {
         await handle.unmount()
+      } catch {
+        // cleanup failure on unmount: the run result stands
+      }
+    }
+    // M24b: reclaim the skills/workflow tools best-effort (same discipline).
+    // The SERVICES behind them ("skills", "workflow/executor") stay registered
+    // on the run-level ctx — core-plugin has no unregister seam (ruling
+    // M24b-T1a) — and the ctx is discarded with the run, so nothing leaks.
+    for (const handle of [skillsMount, workflowMount]) {
+      try {
+        await handle?.unmount()
       } catch {
         // cleanup failure on unmount: the run result stands
       }

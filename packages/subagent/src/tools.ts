@@ -6,6 +6,11 @@ import type { ModelClient } from "@i-harness/llm-seam"
 import { buildModelClient, type ProviderRegistry } from "@i-harness/provider"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
+// M24b (spec §3.3): type-only import — the workflow executor's job store is
+// the THIRD layer of the job_* fallback chain. The dep is optional (injected
+// by the host via RegisterSubagentOptions.workflow), so absent = current
+// behavior (subagent → exec only).
+import type { WorkflowExecutor } from "@i-harness/workflow"
 import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
@@ -33,6 +38,11 @@ export interface SubagentToolDeps {
   // (zero behavior change: top-level callers are depth 0 and can spawn, but
   // subagents cannot nest) — only a host that raises maxDepth enables nesting.
   maxDepth?: number
+  // M24b (spec §3.3): the workflow executor whose job store backs the job_*
+  // third layer. Optional — absent = current behavior. When present, a
+  // `workflow-` prefixed job id routes to it (getOutput/listJobs/killJob)
+  // instead of falling through to the exec bridge.
+  workflow?: WorkflowExecutor
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
@@ -282,10 +292,25 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const jobOutputTool: Tool<{ job_id: string; wait?: boolean; timeout_ms?: number }, { text: string; status: string }> = {
     name: "job_output",
-    description: "Read a background job (subagent or shell). Non-blocking unless wait: true. Every response ends with [status: ...].",
+    description: "Read a background job (subagent, shell, or workflow). Non-blocking unless wait: true. Every response ends with [status: ...].",
     inputSchema: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "boolean" }, timeout_ms: { type: "number" } }, required: ["job_id"] },
     isReadOnly: true,
     execute: async (args) => {
+      // M24b (spec §3.3) third layer: a `workflow-` id belongs to the workflow
+      // job store — route there directly, no fall-through (exec never owns
+      // this prefix; an unknown workflow- id fails visibly as unknown job).
+      // The wait/poll and rendering mirror the exec bridge exactly.
+      if (deps.workflow && args.job_id.startsWith("workflow-")) {
+        if (args.wait === true) {
+          const deadline = Date.now() + (args.timeout_ms ?? 30_000)
+          while (Date.now() < deadline && deps.workflow.getOutput(args.job_id).status === "running") {
+            await new Promise((r) => setTimeout(r, 20))
+          }
+        }
+        const view = deps.workflow.getOutput(args.job_id)
+        const body = view.stdout.length > 0 ? view.stdout : "(no output)"
+        return { text: `${body}\n[status: ${view.status}]`, status: view.status }
+      }
       // Prefer the subagent JobRegistry; fall back to the exec service (bash/pwsh jobs).
       try {
         if (args.wait === true) await deps.jobs.wait(args.job_id, args.timeout_ms ?? 30_000)
@@ -309,22 +334,31 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const jobListTool: Tool<Record<string, never>, { jobs: { id: string; kind: string; status: string; label: string }[] }> = {
     name: "job_list",
-    description: "List your background jobs (subagent and shell) with ids, kinds, and statuses.",
+    description: "List your background jobs (subagent, shell, and workflow) with ids, kinds, and statuses.",
     inputSchema: { type: "object", properties: {} },
     isReadOnly: true,
     execute: async () => {
       const sub = deps.jobs.list("root").map((j) => ({ id: j.id, kind: j.kind, status: j.status, label: j.label }))
       const shell = deps.exec.listJobs().map((v) => ({ id: v.id, kind: "bash", status: v.status, label: v.id }))
-      return { jobs: [...sub, ...shell] }
+      // M24b (spec §3.3): workflow jobs join the index as kind "workflow".
+      const workflow = deps.workflow
+        ? deps.workflow.listJobs().map((v) => ({ id: v.id, kind: "workflow", status: v.status, label: v.id }))
+        : []
+      return { jobs: [...sub, ...shell, ...workflow] }
     },
   }
 
   const jobKillTool: Tool<{ job_id: string; reason?: string }, { outcome: string }> = {
     name: "job_kill",
-    description: "Request cancellation of a running background job (subagent or shell).",
+    description: "Request cancellation of a running background job (subagent, shell, or workflow).",
     inputSchema: { type: "object", properties: { job_id: { type: "string" }, reason: { type: "string" } }, required: ["job_id"] },
     isReadOnly: false,
     execute: async (args) => {
+      // M24b (spec §3.3) third layer: `workflow-` ids route to the workflow
+      // job store (its killJob aborts the run's current step process tree).
+      if (deps.workflow && args.job_id.startsWith("workflow-")) {
+        return { outcome: deps.workflow.killJob(args.job_id) }
+      }
       try {
         return { outcome: deps.jobs.kill(args.job_id) }
       } catch (e) {

@@ -7,6 +7,7 @@ import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createExecService } from "@i-harness/exec"
+import { createWorkflowExecutor, createWorkflowJobStore, type WorkflowDefinition } from "@i-harness/workflow"
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable } from "../src/agent-table.ts"
@@ -557,6 +558,78 @@ describe("job tools bridge", () => {
     expect((out as { previous_status: string }).previous_status).toBe("running")
     expect(table.get("root/helper")).toBeUndefined()
     expect(jobs.read(subId).status).toBe("killed")
+  }, 10_000)
+})
+
+// M24b (spec §3.3): the job_* third layer. A `workflow-` prefixed id routes to
+// the workflow executor's job store when the host injected one (deps.workflow)
+// — additive: without the dep the chain stays subagent → exec (current
+// behavior), and a workflow- id then fails visibly as unknown job.
+describe("job tools workflow layer (M24b spec §3.3)", () => {
+  const finishedDef: WorkflowDefinition = {
+    name: "echo-ok",
+    description: "One fast step",
+    steps: [{ name: "greet", command: `node -e "console.log('wf step ok')"` }],
+  }
+  const slowDef: WorkflowDefinition = {
+    name: "slow",
+    description: "One slow step",
+    steps: [{ name: "wait", command: `node -e "setTimeout(()=>{}, 30_000)"` }],
+  }
+
+  it("job_output routes a workflow-* id to the workflow executor layer", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const workflow = createWorkflowExecutor({ exec, jobs: createWorkflowJobStore() })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry(), workflow })
+    const output = all.find((t) => t.name === "job_output")!
+    const { jobId } = workflow.runWorkflow(finishedDef)
+    expect(jobId).toMatch(/^workflow-\d+$/)
+    // wait:true exercises the workflow-layer poll-wait path (mirrors exec).
+    const read = await output.execute({ job_id: jobId, wait: true, timeout_ms: 10_000 }, {})
+    const body = read as { text: string; status: string }
+    expect(body.status).toBe("completed")
+    expect(body.text).toContain("wf step ok")
+    expect(body.text).toContain("[step 1/1 greet] ok")
+    expect(body.text).toContain("[status: completed]")
+  }, 15_000)
+
+  it("job_list includes workflow jobs with kind workflow", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const workflow = createWorkflowExecutor({ exec, jobs: createWorkflowJobStore() })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry(), workflow })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const list = all.find((t) => t.name === "job_list")!
+    const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    const subId = (spawnOut as { job_id: string }).job_id
+    const { jobId } = workflow.runWorkflow(slowDef)
+    const listed = await list.execute({}, {})
+    const entries = (listed as { jobs: { id: string; kind: string; status: string }[] }).jobs
+    expect(entries.map((j) => j.id)).toContain(subId)
+    const wfEntry = entries.find((j) => j.id === jobId)
+    expect(wfEntry).toBeDefined()
+    expect(wfEntry!.kind).toBe("workflow")
+    expect(wfEntry!.status).toBe("running")
+  }, 10_000)
+
+  it("job_kill routes a workflow-* id to the workflow executor layer", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const workflow = createWorkflowExecutor({ exec, jobs: createWorkflowJobStore() })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry(), workflow })
+    const kill = all.find((t) => t.name === "job_kill")!
+    const output = all.find((t) => t.name === "job_output")!
+    const { jobId } = workflow.runWorkflow(slowDef)
+    const out = await kill.execute({ job_id: jobId }, {})
+    expect((out as { outcome: string }).outcome).toBe("cancellation-requested")
+    // The kill is observable through job_output: the run ends killed.
+    const read = await output.execute({ job_id: jobId }, {})
+    expect((read as { status: string }).status).toBe("killed")
+  }, 10_000)
+
+  it("without the workflow dep a workflow-* id fails visibly as unknown job (additive safety)", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
+    const output = all.find((t) => t.name === "job_output")!
+    await expect(output.execute({ job_id: "workflow-9" }, {})).rejects.toThrow(/unknown job/)
   }, 10_000)
 })
 

@@ -113,12 +113,18 @@ importers:
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell
+      '@i-harness/skills':
+        specifier: workspace:*
+        version: link:../../packages/skills
       '@i-harness/subagent':
         specifier: workspace:*
         version: link:../../packages/subagent
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../../packages/tool-search
+      '@i-harness/workflow':
+        specifier: workspace:*
+        version: link:../../packages/workflow
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
@@ -524,6 +530,9 @@ importers:
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
+      '@i-harness/workflow':
+        specifier: workspace:*
+        version: link:../workflow
     devDependencies:
       '@i-harness/llm-mock':
         specifier: workspace:*
