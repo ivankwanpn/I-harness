@@ -1,2 +1,42 @@
+# Node
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+
+# pnpm 已 commit pnpm-lock.yaml（不 ignore）
+
+# 建置 / 測試 artifacts
+dist/
+coverage/
+.tmp/
+*.log
+*.tmp
+
+# e2e 臨時工作區（e2e 測試建立的 tmp）
+e2e/.tmp/
+*.workspace.tmp
+
+# SDK / 環境
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# SDD / 治理 scratch（gitignored workspace）
 .superpowers/
+
+# Windows
+*~
