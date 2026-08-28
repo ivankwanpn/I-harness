@@ -73,7 +73,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   }
   if (opts.restoredState) {
     // Restore BEFORE wrapping so the first save persists the restored state.
-    restoreState({ jobs, table, roles }, opts.restoredState)
+    // M24a: persistence is passed through (optional) — restoreState stays
+    // sync; the async G1a mirror rebuild lands in Task 3.
+    restoreState({ jobs, table, roles }, opts.restoredState, opts.persist)
   }
   if (opts.persist) {
     const wired = wireSubagentPersistence({ jobs, table, roles }, opts.persist)

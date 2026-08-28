@@ -76,7 +76,13 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
 export function restoreState(
   state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry },
   snap: SubagentStateSnapshot,
+  // M24a (Ruling M24a-P2): optional; accepted so the caller (index.ts) can
+  // hand persistence through, but restoreState stays SYNC. The async G1a
+  // hooked-mirror rebuild is deferred to Task 3 (async step after restore in
+  // registerSubagent / ensureResidentAgent) — NOT implemented here.
+  persistence?: SubagentPersistence,
 ): void {
+  void persistence
   // Restore roles first (register may be used by later spawns).
   for (const role of snap.roles) {
     if (!state.roles.get(role.name)) state.roles.register(role)
@@ -84,8 +90,11 @@ export function restoreState(
   // Agent table: restore entries; running → error (process gone after resume,
   // design spec M6). Such entries carry the explicit "interrupted by resume"
   // marker so callers can distinguish them from genuine runtime errors.
+  // M24a (G3) waiting fidelity: "waiting" means the child was mid-conversation
+  // with a queued followup, not dead — restore it as waiting so the followup
+  // re-drive can resume it. Only "running" is interrupted by resume.
   for (const entry of snap.agentTable) {
-    const wasRunning = entry.status === "running" || entry.status === "waiting"
+    const wasRunning = entry.status === "running"
     const status: ChildStatus = wasRunning ? "error" : entry.status
     state.table.add(entry.path, {
       path: entry.path,
@@ -101,13 +110,14 @@ export function restoreState(
       ...(entry.lastInboxSeq !== undefined ? { lastInboxSeq: entry.lastInboxSeq } : {}),
     })
   }
-  // Jobs: register fresh (ids drift — registerJob assigns new per-kind ids;
-  // status/output/kind/label preserved). Running jobs were mid-flight when the
-  // harness stopped → restore as error (design spec M6). Agent-table jobId
-  // links are advisory.
+  // Jobs: M24a (G2) the persisted id is authoritative — registerJob is given
+  // `rec.id` so post-resume followups address jobs by their original id (no
+  // re-count drift). A duplicate id fails loud. Running jobs were mid-flight
+  // when the harness stopped → restore as error (design spec M6). Agent-table
+  // jobId links are advisory.
   for (const rec of snap.jobs) {
     const wasRunning = rec.status === "running"
-    const { id } = state.jobs.registerJob(rec.owner, rec.kind, rec.label)
+    const { id } = state.jobs.registerJob(rec.owner, rec.kind, rec.label, rec.id)
     state.jobs.updateJob(id, {
       status: wasRunning ? "error" : rec.status,
       output: wasRunning ? "interrupted by resume" : rec.output,
@@ -127,14 +137,17 @@ export function persistentJobRegistry(
 ): JobRegistry {
   return {
     ...jobs,
-    registerJob(owner, kind, label) {
-      const result = jobs.registerJob(owner, kind, label)
+    registerJob(owner, kind, label, id) {
+      const result = jobs.registerJob(owner, kind, label, id)
       void save()
       return result
     },
     updateJob(id, patch) {
-      jobs.updateJob(id, patch)
-      void save()
+      const updated = jobs.updateJob(id, patch)
+      // G2: a failed update (unknown id) changes no state — no spurious save,
+      // same rule as the no-op kill above.
+      if (updated) void save()
+      return updated
     },
     kill(id) {
       const outcome = jobs.kill(id)

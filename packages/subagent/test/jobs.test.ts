@@ -41,6 +41,19 @@ describe("job registry", () => {
     expect(jobs.read(id).status).toBe("running")
   })
 
+  // M24a (G2): registerJob accepts an explicit persisted id; duplicates fail
+  // loud; updateJob reports unknown ids via false (observable, not silent).
+  it("registerJob accepts a persisted id (duplicate throws); updateJob returns boolean", () => {
+    const jobs = createJobRegistry()
+    expect(jobs.registerJob("root", "subagent", "h", "subagent-7").id).toBe("subagent-7")
+    expect(() => jobs.registerJob("root", "subagent", "dup", "subagent-7")).toThrow(/duplicate job id/)
+    // Explicit ids do not advance the per-kind auto counter.
+    expect(jobs.registerJob("root", "subagent", "next").id).toBe("subagent-1")
+    expect(jobs.updateJob("subagent-7", { status: "completed", output: "done" })).toBe(true)
+    expect(jobs.read("subagent-7").status).toBe("completed")
+    expect(jobs.updateJob("unknown-id", { status: "completed" })).toBe(false)
+  })
+
   it("updateJob re-opens a terminal job when set to running again", () => {
     const jobs = createJobRegistry()
     const { id } = jobs.registerJob("root", "subagent", "h")
