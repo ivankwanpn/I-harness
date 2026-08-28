@@ -43,6 +43,10 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   let childSession: ReturnType<typeof createSession>
   let sessionId: string | undefined
+  // M24a (B1): resolveChildDepth = delegationDepthOf(parent) + 1 — depth
+  // recurses down the delegation chain (a child of a depth-1 subagent is
+  // depth 2) instead of hardcoding 1. A headerless (root) parent is depth 0.
+  const childDepth = (opts.parentSession.header?.delegationDepth ?? 0) + 1
   if (opts.childSessions) {
     sessionId = `child-${randomUUID()}`
     await opts.childSessions.coordinator.create({
@@ -52,7 +56,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       origin: "subagent",
       // dsh: resolveChildDepth = delegationDepthOf(parent) + 1 — a child of a
       // top-level (depth 0) session is depth 1.
-      delegationDepth: 1,
+      delegationDepth: childDepth,
     })
     childSession = createSession((ev) => {
       opts.childSessions!.coordinator.enqueue(sessionId!, [ev])
@@ -62,7 +66,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // with the inherited context (dsh: seed events live in the child log).
     for (const ev of seedEvents) append(childSession, { ...ev })
     // dsh parent+1 rule: same depth as the coordinator.create lineage above.
-    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: 1 }
+    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: childDepth }
   } else {
     childSession = createSession()
     for (const ev of seedEvents) childSession.events.push({ ...ev })

@@ -136,6 +136,44 @@ describe("spawnChild durable child sessions (M8)", () => {
     expect(agents.get(sessionId!)).toBeDefined() // agent retained in the registry
   })
 
+  // M24a (B1): delegationDepth recursion — a child of a depth-1 subagent is
+  // depth 2 (resolveChildDepth = parent + 1), not the hardcoded 1.
+  it("spawnChild sets delegationDepth = parent depth + 1 (nested delegation)", async () => {
+    const coordinator = fakeCoordinator()
+    const jobs = createJobRegistry()
+    const table = createAgentTable()
+    const roles = createRoleRegistry()
+    roles.register({ name: "general", description: "d", systemPrompt: "p", tools: [] })
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    // The parent is itself a depth-1 subagent → the child must be depth 2.
+    parentSession.header = { delegationDepth: 1, origin: "subagent" }
+    // two parent turns so forkTurns("all") has seed content
+    parentSession.events.push({ type: "turn/start" }, { type: "user/message", text: "a" }, { type: "assistant/message", text: "b" }, { type: "turn/end" })
+    const mock = createMockClient([{ role: "assistant", text: "ok" }])
+
+    const { sessionId } = await spawnChild({
+      taskName: "grandchild",
+      message: "hi",
+      parentPath: "root/helper",
+      parentRegistry,
+      parentSession,
+      parentCtx: ctx,
+      role: roles.get("general")!,
+      parentModel: mock,
+      providers: createProviderRegistry(),
+      jobs,
+      table,
+      agents: createAgentRegistry(),
+      childSessions: { coordinator, parentSessionId: "sess-child" },
+    })
+    expect(sessionId).toMatch(/^child-/)
+    expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-child", origin: "subagent", seedLength: 4, delegationDepth: 2 })
+    const entry = table.get("root/helper/grandchild")
+    expect(entry?.session.header).toMatchObject({ parentSession: "sess-child", origin: "subagent", delegationDepth: 2, seedLength: 4 })
+  })
+
   it("without childSessions behaves exactly as today (anonymous session, no sessionId)", async () => {
     const jobs = createJobRegistry()
     const table = createAgentTable()

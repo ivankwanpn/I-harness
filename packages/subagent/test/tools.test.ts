@@ -559,3 +559,150 @@ describe("job tools bridge", () => {
     expect(jobs.read(subId).status).toBe("killed")
   }, 10_000)
 })
+
+// M24a: nested delegation (max_depth guard) + wait_agent target / list_agents
+// fields & scope extensions.
+describe("M24a nested delegation and wait/list extensions", () => {
+  it("spawn_agent rejects when caller depth >= maxDepth", async () => {
+    const { ctx, table, jobs, roles, parentReg, providers, model, exec } = setup()
+    const session = createSession()
+    session.header = { delegationDepth: 1, origin: "subagent" }
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry(), maxDepth: 1 })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    await expect(spawn.execute({ message: "x", task_name: "y" }, {})).rejects.toThrow(/max/)
+    expect(table.get("root/y")).toBeUndefined() // nothing was spawned
+  })
+
+  it("spawn_agent allows nesting when caller depth < maxDepth (child of depth-1 parent, maxDepth 2)", async () => {
+    const { ctx, table, jobs, roles, parentReg, providers, model, exec } = setup()
+    const session = createSession()
+    session.header = { delegationDepth: 1, origin: "subagent" }
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry(), maxDepth: 2 })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const out = await spawn.execute({ message: "do it", task_name: "helper" }, {})
+    expect((out as { agent_path: string }).agent_path).toBe("root/helper")
+    expect(table.get("root/helper")).toBeDefined()
+  })
+
+  it("wait_agent with target waits for that specific child and returns its summary", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
+    const wait = all.find((t) => t.name === "wait_agent")!
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "running",
+      session: createSession(),
+      controller: new AbortController(),
+      mailbox: [],
+      roleName: "researcher",
+      jobId: "subagent-1",
+      sessionId: "child-1",
+    })
+    // The child settles shortly after the wait starts.
+    setTimeout(() => {
+      const e = table.get("root/helper")
+      if (e) { e.status = "waiting"; e.finalText = "done!" }
+    }, 60)
+    const out = await wait.execute({ target: "root/helper", timeout_ms: 5000 }, {}) as { path: string; status: string; finalText?: string; timed_out: boolean }
+    expect(out.path).toBe("root/helper")
+    expect(out.status).toBe("waiting")
+    expect(out.finalText).toBe("done!")
+    expect(out.timed_out).toBe(false)
+  }, 10_000)
+
+  it("wait_agent with target reports an errored child and throws on an unknown target", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
+    const wait = all.find((t) => t.name === "wait_agent")!
+    table.add("root/broken", {
+      path: "root/broken",
+      status: "error",
+      session: createSession(),
+      controller: new AbortController(),
+      mailbox: [],
+      error: "boom",
+    })
+    const out = await wait.execute({ target: "root/broken", timeout_ms: 1000 }, {}) as { path: string; status: string; error?: string; timed_out: boolean }
+    expect(out.path).toBe("root/broken")
+    expect(out.status).toBe("error")
+    expect(out.error).toBe("boom")
+    expect(out.timed_out).toBe(false)
+    await expect(wait.execute({ target: "root/ghost" }, {})).rejects.toThrow(/unknown subagent/)
+  })
+
+  it("wait_agent clamps the timeout to [100ms, 300000ms]", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
+    const wait = all.find((t) => t.name === "wait_agent")!
+    table.add("root/slow", {
+      path: "root/slow",
+      status: "running", // never settles within the wait
+      session: createSession(),
+      controller: new AbortController(),
+      mailbox: [],
+    })
+    const start = Date.now()
+    const out = await wait.execute({ target: "root/slow", timeout_ms: 10 }, {}) as { timed_out: boolean }
+    const elapsed = Date.now() - start
+    expect(out.timed_out).toBe(true)
+    // timeout_ms 10 is clamped UP to the 100ms floor.
+    expect(elapsed).toBeGreaterThanOrEqual(100)
+  })
+
+  it("list_agents returns roleName/jobId/sessionId/finalText/error fields when present", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
+    const list = all.find((t) => t.name === "list_agents")!
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: createSession(),
+      controller: new AbortController(),
+      mailbox: [],
+      roleName: "researcher",
+      jobId: "subagent-7",
+      sessionId: "child-abc",
+      finalText: "answer",
+    })
+    table.add("root/broken", {
+      path: "root/broken",
+      status: "error",
+      session: createSession(),
+      controller: new AbortController(),
+      mailbox: [],
+      error: "boom",
+    })
+    const out = await list.execute({}, {}) as { agents: Record<string, unknown>[] }
+    const helper = out.agents.find((a) => a.path === "root/helper")!
+    expect(helper).toMatchObject({ status: "waiting", roleName: "researcher", jobId: "subagent-7", sessionId: "child-abc", finalText: "answer" })
+    expect(helper).not.toHaveProperty("error")
+    const broken = out.agents.find((a) => a.path === "root/broken")!
+    expect(broken).toMatchObject({ status: "error", error: "boom" })
+    expect(broken).not.toHaveProperty("finalText")
+    expect(broken).not.toHaveProperty("roleName")
+  })
+
+  it("list_agents scope children/descendants filters the tree (path_prefix kept for compat)", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
+    const list = all.find((t) => t.name === "list_agents")!
+    const add = (path: string) =>
+      table.add(path, { path, status: "waiting", session: createSession(), controller: new AbortController(), mailbox: [] })
+    add("root/a")
+    add("root/a/b")
+    add("root/a/b/c")
+    add("root/z")
+
+    // children (default base "root") → direct children only, no grandchildren.
+    const kids = await list.execute({ scope: "children" }, {}) as { agents: { path: string }[] }
+    expect(kids.agents.map((a) => a.path).sort()).toEqual(["root/a", "root/z"])
+
+    // descendants of root/a → the whole subtree below it.
+    const desc = await list.execute({ scope: "descendants", path_prefix: "root/a" }, {}) as { agents: { path: string }[] }
+    expect(desc.agents.map((a) => a.path).sort()).toEqual(["root/a/b", "root/a/b/c"])
+
+    // Legacy path_prefix WITHOUT scope keeps the existing startsWith semantics.
+    const legacy = await list.execute({ path_prefix: "root/a" }, {}) as { agents: { path: string }[] }
+    expect(legacy.agents.map((a) => a.path).sort()).toEqual(["root/a", "root/a/b", "root/a/b/c"])
+  })
+})
