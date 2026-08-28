@@ -2,6 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append } from "@i-harness/core-session"
 import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
+import type { Telemetry } from "@i-harness/telemetry"
 
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
 
@@ -19,6 +20,9 @@ export interface ExecuteToolCallsOptions {
   // the caller (the agent-team scheduler resolves team-tool callers from it).
   // Additive: absent → ToolExec.sessionId stays undefined (pre-M19 behavior).
   sessionId?: string
+  // M25: optional host telemetry stream (Ruling M25-P3 — independent of the
+  // session log, agent-invisible). Absent = no tool events.
+  telemetry?: Telemetry
 }
 
 // M13 bounded rolling-pool scheduler. Model-order guarantees:
@@ -66,6 +70,8 @@ export async function executeToolCalls(
       // parallel path must not skip the staged post-execute seam.
       const finalized = await tools.finalize(slot.prepared, slot.output)
       append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: finalized.output })
+      // M25: tool/end beside the tool/result commit (model-order lane).
+      opts.telemetry?.emit({ type: "tool/end", ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
       // M10a ordering ruling: post-tool only for completed dispatches and only
       // when not aborted (the abort check precedes the observation).
       if (!aborted) {
@@ -84,12 +90,22 @@ export async function executeToolCalls(
     // TOOL_ABORTED_BEFORE_DISPATCH results).
     const prepared = await tools.prepare({ name: call.name, args: call.args }, opts.signal, { sessionId: opts.sessionId })
     startedUpTo = index + 1
+    // M25: tool/start only once the call is REALLY dispatched (after prepare —
+    // a prepare failure means the tool never started, mirroring the
+    // never-started boundary that abort synthesis relies on).
+    opts.telemetry?.emit({ type: "tool/start", ts: Date.now(), data: { tool: call.name, callId: call.callId } })
     const promise = tools
       .dispatch(prepared)
       .then((output) => {
         slots[index] = { name: call.name, callId: call.callId, prepared, output }
       })
       .catch((err: unknown) => {
+        // M25: tool/error — the tool body failed (throw-fails-turn semantics).
+        opts.telemetry?.emit({
+          type: "tool/error",
+          ts: Date.now(),
+          data: { tool: call.name, callId: call.callId, error: err instanceof Error ? err.message : String(err) },
+        })
         firstError ??= err
       })
       .then(() => index)

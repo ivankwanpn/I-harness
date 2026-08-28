@@ -119,6 +119,9 @@ importers:
       '@i-harness/subagent':
         specifier: workspace:*
         version: link:../../packages/subagent
+      '@i-harness/telemetry':
+        specifier: workspace:*
+        version: link:../../packages/telemetry
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../../packages/tool-search
@@ -203,6 +206,9 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
       '@i-harness/token-meter':
         specifier: workspace:*
         version: link:../token-meter

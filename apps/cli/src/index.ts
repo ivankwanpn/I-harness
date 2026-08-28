@@ -26,11 +26,15 @@ export function parseModel(modelSpec: string, apiKey: string): ModelClient {
 export async function main(argv: string[]): Promise<number> {
   const args = argv.slice(2)
   if (args[0] !== "run") {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry]")
     return Promise.resolve(1)
   }
 
   const yes = args.includes("--yes")
+  // M25: --telemetry enables the independent host event stream (stdout JSONL
+  // sink, assembled in run.ts). Default OFF; I_HARNESS_TELEMETRY=1 is the
+  // env-var equivalent.
+  const telemetry = args.includes("--telemetry") || process.env.I_HARNESS_TELEMETRY === "1"
   const modelIdx = args.indexOf("--model")
   const keyIdx = args.indexOf("--api-key")
   const sessionDirIdx = args.indexOf("--session-dir")
@@ -106,18 +110,19 @@ export async function main(argv: string[]): Promise<number> {
 
   // task = everything after the "run" command, excluding flag tokens/values.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--session-backend") return false
+    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--session-backend" || a === "--telemetry") return false
     const prev = args.slice(1)[i - 1]
     return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--session-backend"
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry]")
     return Promise.resolve(1)
   }
 
   const opts: HeadlessOptions = { workspace: process.cwd(), approveAll: yes }
   if (model) opts.model = model
+  if (telemetry) opts.telemetry = "jsonl"
   if (coordinator) {
     opts.coordinator = coordinator
     if (sessionId) opts.sessionId = sessionId

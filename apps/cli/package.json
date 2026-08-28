@@ -41,6 +41,7 @@
     "@i-harness/session-persistence-jsonl": "workspace:*",
     "@i-harness/session-persistence-sqlite": "workspace:*",
     "@i-harness/session-query": "workspace:*",
+    "@i-harness/telemetry": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
     "@i-harness/skills": "workspace:*",
     "@i-harness/subagent": "workspace:*",
