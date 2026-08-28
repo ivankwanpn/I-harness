@@ -1,6 +1,6 @@
 # M19 Design — Subagent Teams（具名協作團隊）
 
-Date: 2026-08-26. Milestone: M19. Status: design.
+Date: 2026-08-26. Milestone: M19. Status: implemented (complete — M20-M24 build on it).
 
 ## 1. Framing
 

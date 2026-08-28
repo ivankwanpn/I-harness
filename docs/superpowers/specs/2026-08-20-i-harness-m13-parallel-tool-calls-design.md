@@ -1,6 +1,6 @@
 # M13 Design — Parallel Tool-Call Execution
 
-Date: 2026-08-20. Milestone: M13. Status: design.
+Date: 2026-08-20. Milestone: M13. Status: implemented (complete).
 
 ## 1. Framing
 

@@ -1,6 +1,6 @@
 # M14 Design — Multimodal (Image Input) v0
 
-Date: 2026-08-24. Milestone: M14. Status: design.
+Date: 2026-08-24. Milestone: M14. Status: implemented (complete).
 
 ## 1. Framing
 

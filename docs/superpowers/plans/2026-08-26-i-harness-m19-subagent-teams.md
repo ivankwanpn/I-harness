@@ -40,7 +40,7 @@
 - Consumes: nothing (builtins + zod).
 - Produces (used by Tasks 2-10): `AgentPath` class, `TeamConfig` + `validateTeamConfig`, all `Team*Snapshot`/`Team*View` types, `TeamEvent` union for the 4 team events, `TeamError` + `TEAM_*` codes.
 
-- [ ] **Step 1: Create the package scaffold**
+- [x] **Step 1: Create the package scaffold**
 
 `packages/agent-team/package.json`:
 
@@ -74,7 +74,7 @@
 
 Then `pnpm install` at repo root.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `packages/agent-team/test/agent-path.test.ts`:
 
@@ -131,12 +131,12 @@ describe("validateTeamConfig", () => {
 })
 ```
 
-- [ ] **Step 3: Run the test to verify it fails**
+- [x] **Step 3: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — module not found (`../src/index.ts` has no exports).
 
-- [ ] **Step 4: Implement agent-path.ts + types.ts + index.ts**
+- [x] **Step 4: Implement agent-path.ts + types.ts + index.ts**
 
 `packages/agent-team/src/agent-path.ts`:
 
@@ -281,12 +281,12 @@ export type { TeamConfig, TeamMemberPhase, TeamMemberSnapshot, TeamMemberView, T
 export { validateTeamConfig, TeamError, TEAM_CODES } from "./types.ts"
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS (all 3 tests).
 
-- [ ] **Step 6: Typecheck and commit**
+- [x] **Step 6: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -308,7 +308,7 @@ git commit -m "feat(M19): agent-team scaffold + AgentPath + types (config bounds
 - Consumes: Task 1's `TeamEvent` shape.
 - Produces (used by Task 3+): `SessionEvent` union includes the 4 team events; `registerEventType(type: string): void` on the coordinator factory.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/session-persistence/test/coordinator.test.ts` (append a small block; use the JSONL backend factory):
 
@@ -338,12 +338,12 @@ describe("team event types round-trip", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/session-persistence && pnpm test`
 Expected: FAIL (or existing behavior throws — the team/member event is not in KNOWN_EVENT_TYPES, so load rejects).
 
-- [ ] **Step 3: Implement the event-type plumbing**
+- [x] **Step 3: Implement the event-type plumbing**
 
 `packages/core-session/src/index.ts` — add to the SessionEvent union (after `sandbox/mode`):
 
@@ -385,12 +385,12 @@ registerEventType("team/message/queued")
 registerEventType("team/message/delivered")
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/session-persistence && pnpm test`
 Expected: PASS (new round-trip test + all existing).
 
-- [ ] **Step 5: Run affected packages + typecheck**
+- [x] **Step 5: Run affected packages + typecheck**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -400,7 +400,7 @@ pnpm --filter @i-harness/session-persistence test
 pnpm --filter @i-harness/session-persistence typecheck
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/core-session packages/session-persistence
@@ -419,7 +419,7 @@ git commit -m "feat(M19): team/* session event types + registerEventType (KNOWN_
 - Consumes: `TeamEvent`, `TeamMemberSnapshot`, `TeamTaskSnapshot`, `TeamMessageSnapshot` (Task 1).
 - Produces (used by Tasks 4-8): `TeamFoldState`, `foldTeam(events, opts?)`, `applyTeamEvent(state, event)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/fold.test.ts`:
 
@@ -467,12 +467,12 @@ describe("foldTeam", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — foldTeam not exported.
 
-- [ ] **Step 3: Implement fold.ts**
+- [x] **Step 3: Implement fold.ts**
 
 `packages/agent-team/src/fold.ts`:
 
@@ -554,12 +554,12 @@ export { foldTeam, applyTeamEvent, createFoldState } from "./fold.ts"
 export type { TeamFoldState } from "./fold.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -580,7 +580,7 @@ git commit -m "feat(M19): team fold — incremental event replay + invariant val
 - Consumes: `foldTeam`/`TeamFoldState` (Task 3), `TeamEvent` (Task 1).
 - Produces (used by Tasks 5-8): `createTeamTransact(lead)`, `TeamTransaction`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/transact.test.ts`:
 
@@ -622,12 +622,12 @@ describe("createTeamTransact", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — createTeamTransact not exported.
 
-- [ ] **Step 3: Implement transact.ts**
+- [x] **Step 3: Implement transact.ts**
 
 `packages/agent-team/src/transact.ts`:
 
@@ -670,12 +670,12 @@ export { createTeamTransact } from "./transact.ts"
 export type { TeamLead, TeamTransaction } from "./transact.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -696,7 +696,7 @@ git commit -m "feat(M19): transact — per-team serialized read-check-append"
 - Consumes: `TeamFoldState`/`foldTeam` (Task 3), transact (Task 4), `spawnChild`-equivalent (from `@i-harness/subagent` — see deps), types (Task 1).
 - Produces (used by Task 8/10): `createRoster(deps, state, tx)`, `listMembers()`, `spawnTeammate(...)`, `interrupt(...)`, `resolveCaller(...)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/roster.test.ts`:
 
@@ -740,12 +740,12 @@ describe("TeamRoster", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — createRoster not exported.
 
-- [ ] **Step 3: Implement roster.ts**
+- [x] **Step 3: Implement roster.ts**
 
 `packages/agent-team/src/roster.ts`:
 
@@ -858,12 +858,12 @@ export { createRoster } from "./roster.ts"
 export type { RosterDeps } from "./roster.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -884,7 +884,7 @@ git commit -m "feat(M19): roster — named members, provisioning lifecycle, Lead
 - Consumes: transact, fold state, types (Tasks 1/3/4).
 - Produces (used by Task 8/10): `createMailbox(deps, state, tx)`, `sendMessage(...)`, `recoverRoot(...)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/mailbox.test.ts`:
 
@@ -934,12 +934,12 @@ describe("TeamMailbox", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — createMailbox not exported.
 
-- [ ] **Step 3: Implement mailbox.ts**
+- [x] **Step 3: Implement mailbox.ts**
 
 `packages/agent-team/src/mailbox.ts`:
 
@@ -1017,12 +1017,12 @@ export { createMailbox } from "./mailbox.ts"
 export type { MailboxDeps } from "./mailbox.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -1043,7 +1043,7 @@ git commit -m "feat(M19): mailbox — durable queued→delivered with recovery"
 - Consumes: transact, fold state, types (Tasks 1/3/4).
 - Produces (used by Task 8/10): `createTaskBoard(deps, state, tx)`, `createTask(...)`, `getTask(...)`, `listTasks(...)`, `updateTask(...)`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/task-board.test.ts`:
 
@@ -1091,12 +1091,12 @@ describe("TaskBoard", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — createTaskBoard not exported.
 
-- [ ] **Step 3: Implement task-board.ts**
+- [x] **Step 3: Implement task-board.ts**
 
 `packages/agent-team/src/task-board.ts`:
 
@@ -1229,12 +1229,12 @@ export { createTaskBoard, normalizeWriteScopes } from "./task-board.ts"
 export type { TaskBoardDeps, TaskAction } from "./task-board.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -1255,7 +1255,7 @@ git commit -m "feat(M19): task board — CAS revisions, DAG readiness, tombstone
 - Consumes: types (Task 1).
 - Produces (used by Task 9/10): `createActivity(cfg)`, `waitForChange(...)`, `notify()`, `close()`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/activity.test.ts`:
 
@@ -1283,12 +1283,12 @@ describe("TeamActivity", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — createActivity not exported.
 
-- [ ] **Step 3: Implement activity.ts**
+- [x] **Step 3: Implement activity.ts**
 
 `packages/agent-team/src/activity.ts`:
 
@@ -1342,12 +1342,12 @@ export { createActivity } from "./activity.ts"
 export type { ActivityConfig, TeamWaitResult } from "./activity.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -1368,7 +1368,7 @@ git commit -m "feat(M19): activity — edge-triggered wait with noProgress + dis
 - Consumes: roster/mailbox/task-board/activity (Tasks 5-8), `Tool`/`ToolExec` from `@i-harness/core-tools`.
 - Produces (used by Task 10): `createTeamTools(deps)`, `TeamToolDeps`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/tools.test.ts`:
 
@@ -1411,12 +1411,12 @@ describe("createTeamTools", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — createTeamTools not exported.
 
-- [ ] **Step 3: Implement tools.ts**
+- [x] **Step 3: Implement tools.ts**
 
 `packages/agent-team/src/tools.ts`:
 
@@ -1499,12 +1499,12 @@ export { createTeamTools } from "./tools.ts"
 export type { TeamToolDeps } from "./tools.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -1525,7 +1525,7 @@ git commit -m "feat(M19): 10 team tools (spawn/list/send/followup/wait/interrupt
 - Consumes: Tasks 1-9 + subagent's `spawnChild`/`AgentTable`/`JobRegistry`.
 - Produces (used by Task 11): `mountAgentTeams(ctx, tools, deps, config?): Promise<TeamMountHandle>`, `TeamMountHandle { teamName; unmount() }`, `TeamDeps`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `packages/agent-team/test/lifecycle.test.ts`:
 
@@ -1561,12 +1561,12 @@ describe("mountAgentTeams lifecycle", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: FAIL — mountAgentTeams not exported.
 
-- [ ] **Step 3: Implement scheduler.ts**
+- [x] **Step 3: Implement scheduler.ts**
 
 `packages/agent-team/src/scheduler.ts`:
 
@@ -1650,12 +1650,12 @@ export { mountAgentTeams } from "./scheduler.ts"
 export type { TeamDeps, TeamMountHandle, TeamSubagentDeps } from "./scheduler.ts"
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/agent-team && pnpm test`
 Expected: PASS.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -1677,7 +1677,7 @@ git commit -m "feat(M19): team mount/unmount lifecycle"
 - Consumes: `mountAgentTeams` (Task 10).
 - Produces: CLI `--team` option that mounts the team domain.
 
-- [ ] **Step 1: Write the failing (e2e) test**
+- [x] **Step 1: Write the failing (e2e) test**
 
 Append to `apps/cli/test/cli.test.ts`:
 
@@ -1702,12 +1702,12 @@ describe("M19 CLI team integration", () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd apps/cli && pnpm test`
 Expected: FAIL — `HeadlessOptions.team` unknown.
 
-- [ ] **Step 3: Implement CLI wiring**
+- [x] **Step 3: Implement CLI wiring**
 
 Modify `apps/cli/src/run.ts`:
 
@@ -1741,12 +1741,12 @@ And the combined mounts in finally:
 
 Also add `"@i-harness/agent-team": "workspace:*"` to apps/cli/package.json and `pnpm install`.
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd apps/cli && pnpm test`
 Expected: PASS (existing + M19 e2e).
 
-- [ ] **Step 5: Full regression**
+- [x] **Step 5: Full regression**
 
 ```bash
 cd D:/agent-complete/I-harness
@@ -1755,7 +1755,7 @@ pnpm -r typecheck
 ```
 Expected: ALL packages green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/cli packages/agent-team pnpm-lock.yaml

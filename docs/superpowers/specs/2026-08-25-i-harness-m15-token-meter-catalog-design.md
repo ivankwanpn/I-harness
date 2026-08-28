@@ -1,6 +1,6 @@
 # M15 Design — Token Meter + Per-Model Context Catalog
 
-Date: 2026-08-25. Milestone: M15. Status: design.
+Date: 2026-08-25. Milestone: M15. Status: implemented (complete).
 
 ## 1. Framing
 

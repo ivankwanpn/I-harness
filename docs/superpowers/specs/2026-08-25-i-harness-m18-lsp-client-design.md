@@ -1,6 +1,6 @@
 # M18 Design — LSP Client (core navigation + on-demand diagnostics)
 
-Date: 2026-08-25. Milestone: M18. Status: design.
+Date: 2026-08-25. Milestone: M18. Status: implemented (complete).
 
 ## 1. Framing
 

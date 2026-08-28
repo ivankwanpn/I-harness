@@ -1,6 +1,6 @@
 # M17 Design — MCP Client (tools + resources bridge)
 
-Date: 2026-08-25. Milestone: M17. Status: design.
+Date: 2026-08-25. Milestone: M17. Status: implemented (complete).
 
 ## 1. Framing
 
