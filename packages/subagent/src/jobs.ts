@@ -3,8 +3,12 @@ export interface JobSnapshot { id: string; kind: string; label: string; status: 
 interface JobRecord extends JobSnapshot { owner: string; terminal: boolean }
 
 export interface JobRegistry {
-  registerJob(owner: string, kind: string, label: string): { id: string }
-  updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output">>): void
+  // M24a (G2): `id` is optional — when provided (restore path) it is used
+  // verbatim so persisted job ids survive resume; duplicates fail loud.
+  registerJob(owner: string, kind: string, label: string, id?: string): { id: string }
+  // M24a (G2/Ruling M24a-P4): returns false for an unknown id (observable
+  // instead of a silent no-op). Existing callers may ignore the return.
+  updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output">>): boolean
   read(id: string): JobSnapshot
   list(owner: string): JobSnapshot[]
   wait(id: string, timeoutMs: number): Promise<void>
@@ -20,19 +24,23 @@ export function createJobRegistry(): JobRegistry {
     return `${kind}-${n}`
   }
   return {
-    registerJob(owner: string, kind: string, label: string) {
-      const id = nextId(kind)
-      records.set(id, { id, kind, label, status: "running", output: "", owner, terminal: false })
-      return { id }
+    registerJob(owner: string, kind: string, label: string, id?: string) {
+      const resolved = id ?? nextId(kind)
+      // Fail loud on a persisted-id collision: silent re-count would break
+      // post-resume jobId links (agent-table entries + followups).
+      if (records.has(resolved)) throw new Error(`duplicate job id: ${resolved}`)
+      records.set(resolved, { id: resolved, kind, label, status: "running", output: "", owner, terminal: false })
+      return { id: resolved }
     },
-    updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output">>) {
+    updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output">>): boolean {
       const rec = records.get(id)
-      if (!rec) return
-      if (rec.terminal && patch.status !== "running") return
+      if (!rec) return false // G2: unknown id is observable, not silent
+      if (rec.terminal && patch.status !== "running") return true
       if (patch.status === "running") rec.terminal = false
       if (patch.status !== undefined) rec.status = patch.status
       if (patch.output !== undefined) rec.output = patch.output
       if (rec.status !== "running") rec.terminal = true
+      return true
     },
     read(id: string) {
       const rec = records.get(id)

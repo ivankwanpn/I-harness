@@ -92,7 +92,10 @@ describe("subagent state snapshot", () => {
     expect(fresh.table.get("root/helper")?.lastInboxSeq).toBe(6)
   })
 
-  it("restoreState maps waiting entries to error (interrupted by resume)", () => {
+  // M24a (G3): waiting fidelity — a waiting child is mid-conversation, not
+  // dead; restore keeps it waiting so the followup re-drive (Task 3) can
+  // resume it. Only "running" means the process is gone → error.
+  it("restoreState keeps waiting entries waiting (only running → error)", () => {
     const fresh = makeState()
     const snap: SubagentStateSnapshot = {
       formatVersion: 1,
@@ -101,7 +104,39 @@ describe("subagent state snapshot", () => {
       roles: [],
     }
     restoreState(fresh, snap)
-    expect(fresh.table.get("root/w")?.status).toBe("error")
+    expect(fresh.table.get("root/w")?.status).toBe("waiting")
+  })
+
+  // M24a (G2): job-id contract — the persisted id is authoritative; restore
+  // must NOT re-count ids (post-resume followups address jobs by persisted id).
+  it("restoreState preserves persisted job ids (no re-count)", () => {
+    const fresh = { jobs: createJobRegistry(), table: createAgentTable(), roles: createRoleRegistry() }
+    const snap = {
+      formatVersion: 1,
+      jobs: [{ id: "subagent-5", owner: "root", kind: "subagent", label: "helper", status: "completed", output: "done", terminal: true }],
+      agentTable: [],
+      roles: [],
+    }
+    restoreState(fresh, snap as never)
+    expect(fresh.jobs.read("subagent-5").status).toBe("completed")
+    expect(fresh.jobs.list("root").some((j) => j.id === "subagent-5")).toBe(true)
+  })
+
+  // M24a (G3): waiting→waiting and running→error in one restore pass.
+  it("restoreState keeps waiting waiting; running → error", () => {
+    const fresh = { jobs: createJobRegistry(), table: createAgentTable(), roles: createRoleRegistry() }
+    const snap = {
+      formatVersion: 1,
+      jobs: [],
+      agentTable: [
+        { path: "root/wait", status: "waiting", session: { formatVersion: 1, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c1" },
+        { path: "root/run", status: "running", session: { formatVersion: 1, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c2" },
+      ],
+      roles: [],
+    }
+    restoreState(fresh, snap as never)
+    expect(fresh.table.get("root/wait")!.status).toBe("waiting")
+    expect(fresh.table.get("root/run")!.status).toBe("error")
   })
 })
 
