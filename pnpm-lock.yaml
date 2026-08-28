@@ -538,6 +538,8 @@ importers:
         specifier: workspace:*
         version: link:../llm-mock
 
+  packages/telemetry: {}
+
   packages/todo:
     dependencies:
       '@i-harness/core-session':
