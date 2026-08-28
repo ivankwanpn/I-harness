@@ -176,6 +176,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       const { session: restored } = await opts.coordinator.load(opts.resumeSessionId)
       session.events.push(...restored.events)
       session.formatVersion = restored.formatVersion
+      // M24a (G7): restore the lineage header too — it is the authoritative
+      // carrier of delegationDepth/origin/parentSession (the subagent
+      // max_depth guard reads header.delegationDepth), and without it a
+      // resumed session would always present as root-depth.
+      session.header = restored.header
       // M23: after a successful load the resumed CLI IS this session's active
       // writer (it keeps appending below), so it adopts the ownership lease
       // long-term — held until the run's coordinator.close(). Conflict (another
@@ -242,33 +247,21 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         : {}),
       ...(restoredState ? { restoredState } : {}),
     })
-    if (opts.coordinator && opts.resumeSessionId && activeId) {
-      for (const entry of subagent.table.entries().values()) {
-        if (!entry.sessionId) continue
-        try {
-          const loaded = await opts.coordinator.load(entry.sessionId)
-          // Fresh mirror session (like the main session resume): history loaded,
-          // subsequent appends keep persisting through the write-behind.
-          const resumed = createSession((ev) => {
-            opts.coordinator!.enqueue(entry.sessionId!, [ev])
-            if (ev.type === "turn/end") void opts.coordinator!.flush(entry.sessionId!).catch(() => {})
-          })
-          resumed.events.push(...loaded.session.events)
-          resumed.formatVersion = loaded.session.formatVersion
-          resumed.header = loaded.session.header
-          entry.session = resumed
-        } catch {
-          // missing/corrupt child log → keep the empty stub
-        }
-      }
-    }
+    // M24a (G1a/G4): the subagent mount now owns the post-restore async steps
+    // (hooked child-mirror rebuild from durable logs + the pending-inbox
+    // sweep) behind `ready` — the host-side mirror loop that used to live
+    // here is gone. Await it BEFORE mounting agent teams: recoverRoot
+    // delivers queued team messages to entry.session, so the mirrors must be
+    // live (and the sweep initiated) first, or a restored teammate's queued
+    // messages would race a still-empty stub session.
+    await subagent.ready
     // M19: mount the agent-team domain when the host asks for a team run. The
     // mount sits AFTER registerSubagent (it needs the live registries) and
-    // AFTER the resume restore loop above — the loop rebuilds the child mirror
-    // sessions from durable logs first, so team recovery probes see live
-    // mirrors. The team's parentScope is the SAME ctx the subagent machinery
-    // uses, and the shared exec service / provider registry bind the real
-    // spawn bridge.
+    // AFTER `subagent.ready` — the G1a mirror rebuild above has restored the
+    // child mirror sessions from durable logs by then, so team recovery
+    // probes see live mirrors. The team's parentScope is the SAME ctx the
+    // subagent machinery uses, and the shared exec service / provider
+    // registry bind the real spawn bridge.
     // M23 (Minor 4 fix): the subagent Agent registry is fresh-empty after a
     // resume (entries are registered per spawn/turn), so a pre-resume wakeup
     // for a restored teammate used to find no resident agent and drop the

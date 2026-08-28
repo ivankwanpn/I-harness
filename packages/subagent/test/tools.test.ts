@@ -630,6 +630,27 @@ describe("M24a nested delegation and wait/list extensions", () => {
     await expect(wait.execute({ target: "root/ghost" }, {})).rejects.toThrow(/unknown subagent/)
   })
 
+  it("wait_agent with target stops early when the target is closed mid-wait (M24a hardening)", async () => {
+    const { table, tools } = setup()
+    const wait = tools.find((t) => t.name === "wait_agent")!
+    table.add("root/worker", {
+      path: "root/worker",
+      status: "running", // never settles on its own
+      session: createSession(),
+      controller: new AbortController(),
+      mailbox: [],
+    })
+    // close_agent removes the entry from the table mid-wait (its status object
+    // still says "running") — the wait must break out instead of spinning to
+    // the (here deliberately huge) deadline.
+    setTimeout(() => table.remove("root/worker"), 60)
+    const start = Date.now()
+    const out = await wait.execute({ target: "root/worker", timeout_ms: 30_000 }, {}) as { path: string; status: string; timed_out: boolean }
+    const elapsed = Date.now() - start
+    expect(out.timed_out).toBe(true) // never settled — surfaced, not hung
+    expect(elapsed).toBeLessThan(5_000) // hardened: broke out at ~60ms, not 30s
+  }, 10_000)
+
   it("wait_agent clamps the timeout to [100ms, 300000ms]", async () => {
     const { ctx, table, jobs, roles, parentReg, session, providers, model, exec } = setup()
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry() })
