@@ -12,6 +12,7 @@ I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v
   - `packages/sandbox/src/index.ts` — enforcement gate refuse-to-run 形狀（sandboxing/windows.rs）
   - `packages/fs-lock/src/win32.ts` — 所有權租約 fail-closed 衝突語意（thread-store/src/local/writer_lock.rs 之 try_lock + WouldBlock→Conflict）
   - `packages/session-persistence-sqlite/src/schema.ts` — sqlite 事務紀律（state/sqlite.rs:248-251 之 busy_timeout + BEGIN IMMEDIATE；跨進程寫競爭等待而非立即 SQLITE_BUSY）
+  - `packages/skills/src/{frontmatter,registry}.ts` — SKILL.md 解析/掃描 root 模型（codex-rs/skills parser.rs + model.rs：front-matter 必填 name/description、name≤64 缺省取目錄名、description 單行化、掃描 hidden-skip/深度上限/entry cap/per-skill 錯誤收錯；M24b 簡化為 depth≤4 + rescan-per-access，front-matter 改用通用 `yaml` 包）
 - License: MIT
 
 ## deepseek-harness (dsh) (MIT)
@@ -21,4 +22,11 @@ I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v
   - `packages/fs-lock/src/win32.ts` — LockFileEx 非阻塞綁定形狀（同源之 sandbox-windows-acl ffi.ts win32Bindings + acl.ts:75-110 withPathLock，含 zeroed OVERLAPPED gotcha；機制同 huoyaoyuan/windows-acl-restrict-poc@10e4dfb）
   - `packages/guard-approval/` 與 `packages/interaction/` — user-approval one-shot 語義（allowed-once/rejected/cancelled/unavailable）
   - `packages/mcp-client/src/supervisor.ts` — generation-based reconnect supervisor（packages/mcp/mcp-client/src/connection.ts absorb：generation 重建 + onclose→generationDown isCurrent 冪等、退避 min(maxDelayMs, initialDelayMs*2^(n-1))、stability window 重置 attempt budget、逾 maxRetries → unregister+lost、5s overlap guard 防 stdio 子進程重疊）
+  - `packages/skills/src/{registry,tool}.ts` — skill name kebab 文法 `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`（≤64）+ `<skill_content>` render 語彙（packages/skill/{skill,tool-skill}/src/index.ts）
+- License: MIT
+
+## opencode (MIT)
+- 來源：https://github.com/sst/opencode (packages/core/src/skill.ts, packages/core/src/tool/skill.ts)
+- 吸收：
+  - `packages/skills/src/{tool,search}.ts` — skill 工具形（skill_search/skill_get deferred 檢索入口 + base-directory 提示）+ 目錄檔案清單取樣（MODEL_FILE_LIMIT=10 + "sampled" 註記、SKILL.md 排除）
 - License: MIT
