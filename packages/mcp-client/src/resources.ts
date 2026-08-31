@@ -12,6 +12,7 @@ export function createResourceTools(
   config: McpServerConfig,
 ): Tool[] {
   const listName = `list_mcp_resources__${serverName}`
+  const templatesName = `list_mcp_resource_templates__${serverName}`
   const readName = `read_mcp_resource__${serverName}`
   return [
     {
@@ -34,6 +35,16 @@ export function createResourceTools(
       timeoutMs: config.toolCallTimeoutMs,
       async execute(args: { server: string; uri: string }, exec: ToolExec) {
         return client.readResource(args.server, args.uri, exec.abortSignal)
+      },
+    },
+    {
+      name: templatesName,
+      description: `List MCP resource templates from server "${serverName}" (use a template's uriTemplate with read_mcp_resource__${serverName})`,
+      inputSchema: { type: "object", properties: { server: { type: "string" } } },
+      timeoutMs: config.toolCallTimeoutMs,
+      async execute(_args: { server?: string }, exec: ToolExec) {
+        if (!client.listResourceTemplates) throw new Error(`mcp-server(${serverName}): resources/templates/list unsupported by this build's client`)
+        return client.listResourceTemplates(exec.abortSignal)
       },
     },
   ]

@@ -15,6 +15,8 @@ export {
   type ExecuteToolCallsOptions,
 } from "./execute-tool-calls.ts"
 import { executeToolCalls, type BatchCall } from "./execute-tool-calls.ts"
+export { createSessionExecutor, createSessionExecutorRegistry, mapSubmitToAdmission } from "./executor.ts"
+export type { SessionExecutor, SessionExecutorDeps, SessionExecutorRegistry, AgentRunSurface, InputSubmit } from "./executor.ts"
 
 // M20 budget/overflow control (absorb codex token-budget): `contextWindow` is
 // the absolute context window; the agent budget is `contextWindow *
@@ -56,6 +58,12 @@ export interface AgentDeps {
   // its tools cannot see them). Absent = no events at all (backward compat:
   // every pre-M25 deps object behaves byte-identically).
   telemetry?: Telemetry
+  // R-A1: optional step-boundary input seam (steer tier). The loop calls it at
+  // the START of every step (including the first) so mid-turn steering lands in
+  // the log before the model sees this step's messages. The seam itself appends
+  // the promoted user/messages to the session (inbox.claimAtStepBoundary).
+  // Absent → byte-identical pre-R-A1 behavior.
+  stepInputs?: { claimAtStepBoundary(): void }
 }
 
 export interface AgentResult {
@@ -158,6 +166,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // Guard against an infinite tool-call loop: throw once steps exceed
       // the configured maximum (default 20).
       if (steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
+      // R-A1: steer-tier inputs arrive at the provider boundary — claimed
+      // before step/start so deriveMessages below already includes them.
+      deps.stepInputs?.claimAtStepBoundary()
       append(deps.session, { type: "step/start" })
 
       // M11 compaction: pressure check at the step boundary, before the model sees
@@ -208,10 +219,14 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
           case "tool_call": {
             callSeq += 1
             const callId = `call_${callSeq}`
+            // M26 (R-D1): capture the seq BEFORE append — append assigns seq =
+            // events.length, so the value below IS the tool/call event's
+            // durable seq.
+            const eventSeq = deps.session.events.length
             append(deps.session, { type: "tool/call", callId, name: ev.call.name, args: ev.call.args })
             // M13: collect the call; execution happens after the stream ends so
             // the step's tool calls can run concurrently (bounded pool).
-            batch.push({ callId, name: ev.call.name, args: ev.call.args })
+            batch.push({ callId, name: ev.call.name, args: ev.call.args, eventSeq })
             toolCallsThisStep += 1
             break
           }
@@ -264,6 +279,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       : Array.isArray(last?.content)
         ? last.content.filter((p) => p.type === "text").map((p) => p.text).join("")
         : ""
+    // E5 "stop" hooks seam: emit at the turn boundary so hook handlers observe
+    // the final text and can refuse it (a listener throw propagates as the
+    // turn's failure). No handlers → emit returns the payload unchanged
+    // (zero behavior change; additive event, no session-log write).
+    await ctx.emit("agent/stop", { session: deps.session, turns: steps, finalText })
     return { finalText, turns: steps, reasoning }
   }
 

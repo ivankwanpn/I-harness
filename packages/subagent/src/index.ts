@@ -12,6 +12,10 @@ export { driveFollowups, ensureResidentAgent, sweepPendingInbox, type FollowupDe
 export type { SubagentToolDeps } from "./tools.ts"
 export { restoreState, wireSubagentPersistence } from "./persist.ts"
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
+export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
+export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
+export { createNotificationDrain } from "./task-notification.ts"
+export type { ParentInputAdmission, NotificationDrainOptions } from "./task-notification.ts"
 
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
@@ -28,8 +32,10 @@ import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent
 import { createSubagentTools, ensureResidentAgent, sweepPendingInbox } from "./tools.ts"
 import type { SubagentToolDeps } from "./tools.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
-import { restoreState, wireSubagentPersistence } from "./persist.ts"
+import { emitRestoredJobTransitions, restoreState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
+import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, taskDocKey, type TaskProtocolDocument, type TaskRegistry } from "./task-protocol.ts"
+import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 
 export interface RegisterSubagentOptions {
   providers: ProviderRegistry
@@ -49,6 +55,14 @@ export interface RegisterSubagentOptions {
   // prefixed ids route to it. Optional: absent = current behavior (the chain
   // stays subagent → exec).
   workflow?: WorkflowExecutor
+  // M26-D3 (R-D1-T3): subagent 並行配額——非終態（accepted+running）任務數 >=
+  // maxConcurrency 時 submit 以 TaskConcurrencyLimitError 失敗閉合（fail-closed）。
+  // 缺省 Infinity（host 開啟才生效——零行為變更）。R-D1 的 depth 配額由既存
+  // maxDepth（M24a B2）擔當，本欄位是 concurrency 軸。
+  maxConcurrency?: number
+  // M26-D2: R-A1 (A-plan) 輸入接納 — 由 host（run.ts）注入。缺省 = durable-only
+  // 交付（通知留在 outbox pending，冷啟後由 ready 鏈再試）。
+  parentNotify?: ParentInputAdmission
 }
 
 export interface RegisterSubagentResult {
@@ -73,6 +87,10 @@ export interface RegisterSubagentResult {
   // mirror by then) and before the main agent can touch the tools. Resolves
   // immediately (no-op) when there is no restored state.
   ready: Promise<void>
+  // M26-D1: the durable task protocol registry (records + notification
+  // outbox) behind this mount. With persistence the ready chain already
+  // restored + classified the records from `task:<stateId>`.
+  tasks: TaskRegistry
 }
 
 // Mount entry point (spec §1.1.6 / §2.3): seeds the role registry with the
@@ -104,6 +122,17 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     roles = wired.roles
   }
   const agents = createAgentRegistry()
+  // M26-D1/D2: task protocol registry — durable task records + outbox behind
+  // the existing persistence seam (doc key `task:<stateId>`). onTerminalized
+  // is a deferred hook (assigned once the notification drain exists below) so
+  // every terminalize (spawn settle / cancelTree / recovery classification)
+  // triggers an immediate delivery attempt.
+  let notifDrainHook: (() => void) | undefined
+  const tasks = createTaskRegistry({
+    ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
+    maxConcurrency: opts.maxConcurrency,
+    onTerminalized: () => { notifDrainHook?.() },
+  })
   // M23 (Minor 4): the deps object is kept in a named variable so the
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
@@ -111,6 +140,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, providers: opts.providers, exec: opts.exec,
     agents,
+    tasks,
     // M24b (spec §3.3): thread the optional workflow executor through so the
     // job_* tools see the third layer. Omitted when the host didn't pass one —
     // additive, zero behavior change.
@@ -127,14 +157,66 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   for (const tool of tools) {
     if (!parentRegistry.get(tool.name)) parentRegistry.register(tool)
   }
+  // M26-D2: the notification drain. admit = the host-injected A-plan admission
+  // (ParentInputAdmission — run.ts backs it with the real SessionExecutor's
+  // inject tier); isSessionCancelled suppresses delivery when the parent chain
+  // was cancelled (R-D3 opencode rule). One drain instance per mount; it is
+  // also awaited at the cold-restore chain tail (below).
+  const notifDrain = createNotificationDrain({
+    tasks,
+    admit: opts.parentNotify,
+    isSessionCancelled: (sessionId) => isSessionCancelledChain(tasks, sessionId),
+  })
+  notifDrainHook = () => { void notifDrain.drain().catch(() => {}) }
   if (opts.restoredState && opts.persist) {
-    // M24a (G1a/G4): the async after-restore step — rebuild each child's
-    // hooked mirror from its durable log, then sweep the pending inbox. The
-    // returned `ready` gates hosts until this completes (run.ts awaits it
-    // before mountAgentTeams' recoverRoot delivers to entry.session).
-    ready = restoreMirrorsAndSweep(subagentDeps, table)
+    // Task 4.4 (fix round 1): restoreState mapped each mid-flight job
+    // running→"error" PRE-wiring, so the observer-wrapped registry never saw
+    // that transition and no terminal `job/status` event would land in the
+    // evented parent session — the resumed log (pre-crash `running` event,
+    // nothing after) would fold to forever-"running" while the doc says
+    // "error". Replay the mapped outcome through the event emitter now, so
+    // the log stays rebuildable (no-op without a parentSession).
+    emitRestoredJobTransitions(opts.persist, opts.restoredState, jobs)
   }
-  return { roles, jobs, table, agents, ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry), ready }
+  if (opts.persist) {
+    // M26-D1/D2: the unified post-restore chain — task doc restore +
+    // recovery classification (M26) + drain (M26-D2) THEN the M24a G1a mirror
+    // rebuild + G4 pending-inbox sweep. `ready` gates hosts until it completes.
+    ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks, notifDrain)
+  }
+  return { roles, jobs, table, agents, ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry), ready, tasks }
+}
+
+// M26-D1/D2: post-restore task protocol chain — (1) load the durable task doc
+// (records + outbox rows), (2) classify ambiguous accepted/running attempts from
+// the durable child log (completed | recovery-required — never re-dispatch),
+// (3) G1a mirrors + G4 sweep (existing M24a steps). Notifications drain (D2-T1)
+// runs here too once wired.
+async function restoreTasksAndSweep(
+  deps: SubagentToolDeps,
+  table: AgentTable,
+  persist: SubagentPersistence,
+  tasks: TaskRegistry,
+  notifDrain: { drain: () => Promise<number> },
+): Promise<void> {
+  // ADAPTATION (M26-D1, plan T5 Step 3 vs M24a G1a test): the plan's naive
+  // order (task doc restore FIRST) suspends on the first await and defers the
+  // mirror rebuild past a microtask — the existing G1a test asserts load() is
+  // called SYNCHRONOUSLY at mount. Mirrors first restores that contract; the
+  // task-doc restore + classification only read durable state (no mirror
+  // dependency), and `ready` still gates the whole chain for hosts.
+  await restoreMirrorsAndSweep(deps, table)
+  if (deps.childSessions) {
+    try {
+      const doc = await deps.childSessions.coordinator.getDocument(taskDocKey(persist.stateId))
+      if (doc !== undefined) tasks.restore(doc as TaskProtocolDocument)
+    } catch {
+      // task doc missing/corrupt → empty registry（既有 subagent-state 同姿態）
+    }
+    await classifyRestoredTasks(tasks, deps.childSessions.coordinator)
+    // M26-D2: 冷啟先交付（前次 run 的完成通知 = 本次啟動時父 session 的收件箱輸入）。
+    await notifDrain.drain()
+  }
 }
 
 // M24a (G1a): rebuild each restored child's hooked mirror session from its

@@ -1,9 +1,15 @@
-import { mkdir, open, readFile, readdir, rename, writeFile } from "node:fs/promises"
+import { mkdir, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { join, basename } from "node:path"
+import { dirname, join, basename } from "node:path"
 import type { SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
+
+// C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
+// session artifact at or under this size is read in full for the EXACT blank
+// answer (no turn/start yet); a larger one is served non-blank without a read
+// (honest-bounding: it may have content — never guessed blank).
+const BLANK_PROBE_MAX_BYTES = 1024
 
 export function createJsonlBackend(root: string): PersistenceBackend {
   const filePath = (id: string) => join(root, `${id}.jsonl`)
@@ -80,9 +86,47 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       return { version: header.formatVersion, events: [...events, ...closers], meta: header }
     },
 
+    async profile(sessionId) {
+      const path = filePath(sessionId)
+      // Blank probe (coldBlankProbeMaxBytes policy): a small artifact is read
+      // whole for the exact answer; a big one is served non-blank.
+      if ((await stat(path)).size <= BLANK_PROBE_MAX_BYTES) {
+        const lines = (await readFile(path, "utf-8")).split("\n")
+        return {
+          meta: parseHeader(lines[0]!),
+          blank: parseEventLines(lines.slice(1)).every((ev) => ev.type !== "turn/start"),
+        }
+      }
+      return { meta: await readHeader(path), blank: false }
+    },
+
+    async updateMeta(sessionId, patch) {
+      const path = filePath(sessionId)
+      // Header rewrite: replace line 0 only; event lines are kept byte-exact
+      // (a torn tail is preserved as-is, repair's business). Atomic temp +
+      // rename (putDocument pattern) — a concurrent reader sees either the
+      // old or the new file, never a truncated one.
+      const text = await readFile(path, "utf-8")
+      const lines = text.split("\n")
+      if (lines.length === 0 || lines[0]!.trim() === "") {
+        throw new Error(`empty session file: ${sessionId}`)
+      }
+      const merged: SessionMeta = { ...parseHeader(lines[0]!), ...patch }
+      const out = lines.slice()
+      out[0] = serializeHeader(merged)
+      const tmp = `${path}.${randomUUID()}.tmp`
+      await writeFile(tmp, out.join("\n"), { encoding: "utf-8" })
+      await rename(tmp, path)
+      return merged
+    },
+
     async putDocument(key: string, data: unknown): Promise<void> {
       await mkdir(root, { recursive: true })
       const path = docPath(key)
+      // Namespaced keys ("session-title/<id>") live in a subdirectory of the
+      // store root — create it so nested doc keys work (top-level listings
+      // stay clean: the subdir never matches `*.jsonl`).
+      await mkdir(dirname(path), { recursive: true })
       // Atomic write: temp file + rename so concurrent saves never
       // interleave/truncate the sidecar. A transient `<uuid>.tmp` matches
       // neither `*.jsonl` nor `*.doc.jsonl`, so list() stays correct.
@@ -95,6 +139,25 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       if (text === undefined) return undefined
       return JSON.parse(text) as unknown
     },
+  }
+}
+
+// C5 header-only read (profile on a large artifact): the header is always
+// line 0 and bounded (ids ~40 chars, titles capped at 200), so reading one
+// 64 KiB window never touches the event body of a multi-megabyte log.
+const HEADER_READ_MAX_BYTES = 64 * 1024
+
+async function readHeader(path: string): Promise<SessionMeta> {
+  const handle = await open(path, "r")
+  try {
+    const buffer = Buffer.alloc(HEADER_READ_MAX_BYTES)
+    await handle.read(buffer, 0, HEADER_READ_MAX_BYTES, 0)
+    // Unread tail is zeros, so a newline found anywhere was inside the window.
+    const end = buffer.indexOf(0x0a, 0) // "\n"
+    const line = (end === -1 ? buffer : buffer.subarray(0, end)).toString("utf8")
+    return parseHeader(line)
+  } finally {
+    await handle.close()
   }
 }
 

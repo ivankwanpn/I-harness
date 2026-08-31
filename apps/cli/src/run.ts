@@ -1,37 +1,22 @@
-import { createContext, type PluginContext } from "@i-harness/core-plugin"
-import { createSession, type Session } from "@i-harness/core-session"
-import { createToolRegistry } from "@i-harness/core-tools"
-import { createAgent } from "@i-harness/core-agent"
+import { createSession, deriveMessages, type Session } from "@i-harness/core-session"
+import { createSessionExecutor, type SessionExecutor } from "@i-harness/core-agent"
 import type { CompactionConfig } from "@i-harness/compaction"
-import { createMockClient, type MockStep } from "@i-harness/llm-mock"
+import type { MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { registerShell } from "@i-harness/shell"
-import { createFsTools } from "@i-harness/fs"
-import { createApprovalPolicy } from "@i-harness/guard-approval"
-import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
-import { createTimeoutGuard } from "@i-harness/guard-timeout"
-import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import type { ShellRetentionOptions } from "@i-harness/shell"
-import { registerApprovalAnswerer } from "@i-harness/interaction"
-import { registerToolSearch } from "@i-harness/tool-search"
-import { createFsSearchTools } from "@i-harness/fs-search"
-import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
-import { registerSubagent, type SubagentStateSnapshot } from "@i-harness/subagent"
-// M24b (spec §4): skills + workflow mounts. Skills sits beside registerToolSearch
-// (the deferred-retrieval family); workflow sits beside registerSubagent (its
-// executor is the run-level job store the subagent job_* third layer consults).
-import { registerSkills } from "@i-harness/skills"
-import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
-import { mountMcpClient, type McpMountHandle, type McpServerConfig } from "@i-harness/mcp-client"
-import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
-import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
-import { mountAgentTeams, type TeamDeps, type TeamMountHandle, type TeamConfig } from "@i-harness/agent-team"
-import { createProviderRegistry } from "@i-harness/provider"
-import { createLocalSandbox } from "@i-harness/sandbox-local"
-import { createWindowsAclSandbox } from "@i-harness/sandbox-windows-acl"
-import { createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
+import type { RetryConfig } from "@i-harness/guard-retry"
 import type { SandboxMode } from "@i-harness/sandbox"
+import type { SessionQuery } from "@i-harness/session-query"
+import type { ParentInputAdmission, SubagentStateSnapshot } from "@i-harness/subagent"
+import type { McpServerConfig } from "@i-harness/mcp-client"
+import type { LspServerConfig } from "@i-harness/lsp"
+import type { TeamConfig } from "@i-harness/agent-team"
+import { registerCommand } from "@i-harness/interaction"
+import { enterPlanMode } from "@i-harness/plan-mode"
+import { maybeAutoTitle } from "@i-harness/session-title"
+import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
+import { createSessionAssembly } from "@i-harness/session-executor"
 
 export interface HeadlessOptions {
   workspace: string
@@ -53,6 +38,13 @@ export interface HeadlessOptions {
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
   team?: Partial<TeamConfig> // M19: mount the agent-team domain (10 team tools replace the colliding subagent surface)
   telemetry?: "jsonl" // M25: enable the independent host event stream as JSONL on stdout (default off)
+  planMode?: boolean // R-A7: start in plan mode (proposal = the task text; exit_plan_mode tool mounted; prompt fragment appended)
+  guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient } // R-A9: auto-approval guardian reviewer
+  outputSpill?: import("@i-harness/output-retention").OutputSpillGuardConfig // M26-B7: registry-level output spill（設了就掛）
+  // M26-D2: R-A1 輸入接納（inject tier）——host 可注入自訂 ParentInputAdmission；
+  // 缺省時 run.ts 以本 run 的執行器 lane 自動建置（subagent 完成通知 → parent
+  // session 的 inject 輸入 + event-driven wake）。
+  parentNotify?: ParentInputAdmission
 }
 
 export interface HeadlessResult {
@@ -76,104 +68,17 @@ function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
   )
 }
 
-// Headless single-agent run for the CLI. Everything lives on ONE scope/ctx:
-// the execution environment (exec + shell + fs tools) and the approval policy
-// are mounted on the same ctx that the agent's tool registry dispatches
-// through, so the policy IS in the dispatching scope for this path. Cross-scope
-// dispatch (a child scope's registry) is gated separately by core-tools'
-// `execute` consulting `ctx.resolveDecision` — see mechanism B in the Task 10
-// report.
+// Headless single-agent run for the CLI. R-C0 (engine-owned): the run-level
+// environment assembly (ctx/tools/shell+sandbox/fs/approval/guards/terminal/
+// web/ask-user-input/tool-search/fs-search/session-query/subagent/workflow/
+// mcp/lsp/teams mounts + agent) lives in @i-harness/session-executor —
+// createSessionAssembly. run.ts owns ONE-TURN orchestration only: the per-
+// session serial lane (A's executor), the session/* command surface, resume/
+// restore/title/flush/close, and the result vocabulary. The assembly's
+// dispose() owns every mount teardown + the win32 ACL sandbox — never the
+// coordinator lifecycle (this file's close() does) and never the telemetry
+// stream (this file closes it last on every exit path).
 export async function runHeadless(task: string, opts: HeadlessOptions): Promise<HeadlessResult> {
-  const ctx: PluginContext = createContext()
-  const tools = createToolRegistry(ctx)
-
-  // mount the execution environment + policy
-  const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
-  // M12: the shipped harness caps shell output at 64_000 bytes headTail unless
-  // the host overrides it (parallel to the shellTimeoutMs default). A host
-  // that wants no cap passes { maxBytes: Number.MAX_SAFE_INTEGER }.
-  // M16: a confined mode composes the platform-local sandbox provider (bwrap
-  // on Linux, ACL fabric on win32) and hands it to exec through registerShell;
-  // unset or danger-full-access compose NO provider (exec stays passthrough).
-  // M16w final review (win32 composition): the sandbox-local wrapper returns a
-  // bare SandboxProvider and DROPS the backend's dispose(), so this compose
-  // site keeps the raw backend and tears it down in the finally below —
-  // otherwise the ACL temp grants would leak in composed use. The construction
-  // `mode` is only the type; the per-call policy (resolved below) governs.
-  const winSandbox =
-    process.platform !== "win32" || opts.sandbox === undefined || opts.sandbox === "danger-full-access"
-      ? undefined
-      : createWindowsAclSandbox({ writableDirs: [opts.workspace], mode: "read-only" })
-  const sandboxProvider =
-    opts.sandbox === undefined || opts.sandbox === "danger-full-access"
-      ? undefined
-      : createLocalSandbox({ ...(winSandbox !== undefined ? { windowsAclBackend: winSandbox } : {}) })
-  // M16 final-review (C1): resolve the effective policy ONCE and pass the SAME
-  // resolved value to the enforce step (registerShell → exec confines at
-  // spawn) and to the prompt renderer, so the prompt and the enforcement can
-  // never drift. The requested mode is the policy; a host calling
-  // resolve({ session }) can override it — the CLI passes opts.session here,
-  // so a host-seeded sandbox/mode session event actually applies.
-  const sandboxPolicy =
-    opts.sandbox === undefined
-      ? undefined
-      : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace }).resolve({ session: opts.session })
-  registerShell(ctx, tools, {
-    timeoutMs: shellTimeoutMs,
-    retention: opts.shellRetention ?? { maxBytes: 64_000 },
-    ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
-    ...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}),
-  })
-  for (const tool of createFsTools({ workspace: opts.workspace })) tools.register(tool)
-  createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
-
-  // M10a guards (part of the shipped harness):
-  //  - timeout: cooperative deadline on tools that declare timeoutMs (bash/pwsh).
-  //  - repeat-reminder: advisory consecutive-repeat notice for the model.
-  // M12 retry (OPT-IN — re-runs timed-out tools, changing execution semantics):
-  // `ctx.cascade` runs handlers in registration order, FIRST REGISTERED =
-  // OUTERMOST, so createRetryGuard MUST be mounted BEFORE createTimeoutGuard
-  // to observe the timeout wrapper's substituted TOOL_TIMEOUT raw value (retry
-  // outer, timeout inner).
-  if (opts.retry) ctx.mount(createRetryGuard(ctx, opts.retry))
-  ctx.mount(createTimeoutGuard(ctx))
-  ctx.mount(createRepeatToolGuard(ctx))
-
-  // approval: approveAll → auto-approve; else fail closed (no answerer)
-  if (opts.approveAll) {
-    registerApprovalAnswerer(ctx, async () => ({ approved: true }))
-  }
-
-  registerToolSearch(ctx, tools)
-
-  // M24b (spec §4): skills mount beside registerToolSearch — the deferred-
-  // retrieval family (skill_search/skill_get scan <workspace>/skills/**/SKILL.md).
-  // Mounted ONCE per ctx (ruling M24b-T1a: the "skills" service has no
-  // unregister seam, so a remount on the same ctx would throw on duplicate
-  // tool registration); the finally below reclaims the tools via the handle.
-  const skillsMount = registerSkills(ctx, tools, { workspace: opts.workspace })
-
-  // fs-search glob/grep (replaces the deferred grep stub below)
-  const execService = ctx.services.get<import("@i-harness/exec").ExecService>("exec/service")
-  for (const tool of createFsSearchTools({ exec: execService })) tools.register(tool)
-
-  // M10b: session-query tools (sqlite-only, read-only). No sessionQuery → not
-  // mounted (capability-gated, behavior unchanged).
-  if (opts.sessionQuery) {
-    for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
-  }
-
-  const model = opts.model ?? createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
-
-  // M7: session events go through the coordinator's write-behind (batched,
-  // durable on flush). One durability point per turn; the 200 ms deadline
-  // coalesces intra-turn events. Without a coordinator the events stay in the
-  // in-memory session only.
-  // M14: when the host passes a pre-seeded `session`, use it as-is — the
-  // onAppend coordinator hook lives ONLY on this internal createSession, so a
-  // host-provided session carries no write-behind (the host owns durability;
-  // a coordinator passed alongside is still used for the flush-on-turn/end and
-  // resume/load paths below).
   const activeId = opts.resumeSessionId ?? opts.sessionId
   // M25 (spec §2.2): the independent host event stream, assembled ONLY when the
   // host asks for it (`--telemetry` → opts.telemetry === "jsonl"). JSONL sink
@@ -242,171 +147,151 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
   }
 
-  const mcpHandles: McpMountHandle[] = []
-  const lspHandles: LspMountHandle[] = []
-  const teamHandles: TeamMountHandle[] = []
-  // M24b: the workflow mount handle is assigned inside the try (it must sit
-  // beside registerSubagent, after the MCP/LSP failures that would throw
-  // early) and reclaimed in the finally below, same best-effort discipline.
-  let workflowMount: WorkflowMountHandle | undefined
-
+  let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+  // M26-D2: the run's serial lane is created below (after the assembly) — the
+  // default parent-notify adapter closes over it and is rebound before the run
+  // starts; a task completing before the lane exists keeps its outbox row
+  // pending (fail-closed, drained by the ready-chain / recovery path).
+  let executorRef: SessionExecutor | undefined
+  const parentNotify: ParentInputAdmission = opts.parentNotify ?? {
+    admit: async ({ text, description }) => {
+      const lane = executorRef
+      if (!lane) throw new Error("no session lane for parent admission")
+      lane.submit({ tier: "inject", text, description, scope: "turn" })
+    },
+    // A executors are event-driven: admission while idle starts the idle drain,
+    // so submit() IS the wake (documented in D's plan).
+    wake: () => {},
+  }
   try {
-    // M17: mount MCP servers into the registry before the agent can see them
-    // (each handle is pushed only after a successful mount; a failed mount
-    // cleans itself up, so the finally below only releases live handles).
-    for (const cfg of opts.mcp ?? []) {
-      // M25: when telemetry is on, route the supervisor's host events through
-      // the telemetry stream (mcp/server-status); absent → default logger.
-      mcpHandles.push(await mountMcpClient(ctx, tools, cfg, telemetry ? { onStatus: (ev) => telemetry.emit({ type: "mcp/server-status", ts: Date.now(), data: { ...ev } }) } : undefined))
-    }
-    // M18: mount LSP servers the same way (same reservation semantics, same
-    // best-effort teardown) — the handles unify with MCP's for the reverse
-    // unmount below.
-    for (const cfg of opts.lsp ?? []) {
-      // M18 final-review (cwd-vs-workspaceRoot): resolve file_path against the
-      // harness workspace when the config doesn't set cwd explicitly — the lsp
-      // tools are mounted with cwd = config.cwd ?? opts.workspace so they read
-      // files under the same root the fs tools expose.
-      lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
-    }
-    // M24b (spec §4): registerWorkflow sits beside registerSubagent — it
-    // scans <workspace>/workflow/*.yml into the definitions registry, mounts
-    // workflow_run/workflow_list, and returns the run-level executor whose
-    // job store IS the job_* third layer. The executor is threaded into
-    // registerSubagent so the subagent's job_output/job_list/job_kill route
-    // `workflow-` ids to it (ruling M24b-P5).
-    workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService })
-    // Mount the subagent + job tools so the main agent can delegate.
-    // M8: persist child sessions through the same coordinator (child lineage
-    // records the main session id) and on resume load each restored child's
-    // durable log into a live mirror session.
-    const subagent = registerSubagent(ctx, tools, {
-      providers: createProviderRegistry(),
-      exec: ctx.services.get<import("@i-harness/exec").ExecService>("exec/service"),
-      parentModel: model,
-      parentSession: session,
-      // M24b (spec §3.3): the workflow executor backs the job_* third layer.
-      workflow: workflowMount.executor,
-      // M7: the coordinator owns document-write serialization, failure
-      // reporting (reportBackgroundFailure), and run-end draining.
-      ...(opts.coordinator && activeId
-        ? { persist: { coordinator: opts.coordinator, stateId: activeId, parentSessionId: activeId } }
-        : {}),
-      ...(restoredState ? { restoredState } : {}),
-    })
-    // M24a (G1a/G4): the subagent mount now owns the post-restore async steps
-    // (hooked child-mirror rebuild from durable logs + the pending-inbox
-    // sweep) behind `ready` — the host-side mirror loop that used to live
-    // here is gone. Await it BEFORE mounting agent teams: recoverRoot
-    // delivers queued team messages to entry.session, so the mirrors must be
-    // live (and the sweep initiated) first, or a restored teammate's queued
-    // messages would race a still-empty stub session.
-    await subagent.ready
-    // M19: mount the agent-team domain when the host asks for a team run. The
-    // mount sits AFTER registerSubagent (it needs the live registries) and
-    // AFTER `subagent.ready` — the G1a mirror rebuild above has restored the
-    // child mirror sessions from durable logs by then, so team recovery
-    // probes see live mirrors. The team's parentScope is the SAME ctx the
-    // subagent machinery uses, and the shared exec service / provider
-    // registry bind the real spawn bridge.
-    // M23 (Minor 4 fix): the subagent Agent registry is fresh-empty after a
-    // resume (entries are registered per spawn/turn), so a pre-resume wakeup
-    // for a restored teammate used to find no resident agent and drop the
-    // drive. ensureResident (registerSubagent's lazy rebuild over the REAL
-    // subagent deps) is injected here so realDeliver/driveFollowups can
-    // rebuild the resident agent and the wakeup actually runs.
-    if (opts.team !== undefined) {
-      teamHandles.push(await mountAgentTeams(ctx, tools, {
-        parentSession: session,
-        parentRegistry: tools,
-        subagents: {
-          table: subagent.table,
-          jobs: subagent.jobs,
-          roles: subagent.roles,
-          agents: subagent.agents,
-          exec: execService,
-          providers: createProviderRegistry(),
-          childSessions: opts.coordinator && activeId
-            ? { coordinator: opts.coordinator, parentSessionId: activeId }
-            : undefined,
-          ensureResident: subagent.ensureResident,
-        },
-        parentModel: model,
-      } satisfies TeamDeps, opts.team))
-    }
-    // M16: when a sandbox mode is configured, the rendered policy context is
-    // injected into the system prompt so the agent knows the standing file
-    // policy. Unset → no policy, prompt unchanged.
-    // M16 final-review (C1): the policy is the SAME value that registerShell
-    // attached to every bash/pwsh execution — resolved once above — so the
-    // prompt and the enforce step can never drift.
-    let systemPrompt = "You are a coding agent."
-    if (sandboxPolicy) {
-      systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicy)}`
-    }
-    const agent = createAgent(ctx, {
-      session, tools, model,
-      systemPrompt,
-      // M19 (Ruling 24): attribute the lead's tool calls to the Lead — the
-      // agent-team scheduler's resolveCaller maps the parent session id to
-      // the team's canonical lead id.
-      ...(activeId ? { sessionId: activeId } : {}),
-      ...(opts.compact ? { compact: opts.compact } : {}),
+    assembly = await createSessionAssembly({
+      workspace: opts.workspace,
+      ...(activeId !== undefined ? { sessionId: activeId } : {}),
+      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      ...(opts.mockScript !== undefined ? { mockScript: opts.mockScript } : {}),
+      approveAll: opts.approveAll,
+      ...(opts.shellTimeoutMs !== undefined ? { shellTimeoutMs: opts.shellTimeoutMs } : {}),
+      ...(opts.shellRetention !== undefined ? { shellRetention: opts.shellRetention } : {}),
+      ...(opts.retry !== undefined ? { retry: opts.retry } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
-      // M25: the agent emits turn/tool/provider/token host events through the
-      // same stream (AgentDeps.telemetry? — absent here = silent agent).
-      ...(telemetry ? { telemetry } : {}),
+      ...(opts.sandbox !== undefined ? { sandbox: opts.sandbox } : {}),
+      session,
+      // M16 final-review (C1) parity: the policy resolves against the
+      // HOST-SEEDED session only — a resumed session's fully restored history
+      // must not silently override the requested mode (see AssemblyOptions.
+      // policySession).
+      policySession: opts.session,
+      ...(opts.mcp !== undefined ? { mcp: opts.mcp } : {}),
+      ...(opts.lsp !== undefined ? { lsp: opts.lsp } : {}),
+      ...(opts.team !== undefined ? { team: opts.team } : {}),
+      ...(opts.compact !== undefined ? { compact: opts.compact } : {}),
+      ...(opts.sessionQuery !== undefined ? { sessionQuery: opts.sessionQuery } : {}),
+      ...(opts.coordinator !== undefined ? { coordinator: opts.coordinator } : {}),
+      ...(restoredState !== undefined ? { restoredState } : {}),
+      ...(telemetry !== undefined ? { telemetry } : {}),
+      ...(opts.planMode ? { planMode: true } : {}),
+      ...(opts.guardian !== undefined ? { guardian: opts.guardian } : {}),
+      ...(opts.outputSpill !== undefined ? { outputSpill: opts.outputSpill } : {}),
+      parentNotify,
     })
-    const result = await agent.run(task)
+  } catch (err) {
+    emitSessionEnd(1)
+    telemetry?.close()
+    if (opts.coordinator) await opts.coordinator.close().catch(() => {})
+    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
+  }
+  if (telemetry) {
+    telemetry.emit({ type: "session/request", ts: Date.now(), data: { ...(activeId ? { sessionId: activeId } : {}) } })
+  }
+  try {
+    // R-A7: the plan-mode proposal event must be on the log before the run
+    // starts (the tool mount + prompt fragment are the assembly's do).
+    if (opts.planMode) enterPlanMode(session, task)
+    // R-A1/R-A2: the session's serial lane. The initial task flows through the
+    // executor (idle drain → one turn); host commands can submit additional
+    // tiers during the run — they are promoted FIFO and drained serially. The
+    // lane's inbox comes from the assembly (agent step-boundary steer claims
+    // read the same inbox).
+    const executor: SessionExecutor = (executorRef = createSessionExecutor({
+      session,
+      agent: assembly.agent,
+      inbox: assembly.inbox,
+    }))
+    registerCommand(assembly.ctx, {
+      name: "session-send",
+      execute: async (input) => {
+        const { text } = JSON.parse(input) as { text: string }
+        executor.submit({ tier: "send", text })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-followup",
+      execute: async (input) => {
+        const { text } = JSON.parse(input) as { text: string }
+        executor.submit({ tier: "followup", text })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-steer",
+      execute: async (input) => {
+        const { text } = JSON.parse(input) as { text: string }
+        executor.submit({ tier: "steer", text })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-inject",
+      execute: async (input) => {
+        const { text, description, scope } = JSON.parse(input) as { text: string; description: string; scope: "turn" | "session" }
+        executor.submit({ tier: "inject", text, description, scope })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-cancel",
+      execute: async (input) => {
+        const { inputId } = JSON.parse(input) as { inputId: string }
+        return JSON.stringify(executor.cancel(inputId))
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-pending",
+      execute: async () => JSON.stringify(executor.pending().map((p) => ({ inputId: p.inputId, text: p.text, delivery: p.delivery }))),
+    })
+    // Initial task through the executor (serial lane; a resumed session's
+    // recovered pending inputs precede it FIFO). drain REJECTS on the first
+    // turn failure — thrown into the catch below → exitCode 1 (the CLI's
+    // exit-code contract).
+    executor.submit({ tier: "followup", text: task })
+    await executor.drain()
+    const derived = deriveMessages(session).at(-1)
+    const finalText = typeof derived?.content === "string" ? derived.content : ""
     if (opts.coordinator) {
       // flush first: this is the durability-failure signal (rejects on a durable
       // write failure → exitCode 1); close() then drains everything best-effort.
       if (activeId) await opts.coordinator.flush(activeId)
-      await opts.coordinator.close()
     }
+    // R-A6: first-prompt auto title after a successful run (fail-soft — LLM
+    // failure degrades to the deterministic fallback; a coordinator document
+    // mirror only when a session id is known).
+    await maybeAutoTitle({
+      session, model: assembly.model,
+      ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
+    })
+    if (opts.coordinator) await opts.coordinator.close()
     emitSessionEnd(0)
     telemetry?.close()
-    return { finalText: result.finalText, exitCode: 0, session }
+    return { finalText, exitCode: 0, session }
   } catch (err) {
     emitSessionEnd(1)
     telemetry?.close()
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {
-    // M17+M18+M19: unmount MCP, LSP AND team servers after the run — the
-    // handles unify into ONE array and unmount in reverse mount order (the
-    // last-mounted handle unmounts first), best-effort like the sandbox
-    // teardown: an unmount failure must not mask the run result. The arrays
-    // are NOT reversed in place (a shared-array reverse would be
-    // remount-unsafe); the copy is.
-    const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]
-    for (const handle of mounts.reverse()) {
-      try {
-        await handle.unmount()
-      } catch {
-        // cleanup failure on unmount: the run result stands
-      }
-    }
-    // M24b: reclaim the skills/workflow tools best-effort (same discipline).
-    // The SERVICES behind them ("skills", "workflow/executor") stay registered
-    // on the run-level ctx — core-plugin has no unregister seam (ruling
-    // M24b-T1a) — and the ctx is discarded with the run, so nothing leaks.
-    for (const handle of [skillsMount, workflowMount]) {
-      try {
-        await handle?.unmount()
-      } catch {
-        // cleanup failure on unmount: the run result stands
-      }
-    }
-    // M16w final-review: the sandbox-local wrapper dropped the win32 backend's
-    // dispose() (it returns a bare SandboxProvider), so the compose site owns
-    // teardown — otherwise the backend's revocable ACL temp grants would leak
-    // past a composed run. Best-effort like the coordinator close above: a
-    // teardown failure must not mask the run's own result.
-    try {
-      winSandbox?.dispose()
-    } catch {
-      // cleanup failure on teardown: the run result stands
-    }
+    // The assembly owns every mount's reverse-order unmount + the win32 ACL
+    // sandbox teardown (dispose never throws) — never the coordinator.
+    await assembly?.dispose().catch(() => {})
   }
 }

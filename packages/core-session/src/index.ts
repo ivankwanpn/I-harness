@@ -1,5 +1,7 @@
 // `&` binds tighter than `|`, so the intersection must wrap the whole union —
 // otherwise only the last member would carry `ignorable`.
+export { Inbox, SYSTEM_INPUT_PLUGIN } from "./inbox.ts"
+export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynthetic } from "./inbox.ts"
 export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
@@ -42,6 +44,67 @@ export type SessionEvent =
     // the richer shape and reuses these names). No model-visible text →
     // deliberately unindexed (deriveMessages/deriveSearchText defaults).
     | { type: "todo/write"; version: 1; items: TodoItem[]; seq?: number }
+    // Task 4.2 goals (DSH goal/change parity, simplified): whole-snapshot
+    // `goal/change` events — every non-clear operation carries the COMPLETE
+    // post-change goal state (last-wins fold, DSH's exact rule) so the
+    // projection is a pure replay; a clear carries no `goal` but a tombstone
+    // `cleared` ref (projection → null). UI-plane: deriveMessages skips it
+    // (default branch — the model surface is unchanged) and deriveSearchText
+    // returns "" (unindexed). Additive event type; format version stays 1.
+    | { type: "goal/change"; version: 1; operation: GoalOperation; goal?: GoalSnapshot; cleared?: GoalRef; updatedAt?: number; seq?: number }
+    // Task 4.4 jobs 状态流基础版: per-job lifecycle snapshot events emitted by
+    // the subagent layer's job registries on every observable transition
+    // (register → running; update → completed/error/re-opened running; kill →
+    // killed). Whole-job snapshot per event so a consumer folds last-wins by
+    // jobId (the goal/change pattern — the log alone rebuilds the list).
+    // UI-plane: deriveMessages' default branch keeps it model-invisible and
+    // deriveSearchText returns "" (unindexed). Additive event type; format
+    // version stays 1. The status vocabulary is @i-harness/subagent's
+    // JobStatus — INLINED because core-session must stay dependency-free
+    // (team/* precedent); the producer (subagent persist.ts) owns the event.
+    | { type: "job/status"; version: 1; job: { jobId: string; kind: string; label: string; status: "running" | "completed" | "killed" | "error"; outputAvailable: boolean; startedAt?: number; endedAt?: number }; seq?: number }
+    // E9 schedule: durable schedule mutation events (dsh schedule/change
+    // parity, IH-shaped: payload fields inline — the shape's single source is
+    // packages/schedule). UI-plane: deriveMessages default branch keeps it
+    // model-invisible; deriveSearchText returns "" (unindexed). Additive.
+    | { type: "schedule/change"; version: 1; operation: "create" | "delete" | "dispatch"; schedule?: { id: string; kind: "after" | "at" | "every"; prompt: string; afterSeconds?: number; everySeconds?: number; scheduledAt: string }; id?: string; acceptedAt?: string; seq?: number }
+    // R-A1 input tiers: durable inbox ladder (dsh agent/inbox/spliced +
+    // opencode admit→promote→cancel re-implemented in i-harness vocabulary).
+    // `admitted` is the durable enqueue; `promoted` marks consumption (the
+    // consuming user/message follows in the same log — an active turn's
+    // user/message is appended by the agent loop, an idle turn's by the
+    // executor's agent.run); `cancelled` retracts a never-promoted input.
+    // All three are log-only (never model-visible; the text enters the model
+    // surface only through the promoted user/message). version 1 (M19/M21
+    // convention for structured new event slots).
+    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: { description: string; scope: "turn" | "session" }; seq?: number }
+    | { type: "agent/input/promoted"; version: 1; inputId: string; seq?: number }
+    | { type: "agent/input/cancelled"; version: 1; inputId: string; reason?: string; seq?: number }
+    // R-A6 session title: latest-wins log-only snapshot (dsh `session/title`).
+    // Never model-visible; deriveSearchText defaults ("").
+    | { type: "session/title"; title: string; messageSeqs: number[]; source: "fallback" | "provider" | "user"; seq?: number }
+    // R-A7 plan mode: log-only mode marker + the proposal text (the proposal is
+    // ALSO appended as a regular user/message when entering; this event carries
+    // the mode + attribution, never model-visible itself).
+    | { type: "plan/mode"; mode: "on" | "off"; proposal?: string; seq?: number }
+    // M26 (R-D1): subagent task protocol log events (version 1). INLINED like
+    // team/* so core-session stays dependency-free. Log-only (deriveMessages
+    // skips them — the parent wake input arrives via the A-plan input tier);
+    // subagent/start is appended on task submit, subagent/end on terminalize.
+    | { type: "subagent/start"; version: 1; taskId: string; agentPath: string; role: string; description: string; parentSessionId?: string; seq?: number }
+    | { type: "subagent/end"; version: 1; taskId: string; outcome: "completed" | "error" | "cancelled" | "recovery-required"; resultText?: string; error?: string; seq?: number }
+    // C-region port (R-C1): the model's thinking trajectory, persisted to the
+    // log but deliberately model-INVISIBLE — deriveMessages skips it (default
+    // branch) and deriveSearchText returns "" (unindexed). Additive event type;
+    // format version stays 1. The PRODUCER is A/B-region (llm layer); the live
+    // `reasoning` mux stream carries it.
+    | { type: "reasoning"; text: string; seq?: number }
+    // C-region port (R-C1 commands lifecycle, DSH commands parity): a slash
+    // command's execution pair, appended by the executing host before/after the
+    // handler. UI-plane (audit F05-6): the command never creates a model
+    // message (default branches) and is unindexed.
+    | { type: "command/run"; commandId: string; name: string; args?: string; source: { kind: "user" }; seq?: number }
+    | { type: "command/done"; commandId: string; kind: "success" | "error"; text?: string; seq?: number }
   )
   & { ignorable?: true }
 
@@ -52,6 +115,29 @@ export type TodoItemStatus = "pending" | "in_progress" | "completed"
 export interface TodoItem {
   content: string
   status: TodoItemStatus
+}
+
+// ── Task 4.2 goal vocabulary (goal/change payload shapes) ────────────────────
+// DSH-aligned names (dsh-goal: GoalPhase/GoalOperation/GoalRef/GoalSnapshot),
+// simplified for our v0: no `blocked` phase / blockedReason (block is a DSH
+// policy verb we do not implement), no mandatory maxGoalRounds (DSH configures
+// a deployment default of 256; we have none — an omitted cap simply carries
+// no cap), and no round admission (roundsStarted — out of scope; the
+// projection's `round` stays a documented seam).
+export type GoalPhase = "active" | "paused" | "complete"
+export type GoalOperation = "create" | "edit" | "pause" | "resume" | "complete" | "clear"
+
+/** Compare-and-set identity for one exact goal revision (DSH GoalRef shape). */
+export interface GoalRef {
+  id: string
+  revision: number
+}
+
+/** Goal state written by every non-clear goal mutation (DSH GoalSnapshot shape). */
+export interface GoalSnapshot extends GoalRef {
+  objective: string
+  phase: GoalPhase
+  maxGoalRounds?: number
 }
 
 // Lineage/identity carried on a session (M8): who spawned it and how deep in
@@ -138,9 +224,11 @@ export function append(session: Session, event: SessionEvent): void {
   subscribers.get(session)?.forEach((l) => l(ev))
 }
 
-const IMAGE_MEDIA_TYPES = new Set<ImageMediaType>(["image/png", "image/jpeg", "image/webp", "image/gif"])
+// C5 (web-host attachment routes reuse the same capacity rules as a log
+// append — one source of truth): exported for the HTTP upload validation.
+export const IMAGE_MEDIA_TYPES = new Set<ImageMediaType>(["image/png", "image/jpeg", "image/webp", "image/gif"])
 const MAX_IMAGES_PER_MESSAGE = 20
-const MAX_IMAGE_BYTES_PER_MESSAGE = 200 * 1024 * 1024
+export const MAX_IMAGE_BYTES_PER_MESSAGE = 200 * 1024 * 1024
 
 function isValidBase64(s: string): boolean {
   return /^[A-Za-z0-9+/]*={0,2}$/.test(s) && s.length % 4 === 0 && !s.includes(" ")
@@ -293,9 +381,46 @@ export function deriveSearchText(ev: SessionEvent): string {
       return ev.task.subject + " " + ev.task.description
     case "team/message/queued":
       return ev.message.content
+    case "subagent/start":
+      return `${ev.description} ${ev.agentPath}`
+    case "subagent/end":
+      return ev.resultText ?? ev.error ?? ""
     default:
       return ""
   }
+}
+
+export interface PlanModeView { active: boolean; proposal?: string; eventSeq?: number }
+
+/** Latest-wins plan-mode projection (last-wins: an "off" resets). */
+export function derivePlanMode(session: Session): PlanModeView {
+  let view: PlanModeView = { active: false }
+  for (const ev of session.events) {
+    if (ev.type !== "plan/mode") continue
+    view = {
+      active: ev.mode === "on",
+      ...(ev.proposal !== undefined ? { proposal: ev.proposal } : {}),
+      eventSeq: ev.seq ?? 0,
+    }
+  }
+  return view
+}
+
+export interface SessionTitleView {
+  title: string
+  messageSeqs: number[]
+  source: "fallback" | "provider" | "user"
+  eventSeq: number
+}
+
+/** Latest-wins session title projection (log-only: never `deriveMessages`-visible). */
+export function deriveSessionTitle(session: Session): SessionTitleView | null {
+  let view: SessionTitleView | null = null
+  for (const ev of session.events) {
+    if (ev.type !== "session/title") continue
+    view = { title: ev.title, messageSeqs: ev.messageSeqs, source: ev.source, eventSeq: ev.seq ?? 0 }
+  }
+  return view
 }
 
 function imageDescriptor(images: ImageInput[] | undefined): string {

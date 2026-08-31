@@ -3,6 +3,66 @@ import { syncTools, type McpServerConfig } from "../src/index.ts"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import type { ConnectedMcpClient } from "../src/index.ts"
 
+function blockedDirectClient(tools: Array<{ name: string }>) {
+  return {
+    async listTools() { return { tools } },
+    async callTool() { return { content: [] } },
+    async listResources() { return [] },
+    async readResource() { return [] },
+    async close() {},
+  } as unknown as ConnectedMcpClient
+}
+
+describe("blocked/direct policy", () => {
+  function clientWith(tools: Array<{ name: string }>) {
+    return blockedDirectClient(tools)
+  }
+  function cfg(extra: object) {
+    return { transport: "stdio", serverName: "files", command: "x", args: [], ...extra } as McpServerConfig
+  }
+
+  it("blocked tools are never registered; others still are", async () => {
+    const reg = registry()
+    const disposers = await syncTools(
+      clientWith([{ name: "safe" }, { name: "nuke" }]),
+      reg,
+      cfg({ blockedTools: ["nuke"] }),
+    )
+    const names = reg.schemas().map((s) => s.name)
+    expect(names).toContain("mcp__files__safe")
+    expect(names).not.toContain("mcp__files__nuke")
+    // 每個 registered 工具都有對應 disposer
+    expect([...disposers.keys()]).toContain("mcp__files__safe")
+    expect([...disposers.keys()]).not.toContain("mcp__files__nuke")
+  })
+
+  it("blocked wins over direct (a tool in both lists stays unregistered)", async () => {
+    const reg = registry()
+    await syncTools(clientWith([{ name: "nuke" }]), reg, cfg({ blockedTools: ["nuke"], directTools: ["nuke"] }))
+    expect(reg.schemas().map((s) => s.name)).not.toContain("mcp__files__nuke")
+  })
+
+  it("directTools narrows exposure: listed tools direct, everything else deferred", async () => {
+    const reg = registry()
+    const disposers = await syncTools(
+      clientWith([{ name: "hot" }, { name: "cold" }]),
+      reg,
+      cfg({ directTools: ["hot"] }),
+    )
+    // exposure 直接落在 Tool 物件（createMcpTool 5th 參數）；schemas 表面由真 registry 過濾——
+    // 此處用 registry stub 的 get 斷言即可（sync.test 慣例：stub schemas 不複製 exposure 過濾）
+    expect(reg.get("mcp__files__hot")).toMatchObject({ exposure: "direct" })
+    expect(reg.get("mcp__files__cold")).toMatchObject({ exposure: "deferred" })
+    expect([...disposers.keys()]).toEqual(expect.arrayContaining(["mcp__files__hot", "mcp__files__cold"]))
+  })
+
+  it("absent directTools keeps today's behavior: everything direct", async () => {
+    const reg = registry()
+    await syncTools(clientWith([{ name: "any" }]), reg, cfg({}))
+    expect(reg.get("mcp__files__any")).toMatchObject({ exposure: "direct" })
+  })
+})
+
 function registry(): ToolRegistry {
   const tools: Tool[] = []
   return {

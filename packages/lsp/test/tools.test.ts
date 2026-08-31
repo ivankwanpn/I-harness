@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { createLspTools, type LspDiagnostic, type LspInstance, type LspQueryResult, type LspToolConfig } from "../src/index.ts"
 
 function makeConfig(languages: string[] = [".ts"]): LspToolConfig {
@@ -194,5 +195,63 @@ describe("createLspTools", () => {
     expect(query).toHaveBeenCalledWith(expect.anything(), expect.anything(), ac.signal)
     await diagTool.execute({ file_path: "a.ts" }, { abortSignal: ac.signal })
     expect(diagnostics).toHaveBeenCalledWith(expect.anything(), expect.anything(), ac.signal)
+  })
+})
+
+describe("M26-B5 lsp tool operations", () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "i-harness-lsp5-"))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("documentSymbol renders formatSymbols text (file_path only, no position)", async () => {
+    writeFileSync(join(dir, "a.ts"), "function main() {}\n")
+    const { instance, query } = makeStub()
+    query.mockResolvedValue({ kind: "symbols", symbols: [{ name: "main", kind: 12, uri: pathToFileURL(join(dir, "a.ts")).href, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } } }] } as never)
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    const out = await lsp.execute({ operation: "documentSymbol", file_path: "a.ts" }, {})
+    expect(query).toHaveBeenCalledWith({ operation: "documentSymbol", filePath: join(dir, "a.ts") }, "function main() {}\n", undefined)
+    expect(String(out)).toContain("main [12]")
+  })
+
+  it("workspaceSymbol sends query and renders 'No symbols.' for empty", async () => {
+    const { instance, query } = makeStub()
+    query.mockResolvedValue({ kind: "symbols", symbols: [] } as never)
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    const out = await lsp.execute({ operation: "workspaceSymbol", query: "util" }, {})
+    expect(query).toHaveBeenCalledWith({ operation: "workspaceSymbol", query: "util" }, "", undefined)
+    expect(out).toBe("No symbols.")
+  })
+
+  it("callHierarchy returns structured items; incomingCalls/outgoingCalls return direction+target+calls", async () => {
+    writeFileSync(join(dir, "a.ts"), "function main() {}\n")
+    const { instance, query } = makeStub()
+    const item = { name: "callee", kind: 12, uri: "file:///w/a.ts", range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } }, selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } } }
+    query.mockResolvedValueOnce({ kind: "callHierarchy", items: [item] } as never)
+    query.mockResolvedValueOnce({ kind: "calls", calls: [{ item: { name: "caller", kind: 12, uri: "file:///w/a.ts", range: item.range, selectionRange: item.range }, fromRanges: [{ start: { line: 1, character: 2 }, end: { line: 1, character: 7 } }] }], direction: "incoming", target: item } as never)
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    const prep = (await lsp.execute({ operation: "callHierarchy", file_path: "a.ts", line: 1, character: 1 }, {})) as { items: unknown[] }
+    expect(prep.items).toHaveLength(1)
+    const calls = (await lsp.execute({ operation: "incomingCalls", item }, {})) as { direction: string; target: { name: string }; calls: Array<{ from: { name: string }; at: string }> }
+    expect(calls.direction).toBe("incoming")
+    expect(calls.target.name).toBe("callee")
+    expect(calls.calls[0]!.from.name).toBe("caller")
+    expect(calls.calls[0]!.at).toContain("2:3-2:8")
+  })
+
+  it("rejects missing per-operation params (fail-loud, no server roundtrip)", async () => {
+    const { instance, query } = makeStub()
+    const tools = createLspTools(instance, makeConfig(), dir)
+    const lsp = tools.find((t) => t.name === "lsp")!
+    await expect(lsp.execute({ operation: "documentSymbol" }, {})).rejects.toThrow(/requires file_path/)
+    await expect(lsp.execute({ operation: "workspaceSymbol" }, {})).rejects.toThrow(/requires query/)
+    await expect(lsp.execute({ operation: "incomingCalls" }, {})).rejects.toThrow(/requires item/)
+    expect(query).not.toHaveBeenCalled()
   })
 })

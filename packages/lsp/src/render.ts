@@ -1,6 +1,6 @@
 // Text rendering of LSP query results: grouped locations, hover contents, and
 // diagnostics with caps + omission markers, plus a hard character cap.
-import type { LspHover, LspQueryResult } from "./instance.ts"
+import type { LspCallHierarchyCall, LspCallHierarchyItem, LspHover, LspQueryResult, LspSymbol } from "./instance.ts"
 
 export interface RenderOptions {
   workspaceRoot?: string
@@ -89,4 +89,38 @@ export function formatDiagnostics(diagnostics: Array<{ range: { start: { line: n
   if (omitted > 0) text += `\n(${omitted} more diagnostics)`
   if (text.length === 0) return "No diagnostics."
   return truncate(text, maxChars)
+}
+
+// ---------- M26-B5 ----------
+
+/** 一列一位符號："name [kind] file:line:ch — detail"（kind 是 LSP SymbolKind 整數）。 */
+export function formatSymbols(symbols: LspSymbol[], opts: RenderOptions): string {
+  return symbols.map((s) => {
+    const loc = formatLocations({ kind: "locations", locations: [{ uri: s.uri, range: s.range }] }, opts)
+    const detail = s.detail !== undefined ? ` — ${s.detail}` : ""
+    return `${s.name} [${s.kind}] ${loc}${detail}`
+  }).join("\n")
+}
+
+/** prepareCallHierarchy：一列一位項目。 */
+export function formatCallHierarchyItem(item: LspCallHierarchyItem, opts: RenderOptions): string {
+  return `${item.name} [${item.kind}] ${formatLocations({ kind: "locations", locations: [{ uri: item.uri, range: item.selectionRange }] }, opts)}`
+}
+
+/** incoming/outgoing 呼叫對。target 是備查的那個函式；calls 是呼叫方/被呼叫方，
+ *  fromRanges 是呼叫點。direction 決定箭頭方向與語意標籤。 */
+export function formatCallHierarchyCalls(
+  calls: LspCallHierarchyCall[],
+  target: LspCallHierarchyItem,
+  direction: "incoming" | "outgoing",
+  opts: RenderOptions,
+): string {
+  if (calls.length === 0) return "No calls."
+  return calls.map((c) => {
+    const site = c.fromRanges[0]
+    const siteDesc = site !== undefined ? formatLocations({ kind: "locations", locations: [{ uri: c.item.uri, range: site }] }, opts) : "?"
+    return direction === "incoming"
+      ? `${c.item.name} calls ${target.name} at ${siteDesc}`
+      : `${target.name} calls ${c.item.name} at ${siteDesc}`
+  }).join("\n")
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { pathToFileURL } from "node:url"
-import { LspInstance, type InstanceSpec, type LspQuery } from "../src/index.ts"
+import { LspInstance, type InstanceSpec, type LspQuery, type LspSymbol, type LspCallHierarchyItem, type LspCallHierarchyCall } from "../src/index.ts"
 import { createFakeLspServer } from "./fake-server.ts"
 
 const DEF = "textDocument/definition"
@@ -33,7 +33,7 @@ function paramsOf(msg: unknown): Record<string, unknown> {
   return (msg as { params?: Record<string, unknown> }).params ?? {}
 }
 
-function definition(overrides?: Partial<LspQuery>): LspQuery {
+function definition(overrides?: Partial<{ operation: "goToDefinition"; filePath: string; line: number; character: number }>): LspQuery {
   return { operation: "goToDefinition", filePath: "/w/a.ts", line: 1, character: 3, ...overrides }
 }
 
@@ -75,6 +75,78 @@ describe("LspInstance ready", () => {
     expect(Date.now() - start).toBeGreaterThanOrEqual(40)
     expect(Date.now() - start).toBeLessThan(2_000)
     await inst.dispose().catch(() => undefined) // cleanup: bounded teardown of the hung server
+  })
+})
+
+// M26-B5：documentSymbol/workspaceSymbol/callHierarchy/incoming+outgoingCalls。
+// 既有實作 pushMessage 一次一只 request——scripted entry 是靜態 response 或 fn(params)。
+const DOC_SYMBOLS = [
+  { name: "main", kind: 12, // Function
+    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 20 } },
+    selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 4 } },
+    children: [{ name: "inner", kind: 13,
+      range: { start: { line: 1, character: 2 }, end: { line: 1, character: 8 } },
+      selectionRange: { start: { line: 1, character: 2 }, end: { line: 1, character: 7 } } }] },
+]
+const CALL_ITEM = { name: "callee", kind: 12, uri: FILE_A_TS,
+  range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } },
+  selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } } }
+const CALLS = {
+  items: [{ item: { name: "caller", kind: 12, uri: FILE_A_TS,
+    range: { start: { line: 1, character: 0 }, end: { line: 1, character: 8 } },
+    selectionRange: { start: { line: 1, character: 0 }, end: { line: 1, character: 8 } } },
+    fromRanges: [{ start: { line: 1, character: 2 }, end: { line: 1, character: 7 } }] }],
+}
+
+describe("M26-B5 LspInstance ops", () => {
+  it("documentSymbol: sends textDocument/documentSymbol and flattens children depth-first", async () => {
+    const server = createFakeLspServer({
+      initialize: { capabilities: { ...CAPS, documentSymbolProvider: true } },
+      "textDocument/documentSymbol": DOC_SYMBOLS,
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    const res = await inst.query({ operation: "documentSymbol", filePath: "/w/a.ts" }, "x")
+    expect(res.kind).toBe("symbols")
+    expect((res as { symbols: LspSymbol[] }).symbols.map((s) => s.name)).toEqual(["main", "inner"])
+    expect(server.server.methods).toContain("textDocument/documentSymbol")
+  })
+
+  it("workspaceSymbol: sends workspace/symbol with the query string", async () => {
+    const server = createFakeLspServer({
+      initialize: { capabilities: { ...CAPS, workspaceSymbolProvider: true } },
+      "workspace/symbol": [{ name: "util", kind: 7, location: { uri: FILE_A_TS, range: { start: { line: 2, character: 0 }, end: { line: 2, character: 5 } } } }],
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    const res = await inst.query({ operation: "workspaceSymbol", query: "util" }, "")
+    expect((res as { symbols: LspSymbol[] }).symbols).toHaveLength(1)
+    expect((server.server.requests.find((r) => methodOf(r) === "workspace/symbol")?.params as { query: string }).query).toBe("util")
+  })
+
+  it("callHierarchy prepare + incoming/outgoingCalls roundtrip the item", async () => {
+    const server = createFakeLspServer({
+      initialize: { capabilities: { ...CAPS, prepareCallHierarchyProvider: true, callHierarchyProvider: true } },
+      "textDocument/prepareCallHierarchy": [CALL_ITEM],
+      "callHierarchy/incomingCalls": CALLS,
+      "callHierarchy/outgoingCalls": CALLS,
+    })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    const prep = await inst.query({ operation: "callHierarchy", filePath: "/w/a.ts", line: 1, character: 1 }, "x")
+    expect(prep.kind).toBe("callHierarchy")
+    const item = (prep as { items: LspCallHierarchyItem[] }).items[0]!
+    const incoming = await inst.query({ operation: "incomingCalls", item }, "x")
+    expect((incoming as { calls: LspCallHierarchyCall[] }).calls).toHaveLength(1)
+    const outgoing = await inst.query({ operation: "outgoingCalls", item }, "x")
+    expect((outgoing as { calls: LspCallHierarchyCall[] }).calls).toHaveLength(1)
+  })
+
+  it("documentSymbol capability absent → LSP_UNSUPPORTED_OPERATION", async () => {
+    const server = createFakeLspServer({ initialize: { capabilities: { ...CAPS } } })
+    const inst = new LspInstance(spec(), server.spawner)
+    await inst.ready
+    await expect(inst.query({ operation: "documentSymbol", filePath: "/w/a.ts" }, "x")).rejects.toThrow(/UNSUPPORTED|not support/i)
   })
 })
 

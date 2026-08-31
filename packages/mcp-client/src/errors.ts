@@ -7,3 +7,11 @@ export class McpServerUnavailableError extends Error {
     this.name = "McpServerUnavailableError"
   }
 }
+
+// M26-B1: OAuth 流失敗（回調超時/state 不符/停止）統一出口——fail-closed、可辨識。
+export class McpOAuthError extends Error {
+  constructor(message: string) {
+    super(`mcp-client OAuth: ${message}`)
+    this.name = "McpOAuthError"
+  }
+}

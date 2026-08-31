@@ -28,6 +28,14 @@ export const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 const SHELL_TOOLS = new Set(["bash", "pwsh"])
 const WRITE_TOOLS = new Set(["write"])
 
+export { parseGuardianAssessment, GUARDIAN_JSON_CONTRACT } from "./guardian/verdict.ts"
+export type { ParsedGuardianAssessment } from "./guardian/verdict.ts"
+export { GuardianBreaker, isGuardianBreakerState, GUARDIAN_BREAKER_WINDOW, GUARDIAN_BREAKER_DENY_LIMIT } from "./guardian/breaker.ts"
+export type { GuardianBreakerState } from "./guardian/breaker.ts"
+export { registerGuardian } from "./guardian/index.ts"
+export type { GuardianConfig, GuardianReviewDeps } from "./guardian/index.ts"
+export { runGuardianReview, ensureReviewerRole, renderGuardianMessage, renderRecentContext, BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, GUARDIAN_REVIEWER_ROLE_NAME } from "./guardian/index.ts"
+
 // M22: 'never' policy — an ask-decision (danger classifier or whitelist) is
 // promoted to deny-with-reason instead of consulting the approval answerer
 // (headless posture: no interactive prompt can ever approve execution).

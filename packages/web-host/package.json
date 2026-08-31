@@ -1,0 +1,36 @@
+{
+  "name": "@i-harness/web-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./models": "./src/models.ts",
+    "./auth": "./src/auth.ts",
+    "./mux": "./src/mux.ts"
+  },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/attachment": "workspace:*",
+    "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/credentials": "workspace:*",
+    "@i-harness/feedback": "workspace:*",
+    "@i-harness/goal": "workspace:*",
+    "@i-harness/interaction": "workspace:*",
+    "@i-harness/jobs": "workspace:*",
+    "@i-harness/plugin-registry": "workspace:*",
+    "@i-harness/provider": "workspace:*",
+    "@i-harness/session-executor": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*",
+    "@i-harness/session-query": "workspace:*",
+    "@i-harness/settings": "workspace:*",
+    "@i-harness/workspace": "workspace:*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@i-harness/session-persistence-jsonl": "workspace:*",
+    "@types/ws": "^8.5.12"
+  }
+}

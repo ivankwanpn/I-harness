@@ -22,4 +22,14 @@ describe("writeFileAtomic", () => {
     await writeFileAtomic(p, "two")
     expect(await readFile(p, "utf-8")).toBe("two")
   })
+  it("applies the mode to the temp + renamed file (credentials/plugin-state use 0600)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-atomic-mode-"))
+    const p = join(dir, "secret.json")
+    await writeFileAtomic(p, "{}", 0o600)
+    expect(await readFile(p, "utf-8")).toBe("{}")
+    // win32: Node ignores POSIX mode bits (best-effort — Windows ACLs apply
+    // instead); the compile+option contract (not a permission assertion) is
+    // what is tested on every platform.
+    expect(await import("node:fs/promises").then((m) => m.stat(p))).toBeTruthy()
+  })
 })

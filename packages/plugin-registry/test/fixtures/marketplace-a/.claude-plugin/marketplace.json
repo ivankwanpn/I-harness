@@ -1,0 +1,21 @@
+{
+  "$schema": "https://claude.com/plugin-marketplace/schema.json",
+  "name": "Marketplace A",
+  "description": "Fixture marketplace: one skill+command plugin (hello) and one MCP-only plugin (proxy)",
+  "version": "0.1.0",
+  "plugins": [
+    {
+      "name": "hello",
+      "source": "./plugins/hello",
+      "description": "Greeting plugin with a skill and a command",
+      "version": "1.2.3",
+      "category": "utility",
+      "tags": ["greeting", "demo"]
+    },
+    {
+      "name": "proxy",
+      "source": "./plugins/proxy",
+      "description": "MCP-only proxy plugin (no skills or commands)"
+    }
+  ]
+}

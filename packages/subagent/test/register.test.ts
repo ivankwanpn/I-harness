@@ -8,7 +8,7 @@ import { createExecService } from "@i-harness/exec"
 import { registerSubagent } from "../src/index.ts"
 
 describe("registerSubagent", () => {
-  it("seeds built-in roles, mounts the 11 tools, and returns the registries", () => {
+  it("seeds built-in roles, mounts the 13 tools, and returns the registries", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const providers = createProviderRegistry()
@@ -28,10 +28,28 @@ describe("registerSubagent", () => {
       expect.arrayContaining([
         "spawn_agent", "wait_agent", "list_agents", "send_message", "interrupt_agent",
         "followup_task", "close_agent", "resume_agent", "job_output", "job_list", "job_kill",
+        "get_task_output", "stop_task",
       ]),
     )
     expect(typeof jobs.registerJob).toBe("function")
     expect(typeof table.get).toBe("function")
+  })
+
+  it("returns a live task registry (durable records behind the mount)", () => {
+    const ctx = createContext()
+    const parentReg = createToolRegistry(ctx)
+    const providers = createProviderRegistry()
+    const exec = createExecService()
+    const model = createMockClient([{ role: "assistant", text: "ok" }])
+    const session = createSession()
+
+    const { tasks } = registerSubagent(ctx, parentReg, {
+      providers, exec, parentModel: model, parentSession: session,
+    })
+
+    expect(typeof tasks.submit).toBe("function")
+    expect(typeof tasks.terminalize).toBe("function")
+    expect(tasks.list()).toEqual([])
   })
 
   it("is idempotent when called twice on the same registry", () => {

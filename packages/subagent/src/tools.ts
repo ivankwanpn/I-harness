@@ -16,6 +16,7 @@ import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
 import { spawnChild } from "./child.ts"
+import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
 
 export interface SubagentToolDeps {
   table: AgentTable
@@ -43,12 +44,18 @@ export interface SubagentToolDeps {
   // `workflow-` prefixed job id routes to it (getOutput/listJobs/killJob)
   // instead of falling through to the exec bridge.
   workflow?: WorkflowExecutor
+  // M26-D1: the durable task protocol registry — spawn_agent submissions go
+  // through it (identity-keyed submit/claim/terminalize; cancelTree/wait read it).
+  tasks: TaskRegistry
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
-  const spawnTool: Tool<{ message: string; task_name: string; agent_type?: string; fork_turns?: string | number }, { agent_path: string; job_id: string }> = {
+  const spawnTool: Tool<
+    { message: string; task_name: string; agent_type?: string; fork_turns?: string | number; background?: boolean },
+    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string }
+  > = {
     name: "spawn_agent",
-    description: "Launch a subagent in the background. Returns an agent path and job id immediately. Use wait_agent or job_output to observe completion.",
+    description: "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary.",
     inputSchema: {
       type: "object",
       properties: {
@@ -56,11 +63,12 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         task_name: { type: "string", description: "Short name used in the agent path." },
         agent_type: { type: "string", description: "Role name (default general)." },
         fork_turns: { type: ["string", "number"], description: "none, all, or N." },
+        background: { type: "boolean", description: "false = block until the task settles (escape hatch); default true = return immediately and notify the parent on completion." },
       },
       required: ["message", "task_name"],
     },
     isReadOnly: false,
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const role = deps.roles.get(args.agent_type ?? "general")
       if (!role) throw new Error(`unknown role: ${args.agent_type}`)
       // M24a (B2): max_depth guard — reject spawning once the caller is already
@@ -89,7 +97,29 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         throw new Error(`subagent nesting depth limit reached (max ${maxDepth}) — cannot spawn from depth ${callerDepth}`)
       }
       const turns = parseForkTurns(args.fork_turns)
-      const { path, jobId } = await spawnChild({
+      const delivery = args.background === false ? "tool" : "parent"
+      // M26-D1 三元 identity（exact-semantics 表）：callEventSeq 唯一；toolCallId 隨身。
+      const identity: TaskIdentity = {
+        parentSessionId: exec?.sessionId ?? deps.childSessions?.parentSessionId ?? "",
+        ...(exec?.callEventSeq !== undefined ? { callEventSeq: exec.callEventSeq } : {}),
+        ...(exec?.callId !== undefined ? { toolCallId: exec.callId } : {}),
+      }
+      let task: TaskRecord
+      try {
+        task = deps.tasks.submit({
+          identity,
+          agentPath: `root/${args.task_name}`,
+          description: args.task_name,
+          prompt: args.message,
+          agent: role.name,
+          delivery,
+        })
+      } catch (err) {
+        if (err instanceof TaskIdentityConflictError) throw new Error(`task identity conflict for this call: ${err.message}`)
+        throw err
+      }
+      append(deps.parentSession, { type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) })
+      const executed = await spawnChild({
         taskName: args.task_name,
         message: args.message,
         parentPath: "root",
@@ -104,8 +134,39 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         agents: deps.agents,
         forkTurns: turns,
         childSessions: deps.childSessions,
+        onSettled: (info) => {
+          // M26-D1: settle → terminalize（interrupt 中止的初始 turn 視為 cancelled——
+          // 被等待的回答不會到來；後續 followup 沿用 M9 job 流，不再入本 task）。
+          const outcome: TaskOutcome = info.aborted
+            ? "cancelled"
+            : info.error !== undefined && info.finalText === undefined
+              ? "error"
+              : "completed"
+          deps.tasks.terminalize({
+            taskId: task.id,
+            outcome,
+            ...(info.finalText !== undefined ? { resultText: info.finalText } : {}),
+            ...(info.error !== undefined ? { error: info.error } : {}),
+          })
+          // subagent/end —— parent 側的 durable 記號（D2 通知的資料源）。
+          // 若已被 stop_task/close_agent 先行終態化（cancelTree 寫入 cancelled），
+          // 本次 terminalize 為 no-op（CAS），但仍據 record 現值 append。
+          const settled = deps.tasks.get(task.id)!
+          append(deps.parentSession, {
+            type: "subagent/end", version: 1, taskId: task.id,
+            outcome: settled.outcome ?? outcome,
+            ...(settled.resultText !== undefined ? { resultText: settled.resultText } : {}),
+            ...(settled.error !== undefined ? { error: settled.error } : {}),
+          })
+        },
       })
-      return { agent_path: path, job_id: jobId }
+      deps.tasks.claim(task.id, executed.sessionId)
+      const base = { agent_path: executed.path, job_id: executed.jobId, task_id: task.id }
+      if (args.background === false) {
+        const settled = await deps.tasks.wait(task.id, 300_000)
+        return { ...base, status: settled?.status ?? "unknown", ...(settled?.outcome !== undefined ? { outcome: settled.outcome } : {}), ...(settled?.resultText !== undefined ? { resultText: settled.resultText } : {}), ...(settled?.error !== undefined ? { error: settled.error } : {}), message: `subagent ${executed.path} settled: ${settled?.status ?? "unknown"}` }
+      }
+      return base
     },
   }
 
@@ -238,7 +299,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const closeTool: Tool<{ target: string }, { previous_status: string }> = {
     name: "close_agent",
-    description: "Close a subagent and reclaim its resources (abort execution, unmount child scope, remove from the agent and job tables).",
+    description: "Close a subagent and reclaim its resources (abort execution, unmount child scope, remove from the agent and job tables). Its task record terminalizes as cancelled.",
     inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     isReadOnly: false,
     execute: async (args) => {
@@ -246,6 +307,13 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
       const previous = entry.status
       entry.controller.abort()
+      // M26-D3: a closed chat no longer has an outstanding settlement — terminalize
+      // its task record as cancelled so a cold restore never reclassifies it.
+      for (const t of deps.tasks.list()) {
+        if (t.agentPath === entry.path && t.outcome === undefined) {
+          deps.tasks.terminalize({ taskId: t.id, outcome: "cancelled", error: "subagent closed" })
+        }
+      }
       entry.unmount?.()
       if (entry.jobId) deps.jobs.kill(entry.jobId)
       deps.table.remove(args.target)
@@ -368,7 +436,98 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool, jobOutputTool, jobListTool, jobKillTool]
+  const getTaskOutputTool: Tool<
+    { task_ids: string[]; wait?: boolean; timeout_ms?: number },
+    { tasks: { task_id: string; status: string; outcome?: string; agent_path: string; description: string; resultText?: string; error?: string; time_created: number }[] }
+  > = {
+    name: "get_task_output",
+    description: "Read the durable output of 1..20 subagent tasks (task ids). wait: true polls each until terminal (timeout_ms clamped 100..600000). An id this session does not own fails identically to an unknown id (task or otherwise).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_ids: { type: "array", items: { type: "string" }, description: "1..20 task ids." },
+        wait: { type: "boolean", description: "Poll until every task is terminal (default false = snapshot only)." },
+        timeout_ms: { type: "number", description: "Max wait in ms (default 30000, clamped 100..600000)." },
+      },
+      required: ["task_ids"],
+    },
+    isReadOnly: true,
+    execute: async (args) => {
+      if (!Array.isArray(args.task_ids) || args.task_ids.length < 1 || args.task_ids.length > 20) {
+        throw new Error("get_task_output expects between 1 and 20 task ids")
+      }
+      // Ownership gate: EVERY id must be owned by this registry — a non-owned id
+      // (foreign session, shell job, malformed) fails identically to an unknown
+      // task: nothing here distinguishes them (R-D6 no-oracle posture).
+      for (const taskId of args.task_ids) {
+        if (!deps.tasks.get(taskId)) throw new Error(`unknown task: ${taskId}`)
+      }
+      const timeoutMs = Math.min(600_000, Math.max(100, args.timeout_ms ?? 30_000))
+      if (args.wait === true) {
+        const deadline = Date.now() + timeoutMs
+        for (const taskId of args.task_ids) {
+          await deps.tasks.wait(taskId, Math.max(0, deadline - Date.now()))
+        }
+      }
+      return {
+        tasks: args.task_ids.map((taskId) => {
+          const t = deps.tasks.get(taskId)!
+          return {
+            task_id: t.id,
+            status: t.status,
+            ...(t.outcome !== undefined ? { outcome: t.outcome } : {}),
+            agent_path: t.agentPath,
+            description: t.description,
+            ...(t.resultText !== undefined ? { resultText: t.resultText } : {}),
+            ...(t.error !== undefined ? { error: t.error } : {}),
+            time_created: t.timeCreated,
+          }
+        }),
+      }
+    },
+  }
+
+  const stopTaskTool: Tool<{ task_id: string; reason?: string }, { outcome: string; cancelled: number; task_ids: string[] }> = {
+    name: "stop_task",
+    description: "Cancel a subagent task and its whole descendant tree (durable cancelled markers + interrupt + quiescence wait). Already-terminal tasks report finished.",
+    inputSchema: { type: "object", properties: { task_id: { type: "string" }, reason: { type: "string" } }, required: ["task_id"] },
+    isReadOnly: false,
+    execute: async (args) => {
+      const existing = deps.tasks.get(args.task_id)
+      if (!existing) throw new Error(`unknown task: ${args.task_id}`)
+      if (existing.outcome !== undefined) return { outcome: "already-finished", cancelled: 0, task_ids: [] }
+      const result = await cancelSubtree(deps, args.task_id, args.reason)
+      return { outcome: "cancellation-requested", cancelled: result.cancelled, task_ids: result.taskIds }
+    },
+  }
+
+  return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool, jobOutputTool, jobListTool, jobKillTool, getTaskOutputTool, stopTaskTool]
+}
+
+// M26-D3: cancel a task + its whole descendant tree (agentPath prefix = the
+// delegation tree), durable marks in ONE doc write (registry.cancelTree —
+// terminalizes + enqueues notifications), then interrupt the live table subtree
+// (existing controller channel) and await quiescence via each entry's
+// followupChain (covers the initial run + all chained followups).
+export async function cancelSubtree(
+  deps: SubagentToolDeps,
+  taskId: string,
+  reason?: string,
+): Promise<{ taskIds: string[]; cancelled: number }> {
+  const root = deps.tasks.get(taskId)
+  if (!root) throw new Error(`unknown task: ${taskId}`)
+  if (root.outcome !== undefined) return { taskIds: [], cancelled: 0 }
+  const result = deps.tasks.cancelTree(taskId, reason ?? "task cancelled by owner")
+  const prefix = `${root.agentPath}/`
+  const entries = [...deps.table.entries().values()].filter(
+    (e) => e.path === root.agentPath || e.path.startsWith(prefix),
+  )
+  for (const e of entries) {
+    e.controller.abort()
+    if (e.jobId) deps.jobs.kill(e.jobId)
+  }
+  await Promise.allSettled(entries.map((e) => e.followupChain ?? Promise.resolve()))
+  return result
 }
 
 // M23 (Minor 4): lazy resident rebuild, extracted verbatim from resume_agent's

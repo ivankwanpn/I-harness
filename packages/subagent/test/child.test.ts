@@ -84,6 +84,8 @@ function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enque
     async getDocument() { return undefined },
     ownerOf() { return false },
     async adoptOwnership() {},
+    async profile() { throw new Error("unused") },
+    async updateMeta() { throw new Error("unused") },
   }
 }
 
@@ -193,4 +195,29 @@ describe("spawnChild durable child sessions (M8)", () => {
     expect(path).toBe("root/h")
     expect(table.get("root/h")?.sessionId).toBeUndefined()
   })
+})
+
+describe("spawnChild onSettled seam (M26-D1)", () => {
+  it("fires onSettled after a completed initial run with finalText", async () => {
+    const ctx = createContext()
+    const parentReg = createToolRegistry(ctx)
+    parentReg.register(makeTool("read"))
+    const roles = createRoleRegistry()
+    roles.register({ name: "general", description: "d", systemPrompt: "p", tools: [] })
+    const jobs = createJobRegistry()
+    const table = createAgentTable()
+    const model = createMockClient([{ role: "assistant", text: "ok" }])
+    const settled: { finalText?: string; error?: string; aborted: boolean }[] = []
+    const { path } = await spawnChild({
+      taskName: "helper", message: "hi", parentPath: "root", parentRegistry: parentReg,
+      parentSession: createSession(), parentCtx: ctx, role: roles.get("general")!,
+      parentModel: model, providers: createProviderRegistry(), jobs, table,
+      agents: createAgentRegistry(),
+      onSettled: (info) => { settled.push(info) },
+    })
+    expect(path).toBe("root/helper")
+    await new Promise((r) => setTimeout(r, 150))
+    expect(settled).toHaveLength(1)
+    expect(settled[0]).toEqual({ finalText: "ok", aborted: false })
+  }, 10_000)
 })

@@ -62,6 +62,9 @@ importers:
       '@i-harness/guard-timeout':
         specifier: workspace:*
         version: link:../../packages/guard-timeout
+      '@i-harness/instructions':
+        specifier: workspace:*
+        version: link:../../packages/instructions
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../../packages/interaction
@@ -80,12 +83,18 @@ importers:
       '@i-harness/output-retention':
         specifier: workspace:*
         version: link:../../packages/output-retention
+      '@i-harness/plan-mode':
+        specifier: workspace:*
+        version: link:../../packages/plan-mode
       '@i-harness/preset':
         specifier: workspace:*
         version: link:../../packages/preset
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../../packages/provider
+      '@i-harness/runtime-context':
+        specifier: workspace:*
+        version: link:../../packages/runtime-context
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../../packages/sandbox
@@ -110,6 +119,9 @@ importers:
       '@i-harness/session-query':
         specifier: workspace:*
         version: link:../../packages/session-query
+      '@i-harness/session-title':
+        specifier: workspace:*
+        version: link:../../packages/session-title
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell
@@ -122,9 +134,15 @@ importers:
       '@i-harness/telemetry':
         specifier: workspace:*
         version: link:../../packages/telemetry
+      '@i-harness/terminal':
+        specifier: workspace:*
+        version: link:../../packages/terminal
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../../packages/tool-search
+      '@i-harness/web':
+        specifier: workspace:*
+        version: link:../../packages/web
       '@i-harness/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -227,6 +245,12 @@ importers:
         specifier: workspace:*
         version: link:../interaction
 
+  packages/credentials:
+    dependencies:
+      '@i-harness/fs':
+        specifier: workspace:*
+        version: link:../fs
+
   packages/exec:
     dependencies:
       '@i-harness/core-plugin':
@@ -235,6 +259,19 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+
+  packages/feedback:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+    devDependencies:
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
 
   packages/fs:
     dependencies:
@@ -260,17 +297,47 @@ importers:
         specifier: ^1.18.0
         version: 1.18.0
 
+  packages/goal:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+
   packages/guard-approval:
     dependencies:
+      '@i-harness/core-agent':
+        specifier: workspace:*
+        version: link:../core-agent
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../interaction
+      '@i-harness/llm-mock':
+        specifier: workspace:*
+        version: link:../llm-mock
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+      '@i-harness/subagent':
+        specifier: workspace:*
+        version: link:../subagent
 
   packages/guard-repeat-tool:
     dependencies:
@@ -309,11 +376,41 @@ importers:
         specifier: workspace:*
         version: link:../shell
 
+  packages/hooks:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+    devDependencies:
+      '@i-harness/core-agent':
+        specifier: workspace:*
+        version: link:../core-agent
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/llm-mock':
+        specifier: workspace:*
+        version: link:../llm-mock
+
+  packages/instructions: {}
+
   packages/interaction:
     dependencies:
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+
+  packages/jobs:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
 
   packages/llm-anthropic:
     dependencies:
@@ -372,7 +469,32 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/output-retention: {}
+  packages/output-retention:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+
+  packages/plan-mode:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+
+  packages/plugin-registry:
+    dependencies:
+      '@i-harness/fs':
+        specifier: workspace:*
+        version: link:../fs
 
   packages/preset:
     dependencies:
@@ -385,6 +507,9 @@ importers:
 
   packages/provider:
     dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
       '@i-harness/llm-anthropic':
         specifier: workspace:*
         version: link:../llm-anthropic
@@ -397,6 +522,15 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+
+  packages/runtime-context:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
 
   packages/sandbox: {}
 
@@ -423,6 +557,12 @@ importers:
       koffi:
         specifier: ^3.1.0
         version: 3.1.6
+
+  packages/schedule:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
 
   packages/session-persistence:
     dependencies:
@@ -473,6 +613,23 @@ importers:
       '@i-harness/session-persistence-sqlite':
         specifier: workspace:*
         version: link:../session-persistence-sqlite
+
+  packages/session-title:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/llm-mock':
+        specifier: workspace:*
+        version: link:../llm-mock
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+
+  packages/settings: {}
 
   packages/shell:
     dependencies:
@@ -546,6 +703,18 @@ importers:
 
   packages/telemetry: {}
 
+  packages/terminal:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      node-pty:
+        specifier: ^1.1.0
+        version: 1.1.0
+
   packages/todo:
     dependencies:
       '@i-harness/core-session':
@@ -570,6 +739,21 @@ importers:
         specifier: workspace:*
         version: link:../core-tools
 
+  packages/web:
+    dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/output-retention':
+        specifier: workspace:*
+        version: link:../output-retention
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
+
   packages/workflow:
     dependencies:
       '@i-harness/core-plugin':
@@ -587,6 +771,16 @@ importers:
       yaml:
         specifier: ^2.4.2
         version: 2.9.0
+
+  packages/workspace:
+    dependencies:
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+    devDependencies:
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
 
 packages:
 
@@ -1380,6 +1574,12 @@ packages:
   negotiator@1.1.0:
     resolution: {integrity: sha512-NMPBRMJgiQHjbd8phG3Vebdx4kZ1H121rbl5IkMqeOsahptB9BKo/d7oJ3zTXqTgagn2bWlNSXkh0QUGM31RYg==}
     engines: {node: '>=18'}
+
+  node-addon-api@7.1.1:
+    resolution: {integrity: sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==}
+
+  node-pty@1.1.0:
+    resolution: {integrity: sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==}
 
   object-assign@4.1.1:
     resolution: {integrity: sha512-rJgTQnkUnH1sFw8yT6VSU3zD3sWmu6sZhIseY8VX+GRu3P6F7Fu+JNDoXfklElbLJSnc3FUQHVe4cU5hj+BcUg==}
@@ -2323,6 +2523,12 @@ snapshots:
   negotiator@1.1.0:
     dependencies:
       content-type: 2.1.0
+
+  node-addon-api@7.1.1: {}
+
+  node-pty@1.1.0:
+    dependencies:
+      node-addon-api: 7.1.1
 
   object-assign@4.1.1: {}
 

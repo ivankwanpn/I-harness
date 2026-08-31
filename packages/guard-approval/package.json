@@ -13,6 +13,14 @@
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
-    "@i-harness/interaction": "workspace:*"
+    "@i-harness/interaction": "workspace:*",
+    "@i-harness/core-agent": "workspace:*",
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/llm-seam": "workspace:*",
+    "@i-harness/llm-mock": "workspace:*",
+    "@i-harness/provider": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*",
+    "@i-harness/exec": "workspace:*",
+    "@i-harness/subagent": "workspace:*"
   }
 }

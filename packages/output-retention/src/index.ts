@@ -205,3 +205,6 @@ function sanitizeSegment(s: string): string {
 export function spillNotice(omittedBytes: number, path: string): string {
   return `(Omitted ${omittedBytes} bytes. Full result stored at: ${path}. Use read with offset/limit, or grep this path to search within it.)`
 }
+
+export { createOutputSpillGuard, gcSpillStore, createUnifiedSpillStore } from "./spill-guard.ts"
+export type { OutputSpillGuardConfig } from "./spill-guard.ts"

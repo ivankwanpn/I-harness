@@ -31,3 +31,10 @@ I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v
 - 吸收：
   - `packages/skills/src/{tool,search}.ts` — skill 工具形（skill_search/skill_get deferred 檢索入口 + base-directory 提示）+ 目錄檔案清單取樣（MODEL_FILE_LIMIT=10 + "sampled" 註記、SKILL.md 排除）
 - License: MIT
+
+## node-pty (MIT)
+- 來源：https://github.com/microsoft/node-pty
+- 吸收：`packages/terminal/src/service.ts` — ConPTY/Winpty 後端選擇、onData/onExit 生命週期與
+  CRLF 歸一（dsh packages/tool-terminal 同源機制；M26-B2 唯一新外部依賴，pnpm-workspace.yaml
+  allowBuilds 對照 koffi 先例）
+- License: MIT

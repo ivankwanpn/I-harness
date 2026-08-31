@@ -3,6 +3,9 @@
 export type TelemetryEventType =
   | "session/start"
   | "session/end"
+  | "session/request" // an inbound prompt submitted to the SessionService (R-C6)
+  | "session/queued" // the submit chained behind an active turn (per-session serial, R-C6)
+  | "session/error" // a run failed / rejected (R-C6)
   | "turn/start"
   | "turn/end"
   | "tool/start"

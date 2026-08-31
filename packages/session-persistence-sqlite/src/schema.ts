@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite"
 import type { SessionEvent } from "@i-harness/core-session"
 import { deriveSearchText } from "@i-harness/core-session"
 
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 export const APPLICATION_ID = 0x4948524e // "IHRN"
 
 export type JournalMode = "wal" | "delete" | "truncate" | "persist"
@@ -28,6 +28,16 @@ export const MIGRATIONS: Record<number, (db: DatabaseSync) => void> = {
       const ev = JSON.parse(r.data) as SessionEvent
       insert.run(r.session_id, r.seq, r.type, r.time, deriveSearchText(ev))
     }
+  },
+  // Migration 2→3 (C5 session title): sessions.title replaceable column.
+  // The fresh-database DDL below already carries `title TEXT`, so an old DB
+  // is the only consumer of the ALTER — guarded by a pragma_table_info check
+  // so an idempotent re-run never double-adds it.
+  2: (db) => {
+    const { c } = db.prepare(
+      "SELECT COUNT(*) AS c FROM pragma_table_info('sessions') WHERE name = 'title'",
+    ).get() as { c: number }
+    if (c === 0) db.exec("ALTER TABLE sessions ADD COLUMN title TEXT")
   },
 }
 
@@ -113,7 +123,8 @@ export function openDatabase(path: string, journalMode: JournalMode = "wal"): Da
           delegation_depth INTEGER,
           agent_preset     TEXT,
           incarnation      TEXT NOT NULL,
-          revision         INTEGER NOT NULL
+          revision         INTEGER NOT NULL,
+          title            TEXT
         ) STRICT;
         CREATE TABLE IF NOT EXISTS events (
           session_id        TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,

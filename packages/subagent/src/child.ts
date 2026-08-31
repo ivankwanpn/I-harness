@@ -29,6 +29,9 @@ export interface SpawnOptions {
   // created through the coordinator with the lineage header, and mirrored to
   // the parent's write-behind coordinator.
   childSessions?: { coordinator: SessionCoordinator; parentSessionId: string }
+  // M26-D1: settle callback — fires once when the initial run settles (the
+  // task protocol's spawn record transitions on it). Additive: absent = today.
+  onSettled?: (info: { finalText?: string; error?: string; aborted: boolean }) => void
 }
 
 export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jobId: string; sessionId?: string }> {
@@ -128,6 +131,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       // from an earlier interrupted attempt is cleared on success.
       if (e) { e.status = "waiting"; e.error = undefined; e.finalText = result.finalText }
       opts.jobs.updateJob(jobId, { status: "completed", output: result.finalText })
+      opts.onSettled?.({ finalText: result.finalText, aborted: false })
     },
     (err) => {
       const aborted = controller.signal.aborted
@@ -138,6 +142,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
         e.error = aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
       }
       opts.jobs.updateJob(jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
+      opts.onSettled?.({ error: err instanceof Error ? err.message : String(err), aborted })
     },
   )
 

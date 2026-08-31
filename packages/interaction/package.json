@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@i-harness/core-plugin": "workspace:*"
+    "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-tools": "workspace:*"
   }
 }
