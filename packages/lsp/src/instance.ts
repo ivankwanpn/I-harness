@@ -4,7 +4,7 @@
 import { pathToFileURL } from "node:url"
 import type { ConnectionSpec } from "./connection.ts"
 import { spawnLspConnection, type LspConnection } from "./connection.ts"
-import { normalizeHover, normalizeLocations } from "./translate.ts"
+import { normalizeCallHierarchyCalls, normalizeCallHierarchyItems, normalizeHover, normalizeLocations, normalizeSymbols } from "./translate.ts"
 
 export interface InstanceSpec extends ConnectionSpec {
   initializeOptions?: unknown
@@ -14,19 +14,29 @@ export interface InstanceSpec extends ConnectionSpec {
   startupTimeoutMs?: number
 }
 
-export type LspOperation = "goToDefinition" | "findReferences" | "hover"
+export type LspOperation =
+  | "goToDefinition" | "findReferences" | "hover"
+  | "documentSymbol" | "workspaceSymbol"
+  | "callHierarchy" | "incomingCalls" | "outgoingCalls"
 
-export interface LspQuery {
-  operation: LspOperation
-  filePath: string
-  line: number        // 1-based
-  character: number   // 1-based UTF-16
-}
+export type LspQuery =
+  | { operation: "goToDefinition" | "findReferences" | "hover"; filePath: string; line: number; character: number }
+  | { operation: "documentSymbol"; filePath: string }
+  | { operation: "workspaceSymbol"; query: string }
+  | { operation: "callHierarchy"; filePath: string; line: number; character: number }
+  | { operation: "incomingCalls" | "outgoingCalls"; item: LspCallHierarchyItem }
 
 export interface LspPosition { line: number; character: number }
 export interface LspRange { start: LspPosition; end: LspPosition }
 export interface LspLocation { uri: string; range: LspRange }
 export interface LspHover { contents: string; range?: LspRange }
+/** M26-B5: 扁平化符號（DocumentSymbol 階層平鋪後或 SymbolInformation 原樣）。 */
+export interface LspSymbol { name: string; kind: number; detail?: string; uri: string; range: LspRange }
+/** M26-B5: prepareCallHierarchy 的項目（selectionRange 必需——回傳給 incoming/outgoing）。 */
+export interface LspCallHierarchyItem {
+  name: string; kind: number; detail?: string; uri: string; range: LspRange; selectionRange: LspRange; data?: unknown
+}
+export interface LspCallHierarchyCall { item: LspCallHierarchyItem; fromRanges: LspRange[] }
 /** A diagnostic as reported by a language server (textDocument/diagnostic).
  *  Ranges stay 0-based LSP coordinates; the 1-based conversion happens at render time. */
 export interface LspDiagnostic {
@@ -41,24 +51,34 @@ export type LspQueryResult =
   | { kind: "locations"; locations: LspLocation[] }
   | { kind: "empty" }
   | { kind: "hover"; hover: LspHover | null }
+  | { kind: "symbols"; symbols: LspSymbol[] }
+  | { kind: "callHierarchy"; items: LspCallHierarchyItem[] }
+  | { kind: "calls"; calls: LspCallHierarchyCall[]; direction: "incoming" | "outgoing"; target: LspCallHierarchyItem }
 
 const OP_TO_METHOD: Record<LspOperation, string> = {
   goToDefinition: "textDocument/definition",
   findReferences: "textDocument/references",
   hover: "textDocument/hover",
+  documentSymbol: "textDocument/documentSymbol",
+  workspaceSymbol: "workspace/symbol",
+  callHierarchy: "textDocument/prepareCallHierarchy",
+  incomingCalls: "callHierarchy/incomingCalls",
+  outgoingCalls: "callHierarchy/outgoingCalls",
 }
 
-const OP_TO_CAPABILITY: Record<LspOperation, keyof { definitionProvider: unknown; referencesProvider: unknown; hoverProvider: unknown }> = {
-  goToDefinition: "definitionProvider",
-  findReferences: "referencesProvider",
-  hover: "hoverProvider",
+const OP_TO_CAPABILITY: Record<LspOperation, string> = {
+  goToDefinition: "definitionProvider", findReferences: "referencesProvider", hover: "hoverProvider",
+  documentSymbol: "documentSymbolProvider", workspaceSymbol: "workspaceSymbolProvider",
+  callHierarchy: "prepareCallHierarchyProvider", incomingCalls: "callHierarchyProvider", outgoingCalls: "callHierarchyProvider",
 }
+
+// M26-B5 additive：translate.ts 要用的既有 helper（原 local，改 export）。
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function isPos(v: unknown): v is LspPosition {
+export function isPos(v: unknown): v is LspPosition {
   if (typeof v !== "object" || v === null) return false
   const p = v as Record<string, unknown>
   return typeof p.line === "number" && typeof p.character === "number"
@@ -178,18 +198,53 @@ export class LspInstance {
     if (this.capabilities[capKey] === false || this.capabilities[capKey] === undefined) {
       throw new Error(`LSP_UNSUPPORTED_OPERATION: server does not support ${query.operation}`)
     }
-    const uri = this.fileUri(query.filePath)
-    return this.withOpenDocument(uri, query.filePath, source, async () => {
-      const method = OP_TO_METHOD[query.operation]
-      const params = {
-        textDocument: { uri },
-        position: { line: query.line - 1, character: query.character - 1 }, // 1-based → 0-based wire
-        ...(query.operation === "findReferences" ? { context: { includeDeclaration: true } } : {}),
+    const method = OP_TO_METHOD[query.operation]
+    // M26-B5 分派（兩類）：
+    //   A) 無文檔類（workspaceSymbol / incomingCalls / outgoingCalls）→ 直接 conn.request（不 didOpen）
+    //   B) textDocument 類（documentSymbol/callHierarchy 與既有三 op）→ withOpenDocument 內 request
+    if (query.operation === "workspaceSymbol") {
+      const result = await this.conn.request(method, { query: query.query }, signal)
+      return { kind: "symbols", symbols: normalizeSymbols(result) }
+    }
+    if (query.operation === "incomingCalls" || query.operation === "outgoingCalls") {
+      const result = await this.conn.request(method, { item: query.item }, signal) // data 欄位原樣隨行
+      const calls = normalizeCallHierarchyCalls(result)
+      return {
+        kind: "calls",
+        calls,
+        direction: query.operation === "incomingCalls" ? "incoming" : "outgoing",
+        target: query.item,
+      }
+    }
+    // query 是參數（閉包不繼承收窄）——const 別名把收窄帶進閉包。
+    const docQuery = query as Extract<LspQuery, { operation: "goToDefinition" | "findReferences" | "hover" | "documentSymbol" | "callHierarchy" }>
+    const uri = this.fileUri(docQuery.filePath)
+    return this.withOpenDocument(uri, docQuery.filePath, source, async () => {
+      let params: Record<string, unknown>
+      if (docQuery.operation === "documentSymbol") {
+        params = { textDocument: { uri } }
+      } else if (docQuery.operation === "callHierarchy") {
+        params = {
+          textDocument: { uri },
+          position: { line: docQuery.line - 1, character: docQuery.character - 1 }, // 1-based → 0-based wire
+        }
+      } else {
+        params = {
+          textDocument: { uri },
+          position: { line: docQuery.line - 1, character: docQuery.character - 1 }, // 1-based → 0-based wire
+          ...(docQuery.operation === "findReferences" ? { context: { includeDeclaration: true } } : {}),
+        }
       }
       const result = await this.conn.request(method, params, signal)
-      if (query.operation === "hover") {
+      if (docQuery.operation === "hover") {
         const hover = normalizeHover(result)
         return { kind: "hover", hover }
+      }
+      if (docQuery.operation === "documentSymbol") {
+        return { kind: "symbols", symbols: normalizeSymbols(result, uri) }
+      }
+      if (docQuery.operation === "callHierarchy") {
+        return { kind: "callHierarchy", items: normalizeCallHierarchyItems(result) }
       }
       const locs = normalizeLocations(result)
       return locs.length === 0 ? { kind: "empty" } : { kind: "locations", locations: locs }

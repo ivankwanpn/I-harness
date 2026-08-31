@@ -5,3 +5,4 @@ packages:
 allowBuilds:
   esbuild: true
   koffi: true
+  node-pty: true   # M26-B2: node-pty 原生綁定（見 Global Constraints 例外依據）

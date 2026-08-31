@@ -73,3 +73,4 @@
 | R-C6 | **M26 立即** | 同批（事件碼擴充） |
 | R-C7 | 後補 | ACP 兼容策略待產品定 |
 | R-C8 | 遠期 | 分享/遠程（產品面） |
+| R-C1 | （執行註記 2026-08-31） | ① 全局 surface 改名 `SessionService`（A 區已先佔 `SessionExecutor` = 每 session lane）；registry 即 A 的 per-session lane。② A 的 `drain()` 失敗即 reject → service.submit reject → host error frame。③ E 區全套（settings/credentials/workspace/plugin-registry/goal/jobs/feedback）已落地 → branch host.ts 全路由直接實裝（無 duck face、無 modelProtocol 暫存模組）。④ run.ts 環境下沉到 `createSessionAssembly`（policySession 選項保 sandbox 解析語義）。⑤ web-host 靜態 SPA 延後（C 範圍外）+ `Endpoint` 去掉 team/telemetry。⑥ A 區命令名（session/send 等）正名為 DSH 文法（session-send……）。⑦ mux ready 幀在 open 幀之後（以 branch mux 為準）。⑧ 附加 IMAGE 常量轉 core-session 導出。 |

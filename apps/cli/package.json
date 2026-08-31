@@ -12,7 +12,13 @@
   },
   "dependencies": {
     "@i-harness/agent-team": "workspace:*",
+    "@i-harness/attachment": "workspace:*",
     "@i-harness/compaction": "workspace:*",
+    "@i-harness/credentials": "workspace:*",
+    "@i-harness/runtime-context": "workspace:*",
+    "@i-harness/instructions": "workspace:*",
+    "@i-harness/session-title": "workspace:*",
+    "@i-harness/plan-mode": "workspace:*",
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-session": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
@@ -40,12 +46,18 @@
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-persistence-jsonl": "workspace:*",
     "@i-harness/session-persistence-sqlite": "workspace:*",
+    "@i-harness/session-executor": "workspace:*",
+    "@i-harness/settings": "workspace:*",
     "@i-harness/session-query": "workspace:*",
     "@i-harness/telemetry": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
     "@i-harness/skills": "workspace:*",
     "@i-harness/subagent": "workspace:*",
     "@i-harness/workflow": "workspace:*",
+    "@i-harness/terminal": "workspace:*",
+    "@i-harness/web": "workspace:*",
+    "@i-harness/web-host": "workspace:*",
+    "@i-harness/workspace": "workspace:*",
     "@vscode/ripgrep": "^1.18.0"
   }
 }

@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest"
+import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createJobRegistry, type JobRegistry } from "../src/jobs.ts"
 import { createAgentTable, type AgentTable } from "../src/agent-table.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "../src/roles.ts"
 import {
+  emitRestoredJobTransitions,
   snapshotState, restoreState, persistentJobRegistry, persistentAgentTable,
   persistentRoleRegistry, wireSubagentPersistence,
   type SubagentStateSnapshot, type SubagentPersistence,
@@ -194,5 +196,125 @@ describe("persistent wrappers", () => {
     wired.roles.register({ name: "custom", description: "d", systemPrompt: "p", tools: [] })
     expect(saved).toHaveLength(2)
     expect(saved[1]!.roles.map((r) => r.name)).toContain("custom")
+  })
+})
+
+describe("task 4.4: job stamp persistence + job/status events", () => {
+  it("snapshotState carries startedAt/endedAt; restoreState replays them verbatim", () => {
+    const s = makeState()
+    const { id } = s.jobs.registerJob("root", "subagent", "h", undefined, 10)
+    s.jobs.updateJob(id, { status: "completed", output: "done", startedAt: 10, endedAt: 20 })
+    const snap = snapshotState(s)
+    expect(snap.jobs[0]).toMatchObject({ id, startedAt: 10, endedAt: 20, terminal: true })
+    const fresh = makeState()
+    restoreState(fresh, snap)
+    expect(fresh.jobs.read(id)).toMatchObject({ startedAt: 10, endedAt: 20 })
+  })
+
+  it("wireSubagentPersistence with a parentSession appends a job/status event per real transition (and none for no-ops)", async () => {
+    const s = makeState()
+    const parent = createSession()
+    const persist: SubagentPersistence = {
+      coordinator: { putDocument: async () => {}, getDocument: async () => undefined } as unknown as SubagentPersistence["coordinator"],
+      stateId: "subagent-state",
+      parentSessionId: "sess-main",
+      parentSession: parent,
+    }
+    const wired = wireSubagentPersistence(s, persist)
+    const { id } = wired.jobs.registerJob("root", "subagent", "h")
+    expect(parent.events.map((e) => e.type)).toEqual(["job/status"])
+    const first = parent.events[0] as Extract<SessionEvent, { type: "job/status" }>
+    expect(first.job).toMatchObject({ jobId: id, kind: "subagent", label: "h", status: "running", outputAvailable: false })
+    expect(typeof first.job.startedAt).toBe("number")
+    // completed transition → second event
+    wired.jobs.updateJob(id, { status: "completed", output: "done" })
+    expect(parent.events.map((e) => e.type)).toEqual(["job/status", "job/status"])
+    const second = parent.events[1] as Extract<SessionEvent, { type: "job/status" }>
+    expect(second.job).toMatchObject({ status: "completed", outputAvailable: true })
+    expect(typeof second.job.endedAt).toBe("number")
+    // updating the same terminal job with the same status/output again is a
+    // no-op state change → NO spurious event (the wrapper compares snapshots).
+    wired.jobs.updateJob(id, { status: "completed", output: "done" })
+    expect(parent.events).toHaveLength(2)
+    // kill on a finished job is a no-op → no event
+    expect(wired.jobs.kill(id)).toBe("already-finished")
+    expect(parent.events).toHaveLength(2)
+  })
+
+  it("wireSubagentPersistence WITHOUT a parentSession appends no events (additive-only)", async () => {
+    const s = makeState()
+    const persist: SubagentPersistence = {
+      coordinator: { putDocument: async () => {}, getDocument: async () => undefined } as unknown as SubagentPersistence["coordinator"],
+      stateId: "subagent-state",
+      parentSessionId: "sess-main",
+    }
+    const wired = wireSubagentPersistence(s, persist)
+    const { id } = wired.jobs.registerJob("root", "subagent", "h")
+    wired.jobs.updateJob(id, { status: "completed", output: "x" })
+    wired.jobs.kill(id)
+    // nothing observable — only the doc writes happened (no session to assert on)
+    expect(snapshotState({ jobs: wired.jobs, table: s.table, roles: s.roles }).jobs).toHaveLength(1)
+  })
+
+  // Task 4.4 (fix round 1) regression: restoreState maps running→"error" on the
+  // RAW registry (pre-wiring) — the observe-wrapped registry can never see that
+  // transition, so without emitRestoredJobTransitions the resumed evented log
+  // would replay the pre-crash `running` event with nothing after it and a fold
+  // would permanently disagree with the durable doc. The emit must replay the
+  // mapped outcome for exactly the mid-flight jobs (and only when events are
+  // opted in). Mirrors the registerSubagent ordering: restore on raw, wire,
+  // then emit.
+  it("emitRestoredJobTransitions replays the running→error mapping as a terminal job/status event (mid-flight only)", () => {
+    const snap: SubagentStateSnapshot = {
+      formatVersion: 1,
+      jobs: [
+        { id: "subagent-1", owner: "root", kind: "subagent", label: "midflight", status: "running", output: "", terminal: false, startedAt: 10 },
+        { id: "subagent-2", owner: "root", kind: "subagent", label: "settled", status: "completed", output: "done", terminal: true, startedAt: 11, endedAt: 12 },
+      ],
+      agentTable: [],
+      roles: [],
+    }
+    // 1. restore on raw registries (the pre-wire step in registerSubagent)
+    const raw = { jobs: createJobRegistry(), table: createAgentTable(), roles: createRoleRegistry() }
+    restoreState(raw, snap)
+    expect(raw.jobs.read("subagent-1").status).toBe("error") // mid-flight → error
+    // 2. wire (observations on) with an evented parent session
+    const parent = createSession()
+    const persist: SubagentPersistence = {
+      coordinator: { putDocument: async () => {}, getDocument: async () => undefined } as unknown as SubagentPersistence["coordinator"],
+      stateId: "subagent-state",
+      parentSessionId: "sess-main",
+      parentSession: parent,
+    }
+    wireSubagentPersistence(raw, persist)
+    // 3. emit the unobserved transition (the registerSubagent post-wire step)
+    emitRestoredJobTransitions(persist, snap, raw.jobs)
+    expect(parent.events.map((e) => e.type)).toEqual(["job/status"])
+    const ev = parent.events[0] as Extract<SessionEvent, { type: "job/status" }>
+    expect(ev.job).toMatchObject({
+      jobId: "subagent-1", kind: "subagent", label: "midflight",
+      status: "error", outputAvailable: true, startedAt: 10,
+    })
+    expect(typeof ev.job.endedAt).toBe("number")
+  })
+
+  it("emitRestoredJobTransitions is a no-op without a parentSession (additive-only)", () => {
+    const snap: SubagentStateSnapshot = {
+      formatVersion: 1,
+      jobs: [{ id: "subagent-1", owner: "root", kind: "subagent", label: "mf", status: "running", output: "", terminal: false }],
+      agentTable: [],
+      roles: [],
+    }
+    const raw = { jobs: createJobRegistry(), table: createAgentTable(), roles: createRoleRegistry() }
+    restoreState(raw, snap)
+    const persist: SubagentPersistence = {
+      coordinator: { putDocument: async () => {}, getDocument: async () => undefined } as unknown as SubagentPersistence["coordinator"],
+      stateId: "subagent-state",
+      parentSessionId: "sess-main",
+    }
+    emitRestoredJobTransitions(persist, snap, raw.jobs)
+    // no session to attach events to — the call resolves without throwing; the
+    // registry outcome is unchanged (error mapping is untouched).
+    expect(raw.jobs.read("subagent-1").status).toBe("error")
   })
 })

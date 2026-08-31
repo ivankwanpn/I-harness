@@ -1,0 +1,14 @@
+{
+  "name": "@i-harness/session-title",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/llm-seam": "workspace:*",
+    "@i-harness/llm-mock": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*"
+  }
+}

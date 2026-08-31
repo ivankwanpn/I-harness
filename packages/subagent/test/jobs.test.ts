@@ -75,4 +75,32 @@ describe("job registry", () => {
     expect(jobs.read(id).status).toBe("completed")
     expect(jobs.read(id).output).toBe("second")
   })
+
+  // Task 4.4: job lifecycle stamps (startedAt/endedAt) — the honest source for
+  // the web jobs surface's duration display.
+  it("records startedAt on register; endedAt appears on terminal transitions and clears on re-open", () => {
+    const jobs = createJobRegistry()
+    const { id } = jobs.registerJob("root", "subagent", "h")
+    const fresh = jobs.read(id)
+    expect(typeof fresh.startedAt).toBe("number")
+    expect(fresh.endedAt).toBeUndefined()
+    jobs.updateJob(id, { status: "completed", output: "done" })
+    const done = jobs.read(id)
+    expect(typeof done.startedAt).toBe("number")
+    expect(typeof done.endedAt).toBe("number")
+    // re-open to running clears the end stamp (the same logical job is live again)
+    jobs.updateJob(id, { status: "running" })
+    expect(jobs.read(id).endedAt).toBeUndefined()
+    // kill stamps too
+    jobs.kill(id)
+    expect(typeof jobs.read(id).endedAt).toBe("number")
+  })
+
+  it("registerJob accepts an explicit startedAt (restore path); list/read carry the stamps", () => {
+    const jobs = createJobRegistry()
+    const { id } = jobs.registerJob("root", "subagent", "h", undefined, 1234)
+    jobs.updateJob(id, { status: "completed", output: "x", startedAt: 1234, endedAt: 2234 })
+    expect(jobs.read(id)).toMatchObject({ startedAt: 1234, endedAt: 2234 })
+    expect(jobs.list("root")[0]).toMatchObject({ startedAt: 1234, endedAt: 2234 })
+  })
 })

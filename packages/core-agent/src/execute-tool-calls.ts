@@ -10,6 +10,9 @@ export interface BatchCall {
   callId: string
   name: string
   args: unknown
+  // M26 (R-D1): durable seq of the invoking tool/call event (set by runTurn;
+  // optional so pre-M26 callers / tests keep compiling).
+  eventSeq?: number
 }
 
 export interface ExecuteToolCallsOptions {
@@ -88,7 +91,11 @@ export async function executeToolCalls(
     // not be counted as started — the boundary stays truthful (on abort the
     // [startedUpTo, batch.length) range decides which calls get synthesized
     // TOOL_ABORTED_BEFORE_DISPATCH results).
-    const prepared = await tools.prepare({ name: call.name, args: call.args }, opts.signal, { sessionId: opts.sessionId })
+    const prepared = await tools.prepare(
+      { name: call.name, args: call.args },
+      opts.signal,
+      { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
+    )
     startedUpTo = index + 1
     // M25: tool/start only once the call is REALLY dispatched (after prepare —
     // a prepare failure means the tool never started, mirroring the

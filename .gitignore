@@ -40,3 +40,6 @@ desktop.ini
 
 # Windows
 *~
+
+# git worktrees（區域隔離工作區）
+.worktrees/

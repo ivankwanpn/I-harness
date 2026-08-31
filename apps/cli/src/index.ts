@@ -7,6 +7,8 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSqliteBackend } from "@i-harness/session-persistence-sqlite"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { parsePort, runWebServer } from "./web.ts"
+import type { WebServerOptions } from "./web.ts"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -25,8 +27,35 @@ export function parseModel(modelSpec: string, apiKey: string): ModelClient {
 
 export async function main(argv: string[]): Promise<number> {
   const args = argv.slice(2)
+  // R-C1 web subcommand: the thin composition over the session service
+  // (apps/cli/src/web.ts). PORT env wins over the default; the workspace is
+  // the cwd; auth is opt-in (--launch-token/--hmac-secret) — absent = no
+  // fence (dev), present = the R-C3 fence.
+  if (args[0] === "web") {
+    const backendIdx = args.indexOf("--session-backend")
+    const sessionBackend = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
+    const launchIdx = args.indexOf("--launch-token")
+    const hmacIdx = args.indexOf("--hmac-secret")
+    const launchToken = launchIdx !== -1 ? args[launchIdx + 1] : process.env.I_HARNESS_TOKEN
+    const hmacSecret = hmacIdx !== -1 ? args[hmacIdx + 1] : process.env.I_HARNESS_HMAC
+    const opts: WebServerOptions = {
+      port: parsePort(process.env.PORT),
+      workspace: process.cwd(),
+      sessionBackend,
+      ...(launchToken !== undefined || hmacSecret !== undefined
+        ? { auth: { launchToken, hmacSecret }, printLoginUrl: true }
+        : {}),
+    }
+    try {
+      const result = await runWebServer(opts)
+      return Promise.resolve(result.port)
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err))
+      return Promise.resolve(1)
+    }
+  }
   if (args[0] !== "run") {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry]")
+    console.error("usage: i-harness <run|web> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET]")
     return Promise.resolve(1)
   }
 

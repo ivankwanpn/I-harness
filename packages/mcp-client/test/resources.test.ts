@@ -46,4 +46,18 @@ describe("createResourceTools", () => {
     await readTool.execute({ server: "files", uri: "file:///a.txt" }, { abortSignal: signal } as never)
     expect(called).toEqual({ server: "files", uri: "file:///a.txt", signal })
   })
+
+  it("list_mcp_resource_templates__files exists and forwards to client.listResourceTemplates", async () => {
+    let called: { signal?: AbortSignal } | undefined
+    const client: ConnectedMcpClient = {
+      ...fakeClient(),
+      async listResourceTemplates(signal?: AbortSignal) { called = { signal }; return [{ uriTemplate: "data://{id}", name: "x" }] },
+    } as unknown as ConnectedMcpClient
+    const tools = createResourceTools(client, "files", { transport: "stdio", serverName: "files", command: "x", args: [] })
+    const templatesTool = tools.find((t) => t.name === "list_mcp_resource_templates__files")!
+    const signal = new AbortController().signal
+    const out = await templatesTool.execute({}, { abortSignal: signal } as never)
+    expect(called).toEqual({ signal })
+    expect(out).toEqual([{ uriTemplate: "data://{id}", name: "x" }])
+  })
 })

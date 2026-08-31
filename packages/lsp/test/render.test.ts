@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { formatLocations, formatHover, formatDiagnostics } from "../src/index.ts"
+import { formatLocations, formatHover, formatDiagnostics, formatSymbols, formatCallHierarchyCalls } from "../src/index.ts"
 import { normalizeLocations, normalizeHover } from "../src/index.ts"
 
 describe("render", () => {
@@ -136,5 +136,25 @@ describe("translate", () => {
   it("normalizeHover treats null contents as malformed", () => {
     expect(normalizeHover({ contents: null })).toBeNull()
     expect(normalizeHover({ contents: undefined })).toBeNull()
+  })
+})
+
+describe("M26-B5 render", () => {
+  const URI = "file:///D:/w/a.ts"
+
+  it("formatSymbols renders one line per symbol with kind + workspace-relative loc + detail", () => {
+    const out = formatSymbols([
+      { name: "main", kind: 12, uri: URI, range: { start: { line: 0, character: 4 }, end: { line: 0, character: 20 } }, detail: "function" },
+      { name: "inner", kind: 13, uri: URI, range: { start: { line: 1, character: 2 }, end: { line: 1, character: 7 } } },
+    ], { workspaceRoot: "D:/w" })
+    expect(out).toBe(`main [12] a.ts:1:5-1:21 — function${String.fromCharCode(10)}inner [13] a.ts:2:3-2:8`)
+  })
+
+  it("formatCallHierarchyCalls renders incoming/outgoing semantic lines", () => {
+    const target = { name: "callee", kind: 12, uri: URI, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 10 } }, selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 6 } } }
+    const call = { item: { name: "caller", kind: 12, uri: URI, range: { start: { line: 1, character: 0 }, end: { line: 1, character: 8 } }, selectionRange: { start: { line: 1, character: 0 }, end: { line: 1, character: 8 } } }, fromRanges: [{ start: { line: 1, character: 2 }, end: { line: 1, character: 7 } }] }
+    expect(formatCallHierarchyCalls([call], target, "incoming", { workspaceRoot: "D:/w" })).toBe("caller calls callee at a.ts:2:3-2:8")
+    expect(formatCallHierarchyCalls([call], target, "outgoing", { workspaceRoot: "D:/w" })).toBe("callee calls caller at a.ts:2:3-2:8")
+    expect(formatCallHierarchyCalls([], target, "incoming", {})).toBe("No calls.")
   })
 })

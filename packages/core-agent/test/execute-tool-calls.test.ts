@@ -265,3 +265,43 @@ describe("executeToolCalls scheduler", () => {
     expect(t.maxConcurrent).toBe(0)
   })
 })
+
+describe("M26 tool identity plumbing", () => {
+  it("seeds exec.callId + exec.callEventSeq from the batch", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const seen: { callId?: string; callEventSeq?: number }[] = []
+    tools.register({
+      name: "idTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async (_args, exec) => { seen.push({ callId: exec.callId, callEventSeq: exec.callEventSeq }) },
+    })
+    // c'tor of BatchCall: eventSeq = the tool/call event's durable seq (0,1 here)
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "idTool", args: {}, eventSeq: 99 },
+      { callId: "c1", name: "idTool", args: {}, eventSeq: 100 },
+    ], { maxParallel: 2 })
+    expect(seen).toEqual([
+      { callId: "c0", callEventSeq: 99 },
+      { callId: "c1", callEventSeq: 100 },
+    ])
+  })
+
+  it("leaves exec.callEventSeq undefined when the batch carries no eventSeq (backward compat)", async () => {
+    // ADAPTATION (M26-D1, plan T2 Step 1 vs Step 4): the plan's test asserted
+    // callId undefined too, but BatchCall.callId is a REQUIRED field seeded
+    // unconditionally (identity degrades to toolCallId-only when eventSeq is
+    // absent) — the backward-compat property that matters is callEventSeq
+    // staying undefined for pre-M26 callers.
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const seen: { callId?: string; callEventSeq?: number }[] = []
+    tools.register({
+      name: "idTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async (_args, exec) => { seen.push({ callId: exec.callId, callEventSeq: exec.callEventSeq }) },
+    })
+    await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "idTool", args: {} }], { maxParallel: 2 })
+    expect(seen).toEqual([{ callId: "c0", callEventSeq: undefined }])
+  })
+})

@@ -24,6 +24,10 @@ export interface ToolExec {
   // scheduler resolves team tool callers from this (a teammate's child-session
   // id → that member; the parent session id → the Lead).
   sessionId?: string
+  // M26 (R-D1): the executing tool/call identity — seeded by the M13 scheduler
+  // so tool bodies can durably key a submission to the invoking log event.
+  callId?: string
+  callEventSeq?: number
 }
 
 export type ToolDecision =
@@ -99,12 +103,20 @@ function isDecision(value: unknown): value is ToolDecision {
 
 type ApprovalAnswerer = (req: { name: string; reason: string }) => Promise<boolean>
 
+// R-A9: auto-approval guardian surface. The guardian is consulted BEFORE the
+// human answerer for `ask` decisions: deny ⇒ fail-closed throw; approve ⇒
+// auto-approve (answerer skipped); allow ⇒ human answerer as before. Absent
+// service ⇒ behavior byte-identical to pre-R-A9.
+export interface GuardianRequest { name: string; reason: string; args: unknown }
+export interface GuardianVerdict { outcome: "approve" | "allow" | "deny"; rationale: string }
+export type ApprovalGuardian = (req: GuardianRequest) => Promise<GuardianVerdict>
+
 export interface ToolRegistry {
   register(tool: Tool): void
   get(name: string): Tool | undefined
   unregister(name: string): void
   schemas(): ToolSchema[]
-  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string }): Promise<PreparedCall>
+  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number }): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>
@@ -192,7 +204,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       }))
   }
 
-  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string }): Promise<PreparedCall> {
+  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number }): Promise<PreparedCall> {
     const tool = tools.get(call.name)
     if (!tool) throw new Error(`unknown tool: ${call.name}`)
 
@@ -232,7 +244,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
 
     // 3. decision enforcement + approval seam — fail closed: no answerer ⇒ deny.
     if (resolved.kind === "deny") throw new Error(`denied: ${resolved.reason}`)
-    if (resolved.kind === "ask") {
+    const askHuman = async (reason: string): Promise<void> => {
       let answerer: ApprovalAnswerer | null = null
       try {
         answerer = ctx.services.get<ApprovalAnswerer>("approval/answerer")
@@ -240,10 +252,28 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
         answerer = null
       }
       if (!answerer) {
-        throw new Error(`approval required but no answerer registered (fail closed): ${resolved.reason}`)
+        throw new Error(`approval required but no answerer registered (fail closed): ${reason}`)
       }
-      const ok = await answerer({ name: call.name, reason: resolved.reason })
-      if (!ok) throw new Error(`denied by user: ${resolved.reason}`)
+      const ok = await answerer({ name: call.name, reason })
+      if (!ok) throw new Error(`denied by user: ${reason}`)
+    }
+    if (resolved.kind === "ask") {
+      // R-A9 guardian: runtime review before the human approval decision.
+      // deny → fail-closed; approve → auto-approve (skip the answerer);
+      // allow → human answerer as before. Absent → pre-R-A9 behavior.
+      let guardian: ApprovalGuardian | undefined
+      try {
+        guardian = ctx.services.get<ApprovalGuardian>("approval/guardian")
+      } catch {
+        guardian = undefined
+      }
+      if (guardian) {
+        const verdict = await guardian({ name: call.name, reason: resolved.reason, args: call.args })
+        if (verdict.outcome === "deny") throw new Error(`guardian denied: ${verdict.rationale}`)
+        if (verdict.outcome === "allow") await askHuman(resolved.reason)
+      } else {
+        await askHuman(resolved.reason)
+      }
     }
 
     // M13: seed the per-dispatch exec with the caller signal so in-flight tool
@@ -255,6 +285,8 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     const exec: ToolExec = {}
     if (signal) exec.abortSignal = signal
     if (identity?.sessionId !== undefined) exec.sessionId = identity.sessionId
+    if (identity?.callId !== undefined) exec.callId = identity.callId
+    if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
 
     return { call, tool, exec }
   }

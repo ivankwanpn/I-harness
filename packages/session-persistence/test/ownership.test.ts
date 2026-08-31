@@ -41,6 +41,17 @@ function fakeBackend(): PersistenceBackend {
     },
     async putDocument(key, data) { documents.set(key, data) },
     async getDocument(key) { return documents.get(key) },
+    async profile(sessionId) {
+      const f = files.get(sessionId)
+      if (!f) throw new Error(`unknown session: ${sessionId}`)
+      return { meta: f.meta, blank: f.events.every((ev) => ev.type !== "turn/start") }
+    },
+    async updateMeta(sessionId, patch) {
+      const f = files.get(sessionId)
+      if (!f) throw new Error(`unknown session: ${sessionId}`)
+      f.meta = { ...f.meta, ...patch }
+      return f.meta
+    },
   }
 }
 

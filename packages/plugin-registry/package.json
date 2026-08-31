@@ -1,0 +1,11 @@
+{
+  "name": "@i-harness/plugin-registry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/fs": "workspace:*"
+  }
+}

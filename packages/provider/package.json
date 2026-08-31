@@ -14,6 +14,7 @@
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/llm-openai": "workspace:*",
     "@i-harness/llm-openai-compatible": "workspace:*",
-    "@i-harness/llm-anthropic": "workspace:*"
+    "@i-harness/llm-anthropic": "workspace:*",
+    "@i-harness/core-plugin": "workspace:*"
   }
 }

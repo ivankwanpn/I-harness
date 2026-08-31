@@ -21,6 +21,7 @@ import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable, type ChildAgentEntry } from "../src/agent-table.ts"
 import { createSubagentTools, driveFollowups, ensureResidentAgent, sweepPendingInbox, type SubagentToolDeps } from "../src/tools.ts"
 import { registerSubagent } from "../src/index.ts"
+import { classifyRestoredTasks, createTaskRegistry } from "../src/task-protocol.ts"
 import type { SubagentStateSnapshot } from "../src/persist.ts"
 
 function setup() {
@@ -38,6 +39,7 @@ function setup() {
   const deps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
     parentModel: model, providers, exec, agents: createAgentRegistry(),
+    tasks: createTaskRegistry(),
   }
   return { deps, table, agents: deps.agents, jobs }
 }
@@ -309,4 +311,71 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     expect(agents.get("child-1")).toBeUndefined() // nothing pending → no rebuild, no drive
     expect(entry.finalText).toBeUndefined()
   }, 10_000)
+})
+
+describe("M26-D1 recovery classification on cold restore", () => {
+  it("classifies running→completed when the durable child log has a complete turn; recovery-required when not", async () => {
+    const states: unknown[] = []
+    const coord = {
+      putDocument: async (_k: string, data: unknown) => { states.push(data) },
+      getDocument: async (k: string) => {
+        if (k === "task-sess-main") {
+          return {
+            formatVersion: 1,
+            tasks: [
+              { id: "task-1", parentSessionId: "sess-main", callEventSeq: 1, childSessionId: "child-done", agentPath: "root/done", description: "d", prompt: "p", agent: "general", delivery: "parent", status: "running", timeCreated: 1 },
+              { id: "task-2", parentSessionId: "sess-main", callEventSeq: 2, childSessionId: "child-ambiguous", agentPath: "root/amb", description: "a", prompt: "p", agent: "general", delivery: "parent", status: "running", timeCreated: 2 },
+              { id: "task-3", parentSessionId: "sess-main", callEventSeq: 3, agentPath: "root/nodispatch", description: "n", prompt: "p", agent: "general", delivery: "parent", status: "accepted", timeCreated: 3 },
+            ],
+            notifications: [],
+          }
+        }
+        return undefined
+      },
+      load: async (sid: string) => {
+        if (sid === "child-done") {
+          return { session: { formatVersion: 1, header: { seedLength: 0 }, events: [
+            { type: "turn/start", seq: 0 }, { type: "user/message", text: "p", seq: 1 },
+            { type: "assistant/message", text: "final answer", seq: 2 }, { type: "turn/end", seq: 3 },
+          ] } }
+        }
+        if (sid === "child-ambiguous") {
+          return { session: { formatVersion: 1, header: { seedLength: 0 }, events: [
+            { type: "turn/start", seq: 0 }, { type: "user/message", text: "p", seq: 1 },
+          ] } }
+        }
+        throw new Error("no such session")
+      },
+    } as never
+    const tasks = createTaskRegistry({ coordinator: coord, stateId: "sess-main" })
+    await (async () => {
+      // ADAPTATION (M26-D1, plan T5 Step 1): `coord` is typed never (fixture
+      // cast) — access just the accessor shape for the simulated mount restore.
+      const pre = await (coord as unknown as { getDocument: (k: string) => Promise<unknown | undefined> }).getDocument("task-sess-main")
+      tasks.restore(pre as never)
+    })()
+    const restored = await classifyRestoredTasks(tasks, coord)
+    expect(restored).toBe(3)
+    expect(tasks.get("task-1")).toMatchObject({ outcome: "completed", resultText: "final answer" })
+    expect(tasks.get("task-2")).toMatchObject({ outcome: "recovery-required", recoveryReason: "response-interrupted" })
+    expect(tasks.get("task-3")).toMatchObject({ outcome: "recovery-required", recoveryReason: "dispatch-unknown" })
+    // recovery classification also enqueues durable notifications (parent delivery)
+    expect(tasks.notifications().map((n) => n.state)).toEqual(["completed", "recovery-required", "recovery-required"])
+  })
+
+  it("cancelled/terminal tasks on restore are kept terminal (never reclassified)", async () => {
+    const tasks = createTaskRegistry()
+    tasks.restore({
+      formatVersion: 1,
+      tasks: [
+        { id: "task-1", parentSessionId: "s1", callEventSeq: 1, childSessionId: "child-c", agentPath: "root/x", description: "x", prompt: "p", agent: "general", delivery: "tool", status: "cancelled", outcome: "cancelled", timeCreated: 1, timeCompleted: 2 },
+      ],
+      notifications: [],
+    })
+    // classification must never touch terminal records — the coordinator is not
+    // consulted at all (a throw proves no load call happened below).
+    const classified = await classifyRestoredTasks(tasks, { load: async () => { throw new Error("should not load") } } as never)
+    expect(classified).toBe(0)
+    expect(tasks.get("task-1")!.outcome).toBe("cancelled")
+  })
 })

@@ -5,8 +5,8 @@
 import { readFile } from "node:fs/promises"
 import { basename, resolve } from "node:path"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
-import type { LspInstance, LspQuery } from "./instance.ts"
-import { formatDiagnostics, formatHover, formatLocations } from "./render.ts"
+import type { LspCallHierarchyItem, LspInstance, LspOperation, LspQuery } from "./instance.ts"
+import { formatDiagnostics, formatHover, formatLocations, formatSymbols } from "./render.ts"
 
 export interface LspToolConfig {
   serverName: string
@@ -43,30 +43,68 @@ export function createLspTools(instance: LspInstance, config: LspToolConfig, wor
     {
       name: "lsp",
       description:
-        "Query a language server for precise code navigation. operation is one of goToDefinition, findReferences, hover. line and character are one-based UTF-16 cursor coordinates.",
+        "Query a language server for precise code navigation. operation is one of goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, callHierarchy, incomingCalls, outgoingCalls. line and character are one-based UTF-16 cursor coordinates.",
       inputSchema: {
         type: "object",
         properties: {
-          operation: { type: "string", enum: ["goToDefinition", "findReferences", "hover"] },
+          operation: { type: "string", enum: ["goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "callHierarchy", "incomingCalls", "outgoingCalls"] },
           file_path: { type: "string" },
           line: { type: "number", minimum: 1 },
           character: { type: "number", minimum: 1 },
+          query: { type: "string" },
+          item: { type: "object", description: "callHierarchy 結果的整枚 item（incomingCalls/outgoingCalls 必填）" },
         },
-        required: ["operation", "file_path", "line", "character"],
+        required: ["operation"],
       },
       isReadOnly: true,
       isConcurrencySafe: true,
-      async execute(args: { operation: LspQuery["operation"]; file_path: string; line: number; character: number }, exec: ToolExec) {
-        const filePath = resolve(workspaceRoot, args.file_path)
-        assertServesFile(config, filePath)
-        const source = await readFile(filePath, "utf-8")
-        const result = await instance.query(
-          { operation: args.operation, filePath, line: args.line, character: args.character },
-          source,
-          exec.abortSignal,
-        )
+      async execute(args: { operation: string; file_path?: string; line?: number; character?: number; query?: string; item?: unknown }, exec: ToolExec) {
+        const operation = args.operation as LspOperation
+        const needsPosition = operation === "goToDefinition" || operation === "findReferences" || operation === "hover" || operation === "callHierarchy"
+        // 各 op 的必需參數缺 → 錯誤訊息指明（fail-loud）。
+        if ((needsPosition || operation === "documentSymbol") && typeof args.file_path !== "string") {
+          throw new Error(`lsp(${config.serverName}): operation ${operation} requires file_path`)
+        }
+        if (needsPosition && (typeof args.line !== "number" || typeof args.character !== "number")) {
+          throw new Error(`lsp(${config.serverName}): operation ${operation} requires line and character`)
+        }
+        if (operation === "workspaceSymbol" && typeof args.query !== "string") {
+          throw new Error(`lsp(${config.serverName}): workspaceSymbol requires query`)
+        }
+        if ((operation === "incomingCalls" || operation === "outgoingCalls") && (typeof args.item !== "object" || args.item === null)) {
+          throw new Error(`lsp(${config.serverName}): ${operation} requires item (an object from a callHierarchy result)`)
+        }
+        const filePath = operation === "workspaceSymbol" || operation === "incomingCalls" || operation === "outgoingCalls"
+          ? undefined
+          : resolve(workspaceRoot, args.file_path!)
+        if (filePath !== undefined) assertServesFile(config, filePath)
+        const source = filePath !== undefined ? await readFile(filePath, "utf-8") : ""
+        const query: LspQuery =
+          operation === "documentSymbol"
+            ? { operation, filePath: filePath! }
+            : operation === "workspaceSymbol"
+              ? { operation, query: args.query! }
+              : operation === "callHierarchy"
+                ? { operation, filePath: filePath!, line: args.line!, character: args.character! }
+                : operation === "incomingCalls" || operation === "outgoingCalls"
+                  ? { operation, item: args.item as LspCallHierarchyItem }
+                  : { operation, filePath: filePath!, line: args.line!, character: args.character! }
+        const result = await instance.query(query, source, exec.abortSignal)
         if (result.kind === "locations") return formatLocations(result, { workspaceRoot })
         if (result.kind === "hover") return formatHover(result, { workspaceRoot })
+        if (result.kind === "symbols") return result.symbols.length === 0 ? "No symbols." : formatSymbols(result.symbols, { workspaceRoot })
+        if (result.kind === "callHierarchy") return { items: result.items }
+        if (result.kind === "calls") {
+          // 結構化回傳：單個 site 用 formatLocations 的 "file:line:ch" 字串表示（模型不必回填來回 JSON）。
+          return {
+            direction: result.direction,
+            target: { name: result.target.name, uri: result.target.uri },
+            calls: result.calls.map((c) => ({
+              from: { name: c.item.name, uri: c.item.uri },
+              at: c.fromRanges[0] !== undefined ? formatLocations({ kind: "locations", locations: [{ uri: c.item.uri, range: c.fromRanges[0] }] }, { workspaceRoot }) : "?",
+            })),
+          }
+        }
         return "No results."
       },
     },

@@ -119,10 +119,10 @@ describe("schema v2 events_fts", () => {
         .run("s-old", 1, "turn/end", 2, JSON.stringify({ type: "turn/end" }))
       db.close()
     }
-    const db = openDatabase(path) // should migrate 1 → 2 + backfill
+    const db = openDatabase(path) // should migrate 1 → 3 + backfill + title column
     try {
       const { user_version: v } = db.prepare("PRAGMA user_version").get() as { user_version: number }
-      expect(v).toBe(2)
+      expect(v).toBe(SCHEMA_VERSION)
       const hits = db.prepare("SELECT session_id, seq FROM events_fts WHERE events_fts MATCH ?").all('"unicorn"') as { session_id: string; seq: number }[]
       expect(hits).toEqual([{ session_id: "s-old", seq: 0 }])
       // control events are not indexed
@@ -138,7 +138,7 @@ describe("schema v2 events_fts", () => {
     const db = openDatabase(path)
     try {
       const { user_version: v } = db.prepare("PRAGMA user_version").get() as { user_version: number }
-      expect(v).toBe(2)
+      expect(v).toBe(SCHEMA_VERSION)
       const row = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events_fts'").get()
       expect(row).toBeDefined()
     } finally {

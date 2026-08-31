@@ -13,6 +13,26 @@ export interface SessionMeta extends SessionHeader {
   formatVersion: number
   sessionId: string
   createdAt: string
+  /** C5 workspace grouping (DSH parity): the workspace registry record id,
+   * recorded at create. Metadata, never a SessionEvent — lives in the header
+   * (jsonl passthrough) and the workspace registry document. */
+  workspaceId?: string
+  /** C5 session title (DSH parity): header-rewrite metadata like rename —
+   * never a SessionEvent (a rename is a metadata rewrite, not a log op). */
+  title?: string
+  /** C5 per-session model selection: header metadata (resolution chain:
+   * session meta > llm.defaultModel > legacy core.model > mock). */
+  modelSelection?: SessionModelSelection
+}
+
+/** C5: one per-session model selection. */
+export interface SessionModelSelection {
+  /** Provider route ("deepseek" | "anthropic" | a custom route). */
+  provider: string
+  /** Model id within the provider's registry/catalog. */
+  model: string
+  /** Optional reasoning-effort hint (forward-compatible passthrough). */
+  reasoningEffort?: string
 }
 
 // One-directional seam (M4): the coordinator owns the backend interface; a
@@ -36,6 +56,14 @@ export interface PersistenceBackend {
    * it as the default lock root when `lock.lockRoot` is not given.
    */
   lockRoot?: string
+  /** C5: cheap per-session meta profile (header read only on jsonl; no event
+   * decode). `blank` = the log has no turn/start yet. Throws for an unknown
+   * session — the caller surfaces it (never a silent default row). */
+  profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }>
+  /** C5: rewrite the durable session meta (merge patch atomically — jsonl:
+   * header line replaced via temp+rename, event lines byte-exact; sqlite:
+   * whitelisted-column UPDATE). Throws for an unknown session. */
+  updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
 }
 
 export interface CoordinatorOptions {
@@ -62,6 +90,12 @@ export interface SessionCoordinator {
   enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
   list(): Promise<string[]>
+  /** C5: cheap per-session meta profile (header read only; no event decode).
+   * Read-only — never acquires the ownership lease. */
+  profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }>
+  /** C5: merge a meta patch durably. MUTATING — runs under the ownership
+   * lease (M23 discipline, same as append); a conflicting writer fails closed. */
+  updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
   flush(sessionId: string): Promise<void>
   /**
    * Drain all live write-behinds best-effort (flush failures are swallowed) and
@@ -134,6 +168,29 @@ registerEventType("compaction/reset")
 // reasoning as above: only this package loads on a plain persistence-only path,
 // so without registration guardIgnorable would refuse the type at load.
 registerEventType("todo/write")
+// E-region (M26): goal/jobs/schedule — same load-gate reasoning.
+registerEventType("goal/change")   // goal/change whole-snapshot events (packages/goal)
+registerEventType("job/status")    // subagent job lifecycle events (packages/jobs)
+registerEventType("schedule/change") // durable schedule mutation events (packages/schedule)
+// R-A1 input tiers (agent/input/admitted|promoted|cancelled) — same
+// reasoning as above: only this package loads on a plain persistence-only
+// path, so without registration guardIgnorable would refuse the types.
+registerEventType("agent/input/admitted")
+registerEventType("agent/input/promoted")
+registerEventType("agent/input/cancelled")
+// R-A6: session title snapshot event (log-only).
+registerEventType("session/title")
+// R-A7: plan-mode marker (log-only).
+registerEventType("plan/mode")
+// M26 (R-D1): subagent task protocol log events — M19 team/* pattern: only
+// this package loads on a plain persistence-only path, so without registration
+// guardIgnorable would refuse the type at load.
+registerEventType("subagent/start")
+registerEventType("subagent/end")
+// C-region (port): the three event types the C service surface streams/persists.
+registerEventType("reasoning")
+registerEventType("command/run")
+registerEventType("command/done")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
@@ -357,6 +414,15 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     },
     async list() {
       return backend.list()
+    },
+    async profile(sessionId) {
+      return backend.profile(sessionId)
+    },
+    async updateMeta(sessionId, patch) {
+      // Mutating path (M23 discipline, same as append): the rewrite must be
+      // serialized with appends/write-behind flushes on the same session.
+      await ensureOwnership(sessionId)
+      return backend.updateMeta(sessionId, patch)
     },
     async flush(sessionId) {
       const wb = writeBehinds.get(sessionId)

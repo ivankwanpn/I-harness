@@ -30,6 +30,7 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
     delegation_depth: number | null
     incarnation: string
     revision: number
+    title: string | null
   }
   interface EventRow {
     seq: number
@@ -40,24 +41,32 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
 
   const getSession = (sessionId: string): SessionRow => {
     const row = db.prepare(
-      "SELECT id, version, created_at, parent_session, seed_length, origin, delegation_depth, incarnation, revision FROM sessions WHERE id = ?",
+      "SELECT id, version, created_at, parent_session, seed_length, origin, delegation_depth, incarnation, revision, title FROM sessions WHERE id = ?",
     ).get(sessionId) as SessionRow | undefined
     if (!row) throw new Error(`unknown session: ${sessionId}`)
     return row
   }
 
-  const lineageMeta = (row: SessionRow): SessionMeta | undefined => {
-    if (row.parent_session === null && row.seed_length === null && row.origin === null && row.delegation_depth === null) return undefined
-    return {
-      formatVersion: row.version,
-      sessionId: row.id,
-      createdAt: new Date(row.created_at).toISOString(),
-      ...(row.parent_session !== null ? { parentSession: row.parent_session } : {}),
-      ...(row.seed_length !== null ? { seedLength: row.seed_length } : {}),
-      ...(row.origin !== null ? { origin: row.origin } : {}),
-      ...(row.delegation_depth !== null ? { delegationDepth: row.delegation_depth } : {}),
-    }
-  }
+  // C5: always-present meta (a list row needs createdAt/title even for a
+  // session without lineage).
+  const metaOf = (row: SessionRow): SessionMeta => ({
+    formatVersion: row.version,
+    sessionId: row.id,
+    createdAt: new Date(row.created_at).toISOString(),
+    ...(row.parent_session !== null ? { parentSession: row.parent_session } : {}),
+    ...(row.seed_length !== null ? { seedLength: row.seed_length } : {}),
+    ...(row.origin !== null ? { origin: row.origin } : {}),
+    ...(row.delegation_depth !== null ? { delegationDepth: row.delegation_depth } : {}),
+    ...(row.title !== null ? { title: row.title } : {}),
+  })
+
+  // read()/repair() keep the pre-C5 contract: meta is `undefined` for a plain
+  // session (no lineage, no title); profile()/updateMeta() use metaOf().
+  const lineageMeta = (row: SessionRow): SessionMeta | undefined =>
+    row.parent_session === null && row.seed_length === null && row.origin === null
+      && row.delegation_depth === null && row.title === null
+      ? undefined
+      : metaOf(row)
 
   return {
     id: "sqlite",
@@ -69,15 +78,20 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
     lockRoot: dirname(dbPath) === "." ? process.cwd() : dirname(dbPath),
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
+      // C5: session meta columns are WHITELISTED — lineage plus title. A
+      // modelSelection is NOT persisted by the sqlite backend (its updateMeta
+      // refuses unknown keys loudly — never a silent drop); the jsonl header
+      // keeps the full form.
       db.exec("BEGIN IMMEDIATE")
       try {
         db.prepare(
-          `INSERT INTO sessions (id, version, created_at, parent_session, seed_length, origin, delegation_depth, incarnation, revision)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+          `INSERT INTO sessions (id, version, created_at, parent_session, seed_length, origin, delegation_depth, incarnation, revision, title)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
         ).run(
           sessionId, meta.formatVersion, Date.now(),
           meta.parentSession ?? null, meta.seedLength ?? null, meta.origin ?? null, meta.delegationDepth ?? null,
           randomUUID(),
+          meta.title ?? null,
         )
         db.exec("COMMIT")
       } catch (err) {
@@ -120,6 +134,30 @@ export function createSqliteBackend(dbPath: string): PersistenceBackend {
     async list(): Promise<string[]> {
       const rows = db.prepare("SELECT id FROM sessions ORDER BY created_at").all() as { id: string }[]
       return rows.map((r) => r.id)
+    },
+
+    async profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }> {
+      const row = getSession(sessionId)
+      // Exact DSH blank definition — one indexed lookup, no event decode.
+      const started = db.prepare(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = ? AND type = 'turn/start') AS started",
+      ).get(sessionId) as { started: number }
+      return { meta: metaOf(row), blank: started.started !== 1 }
+    },
+
+    async updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta> {
+      const row = getSession(sessionId)
+      // Whitelist: only the replaceable header column exists; lineage fields
+      // are recorded ONCE at create and never patched — refuse loudly instead
+      // of silently dropping (a sqlite session must never silently lose a
+      // model selection).
+      const unsupported = Object.keys(patch).filter((k) => k !== "title")
+      if (unsupported.length > 0) {
+        throw new Error(`sqlite backend cannot patch session meta key(s): ${unsupported.join(", ")}`)
+      }
+      const title = typeof patch.title === "string" ? patch.title : (row.title ?? undefined)
+      db.prepare("UPDATE sessions SET title = ? WHERE id = ?").run(title === undefined ? null : title, sessionId)
+      return metaOf({ ...row, title: title ?? null })
     },
 
     async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
