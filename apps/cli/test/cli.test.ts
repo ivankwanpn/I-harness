@@ -41,6 +41,23 @@ vi.mock("@i-harness/session-persistence", async (importOriginal) => {
   }
 })
 
+// M29: observe — without altering — the createFileBackedSessionQuery call
+// surface so the CLI's file-backed wiring is assertable (the real builder is
+// used; only the arguments are recorded; the M10b tests keep the genuine
+// createSessionQuery passthrough).
+const fileBackedCalls = vi.hoisted(() => ({ list: [] as unknown[][] }))
+vi.mock("@i-harness/session-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@i-harness/session-query")>()
+  const real = actual.createFileBackedSessionQuery as (...args: unknown[]) => unknown
+  return {
+    ...actual,
+    createFileBackedSessionQuery: (...args: unknown[]) => {
+      fileBackedCalls.list.push(args)
+      return real(...args)
+    },
+  }
+})
+
 // Poll a read until it returns a defined value (bounded). The subagent
 // persistence wrappers save fire-and-forget (M6), so document reads need to
 // wait for eventual durability. A read that throws (e.g. JSON.parse on a file
@@ -1814,6 +1831,8 @@ describe("M25 --telemetry (JSONL host event stream)", () => {
 
   // mcp onStatus wire: the supervisor's host events flow through the same
   // telemetry stream as mcp/server-status (real stdio subprocess, like M17).
+  // mcp onStatus wire: the supervisor's host events flow through the same
+  // telemetry stream as mcp/server-status (real stdio subprocess, like M17).
   it("mcp server status flows through the telemetry stream (mcp/server-status)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m25-tele-mcp-"))
     const chunks: string[] = []
@@ -1837,6 +1856,46 @@ describe("M25 --telemetry (JSONL host event stream)", () => {
     const status = chunks.join("").split("\n").filter((l) => l.includes("mcp/server-status")).map((l) => JSON.parse(l) as { data: { server: string; state: string } })
     expect(status.length).toBeGreaterThan(0)
     expect(status.some((s) => s.data.server === "tele" && s.data.state === "ready")).toBe(true)
+  }, 30_000)
+})
+
+// M29: the CLI run path wires the file-backed session query when the session
+// store root is known (--session-dir) — the search/lineage tools become
+// available out of the box (they mount in the assembly seam).
+describe("headless CLI M29 file-backed session query wiring", () => {
+  it("main() creates a file-backed query over --session-dir (storeRoot)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m29-wire-"))
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {})
+      const err = vi.spyOn(console, "error").mockImplementation(() => {})
+      const before = fileBackedCalls.list.length
+      try {
+        expect(await main(["node", "i-harness", "run", "hello", "--session-dir", dir])).toBe(0)
+      } finally {
+        log.mockRestore()
+        err.mockRestore()
+      }
+      const calls = fileBackedCalls.list.slice(before) as { storeRoot: string; dbPath?: string }[][]
+      expect(calls).toHaveLength(1)
+      // the store root given on the flag, index file left process-private (:memory:)
+      expect(calls[0]![0]!.storeRoot).toBe(dir)
+      expect(calls[0]![0]!.dbPath).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it("main() without --session-dir mounts no file-backed query", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {})
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    const before = fileBackedCalls.list.length
+    try {
+      expect(await main(["node", "i-harness", "run", "hello"])).toBe(0)
+    } finally {
+      log.mockRestore()
+      err.mockRestore()
+    }
+    expect(fileBackedCalls.list.length).toBe(before)
   }, 30_000)
 })
 
