@@ -1,5 +1,24 @@
 import { spawn, type IPty } from "node-pty"
 
+// M27-H-2 (win32 ConPTY quirk): node-pty's fork()'d conpty_console_list_agent
+// agent writes "Error: AttachConsole failed" to its INHERITED stderr on every
+// PTY kill (exit status 0) — the subprocess stderr cannot be intercepted
+// library-side, so the known-noise filter runs on the terminal surface's ERROR
+// REPORT path: matching lines are stripped before an error escapes a tool, and
+// an all-noise report yields the benign terminal-state outcome instead.
+// Upstream: https://github.com/microsoft/node-pty (winptyagent).
+const CONPTY_NOISE_RE = /AttachConsole failed|conpty_console_list_agent/i
+
+/** True when a single error-report line is known ConPTY agent noise. */
+export function isKnownConptyNoise(line: string): boolean {
+  return CONPTY_NOISE_RE.test(line)
+}
+
+/** Strip known ConPTY noise lines from a PTY error report (per-line match). */
+export function filterConptyNoise(text: string): string {
+  return text.replace(/\r\n/g, "\n").split("\n").filter((l) => !isKnownConptyNoise(l)).join("\n")
+}
+
 export interface TerminalOpenSpec {
   command: string
   args?: string[]

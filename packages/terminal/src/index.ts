@@ -1,4 +1,4 @@
-export { createTerminalService } from "./service.ts"
+export { createTerminalService, isKnownConptyNoise, filterConptyNoise } from "./service.ts"
 export type {
   TerminalOpenSpec, TerminalSignalName, TerminalView, TerminalRunSpec, TerminalReadResult, TerminalService,
 } from "./service.ts"
