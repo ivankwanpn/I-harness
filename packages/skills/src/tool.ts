@@ -16,6 +16,11 @@ import {
   type SkillRegistry,
   type SkillSource,
 } from "./registry.ts"
+import {
+  explicitMentionMatches,
+  selectShadowCandidates,
+  type SkillTelemetryEmitter,
+} from "./shadow.ts"
 
 export const skillSearchName = "skill_search"
 export const skillGetName = "skill_get"
@@ -31,6 +36,15 @@ const SKILL_SEARCH_USAGE =
 
 export interface SkillToolDeps {
   registry: SkillRegistry
+  /** M27 R-B6 shadow selector sink — the `skill/selector-shadow` telemetry
+   * report goes here (a host bridges it into @i-harness/telemetry). Optional:
+   * absent → no report, no behavior change. */
+  telemetry?: SkillTelemetryEmitter
+  /** M27 R-B6 implicit invocation gate. false → skill_search returns ONLY
+   * explicit mention matches (whole skill names, select: lists) — a keyword
+   * query returns an empty match list while skill_get stays available.
+   * Default true (BM25 keyword search unchanged). */
+  allowImplicitInvocation?: boolean
 }
 
 export interface SkillSearchArgs {
@@ -86,7 +100,25 @@ export function createSkillSearchTool(deps: SkillToolDeps): Tool<SkillSearchArgs
     exposure: "direct",
     isReadOnly: true,
     execute: async (args: SkillSearchArgs) => {
-      const matches = deps.registry.searchSkills(args.query, { limit: args.limit })
+      const all = deps.registry.list()
+      // M27 R-B6 shadow selector: report what the selectors WOULD pick,
+      // deterministically, BEFORE the real selection — the report never
+      // changes behavior and never throws (a malformed query still surfaces
+      // via the real selector, or yields an empty list when the gate is on).
+      const shadow = selectShadowCandidates(args.query, all)
+      deps.telemetry?.emit({
+        type: "skill/selector-shadow",
+        ts: Date.now(),
+        data: {
+          query: args.query,
+          candidates: shadow.candidates,
+          implicitAllowed: deps.allowImplicitInvocation !== false,
+        },
+      })
+      // M27 R-B6 implicit policy gate: when closed, only explicit mentions.
+      const matches = deps.allowImplicitInvocation === false
+        ? explicitMentionMatches(args.query, all)
+        : deps.registry.searchSkills(args.query, { limit: args.limit })
       return {
         query: args.query,
         matches: matches.map((summary) => ({
@@ -95,7 +127,7 @@ export function createSkillSearchTool(deps: SkillToolDeps): Tool<SkillSearchArgs
           path: summary.path,
           source: summary.source,
         })),
-        totalSkills: deps.registry.list().length,
+        totalSkills: all.length,
         usage: SKILL_SEARCH_USAGE,
       }
     },
@@ -217,14 +249,28 @@ export interface SkillsMountHandle {
 // family): registers the "skills" service and the skill_search/skill_get tools.
 // The returned handle unregisters the tools so a host (or the plugin below)
 // can reclaim them; unregister is idempotent (unknown names are no-ops).
+/** M27 R-B6 mount config (additive): workspace root, the shadow-selector
+ * telemetry sink, and the explicit-invocation policy. Hosts pass a
+ * `allow_implicit_invocation`-equivalent here ("plugin manifest" form) —
+ * `allowImplicitInvocation` defaults to TRUE (status quo behavior). */
+export interface SkillsMountConfig {
+  workspace?: string
+  telemetry?: SkillTelemetryEmitter
+  allowImplicitInvocation?: boolean
+}
+
 export function registerSkills(
   ctx: PluginContext,
   tools: ToolRegistry,
-  config?: { workspace?: string },
+  config?: SkillsMountConfig,
 ): SkillsMountHandle {
   const registry = createSkillRegistry({ workspace: config?.workspace })
   ctx.services.register(skillsServiceName, registry)
-  const skillSearch = createSkillSearchTool({ registry })
+  const skillSearch = createSkillSearchTool({
+    registry,
+    ...(config?.telemetry !== undefined ? { telemetry: config.telemetry } : {}),
+    ...(config?.allowImplicitInvocation !== undefined ? { allowImplicitInvocation: config.allowImplicitInvocation } : {}),
+  })
   const skillGet = createSkillGetTool({ registry })
   tools.register(skillSearch)
   tools.register(skillGet)
@@ -244,7 +290,7 @@ export function registerSkills(
 export function createSkillsPlugin(
   ctx: PluginContext,
   tools: ToolRegistry,
-  config?: { workspace?: string },
+  config?: SkillsMountConfig,
 ): Plugin {
   let handle: SkillsMountHandle | undefined
   return {

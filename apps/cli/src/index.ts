@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url"
 import { join } from "node:path"
+import { createInterface } from "node:readline"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -7,6 +8,9 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSqliteBackend } from "@i-harness/session-persistence-sqlite"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionService } from "@i-harness/session-executor"
+import { createSdkServer } from "@i-harness/sdk/server"
+import { encodeFrame } from "@i-harness/sdk"
 import { parsePort, runWebServer } from "./web.ts"
 import type { WebServerOptions } from "./web.ts"
 
@@ -69,8 +73,14 @@ export async function main(argv: string[]): Promise<number> {
       return Promise.resolve(1)
     }
   }
+  // R-C4 sdk subcommand: NDJSON JSON-RPC 2.0 stdio server (hosted by the
+  // SessionService). stdout carries ONLY protocol frames — every log goes to
+  // stderr. `i-harness sdk [--session-dir DIR] [--session-backend jsonl|sqlite]`
+  if (args[0] === "sdk") {
+    return runSdkCommand(args)
+  }
   if (args[0] !== "run") {
-    console.error("usage: i-harness <run|web> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--port N] [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET]")
+    console.error("usage: i-harness <run|web|sdk> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--port N] [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] [--session-backend jsonl|sqlite]")
     return Promise.resolve(1)
   }
 
@@ -176,6 +186,80 @@ export async function main(argv: string[]): Promise<number> {
     if (r.finalText) console.log(r.finalText)
     if (r.error) console.error(r.error)
     return r.exitCode
+  })
+}
+
+/** `i-harness sdk` — the SDK stdio server (R-C4). One NDJSON JSON-RPC line
+ * per frame; every response/notification is written through onWrite so stdout
+ * NEVER carries host logs (all diagnostics go to stderr). Exits cleanly when
+ * the client ends stdin or issues shutdown. */
+async function runSdkCommand(args: string[]): Promise<number> {
+  const backendIdx = args.indexOf("--session-backend")
+  const dirIdx = args.indexOf("--session-dir")
+  const sessionBackend: "jsonl" | "sqlite" = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
+  let coordinator: SessionCoordinator | undefined
+  if (dirIdx !== -1) {
+    const dir = args[dirIdx + 1]
+    if (dir === undefined || dir === "") {
+      console.error("--session-dir requires a directory")
+      return 1
+    }
+    coordinator = createSessionCoordinator(
+      sessionBackend === "sqlite"
+        ? createSqliteBackend(join(dir, "sessions.db"))
+        : createJsonlBackend(dir),
+    )
+  }
+  const service = createSessionService({
+    workspace: process.cwd(),
+    ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(coordinator !== undefined
+      ? {
+          loadMeta: async (id: string) => {
+            try {
+              return (await coordinator.profile(id)).meta
+            } catch {
+              return undefined // unknown session: the sdk server creates it first
+            }
+          },
+        }
+      : {}),
+  })
+
+  const rl = createInterface({ input: process.stdin, terminal: false })
+  const server = createSdkServer(service, {
+    coordinator,
+    onWrite: (message) => process.stdout.write(encodeFrame(message)),
+    onShutdown: () => rl.close(),
+  })
+
+  let tornDown = false
+  const teardown = async (): Promise<void> => {
+    if (tornDown) return
+    tornDown = true
+    rl.close()
+    await server.close()
+    await service.close()
+    if (coordinator !== undefined) await coordinator.close()
+  }
+  rl.on("close", () => { void teardown() })
+  const onSignal = (): void => { void teardown() }
+  process.on("SIGINT", onSignal)
+  process.on("SIGTERM", onSignal)
+  rl.on("line", (line) => {
+    void server.handleLine(line).catch((error: unknown) => {
+      console.error("[i-harness sdk] loop error:", error instanceof Error ? error.message : String(error))
+    })
+  })
+
+  // The process lives until the client ends the stdio (or SIGINT), then 0.
+  return new Promise<number>((resolve) => {
+    const finish = (): void => {
+      process.off("SIGINT", onSignal)
+      process.off("SIGTERM", onSignal)
+      void teardown().then(() => resolve(0))
+    }
+    rl.on("close", finish)
   })
 }
 

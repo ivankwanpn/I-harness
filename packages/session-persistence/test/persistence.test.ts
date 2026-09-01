@@ -61,10 +61,13 @@ describe("session coordinator", () => {
     const backend = fakeBackend()
     const coordinator = createSessionCoordinator(backend)
     const { id } = await coordinator.create()
-    await coordinator.append(id, [{ type: "turn/start" }, { type: "user/message", text: "hi" }])
+    // M27 R-A3 adaptation: load() semantically repairs an OPEN last turn
+    // (synthetic closers), so the round-trip fixture closes its turn first —
+    // this test pins the round-trip itself, not torn-tail repair.
+    await coordinator.append(id, [{ type: "turn/start" }, { type: "user/message", text: "hi" }, { type: "turn/end" }])
     const { session } = await coordinator.load(id)
     expect(session.formatVersion).toBe(1)
-    expect(session.events).toMatchObject([{ type: "turn/start" }, { type: "user/message", text: "hi" }])
+    expect(session.events).toMatchObject([{ type: "turn/start" }, { type: "user/message", text: "hi" }, { type: "turn/end" }])
   })
 
   it("applies registered upgrades in order (migrate-on-continue)", async () => {
@@ -134,10 +137,13 @@ describe("session coordinator", () => {
       { type: "turn/start" },
       { type: "compaction/reset", removedSeqs: [] },
       { type: "user/message", text: "hi" },
+      // M27 R-A3 adaptation: closed tail so load()'s semantic repair does not
+      // add closers — this test pins the load gate, not torn-tail repair.
+      { type: "turn/end" },
     ] as SessionEvent[])
     const coordinator = createSessionCoordinator(backend)
     const { session } = await coordinator.load("s1")
-    expect(session.events.map((e) => e.type)).toEqual(["turn/start", "compaction/reset", "user/message"])
+    expect(session.events.map((e) => e.type)).toEqual(["turn/start", "compaction/reset", "user/message", "turn/end"])
   })
 
   it("flush on a session with no write-behind resolves (no pending writes)", async () => {

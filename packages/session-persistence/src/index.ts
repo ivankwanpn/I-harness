@@ -1,8 +1,10 @@
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent, type SessionHeader } from "@i-harness/core-session"
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
+import { repairTurnTail } from "./repair.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
+export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
 
 // M23: the ownership lease's typed errors are part of the coordinator's
 // fail-closed surface (create/append/adopt/load/flush propagate them), so
@@ -400,7 +402,13 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       const { version, events, meta } = repaired
       const guarded = guardIgnorable(events)
       const migrated = await migrate(version, guarded)
-      const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: migrated }
+      // M27 R-A3: log-SEMANTIC repair — append synthetic closers (step/end,
+      // turn/end, tool/result for calls whose results were lost to the crash)
+      // AFTER the backend structural repair (truncate + closers) and AFTER the
+      // version/guard gates, BEFORE the projection. Pure: operates on a copy,
+      // the durable log is never modified.
+      const repairedTail = repairTurnTail(migrated)
+      const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: repairedTail }
       if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined
         || meta.delegationDepth !== undefined || meta.origin !== undefined)) {
         session.header = {
