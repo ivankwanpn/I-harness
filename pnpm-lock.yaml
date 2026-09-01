@@ -23,6 +23,12 @@ importers:
 
   apps/cli:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^1.4.0
+        version: 1.4.0(zod@4.4.3)
+      '@i-harness/acp':
+        specifier: workspace:*
+        version: link:../../packages/acp
       '@i-harness/agent-team':
         specifier: workspace:*
         version: link:../../packages/agent-team
