@@ -76,14 +76,14 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const inflight = new Map<string, Inflight>()
   let closed = false
 
-  const pushNotify = (message: RpcNotification): void => {
-    opts.onNotify?.(message)
-    for (const cb of [...notifiers]) cb(message)
-  }
-
-  const pushMessage = (message: RpcMessage): void => {
+  /** One sink path for EVERY outgoing message: onWrite (the CLI's stdout
+   * writer), then onNotify + subscription listeners for notifications. */
+  const emitMessage = (message: RpcMessage): void => {
     opts.onWrite?.(message)
-    if (isRpcNotification(message)) pushNotify(message)
+    if (isRpcNotification(message)) {
+      opts.onNotify?.(message)
+      for (const cb of [...notifiers]) cb(message)
+    }
   }
 
   // Session event bridge: one subscription per live assembly — every appended
@@ -92,13 +92,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const offAssembly = service.onAssembly((assembly) => {
     if (assembly.sessionId === undefined) return
     const unsubscribe = subscribe(assembly.session, (event) => {
-      pushNotify(makeNotification("session/event", { sessionId: assembly.sessionId, event }) as RpcNotification)
+      emitMessage(makeNotification("session/event", { sessionId: assembly.sessionId, event }))
     })
     assemblyUnsubscribes.set(assembly.sessionId, unsubscribe)
   })
 
   const statusNotify = (sessionId: string, status: string, error?: string): void => {
-    pushNotify(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}) }) as RpcNotification)
+    emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}) }))
   }
 
   /** Make sure the session exists in the coordinator (create once per id). */
@@ -192,7 +192,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       if (isRpcNotification(message)) return null // client → server notifications are accepted-and-ignored in v1
       if (!isRpcRequest(message)) return null
       const reply = await handleRequest(message.method, message.params, message.id)
-      pushMessage(reply)
+      emitMessage(reply)
       return encodeFrame(reply)
     },
     onNotify(cb) {
