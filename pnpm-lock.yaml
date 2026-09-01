@@ -793,6 +793,9 @@ importers:
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
       '@i-harness/session-persistence-sqlite':
         specifier: workspace:*
         version: link:../session-persistence-sqlite

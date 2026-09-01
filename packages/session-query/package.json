@@ -12,6 +12,7 @@
   "devDependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
+    "@i-harness/session-persistence-jsonl": "workspace:*",
     "@i-harness/session-persistence-sqlite": "workspace:*"
   }
 }
