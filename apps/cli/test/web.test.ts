@@ -5,7 +5,21 @@ import { describe, expect, it } from "vitest"
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createCredentialStore } from "@i-harness/credentials"
-import { parsePort, createWebServer, resolveModelSpec, type WebServerOptions } from "../src/web.ts"
+import { parsePort, createWebServer, defaultContextWindow, resolveModelSpec, type WebServerOptions } from "../src/web.ts"
+import { pickWebPort } from "../src/index.ts"
+
+describe("pickWebPort (H-4)", () => {
+  it("web: flag beats env beats default", () => {
+    expect(pickWebPort(["node", "i-harness", "web", "--port", "4398"], "1234")).toBe(4398)
+    expect(pickWebPort(["node", "i-harness", "web"], "1234")).toBe(1234)
+    expect(pickWebPort(["node", "i-harness", "web"], undefined)).toBe(4310)
+  })
+
+  it("web: invalid flag falls back to env/default and env passes through parsePort", () => {
+    expect(pickWebPort(["node", "i-harness", "web", "--port", "abc"], "1234")).toBe(1234)
+    expect(pickWebPort(["node", "i-harness", "web", "--port", "0"], undefined)).toBe(4310)
+  })
+})
 
 describe("parsePort", () => {
   it("falls back on junk and floors valid values", () => {
@@ -57,6 +71,20 @@ describe("web composition (R-C1)", () => {
     expect(resolveModelSpec(opts)).toEqual({ spec: "deepseek:deepseek-chat", source: "default" })
     expect(resolveModelSpec(opts, { formatVersion: 1, sessionId: "s", createdAt: "", modelSelection: { provider: "anthropic", model: "claude-3-5" } }))
       .toEqual({ spec: "anthropic:claude-3-5", source: "session" })
+  })
+
+  it("defaultContextWindow: M15 provider record → session window (R-A8)", async () => {
+    const registry = createProviderRegistry()
+    registry.register({
+      name: "acme", displayName: "Acme", protocol: "openai-compatible",
+      contextWindow: 96_000, modelContexts: { small: { contextWindow: 200_000 } }, models: [], defaultModel: "small",
+    })
+    const opts = options(process.cwd(), { providerRegistry: registry })
+    expect(defaultContextWindow(opts)).toBeUndefined() // mock default → fail-closed (not registered)
+    await opts.settings!.set({ model: "acme:small" })
+    expect(defaultContextWindow(opts)).toBe(200_000) // per-model override wins
+    await opts.settings!.set({ model: "acme:other" })
+    expect(defaultContextWindow(opts)).toBe(96_000) // profile-level default
   })
 
   it("defaults the settings store path to the config dir", () => {

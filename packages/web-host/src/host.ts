@@ -263,8 +263,19 @@ function parseSectionOps(raw: unknown): SectionOp[] | undefined {
 // (`../x`, `%2e%2e%2f`, …) cannot traverse out of the attachments dir.
 const ATTACHMENT_ID_RE = /^att-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/
 
+/** M27-H-1: the version GET /api/health reports when the embedder passes no
+ * `version` (the CLI injects its package.json version). */
+export const DEFAULT_HOST_VERSION = "0.1.0"
+
 export interface WebHostOptions {
   port: number
+  /**
+   * M27-H-1: version string served by GET /api/health ({ healthy, version }).
+   * The embedder passes its own (the CLI injects apps/cli package.json); the
+   * host default is `DEFAULT_HOST_VERSION`. Absent → still served (a health
+   * probe must never depend on an optional seam).
+   */
+  version?: string
   /**
    * R-C0 (engine-owned): the per-session service behind the mux `command`
    * endpoint — submit(sessionId, prompt, signal) starts/continues the session's
@@ -772,6 +783,15 @@ export function createWebHost(opts: WebHostOptions): WebHost {
     // R-C3: login — the `?token=<launch>` bootstrap (already accepted by the
     // guard), sets the session cookie (SameSite=Strict + loopback-only fence
     // = dsh-shaped browser auth for a local service).
+    // M27-H-1: health — no seams required (a probe/embedder ping; the 401
+    // fence would close the door, so it answers BEFORE guardAndAuth would
+    // matter only when auth is absent — the guard already ran above, and a
+    // fenced host deliberately keeps /api/health behind the same fence).
+    if (req.method === "GET" && url.pathname === "/api/health") {
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ healthy: true, version: opts.version ?? DEFAULT_HOST_VERSION }))
+      return
+    }
     if (req.method === "GET" && url.pathname === "/api/auth/login") {
       if (auth === undefined) { res.writeHead(404); res.end(); return }
       const token = url.searchParams.get("token")

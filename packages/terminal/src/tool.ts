@@ -1,12 +1,41 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { createTerminalService, type TerminalService, type TerminalSignalName } from "./service.ts"
+import { createTerminalService, filterConptyNoise, type TerminalService, type TerminalSignalName } from "./service.ts"
 
 export interface TerminalToolDeps { service: TerminalService }
 
+/**
+ * M27-H-2 error-path guard: node-pty's win32 ConPTY agent noise ("Error:
+ * AttachConsole failed" — fork'd conpty_console_list_agent writing to the
+ * inherited stderr, exit 0; the subprocess stderr is not interceptable
+ * library-side). Tool errors are the only PTY error report escaping the
+ * surface, so the guard runs here:
+ *  - known-noise lines are stripped from the thrown report,
+ *  - a report that is ONLY noise converts to the benign terminal-state
+ *    outcome (the pty channel is terminating — the operation did not fail
+ *    server-side), never leaking the raw agent text to the tool result.
+ */
+async function guardPtyErrors(fn: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await fn()
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err)
+    const cleaned = filterConptyNoise(raw)
+    if (cleaned.trim() === "") {
+      return { suppressed: "AttachConsole failed", note: "known win32 ConPTY agent noise — the pty is in its terminal state (see node-pty upstream)" }
+    }
+    if (cleaned !== raw) throw new Error(cleaned)
+    throw err
+  }
+}
+
+function noNoiseLeak(tools: Tool[]): Tool[] {
+  return tools.map((t) => ({ ...t, execute: (args, exec) => guardPtyErrors(() => t.execute(args, exec)) }))
+}
+
 export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
   const { service } = deps
-  return [
+  return noNoiseLeak([
     {
       name: "terminal_open",
       description:
@@ -79,13 +108,13 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
       isReadOnly: true,
       execute: async () => ({ terminals: service.list() }),
     },
-  ]
+  ])
 }
 
 // M26-B8：進程控制面——terminal service 的薄包（spawn/kill/resize_pty）。
 export function createProcessTools(deps: TerminalToolDeps): Tool[] {
   const { service } = deps
-  return [
+  return noNoiseLeak([
     {
       name: "process_spawn",
       description:
@@ -119,7 +148,7 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
       execute: async (args: { id: string; cols: number; rows: number }, exec: ToolExec) =>
         service.resize(args.id, args.cols, args.rows, { sessionId: exec.sessionId }),
     },
-  ]
+  ])
 }
 
 export interface TerminalMountHandle { dispose(): void }
