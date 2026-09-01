@@ -7,7 +7,7 @@
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, Inbox, type Session } from "@i-harness/core-session"
-import { createToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type Agent } from "@i-harness/core-agent"
 import type { CompactionConfig } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -107,6 +107,10 @@ export interface AssemblyOptions {
   /** When persist is active, append `job/status` events to the LIVE session too
    * (the web jobs surface reads them; CLI parity keeps them off — default). */
   jobStatusEvents?: boolean
+  /** M27-R-A8: model context window (tokens) — M15 provider-record knowledge
+   * supplied by the composition (e.g. web.ts via resolveModelContext). Absent →
+   * get_context_remaining is NOT registered (fail-closed). */
+  contextWindow?: number
   /** M26-D2: durable task completion → parent session input admission. Wire to
    * the host's input tier (run.ts builds the default over its executor lane);
    * absent → notification rows stay pending (fail-closed, no silent drop). */
@@ -219,6 +223,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (ev.type === "turn/end") void opts.coordinator.flush(opts.sessionId).catch(() => {})
   })
   const inbox = new Inbox(session)
+  // M27-R-A8: context budget tool — registered against the live session (the
+  // M15 projection source) only when the composition supplied a window.
+  registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session })
 
   // R-A4/R-A5: dynamic system context — sections render at every step boundary
   // via the agent/pre-step hook. Instructions load as one section.

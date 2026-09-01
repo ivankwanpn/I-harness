@@ -1,5 +1,10 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 
+// M27-R-A8: get_context_remaining — registered only when a contextWindow is
+// known (fail-closed); see context-remaining.ts.
+export { registerContextRemaining } from "./context-remaining.ts"
+export type { ContextRemainingOptions } from "./context-remaining.ts"
+
 export type ToolExposure = "direct" | "deferred" | "hidden"
 
 export interface Tool<Args = unknown, Output = unknown> {

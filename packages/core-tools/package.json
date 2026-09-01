@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./context-remaining": "./src/context-remaining.ts"
   },
   "scripts": {
     "test": "vitest run",
@@ -13,7 +14,9 @@
     "verify-tool-catalog": "tsx scripts/verify-tool-catalog.ts"
   },
   "dependencies": {
-    "@i-harness/core-plugin": "workspace:*"
+    "@i-harness/core-plugin": "workspace:*",
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/token-meter": "workspace:*"
   },
   "devDependencies": {
     "@i-harness/interaction": "workspace:*"

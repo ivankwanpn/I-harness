@@ -30,6 +30,7 @@ import {
 import {
   createProviderRegistry,
   buildWireClient,
+  resolveModelContext,
   type ProviderRegistry,
   type ProviderProfile,
 } from "@i-harness/provider"
@@ -258,6 +259,19 @@ function appendCommandEvents(executor: SessionService, sessionId: string, name: 
   }).catch(() => {})
 }
 
+/** M27-R-A8: the context window of the DEFAULT resolution chain (M15 provider
+ * records — profile.contextWindow / modelContexts override). Unknown (mock /
+ * no registry entry) → undefined → get_context_remaining fails closed (not
+ * registered). Per-session meta.modelSelection resolutions are covered by the
+ * same registry record family; the assembly registers per session. */
+export function defaultContextWindow(opts: WebServerOptions): number | undefined {
+  const { spec } = resolveModelSpec(opts)
+  if (spec === "") return undefined
+  const [providerName, modelId] = spec.split(":")
+  const profile = opts.providerRegistry?.get(providerName)
+  return profile === undefined ? undefined : resolveModelContext(profile, modelId).contextWindow
+}
+
 export async function createWebServer(opts: WebServerOptions): Promise<WebServer> {
   const listenPort = Number.isFinite(opts.port) && opts.port >= 0 ? Math.floor(opts.port) : DEFAULT_WEB_PORT
   const coordinator: SessionCoordinator =
@@ -289,6 +303,8 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     // The web path: job/status events mirror into the live session (the jobs
     // surface folds the durable doc; the mux streams carry the events).
     jobStatusEvents: true,
+    // M27-R-A8: get_context_remaining window knowledge (M15 records).
+    contextWindow: defaultContextWindow(opts),
     loadMeta: async (id) => (await coordinator.profile(id)).meta,
     modelBuilder: async (_sessionId, meta) => buildModelFor(opts, meta),
   })
