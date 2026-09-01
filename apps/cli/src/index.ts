@@ -1,6 +1,8 @@
 import { pathToFileURL } from "node:url"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
+import { Readable, Writable } from "node:stream"
+import { ndJsonStream } from "@agentclientprotocol/sdk"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -11,6 +13,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame } from "@i-harness/sdk"
+import { createAcpServer } from "@i-harness/acp"
 import { parsePort, runWebServer } from "./web.ts"
 import type { WebServerOptions } from "./web.ts"
 
@@ -79,8 +82,13 @@ export async function main(argv: string[]): Promise<number> {
   if (args[0] === "sdk") {
     return runSdkCommand(args)
   }
+  // R-C7 acp subcommand: official-ACP (v1) stdio server over the SessionService.
+  // Same stdout discipline as `sdk` — ONLY ACP NDJSON frames on stdout.
+  if (args[0] === "acp") {
+    return runAcpCommand(args)
+  }
   if (args[0] !== "run") {
-    console.error("usage: i-harness <run|web|sdk> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--port N] [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] [--session-backend jsonl|sqlite]")
+    console.error("usage: i-harness <run|web|sdk|acp> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--port N] [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] [--session-backend jsonl|sqlite] | acp [--session-dir DIR] [--session-backend jsonl|sqlite] [--no-auto-approve]")
     return Promise.resolve(1)
   }
 
@@ -260,6 +268,88 @@ async function runSdkCommand(args: string[]): Promise<number> {
       void teardown().then(() => resolve(0))
     }
     rl.on("close", finish)
+  })
+}
+
+/** `i-harness acp` — the official-ACP (v1) stdio server (R-C7). The
+ * @agentclientprotocol/sdk ndJsonStream is the NDJSON JSON-RPC loop over
+ * process stdin/stdout (Web-stream adapted); stdout carries ONLY ACP frames.
+ * Version-same flags as `sdk`; `--no-auto-approve` switches the v0 permission
+ * face to refuse-prompts (fail-closed) instead of allow-once. */
+async function runAcpCommand(args: string[]): Promise<number> {
+  const backendIdx = args.indexOf("--session-backend")
+  const dirIdx = args.indexOf("--session-dir")
+  const sessionBackend: "jsonl" | "sqlite" = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
+  let coordinator: SessionCoordinator | undefined
+  if (dirIdx !== -1) {
+    const dir = args[dirIdx + 1]
+    if (dir === undefined || dir === "") {
+      console.error("--session-dir requires a directory")
+      return 1
+    }
+    coordinator = createSessionCoordinator(
+      sessionBackend === "sqlite"
+        ? createSqliteBackend(join(dir, "sessions.db"))
+        : createJsonlBackend(dir),
+    )
+  }
+  const service = createSessionService({
+    workspace: process.cwd(),
+    ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(coordinator !== undefined
+      ? {
+          loadMeta: async (id: string) => {
+            try {
+              return (await coordinator.profile(id)).meta
+            } catch {
+              return undefined // unknown session: session/new is the ACP path to create it
+            }
+          },
+        }
+      : {}),
+  })
+  const server = createAcpServer({
+    service,
+    ...(coordinator !== undefined ? { coordinator } : {}),
+    autoApprove: !args.includes("--no-auto-approve"),
+  })
+
+  // The ACP transport: NDJSON in → NDJSON out (official SDK line loop).
+  // The SDK's Stream types come from the DOM lib; Node's stream/web types are
+  // structurally equivalent at runtime but not assignable there — cast at the
+  // adaptor boundary (the stdio round-trip is verified by e2e).
+  const stream = ndJsonStream(
+    Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
+    Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
+  )
+  const connection = server.connect(stream)
+
+  let tornDown = false
+  const teardown = async (): Promise<void> => {
+    if (tornDown) return
+    tornDown = true
+    connection.close()
+    await service.close()
+    if (coordinator !== undefined) await coordinator.close()
+  }
+  const onSignal = (): void => { void teardown() }
+  process.on("SIGINT", onSignal)
+  process.on("SIGTERM", onSignal)
+
+  // The process lives until the client ends the stdio (stream EOF closes the
+  // connection) or SIGINT/SIGTERM, then 0.
+  return new Promise<number>((resolve) => {
+    const finish = (): void => {
+      process.off("SIGINT", onSignal)
+      process.off("SIGTERM", onSignal)
+      void teardown().then(() => resolve(0))
+    }
+    void connection.closed.then(finish, (error: unknown) => {
+      process.stderr.write(
+        `[i-harness acp] connection error: ${error instanceof Error ? error.message : String(error)}\n`,
+      )
+      finish()
+    })
   })
 }
 
