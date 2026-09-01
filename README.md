@@ -40,6 +40,7 @@ pnpm e2e             # end-to-end: real CLI + real tools (spawned process / runH
 | `pnpm test`      | Every package's vitest suite (`pnpm -r test`)        |
 | `pnpm typecheck` | Type-check every package (`pnpm -r typecheck`)       |
 | `pnpm e2e`       | End-to-end tests (`vitest run e2e/ --config e2e/vitest.config.ts`) |
+| `pnpm verify:store` | pnpm store integrity check (`scripts/check-store.sh`) — run before e2e after installs |
 
 Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
 
