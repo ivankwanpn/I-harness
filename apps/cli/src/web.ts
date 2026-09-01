@@ -9,6 +9,7 @@
 // composed here directly (the plan's E-flip is the port itself), so the
 // host's settings/credentials/llm/models route family activates.
 import { dirname, join } from "node:path"
+import { createRequire } from "node:module"
 import { randomBytes } from "node:crypto"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { append, type SessionEvent } from "@i-harness/core-session"
@@ -49,6 +50,11 @@ import { createWorkspaceRegistry } from "@i-harness/workspace"
 import { registerCommand, listCommands, parseCommandLine, runCommand } from "@i-harness/interaction"
 
 export const DEFAULT_WEB_PORT = 4310
+
+// M27-H-1: the host's /api/health version — the CLI package's own version is
+// the single constant (read at module load; the CLI is never bundled).
+const require = createRequire(import.meta.url)
+export const CLI_VERSION = (require("../package.json") as { version: string }).version
 
 /**
  * PORT parsing (review fix): `Number(process.env.PORT)` is NaN for PORT=abc,
@@ -336,6 +342,8 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     workspaceRegistry,
     modelSources: { settingsStore: settings, credentialStore: credentials, providerRegistry },
     ...(auth !== undefined ? { auth } : {}),
+    // M27-H-1: the health route's version — the CLI package.json constant.
+    version: CLI_VERSION,
   })
   executor.onAssembly((a) => {
     if (a.sessionId === undefined) return
