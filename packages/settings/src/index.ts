@@ -11,7 +11,8 @@
  * @module @i-harness/settings
  */
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { homedir } from "node:os"
 // Runtime import of the protocol constants (the enum's single source). Safe:
@@ -469,6 +470,455 @@ export async function updateSettings(
   const store = new SettingsStore(options)
   await store.load()
   return store.set(patch)
+}
+
+// ── M27 R-E10: layered sources (global < workspace < project, last wins) ─────
+// Additive only: SettingsStore / normalizeSettings / resolveSettingsPath keep
+// their exact behavior; layering is a NEW family of helpers + a store variant
+// built on the same normalize layer.
+
+/** One resolved settings source, lowest → highest priority. */
+export interface LayerSource {
+  /** Path on disk (null = the source does not exist yet). */
+  path: string | null
+  /** 0 = lowest, 2 = highest (3+ for extra configured files). */
+  order: number
+  label: "global" | "workspace" | "project" | "file"
+  /** Raw parsed document (comment-stripped), when the source exists. */
+  raws?: Record<string, unknown>
+}
+
+/** Layered roots: explicit paths, or "auto" (resolved by the store against its
+ * configDir/workspace/cwd — see createLayeredStore). */
+export interface LayeredRoots {
+  global?: string | "auto"
+  workspace?: string | "auto"
+  project?: string | "auto"
+}
+
+const SOURCE_ORDER: Record<string, number> = { global: 0, workspace: 1, project: 2 }
+
+/**
+ * Resolve ordered sources from explicit roots (missing files are dropped —
+ * a layer without a file contributes nothing). Order: global < workspace <
+ * project (project wins).
+ */
+export function resolveLayeredSources(roots: LayeredRoots): LayerSource[] {
+  const sources: LayerSource[] = []
+  for (const label of ["global", "workspace", "project"] as const) {
+    const configured = roots[label]
+    if (configured === undefined) continue
+    const path = resolve(configured)
+    if (!existsSync(path)) continue // a layer without a file contributes nothing
+    sources.push({ path, order: SOURCE_ORDER[label]!, label })
+  }
+  return sources
+}
+
+/** One raw doc contribution to a layer merge (the minimal shape). */
+export interface LayerRaw {
+  raws?: unknown
+}
+
+/** Deep-merge raw layer documents low → high: plain objects merge per key,
+ * arrays/scalars are replaced (last wins). The merged RAW is normalized ONCE. */
+export function mergeRawLayers(layers: readonly (LayerSource | LayerRaw)[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const layer of layers) {
+    if (!isRecord(layer.raws)) continue
+    for (const [key, value] of Object.entries(layer.raws)) {
+      out[key] = isRecord(out[key]) && isRecord(value)
+        ? mergeRawLayers([{ raws: out[key] }, { raws: value }])
+        : value
+    }
+  }
+  return out
+}
+
+/** Fail-closed leaf-patch error: a document the patchter cannot rewrite
+ * safely stays untouched (the caller surfaces it; nothing is destroyed). */
+export class SettingsPatchError extends Error {
+  readonly code = "settings-leaf-patch" as const
+  constructor(message: string) {
+    super(`[settings-leaf-patch] ${message}`)
+    this.name = "SettingsPatchError"
+  }
+}
+
+const COMMENT_LINE = /^\s*(\/\/|#|\/\*|\*|\*\/)/
+const BLOCK_START = /^\s*\/\*/
+const BLOCK_END = /\*\//
+
+interface AnchoredLine {
+  text: string
+  /** index of the next structural line (raw's structural index) */
+  anchor: number
+}
+
+/** Split raw text into structural lines (strippable JSON) + comment/blank
+ * lines anchored to the next structural line. Full-line comments only (an
+ * inline comment inside a value string is indistinguishable — fail-closed
+ * rather than corrupt). */
+function splitRawLines(raw: string): { structural: string[]; extras: AnchoredLine[] } {
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n")
+  const structural: string[] = []
+  const extras: AnchoredLine[] = []
+  let inBlock = false
+  for (const line of lines) {
+    const trimmed = line.trim()
+    if (inBlock) {
+      extras.push({ text: line, anchor: structural.length })
+      if (BLOCK_END.test(trimmed)) inBlock = false
+      continue
+    }
+    if (BLOCK_START.test(trimmed)) {
+      extras.push({ text: line, anchor: structural.length })
+      if (!(BLOCK_END.test(trimmed.slice(trimmed.indexOf("/*") + 2)))) inBlock = true
+      continue
+    }
+    if (COMMENT_LINE.test(trimmed) || trimmed === "") {
+      extras.push({ text: line, anchor: structural.length })
+      continue
+    }
+    structural.push(line)
+  }
+  return { structural, extras }
+}
+
+/** Comment-tolerant parse for READ paths (a hand-edited comment-bearing
+ * document still loads); throws when even the stripped text is invalid. */
+function parseDocumentTolerant(raw: string): Record<string, unknown> {
+  const { structural } = splitRawLines(raw)
+  const parsed = JSON.parse(structural.join("\n")) as unknown
+  if (!isRecord(parsed)) throw new Error("settings document is not an object")
+  return parsed
+}
+
+/**
+ * Comment/blank-line-preserving JSON patch. The raw document is parsed after
+ * stripping FULL-LINE comments (`//`, `#`, `/* … *​/`, `*`) and blank lines; the
+ * patch deep-merges into it; the result is re-serialized with every comment
+ * line re-anchored to its positional line (identical structural layout = the
+ * file this package writes; a REORGANIZED document degrades to preserving the
+ * leading/trailing blocks — still no data loss, and a fault unsafe to fix
+ * throws SettingsPatchError BEFORE writing).
+ */
+export function patchJsonDocumentKeepingComments(raw: string, patch: Record<string, unknown>): string {
+  const { structural, extras } = splitRawLines(raw)
+  // Fail-closed: a document that does not parse even comment-stripped is left
+  // untouched (the caller surfaces; the file is never destroyed).
+  const baseDoc = parseDocumentTolerant(raw)
+  const merged = mergeRawLayers([{ raws: baseDoc }, { raws: patch }])
+  const oldLines = JSON.stringify(baseDoc, null, 2).split("\n")
+  const newLines = JSON.stringify(merged, null, 2).split("\n")
+
+  // Canonical alignment: raw structural lines must be exactly the canonical
+  // re-serialization of the parsed doc (the formatter this package writes).
+  const canonical = structural.length === oldLines.length
+    && structural.every((line, i) => line === oldLines[i])
+  if (!canonical) {
+    // Degraded preservation: leading + trailing comment blocks only; interior
+    // extras relocate to the end (they never delete user data, and a compact
+    // document is being normalized to the canonical layout).
+    const leading = extras.filter((e) => e.anchor === 0)
+    const trailing = extras.filter((e) => e.anchor === structural.length)
+    return [
+      ...leading.map((e) => e.text),
+      ...newLines,
+      ...trailing.map((e) => e.text),
+    ].join("\n")
+  }
+
+  // Positional re-anchoring: key order is preserved through
+  // parse→patch→stringify, so structural index k maps to the same logical
+  // line when the line counts match; extras are re-emitted before it.
+  if (newLines.length === oldLines.length) {
+    const out: string[] = []
+    for (let k = 0; k < newLines.length; k += 1) {
+      for (const extra of extras) if (extra.anchor === k && !out.includes(extra.text)) out.push(extra.text)
+      out.push(newLines[k])
+    }
+    for (const extra of extras) if (extra.anchor === structural.length && !out.includes(extra.text)) out.push(extra.text)
+    return out.join("\n")
+  }
+
+  // Counts differ (a leaf set/unset changed the line count): keep the leading
+  // block, the extras anchored to lines that survived verbatim, then every
+  // remaining extra followed by the trailing block — deterministic, no loss.
+  const out: string[] = []
+  const placed = new Set<string>()
+  for (const extra of extras) if (extra.anchor === 0) { out.push(extra.text); placed.add(extra.text) }
+  for (const line of newLines) {
+    const oldIdx = oldLines.indexOf(line)
+    if (oldIdx !== -1) {
+      for (const extra of extras) {
+        if (extra.anchor === oldIdx && !placed.has(extra.text)) { out.push(extra.text); placed.add(extra.text) }
+      }
+    }
+    out.push(line)
+  }
+  for (const extra of extras) if (!placed.has(extra.text)) out.push(extra.text)
+  return out.join("\n")
+}
+
+export interface LayeredStoreOptions {
+  /** Explicit ordered file list (LOW → HIGH priority). Takes precedence over
+   * `roots` when both are given. */
+  files?: string[]
+  /** Conventional roots; each is either an explicit path or "auto" (resolved
+   * by the store: global = configDir/settings.json, workspace =
+   * <workspace>/.i-harness/settings.json, project = <cwd>/settings.json). */
+  roots?: LayeredRoots
+  /** Config home for the global root default; defaults to `$IH_CONFIG_DIR` or
+   * `~/.i-harness` (same chain as resolveSettingsPath). */
+  configDir?: string
+  /** Workspace root for the workspace layer default (absent → process.cwd()). */
+  workspace?: string
+  /** Polling interval for the internal hot-reload watcher (default 500ms).
+   * `false` disables it. */
+  watchIntervalMs?: number | false
+}
+
+/** The structural surface the section protocol needs from a settings store
+ * (SettingsStore and LayeredSettingsStore both satisfy it). */
+export interface SettingsStoreSurface {
+  get(): Settings
+  isLoaded(): boolean
+  load(): Promise<Settings>
+  set(patch: Partial<Settings>): Promise<Settings>
+  reset(): Promise<Settings>
+  getSectionRevision(name: string): number
+}
+
+/**
+ * A layered Settings store (SettingsStore-compatible surface — usable where a
+ * SettingsStore is accepted). Sources are merged by RAW documents (deep, last
+ * wins) and normalized ONCE, so unknown keys survive as long as a higher layer
+ * does not override them. Writes go to the MASTER = the highest-priority
+ * EXISTING source, via the comment-preserving leaf patch. Revision meta
+ * (`_revision`) follows the master document.
+ */
+export class LayeredSettingsStore {
+  private readonly options: LayeredStoreOptions
+  private readonly resolvedRoots: LayerSource[]
+  private rawsByPath = new Map<string, Record<string, unknown>>()
+  private current: Settings = normalizeSettings(undefined)
+  private loaded = false
+  private revision: Record<string, number> = {}
+  private listeners = new Set<(path: string) => void>()
+  private watcher: { dispose: () => void } | undefined
+
+  constructor(options: LayeredStoreOptions = {}) {
+    this.options = options
+    this.resolvedRoots = resolveLayeredDefaults(options)
+  }
+
+  get(): Settings { return this.current }
+
+  isLoaded(): boolean { return this.loaded }
+
+  async load(): Promise<Settings> {
+    this.rawsByPath.clear()
+    for (const source of this.resolvedRoots) {
+      if (source.path === null) continue
+      const text = await readFile(source.path, "utf8").catch(() => undefined)
+      if (text === undefined) continue
+      const raw = parseDocumentTolerant(text)
+      this.rawsByPath.set(source.path, raw)
+      source.raws = raw
+    }
+    const master = this.masterSource()
+    const masterRaw = master !== undefined ? this.rawsByPath.get(master.path!) : undefined
+    this.revision = loadRevisionMeta(masterRaw)
+    this.current = normalizeSettings(mergeRawLayers([...this.resolvedRoots]))
+    this.loaded = true
+    this.ensureWatcher()
+    return this.current
+  }
+
+  async set(patch: Partial<Settings>): Promise<Settings> {
+    if (!this.loaded) await this.load()
+    this.current = normalizeSettings(mergeRawLayers([...this.resolvedRoots, { raws: patch }]))
+    if ("llm" in patch) this.revision.llm = (this.revision.llm ?? 0) + 1
+    if ("onboarding" in patch) this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
+    await this.writeMaster(patch, { ...this.revision })
+    return this.current
+  }
+
+  async reset(): Promise<Settings> {
+    if (!this.loaded) await this.load()
+    this.current = normalizeSettings(undefined)
+    this.revision.llm = (this.revision.llm ?? 0) + 1
+    this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
+    await this.writeMaster({}, { ...this.revision })
+    return this.current
+  }
+
+  getSectionRevision(name: string): number { return this.revision[name] ?? 0 }
+
+  sources(): LayerSource[] { return this.resolvedRoots }
+
+  onChange(cb: (path: string) => void): () => void {
+    this.listeners.add(cb)
+    return () => { this.listeners.delete(cb) }
+  }
+
+  async reloadFromDisk(): Promise<Settings> {
+    return this.load()
+  }
+
+  dispose(): void {
+    this.watcher?.dispose()
+    this.watcher = undefined
+  }
+
+  /** Highest-priority EXISTING source; the write target. */
+  private masterSource(): LayerSource | undefined {
+    for (let i = this.resolvedRoots.length - 1; i >= 0; i -= 1) {
+      const source = this.resolvedRoots[i]!
+      if (source.path !== null && this.rawsByPath.has(source.path)) return source
+    }
+    return this.resolvedRoots.find((s) => s.path !== null) ?? this.resolvedRoots.at(-1)
+  }
+
+  /**
+   * Leaf-patch write: merge the patch ONTO THE MASTER RAW DOCUMENT (never the
+   * normalized memory — unknown keys and hand-edited extras survive) and
+   * persist atomically through the comment-preserving patcher. A document the
+   * patcher's parser rejects is untouched and the write throws
+   * SettingsPatchError (fail-closed — never a destructive rewrite).
+   */
+  private async writeMaster(patch: Record<string, unknown>, nextRevision: Record<string, number>): Promise<void> {
+    const master = this.masterSource()
+    if (master?.path === undefined || master.path === null) return // nothing to write
+    const dir = dirname(master.path)
+    await mkdir(dir, { recursive: true })
+    const existing = await readFile(master.path, "utf8").catch(() => undefined)
+    const doc = existing !== undefined
+      ? mergeRawLayers([{ raws: parseDocumentTolerant(existing) }, { raws: patch }])
+      : mergeRawLayers([{ raws: {} }, { raws: patch }])
+    if (Object.keys(nextRevision).length > 0) doc._revision = { ...nextRevision }
+
+    let text: string
+    if (existing !== undefined) {
+      try {
+        text = patchJsonDocumentKeepingComments(existing, doc)
+      } catch (error) {
+        // fail-closed: never destroy a document the patcher cannot read
+        throw new SettingsPatchError(`cannot safely patch ${master.path}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    } else {
+      text = JSON.stringify(doc, null, 2)
+    }
+    const tmp = `${master.path}.tmp`
+    await writeFile(tmp, text, "utf8")
+    await rename(tmp, master.path)
+    this.rawsByPath.set(master.path, doc)
+  }
+
+  /** Polling watcher (500ms default — no fs events, no chokidar): when a
+   * source's mtime/size changed, reload merged view + notify (settings/changed
+   * analog at the store surface: `onChange`). */
+  private ensureWatcher(): void {
+    if (this.watcher !== undefined || this.options.watchIntervalMs === false) return
+    const intervalMs = this.options.watchIntervalMs ?? 500
+    const paths = this.resolvedRoots
+      .map((s) => s.path)
+      .filter((p): p is string => p !== null && p !== undefined)
+    if (paths.length === 0) return
+    this.watcher = watchSettings(paths, (path) => {
+      void this.reloadFromDisk().then((settings) => {
+        if (JSON.stringify(settings) !== JSON.stringify(this.current)) {
+          this.current = settings
+          for (const cb of [...this.listeners]) cb(path)
+        }
+      }).catch(() => {})
+    }, { intervalMs })
+  }
+}
+
+/** Convenience factory for the layered store. */
+export function createLayeredStore(options: LayeredStoreOptions = {}): LayeredSettingsStore {
+  return new LayeredSettingsStore(options)
+}
+
+/** Resolve the layered roots with the store-level defaults: global =
+ * `<configDir>/settings.json` (config home, same chain as resolveSettingsPath);
+ * workspace = `<workspace>/.i-harness/settings.json`; project =
+ * `<cwd>/settings.json`. */
+function resolveLayeredDefaults(options: LayeredStoreOptions): LayerSource[] {
+  if (options.files !== undefined) {
+    return options.files.map((file, i) => ({ path: resolve(file), order: i, label: "file" as const }))
+  }
+  const roots = options.roots ?? {}
+  const sources: LayerSource[] = []
+  const configDir = options.configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
+  const workspaceRoot = options.workspace ?? process.cwd()
+  if (roots.global !== undefined) {
+    const path = roots.global === "auto" ? join(configDir, "settings.json") : resolve(roots.global)
+    sources.push({ path, order: 0, label: "global" })
+  }
+  if (roots.workspace !== undefined) {
+    const path = roots.workspace === "auto" ? join(workspaceRoot, ".i-harness", "settings.json") : resolve(roots.workspace)
+    sources.push({ path, order: 1, label: "workspace" })
+  }
+  if (roots.project !== undefined) {
+    const path = roots.project === "auto" ? join(process.cwd(), "settings.json") : resolve(roots.project)
+    sources.push({ path, order: 2, label: "project" })
+  }
+  return sources
+}
+
+/**
+ * Polling settings watcher (no new deps — no chokidar). `intervalMs` defaults
+ * to 500. The FIRST tick only snapshots (a pre-existing state never fires);
+ * a change fires the callback with the changed path. Returns a dispose() that
+ * stops polling.
+ */
+export function watchSettings(
+  paths: string | string[],
+  onChange: (path: string) => void,
+  opts?: { intervalMs?: number },
+): { dispose: () => void } {
+  const files = Array.isArray(paths) ? paths : [paths]
+  const intervalMs = opts?.intervalMs ?? 500
+  let snapshot = new Map<string, string>()
+  let timer: ReturnType<typeof setInterval> | undefined
+
+  const capture = async (): Promise<Map<string, string>> => {
+    const snap = new Map<string, string>()
+    for (const file of files) {
+      const info = await stat(file).then(
+        (s) => `${s.mtimeMs}:${s.size}`,
+        () => "", // missing → empty marker (reappearance fires)
+      )
+      snap.set(file, info)
+    }
+    return snap
+  }
+
+  void capture().then((snap) => { snapshot = snap })
+  timer = setInterval(() => {
+    void capture().then((snap) => {
+      for (const [file, info] of snap) {
+        if (snapshot.get(file) !== info) {
+          snapshot = snap
+          onChange(file)
+          return // one batch per tick
+        }
+      }
+      snapshot = snap
+    })
+  }, intervalMs)
+  // A hot-reload poll must never keep the process alive (tests / short hosts).
+  timer.unref?.()
+
+  return {
+    dispose: () => {
+      if (timer !== undefined) clearInterval(timer)
+      timer = undefined
+    },
+  }
 }
 
 // Section descriptor API (Task 1 of the models plan): schemas, redacted

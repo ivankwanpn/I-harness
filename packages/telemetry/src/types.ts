@@ -18,6 +18,10 @@ export type TelemetryEventType =
   | "error"
   | "warn"
   | "mcp/server-status"
+  // M27 R-B6: skills shadow selector report (deterministic; sinks may ignore)
+  | "skill/selector-shadow"
+  // M27 R-E10: layered settings hot-reload change notification
+  | "settings/changed"
 
 export interface TelemetryEvent {
   type: TelemetryEventType

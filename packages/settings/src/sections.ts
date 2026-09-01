@@ -15,7 +15,7 @@
  * @module @i-harness/settings/sections
  */
 
-import type { SettingsLlm, SettingsOnboarding, SettingsProviderConfig, SettingsStore } from "./index.ts"
+import type { SettingsLlm, SettingsOnboarding, SettingsProviderConfig, SettingsStoreSurface } from "./index.ts"
 
 /** The top-level section keys the section protocol knows about. */
 export type SectionName = "llm" | "onboarding"
@@ -282,7 +282,7 @@ function deepMerge(base: unknown, user: unknown): unknown {
 }
 
 /** Describe one section for the UI: merged redacted view + base + user layers. */
-export function describeSection(name: SectionName, store: SettingsStore): SectionView {
+export function describeSection(name: SectionName, store: SettingsStoreSurface): SectionView {
   const schema = SECTION_SCHEMAS[name]
   const stored = store.get()[name] as unknown as Record<string, unknown>
   const base = sectionBase[name]
@@ -529,7 +529,7 @@ function stableStringify(value: unknown): string {
 export async function mutateSection(
   name: SectionName,
   ops: SectionOp[],
-  store: SettingsStore,
+  store: SettingsStoreSurface,
   expectedRevision?: number,
 ): Promise<SectionView> {
   const schema = SECTION_SCHEMAS[name]
