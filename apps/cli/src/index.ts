@@ -13,6 +13,20 @@ import type { WebServerOptions } from "./web.ts"
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
 
+/**
+ * H-4: web port selection — `--port N` flag beats the PORT env var, which
+ * beats the 4310 default. Flag values must be positive integers; anything
+ * else falls through to the env (or the default). The env path reuses
+ * `parsePort` (web.ts) so PORT=0 (OS-assigned) stays valid there.
+ */
+export function pickWebPort(args: string[], envPort: string | undefined): number {
+  const idx = args.indexOf("--port")
+  const flagPort = idx !== -1 ? Number(args[idx + 1]) : undefined
+  return flagPort !== undefined && Number.isInteger(flagPort) && flagPort > 0
+    ? flagPort
+    : envPort !== undefined ? parsePort(envPort) : 4310
+}
+
 export function parseModel(modelSpec: string, apiKey: string): ModelClient {
   const [provider, model] = modelSpec.split(":")
   const reg = createProviderRegistry()
@@ -39,7 +53,8 @@ export async function main(argv: string[]): Promise<number> {
     const launchToken = launchIdx !== -1 ? args[launchIdx + 1] : process.env.I_HARNESS_TOKEN
     const hmacSecret = hmacIdx !== -1 ? args[hmacIdx + 1] : process.env.I_HARNESS_HMAC
     const opts: WebServerOptions = {
-      port: parsePort(process.env.PORT),
+      // H-4: flag > PORT env > default (4310) — pickWebPort owns the priority.
+      port: pickWebPort(args, process.env.PORT),
       workspace: process.cwd(),
       sessionBackend,
       ...(launchToken !== undefined || hmacSecret !== undefined
@@ -55,7 +70,7 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
   if (args[0] !== "run") {
-    console.error("usage: i-harness <run|web> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET]")
+    console.error("usage: i-harness <run|web> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--port N] [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET]")
     return Promise.resolve(1)
   }
 

@@ -6,6 +6,20 @@ import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createCredentialStore } from "@i-harness/credentials"
 import { parsePort, createWebServer, resolveModelSpec, type WebServerOptions } from "../src/web.ts"
+import { pickWebPort } from "../src/index.ts"
+
+describe("pickWebPort (H-4)", () => {
+  it("web: flag beats env beats default", () => {
+    expect(pickWebPort(["node", "i-harness", "web", "--port", "4398"], "1234")).toBe(4398)
+    expect(pickWebPort(["node", "i-harness", "web"], "1234")).toBe(1234)
+    expect(pickWebPort(["node", "i-harness", "web"], undefined)).toBe(4310)
+  })
+
+  it("web: invalid flag falls back to env/default and env passes through parsePort", () => {
+    expect(pickWebPort(["node", "i-harness", "web", "--port", "abc"], "1234")).toBe(1234)
+    expect(pickWebPort(["node", "i-harness", "web", "--port", "0"], undefined)).toBe(4310)
+  })
+})
 
 describe("parsePort", () => {
   it("falls back on junk and floors valid values", () => {
