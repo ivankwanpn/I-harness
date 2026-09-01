@@ -10,6 +10,7 @@
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@i-harness/core-session": "workspace:*",
-    "@i-harness/session-executor": "workspace:*"
+    "@i-harness/session-executor": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*"
   }
 }
