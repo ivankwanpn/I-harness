@@ -1,0 +1,19 @@
+{
+  "name": "@i-harness/acp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0",
+    "@i-harness/sdk": "workspace:*",
+    "@i-harness/session-executor": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*"
+  }
+}

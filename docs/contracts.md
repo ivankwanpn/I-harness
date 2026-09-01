@@ -91,3 +91,28 @@
 ## 版本 / 健康
 
 `GET /api/health`（web-host）→ `{ "healthy": true, "version": string }`；version 源 = `apps/cli` package.json 常量（M27-H-1 注入）。
+
+## ACP wire（R-C7，M28）
+
+`i-harness acp`（`packages/acp`，官方 `@agentclientprotocol/sdk`）serves **ACP v1**（`protocolVersion` = 1）的 automation 子集——stdin/stdout NDJSON JSON-RPC，stdout 僅 ACP 幀（日志一律 stderr）。A session-driven 面（A4/A5 等 turn 前檢查）不變。
+
+### Agent 面（我們 = ACP Agent）
+
+| 方法 | 行為 |
+|---|---|
+| `initialize` | `{ protocolVersion: 1, agentInfo: { name: "i-harness", version }, agentCapabilities: { sessionCapabilities: { list: {}, close: {}, resume: {} } } }` |
+| `session/new` | `{ sessionId }`（`--session-dir` 給定 → `SessionCoordinator` 持久化；否則 in-memory） |
+| `session/list` | `{ sessions: [{ sessionId, cwd }] }`（coordinator ∪ 本會話新建；adopted 的 cwd 回報 harness workspace） |
+| `session/resume` | `{}`；未知 id → 錯誤（fail-closed） |
+| `session/close` | `{}`（v0 no-op；v1 掛點：flush + lease 釋放） |
+| `session/prompt` | 提交文本（text content block 拼接；非 text 塊 v0 拒收）到 `SessionService.submit`（tier send），run 結束回 `{ stopReason: "end_turn" }`；被 cancel/連線中斷 → `{ stopReason: "cancelled" }` |
+| `session/cancel`（notification） | 中止該 session 的 in-flight submit（閒置時 no-op） |
+
+### Client 面 / 未用（v0 排除項）
+
+- **權限面（v0）**: `autoApprove`（預設 `true`）＝ **allow-once**——prompt 直接 admission，不呼叫 `session/request_permission`。`autoApprove: false`（CLI `--no-auto-approve`）＝ **拒絕 prompt**（fail-closed：v0 無 request/approval 回環）。**v1 掛點**：guardian/approval 接線 + `session/request_permission` round-trip。
+- **v0 省略（文檔化）**: session/new 的 `mcpServers`、per-session cwd（service 固定於 CLI workspace）、`session/update` 通知鏡像（session 事件 == `session/event` 流，ACP 側 v0 不轉發）、`session/delete`/`fork`/`set_mode`/`set_config_option`、terminal/fs/elicitation client 方法、`authenticate`。
+
+### 與 SDK 的界線
+
+`i-harness sdk`（NDJSON JSON-RPC v0 自家協議）是原生宿主協議；`i-harness acp` 是標準外部 ACP。二者 `--session-dir`/`--session-backend` 旗標一致、stdout 純幀紀律一致。ACP v1 下 `session/prompt` 是 request（回 `PromptResponse`）——舊版「fire-and-forget + `sessionUpdate{messageId}` admission 回執」的設計由「await submit + stopReason」取代（SDK 1.4 高階 client 面即此形狀）。
