@@ -113,6 +113,9 @@ importers:
       '@i-harness/sandbox-windows-acl':
         specifier: workspace:*
         version: link:../../packages/sandbox-windows-acl
+      '@i-harness/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../../packages/session-executor
@@ -590,6 +593,9 @@ importers:
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../session-executor
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
 
   packages/session-executor:
     dependencies:
