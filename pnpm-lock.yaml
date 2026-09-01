@@ -26,6 +26,9 @@ importers:
       '@i-harness/agent-team':
         specifier: workspace:*
         version: link:../../packages/agent-team
+      '@i-harness/attachment':
+        specifier: workspace:*
+        version: link:../../packages/attachment
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../../packages/compaction
@@ -41,6 +44,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../../packages/core-tools
+      '@i-harness/credentials':
+        specifier: workspace:*
+        version: link:../../packages/credentials
       '@i-harness/exec':
         specifier: workspace:*
         version: link:../../packages/exec
@@ -107,6 +113,9 @@ importers:
       '@i-harness/sandbox-windows-acl':
         specifier: workspace:*
         version: link:../../packages/sandbox-windows-acl
+      '@i-harness/session-executor':
+        specifier: workspace:*
+        version: link:../../packages/session-executor
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../../packages/session-persistence
@@ -122,6 +131,9 @@ importers:
       '@i-harness/session-title':
         specifier: workspace:*
         version: link:../../packages/session-title
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../../packages/settings
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../../packages/shell
@@ -143,9 +155,15 @@ importers:
       '@i-harness/web':
         specifier: workspace:*
         version: link:../../packages/web
+      '@i-harness/web-host':
+        specifier: workspace:*
+        version: link:../../packages/web-host
       '@i-harness/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
+      '@i-harness/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
@@ -240,6 +258,12 @@ importers:
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
     devDependencies:
       '@i-harness/interaction':
         specifier: workspace:*
@@ -564,6 +588,123 @@ importers:
         specifier: workspace:*
         version: link:../core-session
 
+  packages/session-executor:
+    dependencies:
+      '@i-harness/agent-team':
+        specifier: workspace:*
+        version: link:../agent-team
+      '@i-harness/compaction':
+        specifier: workspace:*
+        version: link:../compaction
+      '@i-harness/core-agent':
+        specifier: workspace:*
+        version: link:../core-agent
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
+      '@i-harness/fs':
+        specifier: workspace:*
+        version: link:../fs
+      '@i-harness/fs-search':
+        specifier: workspace:*
+        version: link:../fs-search
+      '@i-harness/guard-approval':
+        specifier: workspace:*
+        version: link:../guard-approval
+      '@i-harness/guard-repeat-tool':
+        specifier: workspace:*
+        version: link:../guard-repeat-tool
+      '@i-harness/guard-retry':
+        specifier: workspace:*
+        version: link:../guard-retry
+      '@i-harness/guard-timeout':
+        specifier: workspace:*
+        version: link:../guard-timeout
+      '@i-harness/instructions':
+        specifier: workspace:*
+        version: link:../instructions
+      '@i-harness/interaction':
+        specifier: workspace:*
+        version: link:../interaction
+      '@i-harness/llm-mock':
+        specifier: workspace:*
+        version: link:../llm-mock
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/lsp':
+        specifier: workspace:*
+        version: link:../lsp
+      '@i-harness/mcp-client':
+        specifier: workspace:*
+        version: link:../mcp-client
+      '@i-harness/output-retention':
+        specifier: workspace:*
+        version: link:../output-retention
+      '@i-harness/plan-mode':
+        specifier: workspace:*
+        version: link:../plan-mode
+      '@i-harness/preset':
+        specifier: workspace:*
+        version: link:../preset
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
+      '@i-harness/runtime-context':
+        specifier: workspace:*
+        version: link:../runtime-context
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+      '@i-harness/sandbox-local':
+        specifier: workspace:*
+        version: link:../sandbox-local
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../sandbox-policy
+      '@i-harness/sandbox-windows-acl':
+        specifier: workspace:*
+        version: link:../sandbox-windows-acl
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+      '@i-harness/session-query':
+        specifier: workspace:*
+        version: link:../session-query
+      '@i-harness/shell':
+        specifier: workspace:*
+        version: link:../shell
+      '@i-harness/skills':
+        specifier: workspace:*
+        version: link:../skills
+      '@i-harness/subagent':
+        specifier: workspace:*
+        version: link:../subagent
+      '@i-harness/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
+      '@i-harness/terminal':
+        specifier: workspace:*
+        version: link:../terminal
+      '@i-harness/tool-search':
+        specifier: workspace:*
+        version: link:../tool-search
+      '@i-harness/web':
+        specifier: workspace:*
+        version: link:../web
+      '@i-harness/workflow':
+        specifier: workspace:*
+        version: link:../workflow
+
   packages/session-persistence:
     dependencies:
       '@i-harness/core-session':
@@ -753,6 +894,64 @@ importers:
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../provider
+
+  packages/web-host:
+    dependencies:
+      '@i-harness/attachment':
+        specifier: workspace:*
+        version: link:../attachment
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/credentials':
+        specifier: workspace:*
+        version: link:../credentials
+      '@i-harness/feedback':
+        specifier: workspace:*
+        version: link:../feedback
+      '@i-harness/goal':
+        specifier: workspace:*
+        version: link:../goal
+      '@i-harness/interaction':
+        specifier: workspace:*
+        version: link:../interaction
+      '@i-harness/jobs':
+        specifier: workspace:*
+        version: link:../jobs
+      '@i-harness/plugin-registry':
+        specifier: workspace:*
+        version: link:../plugin-registry
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
+      '@i-harness/session-executor':
+        specifier: workspace:*
+        version: link:../session-executor
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+      '@i-harness/session-query':
+        specifier: workspace:*
+        version: link:../session-query
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
+      '@i-harness/workspace':
+        specifier: workspace:*
+        version: link:../workspace
+      ws:
+        specifier: ^8.18.0
+        version: 8.21.3
+    devDependencies:
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
+      '@types/ws':
+        specifier: ^8.5.12
+        version: 8.18.1
 
   packages/workflow:
     dependencies:
@@ -1190,6 +1389,9 @@ packages:
 
   '@types/node@24.13.3':
     resolution: {integrity: sha512-Dh8vAsV36ig5wa9OX4pXvMc9D3Veibfw2wix0CUwYODLD8nkj9UsLjASr49nPg+2eKzxhBV+v7L8pXvT4e639Q==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   '@vitest/expect@3.2.7':
     resolution: {integrity: sha512-E8eBXaKibuvH2pSZErOjdVb5vF4PbKYcrnluBTYxEk1l/VhhwZg1kZQsdtjq+CsF5CFydf2Rdkz7jDHKSisi3w==}
@@ -1853,6 +2055,18 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
+  ws@8.21.3:
+    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   yaml@2.9.0:
     resolution: {integrity: sha512-2AvhNX3mb8zd6Zy7INTtSpl1F15HW6Wnqj0srWlkKLcpYl/gMIMJiyuGq2KeI2YFxUPjdlB+3Lc10seMLtL4cA==}
     engines: {node: '>= 14.6'}
@@ -2109,6 +2323,10 @@ snapshots:
   '@types/node@24.13.3':
     dependencies:
       undici-types: 7.18.2
+
+  '@types/ws@8.18.1':
+    dependencies:
+      '@types/node': 24.13.3
 
   '@vitest/expect@3.2.7':
     dependencies:
@@ -2827,6 +3045,8 @@ snapshots:
       stackback: 0.0.2
 
   wrappy@1.0.2: {}
+
+  ws@8.21.3: {}
 
   yaml@2.9.0: {}
 

@@ -9,6 +9,7 @@
 // composed here directly (the plan's E-flip is the port itself), so the
 // host's settings/credentials/llm/models route family activates.
 import { dirname, join } from "node:path"
+import { createRequire } from "node:module"
 import { randomBytes } from "node:crypto"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { append, type SessionEvent } from "@i-harness/core-session"
@@ -30,6 +31,7 @@ import {
 import {
   createProviderRegistry,
   buildWireClient,
+  resolveModelContext,
   type ProviderRegistry,
   type ProviderProfile,
 } from "@i-harness/provider"
@@ -48,6 +50,11 @@ import { createWorkspaceRegistry } from "@i-harness/workspace"
 import { registerCommand, listCommands, parseCommandLine, runCommand } from "@i-harness/interaction"
 
 export const DEFAULT_WEB_PORT = 4310
+
+// M27-H-1: the host's /api/health version — the CLI package's own version is
+// the single constant (read at module load; the CLI is never bundled).
+const require = createRequire(import.meta.url)
+export const CLI_VERSION = (require("../package.json") as { version: string }).version
 
 /**
  * PORT parsing (review fix): `Number(process.env.PORT)` is NaN for PORT=abc,
@@ -258,6 +265,19 @@ function appendCommandEvents(executor: SessionService, sessionId: string, name: 
   }).catch(() => {})
 }
 
+/** M27-R-A8: the context window of the DEFAULT resolution chain (M15 provider
+ * records — profile.contextWindow / modelContexts override). Unknown (mock /
+ * no registry entry) → undefined → get_context_remaining fails closed (not
+ * registered). Per-session meta.modelSelection resolutions are covered by the
+ * same registry record family; the assembly registers per session. */
+export function defaultContextWindow(opts: WebServerOptions): number | undefined {
+  const { spec } = resolveModelSpec(opts)
+  if (spec === "") return undefined
+  const [providerName, modelId] = spec.split(":")
+  const profile = opts.providerRegistry?.get(providerName)
+  return profile === undefined ? undefined : resolveModelContext(profile, modelId).contextWindow
+}
+
 export async function createWebServer(opts: WebServerOptions): Promise<WebServer> {
   const listenPort = Number.isFinite(opts.port) && opts.port >= 0 ? Math.floor(opts.port) : DEFAULT_WEB_PORT
   const coordinator: SessionCoordinator =
@@ -289,6 +309,8 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     // The web path: job/status events mirror into the live session (the jobs
     // surface folds the durable doc; the mux streams carry the events).
     jobStatusEvents: true,
+    // M27-R-A8: get_context_remaining window knowledge (M15 records).
+    contextWindow: defaultContextWindow(opts),
     loadMeta: async (id) => (await coordinator.profile(id)).meta,
     modelBuilder: async (_sessionId, meta) => buildModelFor(opts, meta),
   })
@@ -320,6 +342,8 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     workspaceRegistry,
     modelSources: { settingsStore: settings, credentialStore: credentials, providerRegistry },
     ...(auth !== undefined ? { auth } : {}),
+    // M27-H-1: the health route's version — the CLI package.json constant.
+    version: CLI_VERSION,
   })
   executor.onAssembly((a) => {
     if (a.sessionId === undefined) return
