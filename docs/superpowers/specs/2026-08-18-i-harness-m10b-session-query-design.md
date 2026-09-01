@@ -7,6 +7,16 @@ decisions confirmed — agent tools + public API, event-level indexing, new
 ancestors/descendants/children + depth, direct read-only tools, BM25 + snippet +
 session filter).
 
+> **§歷史 —— M29 分離（2026-09-02，superseded）**: M29 replaces the query
+> backend — the SQLite persistence backend is REMOVED; the search/lineage
+> surface is served by `createFileBackedSessionQuery` (`packages/session-query/
+> src/file-backed.ts`), a rebuildable index derived from the JSONL store on
+> every search (reconcile-on-search: 快照 revision diff → 變更 session 唯讀全
+> decode → 一事務重插 → 失敗大聲，絕不回退舊行)。一致性語意由「與事件同事務
+> 永不偏離」換成「搜索永不舊於自身 reconcile」；`SessionQuery` 抽象、工具/
+> web 路由介面零改動。`createSessionQuery(dbPath)` 保留為既有索引文件的只讀
+> 開啟。詳見 `docs/superpowers/specs/2026-09-02-m29-sqlite-split-design.md`。
+
 ## Context
 
 The harness persists session logs through `@i-harness/session-persistence`

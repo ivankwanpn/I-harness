@@ -38,7 +38,8 @@ export interface SessionQuery {
 }
 
 // Open-connection tracking so hosts/tests can release the DB file handle on
-// Windows (mirrors createSqliteBackend's closeSqliteBackends).
+// Windows (a reader over a persisted index file holds it open; closeSessionQueries
+// also closes the file-backed index connections).
 const openConnections = new Set<DatabaseSync>()
 export function closeSessionQueries(): void {
   for (const db of openConnections) db.close()
