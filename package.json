@@ -11,7 +11,8 @@
   "scripts": {
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "e2e": "vitest run e2e/ --config e2e/vitest.config.ts"
+    "e2e": "vitest run e2e/ --config e2e/vitest.config.ts",
+    "verify:store": "bash scripts/check-store.sh"
   },
   "devDependencies": {
     "typescript": "^5.9.0",
