@@ -5,22 +5,22 @@ import { describe, expect, it } from "vitest"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createContext } from "@i-harness/core-plugin"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { closeSqliteBackends, createSqliteBackend } from "@i-harness/session-persistence-sqlite"
-import { createSessionQuery, createSessionQueryTools, closeSessionQueries } from "../src/index.ts"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createFileBackedSessionQuery, createSessionQueryTools, closeSessionQueries } from "../src/index.ts"
 
+// M29: tools over the file-backed query (jsonl store seed — reconcile-on-search).
 describe("session-query tools", () => {
   it("registers session_search and lineage as read-only direct tools", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools-"))
     try {
-      const dbPath = join(dir, "sessions.db")
-      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await coordinator.create({ sessionId: "parent" })
       await coordinator.create({ sessionId: "child", parentSession: "parent" })
       await coordinator.append("parent", [{ type: "user/message", text: "searchable needle phrase" }])
 
       const ctx = createContext()
       const registry = createToolRegistry(ctx)
-      for (const tool of createSessionQueryTools(createSessionQuery(dbPath))) registry.register(tool)
+      for (const tool of createSessionQueryTools(createFileBackedSessionQuery({ storeRoot: dir }))) registry.register(tool)
       const names = registry.schemas().map((s) => s.name).sort()
       expect(names).toEqual(["lineage", "session_search"])
 
@@ -40,7 +40,6 @@ describe("session-query tools", () => {
         .rejects.toThrow(/invalid direction/)
     } finally {
       closeSessionQueries()
-      closeSqliteBackends()
       rmSync(dir, { recursive: true, force: true })
     }
   })
@@ -48,17 +47,15 @@ describe("session-query tools", () => {
   it("marks session_search and lineage isConcurrencySafe", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools-cc-"))
     try {
-      const dbPath = join(dir, "sessions.db")
-      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await coordinator.create({ sessionId: "parent" })
-      const tools = createSessionQueryTools(createSessionQuery(dbPath))
+      const tools = createSessionQueryTools(createFileBackedSessionQuery({ storeRoot: dir }))
       const search = tools.find((t) => t.name === "session_search")!
       const lineage = tools.find((t) => t.name === "lineage")!
       expect(search.isConcurrencySafe).toBe(true)
       expect(lineage.isConcurrencySafe).toBe(true)
     } finally {
       closeSessionQueries()
-      closeSqliteBackends()
       rmSync(dir, { recursive: true, force: true })
     }
   })
@@ -66,17 +63,15 @@ describe("session-query tools", () => {
   it("propagates errors as tool failures (unknown session)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "m10b-tools2-"))
     try {
-      const dbPath = join(dir, "sessions.db")
-      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await coordinator.create({ sessionId: "parent" })
       const ctx = createContext()
       const registry = createToolRegistry(ctx)
-      for (const tool of createSessionQueryTools(createSessionQuery(dbPath))) registry.register(tool)
+      for (const tool of createSessionQueryTools(createFileBackedSessionQuery({ storeRoot: dir }))) registry.register(tool)
       await expect(registry.execute({ name: "lineage", args: { session_id: "nope", direction: "children" } }))
         .rejects.toThrow(/unknown session/)
     } finally {
       closeSessionQueries()
-      closeSqliteBackends()
       rmSync(dir, { recursive: true, force: true })
     }
   })
