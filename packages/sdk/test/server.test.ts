@@ -72,6 +72,36 @@ describe("createSdkServer", () => {
     }
   })
 
+  // M28 S-1: sdk wire contract v0 field-level lock (drift sentinel). Every field
+  // the default initialize emits is part of the frozen v0 contract — a change
+  // here is a breaking protocol change for embedders (see protocol.ts JSDoc +
+  // docs/contracts.md "SDK Wire Contract v0").
+  it("initialize wire contract v0 (field-level lock)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service) // default version = "0.1.0" (contract)
+      const output = await server.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+      const msg = decodeFrame(output!) as RpcSuccess
+      expect(msg).toEqual({
+        jsonrpc: "2.0",
+        id: 1,
+        result: {
+          name: "i-harness",
+          version: "0.1.0",
+          protocolVersion: 1,
+          capabilities: {
+            session: ["prompt", "status"],
+            notifications: ["session/event", "session/status"],
+          },
+        },
+      })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
   it("session/prompt streams session events + status notifications and resolves ok", async () => {
     const { service, cleanup } = await makeService()
     try {
