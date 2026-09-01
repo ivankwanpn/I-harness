@@ -131,9 +131,6 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../../packages/session-persistence-jsonl
-      '@i-harness/session-persistence-sqlite':
-        specifier: workspace:*
-        version: link:../../packages/session-persistence-sqlite
       '@i-harness/session-query':
         specifier: workspace:*
         version: link:../../packages/session-query
@@ -769,15 +766,6 @@ importers:
         specifier: workspace:*
         version: link:../session-persistence
 
-  packages/session-persistence-sqlite:
-    dependencies:
-      '@i-harness/core-session':
-        specifier: workspace:*
-        version: link:../core-session
-      '@i-harness/session-persistence':
-        specifier: workspace:*
-        version: link:../session-persistence
-
   packages/session-query:
     dependencies:
       '@i-harness/core-session':
@@ -796,9 +784,6 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../session-persistence-jsonl
-      '@i-harness/session-persistence-sqlite':
-        specifier: workspace:*
-        version: link:../session-persistence-sqlite
 
   packages/session-title:
     dependencies:
