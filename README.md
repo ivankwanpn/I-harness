@@ -150,3 +150,7 @@ The acceptance task runs end-to-end:
 ```bash
 node --import tsx apps/cli/src/index.ts run "把 src/data.txt 第一行改成 hello"
 ```
+
+## Known infra quirks
+
+- **vitest worker flake (rare)**: `pnpm -r test` occasionally reports a single package (web-host) `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL` with no test failure — tinypool worker IPC teardown race; re-running the package alone is green. Seen 2026-09-02 (M29) and during M27/M28 (twice). If it repeats, re-run `pnpm --filter <pkg> test` to confirm.
