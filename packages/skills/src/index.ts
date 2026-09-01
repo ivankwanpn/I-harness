@@ -33,6 +33,7 @@ export {
   registerSkills,
   createSkillsPlugin,
   type SkillToolDeps,
+  type SkillsMountConfig,
   type SkillsMountHandle,
   type SkillSearchArgs,
   type SkillSearchMatch,
@@ -40,3 +41,12 @@ export {
   type SkillGetArgs,
   type SkillGetOutput,
 } from "./tool.ts"
+// M27 R-B6: shadow selector + implicit-invocation vocabulary (pure, no I/O).
+export {
+  selectShadowCandidates,
+  explicitMentionMatches,
+  type ShadowCandidate,
+  type ShadowReport,
+  type SkillSelectorEvent,
+  type SkillTelemetryEmitter,
+} from "./shadow.ts"
