@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite"
 import type { SessionEvent } from "@i-harness/core-session"
+import { closeFileBackedConnections } from "./file-backed.ts"
 
 export interface SearchHit {
   sessionId: string
@@ -37,11 +38,13 @@ export interface SessionQuery {
 }
 
 // Open-connection tracking so hosts/tests can release the DB file handle on
-// Windows (mirrors createSqliteBackend's closeSqliteBackends).
+// Windows (a reader over a persisted index file holds it open; closeSessionQueries
+// also closes the file-backed index connections).
 const openConnections = new Set<DatabaseSync>()
 export function closeSessionQueries(): void {
   for (const db of openConnections) db.close()
   openConnections.clear()
+  closeFileBackedConnections()
 }
 
 const DEFAULT_LIMIT = 20
@@ -227,4 +230,10 @@ export function createSessionQuery(dbPath: string): SessionQuery {
   return { search, lineage }
 }
 
+// M29: the reconcile-on-search index builder over a JSONL store root — the
+// durable, rebuildable derivation of the search/lineage surface (dsh Scheme A).
+// The SQLite persistence backend is gone; this builder is the tool/web query
+// producer. `createSessionQuery(dbPath)` above stays as the read-only opener
+// for existing/legacy index files (event_fts + sessions schema).
+export { createFileBackedSessionQuery, SessionQueryError, type FileBackedQueryOptions, type InspectOutcome } from "./file-backed.ts"
 export { createSessionQueryTools } from "./tools.ts"

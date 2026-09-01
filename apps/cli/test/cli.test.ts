@@ -13,8 +13,7 @@ import { createApprovalPolicy } from "@i-harness/guard-approval"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { createSqliteBackend, closeSqliteBackends } from "@i-harness/session-persistence-sqlite"
-import { createSessionQuery, closeSessionQueries } from "@i-harness/session-query"
+import { createFileBackedSessionQuery, closeSessionQueries } from "@i-harness/session-query"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { CompactionConfig } from "@i-harness/compaction"
 import type { RetryConfig } from "@i-harness/guard-retry"
@@ -36,6 +35,23 @@ vi.mock("@i-harness/session-persistence", async (importOriginal) => {
     ...actual,
     createSessionCoordinator: (...args: unknown[]) => {
       coordinatorFactoryCalls.list.push(args)
+      return real(...args)
+    },
+  }
+})
+
+// M29: observe — without altering — the createFileBackedSessionQuery call
+// surface so the CLI's file-backed wiring is assertable (the real builder is
+// used; only the arguments are recorded; the M10b tests keep the genuine
+// createFileBackedSessionQuery implementation).
+const fileBackedCalls = vi.hoisted(() => ({ list: [] as unknown[][] }))
+vi.mock("@i-harness/session-query", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@i-harness/session-query")>()
+  const real = actual.createFileBackedSessionQuery as (...args: unknown[]) => unknown
+  return {
+    ...actual,
+    createFileBackedSessionQuery: (...args: unknown[]) => {
+      fileBackedCalls.list.push(args)
       return real(...args)
     },
   }
@@ -184,13 +200,14 @@ describe("headless CLI (M2)", () => {
     })
     expect(result.exitCode).toBe(0)
   })
-  describe("headless CLI M10b session-query tools", () => {
+  describe("headless CLI M10b session-query tools (M29: file-backed, jsonl store)", () => {
     it("session_search finds previously written session content", async () => {
-      const dbPath = join(dir, "query.db") // dir is the per-test temp workspace already used in this file
-      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      // M29: the store root is the workspace — the query surface is the
+      // file-backed index over the jsonl store (reconcile-on-search).
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await coordinator.create({ sessionId: "main" })
       await coordinator.append("main", [{ type: "user/message", text: "the purple unicorn fixed the parser" }])
-      const sessionQuery = createSessionQuery(dbPath)
+      const sessionQuery = createFileBackedSessionQuery({ storeRoot: dir })
       try {
         const result = await runHeadless("find it", {
           workspace: dir,
@@ -212,16 +229,14 @@ describe("headless CLI (M2)", () => {
         expect(hits[0]!.snippet).toContain("unicorn")
       } finally {
         closeSessionQueries()
-        closeSqliteBackends()
       }
     })
 
     it("lineage shows the parent/child structure", async () => {
-      const dbPath = join(dir, "query.db")
-      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await coordinator.create({ sessionId: "parent" })
       await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })
-      const sessionQuery = createSessionQuery(dbPath)
+      const sessionQuery = createFileBackedSessionQuery({ storeRoot: dir })
       try {
         const result = await runHeadless("lineage", {
           workspace: dir,
@@ -242,7 +257,6 @@ describe("headless CLI (M2)", () => {
         expect(nodes[0]!.parentSession).toBe("parent")
       } finally {
         closeSessionQueries()
-        closeSqliteBackends()
       }
     })
 
@@ -288,13 +302,12 @@ describe("headless CLI (M2)", () => {
     })
 
     it("resumes a persisted compacted session (load tolerates compaction events)", async () => {
-      // Seed a compacted session over a temp sqlite DB. Seqs are explicit
-      // because the sqlite backend stores each event payload verbatim; the
+      // Seed a compacted session over a temp jsonl store. Seqs are explicit
+      // because the jsonl backend stores each event payload verbatim; the
       // summary's shadowedSeqs [0] then hides the old user/message so the
       // resume surface leads with the summary. Without the KNOWN_EVENT_TYPES
       // registration this load path hard-fails (SessionFormatUnsupportedError).
-      const dbPath = join(dir, "resume.db")
-      const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await coordinator.create({ sessionId: "main" })
       await coordinator.append("main", [
         { type: "user/message", text: "old work", seq: 0 },
@@ -316,7 +329,7 @@ describe("headless CLI (M2)", () => {
         // with the restored summary.
         expect(deriveMessages(result.session!)[0]).toEqual({ role: "user", content: "COMPACTED HISTORY" })
       } finally {
-        closeSqliteBackends()
+        rmSync(dir, { recursive: true, force: true })
       }
     })
 
@@ -615,11 +628,11 @@ describe("headless CLI persistence (M4)", () => {
   })
 })
 
-describe("headless CLI SQLite persistence (M5)", () => {
-  it("runHeadless with a sqlite coordinator persists to sessions.db", async () => {
+describe("headless CLI persistence (M5, M29: JSONL only)", () => {
+  it("runHeadless with a jsonl coordinator persists to the store (no sessions.db)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
-      const coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       const { id } = await coordinator.create()
       const result = await runHeadless("hello", {
         workspace: dir,
@@ -628,19 +641,19 @@ describe("headless CLI SQLite persistence (M5)", () => {
         coordinator,
       })
       expect(result.exitCode).toBe(0)
-      expect(existsSync(join(dir, "sessions.db"))).toBe(true)
+      const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+      expect(files).toHaveLength(1)
+      // M29: the sqlite persistence artifact no longer exists anywhere
+      expect(existsSync(join(dir, "sessions.db"))).toBe(false)
     } finally {
-      // The sqlite backend holds an open DatabaseSync connection; close it
-      // before removing the dir, otherwise rmSync fails on Windows (EPERM).
-      closeSqliteBackends()
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it("resume with --session-backend sqlite restores the persisted history into the model request", async () => {
+  it("resume restores the persisted history into the model request", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
-      const coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       const { id } = await coordinator.create()
       await coordinator.append(id, [
         { type: "turn/start" },
@@ -671,26 +684,24 @@ describe("headless CLI SQLite persistence (M5)", () => {
       expect(texts).toContain("earlier question")
       expect(texts).toContain("earlier answer")
     } finally {
-      // The sqlite backend holds an open DatabaseSync connection; close it
-      // before removing the dir, otherwise rmSync fails on Windows (EPERM).
-      closeSqliteBackends()
       rmSync(dir, { recursive: true, force: true })
     }
   })
 
-  it("main() with --session-backend sqlite creates a sessions.db", async () => {
+  it("main() with --session-dir creates a .jsonl session file (jsonl-only)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
       const log = vi.spyOn(console, "log").mockImplementation(() => {})
       try {
-        const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir, "--session-backend", "sqlite"])
+        const code = await main(["node", "i-harness", "run", "hello", "--session-dir", dir])
         expect(code).toBe(0)
-        expect(existsSync(join(dir, "sessions.db"))).toBe(true)
+        const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
+        expect(files).toHaveLength(1)
+        expect(existsSync(join(dir, "sessions.db"))).toBe(false)
       } finally {
         log.mockRestore()
       }
     } finally {
-      closeSqliteBackends()
       rmSync(dir, { recursive: true, force: true })
     }
   })
@@ -1700,35 +1711,27 @@ describe("M23 CLI session ownership lock wiring", () => {
   // factory's arguments; the coordinator itself is genuine, so this test also
   // proves a lock-enabled run completes (jsonl create → acquire → close →
   // release) instead of failing on its own wiring.
-  it("main wires lock { enabled: true, lockRoot: <store dir> } into both coordinator backends", async () => {
-    const jsonlDir = mkdtempSync(join(tmpdir(), "i-harness-m23-"))
-    const sqliteDir = mkdtempSync(join(tmpdir(), "i-harness-m23-"))
+  it("main wires lock { enabled: true, lockRoot: <store dir> } into the coordinator backend", async () => {
+    const storeDir = mkdtempSync(join(tmpdir(), "i-harness-m23-"))
     try {
       const log = vi.spyOn(console, "log").mockImplementation(() => {})
       const err = vi.spyOn(console, "error").mockImplementation(() => {})
       const before = coordinatorFactoryCalls.list.length
       try {
-        expect(await main(["node", "i-harness", "run", "hello", "--session-dir", jsonlDir])).toBe(0)
-        expect(await main(["node", "i-harness", "run", "hello", "--session-dir", sqliteDir, "--session-backend", "sqlite"])).toBe(0)
+        expect(await main(["node", "i-harness", "run", "hello", "--session-dir", storeDir])).toBe(0)
       } finally {
         log.mockRestore()
         err.mockRestore()
       }
       const calls = coordinatorFactoryCalls.list.slice(before) as [unknown, { lock?: { enabled?: boolean; lockRoot?: string } } | undefined][]
-      expect(calls).toHaveLength(2)
-      for (const [backend, opts] of calls) {
-        expect(backend).toBeDefined()
-        expect(opts?.lock?.enabled).toBe(true)
-      }
-      // lockRoot = the session store dir (jsonl store root / sqlite db dir), NOT the workspace
-      expect(calls[0]![1]?.lock?.lockRoot).toBe(jsonlDir)
-      expect(calls[1]![1]?.lock?.lockRoot).toBe(sqliteDir)
+      expect(calls).toHaveLength(1)
+      const [backend, opts] = calls[0]!
+      expect(backend).toBeDefined()
+      expect(opts?.lock?.enabled).toBe(true)
+      // lockRoot = the session store dir (jsonl store root), NOT the workspace
+      expect(opts?.lock?.lockRoot).toBe(storeDir)
     } finally {
-      // The sqlite backend holds an open DatabaseSync connection; close it
-      // before removing the dir, otherwise rmSync fails on Windows (EPERM).
-      closeSqliteBackends()
-      rmSync(jsonlDir, { recursive: true, force: true })
-      rmSync(sqliteDir, { recursive: true, force: true })
+      rmSync(storeDir, { recursive: true, force: true })
     }
   }, 10_000)
 })
@@ -1814,6 +1817,8 @@ describe("M25 --telemetry (JSONL host event stream)", () => {
 
   // mcp onStatus wire: the supervisor's host events flow through the same
   // telemetry stream as mcp/server-status (real stdio subprocess, like M17).
+  // mcp onStatus wire: the supervisor's host events flow through the same
+  // telemetry stream as mcp/server-status (real stdio subprocess, like M17).
   it("mcp server status flows through the telemetry stream (mcp/server-status)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m25-tele-mcp-"))
     const chunks: string[] = []
@@ -1837,6 +1842,68 @@ describe("M25 --telemetry (JSONL host event stream)", () => {
     const status = chunks.join("").split("\n").filter((l) => l.includes("mcp/server-status")).map((l) => JSON.parse(l) as { data: { server: string; state: string } })
     expect(status.length).toBeGreaterThan(0)
     expect(status.some((s) => s.data.server === "tele" && s.data.state === "ready")).toBe(true)
+  }, 30_000)
+})
+
+// M29: the CLI run path wires the file-backed session query when the session
+// store root is known (--session-dir) — the search/lineage tools become
+// available out of the box (they mount in the assembly seam).
+describe("headless CLI M29 file-backed session query wiring", () => {
+  it("main() creates a file-backed query over --session-dir (storeRoot)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m29-wire-"))
+    try {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {})
+      const err = vi.spyOn(console, "error").mockImplementation(() => {})
+      const before = fileBackedCalls.list.length
+      try {
+        expect(await main(["node", "i-harness", "run", "hello", "--session-dir", dir])).toBe(0)
+      } finally {
+        log.mockRestore()
+        err.mockRestore()
+      }
+      const calls = fileBackedCalls.list.slice(before) as { storeRoot: string; dbPath?: string }[][]
+      expect(calls).toHaveLength(1)
+      // the store root given on the flag, index file left process-private (:memory:)
+      expect(calls[0]![0]!.storeRoot).toBe(dir)
+      expect(calls[0]![0]!.dbPath).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it("--session-backend is removed and fails loud on every subcommand", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m29-flag-"))
+    try {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {})
+      try {
+        for (const args of [
+          ["node", "i-harness", "run", "hello", "--session-dir", dir, "--session-backend", "sqlite"],
+          ["node", "i-harness", "web", "--session-backend", "jsonl"],
+          ["node", "i-harness", "sdk", "--session-backend", "sqlite"],
+          ["node", "i-harness", "acp", "--session-dir", dir, "--session-backend", "sqlite"],
+        ]) {
+          expect(await main(args)).toBe(1)
+        }
+        expect(err).toHaveBeenCalled()
+      } finally {
+        err.mockRestore()
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it("main() without --session-dir mounts no file-backed query", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {})
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    const before = fileBackedCalls.list.length
+    try {
+      expect(await main(["node", "i-harness", "run", "hello"])).toBe(0)
+    } finally {
+      log.mockRestore()
+      err.mockRestore()
+    }
+    expect(fileBackedCalls.list.length).toBe(before)
   }, 30_000)
 })
 

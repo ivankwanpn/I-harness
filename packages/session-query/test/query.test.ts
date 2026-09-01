@@ -1,23 +1,24 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { describe, expect, it } from "vitest"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { closeSqliteBackends, createSqliteBackend } from "@i-harness/session-persistence-sqlite"
-import { closeSessionQueries, createSessionQuery } from "../src/index.ts"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { closeSessionQueries, createFileBackedSessionQuery, createSessionQuery } from "../src/index.ts"
 
 function cleanup(dir: string): void {
   closeSessionQueries()
-  closeSqliteBackends()
   rmSync(dir, { recursive: true, force: true })
 }
 
+// M29: the query surface is seeded from a JSONL store (the sole authority);
+// the file-backed index derives on first search (reconcile-on-search).
 function makeEnv() {
   const dir = mkdtempSync(join(tmpdir(), "m10b-q-"))
-  const dbPath = join(dir, "sessions.db")
-  const coordinator = createSessionCoordinator(createSqliteBackend(dbPath))
-  const query = createSessionQuery(dbPath)
-  return { dir, dbPath, coordinator, query }
+  const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+  const query = createFileBackedSessionQuery({ storeRoot: dir })
+  return { dir, coordinator, query }
 }
 
 async function seed(coordinator: ReturnType<typeof createSessionCoordinator>) {
@@ -125,7 +126,7 @@ describe("session-query", () => {
     }
   })
 
-  it("lineage: unknown session and invalid depth throw; capability fails closed", async () => {
+  it("lineage: unknown session and invalid depth throw", async () => {
     const { dir, coordinator, query } = makeEnv()
     try {
       await seed(coordinator)
@@ -133,19 +134,6 @@ describe("session-query", () => {
       await expect(query.lineage("parent", { direction: "children", depth: 0 })).rejects.toThrow(/invalid depth/)
       await expect(query.lineage("parent", { direction: "ancestors", depth: -1 })).rejects.toThrow(/invalid depth/)
       await expect(query.search("x", { limit: 1.5 })).rejects.toThrow(/invalid limit/)
-      // capability gate: a non-session DB lacks events_fts
-      const bareDir = mkdtempSync(join(tmpdir(), "m10b-bare-"))
-      const barePath = join(bareDir, "x.db")
-      const { DatabaseSync } = await import("node:sqlite")
-      new DatabaseSync(barePath).close()
-      const bareQuery = createSessionQuery(barePath)
-      try {
-        await expect(bareQuery.search("x")).rejects.toThrow(/events_fts/)
-        await expect(bareQuery.lineage("x", { direction: "children" })).rejects.toThrow(/events_fts/)
-      } finally {
-        closeSessionQueries()
-        rmSync(bareDir, { recursive: true, force: true })
-      }
     } finally {
       cleanup(dir)
     }
@@ -160,6 +148,23 @@ describe("session-query", () => {
       )
     } finally {
       cleanup(dir)
+    }
+  })
+
+  // createSessionQuery stays as the READ-ONLY opener for existing/legacy index
+  // files (events_fts + sessions schema, sqlite-backend era); its fails-closed
+  // gate is a contract of that reader.
+  it("createSessionQuery legacy reader fails closed on a non-index db", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "m10b-bare-"))
+    try {
+      const barePath = join(dir, "x.db")
+      new DatabaseSync(barePath).close()
+      const bareQuery = createSessionQuery(barePath)
+      await expect(bareQuery.search("x")).rejects.toThrow(/events_fts/)
+      await expect(bareQuery.lineage("x", { direction: "children" })).rejects.toThrow(/events_fts/)
+    } finally {
+      closeSessionQueries()
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })
