@@ -57,6 +57,37 @@
 
 宿主訂閱 `session/event` 等事件流（M25 sink 接口；web-host 的 live mux 亦承接）。事件碼 13+ 位，詳見 `packages/web-host` 與 `packages/telemetry`。命令/工具面事件（`command/run`、`command/done`）追加到 session live log，模型不可見。
 
+## SDK（`@i-harness/sdk` NDJSON JSON-RPC — Wire Contract v0）
+
+> M28 S-1（2026-09-01）**凍結**。`i-harness sdk`（stdio）與內嵌 harness 走同一條線規約；事實來源：`packages/sdk/src/protocol.ts`（framing + 錯誤碼,頭部 JSDoc = 完整契約註釋）與 `src/server.ts`（方法語義）。漂移哨兵測試：`packages/sdk/test/server.test.ts` 的「initialize wire contract v0 (field-level lock)」。
+
+**Framing**：每行一條 JSON-RPC 2.0 訊息（`JSON.stringify` + `\n`，NDJSON）。畸形行**靜默忽略**（不回應、不崩潰——絕不會 echo）；請求 `id` 原樣進響應。
+
+**Wire Contract v0**：
+
+| 方向 | 方法 / 通知 | 參數 | 響應 |
+|---|---|---|---|
+| call | `initialize` | `{}` | `{ name, version, protocolVersion, capabilities }`（預設 `version: "0.1.0"`；`protocolVersion: 1` = 契約錨定常量；capabilities = `{ session: ["prompt","status"], notifications: ["session/event","session/status"] }`） |
+| call | `session/prompt` | `{ sessionId, prompt }` | `{ sessionId, ok: true }`（turn 跑完歸還）;turn 失敗 → `-32603`，`data.event` 帶已收集事件 |
+| call | `session/status` | `{ sessionId }` | `{ running, queued }` |
+| call | `shutdown` | `{}` | `{ ok: true }`（響應後宿主 teardown） |
+| notify（S→C） | `session/event` | `{ sessionId, event }` | —（僅追加滾動流：訂閱後的事件即時推送） |
+| notify（S→C） | `session/status` | `{ sessionId, status, error? }` | —（`queued`/`idle`/`error` 生命周期） |
+
+**錯誤碼表**（JSON-RPC 常量,protocol.ts；shape：`{ jsonrpc: "2.0", id, error: { code, message, data? } }`）：
+
+| 碼 | 名稱 | 觸發 |
+|---|---|---|
+| `-32700` | `PARSE_ERROR` | 解碼出非請求/響應形狀的行 |
+| `-32600` | `INVALID_REQUEST` | 常量定義（v0 伺服器不發——畸形行靜默忽略） |
+| `-32601` | `METHOD_NOT_FOUND` | 未知方法 |
+| `-32602` | `INVALID_PARAMS` | `sessionId`/`prompt` 缺失、空或非字串 |
+| `-32603` | `INTERNAL_ERROR` | turn / handler 拋錯 |
+
+**回放語義**：`session/event` 流**僅追加、不重放**——新連接只看到訂閱後追加的事件；session 的持久化狀態可跨連接恢復（同 `sessionId`），但歷史事件不回放在新訂閱上。
+
+**凍結後變更流程（v1 起）**：只做**加性**變更——新方法、新通知字段、新錯誤碼可加；既有字段 shape / 錯誤碼**只加不改**。改變或刪除既有 surface = breaking：`PROTOCOL_VERSION` bump + migration 註記。
+
 ## 版本 / 健康
 
 `GET /api/health`（web-host）→ `{ "healthy": true, "version": string }`；version 源 = `apps/cli` package.json 常量（M27-H-1 注入）。

@@ -10,6 +10,44 @@
 // NOTE (external contract): this file IS the sdk wire contract. Any change to
 // the shapes here is a breaking protocol change for embedders.
 
+/**
+ * SDK Wire Contract v0 — FROZEN (M28 S-1, 2026-09-01).
+ *
+ * This is the public wire surface for @i-harness/sdk embedders. The version
+ * anchor is `PROTOCOL_VERSION` (= 1; exposed as SDK_SERVER_PROTOCOL_VERSION by
+ * server.ts). The field-level drift sentinel lives in test/server.test.ts
+ * ("initialize wire contract v0 (field-level lock)") — changing any shape
+ * below breaks it on purpose.
+ *
+ * Framing: ONE JSON-RPC 2.0 message per NDJSON line; request ids echo into
+ * responses; malformed lines are ignored (never echo, never crash).
+ *
+ * Methods (client → server):
+ *   initialize              → { name, version, protocolVersion, capabilities }
+ *   session/prompt { sessionId, prompt }
+ *                           → { sessionId, ok: true } when the turn drained;
+ *                             failure → -32603 (data.event = collected events)
+ *   session/status { sessionId } → { running, queued }
+ *   shutdown                → { ok: true } (host teardown fires afterwards)
+ * Notifications (server → client):
+ *   session/event  { sessionId, event }          — append-only event stream
+ *   session/status { sessionId, status, error? } — lifecycle transitions
+ *
+ * Error shape: { jsonrpc: "2.0", id, error: { code, message, data? } }
+ * Error codes: -32700 parse · -32600 invalid request (defined; v0 never emits
+ *   it — malformed lines are ignored) · -32601 method not found ·
+ *   -32602 invalid params · -32603 internal.
+ *
+ * Replay semantics: the session/event stream is APPEND-ONLY — events are
+ * pushed as they happen and are never replayed. A session's durable state
+ * resumes across connections (same sessionId), but historical events are NOT
+ * re-emitted to a fresh subscription.
+ *
+ * Versioning rules: v1 may only ADD — new methods, new notification fields,
+ * new error codes. Changing or removing an existing shape/field/code is a
+ * breaking change: bump PROTOCOL_VERSION and document the migration path.
+ */
+
 import { createInterface, type Interface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
 
