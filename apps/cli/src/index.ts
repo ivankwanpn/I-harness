@@ -10,6 +10,7 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSqliteBackend } from "@i-harness/session-persistence-sqlite"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame } from "@i-harness/sdk"
@@ -153,6 +154,14 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
+  // M29: the search/lineage surface mounts out of the box once the STORE ROOT
+  // is known — a file-backed query derives from the jsonl store
+  // (reconcile-on-search; default :memory: index, process-private).
+  let sessionQuery: SessionQuery | undefined
+  if (sessionDirIdx !== -1 && args[sessionDirIdx + 1] !== undefined) {
+    sessionQuery = createFileBackedSessionQuery({ storeRoot: args[sessionDirIdx + 1]! })
+  }
+
   // --model requires --api-key: fail loud rather than silently falling back.
   let model: ModelClient | undefined
   if (modelIdx !== -1) {
@@ -190,6 +199,7 @@ export async function main(argv: string[]): Promise<number> {
     if (sessionId) opts.sessionId = sessionId
     if (resumeSessionId) opts.resumeSessionId = resumeSessionId
   }
+  if (sessionQuery) opts.sessionQuery = sessionQuery
   return runHeadless(task, opts).then((r) => {
     if (r.finalText) console.log(r.finalText)
     if (r.error) console.error(r.error)
@@ -206,12 +216,14 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const dirIdx = args.indexOf("--session-dir")
   const sessionBackend: "jsonl" | "sqlite" = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
   let coordinator: SessionCoordinator | undefined
+  let storeRoot: string | undefined
   if (dirIdx !== -1) {
     const dir = args[dirIdx + 1]
     if (dir === undefined || dir === "") {
       console.error("--session-dir requires a directory")
       return 1
     }
+    storeRoot = dir
     coordinator = createSessionCoordinator(
       sessionBackend === "sqlite"
         ? createSqliteBackend(join(dir, "sessions.db"))
@@ -221,6 +233,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const service = createSessionService({
     workspace: process.cwd(),
     ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
     ...(coordinator !== undefined
       ? {
           loadMeta: async (id: string) => {
@@ -281,12 +294,14 @@ async function runAcpCommand(args: string[]): Promise<number> {
   const dirIdx = args.indexOf("--session-dir")
   const sessionBackend: "jsonl" | "sqlite" = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
   let coordinator: SessionCoordinator | undefined
+  let storeRoot: string | undefined
   if (dirIdx !== -1) {
     const dir = args[dirIdx + 1]
     if (dir === undefined || dir === "") {
       console.error("--session-dir requires a directory")
       return 1
     }
+    storeRoot = dir
     coordinator = createSessionCoordinator(
       sessionBackend === "sqlite"
         ? createSqliteBackend(join(dir, "sessions.db"))
@@ -296,6 +311,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
   const service = createSessionService({
     workspace: process.cwd(),
     ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
     ...(coordinator !== undefined
       ? {
           loadMeta: async (id: string) => {
