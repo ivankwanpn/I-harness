@@ -34,13 +34,13 @@ export type SettingsTranscriptMode = "normal" | "compact"
 /** Enter-while-busy behavior (dsh settings.busyEnter). */
 export type SettingsBusyEnter = "interrupt" | "wait"
 
-/** Session-search backend (Task 1.2, 方案 A): the durable preference record
- * for the session-query search/lineage endpoints. `jsonl` (default) keeps the
- * frontend's search UI in the "not enabled" state; `sqlite` declares that the
- * server was started with the sqlite session backend (`--session-backend
- * sqlite` — the FTS5 precondition). The RUNTIME gate is the backend the server
- * actually started with: an sqlite document on a jsonl-run server still leaves
- * the endpoints answering "not enabled" (web.ts warns on the mismatch). */
+/** Session search-backend preference (M29 語意降級——search index switch):
+ * record-derived only. M29 removed the sqlite persistence backend; the search
+ * surface is the file-backed derived index, now ENABLED by default from any
+ * jsonl store root. The field keeps its old vocabulary for on-disk
+ * compatibility: `"jsonl"` (default) / the legacy `"sqlite"` value both read
+ * as "index enabled" (same runtime semantics — the search surface no longer
+ * depends on any backend string; the value is informational). */
 export type SettingsSearchBackend = "jsonl" | "sqlite"
 
 /** Language of the UI. v0 ships zh only — the field is durable and forward-compatible. */

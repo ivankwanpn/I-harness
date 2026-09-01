@@ -11,7 +11,7 @@ headless CLI. **Backend-complete milestone (M1–M25) achieved — frontend
 An agent harness (the "back end" of an agent product) that:
 
 - Drives an LLM agent loop over a real tool set (shell, fs, patch, search, todo…)
-- Persists sessions durably (JSONL or SQLite), with cross-process ownership locks
+- Persists sessions durably (JSONL — the sole authority), with cross-process ownership locks
 - Runs subagents and subagent teams (spawn/send/followup/interrupt/resume + mailbox/task board)
 - Executes tools under guard/approval/timeout/retry/parallel policies
 - Integrates MCP servers + LSP, with reconnect supervision
@@ -96,8 +96,8 @@ packages/
 ├── compaction/           M11 compaction engine
 ├── token-meter/          M20 budget enforcement (context window)
 ├── session-persistence/  coordinator + write-behind (ownership leases)
-├── session-persistence-{jsonl,sqlite}/  backends
-├── session-query/        SQLite FTS + lineage
+├── session-persistence-jsonl/  the only persistence backend (JSONL is the sole authority)
+├── session-query/        search/lineage over the file-backed derived index (reconcile-on-search)
 ├── mcp-client/           MCP client + reconnect supervisor + naming
 ├── lsp/                  LSP client
 ├── guard-{approval,timeout,retry,repeat-tool}/  guards

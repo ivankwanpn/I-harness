@@ -1,5 +1,4 @@
 import { pathToFileURL } from "node:url"
-import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
 import { ndJsonStream } from "@agentclientprotocol/sdk"
@@ -8,8 +7,8 @@ import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { createSqliteBackend } from "@i-harness/session-persistence-sqlite"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame } from "@i-harness/sdk"
@@ -48,13 +47,18 @@ export function parseModel(modelSpec: string, apiKey: string): ModelClient {
 
 export async function main(argv: string[]): Promise<number> {
   const args = argv.slice(2)
+  // M29: --session-backend is removed — JSONL is the only persistence backend
+  // and the search index is derived from it (reconcile-on-search). Fail loud
+  // instead of silently ignoring the old flag.
+  if (args.includes("--session-backend")) {
+    console.error("--session-backend is removed (M29: JSONL-only persistence; the search index derives from the store)")
+    return Promise.resolve(1)
+  }
   // R-C1 web subcommand: the thin composition over the session service
   // (apps/cli/src/web.ts). PORT env wins over the default; the workspace is
   // the cwd; auth is opt-in (--launch-token/--hmac-secret) — absent = no
   // fence (dev), present = the R-C3 fence.
   if (args[0] === "web") {
-    const backendIdx = args.indexOf("--session-backend")
-    const sessionBackend = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
     const launchIdx = args.indexOf("--launch-token")
     const hmacIdx = args.indexOf("--hmac-secret")
     const launchToken = launchIdx !== -1 ? args[launchIdx + 1] : process.env.I_HARNESS_TOKEN
@@ -63,7 +67,6 @@ export async function main(argv: string[]): Promise<number> {
       // H-4: flag > PORT env > default (4310) — pickWebPort owns the priority.
       port: pickWebPort(args, process.env.PORT),
       workspace: process.cwd(),
-      sessionBackend,
       ...(launchToken !== undefined || hmacSecret !== undefined
         ? { auth: { launchToken, hmacSecret }, printLoginUrl: true }
         : {}),
@@ -78,7 +81,7 @@ export async function main(argv: string[]): Promise<number> {
   }
   // R-C4 sdk subcommand: NDJSON JSON-RPC 2.0 stdio server (hosted by the
   // SessionService). stdout carries ONLY protocol frames — every log goes to
-  // stderr. `i-harness sdk [--session-dir DIR] [--session-backend jsonl|sqlite]`
+  // stderr. `i-harness sdk [--session-dir DIR]`
   if (args[0] === "sdk") {
     return runSdkCommand(args)
   }
@@ -88,7 +91,7 @@ export async function main(argv: string[]): Promise<number> {
     return runAcpCommand(args)
   }
   if (args[0] !== "run") {
-    console.error("usage: i-harness <run|web|sdk|acp> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry] | web [--port N] [--session-backend jsonl|sqlite] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] [--session-backend jsonl|sqlite] | acp [--session-dir DIR] [--session-backend jsonl|sqlite] [--no-auto-approve]")
+    console.error("usage: i-harness <run|web|sdk|acp> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] | web [--port N] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve]")
     return Promise.resolve(1)
   }
 
@@ -101,18 +104,8 @@ export async function main(argv: string[]): Promise<number> {
   const keyIdx = args.indexOf("--api-key")
   const sessionDirIdx = args.indexOf("--session-dir")
   const resumeIdx = args.indexOf("--resume")
-  const backendIdx = args.indexOf("--session-backend")
-  let sessionBackend: "jsonl" | "sqlite" = "jsonl"
-  if (backendIdx !== -1) {
-    const value = args[backendIdx + 1]
-    if (value === "sqlite" || value === "jsonl") sessionBackend = value
-    else {
-      console.error("--session-backend must be jsonl or sqlite")
-      return Promise.resolve(1)
-    }
-  }
 
-  // persistence wiring
+  // persistence wiring (M29: JSONL-only — locked under the store root).
   let coordinator: SessionCoordinator | undefined
   let sessionId: string | undefined
   let resumeSessionId: string | undefined
@@ -122,15 +115,11 @@ export async function main(argv: string[]): Promise<number> {
       console.error("--session-dir requires a directory")
       return Promise.resolve(1)
     }
-    if (sessionBackend === "sqlite") {
-      // M23: the CLI opts into the session ownership lease with lockRoot = the
-      // session STORE directory (jsonl store root / sqlite db dir) — lock files
-      // share the store's lifecycle, and a conflicting live writer fails the
-      // create below (fail-closed) instead of silently double-writing.
-      coordinator = createSessionCoordinator(createSqliteBackend(join(dir, "sessions.db")), { lock: { enabled: true, lockRoot: dir } })
-    } else {
-      coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
-    }
+    // M23: the CLI opts into the session ownership lease with lockRoot = the
+    // session STORE directory — lock files share the store's lifecycle, and a
+    // conflicting live writer fails the create below (fail-closed) instead of
+    // silently double-writing.
+    coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
     if (resumeIdx !== -1) {
       resumeSessionId = args[resumeIdx + 1]
       if (!resumeSessionId) {
@@ -153,6 +142,14 @@ export async function main(argv: string[]): Promise<number> {
     }
   }
 
+  // M29: the search/lineage surface mounts out of the box once the STORE ROOT
+  // is known — a file-backed query derives from the jsonl store
+  // (reconcile-on-search; default :memory: index, process-private).
+  let sessionQuery: SessionQuery | undefined
+  if (sessionDirIdx !== -1 && args[sessionDirIdx + 1] !== undefined) {
+    sessionQuery = createFileBackedSessionQuery({ storeRoot: args[sessionDirIdx + 1]! })
+  }
+
   // --model requires --api-key: fail loud rather than silently falling back.
   let model: ModelClient | undefined
   if (modelIdx !== -1) {
@@ -172,13 +169,13 @@ export async function main(argv: string[]): Promise<number> {
 
   // task = everything after the "run" command, excluding flag tokens/values.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--session-backend" || a === "--telemetry") return false
+    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry") return false
     const prev = args.slice(1)[i - 1]
-    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--session-backend"
+    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume"
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--session-backend jsonl|sqlite] [--resume ID] [--telemetry]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry]")
     return Promise.resolve(1)
   }
 
@@ -190,6 +187,7 @@ export async function main(argv: string[]): Promise<number> {
     if (sessionId) opts.sessionId = sessionId
     if (resumeSessionId) opts.resumeSessionId = resumeSessionId
   }
+  if (sessionQuery) opts.sessionQuery = sessionQuery
   return runHeadless(task, opts).then((r) => {
     if (r.finalText) console.log(r.finalText)
     if (r.error) console.error(r.error)
@@ -202,25 +200,22 @@ export async function main(argv: string[]): Promise<number> {
  * NEVER carries host logs (all diagnostics go to stderr). Exits cleanly when
  * the client ends stdin or issues shutdown. */
 async function runSdkCommand(args: string[]): Promise<number> {
-  const backendIdx = args.indexOf("--session-backend")
   const dirIdx = args.indexOf("--session-dir")
-  const sessionBackend: "jsonl" | "sqlite" = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
   let coordinator: SessionCoordinator | undefined
+  let storeRoot: string | undefined
   if (dirIdx !== -1) {
     const dir = args[dirIdx + 1]
     if (dir === undefined || dir === "") {
       console.error("--session-dir requires a directory")
       return 1
     }
-    coordinator = createSessionCoordinator(
-      sessionBackend === "sqlite"
-        ? createSqliteBackend(join(dir, "sessions.db"))
-        : createJsonlBackend(dir),
-    )
+    storeRoot = dir
+    coordinator = createSessionCoordinator(createJsonlBackend(dir))
   }
   const service = createSessionService({
     workspace: process.cwd(),
     ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
     ...(coordinator !== undefined
       ? {
           loadMeta: async (id: string) => {
@@ -277,25 +272,22 @@ async function runSdkCommand(args: string[]): Promise<number> {
  * Version-same flags as `sdk`; `--no-auto-approve` switches the v0 permission
  * face to refuse-prompts (fail-closed) instead of allow-once. */
 async function runAcpCommand(args: string[]): Promise<number> {
-  const backendIdx = args.indexOf("--session-backend")
   const dirIdx = args.indexOf("--session-dir")
-  const sessionBackend: "jsonl" | "sqlite" = backendIdx !== -1 && args[backendIdx + 1] === "sqlite" ? "sqlite" : "jsonl"
   let coordinator: SessionCoordinator | undefined
+  let storeRoot: string | undefined
   if (dirIdx !== -1) {
     const dir = args[dirIdx + 1]
     if (dir === undefined || dir === "") {
       console.error("--session-dir requires a directory")
       return 1
     }
-    coordinator = createSessionCoordinator(
-      sessionBackend === "sqlite"
-        ? createSqliteBackend(join(dir, "sessions.db"))
-        : createJsonlBackend(dir),
-    )
+    storeRoot = dir
+    coordinator = createSessionCoordinator(createJsonlBackend(dir))
   }
   const service = createSessionService({
     workspace: process.cwd(),
     ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
     ...(coordinator !== undefined
       ? {
           loadMeta: async (id: string) => {

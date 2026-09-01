@@ -15,7 +15,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { append, type SessionEvent } from "@i-harness/core-session"
 import { createSessionCoordinator, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { createSqliteBackend, closeSqliteBackends } from "@i-harness/session-persistence-sqlite"
+import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { MockStep } from "@i-harness/llm-mock"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
@@ -71,9 +71,6 @@ export function parsePort(raw: string | undefined, fallback = DEFAULT_WEB_PORT):
 export interface WebServerOptions {
   port: number
   workspace: string
-  /** Session persistence backend; `sqlite` is the FTS5 precondition that
-   * unlocks the host's search/lineage endpoints. */
-  sessionBackend?: "jsonl" | "sqlite"
   /** Explicit model client. Absent → the resolution chain, then the mock. */
   model?: ModelClient
   /** Mock script used when no real model resolves. */
@@ -280,10 +277,7 @@ export function defaultContextWindow(opts: WebServerOptions): number | undefined
 
 export async function createWebServer(opts: WebServerOptions): Promise<WebServer> {
   const listenPort = Number.isFinite(opts.port) && opts.port >= 0 ? Math.floor(opts.port) : DEFAULT_WEB_PORT
-  const coordinator: SessionCoordinator =
-    (opts.sessionBackend ?? "jsonl") === "sqlite"
-      ? createSessionCoordinator(createSqliteBackend(join(opts.workspace, "sessions.db")))
-      : createSessionCoordinator(createJsonlBackend(opts.workspace))
+  const coordinator: SessionCoordinator = createSessionCoordinator(createJsonlBackend(opts.workspace))
   // E-region seams for the host (optional pieces — the routes 404 per absent
   // piece, so an API-only embedder stays unchanged).
   const settings = opts.settings ?? new SettingsStore()
@@ -301,6 +295,10 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
   approvals.attach()
   const questions = new QuestionMuxBridge(hostCtx)
   questions.attach()
+  // M29: the store root is always known here (the workspace) — the file-backed
+  // query derives the search/lineage surface out of the box (reconcile-on-
+  // search, :memory: index per process).
+  const sessionQuery = createFileBackedSessionQuery({ storeRoot: opts.workspace })
   const executor = createSessionService({
     workspace: opts.workspace,
     coordinator,
@@ -309,6 +307,7 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     // The web path: job/status events mirror into the live session (the jobs
     // surface folds the durable doc; the mux streams carry the events).
     jobStatusEvents: true,
+    sessionQuery,
     // M27-R-A8: get_context_remaining window knowledge (M15 records).
     contextWindow: defaultContextWindow(opts),
     loadMeta: async (id) => (await coordinator.profile(id)).meta,
@@ -334,6 +333,10 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     port: listenPort,
     executor,
     coordinator,
+    // M29: the search/lineage HTTP routes now serve out of the box — the
+    // file-backed index over the workspace's jsonl store (409 "not enabled"
+    // only for embedders that never provide a seam).
+    sessionQuery,
     approvalBridge: approvals,
     questionBridge: questions,
     commandBridge,
@@ -365,12 +368,11 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     close: async () => {
       await host.close()
       await executor.close()
-      if (opts.sessionBackend === "sqlite") closeSqliteBackends()
     },
   }
 }
 
-export async function runWebServer(opts: { port: number; workspace: string; sessionBackend?: "jsonl" | "sqlite" }): Promise<{ port: number }> {
+export async function runWebServer(opts: { port: number; workspace: string }): Promise<{ port: number }> {
   const server = await createWebServer(opts)
   console.log(`I-harness web: http://127.0.0.1:${server.port}`)
   await new Promise<void>((resolve) => {

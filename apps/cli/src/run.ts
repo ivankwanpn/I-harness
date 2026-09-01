@@ -31,7 +31,11 @@ export interface HeadlessOptions {
   resumeSessionId?: string // resume: load this id, restore history, continue appending
   session?: Session // M14: host-provided pre-seeded session (the harness is headless; a host can seed a session with image-bearing user/message events before the run)
   coordinator?: SessionCoordinator
-  sessionQuery?: SessionQuery // M10b: host-provided query surface; when present the session_search + lineage tools are mounted
+  // M10b: host-provided query surface; when present the session_search +
+  // lineage tools are mounted. M29: the CLI itself auto-wires a file-backed
+  // query when the store root is known (--session-dir) — a host-provided one
+  // always wins (no override).
+  sessionQuery?: SessionQuery
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)

@@ -4,6 +4,15 @@ Date: 2026-08-17
 Status: Approved by user (design sections confirmed in brainstorming)
 Supersedes: completes M4's `PersistenceBackend` seam (`docs/superpowers/specs/2026-08-17-i-harness-m4-session-persistence-design.md`). Follows the completed M4 (versioned JSONL session log) and M3-C finish (subagent harness mount + fs-search).
 
+> **§歷史 —— M29 分離（2026-09-02，superseded）**: M29 closes this backend.
+> JSONL 是唯一權威持久化（對齊 dsh jsonl-only）；SQLite 持久化後端、其版本化
+> 遷移鏈、同事務 FTS 維護與 `--session-backend` 旗標全部移除。原「同事務 FTS
+> 永不偏離」的搜索語意由獨立可重建索引的 reconcile-on-search 取代（搜索永不
+> 舊於自身 reconcile；失敗大聲、不回退舊行）——見
+> `docs/superpowers/specs/2026-09-02-m29-sqlite-split-design.md` 與
+> `docs/research/2026-09-02-ih-sqlite-removal-study.md`。本檔保留為歷史設計
+> 紀錄（含遷移鏈/application_id 紀律的參考實作已隨包移除）。
+
 ## Purpose
 
 Design the M5 milestone: a SQLite backend for the session-persistence coordinator, plugging into the `PersistenceBackend` seam M4 defined (`packages/session-persistence/src/index.ts`). The seam is unchanged; M5 adds a second concrete backend so the harness can choose durable storage per run (`--session-backend sqlite`), with the audit F01-4 improvement dsh lacks: a schema migration chain with a backup/rollback story instead of refusing every non-current version.

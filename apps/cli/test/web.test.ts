@@ -1,10 +1,12 @@
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createCredentialStore } from "@i-harness/credentials"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { parsePort, createWebServer, defaultContextWindow, resolveModelSpec, type WebServerOptions } from "../src/web.ts"
 import { pickWebPort } from "../src/index.ts"
 
@@ -92,4 +94,36 @@ describe("web composition (R-C1)", () => {
     // the default constructor location contract (no home touch).
     expect(typeof resolveSettingsPath()).toBe("string")
   })
+
+  // M29: the file-backed query is wired into the host seam with the workspace
+  // as its store root — search/lineage routes serve out of the box over the
+  // jsonl store (reconcile-on-search derives the index on first request).
+  it("serves search + lineage routes over the file-backed index (M29)", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-m29-"))
+    try {
+      const coordinator = createSessionCoordinator(createJsonlBackend(workspace))
+      await coordinator.create({ sessionId: "parent" })
+      await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })
+      await coordinator.append("parent", [{ type: "user/message", text: "the purple unicorn fixed the parser" }])
+      await coordinator.close()
+      const server = await createWebServer(options(workspace))
+      try {
+        const search = await fetch(`http://127.0.0.1:${server.port}/api/sessions/search?q=unicorn`)
+        expect(search.status).toBe(200)
+        const { hits } = (await search.json()) as { hits: { sessionId: string; snippet: string }[] }
+        expect(hits).toHaveLength(1)
+        expect(hits[0]!.sessionId).toBe("parent")
+        expect(hits[0]!.snippet).toContain("unicorn")
+        const lineage = await fetch(`http://127.0.0.1:${server.port}/api/sessions/parent/lineage?direction=children`)
+        expect(lineage.status).toBe(200)
+        const { nodes } = (await lineage.json()) as { nodes: { sessionId: string; parentSession?: string }[] }
+        expect(nodes.map((n) => n.sessionId)).toEqual(["child"])
+        expect(nodes[0]!.parentSession).toBe("parent")
+      } finally {
+        await server.close()
+      }
+    } finally {
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
