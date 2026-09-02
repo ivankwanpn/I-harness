@@ -22,6 +22,8 @@ export type TelemetryEventType =
   | "skill/selector-shadow"
   // M27 R-E10: layered settings hot-reload change notification
   | "settings/changed"
+  // M34 ⑦b: compaction attempt conclusion (success | prune-only | failure | skipped)
+  | "compaction/attempt"
 
 export interface TelemetryEvent {
   type: TelemetryEventType
