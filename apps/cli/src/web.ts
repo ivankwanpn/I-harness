@@ -153,13 +153,26 @@ export function effectiveProviderProfile(
   profile: ProviderProfile,
   user: SettingsProviderConfig,
 ): ProviderProfile {
+  // M31 T1: settings model rows no longer FLATTEN into `models` id strings —
+  // that dropped their contextWindow/maxTokens at the settings→provider seam
+  // (the window chain never saw them). Aggregate the rows into `modelContexts`
+  // (per-field USER WINS over profile.modelContexts) so the unified resolution
+  // (resolveEffectiveModelContext / resolveModelContext) sees the settings
+  // override; the base profile's `models` catalog stays as registered.
+  const modelContexts = { ...profile.modelContexts }
+  for (const row of user.models ?? []) {
+    if (row.contextWindow === undefined && row.maxTokens === undefined) continue
+    modelContexts[row.id] = {
+      ...modelContexts[row.id],
+      ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
+      ...(row.maxTokens !== undefined ? { maxContextWindow: row.maxTokens } : {}),
+    }
+  }
   return {
     ...profile,
     apiKeyEnv: user.apiKeyEnv ?? profile.apiKeyEnv,
     baseUrl: user.baseURL ?? profile.baseUrl,
-    ...(user.models !== undefined && user.models.length > 0
-      ? { models: user.models.map((m) => m.id) }
-      : {}),
+    ...(Object.keys(modelContexts).length > 0 ? { modelContexts } : {}),
   }
 }
 
