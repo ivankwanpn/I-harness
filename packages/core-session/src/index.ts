@@ -26,6 +26,14 @@ export type SessionEvent =
     // nothing lost: every raw event stays durably recorded. Carries no
     // user-facing text → deliberately unindexed (default "").
     | { type: "compaction/reset"; removedSeqs: number[]; seq?: number }
+    // M33: model-free prune pass — a single tool/result whose stringified
+    // output was truncated ON THE PROJECTION SURFACE (append-only iron rule:
+    // the raw log keeps the FULL output — dsh 的「剪完整舊結果」語義 hits the
+    // derived surface only). deriveMessages substitutes
+    // `head + "\n…(pruned N bytes)…\n" + tail` for matching callIds; the
+    // compaction engine's renderShadowed applies the same substitute to the
+    // summarizer input. Carries no model-visible text itself (default branch).
+    | { type: "compaction/prune"; version: 1; pruned: PruneRecord[]; seq?: number }
     // M16: log-only sandbox session-mode marker (approval/* precedent) — mode is
     // a local union so core-session stays dependency-free (sandbox-policy owns
     // the real SandboxMode type; a sandbox import here would create a cycle).
@@ -168,6 +176,37 @@ export type LLMContentPart =
   | { type: "text"; text: string }
   | { type: "image"; image: ImageInput }
 
+// M33: one pruned tool/result — the stringified output is narrowed on the
+// projection surface to `head` + a placeholder + `tail` (`removedBytes` is the
+// byte count of the middle that was cut). This record is what
+// `compaction/prune` events carry; the projection alone applies it.
+export interface PruneRecord {
+  callId: string
+  head: string
+  tail: string
+  removedBytes: number
+}
+
+/** The projection-side substitute for a pruned tool/result. */
+export function renderPruneSubstitute(record: PruneRecord): string {
+  return `${record.head}\n…(pruned ${record.removedBytes} bytes)…\n${record.tail}`
+}
+
+// M33: fold EVERY compaction/prune event into callId → record (last wins per
+// callId — later prune passes may re-plan an earlier pass's callId). The map
+// drives deriveMessages' tool/result projection AND the compaction engine's
+// summary-input render; the durable log is never rewritten.
+export function derivePruneSubstitutes(session: Session): Map<string, PruneRecord> {
+  const map = new Map<string, PruneRecord>()
+  for (const ev of session.events) {
+    if (ev.type !== "compaction/prune") continue
+    // defensive `?? []`: persisted logs bypass append validation (fromJSONL
+    // does not validate), so a malformed marker must not throw here
+    for (const record of ev.pruned ?? []) map.set(record.callId, record)
+  }
+  return map
+}
+
 export interface Session {
   formatVersion: number
   events: SessionEvent[]
@@ -287,6 +326,9 @@ export function deriveMessages(session: Session): LLMMessage[] {
     // malformed marker without removedSeqs must not throw here
     else if (ev.type === "compaction/reset") for (const seq of ev.removedSeqs ?? []) shadowed.add(seq)
   }
+  // M33 model-free prune pass: the substitute map is applied to the
+  // tool/result projection ONLY (the raw log keeps the full output).
+  const pruned = derivePruneSubstitutes(session)
   for (const ev of session.events) {
     if (ev.seq !== undefined && shadowed.has(ev.seq)) continue
     if (ev.type === "user/message") {
@@ -309,7 +351,10 @@ export function deriveMessages(session: Session): LLMMessage[] {
     } else if (ev.type === "tool/result") {
       const out = ev.output as { images?: ImageInput[] } | null | undefined
       const images = out?.images
-      pendingResults.push({ role: "tool", toolCallId: ev.callId, content: JSON.stringify(ev.output) })
+      // M33: a pruned callId is projected as its substitute — the raw output
+      // stays durably in the log; only the model-visible text narrows.
+      const record = pruned.get(ev.callId)
+      pendingResults.push({ role: "tool", toolCallId: ev.callId, content: record !== undefined ? renderPruneSubstitute(record) : JSON.stringify(ev.output) })
       // Defensive (M14 spec §8): persisted logs bypass append validation (CLI
       // resume merges via events.push; fromJSONL does not validate), so a
       // truthy non-array `output.images` must NOT throw — treat the output as

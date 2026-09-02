@@ -1,8 +1,8 @@
 import type { Session, SessionEvent } from "@i-harness/core-session"
-import { append, deriveSearchText } from "@i-harness/core-session"
+import { append, deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
-import { resolveConfig, resolveContextWindow, type CompactionConfig } from "./config.ts"
+import { resolveConfig, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
@@ -10,16 +10,21 @@ import { summarizeWithModel } from "./summarizer.ts"
 export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
 export { resolveConfig, resolveContextWindow } from "./config.ts"
-export type { CompactionConfig, ResolvedCompactionConfig } from "./config.ts"
+export type { CompactionConfig, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
 
 export interface CompactionResult {
   compacted: boolean
   // For compact(): the seqs shadowed behind the appended summary. For a pure
   // reset (reset:true): the removedSeqs recorded on the compaction/reset
-  // marker (identical shadow semantics — deriveMessages hides them).
+  // marker (identical shadow semantics — deriveMessages hides them). For a
+  // prune-only pass (pruned:true): nothing was shadowed → [].
   shadowedSeqs: number[]
   summary?: string
   reset?: boolean // M20: true only for a pure resetWindow (no summary)
+  // M33: true when a `compaction/prune` marker was appended in this pass (the
+  // model surface / summarizer input now carries substitutes). A prune-only
+  // pass also reports `compacted:true` (pressure resolved without an LLM call).
+  pruned?: boolean
 }
 
 export interface CompactionEngine {
@@ -48,10 +53,26 @@ export function createCompactionEngine(deps: {
   // → config.contextWindow). No profile/modelId → config → M11/M14 behavior.
   const contextWindow = resolveContextWindow(deps.profile, deps.modelId, config)
 
-  async function compactOnce(session: Session): Promise<CompactionResult> {
+  // M33 §4: one compact pass. `allowPruneOnly` gates the model-free shortcut —
+  // only the AUTO path (maybeCompact) may skip the summarizer when pruning the
+  // big results alone brings the VISIBLE surface back under the threshold;
+  // explicit compact always summarizes (the caller asked for the shadow, even
+  // below pressure — pre-M33 semantics).
+  async function compactOnce(
+    session: Session,
+    allowPruneOnly: boolean,
+  ): Promise<CompactionResult> {
     const shadowedSeqs = selectShadowableRange(session, config.retainTokens)
     if (shadowedSeqs.length === 0) return { compacted: false, shadowedSeqs: [] }
-    const replayText = renderShadowed(session, shadowedSeqs)
+    const pruneRecords = planPrune(session, config.prune)
+    if (allowPruneOnly && pruneRecords.length > 0) {
+      const after = surfaceTokensAfterPrune(session, pruneRecords)
+      if (after < contextWindow * config.thresholdRatio) {
+        append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
+        return { compacted: true, shadowedSeqs: [], pruned: true }
+      }
+    }
+    const replayText = renderShadowed(session, shadowedSeqs, pruneRecords)
     const model = config.summarizationModel ?? deps.model
     let summary: string
     try {
@@ -62,10 +83,11 @@ export function createCompactionEngine(deps: {
       console.warn("[i-harness] compaction summarizer failed (fail-soft, retrying next step):", err instanceof Error ? err.message : String(err))
       return { compacted: false, shadowedSeqs: [] }
     }
+    if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
     append(session, { type: "compaction/summary", text: summary, shadowedSeqs })
     append(session, { type: "compaction/end" })
-    return { compacted: true, shadowedSeqs, summary }
+    return { compacted: true, shadowedSeqs, summary, ...(pruneRecords.length > 0 ? { pruned: true } : {}) }
   }
 
   return {
@@ -82,9 +104,9 @@ export function createCompactionEngine(deps: {
       if (last >= 0 && !hasNonMarkerEventsAfter(session, last)) {
         return { compacted: false, shadowedSeqs: [] } // no new work since the last compaction
       }
-      return compactOnce(session)
+      return compactOnce(session, true)
     },
-    compact: compactOnce,
+    compact: (session) => compactOnce(session, false),
     resetWindow: resetWindowOnce,
   }
 }
@@ -132,17 +154,96 @@ function lastCompactionEndSeq(session: Session): number {
 function hasNonMarkerEventsAfter(session: Session, seq: number): boolean {
   for (const ev of session.events) {
     if (ev.seq === undefined || ev.seq <= seq) continue
-    if (ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset") continue
+    if (ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset" || ev.type === "compaction/prune") continue
     return true
   }
   return false
 }
 
-function renderShadowed(session: Session, shadowedSeqs: number[]): string {
+// M33 §4.2: the prune plan — every tool/result whose stringified output
+// exceeds `prune.thresholdChars` becomes a record (head/tail carving aligned
+// with the retention caps; `removedBytes` = the byte length of the middle).
+// A stringify failure (e.g. a BigInt payload) degrades to "not prunable" —
+// fail-soft, it just does not participate in this pass.
+function planPrune(session: Session, prune: ResolvedPruneConfig): PruneRecord[] {
+  if (!prune.enabled) return []
+  const records: PruneRecord[] = []
+  for (const ev of session.events) {
+    if (ev.type !== "tool/result") continue
+    const text = safeStringifyOutput(ev.output)
+    if (text === null || text.length <= prune.thresholdChars) continue
+    const removed = text.slice(prune.headChars, text.length - prune.tailChars)
+    records.push({
+      callId: ev.callId,
+      head: text.slice(0, prune.headChars),
+      tail: prune.tailChars > 0 ? text.slice(-prune.tailChars) : "",
+      removedBytes: byteLength(removed),
+    })
+  }
+  return records
+}
+
+// M33 §4.2: "替身計數" — the visible surface AFTER the plan's substitutes were
+// applied (dsh 語義: pruning alone has resolved the pressure). Estimates by
+// pricing the savings of VISIBLE prune candidates (events a prior
+// compaction/summary|reset already hides are not on the surface and cost
+// nothing) off the current activeTokens — the meter's role overhead cancels
+// between the before/after tool messages.
+function surfaceTokensAfterPrune(session: Session, records: PruneRecord[]): number {
+  const shadowed = new Set<number>()
+  for (const ev of session.events) {
+    if (ev.type === "compaction/summary") for (const seq of ev.shadowedSeqs) shadowed.add(seq)
+    // defensive `?? []`: persisted logs bypass append validation
+    else if (ev.type === "compaction/reset") for (const seq of ev.removedSeqs ?? []) shadowed.add(seq)
+  }
+  const byCall = new Map<string, PruneRecord>()
+  for (const record of records) byCall.set(record.callId, record)
+  let savings = 0
+  for (const ev of session.events) {
+    if (ev.type !== "tool/result") continue
+    if (ev.seq !== undefined && shadowed.has(ev.seq)) continue
+    const record = byCall.get(ev.callId)
+    if (record === undefined) continue
+    const before = safeStringifyOutput(ev.output)
+    if (before === null) continue
+    const after = renderPruneSubstitute(record)
+    savings += Math.ceil(before.length / 4) - Math.ceil(after.length / 4)
+  }
+  return Math.max(0, activeTokens(session) - savings)
+}
+
+function safeStringifyOutput(output: unknown): string | null {
+  try {
+    return JSON.stringify(output)
+  } catch {
+    return null
+  }
+}
+
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8")
+}
+
+function renderShadowed(session: Session, shadowedSeqs: number[], pruneRecords: PruneRecord[] = []): string {
   const set = new Set(shadowedSeqs)
+  // M33: summary-input substitution — the shadow region's pruned results are
+  // rendered as substitutes so the summarizer never pays for the removed
+  // middle (design 裁定 ①).
+  const prunedByCall = new Map(pruneRecords.map((record) => [record.callId, record]))
   const parts: string[] = []
   for (const ev of session.events) {
     if (ev.seq !== undefined && set.has(ev.seq)) {
+      const prunedRecord = ev.type === "tool/result" ? prunedByCall.get(ev.callId) : undefined
+      // M33 (design 裁定 ①): a pruned tool/result renders as its substitute in
+      // the summary input — the summarizer must not pay for the cut middle.
+      // NOTE: this replaces the M20 image-descriptor union for that event —
+      // the raw bytes stay durably in the log; the narrowed input drops them
+      // along with the rest of the output (v0 carve; image-aware summarize is
+      // still deferred).
+      if (prunedRecord !== undefined) {
+        parts.push(renderPruneSubstitute(prunedRecord))
+        continue
+      }
       // M20 image-aware replay: events carrying images are replayed with a
       // descriptor so the summary records WHICH visuals were in context. The
       // real byte-level replay needs a multimodal summarizer + store ref
