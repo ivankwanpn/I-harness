@@ -2,15 +2,15 @@ import type { Session, SessionEvent } from "@i-harness/core-session"
 import { append, deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
-import { resolveConfig, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
+import { resolveCompactSpec, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
 
 export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
-export { resolveConfig, resolveContextWindow } from "./config.ts"
-export type { CompactionConfig, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
+export { resolveConfig, resolveCompactSpec, resolveContextWindow } from "./config.ts"
+export type { CompactionConfig, ModelCompactionPolicy, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
 
 export interface CompactionResult {
   compacted: boolean
@@ -50,8 +50,12 @@ export function createCompactionEngine(deps: {
   config: CompactionConfig
   profile?: ProviderProfile // M15: optional context catalog
   modelId?: string          // M15: the resolved model id for catalog lookup
+  provider?: string         // M34 ⑦a: the policy-key provider namespace ("provider/model")
 }): CompactionEngine {
-  const config = resolveConfig(deps.config)
+  // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
+  // select the exact "provider/model" entry of config.modelPolicies). No
+  // provider/modelId → resolveConfig → pre-M34 behavior exactly.
+  const config = resolveCompactSpec(deps.config, deps.provider, deps.modelId)
   // M15: catalog-first (profile.modelContexts[modelId] → profile.contextWindow
   // → config.contextWindow). No profile/modelId → config → M11/M14 behavior.
   const contextWindow = resolveContextWindow(deps.profile, deps.modelId, config)

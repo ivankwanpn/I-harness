@@ -13,6 +13,18 @@ export interface PruneConfig {
   tailChars?: number
 }
 
+// M34 ⑦a: per-model compaction policy — overlays the GLOBAL chain (resolved
+// from defaults → modelPolicies entry → config) at engine build time (dsh
+// per-model registry shape + grok per-model threshold). Every field optional:
+// an absent field keeps the global value.
+export interface ModelCompactionPolicy {
+  thresholdRatio?: number
+  retainTokens?: number
+  maxTokens?: number
+  summarizationModel?: ModelClient
+  auto?: boolean
+}
+
 export interface CompactionConfig {
   contextWindow: number
   thresholdRatio?: number
@@ -20,6 +32,12 @@ export interface CompactionConfig {
   maxTokens?: number
   summarizationModel?: ModelClient
   auto?: boolean
+  // M34 ⑦a: per-model policies keyed by EXACT "provider/model" (dsh shape).
+  // An unlisted model (or a build without provider/modelId) = the global
+  // chain. Every key must be "provider/model" — malformed keys fail loud at
+  // resolve (a plain Record cannot carry two entries for the same target;
+  // the format guard is the fail-loud loader check).
+  modelPolicies?: Record<string, ModelCompactionPolicy>
   // M33 §3.1: host/assembly-known overhead the model surface does NOT carry
   // (system prompt + tool schemas) — added to the activeTokens measurement at
   // the pressure gate. 0 (default) = pre-M33 behavior.
@@ -78,6 +96,14 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
   if (!Number.isInteger(minTurnsBeforeRecompact) || minTurnsBeforeRecompact < 0) {
     throw new Error(`compaction: minTurnsBeforeRecompact must be a non-negative integer (got ${minTurnsBeforeRecompact})`)
   }
+  // M34 ⑦a: fail-loud at resolve — every policy target must be exactly
+  // "provider/model" (dsh registry shape). A plain Record can never carry two
+  // entries for the same target, so this is the load-time guard.
+  for (const key of Object.keys(config.modelPolicies ?? {})) {
+    if (!/^[^/]+\/[^/]+$/.test(key)) {
+      throw new Error(`compaction: modelPolicies key must be "provider/model" (got "${key}")`)
+    }
+  }
   const prune = resolvePrune(config.prune)
   return {
     contextWindow: config.contextWindow,
@@ -106,6 +132,31 @@ function resolvePrune(prune: CompactionConfig["prune"]): ResolvedPruneConfig {
     throw new Error(`compaction: prune.headChars + tailChars (${headChars + tailChars}) must not exceed thresholdChars (${thresholdChars})`)
   }
   return { enabled: true, thresholdChars, headChars, tailChars }
+}
+
+// M34 ⑦a: global chain + one policy arm. `provider`/`modelId` (when both are
+// present) select the exact "provider/model" entry in `config.modelPolicies`;
+// the entry's defined fields overlay the global values and the result runs
+// through the SAME validation that resolveConfig applies — a bad override
+// fails loud here (load time), never mid-compaction. Absent provider/modelId
+// or an unlisted model = plain global behavior (forward compat).
+export function resolveCompactSpec(
+  config: CompactionConfig,
+  provider?: string,
+  modelId?: string,
+): ResolvedCompactionConfig {
+  const policy = provider !== undefined && modelId !== undefined
+    ? config.modelPolicies?.[`${provider}/${modelId}`]
+    : undefined
+  if (policy === undefined) return resolveConfig(config)
+  return resolveConfig({
+    ...config,
+    thresholdRatio: policy.thresholdRatio ?? config.thresholdRatio,
+    retainTokens: policy.retainTokens ?? config.retainTokens,
+    maxTokens: policy.maxTokens ?? config.maxTokens,
+    summarizationModel: policy.summarizationModel ?? config.summarizationModel,
+    auto: policy.auto ?? config.auto,
+  })
 }
 
 // M15: catalog-first window resolution — per-model override → profile-level →
