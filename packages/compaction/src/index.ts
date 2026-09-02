@@ -92,7 +92,9 @@ export function createCompactionEngine(deps: {
 
   return {
     async maybeCompact(session: Session): Promise<CompactionResult> {
-      if (activeTokens(session) < contextWindow * config.thresholdRatio) {
+      // M33 §3.1: the host-known charge the session log does not carry
+      // (system prompt + tool schemas — CompactionConfig.overheadTokens).
+      if (activeTokens(session) + config.overheadTokens < contextWindow * config.thresholdRatio) {
         return { compacted: false, shadowedSeqs: [] }
       }
       // Re-fire guard: with `retainTokens 0` and a large `maxTokens`, the
@@ -104,7 +106,36 @@ export function createCompactionEngine(deps: {
       if (last >= 0 && !hasNonMarkerEventsAfter(session, last)) {
         return { compacted: false, shadowedSeqs: [] } // no new work since the last compaction
       }
-      return compactOnce(session, true)
+      // M33 §2.1 hysteresis: after a compaction, at least
+      // `minTurnsBeforeRecompact` turn/end events must pass before the AUTO
+      // path may run again (0 = the pure pre-M33 re-fire guard). Explicit
+      // compact()/resetWindow() stay ungated.
+      if (last >= 0 && config.minTurnsBeforeRecompact > 0) {
+        if (countTurnEndsAfter(session, last) < config.minTurnsBeforeRecompact) {
+          return { compacted: false, shadowedSeqs: [] }
+        }
+      }
+      // M33 §2.2 breaker: 3 consecutive AUTO failures open the circuit — pause
+      // (return false, no attempt) until NEW non-marker events arrive (same
+      // predicate as the re-fire guard). New content resets the counter.
+      let failures = (autoFailures.get(session) ?? { count: 0, openSeq: -1 }).count
+      if (failures >= BREAKER_MAX_FAILURES) {
+        const state = autoFailures.get(session)!
+        if (!hasNonMarkerEventsAfter(session, state.openSeq)) {
+          return { compacted: false, shadowedSeqs: [] }
+        }
+        failures = 0 // new content restarts the count
+      }
+      const result = await compactOnce(session, true)
+      if (result.compacted) {
+        autoFailures.set(session, { count: 0, openSeq: -1 })
+      } else {
+        const count = failures + 1
+        autoFailures.set(session, count >= BREAKER_MAX_FAILURES
+          ? { count, openSeq: lastEventSeq(session) }
+          : { count, openSeq: -1 })
+      }
+      return result
     },
     compact: (session) => compactOnce(session, false),
     resetWindow: resetWindowOnce,
@@ -143,12 +174,37 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   return { compacted: true, shadowedSeqs: removedSeqs, reset: true }
 }
 
+// M33 §2.2: per-session consecutive auto-compaction failure counter. `count`
+// is the consecutive failures; `openSeq` records the session's last seq when
+// the breaker tripped (the pause-release predicate compares against it, so a
+// fresh session's PRE-EXISTING history never releases the circuit — only
+// content appended AFTER the trip does).
+const BREAKER_MAX_FAILURES = 3
+const autoFailures = new WeakMap<Session, { count: number; openSeq: number }>()
+
 function lastCompactionEndSeq(session: Session): number {
   let last = -1
   for (const ev of session.events) {
     if (ev.type === "compaction/end" && ev.seq !== undefined) last = ev.seq
   }
   return last
+}
+
+// M33 §2.1: turn/end events strictly after `seq` — the hysteresis count.
+function countTurnEndsAfter(session: Session, seq: number): number {
+  let count = 0
+  for (const ev of session.events) {
+    if (ev.type === "turn/end" && ev.seq !== undefined && ev.seq > seq) count += 1
+  }
+  return count
+}
+
+function lastEventSeq(session: Session): number {
+  for (let i = session.events.length - 1; i >= 0; i--) {
+    const seq = session.events[i]!.seq
+    if (seq !== undefined) return seq
+  }
+  return -1
 }
 
 function hasNonMarkerEventsAfter(session: Session, seq: number): boolean {

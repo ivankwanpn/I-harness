@@ -151,6 +151,39 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     } as never)
     await expect(agent.run("work", undefined)).rejects.toThrow(/prompt_too_long/)
   })
+
+  // M33 §3.1: counting completeness — AgentBudgetConfig.overheadTokens is
+  // added to the checkBudget measurement at the budget call site.
+  it("budget.overheadTokens pushes an under-budget session to fail-closed (M33 counting)", async () => {
+    const session = createSession()
+    for (let i = 0; i < 2; i++) append(session, { type: "user/message", text: "x".repeat(200) }) // ~54 tokens each
+    const agent = createAgent(ctx, {
+      session,
+      tools: createEmptyRegistry(),
+      model: makeModel("never"),
+      systemPrompt: "",
+      maxTurns: 10,
+      // budget = floor(200*1) = 200; visible ≈113 → ok without overhead,
+      // 213 > 200 with overhead 100 (the system prompt / tool schemas charge)
+      budget: { contextWindow: 200, reserveRatio: 1, overheadTokens: 100 },
+    } as never)
+    await expect(agent.run("work", undefined)).rejects.toThrow(/prompt_too_long/)
+  })
+
+  it("the same session stays under budget without overheadTokens (M33 counting)", async () => {
+    const session = createSession()
+    for (let i = 0; i < 2; i++) append(session, { type: "user/message", text: "x".repeat(200) })
+    const agent = createAgent(ctx, {
+      session,
+      tools: createEmptyRegistry(),
+      model: makeModel("ok"),
+      systemPrompt: "",
+      maxTurns: 10,
+      budget: { contextWindow: 200, reserveRatio: 1 },
+    } as never)
+    const r = await agent.run("work", undefined)
+    expect(r.finalText).toBe("ok")
+  })
 })
 
 describe("budget config validation (fail-loud at creation, Ruling 8a)", () => {

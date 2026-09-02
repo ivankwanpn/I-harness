@@ -9,7 +9,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, Inbox, type Session } from "@i-harness/core-session"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
-import type { CompactionConfig } from "@i-harness/compaction"
+import { approxTokens, type CompactionConfig } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -140,6 +140,17 @@ export interface SessionAssembly {
    * workflow, terminal dispose, win32 ACL sandbox dispose. NEVER closes the
    * coordinator or the telemetry stream — the owner owns those. Never throws. */
   dispose(): Promise<void>
+}
+
+// M33 §3.2: the assembly's scheduling-only overhead estimate — the SAME
+// chars/4 estimator family the meter uses (`approxTokens` — ceil(chars/4)) for
+// the two pieces the session log NEVER carries but the model sees on every
+// request: the (possibly composed) system prompt and the tool schemas' JSON.
+// Documented as an estimate, NOT a wire price — it exists so the M20 budget
+// ladder and the M11 pressure gate charge something for prompt+schemas when
+// the host supplies no exact value.
+export function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown): number {
+  return approxTokens(systemPrompt) + approxTokens(JSON.stringify(schemas))
 }
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
@@ -357,6 +368,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicy)}`
     }
 
+    // M33 §3.2: when the window is resolved and the host did not supply an
+    // overhead, the assembly supplies the estimate into BOTH count surfaces
+    // (M11 compact config — host's explicit overheadTokens always wins — and
+    // the M20 budget ladder).
+    const overheadEstimate = opts.contextWindow === undefined
+      ? undefined
+      : estimateAssemblyOverhead(systemPrompt, tools.schemas())
+
     const agent = createAgent(ctx, {
       session, tools, model,
       systemPrompt,
@@ -366,11 +385,21 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // "有值才供") and the M20 budget ladder. Without a resolved window the
       // compact pass-through stays exactly as the caller wrote it (CLI path).
       ...(opts.compact !== undefined
-        ? { compact: opts.contextWindow !== undefined ? { ...opts.compact, contextWindow: opts.contextWindow } : opts.compact }
+        ? {
+            compact: opts.contextWindow !== undefined
+              ? {
+                  ...opts.compact,
+                  contextWindow: opts.contextWindow,
+                  ...(opts.compact.overheadTokens === undefined && overheadEstimate !== undefined ? { overheadTokens: overheadEstimate } : {}),
+                }
+              : opts.compact,
+          }
         : {}),
       // M31 T3: AgentBudgetConfig.contextWindow is required — supply only when
       // a window was resolved (absent → no budget → pre-M20 behavior).
-      ...(opts.contextWindow !== undefined ? { budget: { contextWindow: opts.contextWindow } } : {}),
+      ...(opts.contextWindow !== undefined && overheadEstimate !== undefined
+        ? { budget: { contextWindow: opts.contextWindow, overheadTokens: overheadEstimate } }
+        : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
