@@ -98,3 +98,30 @@
 ## 6. 參考
 - 本報告四家源（§0 樹）；IH 側：`packages/compaction/*`、`packages/core-agent/src/index.ts`（enforceBudget）、`packages/token-meter`、`docs/superpowers/specs/2026-08-20-i-harness-m11-compaction*design.md`（shadow 基線）、`docs/superpowers/plans/2026-08-20-i-harness-m11-compaction.md`
 - 前代：`docs/research/2026-08-31-dsh-a1-to-a3-delta.md`（alph.3 的 compaction/start|summary|end|prune 事件定義）、`2026-09-02-dsh-a4-to-a5-delta.md`
+
+---
+
+## 7. 第五路補錄：Grok Build（xAI Rust agent, `D:\opencode-bugfix\grok-build-main`）
+
+> 2026-09-02 補錄（用戶補充的參考）。壓縮核心：`crates/codegen/xai-grok-agent/src/compaction.rs`、`xai-grok-shell/src/session/{compaction.rs,two_pass.rs}`、`xai-chat-state/src/{actor,compaction_utils,compaction_mode,compaction_transcript}`、`crates/common/xai-grok-compaction`。
+
+### 7.1 機制（獨特招）
+- **觸發**：純客戶端 token 預算（`auto_compact_threshold_percent` 85 默認；**pre-fire 提前 10 個百分點背景預熱**）；`GROK_PREFIRE_LEAD_PERCENT`；step 邊界檢查；另有 error 補償壓縮、preflight overflow、model-switch 壓縮
+- **模型協作信號**：請求頭 `x-compaction-at`（絕對 token 數）+ `x-compactions-remaining`（1→0）——**不是服務端事件，是請求協議**（模型可感知壓縮點）
+- **策略**：**全替換冷摘要**（System+user_info+AGENTS.md+最後真實 user 查詢+`recent_messages`（assistant 保留、tool 結果→`Tool call omitted...`）+summary message+post `system-reminder` 重注入）；9 節「故事」提示（附 Section 9 = 下一步逐字引用）；**同模型+同工具定義 → 前綴 byte-identical 複用引擎 KV cache**
+- **摘要質量牆**：3 重試（確定性/瞬態錯誤分類）、**degenerate 下限 500 字符**（prod 觀察健康 min 3,242）、302 秒牆鐘預算（p99≈181s）、輸入降級梯 Verbatim→VerbatimFitted（window−32,768−tool tokens）→Lossy（70% cw）
+- **雙通 pre-fire**：threshold−10% 背景跑 95% 前綴摘要 → NOTE₁（12k 字符上限）；壓縮時串接 5% 尾 + rewrite——**延遲隱藏**
+- **模式**：Summary（默認）/ Transcript（指針到 updates.jsonl）/ **Segments（`compaction/segment_NNN.md`+INDEX——on-demand 詳情恢復不占上下文）**
+- **持久化**：`compaction_checkpoints/{uuid}.json` + replay 重建「模型確切視圖」（checkpoint_id/prompt_index/auto_continue/schema_version；跨壓縮 rewind 拒絕 >v1）
+- **抑制狀態機**：`SUPPRESS_NONE/TURN/STICKY/UNTIL_SUCCESS`（編譯後仍超限 → sticky——防 AUTO 死循環）
+- **記憶刷新**：壓縮前可選 `memory_flush`（嵌入複製門控）
+- **模型卡（佐證 M34）**：`ModelEntryConfig` 含 `context_window`（必填、NonZeroU64）、`max_completion_tokens`、`reasoning_efforts[{value,label,description,default}]`、**`auto_compact_threshold_percent`（per-model!）**、`compaction_at_tokens`——**per-model 壓縮策略的第五實例**
+
+### 7.2 優/劣 vs IH
+**優**：①pre-fire 延遲隱藏（獨特）②輸入降級梯 + degenerate 下限（IH 無）③抑制狀態機（比 M33 單向熔斷更細：STICKY/UNTIL_SUCCESS）④檢查點+replay（模型確切視圖、可審計）⑤Segments/Transcript 模式（on-demand 恢復）⑥per-model threshold。
+**劣（風險明示於代碼）**：**全替換冷摘要 + Summary 模式無指針 =「超過 9 節摘要的內容即丟」**——連續壓縮會再摘要前摘要；sticky 抑制可致「直到換模型都壓不了」；bytes/4 漂移；控制 token 用零寬空格消解（結構化解析缺）。**這一劣恰好反證 IH 的 append-only shadow-projection 正確性**（IH 無替換、無丟失、無 sticky 窘境）。
+
+### 7.3 對 M33/M34 的增量
+- M33 已完成項：摘要結構（grok 9 節 ≈ 我們 8 節——採納交匯）；熔斷（≡ UNTIL_SUCCESS 語義可強化為「成功前不鬆綁」——**M34 微調**）
+- M34 ⑦ 應擴容為：**per-model `autoCompactThresholdPercent`/`maxTokens` 策略（grok/dsh 雙證）+ 摘要 degenerate 下限（grok 500 字符）重試 + `until-success` 抑制語義 + compaction analytics**
+- 不採：全替換冷摘要 / 檢查點快照（IH 重放=log 全量+shadow 可重現,保證度更高）/ pre-fire 雙通（複雜、收益延遲性）
