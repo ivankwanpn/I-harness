@@ -403,10 +403,10 @@ describe("CLI main + entry guard", () => {
     expect(typeof client.stream).toBe("function")
   })
 
-  // M31: the M30 hardcoded catalogs (GEMINI_MODEL_CONTEXTS / BEDROCK_MODEL_CONTEXTS)
-  // are REMOVED — discovery + settings adopt own the model list. Their old
-  // assertion block is gone with them; the gemini/bedrock profile tests above
-  // (defaultModel, endpoint, headers, key-less bedrock) stay unchanged.
+  // M31: the M30 hardcoded per-provider catalogs are REMOVED — discovery +
+  // settings adopt own the model list. Their old assertion block is gone with
+  // them; the gemini/bedrock profile tests above (defaultModel, endpoint,
+  // headers, key-less bedrock) stay unchanged.
 
   it("main() fails loud for gemini without --api-key (M30 gate: no mock fallback)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {})
