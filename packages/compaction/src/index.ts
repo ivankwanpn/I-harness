@@ -1,8 +1,8 @@
 import type { Session, SessionEvent } from "@i-harness/core-session"
-import { append, deriveSearchText } from "@i-harness/core-session"
+import { append, deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
-import { resolveConfig, resolveContextWindow, type CompactionConfig } from "./config.ts"
+import { resolveConfig, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
@@ -10,23 +10,28 @@ import { summarizeWithModel } from "./summarizer.ts"
 export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
 export { resolveConfig, resolveContextWindow } from "./config.ts"
-export type { CompactionConfig, ResolvedCompactionConfig } from "./config.ts"
+export type { CompactionConfig, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
 
 export interface CompactionResult {
   compacted: boolean
   // For compact(): the seqs shadowed behind the appended summary. For a pure
   // reset (reset:true): the removedSeqs recorded on the compaction/reset
-  // marker (identical shadow semantics — deriveMessages hides them).
+  // marker (identical shadow semantics — deriveMessages hides them). For a
+  // prune-only pass (pruned:true): nothing was shadowed → [].
   shadowedSeqs: number[]
   summary?: string
   reset?: boolean // M20: true only for a pure resetWindow (no summary)
+  // M33: true when a `compaction/prune` marker was appended in this pass (the
+  // model surface / summarizer input now carries substitutes). A prune-only
+  // pass also reports `compacted:true` (pressure resolved without an LLM call).
+  pruned?: boolean
 }
 
 export interface CompactionEngine {
   maybeCompact(session: Session): Promise<CompactionResult>
-  // M33 §1.2: `instructions` (manual session-compact command, Task 4) threads
-  // through to the summarizer as the "User instructions" section. Auto paths
-  // omit it (undefined → no section).
+  // M33 §5: `instructions` is the manual session-compact surface — threaded
+  // into the summarizer prompt as a "User instructions" section. Optional and
+  // additive: absent → pre-M33 behavior; the auto path never passes one.
   compact(session: Session, instructions?: string): Promise<CompactionResult>
   // M20 (absorbs codex token-budget `start_new_context_window`): new context
   // window — hide everything except the last `retainLast` events, appending a
@@ -51,10 +56,27 @@ export function createCompactionEngine(deps: {
   // → config.contextWindow). No profile/modelId → config → M11/M14 behavior.
   const contextWindow = resolveContextWindow(deps.profile, deps.modelId, config)
 
-  async function compactOnce(session: Session, instructions?: string): Promise<CompactionResult> {
+  // M33 §4: one compact pass. `allowPruneOnly` gates the model-free shortcut —
+  // only the AUTO path (maybeCompact) may skip the summarizer when pruning the
+  // big results alone brings the VISIBLE surface back under the threshold;
+  // explicit compact always summarizes (the caller asked for the shadow, even
+  // below pressure — pre-M33 semantics).
+  async function compactOnce(
+    session: Session,
+    allowPruneOnly: boolean,
+    instructions?: string,
+  ): Promise<CompactionResult> {
     const shadowedSeqs = selectShadowableRange(session, config.retainTokens)
     if (shadowedSeqs.length === 0) return { compacted: false, shadowedSeqs: [] }
-    const replayText = renderShadowed(session, shadowedSeqs)
+    const pruneRecords = planPrune(session, config.prune)
+    if (allowPruneOnly && pruneRecords.length > 0) {
+      const after = surfaceTokensAfterPrune(session, pruneRecords)
+      if (after < contextWindow * config.thresholdRatio) {
+        append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
+        return { compacted: true, shadowedSeqs: [], pruned: true }
+      }
+    }
+    const replayText = renderShadowed(session, shadowedSeqs, pruneRecords)
     const model = config.summarizationModel ?? deps.model
     // M33 §1.2 anchored: scan the session for the LAST `compaction/summary`
     // before building the prompt. If one exists, its text is injected via
@@ -71,15 +93,18 @@ export function createCompactionEngine(deps: {
       console.warn("[i-harness] compaction summarizer failed (fail-soft, retrying next step):", err instanceof Error ? err.message : String(err))
       return { compacted: false, shadowedSeqs: [] }
     }
+    if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
     append(session, { type: "compaction/summary", text: summary, shadowedSeqs })
     append(session, { type: "compaction/end" })
-    return { compacted: true, shadowedSeqs, summary }
+    return { compacted: true, shadowedSeqs, summary, ...(pruneRecords.length > 0 ? { pruned: true } : {}) }
   }
 
   return {
     async maybeCompact(session: Session): Promise<CompactionResult> {
-      if (activeTokens(session) < contextWindow * config.thresholdRatio) {
+      // M33 §3.1: the host-known charge the session log does not carry
+      // (system prompt + tool schemas — CompactionConfig.overheadTokens).
+      if (activeTokens(session) + config.overheadTokens < contextWindow * config.thresholdRatio) {
         return { compacted: false, shadowedSeqs: [] }
       }
       // Re-fire guard: with `retainTokens 0` and a large `maxTokens`, the
@@ -91,9 +116,38 @@ export function createCompactionEngine(deps: {
       if (last >= 0 && !hasNonMarkerEventsAfter(session, last)) {
         return { compacted: false, shadowedSeqs: [] } // no new work since the last compaction
       }
-      return compactOnce(session)
+      // M33 §2.1 hysteresis: after a compaction, at least
+      // `minTurnsBeforeRecompact` turn/end events must pass before the AUTO
+      // path may run again (0 = the pure pre-M33 re-fire guard). Explicit
+      // compact()/resetWindow() stay ungated.
+      if (last >= 0 && config.minTurnsBeforeRecompact > 0) {
+        if (countTurnEndsAfter(session, last) < config.minTurnsBeforeRecompact) {
+          return { compacted: false, shadowedSeqs: [] }
+        }
+      }
+      // M33 §2.2 breaker: 3 consecutive AUTO failures open the circuit — pause
+      // (return false, no attempt) until NEW non-marker events arrive (same
+      // predicate as the re-fire guard). New content resets the counter.
+      let failures = (autoFailures.get(session) ?? { count: 0, openSeq: -1 }).count
+      if (failures >= BREAKER_MAX_FAILURES) {
+        const state = autoFailures.get(session)!
+        if (!hasNonMarkerEventsAfter(session, state.openSeq)) {
+          return { compacted: false, shadowedSeqs: [] }
+        }
+        failures = 0 // new content restarts the count
+      }
+      const result = await compactOnce(session, true)
+      if (result.compacted) {
+        autoFailures.set(session, { count: 0, openSeq: -1 })
+      } else {
+        const count = failures + 1
+        autoFailures.set(session, count >= BREAKER_MAX_FAILURES
+          ? { count, openSeq: lastEventSeq(session) }
+          : { count, openSeq: -1 })
+      }
+      return result
     },
-    compact: compactOnce,
+    compact: (session, instructions) => compactOnce(session, false, instructions),
     resetWindow: resetWindowOnce,
   }
 }
@@ -130,18 +184,13 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   return { compacted: true, shadowedSeqs: removedSeqs, reset: true }
 }
 
-// M33 §1.2: the text of the LAST `compaction/summary` event, if any.
-// Defensive `typeof` guard: persisted logs bypass append validation, so a
-// malformed marker must not break the anchored scan (falls back to fresh).
-function lastSummaryText(session: Session): string | undefined {
-  let text: string | undefined
-  for (const ev of session.events) {
-    if (ev.type === "compaction/summary" && typeof ev.text === "string" && ev.text.length > 0) {
-      text = ev.text
-    }
-  }
-  return text
-}
+// M33 §2.2: per-session consecutive auto-compaction failure counter. `count`
+// is the consecutive failures; `openSeq` records the session's last seq when
+// the breaker tripped (the pause-release predicate compares against it, so a
+// fresh session's PRE-EXISTING history never releases the circuit — only
+// content appended AFTER the trip does).
+const BREAKER_MAX_FAILURES = 3
+const autoFailures = new WeakMap<Session, { count: number; openSeq: number }>()
 
 function lastCompactionEndSeq(session: Session): number {
   let last = -1
@@ -151,20 +200,116 @@ function lastCompactionEndSeq(session: Session): number {
   return last
 }
 
+// M33 §2.1: turn/end events strictly after `seq` — the hysteresis count.
+function countTurnEndsAfter(session: Session, seq: number): number {
+  let count = 0
+  for (const ev of session.events) {
+    if (ev.type === "turn/end" && ev.seq !== undefined && ev.seq > seq) count += 1
+  }
+  return count
+}
+
+function lastEventSeq(session: Session): number {
+  for (let i = session.events.length - 1; i >= 0; i--) {
+    const seq = session.events[i]!.seq
+    if (seq !== undefined) return seq
+  }
+  return -1
+}
+
 function hasNonMarkerEventsAfter(session: Session, seq: number): boolean {
   for (const ev of session.events) {
     if (ev.seq === undefined || ev.seq <= seq) continue
-    if (ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset") continue
+    if (ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset" || ev.type === "compaction/prune") continue
     return true
   }
   return false
 }
 
-function renderShadowed(session: Session, shadowedSeqs: number[]): string {
+// M33 §4.2: the prune plan — every tool/result whose stringified output
+// exceeds `prune.thresholdChars` becomes a record (head/tail carving aligned
+// with the retention caps; `removedBytes` = the byte length of the middle).
+// A stringify failure (e.g. a BigInt payload) degrades to "not prunable" —
+// fail-soft, it just does not participate in this pass.
+function planPrune(session: Session, prune: ResolvedPruneConfig): PruneRecord[] {
+  if (!prune.enabled) return []
+  const records: PruneRecord[] = []
+  for (const ev of session.events) {
+    if (ev.type !== "tool/result") continue
+    const text = safeStringifyOutput(ev.output)
+    if (text === null || text.length <= prune.thresholdChars) continue
+    const removed = text.slice(prune.headChars, text.length - prune.tailChars)
+    records.push({
+      callId: ev.callId,
+      head: text.slice(0, prune.headChars),
+      tail: prune.tailChars > 0 ? text.slice(-prune.tailChars) : "",
+      removedBytes: byteLength(removed),
+    })
+  }
+  return records
+}
+
+// M33 §4.2: "替身計數" — the visible surface AFTER the plan's substitutes were
+// applied (dsh 語義: pruning alone has resolved the pressure). Estimates by
+// pricing the savings of VISIBLE prune candidates (events a prior
+// compaction/summary|reset already hides are not on the surface and cost
+// nothing) off the current activeTokens — the meter's role overhead cancels
+// between the before/after tool messages.
+function surfaceTokensAfterPrune(session: Session, records: PruneRecord[]): number {
+  const shadowed = new Set<number>()
+  for (const ev of session.events) {
+    if (ev.type === "compaction/summary") for (const seq of ev.shadowedSeqs) shadowed.add(seq)
+    // defensive `?? []`: persisted logs bypass append validation
+    else if (ev.type === "compaction/reset") for (const seq of ev.removedSeqs ?? []) shadowed.add(seq)
+  }
+  const byCall = new Map<string, PruneRecord>()
+  for (const record of records) byCall.set(record.callId, record)
+  let savings = 0
+  for (const ev of session.events) {
+    if (ev.type !== "tool/result") continue
+    if (ev.seq !== undefined && shadowed.has(ev.seq)) continue
+    const record = byCall.get(ev.callId)
+    if (record === undefined) continue
+    const before = safeStringifyOutput(ev.output)
+    if (before === null) continue
+    const after = renderPruneSubstitute(record)
+    savings += Math.ceil(before.length / 4) - Math.ceil(after.length / 4)
+  }
+  return Math.max(0, activeTokens(session) - savings)
+}
+
+function safeStringifyOutput(output: unknown): string | null {
+  try {
+    return JSON.stringify(output)
+  } catch {
+    return null
+  }
+}
+
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8")
+}
+
+function renderShadowed(session: Session, shadowedSeqs: number[], pruneRecords: PruneRecord[] = []): string {
   const set = new Set(shadowedSeqs)
+  // M33: summary-input substitution — the shadow region's pruned results are
+  // rendered as substitutes so the summarizer never pays for the removed
+  // middle (design 裁定 ①).
+  const prunedByCall = new Map(pruneRecords.map((record) => [record.callId, record]))
   const parts: string[] = []
   for (const ev of session.events) {
     if (ev.seq !== undefined && set.has(ev.seq)) {
+      const prunedRecord = ev.type === "tool/result" ? prunedByCall.get(ev.callId) : undefined
+      // M33 (design 裁定 ①): a pruned tool/result renders as its substitute in
+      // the summary input — the summarizer must not pay for the cut middle.
+      // NOTE: this replaces the M20 image-descriptor union for that event —
+      // the raw bytes stay durably in the log; the narrowed input drops them
+      // along with the rest of the output (v0 carve; image-aware summarize is
+      // still deferred).
+      if (prunedRecord !== undefined) {
+        parts.push(renderPruneSubstitute(prunedRecord))
+        continue
+      }
       // M20 image-aware replay: events carrying images are replayed with a
       // descriptor so the summary records WHICH visuals were in context. The
       // real byte-level replay needs a multimodal summarizer + store ref
@@ -206,6 +351,17 @@ function renderShadowed(session: Session, shadowedSeqs: number[]): string {
 // Malformed per-image fields degrade to `unknown` / `?` placeholders instead
 // of throwing: renderShadowed runs OUTSIDE compact()'s fail-soft try, so a
 // TypeError here would escape compaction entirely (Ruling 7).
+// M33 §1.2: the text of the LAST `compaction/summary` event, if any.
+// Defensive `typeof` guard: persisted logs bypass append validation, so a
+// malformed marker must not break the anchored scan (falls back to fresh).
+function lastSummaryText(session: Session): string | undefined {
+  for (let i = session.events.length - 1; i >= 0; i--) {
+    const ev = session.events[i]
+    if (ev && ev.type === "compaction/summary") return typeof ev.text === "string" ? ev.text : undefined
+  }
+  return undefined
+}
+
 function imageDescriptor(ev: SessionEvent): string | undefined {
   // FINAL REVIEW (Ruling 8b): the probe covers BOTH image locations —
   // user-message images live at the top level (`event.images`), while

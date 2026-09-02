@@ -29,6 +29,10 @@ export interface AgentBudgetConfig {
   reserveRatio?: number // default 0.9; budget = contextWindow * reserveRatio
   resetWindow?: boolean // default true (allow layer 2 pure reset; false → straight to fail-closed)
   resetRetainLast?: number // default 20 (resetWindow keeps the last N events)
+  // M33 §3.1: the host-known charge the session log does NOT carry (system
+  // prompt + tool schemas) — added to the checkBudget measurement at every
+  // boundary. 0 (default) = pre-M33 measurement.
+  overheadTokens?: number
 }
 
 export interface AgentConfig {
@@ -88,7 +92,9 @@ export interface Agent {
   // M11: explicit manual compaction. Optional because a registry may hold
   // agents that were never configured with a compact seam (no engine). With no
   // compact config, `createAgent` still returns a `compact` that no-ops.
-  compact?(): Promise<CompactionResult>
+  // M33 §5: optional `instructions` are threaded to the summarizer (the
+  // session-compact command surface).
+  compact?(instructions?: string): Promise<CompactionResult>
 }
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
@@ -106,12 +112,17 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // values at creation too. Absent optional fields keep their defaults; no
   // change to `resetWindow` runtime behavior.
   if (deps.budget !== undefined) {
-    const { contextWindow, resetRetainLast } = deps.budget
+    const { contextWindow, resetRetainLast, overheadTokens } = deps.budget
     if (!(Number.isFinite(contextWindow) && contextWindow > 0)) {
       throw new Error(`budget.contextWindow must be a finite positive number (got ${contextWindow})`)
     }
     if (resetRetainLast !== undefined && (!Number.isInteger(resetRetainLast) || resetRetainLast < 0)) {
       throw new Error(`budget.resetRetainLast must be a non-negative integer (got ${resetRetainLast})`)
+    }
+    // M33 §3.1: fail loud at creation like resetRetainLast — a NaN/negative
+    // overhead would silently poison every comparison downstream.
+    if (overheadTokens !== undefined && (!Number.isInteger(overheadTokens) || overheadTokens < 0)) {
+      throw new Error(`budget.overheadTokens must be a non-negative integer (got ${overheadTokens})`)
     }
   }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
@@ -139,17 +150,20 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   //     under budget. No budget config → no-op (pre-M20 behavior).
   async function enforceBudget(): Promise<void> {
     if (budgetCfg === undefined) return
-    const before = checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio)
+    // M33 §3.1: the host-known charge the session log does not carry (system
+    // prompt + tool schemas) is added to EVERY boundary measurement.
+    const overhead = budgetCfg.overheadTokens ?? 0
+    const before = checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio, overhead)
     if (before.state === "ok") return
     // Layer 1: M11 compact (shadow-projection + summary).
     if (compactor) {
       await compactor.compact(deps.session)
-      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio).state === "ok") return
+      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio, overhead).state === "ok") return
     }
     // Layer 2: pure reset (absorb codex token-budget) — keep the recent tail.
     if (compactor && resetAllowed) {
       await compactor.resetWindow(deps.session, resetRetainLast)
-      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio).state === "ok") return
+      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio, overhead).state === "ok") return
     }
     // Layer 3: fail-closed.
     throw new Error(`prompt_too_long: context budget exceeded (${before.tokens} tokens > ${before.budget} budget)`)
@@ -303,7 +317,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   return {
     run: (task, signal) => runTurn(task, signal),
     followup: (message, signal) => runTurn(message, signal),
-    compact: async () => (compactor ? compactor.compact(deps.session) : { compacted: false, shadowedSeqs: [] }),
+    compact: async (instructions?: string) =>
+      compactor ? compactor.compact(deps.session, instructions) : { compacted: false, shadowedSeqs: [] },
   }
 }
 

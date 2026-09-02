@@ -6,7 +6,9 @@ function isCompactionMarker(ev: SessionEvent): boolean {
   // M20 fix round 1: a pure reset is also a compaction marker — it must never
   // be shadow-summarized, priced into the shadow-range tail walk (it carries
   // no text), and alone must not re-arm maybeCompact's re-fire guard.
-  return ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset"
+  // M33: `compaction/prune` joins the same class — never shadowed, never
+  // priced into the tail walk, never re-arms the re-fire guard.
+  return ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset" || ev.type === "compaction/prune"
 }
 
 // Events strictly before the first event whose cumulative tail crosses the

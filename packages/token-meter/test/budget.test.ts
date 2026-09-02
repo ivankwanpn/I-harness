@@ -20,4 +20,12 @@ describe("checkBudget", () => {
     expect(() => checkBudget(s, 100, 0)).toThrow()
     expect(() => checkBudget(s, 100, 1.5)).toThrow()
   })
+  it("M33: overheadTokens is added to the counted tokens (default 0)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "x".repeat(80) }) // 20 + 4 = 24 tokens
+    expect(checkBudget(s, 100, 0.5).state).toBe("ok") // 24 ≤ 50
+    expect(checkBudget(s, 100, 0.5, 30).state).toBe("overflow") // 54 > 50
+    expect(checkBudget(s, 100, 0.5, 30).tokens).toBe(54)
+    expect(() => checkBudget(s, 100, 0.5, -1)).toThrow(/overheadTokens/)
+  })
 })
