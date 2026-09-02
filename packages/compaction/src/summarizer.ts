@@ -102,7 +102,7 @@ export function buildSummaryPrompt(
     parts.push("", "<previous-summary>", previousSummary, "</previous-summary>")
   }
   if (instructions !== undefined && instructions.trim().length > 0) {
-    parts.push("", "User instructions (they take priority over the template):", instructions)
+    parts.push("", "## User instructions (they take priority over the template):", instructions)
   }
   parts.push("", shadowText)
   return parts.join("\n")
