@@ -394,6 +394,21 @@ describe("provider protocol + models objects (Task 1)", () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  it("M30: gemini/bedrock are valid closed-enum protocols (mutate + normalize)", async () => {
+    const { store, root } = await newStore()
+    const v = await mutateSection("llm", [
+      { op: "set", path: ["providers", "gemini", "protocol"], value: "gemini" },
+      { op: "set", path: ["providers", "bedrock", "protocol"], value: "bedrock" },
+    ], store)
+    expect((v.user as AnyRecord).providers).toEqual({
+      gemini: { protocol: "gemini" },
+      bedrock: { protocol: "bedrock" },
+    })
+    expect(resolveProviderProtocol("gemini", { protocol: "gemini" })).toBe("gemini")
+    expect(normalizeSettings({ llm: { providers: { p: { protocol: "bedrock" } } } }).llm.providers.p?.protocol).toBe("bedrock")
+    await rm(root, { recursive: true, force: true })
+  })
+
   it("protocol normalize two-tier: valid kept, absent/invalid left ABSENT (seed resolution is the consumers' chain)", () => {
     // absent stays absent — normalize must NOT fill a default (review r1:
     // filling would shadow the seed chain for user-touched seed routes)

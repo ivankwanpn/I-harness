@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { runHeadless } from "../src/run.ts"
-import { main, parseModel } from "../src/index.ts"
+import { main, parseModel, GEMINI_MODEL_CONTEXTS, BEDROCK_MODEL_CONTEXTS } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
@@ -376,6 +376,48 @@ describe("CLI main + entry guard", () => {
     expect(url).toContain("api.deepseek.com")
     expect(JSON.parse(init.body as string).model).toBe("deepseek-chat")
     await it.return?.()
+  })
+
+  it("parseModel gemini built-in profile: GenAI endpoint + x-goog-api-key + bare defaultModel", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = parseModel("gemini:gemini-2.5-pro", "sk-g")
+    const it = client.stream({ messages: [], tools: [], systemPrompt: "" } as never)[Symbol.asyncIterator]()
+    await it.next()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toContain("/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse")
+    expect((init.headers as Record<string, string> | undefined)?.["x-goog-api-key"]).toBe("sk-g")
+    expect((init.headers as Record<string, string> | undefined)?.["Authorization"]).toBeUndefined()
+    await it.return?.()
+    // bare spec → the built-in profile's defaultModel
+    vi.stubGlobal("fetch", fetchMock)
+    const client2 = parseModel("gemini", "sk-g")
+    const it2 = client2.stream({ messages: [], tools: [], systemPrompt: "" } as never)[Symbol.asyncIterator]()
+    await it2.next()
+    expect(fetchMock.mock.calls[1]![0]).toContain("/gemini-2.5-pro:streamGenerateContent")
+    await it2.return?.()
+  })
+
+  it("parseModel built-in bedrock profile constructs key-less", () => {
+    const client = parseModel("bedrock:anthropic.claude-x", "")
+    expect(typeof client.stream).toBe("function")
+  })
+
+  it("M30 modelContexts: the built-in gemini/bedrock catalogs carry context windows", () => {
+    expect(GEMINI_MODEL_CONTEXTS["gemini-2.5-pro"]?.contextWindow).toBe(1_048_576)
+    expect(GEMINI_MODEL_CONTEXTS["gemini-1.5-pro"]?.contextWindow).toBe(2_097_152)
+    expect(BEDROCK_MODEL_CONTEXTS["anthropic.claude-3-5-sonnet-20241022"]?.contextWindow).toBe(200_000)
+  })
+
+  it("main() fails loud for gemini without --api-key (M30 gate: no mock fallback)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const code = await main(["node", "i-harness", "run", "hello", "--model", "gemini:gemini-2.5-pro"])
+      expect(code).toBe(1)
+      expect(err).toHaveBeenCalledWith("--model requires --api-key KEY")
+    } finally {
+      err.mockRestore()
+    }
   })
 })
 
