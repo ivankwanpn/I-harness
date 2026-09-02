@@ -355,7 +355,16 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       session, tools, model,
       systemPrompt,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
-      ...(opts.compact !== undefined ? { compact: opts.compact } : {}),
+      // M31 T3: when the assembly's window resolved, it feeds BOTH the M11
+      // compaction engine (catalog-first config window ← the unified value,
+      // "有值才供") and the M20 budget ladder. Without a resolved window the
+      // compact pass-through stays exactly as the caller wrote it (CLI path).
+      ...(opts.compact !== undefined
+        ? { compact: opts.contextWindow !== undefined ? { ...opts.compact, contextWindow: opts.contextWindow } : opts.compact }
+        : {}),
+      // M31 T3: AgentBudgetConfig.contextWindow is required — supply only when
+      // a window was resolved (absent → no budget → pre-M20 behavior).
+      ...(opts.contextWindow !== undefined ? { budget: { contextWindow: opts.contextWindow } } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).

@@ -26,6 +26,8 @@ export function registerContextRemaining(_ctx: PluginContext, tools: ToolRegistr
     name: "get_context_remaining",
     description: "回報剩餘上下文預算（window/used/remaining/percentage）。",
     inputSchema: { type: "object" as const, properties: {}, additionalProperties: false },
+    // Pure read (session pricing) — auto-allow under the approval policy.
+    isReadOnly: true,
     execute: async () => {
       const used = session === undefined ? 0 : activeTokens(session)
       const remaining = Math.max(0, window - used)
