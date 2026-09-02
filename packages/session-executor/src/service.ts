@@ -37,6 +37,12 @@ export interface SessionServiceOptions extends AssemblyOptions {
    * (apps/cli/src/web.ts resolveModelSpec). Absent → the assembly's mock
    * default. */
   modelBuilder?: (sessionId: string, meta: SessionMeta | undefined) => Promise<ModelClient | undefined>
+  /** M31 T3: per-session context-window resolver — evaluated at EVERY assembly
+   * build (meta-aware, so session.modelSelection drives the window). When
+   * defined it ALWAYS wins over the static AssemblyOptions.contextWindow
+   * (undefined → fail-closed, get_context_remaining not registered); absent →
+   * the static value (legacy path). */
+  contextWindowFor?: (sessionId: string, meta: SessionMeta | undefined) => number | undefined
 }
 
 export interface SessionService {
@@ -81,10 +87,16 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       pending = (async () => {
         const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
         const model = opts.modelBuilder === undefined ? undefined : await opts.modelBuilder(sessionId, meta)
+        // M31 T3: per-session window (meta-aware) — a defined contextWindowFor
+        // decides even when it resolves to undefined (fail-closed).
+        const contextWindow = opts.contextWindowFor === undefined
+          ? opts.contextWindow
+          : opts.contextWindowFor(sessionId, meta)
         const assembly = await createSessionAssembly({
           ...opts,
           sessionId,
           ...(model !== undefined ? { model } : {}),
+          ...(opts.contextWindowFor !== undefined ? { contextWindow } : {}),
         })
         assemblies.set(sessionId, assembly)
         // The A-region serial lane over this assembly (tiers; send on submit).

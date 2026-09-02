@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient, buildWireClient, resolveModelContext, type ProviderProfile } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, buildWireClient, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -125,5 +125,36 @@ describe("M15 context catalog", () => {
     expect(() => reg.register({ name: "b", displayName: "B", protocol: "openai-compatible", contextWindow: -5 })).toThrow(/contextWindow/i)
     expect(() => reg.register({ name: "c", displayName: "C", protocol: "openai-compatible", contextWindow: 1.5 })).toThrow(/contextWindow/i)
     expect(() => reg.register({ name: "d", displayName: "D", protocol: "openai-compatible", modelContexts: { m: { contextWindow: 0 } } })).toThrow(/modelContexts/i)
+  })
+
+  // M31 T1: unified resolution — the settings-side user model row is the TOP
+  // of the chain (userModel > modelContexts > profile > undefined).
+  it("resolveEffectiveModelContext: user overrides modelContexts overrides profile", () => {
+    const profile = {
+      name: "p", displayName: "P", protocol: "openai-compatible",
+      contextWindow: 128_000, modelContexts: { m1: { contextWindow: 64_000 } },
+    } as ProviderProfile
+    expect(resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { contextWindow: 32_000 } })?.contextWindow).toBe(32_000)
+    expect(resolveEffectiveModelContext({ profile, modelId: "m1" })?.contextWindow).toBe(64_000)
+    expect(resolveEffectiveModelContext({ profile, modelId: "m2" })?.contextWindow).toBe(128_000)
+    expect(resolveEffectiveModelContext({ profile, modelId: "m3" })?.contextWindow).toBe(128_000)
+  })
+
+  it("resolveEffectiveModelContext: user maxTokens overrides maxContextWindow (per-field merge)", () => {
+    const profile = {
+      name: "p", displayName: "P", protocol: "openai-compatible",
+      contextWindow: 128_000, modelContexts: { m1: { contextWindow: 64_000, maxContextWindow: 70_000 } },
+    } as ProviderProfile
+    const r1 = resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { maxTokens: 4096 } })
+    expect(r1?.contextWindow).toBe(64_000)
+    expect(r1?.maxContextWindow).toBe(4096)
+    expect(resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { contextWindow: 32_000, maxTokens: 8192 } }))
+      .toEqual({ contextWindow: 32_000, maxContextWindow: 8192 })
+  })
+
+  it("resolveEffectiveModelContext: no window knowledge anywhere → undefined (fail-closed)", () => {
+    const profile: ProviderProfile = { name: "p", displayName: "P", protocol: "openai-compatible" }
+    expect(resolveEffectiveModelContext({ profile, modelId: "m" })).toBeUndefined()
+    expect(resolveEffectiveModelContext({ profile, modelId: "m", userModel: { maxTokens: 100 } })).toBeUndefined()
   })
 })
