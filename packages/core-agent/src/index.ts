@@ -92,7 +92,9 @@ export interface Agent {
   // M11: explicit manual compaction. Optional because a registry may hold
   // agents that were never configured with a compact seam (no engine). With no
   // compact config, `createAgent` still returns a `compact` that no-ops.
-  compact?(): Promise<CompactionResult>
+  // M33 §5: optional `instructions` are threaded to the summarizer (the
+  // session-compact command surface).
+  compact?(instructions?: string): Promise<CompactionResult>
 }
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
@@ -315,7 +317,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   return {
     run: (task, signal) => runTurn(task, signal),
     followup: (message, signal) => runTurn(message, signal),
-    compact: async () => (compactor ? compactor.compact(deps.session) : { compacted: false, shadowedSeqs: [] }),
+    compact: async (instructions?: string) =>
+      compactor ? compactor.compact(deps.session, instructions) : { compacted: false, shadowedSeqs: [] },
   }
 }
 

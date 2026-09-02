@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { createMockClient } from "@i-harness/llm-mock"
+import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createSessionAssembly, estimateAssemblyOverhead } from "../src/assembly.ts"
 
 describe("createSessionAssembly", () => {
@@ -82,4 +83,52 @@ describe("createSessionAssembly", () => {
       await withWindow.dispose()
     }
   }, 60_000)
+
+  it("M33: compactNow binds the agent's compaction seam (manual surface)", async () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "initial work" })
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      session: s,
+      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      compact: { contextWindow: 100_000 },
+    })
+    try {
+      expect(typeof assembly.compactNow).toBe("function")
+      const res = await assembly.compactNow()
+      expect(res.compacted).toBe(true)
+      expect(res.shadowedSeqs).toEqual([0])
+      expect(assembly.session.events.slice(-3).map((e) => e.type)).toEqual([
+        "compaction/start", "compaction/summary", "compaction/end",
+      ])
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("M33: compactNow with instructions forwards them to the summarizer prompt", async () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "kickoff" })
+    let captured: string | undefined
+    const spy: ModelClient = {
+      async *stream(request: LLMRequest) {
+        captured = (request.messages[0]!.content as string)
+        yield { type: "text/chunk", text: "summary" }
+        yield { type: "end" }
+      },
+    }
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      session: s,
+      model: spy,
+      compact: { contextWindow: 100_000 },
+    })
+    try {
+      await assembly.compactNow("keep the constraint X in mind")
+      expect(captured).toContain("## User instructions")
+      expect(captured).toContain("keep the constraint X in mind")
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
 })

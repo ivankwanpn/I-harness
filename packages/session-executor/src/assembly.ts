@@ -9,7 +9,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, Inbox, type Session } from "@i-harness/core-session"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
-import { approxTokens, type CompactionConfig } from "@i-harness/compaction"
+import { approxTokens, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -134,6 +134,11 @@ export interface SessionAssembly {
   /** Request cancellation of one background job through the subagent job
    * registry (the model-facing job_kill machinery). */
   killJob(jobId: string): "cancellation-requested" | "already-finished"
+  /** M33 §5: manual compaction surface — binds the agent's compaction seam
+   * (no engine configured → { compacted: false } fallback). `instructions` are
+   * forwarded to the summarizer prompt ("User instructions" section; absent →
+   * pre-M33 prompt). */
+  compactNow(instructions?: string): Promise<CompactionResult>
   /** Per-server mount outcome of the plugin MCP servers (serverName → success). */
   pluginMcpResults: Map<string, boolean>
   /** Best-effort teardown: reverse-order unmount of mcp/lsp/teams/skills/
@@ -417,6 +422,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       inbox,
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
+      compactNow: async (instructions?: string) =>
+        agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
       pluginMcpResults,
       dispose,
     }
