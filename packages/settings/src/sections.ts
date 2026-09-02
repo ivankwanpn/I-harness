@@ -92,8 +92,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-/** Closed set for llm.defaultModel.reasoningEffort (validated at mutate time). */
-const REASONING_EFFORTS = ["none", "low", "medium", "high"] as const
+/** Closed set for llm.defaultModel.reasoningEffort (validated at mutate time).
+ * M32: unified 6-level vocab — "off" (was "none" pre-M32), low/medium/high,
+ * xhigh/max. The adapter owns the wire translation; unsupported values fail
+ * loud at the model end. Legacy persisted value "none" maps to "off" at
+ * normalize (see normalizeReasoningEffort). */
+const REASONING_EFFORTS = ["off", "low", "medium", "high", "xhigh", "max"] as const
 
 /**
  * Closed set of provider wire protocols (D2 — explicit dropdown):

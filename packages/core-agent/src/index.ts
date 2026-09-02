@@ -71,12 +71,9 @@ export interface AgentDeps {
   reasoningEffort?: ReasoningEffort
 }
 
-/** M32 G1 TEMPORARY: group-2 (M32 T2) owns the canonical `ReasoningEffort` in
- * @i-harness/llm-seam (`LLMRequest.reasoningEffort`). This local declaration
- * carries the IDENTICAL union until T2 lands so G1's wiring (assembly → agent
- * → request) can be built and tested; group-2 reconciles at merge (import the
- * type from llm-seam, drop this local declaration). */
-export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max"
+// M32: canonical ReasoningEffort lives in @i-harness/llm-seam (T2) — re-export
+// rather than declare (G1 TEMPORARY declaration reconciled at merge).
+export type { ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface AgentResult {
   finalText: string
