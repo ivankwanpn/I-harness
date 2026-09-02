@@ -61,7 +61,7 @@ describe("createSessionAssembly", () => {
       const executor = createSessionExecutor({ session: seeded, agent: noWindow.agent, inbox: noWindow.inbox })
       executor.submit({ tier: "send", text: "go" })
       await executor.drain()
-      expect(seeded.events.some((e) => e.type === "compaction/")).toBe(false)
+      expect(seeded.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
     } finally {
       await noWindow.dispose()
     }
