@@ -159,13 +159,17 @@ export function effectiveProviderProfile(
   // (per-field USER WINS over profile.modelContexts) so the unified resolution
   // (resolveEffectiveModelContext / resolveModelContext) sees the settings
   // override; the base profile's `models` catalog stays as registered.
+  // M32 T1 (FIX): maxTokens is the OUTPUT-LENGTH cap (SettingsModel.maxTokens
+  // = the catalog's maxOutputTokens semantic) — it is NOT mapped into
+  // modelContexts (the M31 maxTokens→maxContextWindow mapping is removed).
+  // The settings row still carries it; the resolution chain's per-field
+  // output-length override picks it up (resolveEffectiveModelContext).
   const modelContexts = { ...profile.modelContexts }
   for (const row of user.models ?? []) {
-    if (row.contextWindow === undefined && row.maxTokens === undefined) continue
+    if (row.contextWindow === undefined) continue
     modelContexts[row.id] = {
       ...modelContexts[row.id],
       ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-      ...(row.maxTokens !== undefined ? { maxContextWindow: row.maxTokens } : {}),
     }
   }
   return {
