@@ -70,7 +70,7 @@ export function resolveEffectiveModelContext(input: EffectiveContextInput): Prov
 - Consumes: `probeModels`（provider 現有）、`settingsStore.mutateSection("llm", …)`（現有）、`ModelDescriptor`
 - Produces: `POST /api/llm/probe-apply { route, baseURL?, apiKey?, protocol? }` → `{ adopted: number, models: ModelDescriptor[], fingerprint: string, failures? }`
 
-- [ ] **Step 1: 失敗測試**
+- [x] **Step 1: 失敗測試**
 
 ```ts
 // models-routes.test.ts 增
@@ -86,11 +86,11 @@ it("probe-apply adopts models into settings (upsert, no delete)", async () => {
 it("probe-apply probe failure leaves settings untouched", async () => { /* 指向壞 issuer → 400 → 斷言 mutate 未被呼叫（settings 原值）*/ })
 ```
 
-- [ ] **Step 2: 驗證失敗**（route 404）
-- [ ] **Step 3: 實現**（host.ts：route 位（2138-2216 probe 旁）→ probeModels（現行協議鏈）→ `upsertModels(existing, discovered)`（id 覆蓋/新增/不刪）→ `settingsStore.mutateSection` → 回 `{ adopted, models, fingerprint: sha256(route+baseURL+apiKey) }`；錯誤 → 400 並保持 settings 不寫）
-- [ ] **Step 4: CLI 去硬編碼**（`apps/cli/src/index.ts`：刪 `GEMINI_MODEL_CONTEXTS`/`BEDROCK_MODEL_CONTEXTS` 常量與 `modelContexts` 傳遞；parseModel 的 gemini/bedrock 改 `models: [], modelContexts: undefined`；defaultModel 保留；cli.test 369-399 更新斷言）
-- [ ] **Step 5: 驗證通過 + `pnpm --filter apps/cli --filter @i-harness/web-host test` + typecheck**
-- [ ] **Step 6: Commit** `feat(m31): probe-apply (discover→adopt) + drop hardcoded model catalogs`
+- [x] **Step 2: 驗證失敗**（route 404）
+- [x] **Step 3: 實現**（host.ts：route 位（2138-2216 probe 旁）→ probeModels（現行協議鏈）→ `upsertModels(existing, discovered)`（id 覆蓋/新增/不刪）→ `settingsStore.mutateSection` → 回 `{ adopted, models, fingerprint: sha256(route+baseURL+apiKey) }`；錯誤 → 400 並保持 settings 不寫）
+- [x] **Step 4: CLI 去硬編碼**（`apps/cli/src/index.ts`：刪 `GEMINI_MODEL_CONTEXTS`/`BEDROCK_MODEL_CONTEXTS` 常量與 `modelContexts` 傳遞；parseModel 的 gemini/bedrock 改 `models: [], modelContexts: undefined`；defaultModel 保留；cli.test 369-399 更新斷言）
+- [x] **Step 5: 驗證通過 + `pnpm --filter apps/cli --filter @i-harness/web-host test` + typecheck**
+- [x] **Step 6: Commit** `feat(m31): probe-apply (discover→adopt) + drop hardcoded model catalogs`
 
 ---
 
@@ -121,11 +121,11 @@ it("probe-apply probe failure leaves settings untouched", async () => { /* 指�
 - Produces: `WebSearchRequest/WebSearchSource{url,title?,snippet?,publishedAt?}/WebSearchResult{content?,sources,truncated}`；provider 註冊同面（`registerSearchProvider(id, provider)`——保留現用命名，形狀升級；`EXTERNAL_WEB_CONTENT_NOTICE` 導出）
 - Consumes: 現 `registerWeb` 語義（保持 fail-closed：無 provider → websearch 工具不註冊）
 
-- [ ] **Step 1: 失敗測試**（新契約型別以 search 結果形狀斷言：sources 可無 title、truncated 標記於 seam 截斷時、notice 前綴出現於返回文本）
-- [ ] **Step 2: 驗證失敗**
-- [ ] **Step 3: 實現**（升級 types/契約;seam 截斷執行;notice: 工具渲染層注入（回傳結果包絡含 `notice` 欄位或首行——決定：**回傳 `{ notice, … }` 結構,避免污染 model 文本**）——tools 層（web 工具）將 notice 置於回傳物件)
-- [ ] **Step 4: 驗證通過 + `pnpm --filter @i-harness/web test && typecheck`**
-- [ ] **Step 5: Commit** `feat(m31): websearch seam contract (dsh-honest shape) + trust notice; zero default providers`
+- [x] **Step 1: 失敗測試**（新契約型別以 search 結果形狀斷言：sources 可無 title、truncated 標記於 seam 截斷時、notice 前綴出現於返回文本）
+- [x] **Step 2: 驗證失敗**
+- [x] **Step 3: 實現**（升級 types/契約;seam 截斷執行;notice: 工具渲染層注入（回傳結果包絡含 `notice` 欄位或首行——決定：**回傳 `{ notice, … }` 結構,避免污染 model 文本**）——tools 層（web 工具）將 notice 置於回傳物件)
+- [x] **Step 4: 驗證通過 + `pnpm --filter @i-harness/web test && typecheck`**
+- [x] **Step 5: Commit** `feat(m31): websearch seam contract (dsh-honest shape) + trust notice; zero default providers`
 
 ---
 

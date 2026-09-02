@@ -41,6 +41,7 @@ import {
   PROVIDER_PROTOCOLS,
   resolveProviderProtocol,
   type SectionView,
+  type SettingsModel,
   type SettingsProviderConfig,
   type SettingsProviderProtocol,
 } from "@i-harness/settings"
@@ -175,6 +176,34 @@ export function mergeCatalogModels(
     if (seen.has(m.id)) continue
     seen.add(m.id)
     out.push(m)
+  }
+  return out
+}
+
+/**
+ * probe-apply upsert (spec §2.2): discovered rows are merged into the section's
+ * existing model list BY ID — an existing id is overwritten in place (name and
+ * caps follow the discovered row), a new id is appended, and NO existing row is
+ * ever deleted (deletion stays a user action). Pure — the route feeds the
+ * merged list to mutateSection; a section store without the route yet starts
+ * from the empty list (the ops write `providers.<route>.models`, materializing
+ * the route row with models only — baseURL/protocol/keys stay compose-side).
+ */
+export function upsertModelRows(existing: SettingsModel[] | undefined, discovered: ModelDescriptor[]): SettingsModel[] {
+  const out: SettingsModel[] = existing !== undefined ? [...existing] : []
+  const indexById = new Map(out.map((m, i) => [m.id, i] as const))
+  for (const row of discovered) {
+    const idx = indexById.get(row.id)
+    const entry: SettingsModel = { id: row.id }
+    if (row.name !== undefined) entry.name = row.name
+    if (row.contextWindow !== undefined) entry.contextWindow = row.contextWindow
+    if (row.maxTokens !== undefined) entry.maxTokens = row.maxTokens
+    if (idx !== undefined) {
+      out[idx] = entry
+    } else {
+      indexById.set(row.id, out.length)
+      out.push(entry)
+    }
   }
   return out
 }

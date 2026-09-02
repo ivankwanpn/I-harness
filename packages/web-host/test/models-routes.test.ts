@@ -114,6 +114,7 @@ describe("models-sources seam HTTP routes (task 4, ported)", () => {
         ["DELETE", "/api/credentials/A", undefined],
         ["GET", "/api/llm/directory", undefined],
         ["POST", "/api/llm/probe", JSON.stringify({ route: "deepseek" })],
+        ["POST", "/api/llm/probe-apply", JSON.stringify({ route: "deepseek" })],
         ["GET", "/api/models/catalog", undefined],
       ]
       for (const [method, path, body] of expectations) {
@@ -499,6 +500,98 @@ describe("models-sources seam HTTP routes (task 4, ported)", () => {
       expect(res.status).toBe(400)
       expect(((await res.json()) as { code: string }).code).toBe("probe-unavailable")
     }, { providerRegistry: unavailable })
+  })
+
+  it("probe-apply adopts discovered models into settings (upsert by id — overwrite + add, never delete)", async () => {
+    const registry = fakeRegistry({
+      probeModels: vi.fn(async (_route: string, _req: unknown) => [
+        { id: "m1", name: "Model One", contextWindow: 64_000, maxTokens: 8_192 },
+        { id: "m2-b", name: "Model Two", contextWindow: 128_000 },
+      ]),
+    })
+    await settingsStoreHost(async (base, store) => {
+      await store.set({
+        llm: {
+          providers: { r1: { models: [{ id: "m1", name: "Old", contextWindow: 32_000 }, { id: "custom-old" }] } },
+          defaultModel: { provider: "", model: "" },
+        },
+      })
+      const res = await fetch(`${base}/api/llm/probe-apply`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ route: "r1", baseURL: "https://g.example" }),
+      })
+      expect(res.status).toBe(200)
+      const body = await res.json() as { adopted: number; models: Array<{ id: string; contextWindow?: number }>; fingerprint: string }
+      expect(body.adopted).toBe(2)
+      expect(body.models.map((m) => m.id)).toEqual(["m1", "m2-b"])
+      await store.load()
+      // Existing rows survive (no delete); the discovered m1 overwrote in place;
+      // the brand-new m2-b was appended.
+      expect(store.get().llm.providers.r1?.models).toEqual([
+        { id: "m1", name: "Model One", contextWindow: 64000, maxTokens: 8192 },
+        { id: "custom-old" },
+        { id: "m2-b", name: "Model Two", contextWindow: 128000 },
+      ])
+    }, { providerRegistry: registry })
+  })
+
+  it("probe-apply probe failure → 400 and settings stay untouched (no half-write)", async () => {
+    const registry = fakeRegistry({
+      probeModels: vi.fn(async () => { throw new ModelProbeFailedError("baseURL unreachable") }),
+    })
+    await settingsStoreHost(async (base, store) => {
+      await store.set({
+        llm: {
+          providers: { r1: { models: [{ id: "keep-me", contextWindow: 8_000 }] } },
+          defaultModel: { provider: "", model: "" },
+        },
+      })
+      const before = store.get().llm.providers.r1?.models
+      const beforeRevision = store.getSectionRevision("llm")
+      const res = await fetch(`${base}/api/llm/probe-apply`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ route: "r1", baseURL: "https://bad.example" }),
+      })
+      expect(res.status).toBe(400)
+      expect(((await res.json()) as { code: string }).code).toBe("model-probe-failed")
+      await store.load()
+      expect(store.get().llm.providers.r1?.models).toEqual(before)
+      expect(store.getSectionRevision("llm")).toBe(beforeRevision)
+    }, { providerRegistry: registry })
+  })
+
+  it("probe-apply returns a deterministic route+baseURL+apiKey fingerprint and never echoes the key", async () => {
+    const registry = fakeRegistry()
+    await settingsStoreHost(async (base) => {
+      const send = (apiKey: string) => fetch(`${base}/api/llm/probe-apply`, {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ route: "r1", baseURL: "https://g.example", apiKey }),
+      })
+      const first = await send("sk-secret")
+      expect(first.status).toBe(200)
+      const b1 = await first.json() as { fingerprint: string; adopted: number; models: unknown[] }
+      expect(b1.fingerprint).toMatch(/^[0-9a-f]{64}$/)
+      expect(JSON.stringify(b1)).not.toContain("sk-secret")
+      const again = await send("sk-secret")
+      expect(((await again.json()) as { fingerprint: string }).fingerprint).toBe(b1.fingerprint)
+      const other = await send("sk-other")
+      expect(((await other.json()) as { fingerprint: string }).fingerprint).not.toBe(b1.fingerprint)
+    }, { providerRegistry: registry })
+  })
+
+  it("probe-apply rejects a missing/mistyped route (400 probe-apply-invalid) without touching settings", async () => {
+    const registry = fakeRegistry()
+    await settingsStoreHost(async (base, store) => {
+      for (const payload of [{}, { route: "" }, { route: 42 }, { route: "x", protocol: 42 }]) {
+        const res = await fetch(`${base}/api/llm/probe-apply`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        })
+        expect(res.status, JSON.stringify(payload)).toBe(400)
+        expect(((await res.json()) as { code: string }).code, JSON.stringify(payload)).toBe("probe-apply-invalid")
+      }
+      expect(registry.probeModels).not.toHaveBeenCalled()
+      expect(store.get().llm.providers).toEqual({})
+    }, { providerRegistry: registry })
   })
 
   it("GET /api/models/catalog answers {default, groups, failures}: default is the honest UNSET when nothing configured", async () => {
