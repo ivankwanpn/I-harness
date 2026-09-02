@@ -82,6 +82,6 @@
 | R-E8 | **M26 回收** | feedback：分支 as-is |
 | R-E9 | **M26（隨 E6）** | schedule：與 goal 同族，隨手補 |
 | R-E10 | 遠期 | config 深化（多層/熱更新）——先以 E1 為主 |
-| R-E11 | 已落地（M30） | provider 廣度（gemini/bedrock）——用戶拍板覆蓋 M20「不新增」；餘項（variants/live discovery）遠期 |
+| R-E11 | 已落地（M30） | provider 廣度（gemini/bedrock）——用戶拍板覆蓋 M20「不新增」；餘項（variants/live discovery）遠期。**追加決策（2026-09-02）**：不追 dsh 的運行期 adapter 註冊表 / model discovery / pi-ai 聚合——維持 static switch + 原生 first-class（現做法對 5 協議已夠；第 6 個協議時再議） |
 | R-E12 | 遠期 | webhook（產品面） |
 | R-E13 | 遠期 | 匿名身份（無產品需求） |
