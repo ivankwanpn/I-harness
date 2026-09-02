@@ -40,7 +40,11 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
       model: makeModel("answer"),
       systemPrompt: "",
       maxTurns: 10,
-      compact: { contextWindow: 200, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16 },
+      // M34 ⑦c note: maxTokens 16 caps the summary at ~64 chars — the default
+      // 500-char minSummaryChars floor would make this tiny-window compact
+      // always degenerate, so the floor is opted out explicitly (this suite
+      // measures the budget ladder, not the summary floor).
+      compact: { contextWindow: 200, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
       budget: { contextWindow: 200, reserveRatio: 0.5 },
     } as never)
     const r = await agent.run("work", undefined)

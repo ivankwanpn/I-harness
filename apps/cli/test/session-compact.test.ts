@@ -62,7 +62,7 @@ describe("session-compact command (M33 §5)", () => {
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session: s,
-      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      model: createMockClient([{ role: "assistant", text: "## Primary Request and Intent\n- " + "work ".repeat(120) }]), // ≥ 500 chars (M34 ⑦c floor)
       compact: { contextWindow: 100_000 },
     })
     try {

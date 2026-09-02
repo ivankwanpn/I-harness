@@ -55,7 +55,7 @@ describe("token estimation", () => {
 })
 
 describe("M15 resolveContextWindow", () => {
-  const config: ResolvedCompactionConfig = { contextWindow: 1000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, auto: true, overheadTokens: 0, minTurnsBeforeRecompact: 3, prune: { enabled: true, thresholdChars: 8192, headChars: 4096, tailChars: 1024 } }
+  const config: ResolvedCompactionConfig = { contextWindow: 1000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, auto: true, overheadTokens: 0, minTurnsBeforeRecompact: 3, minSummaryChars: 500, prune: { enabled: true, thresholdChars: 8192, headChars: 4096, tailChars: 1024 } }
 
   it("catalog-first: per-model override beats profile-level beats config", () => {
     const profile = {

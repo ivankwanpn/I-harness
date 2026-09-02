@@ -344,7 +344,7 @@ describe("agent compaction seam", () => {
   it("explicit agent.compact() appends the compaction events", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
-    deps.model = { async *stream() { yield { type: "text/chunk", text: "reply ".repeat(20) }; yield { type: "end" } } }
+    deps.model = { async *stream() { yield { type: "text/chunk", text: "reply ".repeat(85) }; yield { type: "end" } } } // ≥ 500 chars (M34 ⑦c summary floor)
     const agent = createAgent(ctx, {
       ...deps, systemPrompt: "p",
       compact: { contextWindow: 100000, retainTokens: 0 }, // window huge so auto never fires

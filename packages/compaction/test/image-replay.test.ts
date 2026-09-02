@@ -11,7 +11,7 @@ function spyModel(inputs: string[]): ModelClient {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       const content = request.messages[0]?.content
       inputs.push(typeof content === "string" ? content : JSON.stringify(content))
-      yield { type: "text/chunk", text: "sum" }
+      yield { type: "text/chunk", text: "sum".repeat(200) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }
