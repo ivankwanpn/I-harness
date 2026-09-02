@@ -32,6 +32,14 @@ export interface CompactionConfig {
   maxTokens?: number
   summarizationModel?: ModelClient
   auto?: boolean
+  // M34 ⑦c: summary quality floor — the summarizer output (trimmed) must
+  // contain at least this many chars; a shorter output is treated as a
+  // degenerate summary: ONE same-model retry, then the attempt fails (fail-
+  // soft path unchanged). Default 500 (grok degenerate limit). NOTE: the
+  // floor only makes sense well below ~maxTokens * 4 — the default
+  // maxTokens 1024 caps the output at ~4096 chars, so configuring a
+  // minSummaryChars near or above the cap would make every attempt degenerate.
+  minSummaryChars?: number
   // M34 ⑦a: per-model policies keyed by EXACT "provider/model" (dsh shape).
   // An unlisted model (or a build without provider/modelId) = the global
   // chain. Every key must be "provider/model" — malformed keys fail loud at
@@ -66,6 +74,7 @@ export interface ResolvedCompactionConfig {
   auto: boolean
   overheadTokens: number
   minTurnsBeforeRecompact: number
+  minSummaryChars: number
   prune: ResolvedPruneConfig
 }
 
@@ -86,6 +95,10 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
   const maxTokens = config.maxTokens ?? 1024
   if (!Number.isInteger(maxTokens) || maxTokens < 1) {
     throw new Error(`compaction: maxTokens must be a positive integer (got ${maxTokens})`)
+  }
+  const minSummaryChars = config.minSummaryChars ?? 500
+  if (!Number.isInteger(minSummaryChars) || minSummaryChars < 1) {
+    throw new Error(`compaction: minSummaryChars must be a positive integer (got ${minSummaryChars})`)
   }
   const auto = config.auto ?? true
   const overheadTokens = config.overheadTokens ?? 0
@@ -114,6 +127,7 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
     summarizationModel: config.summarizationModel,
     overheadTokens,
     minTurnsBeforeRecompact,
+    minSummaryChars,
     prune,
   }
 }
