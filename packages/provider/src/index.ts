@@ -44,6 +44,30 @@ export function resolveModelContext(
   }
 }
 
+// M31 T1: the settings-side user model row is the TOP of the unified chain —
+// userModel > profile.modelContexts[modelId] > profile.contextWindow > undefined.
+// Pure, per-field override (settings maxTokens maps to maxContextWindow). The
+// return is UNDEFINED when no contextWindow exists at any tier (fail-closed
+// consumers skip registration / budget entirely); a maxContextWindow-only
+// record folds to undefined for the same reason — registration gates on
+// contextWindow, and callers that only need the ceiling can use
+// resolveModelContext directly.
+export interface EffectiveContextInput {
+  profile: ProviderProfile
+  modelId: string
+  /** Settings-side user model row (llm.providers.<route>.models[i]) — absent = no user override. */
+  userModel?: { contextWindow?: number; maxTokens?: number }
+}
+
+export function resolveEffectiveModelContext(input: EffectiveContextInput): ProviderModelContext | undefined {
+  const base = resolveModelContext(input.profile, input.modelId)
+  const user = input.userModel
+  const merged: ProviderModelContext = { ...base }
+  if (user?.contextWindow !== undefined) merged.contextWindow = user.contextWindow
+  if (user?.maxTokens !== undefined) merged.maxContextWindow = user.maxTokens
+  return merged.contextWindow === undefined ? undefined : merged
+}
+
 // ── Task 3 (models plan D3): the registry IS the directory ───────────────────
 // describeDirectory() is a view over the profiles registered through the
 // existing register() — no second registration mechanism exists. probeModels()

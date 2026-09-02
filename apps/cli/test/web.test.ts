@@ -2,12 +2,14 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
-import { createProviderRegistry } from "@i-harness/provider"
+import { SettingsStore, resolveSettingsPath, type SettingsProviderConfig } from "@i-harness/settings"
+import { createProviderRegistry, resolveModelContext, type ProviderProfile } from "@i-harness/provider"
 import { createCredentialStore } from "@i-harness/credentials"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { parsePort, createWebServer, defaultContextWindow, resolveModelSpec, type WebServerOptions } from "../src/web.ts"
+import { createMockClient, type MockStep } from "@i-harness/llm-mock"
+import type { ModelClient } from "@i-harness/llm-seam"
+import { parsePort, createWebServer, defaultContextWindow, effectiveProviderProfile, resolveModelSpec, sessionContextWindow, type WebServerOptions } from "../src/web.ts"
 import { pickWebPort } from "../src/index.ts"
 
 describe("pickWebPort (H-4)", () => {
@@ -89,11 +91,113 @@ describe("web composition (R-C1)", () => {
     expect(defaultContextWindow(opts)).toBe(96_000) // profile-level default
   })
 
+  it("effectiveProviderProfile merges settings model rows into modelContexts (user wins per field; no id flattening)", () => {
+    const base: ProviderProfile = {
+      name: "acme", displayName: "Acme", protocol: "openai-compatible",
+      contextWindow: 96_000,
+      modelContexts: { small: { contextWindow: 100_000 }, kept: { contextWindow: 50_000 } },
+    }
+    const user: SettingsProviderConfig = {
+      models: [
+        { id: "small", contextWindow: 32_000 },
+        { id: "fresh", contextWindow: 64_000, maxTokens: 8_000 },
+        { id: "unsized", name: "no caps" },
+      ],
+    }
+    const eff = effectiveProviderProfile(base, user)
+    // settings rows aggregate into modelContexts — the contextWindow typed in
+    // settings now reaches the resolution chain (the T1 override-chain fix).
+    expect(eff.modelContexts).toEqual({
+      small: { contextWindow: 32_000 },
+      kept: { contextWindow: 50_000 },
+      fresh: { contextWindow: 64_000, maxContextWindow: 8_000 },
+    })
+    // no id flattening (that dropped the caps) — the base catalog stays as-is
+    expect(eff.models).toBeUndefined()
+    // the merged profile lands in the unified chain: user row wins
+    expect(resolveModelContext(eff, "small").contextWindow).toBe(32_000)
+    expect(resolveModelContext(eff, "kept").contextWindow).toBe(50_000)
+  })
+
   it("defaults the settings store path to the config dir", () => {
     // resolveSettingsPath is E's; assert the option override path works through
     // the default constructor location contract (no home touch).
     expect(typeof resolveSettingsPath()).toBe("string")
   })
+
+  it("sessionContextWindow: per-session chain (M31 T3)", async () => {
+    const registry = createProviderRegistry()
+    registry.register({
+      name: "acme", displayName: "Acme", protocol: "openai-compatible",
+      contextWindow: 96_000, modelContexts: { small: { contextWindow: 200_000 } }, models: [],
+    })
+    const opts = options(process.cwd(), { providerRegistry: registry })
+    const sel = (model: string) =>
+      ({ formatVersion: 1, sessionId: "s", createdAt: "", modelSelection: { provider: "acme", model } })
+    expect(sessionContextWindow(opts, sel("small"))).toBe(200_000) // per-model override
+    expect(sessionContextWindow(opts, sel("other"))).toBe(96_000) // profile-level default
+    // settings user row wins the chain
+    await opts.settings!.set({
+      llm: { ...opts.settings!.get().llm, providers: { acme: { models: [{ id: "small", contextWindow: 32_000 }, { id: "m2", contextWindow: 400_000 }] } } },
+    })
+    expect(sessionContextWindow(opts, sel("small"))).toBe(32_000)
+    expect(sessionContextWindow(opts, sel("m2"))).toBe(400_000)
+    // no window knowledge → fail-closed undefined
+    expect(sessionContextWindow(opts)).toBeUndefined()
+  })
+
+  it("M31 T3: per-session context window — two sessions report their own get_context_remaining windows", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-m31-per-session-"))
+    const seed = createSessionCoordinator(createJsonlBackend(workspace))
+    try {
+      await seed.create({ sessionId: "s1" })
+      await seed.updateMeta("s1", { modelSelection: { provider: "acme", model: "small" } })
+      await seed.create({ sessionId: "s2" })
+      await seed.updateMeta("s2", { modelSelection: { provider: "acme", model: "large" } })
+    } finally {
+      await seed.close()
+    }
+    const registry = createProviderRegistry()
+    registry.register({
+      name: "acme", displayName: "Acme", protocol: "openai-compatible",
+      contextWindow: 96_000,
+      modelContexts: { small: { contextWindow: 200_000 }, large: { contextWindow: 400_000 } },
+      models: [],
+    })
+    // One turn = two stream calls (tool step, then text step). The cassette
+    // cycles per stream call so a fresh per-call client can never replay the
+    // tool step forever; both sessions' turns are strictly sequential here.
+    const script: MockStep[] = [
+      { role: "assistant", toolCalls: [{ name: "get_context_remaining", args: {} }] },
+      { role: "assistant", text: "done" },
+    ]
+    let callIdx = 0
+    const model: ModelClient = {
+      async *stream(_req) {
+        const step = script[callIdx]!
+        callIdx = (callIdx + 1) % script.length
+        yield* createMockClient([step]).stream(_req)
+      },
+    }
+    const server = await createWebServer(options(workspace, { providerRegistry: registry, model }))
+    try {
+      await server.executor.submit("s1", "turn s1", new AbortController().signal)
+      await server.executor.submit("s2", "turn s2", new AbortController().signal)
+      const windowOf = async (id: string): Promise<number | undefined> => {
+        const assembly = await server.executor.assemblyFor(id)
+        for (let i = assembly.session.events.length - 1; i >= 0; i -= 1) {
+          const ev = assembly.session.events[i] as { type?: string; name?: string; output?: { window?: number } }
+          if (ev.type === "tool/result" && ev.name === "get_context_remaining") return ev.output?.window
+        }
+        return undefined
+      }
+      expect(await windowOf("s1")).toBe(200_000)
+      expect(await windowOf("s2")).toBe(400_000)
+    } finally {
+      await server.close()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
 
   // M29: the file-backed query is wired into the host seam with the workspace
   // as its store root — search/lineage routes serve out of the box over the
