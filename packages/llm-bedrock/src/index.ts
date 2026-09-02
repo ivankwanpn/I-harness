@@ -1,4 +1,4 @@
-import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
+import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput } from "@aws-sdk/client-bedrock-runtime"
 
@@ -48,6 +48,54 @@ function imageFormatOf(mediaType: string): "png" | "jpeg" | "gif" | "webp" {
 
 // A Converse toolResult content block: valid-JSON object content is passed
 // through as { json }, anything else becomes a { text } block.
+/**
+ * M32 generation rule: claude 4.x minor ≥ 6 (e.g. claude-sonnet-4-6 /
+ * claude-opus-4-7+, also -4.6 style and anything later) uses the adaptive
+ * protocol; every older generation uses the legacy budget protocol.
+ */
+const ADAPTIVE_CLAUDE_RE = /\-4[-.](?:6|7|8|9|[1-9][0-9]+)/
+
+/** M32 legacy budget table (documented mapping): low/medium/high only. */
+function legacyBudgetTokens(effort: "low" | "medium" | "high" | "xhigh" | "max"): number | string {
+  return effort === "low" ? 2048 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort
+}
+
+/** Wire fields for `additionalModelRequestFields` (the adapter's free-form
+ * extra-parameters channel — Converse only accepts maxTokens/temperature/
+ * topP/stopSequences in inferenceConfig). */
+export interface BedrockReasoningFields {
+  reasoningConfig?: { type: "adaptive"; maxReasoningEffort: string }
+  thinking?: { type: "adaptive" }
+  thinkingConfig?: { type: "enabled"; budgetTokens: number | string }
+}
+
+/**
+ * M32 bedrock translation table with generation rules:
+ * - claude 4.6+ → `additionalModelRequestFields`:
+ *   `reasoningConfig:{type:"adaptive", maxReasoningEffort:<effort verbatim>}`
+ *   + `thinking:{type:"adaptive"}`.
+ * - claude ≤4.5 → `thinkingConfig:{type:"enabled", budgetTokens:<documented
+ *   table>}`; effort is NEVER sent (xhigh/max land verbatim in budgetTokens →
+ *   provider 400, fail-loud).
+ * - amazon nova → its own adaptive `reasoningConfig`; effort verbatim.
+ * - unknown family → the legacy thinkingConfig shape (a model that rejects it
+ *   surfaces its 400 — fail-loud, never silently drop the effort).
+ * - "off" → undefined (do not include any thinking fields).
+ */
+export function translateReasoning(model: string, effort: ReasoningEffort | undefined): BedrockReasoningFields | undefined {
+  if (effort === undefined || effort === "off") return undefined
+  if (/claude/i.test(model)) {
+    if (ADAPTIVE_CLAUDE_RE.test(model)) {
+      return { reasoningConfig: { type: "adaptive", maxReasoningEffort: effort }, thinking: { type: "adaptive" } }
+    }
+    return { thinkingConfig: { type: "enabled", budgetTokens: legacyBudgetTokens(effort) } }
+  }
+  if (/nova/i.test(model)) {
+    return { reasoningConfig: { type: "adaptive", maxReasoningEffort: effort } }
+  }
+  return { thinkingConfig: { type: "enabled", budgetTokens: legacyBudgetTokens(effort) } }
+}
+
 function toolResultContent(content: string | LLMContentPart[]): unknown[] {
   const raw = typeof content === "string"
     ? content
@@ -75,6 +123,8 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
       const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
+      // M32: request-level effort wins over config.options (explicit per-request intent).
+      const reasoning = translateReasoning(config.model, request.reasoningEffort)
       const body: ConverseStreamCommandInput = {
         modelId: config.model,
         ...(request.systemPrompt.trim() !== "" ? { system: [{ text: request.systemPrompt }] } : {}),
@@ -97,8 +147,8 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         ...(request.tools.length > 0
           ? { toolConfig: { tools: request.tools.map((t) => ({ toolSpec: { name: t.name, description: t.description, inputSchema: { json: t.inputSchema } } })) } as ConverseStreamCommandInput["toolConfig"] }
           : {}),
-        ...(config.options !== undefined
-          ? { additionalModelRequestFields: config.options as ConverseStreamCommandInput["additionalModelRequestFields"] }
+        ...(config.options !== undefined || reasoning !== undefined
+          ? { additionalModelRequestFields: { ...(config.options ?? {}), ...(reasoning ?? {}) } as ConverseStreamCommandInput["additionalModelRequestFields"] }
           : {}),
       }
       const output = await client.send(new ConverseStreamCommand(body))

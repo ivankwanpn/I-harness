@@ -1,4 +1,4 @@
-import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
+import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
@@ -33,6 +33,17 @@ function splitToolContent(content: string | LLMContentPart[]): { text: string; i
     else images.push(part)
   }
   return { text, images }
+}
+
+/**
+ * M32 openai-family translation table (Responses | Chat | DeepSeek — ONE
+ * table, zero generation special-casing): the effort is passed through
+ * verbatim and "off" maps to "none". DeepSeek uses the SAME table — its
+ * server maps medium→high itself. Unset effort → undefined (don't send).
+ */
+export function translateReasoning(_model: string, effort: ReasoningEffort | undefined): { reasoning: { effort: string } } | undefined {
+  if (effort === undefined) return undefined
+  return { reasoning: { effort: effort === "off" ? "none" : effort } }
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -81,6 +92,8 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         tools: request.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
         stream: true,
         ...(config.options ?? {}),
+        // M32: request-level effort wins over config.options (explicit per-request intent).
+        ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
       }
       const response = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",

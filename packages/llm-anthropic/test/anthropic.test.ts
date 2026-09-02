@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createAnthropicClient } from "../src/index.ts"
+import { createAnthropicClient, translateReasoning } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
 describe("llm-anthropic protocol", () => {
@@ -246,5 +246,63 @@ describe("M14 anthropic wire", () => {
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
     const last = body.messages[body.messages.length - 1]!
     expect(last).toEqual({ role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: '{"content":"data"}' }] })
+  })
+})
+
+describe("M32 reasoning effort (anthropic)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("maps 4.6+ models to adaptive thinking + output_config effort (verbatim)", () => {
+    expect(translateReasoning("claude-sonnet-4-6", "high")).toEqual({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    })
+    expect(translateReasoning("claude-opus-4-8", "max")).toEqual({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
+    })
+    expect(translateReasoning("claude-sonnet-4-6", "xhigh")).toEqual({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
+    })
+  })
+
+  it("maps legacy (≤4.5) models to budget_tokens from the table and never sends effort", () => {
+    expect(translateReasoning("claude-3-5-sonnet-20241022", "low")).toEqual({ thinking: { type: "enabled", budget_tokens: 2048 } })
+    expect(translateReasoning("claude-sonnet-4-5", "medium")).toEqual({ thinking: { type: "enabled", budget_tokens: 8192 } })
+    expect(translateReasoning("claude-3-5-sonnet-20241022", "high")).toEqual({ thinking: { type: "enabled", budget_tokens: 16384 } })
+  })
+
+  it("passes unmapped xhigh/max to legacy models verbatim (fail-loud: provider 400)", () => {
+    expect(translateReasoning("claude-sonnet-4-5", "xhigh")).toEqual({ thinking: { type: "enabled", budget_tokens: "xhigh" } })
+    expect(translateReasoning("claude-3-5-sonnet-20241022", "max")).toEqual({ thinking: { type: "enabled", budget_tokens: "max" } })
+  })
+
+  it("sends no thinking block on off (both generations) and nothing when unset", () => {
+    expect(translateReasoning("claude-sonnet-4-6", "off")).toBeUndefined()
+    expect(translateReasoning("claude-3-5-sonnet-20241022", "off")).toBeUndefined()
+    expect(translateReasoning("claude-opus-4-8", undefined)).toBeUndefined()
+  })
+
+  it("embeds the translated fields in the Messages body; unset → no thinking field", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-sonnet-4-6" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "", reasoningEffort: "high" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as Record<string, unknown>
+    expect(body.thinking).toEqual({ type: "adaptive" })
+    expect(body.output_config).toEqual({ effort: "high" })
+
+    const client2 = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-sonnet-4-6" })
+    const it2 = client2.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it2.next()
+    await it2.return?.()
+    const body2 = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string) as Record<string, unknown>
+    expect(body2.thinking).toBeUndefined()
+    expect(body2.output_config).toBeUndefined()
   })
 })

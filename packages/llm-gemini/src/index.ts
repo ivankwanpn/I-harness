@@ -1,4 +1,4 @@
-import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
+import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
@@ -11,6 +11,30 @@ export interface GeminiConfig {
 }
 
 // One data: line's payloads (anthropic/llm-openai-compatible shape).
+/**
+ * M32 gemini translation table with generation rules — ONLY these two:
+ * - gemini-3 (and unknown generations default to the current thinkingLevel
+ *   wire) → `thinkingConfig:{thinkingLevel}`: off→minimal, low/medium/high
+ *   verbatim, xhigh/max verbatim (Gemini 3 has no such levels — the provider
+ *   rejects them → 400 propagates, fail-loud).
+ * - gemini-2.5 → `thinkingConfig:{thinkingBudget}`: off 0 / low 4096 /
+ *   medium 8192 / high 16384 (the documented mapping; unmapped levels land
+ *   verbatim in the numeric slot → provider 400).
+ * Unset effort → undefined (don't send — provider default).
+ */
+export function translateReasoning(model: string, effort: ReasoningEffort | undefined):
+  | { thinkingConfig: { thinkingLevel: string } }
+  | { thinkingConfig: { thinkingBudget: number | string } }
+  | undefined {
+  if (effort === undefined) return undefined
+  if (model.includes("gemini-2.5")) {
+    const thinkingBudget: number | string =
+      effort === "off" ? 0 : effort === "low" ? 4096 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort
+    return { thinkingConfig: { thinkingBudget } }
+  }
+  return { thinkingConfig: { thinkingLevel: effort === "off" ? "minimal" : effort } }
+}
+
 export function parseSSE(text: string): Record<string, unknown>[] {
   return text
     .split("\n\n")
@@ -93,6 +117,8 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
           ? { tools: [{ functionDeclarations: request.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.inputSchema })) }] }
           : {}),
         ...(config.options ?? {}),
+        // M32: request-level effort wins over config.options (explicit per-request intent).
+        ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
       }
       const response = await fetch(`${baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:streamGenerateContent?alt=sse`, {
         method: "POST",

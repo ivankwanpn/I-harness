@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createOpenAICompatibleClient } from "../src/index.ts"
+import { createOpenAICompatibleClient, translateReasoning } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
 describe("llm-openai-compatible protocol", () => {
@@ -161,5 +161,47 @@ describe("M14 openai-compatible wire", () => {
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
     expect(body.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
     expect(body.messages[1]).toEqual({ role: "user", content: "plain" })
+  })
+})
+
+describe("M32 reasoning effort (openai-family Chat Completions)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("maps off→none and passes the rest through verbatim (top-level reasoning_effort)", () => {
+    expect(translateReasoning("gpt-5", "off")).toEqual({ reasoning_effort: "none" })
+    expect(translateReasoning("gpt-5", "low")).toEqual({ reasoning_effort: "low" })
+    expect(translateReasoning("gpt-5", "medium")).toEqual({ reasoning_effort: "medium" })
+    expect(translateReasoning("gpt-5", "high")).toEqual({ reasoning_effort: "high" })
+    expect(translateReasoning("gpt-5", "xhigh")).toEqual({ reasoning_effort: "xhigh" })
+    expect(translateReasoning("gpt-5", "max")).toEqual({ reasoning_effort: "max" })
+  })
+
+  it("sends nothing when effort is unset", () => {
+    expect(translateReasoning("gpt-5", undefined)).toBeUndefined()
+  })
+
+  it("uses the same table for DeepSeek (zero special-casing; its server maps medium→high)", () => {
+    expect(translateReasoning("deepseek-v4-flash", "medium")).toEqual({ reasoning_effort: "medium" })
+    expect(translateReasoning("deepseek-v4-flash", "off")).toEqual({ reasoning_effort: "none" })
+  })
+
+  it("embeds reasoning_effort in the Chat body and omits it when unset", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "gpt-5" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "", reasoningEffort: "low" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const [, init] = fetchMock.mock.calls[0]!
+    expect((JSON.parse(init.body as string) as Record<string, unknown>).reasoning_effort).toBe("low")
+
+    const client2 = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "gpt-5" })
+    const it2 = client2.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it2.next()
+    await it2.return?.()
+    const [, init2] = fetchMock.mock.calls[1]!
+    expect((JSON.parse(init2.body as string) as Record<string, unknown>).reasoning_effort).toBeUndefined()
   })
 })
