@@ -469,6 +469,12 @@ importers:
         specifier: workspace:*
         version: link:../llm-seam
 
+  packages/llm-gemini:
+    dependencies:
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+
   packages/llm-mock:
     dependencies:
       '@i-harness/llm-seam':
