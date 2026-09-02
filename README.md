@@ -3,7 +3,7 @@
 I-harness agent runtime — a TypeScript/ESM monorepo (pnpm workspace) that runs
 an agent end-to-end on Windows: real tools, persisted sessions, subagents and
 teams, sandboxed execution, MCP/LSP integration, skills, workflows, and a
-headless CLI. **Backend-complete (M1–M25) achieved, then extended by the M26–M29 wheel
+headless CLI. **Backend-complete (M1–M25) achieved, then extended by the M26–M34 wheel
 (runtime interaction/tiers, subagent messaging, SDK, ACP, JSONL-only persistence
 + a reconcile-on-search index). Frontend (web/TUI/desktop) is the next phase.**
 
