@@ -31,7 +31,7 @@ import {
 import {
   createProviderRegistry,
   buildWireClient,
-  resolveModelContext,
+  resolveEffectiveModelContext,
   type ProviderRegistry,
   type ProviderProfile,
 } from "@i-harness/provider"
@@ -275,17 +275,29 @@ function appendCommandEvents(executor: SessionService, sessionId: string, name: 
   }).catch(() => {})
 }
 
-/** M27-R-A8: the context window of the DEFAULT resolution chain (M15 provider
- * records — profile.contextWindow / modelContexts override). Unknown (mock /
- * no registry entry) → undefined → get_context_remaining fails closed (not
- * registered). Per-session meta.modelSelection resolutions are covered by the
- * same registry record family; the assembly registers per session. */
-export function defaultContextWindow(opts: WebServerOptions): number | undefined {
-  const { spec } = resolveModelSpec(opts)
+/** M27-R-A8 / M31 T3: the context window of the unified resolution chain
+ * (user settings model row > profile.modelContexts[modelId] >
+ * profile.contextWindow > undefined). Resolved against the SESSION tier
+ * (meta.modelSelection) when present — the web path registers per session.
+ * Unknown (mock / no registry entry) → undefined → get_context_remaining
+ * fails closed (not registered). */
+export function sessionContextWindow(opts: WebServerOptions, meta?: SessionMeta): number | undefined {
+  const { spec } = resolveModelSpec(opts, meta)
   if (spec === "") return undefined
   const [providerName, modelId] = spec.split(":")
   const profile = opts.providerRegistry?.get(providerName)
-  return profile === undefined ? undefined : resolveModelContext(profile, modelId).contextWindow
+  if (profile === undefined) return undefined
+  const userModel = opts.settings
+    ?.get().llm.providers[providerName]?.models
+    ?.find((m) => m.id === modelId)
+  return resolveEffectiveModelContext({ profile, modelId, userModel })?.contextWindow
+}
+
+/** M27-R-A8: the default chain's window (no per-session meta) — the legacy
+ * single-value projection. The web path now resolves per session (see
+ * sessionContextWindow / the service's contextWindowFor). */
+export function defaultContextWindow(opts: WebServerOptions): number | undefined {
+  return sessionContextWindow(opts)
 }
 
 export async function createWebServer(opts: WebServerOptions): Promise<WebServer> {
@@ -321,8 +333,10 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     // surface folds the durable doc; the mux streams carry the events).
     jobStatusEvents: true,
     sessionQuery,
-    // M27-R-A8: get_context_remaining window knowledge (M15 records).
-    contextWindow: defaultContextWindow(opts),
+    // M31 T3: per-session window knowledge — resolved at each assembly build
+    // from the session's modelSelection through the unified chain (M27-R-A8
+    // value was the static default chain; per-session selection now wins).
+    contextWindowFor: (_sessionId, meta) => sessionContextWindow(opts, meta),
     loadMeta: async (id) => (await coordinator.profile(id)).meta,
     modelBuilder: async (_sessionId, meta) => buildModelFor(opts, meta),
   })
