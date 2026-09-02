@@ -307,6 +307,54 @@ describe("protocol-aware probe (task 2)", () => {
     })
   })
 
+  it("gemini → x-goog-api-key header (never Authorization)", async () => {
+    const geminiFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: "gemini-2.5-pro" }] }), { status: 200 }),
+    )
+    vi.stubGlobal("fetch", geminiFetch)
+    const reg = createProviderRegistry()
+    reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
+    const models = await reg.probeModels("openai-compatible", {
+      baseURL: "https://g.example",
+      apiKey: "sk-g",
+      protocol: "gemini",
+    })
+    expect(models).toEqual([{ id: "gemini-2.5-pro" }])
+    expect(geminiFetch).toHaveBeenCalledWith("https://g.example/v1/models", {
+      headers: { "x-goog-api-key": "sk-g" },
+      signal: expect.any(AbortSignal),
+    })
+  })
+
+  it("gemini with an absent key omits the auth header entirely", async () => {
+    const geminiFetch = vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 }))
+    vi.stubGlobal("fetch", geminiFetch)
+    const reg = createProviderRegistry()
+    reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
+    await reg.probeModels("openai-compatible", { baseURL: "https://g.example", protocol: "gemini" })
+    expect(geminiFetch).toHaveBeenCalledWith("https://g.example/v1/models", {
+      headers: {},
+      signal: expect.any(AbortSignal),
+    })
+  })
+
+  it("bedrock falls back to the static catalog when registered (v0 backend has no live probe)", async () => {
+    const reg = createProviderRegistry()
+    reg.register({
+      name: "bedrock",
+      displayName: "Amazon Bedrock",
+      protocol: "bedrock",
+      models: ["anthropic.claude-3-5-sonnet-20241022"],
+    })
+    expect(await reg.probeModels("bedrock", {})).toEqual([{ id: "anthropic.claude-3-5-sonnet-20241022" }])
+  })
+
+  it("bedrock without a static catalog → ProbeUnavailableError", async () => {
+    const reg = createProviderRegistry()
+    reg.register({ name: "bedrock", displayName: "Amazon Bedrock", protocol: "bedrock" })
+    await expect(reg.probeModels("bedrock", {})).rejects.toBeInstanceOf(ProbeUnavailableError)
+  })
+
   it("terminal protocol fallback is openai-completions (Bearer) when req.protocol is absent", async () => {
     const probeFetch = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "m" }] }), { status: 200 }))
     vi.stubGlobal("fetch", probeFetch)

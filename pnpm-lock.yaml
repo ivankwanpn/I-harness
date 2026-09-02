@@ -579,6 +579,12 @@ importers:
       '@i-harness/llm-anthropic':
         specifier: workspace:*
         version: link:../llm-anthropic
+      '@i-harness/llm-bedrock':
+        specifier: workspace:*
+        version: link:../llm-bedrock
+      '@i-harness/llm-gemini':
+        specifier: workspace:*
+        version: link:../llm-gemini
       '@i-harness/llm-openai':
         specifier: workspace:*
         version: link:../llm-openai
