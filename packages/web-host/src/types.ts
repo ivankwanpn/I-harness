@@ -66,6 +66,25 @@ export type {
   UserProviderView,
 } from "./models.ts"
 
+/** Payload of POST /api/llm/probe-apply (spec §2.2): the client confirms and
+ * the host probes THEN adopts ALL discovered rows (upsert by id — overwrite +
+ * add, never delete) into `llm.providers.<route>.models`. The draft key is used
+ * in memory only (probe chain) and is never persisted or echoed. */
+export interface ProbeApplyResult {
+  /** Number of discovered model rows adopted (the probe's full list — an
+   * idempotent re-apply of identical rows still reports them as adopted). */
+  adopted: number
+  /** The discovered rows — the probe's own normalized ModelDescriptors. */
+  models: ModelDescriptor[]
+  /** sha256(route + baseURL + apiKey): the fetch-key identity marker. A changed
+   * key/baseURL yields a different fingerprint, so a client can discard stale
+   * results (v0: no server-side seq — the client owns invalidation). */
+  fingerprint: string
+  /** Per-model adoption failures. ALWAYS ABSENT in v0: probeModels either
+   * returns fully-normalized rows or throws before any write (never half-write). */
+  failures?: unknown[]
+}
+
 export type Endpoint =
   | "session"
   | "chunk"

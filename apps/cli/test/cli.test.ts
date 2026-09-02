@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { runHeadless } from "../src/run.ts"
-import { main, parseModel, GEMINI_MODEL_CONTEXTS, BEDROCK_MODEL_CONTEXTS } from "../src/index.ts"
+import { main, parseModel } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createApprovalPolicy } from "@i-harness/guard-approval"
@@ -403,11 +403,10 @@ describe("CLI main + entry guard", () => {
     expect(typeof client.stream).toBe("function")
   })
 
-  it("M30 modelContexts: the built-in gemini/bedrock catalogs carry context windows", () => {
-    expect(GEMINI_MODEL_CONTEXTS["gemini-2.5-pro"]?.contextWindow).toBe(1_048_576)
-    expect(GEMINI_MODEL_CONTEXTS["gemini-1.5-pro"]?.contextWindow).toBe(2_097_152)
-    expect(BEDROCK_MODEL_CONTEXTS["anthropic.claude-3-5-sonnet-20241022"]?.contextWindow).toBe(200_000)
-  })
+  // M31: the M30 hardcoded catalogs (GEMINI_MODEL_CONTEXTS / BEDROCK_MODEL_CONTEXTS)
+  // are REMOVED — discovery + settings adopt own the model list. Their old
+  // assertion block is gone with them; the gemini/bedrock profile tests above
+  // (defaultModel, endpoint, headers, key-less bedrock) stay unchanged.
 
   it("main() fails loud for gemini without --api-key (M30 gate: no mock fallback)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {})
