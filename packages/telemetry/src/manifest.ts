@@ -31,6 +31,7 @@ export const TELEMETRY_MANIFEST = [
   { code: "mcp/server-status", domain: "mcp", description: "MCP server mount/status transition", refs: ["opencode mcp/*"] },
   { code: "skill/selector-shadow", domain: "system", description: "Skills shadow selector candidate report (deterministic; sinks may ignore)", refs: ["codex shadow selector"] },
   { code: "settings/changed", domain: "system", description: "Layered settings document changed on disk (hot-reload)", refs: ["dsh settings-file watcher"] },
+  { code: "compaction/attempt", domain: "system", description: "A compaction attempt concluded (outcome: success | prune-only | failure | skipped)", refs: ["codex compaction", "grok compaction"] },
   { code: "error", domain: "system", description: "Unclassified host error", refs: [] },
   { code: "warn", domain: "system", description: "Unclassified host warning", refs: [] },
 ] as const satisfies readonly TelemetryEventCodeDoc[]

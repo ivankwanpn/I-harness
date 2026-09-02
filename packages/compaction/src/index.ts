@@ -2,6 +2,7 @@ import type { Session, SessionEvent } from "@i-harness/core-session"
 import { append, deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
+import type { Telemetry } from "@i-harness/telemetry"
 import { resolveCompactSpec, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
@@ -51,6 +52,7 @@ export function createCompactionEngine(deps: {
   profile?: ProviderProfile // M15: optional context catalog
   modelId?: string          // M15: the resolved model id for catalog lookup
   provider?: string         // M34 ⑦a: the policy-key provider namespace ("provider/model")
+  telemetry?: Telemetry     // M34 ⑦b: optional host stream (M25 convention — absent = zero events)
 }): CompactionEngine {
   // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
   // select the exact "provider/model" entry of config.modelPolicies). No
@@ -69,14 +71,35 @@ export function createCompactionEngine(deps: {
     session: Session,
     allowPruneOnly: boolean,
     instructions?: string,
+    reason?: "auto" | "manual",
   ): Promise<CompactionResult> {
+    // M34 ⑦b: analytics — one `compaction/attempt` per attempt, emitted at
+    // each outcome. tokensBefore is the meter at entry; tokensAfter is the
+    // meter once the pass's markers are on the log. The host-optional stream
+    // is never REQUIRED by stability (M25 convention: telemetry is additive).
+    // Malformed persisted shapes must not crash the attempt (Ruling 7
+    // convention): the meter is NOT defensive, so measurement degrades to
+    // undefined token fields, never a TypeError out of compact().
+    const startedAt = Date.now()
+    const tokensBefore = safeActiveTokens(session)
+    const emit = (outcome: "success" | "prune-only" | "failure" | "skipped", extra: Record<string, unknown> = {}) => {
+      deps.telemetry?.emit({
+        type: "compaction/attempt",
+        ts: Date.now(),
+        data: { reason, outcome, tokensBefore, durationMs: Date.now() - startedAt, ...extra },
+      })
+    }
     const shadowedSeqs = selectShadowableRange(session, config.retainTokens)
-    if (shadowedSeqs.length === 0) return { compacted: false, shadowedSeqs: [] }
+    if (shadowedSeqs.length === 0) {
+      emit("skipped", { attempts: 0 })
+      return { compacted: false, shadowedSeqs: [] }
+    }
     const pruneRecords = planPrune(session, config.prune)
     if (allowPruneOnly && pruneRecords.length > 0) {
       const after = surfaceTokensAfterPrune(session, pruneRecords)
       if (after < contextWindow * config.thresholdRatio) {
         append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
+        emit("prune-only", { tokensAfter: safeActiveTokens(session), shadowed: 0, pruned: pruneRecords.length, attempts: 0 })
         return { compacted: true, shadowedSeqs: [], pruned: true }
       }
     }
@@ -88,19 +111,23 @@ export function createCompactionEngine(deps: {
     // anchored semantics are prompt-only; the `compaction/summary` event shape
     // is unchanged (each round still appends its own summary event).
     const previousSummary = lastSummaryText(session)
+    let attempts = 0
     let summary: string
     try {
+      attempts += 1
       summary = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions)
     } catch (err) {
       // Fail-soft: never block the agent on a summarizer failure. The warning
       // makes the otherwise-silent retry observable under sustained pressure.
       console.warn("[i-harness] compaction summarizer failed (fail-soft, retrying next step):", err instanceof Error ? err.message : String(err))
+      emit("failure", { attempts })
       return { compacted: false, shadowedSeqs: [] }
     }
     if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
     append(session, { type: "compaction/summary", text: summary, shadowedSeqs })
     append(session, { type: "compaction/end" })
+    emit("success", { tokensAfter: safeActiveTokens(session), shadowed: shadowedSeqs.length, pruned: pruneRecords.length, attempts })
     return { compacted: true, shadowedSeqs, summary, ...(pruneRecords.length > 0 ? { pruned: true } : {}) }
   }
 
@@ -140,7 +167,7 @@ export function createCompactionEngine(deps: {
         }
         failures = 0 // new content restarts the count
       }
-      const result = await compactOnce(session, true)
+      const result = await compactOnce(session, true, undefined, "auto")
       if (result.compacted) {
         autoFailures.set(session, { count: 0, openSeq: -1 })
       } else {
@@ -151,7 +178,7 @@ export function createCompactionEngine(deps: {
       }
       return result
     },
-    compact: (session, instructions) => compactOnce(session, false, instructions),
+    compact: (session, instructions) => compactOnce(session, false, instructions, "manual"),
     resetWindow: resetWindowOnce,
   }
 }
@@ -186,6 +213,20 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   // Append-only record of the removal — no `session.events` mutation.
   append(session, { type: "compaction/reset", removedSeqs })
   return { compacted: true, shadowedSeqs: removedSeqs, reset: true }
+}
+
+// M34 ⑦b: defensive meter read — the token-meter projects through the same
+// deriveMessages that has been made defensive for malformed persisted logs,
+// but its OWN defensive envelope is not warranted for a host-optional
+// analytics feed: any measurement failure degrades to `undefined` (the
+// attempt continues; the telemetry token fields stay unset) — never a
+// TypeError escaping compaction (Ruling 7 convention).
+function safeActiveTokens(session: Session): number | undefined {
+  try {
+    return activeTokens(session)
+  } catch {
+    return undefined
+  }
 }
 
 // M33 §2.2: per-session consecutive auto-compaction failure counter. `count`
