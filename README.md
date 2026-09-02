@@ -201,4 +201,4 @@ node --import tsx apps/cli/src/index.ts run "把 src/data.txt 第一行改成 he
 
 ## Known infra quirks
 
-- **vitest worker flake (rare)**: `pnpm -r test` occasionally reports a single package (web-host) `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL` with no test failure — tinypool worker IPC teardown race; re-running the package alone is green. Seen 2026-09-02 (M29) and during M27/M28 (twice). If it repeats, re-run `pnpm --filter <pkg> test` to confirm.
+- **vitest worker flake (RESOLVED M31)**: the tinypool IPC teardown race (`ERR_IPC_CHANNEL_CLOSED`) that hit web-host (M27-M31) is fixed — `packages/web-host/vitest.config.ts` now uses `pool: "forks"` (child-process workers; two consecutive full-run verifications green). If any other package shows the same symptom, mirror that config.
