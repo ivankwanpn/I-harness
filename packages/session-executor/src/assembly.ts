@@ -8,7 +8,7 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, Inbox, type Session } from "@i-harness/core-session"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
-import { createAgent, type Agent } from "@i-harness/core-agent"
+import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import type { CompactionConfig } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -115,6 +115,12 @@ export interface AssemblyOptions {
    * the host's input tier (run.ts builds the default over its executor lane);
    * absent → notification rows stay pending (fail-closed, no silent drop). */
   parentNotify?: ParentInputAdmission
+  /** M32 T3: per-assembly reasoning effort — forwarded verbatim to the agent,
+   * which copies it onto every LLMRequest (the adapter owns the wire
+   * translation). Absent → requests never carry the field (provider default).
+   * The web path resolves it per session from meta.modelSelection
+   * (see SessionServiceOptions.reasoningEffortFor). */
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface SessionAssembly {
@@ -367,6 +373,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.contextWindow !== undefined ? { budget: { contextWindow: opts.contextWindow } } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
+      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).
       stepInputs: { claimAtStepBoundary: () => inbox.claimAtStepBoundary() },
     })

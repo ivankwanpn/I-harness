@@ -203,6 +203,38 @@ describe("web composition (R-C1)", () => {
     }
   }, 60_000)
 
+  // M32 T3: per-session reasoning effort — meta.modelSelection.reasoningEffort
+  // flows through the service/assembly/agent chain into every LLMRequest; a
+  // session WITHOUT a selection carries no reasoningEffort (缺省不發).
+  it("M32 T3: per-session reasoning effort reaches the model request; absent → undefined", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-m32-effort-"))
+    const seed = createSessionCoordinator(createJsonlBackend(workspace))
+    try {
+      await seed.create({ sessionId: "effort" })
+      await seed.updateMeta("effort", { modelSelection: { provider: "acme", model: "m", reasoningEffort: "high" } })
+      await seed.create({ sessionId: "plain" })
+    } finally {
+      await seed.close()
+    }
+    const captured: (string | undefined)[] = []
+    const model: ModelClient = {
+      async *stream(req) {
+        captured.push((req as { reasoningEffort?: string }).reasoningEffort)
+        yield* createMockClient([{ role: "assistant", text: "done" }]).stream(req)
+      },
+    }
+    const server = await createWebServer(options(workspace, { model }))
+    try {
+      await server.executor.submit("effort", "turn", new AbortController().signal)
+      await server.executor.submit("plain", "turn", new AbortController().signal)
+      expect(captured[0]).toBe("high")
+      expect(captured[1]).toBeUndefined()
+    } finally {
+      await server.close()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
   // M29: the file-backed query is wired into the host seam with the workspace
   // as its store root — search/lineage routes serve out of the box over the
   // jsonl store (reconcile-on-search derives the index on first request).

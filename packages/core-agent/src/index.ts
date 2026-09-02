@@ -64,7 +64,19 @@ export interface AgentDeps {
   // the promoted user/messages to the session (inbox.claimAtStepBoundary).
   // Absent → byte-identical pre-R-A1 behavior.
   stepInputs?: { claimAtStepBoundary(): void }
+  // M32 T3: per-session reasoning effort — copied VERBATIM onto every
+  // LLMRequest of this agent (the adapter owns the wire translation; see
+  // translateReasoning in the llm-* adapters). Absent → the request never
+  // carries the field (缺省不發 — the provider's own default applies).
+  reasoningEffort?: ReasoningEffort
 }
+
+/** M32 G1 TEMPORARY: group-2 (M32 T2) owns the canonical `ReasoningEffort` in
+ * @i-harness/llm-seam (`LLMRequest.reasoningEffort`). This local declaration
+ * carries the IDENTICAL union until T2 lands so G1's wiring (assembly → agent
+ * → request) can be built and tested; group-2 reconciles at merge (import the
+ * type from llm-seam, drop this local declaration). */
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max"
 
 export interface AgentResult {
   finalText: string
@@ -193,6 +205,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         messages,
         tools: deps.tools.schemas(),
         systemPrompt: deps.systemPrompt,
+        // M32 T3: verbatim effort passthrough (absent → the field is never set;
+        // the adapter's translateReasoning owns the wire vocabulary).
+        ...(deps.reasoningEffort !== undefined ? { reasoningEffort: deps.reasoningEffort } : {}),
       }
 
       // M25: provider/call before the model stream opens.

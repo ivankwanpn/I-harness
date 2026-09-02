@@ -16,7 +16,7 @@ import { registerCommand } from "@i-harness/interaction"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
-import { createSessionAssembly } from "@i-harness/session-executor"
+import { createSessionAssembly, type ReasoningEffort } from "@i-harness/session-executor"
 
 export interface HeadlessOptions {
   workspace: string
@@ -49,6 +49,11 @@ export interface HeadlessOptions {
   // 缺省時 run.ts 以本 run 的執行器 lane 自動建置（subagent 完成通知 → parent
   // session 的 inject 輸入 + event-driven wake）。
   parentNotify?: ParentInputAdmission
+  /** M32 T3: reasoning-effort host option — forwarded verbatim to every
+   * request of this run (the adapter owns the wire translation; unsupported
+   * values fail loud at the model end). Absent → the request never carries the
+   * field (the provider's own default applies). */
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface HeadlessResult {
@@ -196,6 +201,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.planMode ? { planMode: true } : {}),
       ...(opts.guardian !== undefined ? { guardian: opts.guardian } : {}),
       ...(opts.outputSpill !== undefined ? { outputSpill: opts.outputSpill } : {}),
+      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
       parentNotify,
     })
   } catch (err) {
