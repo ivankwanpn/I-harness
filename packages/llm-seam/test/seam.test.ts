@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import { assertMessagesFromLog } from "../src/index.ts"
+import type { LLMRequest, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
 
 describe("llm-seam invariant (audit F01-3)", () => {
@@ -71,5 +72,15 @@ describe("M14 projectImagesForTextModel", () => {
     const sneaky = `{"dataBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}`
     const out = projectImagesForTextModel([{ role: "user", content: sneaky }])
     expect(out[0]!.content).toBe(sneaky)
+  })
+})
+
+describe("M32 reasoning effort seam", () => {
+  it("defines the 6-level ReasoningEffort vocabulary", () => {
+    expectTypeOf<ReasoningEffort>().toEqualTypeOf<"off" | "low" | "medium" | "high" | "xhigh" | "max">()
+  })
+
+  it("carries an optional reasoningEffort on LLMRequest (default = don't send)", () => {
+    expectTypeOf<LLMRequest["reasoningEffort"]>().toEqualTypeOf<ReasoningEffort | undefined>()
   })
 })

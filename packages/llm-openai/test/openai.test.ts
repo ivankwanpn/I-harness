@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createOpenAIClient } from "../src/index.ts"
+import { createOpenAIClient, translateReasoning } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -247,5 +247,47 @@ describe("M14 openai responses wire", () => {
       { type: "function_call_output", call_id: "call_1", output: "saw this:" },
       { role: "user", content: [{ type: "input_image", image_url: `data:image/png;base64,${PNG}` }] },
     ])
+  })
+})
+
+describe("M32 reasoning effort (openai-family Responses)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("maps off→none and passes the rest through verbatim", () => {
+    expect(translateReasoning("gpt-5", "off")).toEqual({ reasoning: { effort: "none" } })
+    expect(translateReasoning("gpt-5", "low")).toEqual({ reasoning: { effort: "low" } })
+    expect(translateReasoning("gpt-5", "medium")).toEqual({ reasoning: { effort: "medium" } })
+    expect(translateReasoning("gpt-5", "high")).toEqual({ reasoning: { effort: "high" } })
+    expect(translateReasoning("gpt-5", "xhigh")).toEqual({ reasoning: { effort: "xhigh" } })
+    expect(translateReasoning("gpt-5", "max")).toEqual({ reasoning: { effort: "max" } })
+  })
+
+  it("sends nothing when effort is unset", () => {
+    expect(translateReasoning("gpt-5", undefined)).toBeUndefined()
+  })
+
+  it("uses the same table for DeepSeek (zero special-casing; its server maps medium→high)", () => {
+    expect(translateReasoning("deepseek-v4-pro", "medium")).toEqual({ reasoning: { effort: "medium" } })
+    expect(translateReasoning("deepseek-v4-pro", "off")).toEqual({ reasoning: { effort: "none" } })
+  })
+
+  it("embeds reasoning in the Responses body and omits it when unset", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "gpt-5" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "", reasoningEffort: "high" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const [, init] = fetchMock.mock.calls[0]!
+    expect((JSON.parse(init.body as string) as Record<string, unknown>).reasoning).toEqual({ effort: "high" })
+
+    const client2 = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "gpt-5" })
+    const it2 = client2.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it2.next()
+    await it2.return?.()
+    const [, init2] = fetchMock.mock.calls[1]!
+    expect((JSON.parse(init2.body as string) as Record<string, unknown>).reasoning).toBeUndefined()
   })
 })

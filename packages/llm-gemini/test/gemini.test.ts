@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createGeminiClient } from "../src/index.ts"
+import { createGeminiClient, translateReasoning } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -184,5 +184,57 @@ describe("M14 gemini wire (image modality)", () => {
       { text: "look" },
       { text: "[image omitted: model is text-only; base64:iVBORw0K]" },
     ])
+  })
+})
+
+describe("M32 reasoning effort (gemini)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("maps gemini-3 to thinkingConfig.thinkingLevel (off→minimal, low/medium/high verbatim)", () => {
+    expect(translateReasoning("gemini-3-pro", "off")).toEqual({ thinkingConfig: { thinkingLevel: "minimal" } })
+    expect(translateReasoning("gemini-3-flash", "low")).toEqual({ thinkingConfig: { thinkingLevel: "low" } })
+    expect(translateReasoning("gemini-3-pro", "medium")).toEqual({ thinkingConfig: { thinkingLevel: "medium" } })
+    expect(translateReasoning("gemini-3-pro", "high")).toEqual({ thinkingConfig: { thinkingLevel: "high" } })
+  })
+
+  it("passes unsupported xhigh/max verbatim on gemini-3 (fail-loud: provider 400)", () => {
+    expect(translateReasoning("gemini-3-pro", "xhigh")).toEqual({ thinkingConfig: { thinkingLevel: "xhigh" } })
+    expect(translateReasoning("gemini-3-pro", "max")).toEqual({ thinkingConfig: { thinkingLevel: "max" } })
+  })
+
+  it("maps gemini-2.5 to thinkingConfig.thinkingBudget (off 0 / low 4096 / medium 8192 / high 16384)", () => {
+    expect(translateReasoning("gemini-2.5-pro", "off")).toEqual({ thinkingConfig: { thinkingBudget: 0 } })
+    expect(translateReasoning("gemini-2.5-flash", "low")).toEqual({ thinkingConfig: { thinkingBudget: 4096 } })
+    expect(translateReasoning("gemini-2.5-pro", "medium")).toEqual({ thinkingConfig: { thinkingBudget: 8192 } })
+    expect(translateReasoning("gemini-2.5-pro", "high")).toEqual({ thinkingConfig: { thinkingBudget: 16384 } })
+  })
+
+  it("passes unmapped levels verbatim into the 2.5 budget slot (fail-loud)", () => {
+    expect(translateReasoning("gemini-2.5-pro", "xhigh")).toEqual({ thinkingConfig: { thinkingBudget: "xhigh" } })
+    expect(translateReasoning("gemini-2.5-pro", "max")).toEqual({ thinkingConfig: { thinkingBudget: "max" } })
+  })
+
+  it("sends nothing when effort is unset", () => {
+    expect(translateReasoning("gemini-3-pro", undefined)).toBeUndefined()
+  })
+
+  it("embeds thinkingConfig in the streamGenerateContent body and omits it when unset", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", baseUrl: "https://api.test", model: "gemini-2.5-pro" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "", reasoningEffort: "high" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const [, init] = fetchMock.mock.calls[0]!
+    expect((JSON.parse(init.body as string) as Record<string, unknown>).thinkingConfig).toEqual({ thinkingBudget: 16384 })
+
+    const client2 = createGeminiClient({ apiKey: "k", baseUrl: "https://api.test", model: "gemini-2.5-pro" })
+    const it2 = client2.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it2.next()
+    await it2.return?.()
+    const [, init2] = fetchMock.mock.calls[1]!
+    expect((JSON.parse(init2.body as string) as Record<string, unknown>).thinkingConfig).toBeUndefined()
   })
 })

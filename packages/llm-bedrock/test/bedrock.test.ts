@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Mock } from "vitest"
-import { createBedrockClient, resolveBedrockRegion, type BedrockRuntimeFace } from "../src/index.ts"
+import { createBedrockClient, resolveBedrockRegion, translateReasoning, type BedrockRuntimeFace } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -215,5 +215,78 @@ describe("bedrock region resolution", () => {
     expect(resolveBedrockRegion(undefined, { AWS_REGION: "ap-southeast-2" })).toBe("ap-southeast-2")
     expect(resolveBedrockRegion(undefined, { AWS_DEFAULT_REGION: "us-west-2" })).toBe("us-west-2")
     expect(resolveBedrockRegion(undefined, {})).toBe("us-east-1")
+  })
+})
+
+describe("M32 reasoning effort (bedrock Converse)", () => {
+  it("maps claude 4.6+ to adaptive reasoningConfig + adaptive thinking (effort verbatim)", () => {
+    expect(translateReasoning("anthropic.claude-sonnet-4-6", "high")).toEqual({
+      reasoningConfig: { type: "adaptive", maxReasoningEffort: "high" },
+      thinking: { type: "adaptive" },
+    })
+    expect(translateReasoning("anthropic.claude-opus-4-7", "max")).toEqual({
+      reasoningConfig: { type: "adaptive", maxReasoningEffort: "max" },
+      thinking: { type: "adaptive" },
+    })
+    expect(translateReasoning("anthropic.claude-sonnet-4-6-v1:0", "xhigh")).toEqual({
+      reasoningConfig: { type: "adaptive", maxReasoningEffort: "xhigh" },
+      thinking: { type: "adaptive" },
+    })
+  })
+
+  it("maps claude ≤4.5 to thinkingConfig budgetTokens table (no effort)", () => {
+    expect(translateReasoning("anthropic.claude-3-5-sonnet-20240620", "low")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: 2048 } })
+    expect(translateReasoning("anthropic.claude-sonnet-4-5", "medium")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: 8192 } })
+    expect(translateReasoning("anthropic.claude-3-5-sonnet-20240620", "high")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: 16384 } })
+    expect(translateReasoning("anthropic.claude-sonnet-4-5", "xhigh")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: "xhigh" } })
+  })
+
+  it("maps amazon nova effort verbatim via adaptive reasoningConfig", () => {
+    expect(translateReasoning("amazon.nova-premier-v1:0", "low")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "low" } })
+    expect(translateReasoning("amazon.nova-pro-v1:0", "medium")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "medium" } })
+    expect(translateReasoning("amazon.nova-pro-v1:0", "high")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "high" } })
+    expect(translateReasoning("amazon.nova-pro-v1:0", "max")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "max" } })
+  })
+
+  it("sends nothing on off (all families) and when unset", () => {
+    expect(translateReasoning("anthropic.claude-sonnet-4-6", "off")).toBeUndefined()
+    expect(translateReasoning("anthropic.claude-3-5-sonnet-20240620", "off")).toBeUndefined()
+    expect(translateReasoning("amazon.nova-pro-v1:0", "off")).toBeUndefined()
+    expect(translateReasoning("anthropic.claude-sonnet-4-6", undefined)).toBeUndefined()
+  })
+
+  it("merges translated fields into additionalModelRequestFields; unset → absent", async () => {
+    const { fake } = fakeRuntime([])
+    const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-6" }, fake)
+    const it = client.stream({ messages: [], tools: [], systemPrompt: "", reasoningEffort: "high" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const { input } = await lastCommandSent(fake)
+    expect(input.additionalModelRequestFields).toEqual({
+      reasoningConfig: { type: "adaptive", maxReasoningEffort: "high" },
+      thinking: { type: "adaptive" },
+    })
+
+    const { fake: fake2 } = fakeRuntime([])
+    const client2 = createBedrockClient({ model: "anthropic.claude-sonnet-4-6" }, fake2)
+    const it2 = client2.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it2.next()
+    await it2.return?.()
+    const { input: input2 } = await lastCommandSent(fake2)
+    expect(input2.additionalModelRequestFields).toBeUndefined()
+  })
+
+  it("merges without clobbering existing config.options", async () => {
+    const { fake } = fakeRuntime([])
+    const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-6", options: { max_tokens: 100 } }, fake)
+    const it = client.stream({ messages: [], tools: [], systemPrompt: "", reasoningEffort: "low" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const { input } = await lastCommandSent(fake)
+    expect(input.additionalModelRequestFields).toEqual({
+      max_tokens: 100,
+      reasoningConfig: { type: "adaptive", maxReasoningEffort: "low" },
+      thinking: { type: "adaptive" },
+    })
   })
 })
