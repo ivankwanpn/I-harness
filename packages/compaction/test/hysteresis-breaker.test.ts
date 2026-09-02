@@ -103,7 +103,11 @@ describe("hysteresis (M33 §2.1)", () => {
 describe("breaker (M33 §2.2)", () => {
   const config: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100, minTurnsBeforeRecompact: 0 }
 
-  it("3 consecutive auto failures pause auto-compaction until new content arrives", async () => {
+  // M34 ⑦d (until-success): WHERE M33 reset the failure counter on new
+  // content, M34 keeps it — new content only opens ONE attempt per burst (the
+  // pause releases, the attempt runs); the circuit stays open (and re-arms
+  // immediately without new content) until a compaction SUCCEEDS.
+  it("3 consecutive auto failures pause auto-compaction until a success (M34 until-success)", async () => {
     const calls = { n: 0 }
     const s = pressureSession()
     const engine = createCompactionEngine({ model: failingModel(calls), config })
@@ -113,8 +117,12 @@ describe("breaker (M33 §2.2)", () => {
     const fourth = await engine.maybeCompact(s)
     expect(fourth).toEqual({ compacted: false, shadowedSeqs: [] })
     expect(calls.n).toBe(3) // the 4th attempt was paused — no model call
-    append(s, { type: "user/message", text: "fresh work" }) // new non-marker content → restarts
+    append(s, { type: "user/message", text: "fresh work" }) // new non-marker content → ONE attempt
     expect((await engine.maybeCompact(s)).compacted).toBe(false) // attempts again (and fails again)
+    expect(calls.n).toBe(4)
+    // M34: content did NOT reset the counter — the very next auto call, with
+    // no further content, is paused again (M33 would have attempted, c.n = 5).
+    expect(await engine.maybeCompact(s)).toEqual({ compacted: false, shadowedSeqs: [] })
     expect(calls.n).toBe(4)
   })
 
