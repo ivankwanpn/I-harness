@@ -195,11 +195,24 @@ export interface ToolSchema {
   inputSchema: unknown
 }
 
+/**
+ * M32 six-level reasoning-effort vocabulary (uniform, adapter-agnostic):
+ * "off" | "low" | "medium" | "high" | "xhigh" | "max".
+ * The DEFAULT is "don't send" (`undefined` → each adapter emits NO effort
+ * field; the provider-side default applies — the "don't default any
+ * provider" stance). "fail-loud" rule: a value the model does not support is
+ * passed through verbatim so the provider's 400 surfaces — adapters never
+ * guess, clamp or special-case.
+ */
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max"
+
 export interface LLMRequest {
   messages: LLMMessage[]
   tools: ToolSchema[]
   systemPrompt: string
   model?: string
+  /** M32: per-request reasoning effort; undefined → do not send (provider default). */
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface ModelClient {

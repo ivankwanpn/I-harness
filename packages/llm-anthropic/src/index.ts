@@ -1,4 +1,4 @@
-import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
+import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface AnthropicConfig {
   apiKey: string
@@ -22,6 +22,41 @@ function toAnthropicContent(content: string | LLMContentPart[]): unknown {
       ? { type: "text", text: part.text }
       : { type: "image", source: { type: "base64", media_type: part.image.mediaType, data: part.image.dataBase64 } },
   )
+}
+
+/**
+ * M32 generation rule (cc-custom style, adapter-internal): model names
+ * carrying a 4.x minor ≥ 6 (e.g. claude-sonnet-4-6, claude-opus-4-7/-4-8,
+ * also the -4.6 dotted style, and anything later) use the ADAPTIVE thinking
+ * protocol; every older generation uses the legacy budget protocol.
+ */
+const ADAPTIVE_THINKING_RE = /\-4[-.](?:6|7|8|9|[1-9][0-9]+)/
+
+/** M32 legacy budget table (documented mapping): low/medium/high only. */
+function legacyBudgetTokens(effort: "low" | "medium" | "high" | "xhigh" | "max"): number | string {
+  return effort === "low" ? 2048 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort
+}
+
+/**
+ * M32 anthropic translation table with generation rules:
+ * - 4.6+ → `thinking:{type:"adaptive"}` + `output_config:{effort}` (effort
+ *   verbatim — xhigh/max included, the provider rejects what it cannot do).
+ * - legacy → `thinking:{type:"enabled", budget_tokens:<a number from the
+ *   documented table>}`; effort is NEVER sent to legacy (its translation is
+ *   budget tokens; xhigh/max land verbatim in budget_tokens → provider 400,
+ *   fail-loud: no clamping/guessing).
+ * - "off" → return undefined: NO thinking block in either generation.
+ * - unset → undefined (don't send — provider default).
+ */
+export function translateReasoning(model: string, effort: ReasoningEffort | undefined):
+  | { thinking: { type: "adaptive" }; output_config: { effort: string } }
+  | { thinking: { type: "enabled"; budget_tokens: number | string } }
+  | undefined {
+  if (effort === undefined || effort === "off") return undefined
+  if (ADAPTIVE_THINKING_RE.test(model)) {
+    return { thinking: { type: "adaptive" }, output_config: { effort } }
+  }
+  return { thinking: { type: "enabled", budget_tokens: legacyBudgetTokens(effort) } }
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -59,6 +94,8 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         tools: request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
         stream: true,
         ...(config.options ?? {}),
+        // M32: request-level effort wins over config.options (explicit per-request intent).
+        ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
       }
       const response = await fetch(`${baseUrl}/v1/messages`, {
         method: "POST",
