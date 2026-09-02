@@ -53,6 +53,21 @@
 
 > 正名註記：M26 已將工具面統一為 `terminal_*` / `process_*` 字首；`webfetch` / `websearch` 沿用 M21 名稱；`ask_user_input` 為 M26-B14；`get_context_remaining` 為 M27-R-A8（對應 codex 同名能力）。
 
+## LLM provider 協議（M30）
+
+`--model provider:model` / settings `llm.providers.<route>` 的五個 wire 協議（registry marker 與 wire 詞彙在 gemini/bedrock 兩邊同字串；openai 系既有「openai-compatible」marker vs「openai-completions」wire 不對稱保留）：
+
+| protocol | adapter 包 | 認證 | 端點/形狀 |
+|---|---|---|---|
+| `openai-completions` | `llm-openai-compatible` | Bearer | `{base}/v1/chat/completions` |
+| `openai-responses` | `llm-openai` | Bearer | `{base}/v1/responses` |
+| `anthropic-messages` | `llm-anthropic` | `x-api-key` | `{base}/v1/messages` |
+| `gemini` | `llm-gemini` | `x-goog-api-key` | `{base}/v1beta/models/{model}:streamGenerateContent?alt=sse`（原生 Google GenAI REST；baseUrl 缺省 `https://generativelanguage.googleapis.com`） |
+| `bedrock` | `llm-bedrock` | **無 apiKey**（AWS 憑證鏈：`AWS_ACCESS_KEY_ID/SECRET`／`~/.aws/credentials`+profile／IMDS；region = `AWS_REGION`→缺省 `us-east-1`） | AWS SDK `ConverseStreamCommand`（SigV4 由 SDK 處理，不走 HTTP 可替代端點） |
+
+- bedrock 路由無 key 亦可 `--model bedrock:...`（CLI 鑰匙門檻例外）；其餘路由仍 `--model` 必須帶 `--api-key`（fail-loud，不回退 mock）。
+- gemini/bedrock 的 model probe（模型清單）：gemini v0 走通用 discovery（如配置了 baseURL + key）；bedrock 無 live probe，以 profile 的靜態 catalog（CLI 內建 bedrock profile 預填）兜底，無 catalog → `ProbeUnavailableError`。
+
 ## 事件/遙測（telemetry）
 
 宿主訂閱 `session/event` 等事件流（M25 sink 接口；web-host 的 live mux 亦承接）。事件碼 13+ 位，詳見 `packages/web-host` 與 `packages/telemetry`。命令/工具面事件（`command/run`、`command/done`）追加到 session live log，模型不可見。

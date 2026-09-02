@@ -74,7 +74,7 @@ frontend" gate:
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
 
-## Package structure (61 packages + apps/cli)
+## Package structure (65 packages + apps/cli)
 
 ```
 packages/
@@ -84,7 +84,7 @@ packages/
 ├── core-agent/           event-driven agent loop (+ budget/overflow)
 ├── llm-seam/             unified LLM interface (stream events, retry)
 ├── llm-mock/             script-driven mock LLM
-├── llm-{openai,openai-compatible,anthropic}/  provider protocols
+├── llm-{openai,openai-compatible,anthropic,gemini,bedrock}/  provider protocols
 ├── provider/             provider registry + retry policy
 │   ...
 ├── exec/                 ExecService: run / background jobs (bash/pwsh)
@@ -147,6 +147,12 @@ node --import tsx apps/cli/src/index.ts run "hello"
 
 # real model
 node --import tsx apps/cli/src/index.ts run "solve it" --model openai:gpt-4o --api-key $KEY --yes
+
+# M30 first-class providers: gemini (x-goog-api-key) and bedrock (key-less —
+# AWS credential chain: AWS_ACCESS_KEY_ID/SECRET or ~/.aws/credentials + profile;
+# region = AWS_REGION, default us-east-1)
+node --import tsx apps/cli/src/index.ts run "solve it" --model gemini:gemini-2.5-pro --api-key $GEMINI_API_KEY --yes
+node --import tsx apps/cli/src/index.ts run "hello" --model bedrock:anthropic.claude-3-5-sonnet-20241022 --yes
 
 # resume a session
 node --import tsx apps/cli/src/index.ts run "continue" --resume sess-xxx --yes

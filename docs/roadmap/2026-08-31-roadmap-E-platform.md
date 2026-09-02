@@ -23,7 +23,7 @@
 | R-E8 | feedback | 文檔側車 + CAS 版本 | **分支（as-is）** | S | coordinator | 快速回收 |
 | R-E9 | schedule | 持久 schedule/change + 本地驅動器（min 300s、重啟後重驅動） | dsh | S | core-session | 可插空 |
 | R-E10 | config 深化 | 多層載入/熱更新/註釋保持 | dsh（settings-file） | M | R-E1 | 遠期（先用 E1） |
-| R-E11 | provider 廣度 | 更多協議（gemini/bedrock/…）+ variants + live discovery | opencode（35+）/ codex（bedrock） | M | provider | 遠期（M20 約束「不新增」→ 決策項） |
+| R-E11 | provider 廣度 | 更多協議（gemini/bedrock/…）+ variants + live discovery | opencode（35+）/ codex（bedrock） | M | provider | ~~遠期（M20 約束「不新增」→ 決策項）~~ **gemini/bedrock 已於 M30 落地（用戶拍板覆蓋 M20 不新增）；剩 variants/live discovery 遠期** |
 | R-E12 | webhook | 驗簽 + 觸發 workspace session | dsh | M | R-E3、R-C1 | 遠期 |
 | R-E13 | 身份 | 匿名 UUID 檔案 | dsh | S | — | 遠期（無產品需求） |
 
@@ -52,8 +52,9 @@
 ### R-E9 schedule
 - dsh `schedule/change` 持久事件 + 本地驅動器（agent/status 重驅動、重啟重盤）；IH 化：core-session 事件 + 驅動器掛 agent 循環（與 A1 收件箱互動——「定時 followup」）。
 
-### R-E11 provider 廣度（遠期/決策項）
+### R-E11 provider 廣度（gemini/bedrock 已於 M30 落地）
 - M20 spec §1.2 全域約束：「**不新增 gemini/bedrock/內嵌模型**」——這是當年決策。opencode 35+ / codex bedrock 是改決策的信號但需明確同意；**列為決策項**：維持 3 協議 OR 擴 gemini/bedrock。
+- **M30（2026-09-02）**：用戶拍板覆蓋 M20「不新增」——gemini（原生 Google GenAI REST）與 bedrock（AWS Converse，新公開依賴 `@aws-sdk/client-bedrock-runtime`）已為 first-class provider（協議/regex 分派/settings/CLI 內建 profile/modelContexts 齊備）。剩餘遠期：variants 與 live discovery（bedrock probe 暫以靜態 catalog 兜底）。
 
 ## 4. 排序建議
 
@@ -81,6 +82,6 @@
 | R-E8 | **M26 回收** | feedback：分支 as-is |
 | R-E9 | **M26（隨 E6）** | schedule：與 goal 同族，隨手補 |
 | R-E10 | 遠期 | config 深化（多層/熱更新）——先以 E1 為主 |
-| R-E11 | 後補 | provider 廣度——記錄為決策項（不改 M20「不新增」約束，需時再議） |
+| R-E11 | 已落地（M30） | provider 廣度（gemini/bedrock）——用戶拍板覆蓋 M20「不新增」；餘項（variants/live discovery）遠期 |
 | R-E12 | 遠期 | webhook（產品面） |
 | R-E13 | 遠期 | 匿名身份（無產品需求） |
