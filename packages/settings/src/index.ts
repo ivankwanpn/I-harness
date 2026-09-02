@@ -277,9 +277,11 @@ function normalizeLlm(raw: unknown, base: SettingsLlm): SettingsLlm {
     defaultModel: {
       provider: isNonEmptyString(dm.provider) ? dm.provider : base.defaultModel.provider,
       model: isNonEmptyString(dm.model) ? dm.model : base.defaultModel.model,
-      // string passthrough (forward-compatible with future effort levels);
-      // mutateSection validates the closed enum in the section API
-      ...(typeof dm.reasoningEffort === "string" ? { reasoningEffort: dm.reasoningEffort } : {}),
+      // string passthrough (mutateSection validates the closed enum in the
+      // section API). M32: legacy "none" maps to the unified "off".
+      ...(typeof dm.reasoningEffort === "string"
+        ? { reasoningEffort: dm.reasoningEffort === "none" ? "off" : dm.reasoningEffort }
+        : {}),
     },
   }
 }
