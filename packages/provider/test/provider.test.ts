@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient, resolveModelContext, type ProviderProfile } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, buildWireClient, resolveModelContext, type ProviderProfile } from "../src/index.ts"
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -22,8 +22,29 @@ describe("provider registry", () => {
       buildModelClient({ name: "o", displayName: "O", protocol: "openai-responses", apiKey: "k" }, "gpt-4o"),
       buildModelClient({ name: "c", displayName: "C", protocol: "openai-compatible", apiKey: "k" }, "deepseek-chat"),
       buildModelClient({ name: "a", displayName: "A", protocol: "anthropic-messages", apiKey: "k" }, "claude-x"),
+      buildModelClient({ name: "g", displayName: "G", protocol: "gemini", apiKey: "k" }, "gemini-2.5-pro"),
+      buildModelClient({ name: "b", displayName: "B", protocol: "bedrock" }, "anthropic.claude-x"),
     ]
     for (const c of clients) expect(typeof c.stream).toBe("function")
+  })
+
+  it("gemini dispatch builds the GenAI endpoint client", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = buildModelClient({ name: "g", displayName: "G", protocol: "gemini", apiKey: "sk-g" }, "gemini-2.5-pro")
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as never)[Symbol.asyncIterator]()
+    await it.next()
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(url).toContain("/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse")
+    expect((init.headers as Record<string, string> | undefined)?.["x-goog-api-key"]).toBe("sk-g")
+    await it.return?.()
+  })
+
+  it("buildWireClient dispatches the new wire protocols and returns undefined otherwise", () => {
+    expect(buildWireClient("gemini", { apiKey: "k", model: "m" })).toBeDefined()
+    expect(buildWireClient("bedrock", { apiKey: "", model: "m" })).toBeDefined()
+    expect(buildWireClient("openai-completions", { apiKey: "k", model: "m" })).toBeDefined()
+    expect(buildWireClient("no-such-protocol", { apiKey: "k", model: "m" })).toBeUndefined()
   })
 
   it("buildModelClient throws on unknown protocol", () => {

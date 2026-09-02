@@ -2,8 +2,10 @@ import { createRetryingClient, resolveRetryPolicy, type ModelClient, type RetryP
 import { createOpenAIClient } from "@i-harness/llm-openai"
 import { createOpenAICompatibleClient } from "@i-harness/llm-openai-compatible"
 import { createAnthropicClient } from "@i-harness/llm-anthropic"
+import { createGeminiClient } from "@i-harness/llm-gemini"
+import { createBedrockClient } from "@i-harness/llm-bedrock"
 
-export type ProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic-messages"
+export type ProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic-messages" | "gemini" | "bedrock"
 
 export interface ProviderModelContext {
   contextWindow?: number
@@ -216,14 +218,18 @@ function positiveInteger(value: unknown): number | undefined {
 }
 
 /** Protocol-aware probe auth headers: anthropic-messages → x-api-key +
- * anthropic-version; everything else (openai-completions / openai-responses /
- * unknown) → Bearer. Key-less probing is allowed (some gateways need no auth):
- * an ABSENT key omits the auth header entirely — never `Bearer undefined`. */
+ * anthropic-version; gemini → x-goog-api-key; everything else (openai-
+ * completions / openai-responses / bedrock / unknown) → Bearer. Key-less
+ * probing is allowed (some gateways need no auth): an ABSENT key omits the
+ * auth header entirely — never `Bearer undefined`. */
 function probeAuthHeaders(protocol: string, apiKey: string | undefined): Record<string, string> {
   if (protocol === "anthropic-messages") {
     const headers: Record<string, string> = { "anthropic-version": ANTHROPIC_API_VERSION }
     if (apiKey !== undefined && apiKey !== "") headers["x-api-key"] = apiKey
     return headers
+  }
+  if (protocol === "gemini") {
+    return apiKey !== undefined && apiKey !== "" ? { "x-goog-api-key": apiKey } : {}
   }
   return apiKey !== undefined && apiKey !== "" ? { Authorization: `Bearer ${apiKey}` } : {}
 }
@@ -542,6 +548,13 @@ function buildClient(profile: ProviderProfile, model: string, extra?: Record<str
       return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities })
     case "anthropic-messages":
       return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities })
+    case "gemini":
+      return createGeminiClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities })
+    case "bedrock":
+      // No apiKey — the AWS credential chain (env / ~/.aws/credentials /
+      // IMDS) resolves at the SDK client; region defaults from the env in the
+      // adapter (AWS_REGION → us-east-1).
+      return createBedrockClient({ model, options: extra, inputModalities: profile.inputModalities })
     default:
       throw new Error(`unknown provider protocol: ${String((profile as { protocol?: unknown }).protocol)}`)
   }
@@ -587,6 +600,11 @@ export function buildWireClient(protocol: string, config: WireClientConfig): Mod
       return createOpenAIClient(config)
     case "anthropic-messages":
       return createAnthropicClient(config)
+    case "gemini":
+      return createGeminiClient(config)
+    case "bedrock":
+      // Key-less by design (AWS credential chain); apiKey is ignored.
+      return createBedrockClient({ model: config.model, options: config.options, inputModalities: config.inputModalities })
     default:
       return undefined
   }
