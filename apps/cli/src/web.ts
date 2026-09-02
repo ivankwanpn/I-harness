@@ -18,7 +18,7 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { MockStep } from "@i-harness/llm-mock"
-import { createSessionService, type SessionService } from "@i-harness/session-executor"
+import { createSessionService, type ReasoningEffort, type SessionService } from "@i-harness/session-executor"
 import {
   ApprovalMuxBridge,
   QuestionMuxBridge,
@@ -159,13 +159,17 @@ export function effectiveProviderProfile(
   // (per-field USER WINS over profile.modelContexts) so the unified resolution
   // (resolveEffectiveModelContext / resolveModelContext) sees the settings
   // override; the base profile's `models` catalog stays as registered.
+  // M32 T1 (FIX): maxTokens is the OUTPUT-LENGTH cap (SettingsModel.maxTokens
+  // = the catalog's maxOutputTokens semantic) — it is NOT mapped into
+  // modelContexts (the M31 maxTokens→maxContextWindow mapping is removed).
+  // The settings row still carries it; the resolution chain's per-field
+  // output-length override picks it up (resolveEffectiveModelContext).
   const modelContexts = { ...profile.modelContexts }
   for (const row of user.models ?? []) {
-    if (row.contextWindow === undefined && row.maxTokens === undefined) continue
+    if (row.contextWindow === undefined) continue
     modelContexts[row.id] = {
       ...modelContexts[row.id],
       ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
-      ...(row.maxTokens !== undefined ? { maxContextWindow: row.maxTokens } : {}),
     }
   }
   return {
@@ -337,6 +341,13 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     // from the session's modelSelection through the unified chain (M27-R-A8
     // value was the static default chain; per-session selection now wins).
     contextWindowFor: (_sessionId, meta) => sessionContextWindow(opts, meta),
+    // M32 T3: per-session reasoning effort — session.meta.modelSelection
+    // .reasoningEffort (a string passthrough; type-cast to the effort union —
+    // the adapter's translateReasoning owns the wire vocabulary, and an
+    // unsupported value reaches the model end fail-loud). Absent selection →
+    // undefined → the request never carries the field.
+    reasoningEffortFor: (_sessionId, meta) =>
+      meta?.modelSelection?.reasoningEffort as ReasoningEffort | undefined,
     loadMeta: async (id) => (await coordinator.profile(id)).meta,
     modelBuilder: async (_sessionId, meta) => buildModelFor(opts, meta),
   })

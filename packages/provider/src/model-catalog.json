@@ -1,0 +1,16 @@
+{
+  "deepseek": {
+    "deepseek-v4-flash": { "contextWindow": 1048576, "maxOutputTokens": 384000 },
+    "deepseek-v4-pro": { "contextWindow": 1048576, "maxOutputTokens": 384000 },
+    "deepseek-v4-flash-vision-exp": { "contextWindow": 1048576, "maxOutputTokens": 384000 }
+  },
+  "gemini": {
+    "gemini-2.5-pro": { "contextWindow": 1048576, "maxOutputTokens": 65536 },
+    "gemini-2.5-flash": { "contextWindow": 1048576, "maxOutputTokens": 65536 },
+    "gemini-1.5-pro": { "contextWindow": 2097152, "maxOutputTokens": 8192 }
+  },
+  "bedrock": {
+    "anthropic.claude-3-5-sonnet-20241022": { "contextWindow": 200000, "maxOutputTokens": 8192 },
+    "anthropic.claude-3-5-haiku-20241022": { "contextWindow": 200000, "maxOutputTokens": 8192 }
+  }
+}

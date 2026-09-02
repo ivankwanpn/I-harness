@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { createRetryingClient, resolveRetryPolicy, type ModelClient, type RetryPolicyConfig } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "@i-harness/llm-openai"
 import { createOpenAICompatibleClient } from "@i-harness/llm-openai-compatible"
@@ -44,14 +45,81 @@ export function resolveModelContext(
   }
 }
 
-// M31 T1: the settings-side user model row is the TOP of the unified chain —
-// userModel > profile.modelContexts[modelId] > profile.contextWindow > undefined.
-// Pure, per-field override (settings maxTokens maps to maxContextWindow). The
-// return is UNDEFINED when no contextWindow exists at any tier (fail-closed
-// consumers skip registration / budget entirely); a maxContextWindow-only
-// record folds to undefined for the same reason — registration gates on
-// contextWindow, and callers that only need the ceiling can use
-// resolveModelContext directly.
+// ── M32 T1: model cards (capability cards, NOT a directory) ──────────────────
+// model-catalog.json is a DATA FILE of per-model capability cards
+// ({ contextWindow, maxOutputTokens }) — the last arm of the unified
+// resolution chain (userModel > modelContexts > profile > CARD > undefined).
+// Capability semantics: the model's documented limits — display/validation
+// only; NO request default is ever derived from a card ("缺省不發" — the
+// absence stance); a request maxTokens ABOVE the card is fail-loud at the
+// model end (no clamping).
+//
+// Seed values, source-annotated (updates must annotate their source too):
+// - deepseek: DeepSeek docs — 1,048,576 context / 384,000 max output for the
+//   v4 line (design spec §1.1 carries the same trio).
+// - gemini: Google AI docs — Gemini 2.5 series: 1,048,576 context / 65,536 max
+//   output; Gemini 1.5 Pro: 2,097,152 context / 8,192 max output.
+// - bedrock: Anthropic Claude 3.5 family docs — 200,000 context / 8,192 max
+//   output (claude-3-5-sonnet-20241022 & claude-3-5-haiku-20241022).
+type ModelCatalog = Record<string, Record<string, { contextWindow?: number; maxOutputTokens?: number }>>
+
+function loadModelCatalog(): ModelCatalog {
+  const text = readFileSync(new URL("./model-catalog.json", import.meta.url), "utf8")
+  const parsed: unknown = JSON.parse(text)
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("provider: model-catalog.json is not an object")
+  }
+  const out: ModelCatalog = {}
+  for (const [route, models] of Object.entries(parsed as Record<string, unknown>)) {
+    if (typeof models !== "object" || models === null || Array.isArray(models)) {
+      throw new Error(`provider: model-catalog.json route "${route}" is not an object`)
+    }
+    const rows: Record<string, { contextWindow?: number; maxOutputTokens?: number }> = {}
+    for (const [modelId, card] of Object.entries(models as Record<string, unknown>)) {
+      if (typeof card !== "object" || card === null || Array.isArray(card)) {
+        throw new Error(`provider: model-catalog.json ${route}.${modelId} is not an object`)
+      }
+      const row = card as Record<string, unknown>
+      const contextWindow = positiveInteger(row.contextWindow)
+      const maxOutputTokens = positiveInteger(row.maxOutputTokens)
+      if (contextWindow === undefined && maxOutputTokens === undefined) {
+        throw new Error(`provider: model-catalog.json ${route}.${modelId} has no positive-integer capability`)
+      }
+      rows[modelId] = {
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+      }
+    }
+    out[route] = rows
+  }
+  return out
+}
+
+const MODEL_CATALOG: ModelCatalog = loadModelCatalog()
+
+/** One capability card (model-documented limits). */
+export interface ModelCard {
+  contextWindow?: number
+  maxOutputTokens?: number
+}
+
+/** Pure catalog query: the card for one route's model, or undefined when the
+ * catalog has no entry (fail-closed — never a synthetic value). */
+export function resolveModelCard(route: string, modelId: string): ModelCard | undefined {
+  const card = MODEL_CATALOG[route]?.[modelId]
+  return card === undefined ? undefined : { ...card }
+}
+
+// M31 T1 (M32 T1 fix): the settings-side user model row is the TOP of the
+// unified chain — userModel > profile.modelContexts[modelId] >
+// profile.contextWindow > model-catalog.json CARD > undefined. Pure, per-field:
+// userModel.contextWindow overlaps the window chain; userModel.maxTokens is
+// the OUTPUT-LENGTH cap (same semantics as the card's maxOutputTokens — M31
+// G1's maxTokens→maxContextWindow mapping is REMOVED; maxContextWindow keeps
+// its M15 native meaning). The card arm is value-only (capabilities — display/
+// validation); it never provides a request default. A maxOutputTokens-only
+// card still folds to undefined here (fail-closed consumers gate on
+// contextWindow; callers needing only the card use resolveModelCard).
 export interface EffectiveContextInput {
   profile: ProviderProfile
   modelId: string
@@ -59,12 +127,29 @@ export interface EffectiveContextInput {
   userModel?: { contextWindow?: number; maxTokens?: number }
 }
 
-export function resolveEffectiveModelContext(input: EffectiveContextInput): ProviderModelContext | undefined {
+/** The unified chain's resolution of one model. */
+export interface EffectiveModelContext {
+  contextWindow?: number
+  maxContextWindow?: number
+  /** M32: model-documented output-length cap (card / user maxTokens override). */
+  maxOutputTokens?: number
+}
+
+export function resolveEffectiveModelContext(input: EffectiveContextInput): EffectiveModelContext | undefined {
   const base = resolveModelContext(input.profile, input.modelId)
+  const card = resolveModelCard(input.profile.name, input.modelId)
+  const merged: EffectiveModelContext = {
+    ...base,
+    ...(card !== undefined ? { maxOutputTokens: card.maxOutputTokens } : {}),
+  }
+  // CARD arm: contextWindow falls through to the card only when no profile/
+  // modelContexts tier provided one (per-field — card never overwrites).
+  if (merged.contextWindow === undefined && card?.contextWindow !== undefined) {
+    merged.contextWindow = card.contextWindow
+  }
   const user = input.userModel
-  const merged: ProviderModelContext = { ...base }
   if (user?.contextWindow !== undefined) merged.contextWindow = user.contextWindow
-  if (user?.maxTokens !== undefined) merged.maxContextWindow = user.maxTokens
+  if (user?.maxTokens !== undefined) merged.maxOutputTokens = user.maxTokens
   return merged.contextWindow === undefined ? undefined : merged
 }
 
