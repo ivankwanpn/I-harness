@@ -107,10 +107,14 @@ describe("web composition (R-C1)", () => {
     const eff = effectiveProviderProfile(base, user)
     // settings rows aggregate into modelContexts — the contextWindow typed in
     // settings now reaches the resolution chain (the T1 override-chain fix).
+    // M32 T1: maxTokens is the OUTPUT-LENGTH semantic (SettingsModel.maxTokens
+    // = maxOutputTokens card value) — it no longer maps to maxContextWindow, so
+    // the row flattens its contextWindow only (maxTokens stays in the settings
+    // row for the resolution chain's per-field output-length override).
     expect(eff.modelContexts).toEqual({
       small: { contextWindow: 32_000 },
       kept: { contextWindow: 50_000 },
-      fresh: { contextWindow: 64_000, maxContextWindow: 8_000 },
+      fresh: { contextWindow: 64_000 },
     })
     // no id flattening (that dropped the caps) — the base catalog stays as-is
     expect(eff.models).toBeUndefined()
@@ -193,6 +197,38 @@ describe("web composition (R-C1)", () => {
       }
       expect(await windowOf("s1")).toBe(200_000)
       expect(await windowOf("s2")).toBe(400_000)
+    } finally {
+      await server.close()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  // M32 T3: per-session reasoning effort — meta.modelSelection.reasoningEffort
+  // flows through the service/assembly/agent chain into every LLMRequest; a
+  // session WITHOUT a selection carries no reasoningEffort (缺省不發).
+  it("M32 T3: per-session reasoning effort reaches the model request; absent → undefined", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-m32-effort-"))
+    const seed = createSessionCoordinator(createJsonlBackend(workspace))
+    try {
+      await seed.create({ sessionId: "effort" })
+      await seed.updateMeta("effort", { modelSelection: { provider: "acme", model: "m", reasoningEffort: "high" } })
+      await seed.create({ sessionId: "plain" })
+    } finally {
+      await seed.close()
+    }
+    const captured: (string | undefined)[] = []
+    const model: ModelClient = {
+      async *stream(req) {
+        captured.push((req as { reasoningEffort?: string }).reasoningEffort)
+        yield* createMockClient([{ role: "assistant", text: "done" }]).stream(req)
+      },
+    }
+    const server = await createWebServer(options(workspace, { model }))
+    try {
+      await server.executor.submit("effort", "turn", new AbortController().signal)
+      await server.executor.submit("plain", "turn", new AbortController().signal)
+      expect(captured[0]).toBe("high")
+      expect(captured[1]).toBeUndefined()
     } finally {
       await server.close()
       rmSync(workspace, { recursive: true, force: true })

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createSessionService, type SessionService } from "../src/service.ts"
 import { createTelemetry, type TelemetrySink } from "@i-harness/telemetry"
+import { createMockClient } from "@i-harness/llm-mock"
 
 function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
   const events: unknown[] = []
@@ -90,5 +91,52 @@ describe("createSessionService", () => {
     expect(st.running || st.queued > 0).toBe(true)
     await Promise.all([p1, p2])
     expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
+  }, 60_000)
+
+  // M32 T3: per-session reasoning effort — the service resolves the value at
+  // every assembly build and the assembled agent's requests carry it (absent →
+  // the request never sets the field). The seam option below is spread from a
+  // variable so the pre-wiring test still compiles (the option lands in
+  // SessionServiceOptions with the implementation).
+  it("M32 T3: reasoningEffortFor carries the meta's modelSelection.reasoningEffort into the requests", async () => {
+    const effortSeam = {
+      reasoningEffortFor: (_sessionId: string, meta: import("@i-harness/session-persistence").SessionMeta | undefined) =>
+        meta?.modelSelection?.reasoningEffort as "off" | "low" | "medium" | "high" | "xhigh" | "max" | undefined,
+    }
+    const captured: (string | undefined)[] = []
+    const service = createSessionService({
+      workspace: process.cwd(),
+      approveAll: true,
+      ...effortSeam,
+      loadMeta: async () => ({
+        formatVersion: 1, sessionId: "s1", createdAt: "",
+        modelSelection: { provider: "p", model: "m", reasoningEffort: "high" },
+      }),
+      modelBuilder: async () => ({
+        async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
+          captured.push((request as { reasoningEffort?: string }).reasoningEffort)
+          yield* createMockClient([{ role: "assistant", text: "ok" }]).stream(request)
+        },
+      }),
+    })
+    await service.submit("s1", "hi", new AbortController().signal)
+    expect(captured).toContain("high")
+  }, 60_000)
+
+  it("M32 T3: absent meta selection → the request carries no reasoningEffort", async () => {
+    const captured: (string | undefined)[] = []
+    const service = createSessionService({
+      workspace: process.cwd(),
+      approveAll: true,
+      loadMeta: async () => ({ formatVersion: 1, sessionId: "s1", createdAt: "" }),
+      modelBuilder: async () => ({
+        async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
+          captured.push((request as { reasoningEffort?: string }).reasoningEffort)
+          yield* createMockClient([{ role: "assistant", text: "ok" }]).stream(request)
+        },
+      }),
+    })
+    await service.submit("s1", "hi", new AbortController().signal)
+    expect(captured).toEqual([undefined])
   }, 60_000)
 })

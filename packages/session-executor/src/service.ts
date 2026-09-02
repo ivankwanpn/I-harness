@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import type { Session } from "@i-harness/core-session"
-import { createSessionExecutor, type SessionExecutor as SessionTurnLane } from "@i-harness/core-agent"
+import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -43,6 +43,11 @@ export interface SessionServiceOptions extends AssemblyOptions {
    * (undefined → fail-closed, get_context_remaining not registered); absent →
    * the static value (legacy path). */
   contextWindowFor?: (sessionId: string, meta: SessionMeta | undefined) => number | undefined
+  /** M32 T3: per-session reasoning-effort resolver — evaluated at EVERY
+   * assembly build (meta-aware: session.meta.modelSelection.reasoningEffort).
+   * When defined it ALWAYS wins over the static AssemblyOptions.
+   * reasoningEffort; absent → the static value (or never set). */
+  reasoningEffortFor?: (sessionId: string, meta: SessionMeta | undefined) => ReasoningEffort | undefined
 }
 
 export interface SessionService {
@@ -92,11 +97,19 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const contextWindow = opts.contextWindowFor === undefined
           ? opts.contextWindow
           : opts.contextWindowFor(sessionId, meta)
+        // M32 T3: per-session effort (same meta-driven pattern as the window).
+        // A DEFINED resolver always wins — even when it resolves to undefined
+        // (the explicit spread below overrides the `...opts` static value; the
+        // assembly treats undefined as "never set").
+        const reasoningEffort = opts.reasoningEffortFor === undefined
+          ? opts.reasoningEffort
+          : opts.reasoningEffortFor(sessionId, meta)
         const assembly = await createSessionAssembly({
           ...opts,
           sessionId,
           ...(model !== undefined ? { model } : {}),
           ...(opts.contextWindowFor !== undefined ? { contextWindow } : {}),
+          ...(opts.reasoningEffortFor !== undefined ? { reasoningEffort } : {}),
         })
         assemblies.set(sessionId, assembly)
         // The A-region serial lane over this assembly (tiers; send on submit).

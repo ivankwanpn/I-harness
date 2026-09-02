@@ -22,11 +22,11 @@
 **Interfaces:**
 - Produces: `resolveModelCard(route: string, modelId: string): { contextWindow?: number; maxOutputTokens?: number } | undefined`；chain: userModel > modelContexts > profile > CARD > undefined
 
-- [ ] **Step 1: 失敗測試**（provider.test：`resolveEffectiveModelContext` 經 catalog 檔回 1M/384K；user 覆蓋回 user；無卡→undefined；`maxTokens` 不再映射 maxContextWindow——已撤斷言）
-- [ ] **Step 2: 驗證失敗**
-- [ ] **Step 3: 實現**（catalog json（種子：deepseek 三模型 1M/384000；gemini/bedrock M30 核實值——maxOutputTokens 依官方：gemini 65536、bedrock Claude 系按官（claude-3-5-sonnet 8192 輸出? 以文檔值填並註記來源））；`resolveModelCard` 純查詢；`resolveEffectiveModelContext` 末臂 CARD；撤映射（`mergeModelContext` 中 maxTokens→maxContextWindow 行刪 + web.ts effectiveProviderProfile 對應分支刪；SettingsModel.maxTokens 註記）
-- [ ] **Step 4: 驗證通過 + `pnpm --filter @i-harness/provider --filter apps/cli test`**
-- [ ] **Step 5: Commit** `feat(m32): model-catalog.json + resolution-chain arm; undo maxTokens→maxContextWindow mapping`
+- [x] **Step 1: 失敗測試**（provider.test：`resolveEffectiveModelContext` 經 catalog 檔回 1M/384K；user 覆蓋回 user；無卡→undefined；`maxTokens` 不再映射 maxContextWindow——已撤斷言）
+- [x] **Step 2: 驗證失敗**
+- [x] **Step 3: 實現**（catalog json（種子：deepseek 三模型 1M/384000；gemini/bedrock M30 核實值——maxOutputTokens 依官方：gemini 65536、bedrock Claude 系按官（claude-3-5-sonnet 8192 輸出? 以文檔值填並註記來源））；`resolveModelCard` 純查詢；`resolveEffectiveModelContext` 末臂 CARD；撤映射（`mergeModelContext` 中 maxTokens→maxContextWindow 行刪 + web.ts effectiveProviderProfile 對應分支刪；SettingsModel.maxTokens 註記）
+- [x] **Step 4: 驗證通過 + `pnpm --filter @i-harness/provider --filter apps/cli test`**
+- [x] **Step 5: Commit** `feat(m32): model-catalog.json + resolution-chain arm; undo maxTokens→maxContextWindow mapping`
 
 ---
 
@@ -59,16 +59,16 @@
 - Consumes: `ReasoningEffort`（T2）、`SessionModelSelection.reasoningEffort`（已有）
 - Produces: 請求攜帶 `reasoningEffort`；缺省 → 不發
 
-- [ ] **Step 1: 失敗測試**（web test：session meta 設 effort → e2e mock 收到 `LLMRequest.reasoningEffort === "high"`;無 meta → 接收 undefined）
-- [ ] **Step 2: 驗證失敗**
-- [ ] **Step 3: 實現**（把 effort 從 selection 一路傳到 agent 請求組裝處——core-agent 建 request 時取 deps.reasoningEffort（缺省 undefined 不設））
-- [ ] **Step 4: 驗證通過 + typecheck**
-- [ ] **Step 5: Commit** `feat(m32): wire per-session reasoning effort into requests`
+- [x] **Step 1: 失敗測試**（web test：session meta 設 effort → e2e mock 收到 `LLMRequest.reasoningEffort === "high"`;無 meta → 接收 undefined）
+- [x] **Step 2: 驗證失敗**
+- [x] **Step 3: 實現**（把 effort 從 selection 一路傳到 agent 請求組裝處——core-agent 建 request 時取 deps.reasoningEffort（缺省 undefined 不設））
+- [x] **Step 4: 驗證通過 + typecheck**
+- [x] **Step 5: Commit** `feat(m32): wire per-session reasoning effort into requests`
 
 ---
 
 ### 最終驗證
 
-- [ ] `pnpm -r test` / `pnpm -r typecheck` / `pnpm e2e` 全綠
-- [ ] smoke：`grep maxTokens→maxContextWindow` 零映射（`grep "maxContextWindow.*maxTokens\|maxTokens.*maxContextWindow" packages | grep -v test`）
-- [ ] catalog 生效：`node` 起 web + `/api/models/catalog` 或 unit 斷言 deepseek 卡 1M/384000
+- [x] `pnpm -r test` / `pnpm -r typecheck` / `pnpm e2e` 全綠（EXIT 0；64 projects × test/typecheck；e2e 5 files/11 tests）——G1 T1+T3 執行記錄
+- [x] smoke：`grep maxTokens→maxContextWindow` 零映射（`grep "maxContextWindow.*maxTokens\|maxTokens.*maxContextWindow" packages | grep -v test`；剩餘命中僅為撤映射註記註釋）
+- [x] catalog 生效：unit 斷言 deepseek 卡 1M/384000（provider.test "M32 model catalog"）
