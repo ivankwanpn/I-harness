@@ -24,7 +24,10 @@ export interface CompactionResult {
 
 export interface CompactionEngine {
   maybeCompact(session: Session): Promise<CompactionResult>
-  compact(session: Session): Promise<CompactionResult>
+  // M33 §1.2: `instructions` (manual session-compact command, Task 4) threads
+  // through to the summarizer as the "User instructions" section. Auto paths
+  // omit it (undefined → no section).
+  compact(session: Session, instructions?: string): Promise<CompactionResult>
   // M20 (absorbs codex token-budget `start_new_context_window`): new context
   // window — hide everything except the last `retainLast` events, appending a
   // `compaction/reset` marker, NO summary. Used when compact (summary) fails
@@ -48,14 +51,20 @@ export function createCompactionEngine(deps: {
   // → config.contextWindow). No profile/modelId → config → M11/M14 behavior.
   const contextWindow = resolveContextWindow(deps.profile, deps.modelId, config)
 
-  async function compactOnce(session: Session): Promise<CompactionResult> {
+  async function compactOnce(session: Session, instructions?: string): Promise<CompactionResult> {
     const shadowedSeqs = selectShadowableRange(session, config.retainTokens)
     if (shadowedSeqs.length === 0) return { compacted: false, shadowedSeqs: [] }
     const replayText = renderShadowed(session, shadowedSeqs)
     const model = config.summarizationModel ?? deps.model
+    // M33 §1.2 anchored: scan the session for the LAST `compaction/summary`
+    // before building the prompt. If one exists, its text is injected via
+    // `<previous-summary>` and the summarizer is told to UPDATE it — the
+    // anchored semantics are prompt-only; the `compaction/summary` event shape
+    // is unchanged (each round still appends its own summary event).
+    const previousSummary = lastSummaryText(session)
     let summary: string
     try {
-      summary = await summarizeWithModel(model, replayText, config.maxTokens)
+      summary = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions)
     } catch (err) {
       // Fail-soft: never block the agent on a summarizer failure. The warning
       // makes the otherwise-silent retry observable under sustained pressure.
@@ -119,6 +128,19 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   // Append-only record of the removal — no `session.events` mutation.
   append(session, { type: "compaction/reset", removedSeqs })
   return { compacted: true, shadowedSeqs: removedSeqs, reset: true }
+}
+
+// M33 §1.2: the text of the LAST `compaction/summary` event, if any.
+// Defensive `typeof` guard: persisted logs bypass append validation, so a
+// malformed marker must not break the anchored scan (falls back to fresh).
+function lastSummaryText(session: Session): string | undefined {
+  let text: string | undefined
+  for (const ev of session.events) {
+    if (ev.type === "compaction/summary" && typeof ev.text === "string" && ev.text.length > 0) {
+      text = ev.text
+    }
+  }
+  return text
 }
 
 function lastCompactionEndSeq(session: Session): number {
