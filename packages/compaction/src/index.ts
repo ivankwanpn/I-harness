@@ -113,14 +113,19 @@ export function createCompactionEngine(deps: {
     const previousSummary = lastSummaryText(session)
     let attempts = 0
     let summary: string
+    // M34 ⑦c: minSummaryChars measured inside summarizeWithModel (one
+    // same-model retry); the tracker carries the real model-call count for
+    // the analytics event even when the pass throws (degenerate retry).
+    const attemptsTracker = { count: 0 }
     try {
-      attempts += 1
-      summary = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions)
+      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker)
+      summary = result.text
+      attempts = attemptsTracker.count
     } catch (err) {
       // Fail-soft: never block the agent on a summarizer failure. The warning
       // makes the otherwise-silent retry observable under sustained pressure.
       console.warn("[i-harness] compaction summarizer failed (fail-soft, retrying next step):", err instanceof Error ? err.message : String(err))
-      emit("failure", { attempts })
+      emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [] }
     }
     if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })

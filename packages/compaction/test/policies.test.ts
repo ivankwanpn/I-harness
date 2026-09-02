@@ -60,7 +60,7 @@ describe("per-model compaction policies (M34 ⑦a)", () => {
       modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.5, retainTokens: 400 } },
     }
     const engine = createCompactionEngine({
-      model: mockModel("## Primary Request and Intent\n- work"), config,
+      model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config, // ≥ 500 chars (M34 ⑦c floor)
       provider: "deepseek", modelId: "deepseek-v4-pro",
     })
     const result = await engine.maybeCompact(s)

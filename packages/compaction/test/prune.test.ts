@@ -12,7 +12,7 @@ function recordingModel(seen: { request?: LLMRequest; calls: number }): ModelCli
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       seen.calls += 1
       seen.request = request
-      yield { type: "text/chunk", text: "## Primary Request and Intent\n- compacted" }
+      yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }

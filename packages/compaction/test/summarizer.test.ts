@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
 import { buildSummaryPrompt } from "../src/summarizer.ts"
-import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
+import { createCompactionEngine, resolveConfig, type CompactionConfig } from "../src/index.ts"
 
 // Spy model that records the summarizer input. `summarizeWithModel` builds the
 // prompt with `buildSummaryPrompt` and passes it as the single user-message
@@ -13,7 +13,7 @@ function spyModel(inputs: string[]): ModelClient {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       const content = request.messages[0]?.content
       inputs.push(typeof content === "string" ? content : JSON.stringify(content))
-      yield { type: "text/chunk", text: "## Objective\n- checkpoint A" }
+      yield { type: "text/chunk", text: "## Objective\n- checkpoint A\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }
@@ -108,5 +108,69 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
     expect(r.compacted).toBe(true)
     expect(inputs[0]).toContain("User instructions")
     expect(inputs[0]).toContain("summarize the tool section in Chinese")
+  })
+})
+
+describe("summary degenerate floor (M34 ⑦c)", () => {
+  const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5 }
+  function smallSession(): ReturnType<typeof createSession> {
+    const s = createSession()
+    for (let i = 0; i < 5; i++) append(s, { type: "user/message", text: "word ".repeat(40) })
+    return s
+  }
+
+  it("below minSummaryChars (500) retries once; a longer second pass succeeds", async () => {
+    const calls = { n: 0 }
+    const flip: ModelClient = {
+      async *stream(): AsyncIterable<LLMStreamEvent> {
+        calls.n += 1
+        yield { type: "text/chunk", text: calls.n === 1 ? "a".repeat(100) : "b".repeat(2000) }
+        yield { type: "end" }
+      },
+    }
+    const engine = createCompactionEngine({ model: flip, config })
+    const result = await engine.compact(smallSession())
+    expect(result.compacted).toBe(true)
+    expect(calls.n).toBe(2) // the short output was retried once
+    expect(result.summary).toBe("b".repeat(2000))
+  })
+
+  it("both passes below the floor throw → the existing fail-soft warn path", async () => {
+    const calls = { n: 0 }
+    const short: ModelClient = {
+      async *stream(): AsyncIterable<LLMStreamEvent> {
+        calls.n += 1
+        yield { type: "text/chunk", text: "a".repeat(100) }
+        yield { type: "end" }
+      },
+    }
+    const s = smallSession()
+    const engine = createCompactionEngine({ model: short, config })
+    const result = await engine.compact(s)
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [] })
+    expect(calls.n).toBe(2) // one retry, then fail-soft
+    expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+  })
+
+  it("at/above the floor on the first pass is accepted with a single call", async () => {
+    const calls = { n: 0 }
+    const ok: ModelClient = {
+      async *stream(): AsyncIterable<LLMStreamEvent> {
+        calls.n += 1
+        yield { type: "text/chunk", text: "b".repeat(500) } // exactly at the floor
+        yield { type: "end" }
+      },
+    }
+    const engine = createCompactionEngine({ model: ok, config })
+    expect((await engine.compact(smallSession())).compacted).toBe(true)
+    expect(calls.n).toBe(1)
+  })
+
+  it("minSummaryChars validates fail-loud and defaults to 500", () => {
+    expect(() => resolveConfig({ contextWindow: 100, minSummaryChars: 0 })).toThrow(/minSummaryChars/)
+    expect(() => resolveConfig({ contextWindow: 100, minSummaryChars: 1.5 })).toThrow(/minSummaryChars/)
+    expect(() => resolveConfig({ contextWindow: 100, minSummaryChars: -1 })).toThrow(/minSummaryChars/)
+    expect(resolveConfig({ contextWindow: 100 }).minSummaryChars).toBe(500)
+    expect(resolveConfig({ contextWindow: 100, minSummaryChars: 1200 }).minSummaryChars).toBe(1200)
   })
 })

@@ -11,7 +11,7 @@ function recordingModel(seen: { content?: string }): ModelClient {
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       seen.content = request.messages[0]!.content as string
-      yield { type: "text/chunk", text: "## Primary Request and Intent\n- done" }
+      yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }

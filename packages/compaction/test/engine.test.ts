@@ -23,7 +23,7 @@ function longSession() {
 describe("compaction engine", () => {
   it("maybeCompact triggers above threshold and appends start/summary/end", async () => {
     const s = longSession() // ~2000 tokens > 500 threshold
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- do x"), config })
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config }) // ≥ 500 chars (M34 ⑦c floor)
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
     expect(result.shadowedSeqs.length).toBeGreaterThan(0)
@@ -47,7 +47,7 @@ describe("compaction engine", () => {
   it("compact is explicit (no pressure check) while maybeCompact is gated", async () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" }) // tiny session
-    const engine = createCompactionEngine({ model: mockModel("summary"), config }) // retainTokens default 0
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config }) // retainTokens default 0; ≥ 500 chars (M34 ⑦c floor)
     expect((await engine.maybeCompact(s)).compacted).toBe(false) // tiny → below threshold → gated
     const result = await engine.compact(s)
     expect(result.compacted).toBe(true) // explicit call has no pressure gate; the single event is shadowable

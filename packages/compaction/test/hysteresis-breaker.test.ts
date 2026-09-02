@@ -9,7 +9,7 @@ function countingModel(calls: { n: number }): ModelClient {
   return {
     async *stream(): AsyncIterable<LLMStreamEvent> {
       calls.n += 1
-      yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(80) }
+      yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }
@@ -128,7 +128,7 @@ describe("breaker (M33 §2.2)", () => {
           yield { type: "error", error: new Error("boom") }
         } else {
           // long summary → the hot shape: pressure persists after the compaction
-          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(80) }
+          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
           yield { type: "end" }
         }
       },

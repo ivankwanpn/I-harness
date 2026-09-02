@@ -140,25 +140,52 @@ function trimToTokens(text: string, maxTokens: number): string {
   return text.slice(0, maxTokens * 4)
 }
 
+/**
+ * Summarize with a retry guard against degenerate output.
+ *
+ * M34 ⑦c: `minSummaryChars` (default 500) is the quality floor — a trimmed
+ * output SHORTER than the floor counts as a failed attempt (not a valid
+ * summary): ONE same-model retry is made, then the attempt throws (the
+ * engine's fail-soft path swallows it unchanged — no new error type). The
+ * empty-output case keeps its immediate throw (pre-M34 semantics). The
+ * maxTokens truncation happens AFTER the floor check, on the accepted output.
+ * `attempts` reports how many model calls the pass took (the engine feeds it
+ * into the compaction/attempt analytics event).
+ */
 export async function summarizeWithModel(
   model: ModelClient,
   replayText: string,
   maxTokens: number,
   previousSummary?: string,
   instructions?: string,
-): Promise<string> {
-  const request: LLMRequest = {
-    messages: [{ role: "user", content: buildSummaryPrompt(replayText, previousSummary, instructions) }],
-    tools: [],
-    systemPrompt: "",
+  minSummaryChars = 500,
+  attemptsTracker?: { count: number }, // optional: model-call count even when the pass throws
+): Promise<{ text: string; attempts: number }> {
+  let attempts = 0
+  let lastLength = 0
+  const attemptsTrackerOut = attemptsTracker ?? { count: 0 }
+  for (let round = 0; round < 2; round++) {
+    attempts += 1
+    attemptsTrackerOut.count += 1
+    const request: LLMRequest = {
+      messages: [{ role: "user", content: buildSummaryPrompt(replayText, previousSummary, instructions) }],
+      tools: [],
+      systemPrompt: "",
+    }
+    let out = ""
+    for await (const ev of model.stream(request)) {
+      if (ev.type === "text/chunk") out += ev.text
+      else if (ev.type === "error") throw ev.error
+      else if (ev.type === "end") break
+    }
+    const trimmed = out.trim()
+    if (trimmed.length === 0) throw new Error("compaction: summarizer returned empty output")
+    lastLength = trimmed.length
+    if (trimmed.length < minSummaryChars) continue // degenerate → one retry
+    return {
+      text: approxTokens(trimmed) > maxTokens ? trimToTokens(trimmed, maxTokens) : trimmed,
+      attempts,
+    }
   }
-  let out = ""
-  for await (const ev of model.stream(request)) {
-    if (ev.type === "text/chunk") out += ev.text
-    else if (ev.type === "error") throw ev.error
-    else if (ev.type === "end") break
-  }
-  const trimmed = out.trim()
-  if (trimmed.length === 0) throw new Error("compaction: summarizer returned empty output")
-  return approxTokens(trimmed) > maxTokens ? trimToTokens(trimmed, maxTokens) : trimmed
+  throw new Error(`compaction: summarizer output below minSummaryChars (${lastLength} < ${minSummaryChars})`)
 }
