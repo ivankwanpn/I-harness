@@ -116,3 +116,19 @@
 ### 與 SDK 的界線
 
 `i-harness sdk`（NDJSON JSON-RPC v0 自家協議）是原生宿主協議；`i-harness acp` 是標準外部 ACP。二者只用 `--session-dir` 旗標（M29 起 `--session-backend` 已移除——JSONL 是唯一持久化後端，旗標傳入即 fail-loud 拒絕）、stdout 純幀紀律一致。ACP v1 下 `session/prompt` 是 request（回 `PromptResponse`）——舊版「fire-and-forget + `sessionUpdate{messageId}` admission 回執」的設計由「await submit + stopReason」取代（SDK 1.4 高階 client 面即此形狀）。
+
+## M29 變更註記（2026-09-02，SQLite 持久化分離）
+
+> 本節記錄 M29（JSONL-only 持久化 + 獨立可重建搜索索引）帶來的**外部語意**變化；內部實作見 `docs/research/2026-09-02-ih-sqlite-removal-study.md` 與 `docs/superpowers/specs/2026-09-02-m29-sqlite-split-design.md`。
+
+- **持久化唯一權威**：JSONL。`--session-backend` 旗標已移除；傳入即 fail-loud 拒絕（見上）。鎖（fs-lock）、`profile` / `updateMeta`、文檔側車不受影響。
+
+- **搜索面語意（D1 一致性模型替換）**：`session_search` / `lineage`（及 web `/api/sessions/search`、`/lineage`）不再吃「與持久化**同事務、永不偏離**」的 SQLite FTS，而由**文件級 file-backed 索引**承載（`reconcile-on-search`）：
+  - 每次搜索前對帳 `storeRoot`（目錄掃 + 首行 header + stat revision）；僅對**變更的 session** 全量 decode 重建，未變者以 revision 指紋跳過。
+  - **搜索永不舊於自身 reconcile**——比「永不偏離」更強：過期數據絕不呈現（對異步寫入者也成立）。
+  - 對帳 / 讀取失敗 → `SESSION_QUERY_OBSERVE_FAILED`，**不回退舊行**（fail-closed）。
+  - 索引文件 schema 版本不符 / 外來 DB（`application_id != 0x49485155`）→ `SESSION_QUERY_INDEX_FOREIGN`，拒絕不碰。
+
+- **搜索默認態（D3）**：`--session-dir`（storeRoot 已知）→ 搜索工具**出廠可用**（`first-search` 語意：首次搜索建索引，進程內持久）；無 `--session-dir` → 不掛載（與舊語意一致，web 對無 seam 的請求仍 `409 search_not_enabled`）。
+
+- **`searchBackend` 設置語意（D2，降級）**：`settings.searchBackend` 字符串保留（`"jsonl"` = 搜索索引開啟，默認），不再對應任何多後端旗標；舊值 `"sqlite"` **相容讀取為開啟**；未知值（如 `"postgres"`）歸屬默認 `"jsonl"`。

@@ -3,8 +3,9 @@
 I-harness agent runtime — a TypeScript/ESM monorepo (pnpm workspace) that runs
 an agent end-to-end on Windows: real tools, persisted sessions, subagents and
 teams, sandboxed execution, MCP/LSP integration, skills, workflows, and a
-headless CLI. **Backend-complete milestone (M1–M25) achieved — frontend
-(web/TUI/desktop) is the next phase, explicitly out of the M20–M25 scope.**
+headless CLI. **Backend-complete (M1–M25) achieved, then extended by the M26–M29 wheel
+(runtime interaction/tiers, subagent messaging, SDK, ACP, JSONL-only persistence
++ a reconcile-on-search index). Frontend (web/TUI/desktop) is the next phase.**
 
 ## What it is
 
@@ -44,10 +45,11 @@ pnpm e2e             # end-to-end: real CLI + real tools (spawned process / runH
 
 Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
 
-## Development status (M1 → M25)
+## Development status (M1 → M29)
 
-The full **backend-complete** milestone wheel is done — this is the "backend
-complete before frontend" gate:
+The full **backend-complete** milestone wheel (M1–M25) is done, and the
+M26–M29 extension wheel that followed — this is the "backend complete before
+frontend" gate:
 
 | Milestone | Topic | Status |
 |---|---|---|
@@ -64,11 +66,15 @@ complete before frontend" gate:
 | M24a | Subagent/team resume consistency + nested delegation | ✅ |
 | M24b | Skills (deferred SKILL.md) + workflows (YAML) | ✅ |
 | M25 | Engineering wrap-up: telemetry, e2e layer, docs closure, dir cleanup | ✅ |
+| M26 | Runtime exec + interaction wheel: input tiers (SessionExecutor), terminal PTY, MCP OAuth, tool naming, goal/feedback/jobs/credentials/workspace/plugin-registry/settings/schedule/hooks/instructions/session-title/plan-mode, engine-owned web-host | ✅ |
+| M27 | Stabilization + integration: cli web --port, external contracts, get_context_remaining, web-host routes + /api/health, crash-repair chain, skills shadow selector, settings layering, `@i-harness/sdk` | ✅ |
+| M28 | Cleanup: SDK wire contract v0 freeze, R-B13 close, MCP OAuth real-AS integration, fs-watch (chokidar), ACP (v0 automation subset) | ✅ |
+| M29 | SQLite persistence split: JSONL-only authority + reconcile-on-search file-backed index, remove `--session-backend` | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
 
-## Package structure (42 packages + apps/cli)
+## Package structure (61 packages + apps/cli)
 
 ```
 packages/
@@ -108,9 +114,29 @@ packages/
 ├── sandbox-windows-acl/  Windows ACL isolation (restricted token)
 ├── fs-lock/              ownership lease (koffi LockFileEx / Linux flock)
 ├── preset/               agent preset discovery/mount
-└── telemetry/            independent host event stream (JSONL sink)
+├── telemetry/            independent host event stream (JSONL sink)
+├── session-executor/     M26 A: SessionExecutor — input tiers (send/steer/followup), multi-session
+├── terminal/             M26 B: node-pty (ConPTY) terminal + process control tools
+├── runtime-context/      M26 A: dynamic system-context snapshot
+├── instructions/         M26 A: AGENTS.md instruction loading
+├── session-title/        M26 A: session title (LLM providers + fold)
+├── plan-mode/            M26 A: plan mode (log-only event + projection + exit tool)
+├── goal/                 M26 E: event-sourced goal + tools
+├── feedback/             M26 E: message feedback (doc sidecar + CAS)
+├── jobs/                 M26 D: durable job records + kill bridge
+├── credentials/          M26 E: credentials (env-first, refs-not-values)
+├── workspace/            M26 E: workspace document-library registry
+├── plugin-registry/      M26 E: plugin register/market/status (plugin code never executes)
+├── hooks/                M26 E: hooks (Claude / Codex contracts)
+├── schedule/             M26 E: persistent schedule
+├── settings/             M26 E: settings layering + hot reload + comment-preserving patch
+├── web-host/             M26 C: engine-owned web host (routes + WS mux, /api/health)
+├── web/                  M26 C: web app
+├── sdk/                  M27 C: stdio NDJSON JSON-RPC SDK (wire contract v0)
+├── acp/                  M28 C: ACP server (v0 automation subset)
+└── fs-watch/             M28 B: fs watch (chokidar)
 apps/
-└── cli/                  headless CLI (run/resume/--telemetry/--sandbox)
+└── cli/                  headless CLI (run/resume/--telemetry/--sandbox / sdk / acp / web)
 ```
 
 ## Running the CLI
@@ -131,7 +157,7 @@ node --import tsx apps/cli/src/index.ts run "hello" --telemetry
 
 ## Design docs
 
-- Specs: `docs/superpowers/specs/` (M1–M25, each milestone)
+- Specs: `docs/superpowers/specs/` (M1–M29, each milestone)
 - Plans: `docs/superpowers/plans/`
 - Research: `.superpowers/research/` (gitignored — absorb-not-port conclusions)
 
@@ -144,6 +170,22 @@ node --import tsx apps/cli/src/index.ts run "hello" --telemetry
 - **M15–M25**: backend-complete wheel (token meter, sandbox, MCP/LSP, teams,
   model reliability, tools, Windows security, session/interop locking, resume,
   skills/workflows, telemetry, e2e, doc closure).
+- **M26**: runtime-exec + interaction wheel (input tiers + SessionExecutor,
+  terminal PTY, MCP OAuth, model governance, engine-owned web-host) — planned
+  via `docs/roadmap/roadmap-{A..E}`.
+- **M27**: stabilization + integration (stdio SDK, `get_context_remaining`,
+  web-host routes + `/api/health`, crash-repair chain, settings layering,
+  skills shadow selector, external contracts).
+- **M28**: cleanup (SDK wire contract v0 freeze, fs-watch, ACP v0, MCP OAuth
+  real-AS integration, R-B13 closure).
+- **M29**: SQLite persistence split (JSONL becomes the sole authority; the FTS /
+  lineage search face moves to an independent file-backed reconcile-on-search
+  index; `--session-backend` removed).
+
+> **M29 note**: `--session-backend` is removed — JSONL is the only persistence
+> backend (the flag now fails loud). When `--session-dir` (storeRoot) is present,
+> the search tools (`session_search` / `lineage`) are mounted via the file-backed
+> index and are enabled on first search (reconcile-on-search), default-on.
 
 The acceptance task runs end-to-end:
 

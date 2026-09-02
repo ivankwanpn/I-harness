@@ -119,6 +119,9 @@ export interface Settings {
   fontSize: number
   transcriptMode: SettingsTranscriptMode
   busyEnter: SettingsBusyEnter
+  /** M29: search-index ON-switch, not a persistence backend (JSONL is the sole
+   *  authority). "jsonl" = index enabled (default); legacy "sqlite" value reads
+   *  as enabled (compat); unknown value normalizes to "jsonl". */
   searchBackend: SettingsSearchBackend
   plugins: SettingsPluginToggles
   /** Appended in this plan: previously-absent top-level key, additive-only. */
