@@ -13,6 +13,21 @@ describe("compaction config", () => {
     const r = resolveConfig({ contextWindow: 2000 })
     expect(r).toMatchObject({ contextWindow: 2000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, auto: true })
   })
+
+  it("M33: validates overheadTokens / minTurnsBeforeRecompact / prune (fail-loud, defaults on)", () => {
+    expect(() => resolveConfig({ contextWindow: 100, overheadTokens: -1 })).toThrow(/overheadTokens/)
+    expect(() => resolveConfig({ contextWindow: 100, overheadTokens: 1.5 })).toThrow(/overheadTokens/)
+    expect(() => resolveConfig({ contextWindow: 100, minTurnsBeforeRecompact: -1 })).toThrow(/minTurnsBeforeRecompact/)
+    expect(() => resolveConfig({ contextWindow: 100, prune: { thresholdChars: 100, headChars: 60, tailChars: 60 } })).toThrow(/headChars/)
+    expect(() => resolveConfig({ contextWindow: 100, prune: { thresholdChars: 0 } })).toThrow(/thresholdChars/)
+    const on = resolveConfig({ contextWindow: 100 })
+    expect(on.overheadTokens).toBe(0)
+    expect(on.minTurnsBeforeRecompact).toBe(3)
+    expect(on.prune).toMatchObject({ enabled: true, thresholdChars: 8192, headChars: 4096, tailChars: 1024 })
+    const off = resolveConfig({ contextWindow: 100, prune: false })
+    expect(off.prune.enabled).toBe(false)
+    expect(resolveConfig({ contextWindow: 100, overheadTokens: 5, minTurnsBeforeRecompact: 0 }).overheadTokens).toBe(5)
+  })
 })
 
 describe("token estimation", () => {

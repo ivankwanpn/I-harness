@@ -97,7 +97,9 @@ describe("compaction engine", () => {
   })
 
   it("maybeCompact re-fires once new non-marker events are appended past the last compaction/end", async () => {
-    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100 }
+    // M33 §2.1: `minTurnsBeforeRecompact: 0` pin the PURE re-fire guard (the
+    // default 3-turn hysteresis is covered by hysteresis-breaker.test.ts).
+    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100, minTurnsBeforeRecompact: 0 }
     const s = longSession()
     const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
     await engine.maybeCompact(s)
