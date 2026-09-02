@@ -9,6 +9,7 @@
     "@i-harness/core-session": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/provider": "workspace:*",
+    "@i-harness/telemetry": "workspace:*",
     "@i-harness/token-meter": "workspace:*"
   }
 }

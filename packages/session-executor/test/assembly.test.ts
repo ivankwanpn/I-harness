@@ -90,7 +90,7 @@ describe("createSessionAssembly", () => {
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session: s,
-      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      model: createMockClient([{ role: "assistant", text: "## Primary Request and Intent\n- " + "work ".repeat(120) }]), // ≥ 500 chars (M34 ⑦c floor)
       compact: { contextWindow: 100_000 },
     })
     try {
@@ -113,7 +113,7 @@ describe("createSessionAssembly", () => {
     const spy: ModelClient = {
       async *stream(request: LLMRequest) {
         captured = (request.messages[0]!.content as string)
-        yield { type: "text/chunk", text: "summary" }
+        yield { type: "text/chunk", text: "summary".repeat(100) } // ≥ 500 chars (M34 ⑦c floor)
         yield { type: "end" }
       },
     }

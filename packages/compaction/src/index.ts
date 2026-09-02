@@ -2,15 +2,16 @@ import type { Session, SessionEvent } from "@i-harness/core-session"
 import { append, deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
-import { resolveConfig, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
+import type { Telemetry } from "@i-harness/telemetry"
+import { resolveCompactSpec, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
 
 export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
-export { resolveConfig, resolveContextWindow } from "./config.ts"
-export type { CompactionConfig, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
+export { resolveConfig, resolveCompactSpec, resolveContextWindow } from "./config.ts"
+export type { CompactionConfig, ModelCompactionPolicy, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
 
 export interface CompactionResult {
   compacted: boolean
@@ -50,8 +51,13 @@ export function createCompactionEngine(deps: {
   config: CompactionConfig
   profile?: ProviderProfile // M15: optional context catalog
   modelId?: string          // M15: the resolved model id for catalog lookup
+  provider?: string         // M34 ⑦a: the policy-key provider namespace ("provider/model")
+  telemetry?: Telemetry     // M34 ⑦b: optional host stream (M25 convention — absent = zero events)
 }): CompactionEngine {
-  const config = resolveConfig(deps.config)
+  // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
+  // select the exact "provider/model" entry of config.modelPolicies). No
+  // provider/modelId → resolveConfig → pre-M34 behavior exactly.
+  const config = resolveCompactSpec(deps.config, deps.provider, deps.modelId)
   // M15: catalog-first (profile.modelContexts[modelId] → profile.contextWindow
   // → config.contextWindow). No profile/modelId → config → M11/M14 behavior.
   const contextWindow = resolveContextWindow(deps.profile, deps.modelId, config)
@@ -65,14 +71,35 @@ export function createCompactionEngine(deps: {
     session: Session,
     allowPruneOnly: boolean,
     instructions?: string,
+    reason?: "auto" | "manual",
   ): Promise<CompactionResult> {
+    // M34 ⑦b: analytics — one `compaction/attempt` per attempt, emitted at
+    // each outcome. tokensBefore is the meter at entry; tokensAfter is the
+    // meter once the pass's markers are on the log. The host-optional stream
+    // is never REQUIRED by stability (M25 convention: telemetry is additive).
+    // Malformed persisted shapes must not crash the attempt (Ruling 7
+    // convention): the meter is NOT defensive, so measurement degrades to
+    // undefined token fields, never a TypeError out of compact().
+    const startedAt = Date.now()
+    const tokensBefore = safeActiveTokens(session)
+    const emit = (outcome: "success" | "prune-only" | "failure" | "skipped", extra: Record<string, unknown> = {}) => {
+      deps.telemetry?.emit({
+        type: "compaction/attempt",
+        ts: Date.now(),
+        data: { reason, outcome, tokensBefore, durationMs: Date.now() - startedAt, ...extra },
+      })
+    }
     const shadowedSeqs = selectShadowableRange(session, config.retainTokens)
-    if (shadowedSeqs.length === 0) return { compacted: false, shadowedSeqs: [] }
+    if (shadowedSeqs.length === 0) {
+      emit("skipped", { attempts: 0 })
+      return { compacted: false, shadowedSeqs: [] }
+    }
     const pruneRecords = planPrune(session, config.prune)
     if (allowPruneOnly && pruneRecords.length > 0) {
       const after = surfaceTokensAfterPrune(session, pruneRecords)
       if (after < contextWindow * config.thresholdRatio) {
         append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
+        emit("prune-only", { tokensAfter: safeActiveTokens(session), shadowed: 0, pruned: pruneRecords.length, attempts: 0 })
         return { compacted: true, shadowedSeqs: [], pruned: true }
       }
     }
@@ -84,19 +111,28 @@ export function createCompactionEngine(deps: {
     // anchored semantics are prompt-only; the `compaction/summary` event shape
     // is unchanged (each round still appends its own summary event).
     const previousSummary = lastSummaryText(session)
+    let attempts = 0
     let summary: string
+    // M34 ⑦c: minSummaryChars measured inside summarizeWithModel (one
+    // same-model retry); the tracker carries the real model-call count for
+    // the analytics event even when the pass throws (degenerate retry).
+    const attemptsTracker = { count: 0 }
     try {
-      summary = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions)
+      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker)
+      summary = result.text
+      attempts = attemptsTracker.count
     } catch (err) {
       // Fail-soft: never block the agent on a summarizer failure. The warning
       // makes the otherwise-silent retry observable under sustained pressure.
       console.warn("[i-harness] compaction summarizer failed (fail-soft, retrying next step):", err instanceof Error ? err.message : String(err))
+      emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [] }
     }
     if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
     append(session, { type: "compaction/summary", text: summary, shadowedSeqs })
     append(session, { type: "compaction/end" })
+    emit("success", { tokensAfter: safeActiveTokens(session), shadowed: shadowedSeqs.length, pruned: pruneRecords.length, attempts })
     return { compacted: true, shadowedSeqs, summary, ...(pruneRecords.length > 0 ? { pruned: true } : {}) }
   }
 
@@ -107,11 +143,37 @@ export function createCompactionEngine(deps: {
       if (activeTokens(session) + config.overheadTokens < contextWindow * config.thresholdRatio) {
         return { compacted: false, shadowedSeqs: [] }
       }
-      // Re-fire guard: with `retainTokens 0` and a large `maxTokens`, the
-      // summary alone can re-cross the threshold, re-triggering the summarizer
-      // (and re-rendering the whole non-marker log) at every step boundary.
-      // Only re-compact once NEW non-marker events appear past the last
-      // `compaction/end`. `compact()` (explicit) stays ungated.
+      // M34 ⑦d — the auto-path gate stack (documented state machine):
+      //   (1) pressure gate (§3.1) — below threshold: nothing to do.
+      //   (2) sticky — set by an AUTO success that STILL leaves the surface
+      //       over the threshold ("success but over"). Suppresses the auto
+      //       path until NEW non-marker events arrive (same predicate as the
+      //       re-fire guard) or a MANUAL compaction succeeds. This is what
+      //       stops the prune-only hot loop: a prune-only pass appends no
+      //       `compaction/end`, so the re-fire guard alone would re-plan (and
+      //       re-append) the same prune records on the next step when the
+      //       meter + overhead still reads over threshold.
+      //   (3) re-fire guard (pre-M33) — no new non-marker events past the
+      //       LAST `compaction/end`: no work, no re-compact.
+      //   (4) hysteresis (M33 §2.1) — `minTurnsBeforeRecompact` turn/end
+      //       events must pass after the last compaction.
+      //   (5) breaker (M33 §2.2, M34 until-success) — 3 consecutive AUTO
+      //       failures open the circuit: paused until new non-marker events
+      //       arrive (ONE attempt per content burst — the recovered model is
+      //       given a chance, the failing one is never hammered), but the
+      //       counter is NEVER restarted by content — only a successful
+      //       compaction (auto OR manual) closes the circuit. Where M33
+      //       reset the count on new content, M34 keeps it: the pause is
+      //       effectively "until a success" with a per-burst attempt.
+      //   `compact()` (explicit) is UNGATED (only its success side effects
+      //   touch the state above).
+      const stickySeq = stickyFromSeq.get(session) ?? -1
+      if (stickySeq >= 0) {
+        if (!hasNonMarkerEventsAfter(session, stickySeq)) {
+          return { compacted: false, shadowedSeqs: [] }
+        }
+        stickyFromSeq.delete(session) // new non-marker content releases the stick
+      }
       const last = lastCompactionEndSeq(session)
       if (last >= 0 && !hasNonMarkerEventsAfter(session, last)) {
         return { compacted: false, shadowedSeqs: [] } // no new work since the last compaction
@@ -125,20 +187,26 @@ export function createCompactionEngine(deps: {
           return { compacted: false, shadowedSeqs: [] }
         }
       }
-      // M33 §2.2 breaker: 3 consecutive AUTO failures open the circuit — pause
-      // (return false, no attempt) until NEW non-marker events arrive (same
-      // predicate as the re-fire guard). New content resets the counter.
+      // M34 ⑦d (until-success): release the pause on new content but keep
+      // the counter — success is the only reset.
       let failures = (autoFailures.get(session) ?? { count: 0, openSeq: -1 }).count
       if (failures >= BREAKER_MAX_FAILURES) {
         const state = autoFailures.get(session)!
         if (!hasNonMarkerEventsAfter(session, state.openSeq)) {
           return { compacted: false, shadowedSeqs: [] }
         }
-        failures = 0 // new content restarts the count
       }
-      const result = await compactOnce(session, true)
+      const result = await compactOnce(session, true, undefined, "auto")
       if (result.compacted) {
         autoFailures.set(session, { count: 0, openSeq: -1 })
+        // M34 ⑦d sticky arm: success that still leaves the surface over the
+        // gate → suppress auto re-compaction until new content/manual success.
+        const after = safeActiveTokens(session)
+        if (after !== undefined && after + config.overheadTokens >= contextWindow * config.thresholdRatio) {
+          stickyFromSeq.set(session, lastEventSeq(session))
+        } else {
+          stickyFromSeq.delete(session)
+        }
       } else {
         const count = failures + 1
         autoFailures.set(session, count >= BREAKER_MAX_FAILURES
@@ -147,7 +215,17 @@ export function createCompactionEngine(deps: {
       }
       return result
     },
-    compact: (session, instructions) => compactOnce(session, false, instructions),
+    compact: async (session, instructions) => {
+      const result = await compactOnce(session, false, instructions, "manual")
+      // M34 ⑦d: a MANUAL compaction success shares the until-success reset
+      // (breaker close + sticky release) — the only other release condition
+      // is new non-marker content on the auto path.
+      if (result.compacted) {
+        autoFailures.set(session, { count: 0, openSeq: -1 })
+        stickyFromSeq.delete(session)
+      }
+      return result
+    },
     resetWindow: resetWindowOnce,
   }
 }
@@ -184,6 +262,20 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   return { compacted: true, shadowedSeqs: removedSeqs, reset: true }
 }
 
+// M34 ⑦b: defensive meter read — the token-meter projects through the same
+// deriveMessages that has been made defensive for malformed persisted logs,
+// but its OWN defensive envelope is not warranted for a host-optional
+// analytics feed: any measurement failure degrades to `undefined` (the
+// attempt continues; the telemetry token fields stay unset) — never a
+// TypeError escaping compaction (Ruling 7 convention).
+function safeActiveTokens(session: Session): number | undefined {
+  try {
+    return activeTokens(session)
+  } catch {
+    return undefined
+  }
+}
+
 // M33 §2.2: per-session consecutive auto-compaction failure counter. `count`
 // is the consecutive failures; `openSeq` records the session's last seq when
 // the breaker tripped (the pause-release predicate compares against it, so a
@@ -191,6 +283,15 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
 // content appended AFTER the trip does).
 const BREAKER_MAX_FAILURES = 3
 const autoFailures = new WeakMap<Session, { count: number; openSeq: number }>()
+
+// M34 ⑦d: per-session sticky state — the seq at which an AUTO success left
+// the surface still over the threshold. While set, maybeCompact's auto path
+// is suppressed (after a successful compaction that did not resolve
+// pressure) until new non-marker events arrive past this seq or a manual
+// compact() succeeds. Same predicate as the re-fire guard — the difference
+// is that sticky also covers success paths without a `compaction/end`
+// (prune-only) where the re-fire guard alone would re-fire immediately.
+const stickyFromSeq = new WeakMap<Session, number>()
 
 function lastCompactionEndSeq(session: Session): number {
   let last = -1

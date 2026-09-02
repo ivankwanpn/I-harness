@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import type { ModelClient, LLMStreamEvent } from "@i-harness/llm-seam"
+import { activeTokens } from "@i-harness/token-meter"
 import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
 
 function mockModel(text: string): ModelClient {
@@ -23,7 +24,7 @@ function longSession() {
 describe("compaction engine", () => {
   it("maybeCompact triggers above threshold and appends start/summary/end", async () => {
     const s = longSession() // ~2000 tokens > 500 threshold
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- do x"), config })
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config }) // ≥ 500 chars (M34 ⑦c floor)
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
     expect(result.shadowedSeqs.length).toBeGreaterThan(0)
@@ -47,7 +48,7 @@ describe("compaction engine", () => {
   it("compact is explicit (no pressure check) while maybeCompact is gated", async () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" }) // tiny session
-    const engine = createCompactionEngine({ model: mockModel("summary"), config }) // retainTokens default 0
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config }) // retainTokens default 0; ≥ 500 chars (M34 ⑦c floor)
     expect((await engine.maybeCompact(s)).compacted).toBe(false) // tiny → below threshold → gated
     const result = await engine.compact(s)
     expect(result.compacted).toBe(true) // explicit call has no pressure gate; the single event is shadowable
@@ -181,6 +182,82 @@ describe("compaction engine", () => {
     expect(result).toEqual({ compacted: false, shadowedSeqs: [], reset: false })
     // no marker was appended
     expect(s.events.some((e) => e.type === "compaction/reset")).toBe(false)
+  })
+
+  it("until-success + sticky (M34 ⑦d): a manual compact success releases the sticky, then auto resumes", async () => {
+    // Prune-only hot-loop shape: the meter prices the substitute, but
+    // overheadTokens pushes surface+overhead back OVER the pressure gate. No
+    // compaction/end was ever appended, so the re-fire guard alone would
+    // re-plan (and re-append) the SAME prune records on the next step —
+    // sticky is the guard that stops the loop.
+    const config: CompactionConfig = {
+      contextWindow: 4000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100,
+      minTurnsBeforeRecompact: 0, overheadTokens: 1500,
+    }
+    const threshold = 4000 * 0.5
+    const s = createSession()
+    append(s, { type: "tool/call", callId: "c1", name: "shell", args: {} })
+    append(s, { type: "tool/result", callId: "c1", name: "shell", output: { out: "x".repeat(100_000) } })
+    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config })
+    const first = await engine.maybeCompact(s)
+    expect(first.compacted).toBe(true)
+    expect(first.pruned).toBe(true)
+    expect(s.events.filter((e) => e.type === "compaction/prune")).toHaveLength(1)
+    // sticky premise: meter + overhead still over the gate after the prune pass
+    expect(activeTokens(s) + config.overheadTokens! >= threshold).toBe(true)
+    const second = await engine.maybeCompact(s)
+    expect(second).toEqual({ compacted: false, shadowedSeqs: [] }) // sticky suppresses
+    expect(s.events.filter((e) => e.type === "compaction/prune")).toHaveLength(1) // no hot re-plan
+    // a manual compact success releases the sticky...
+    expect((await engine.compact(s)).compacted).toBe(true)
+    // ...and fresh pressure lets the auto path run again
+    append(s, { type: "tool/call", callId: "c2", name: "shell", args: {} })
+    append(s, { type: "tool/result", callId: "c2", name: "shell", output: { out: "y".repeat(100_000) } })
+    expect((await engine.maybeCompact(s)).compacted).toBe(true)
+  })
+
+  it("until-success + sticky (M34 ⑦d): a new non-marker event releases sticky", async () => {
+    const config: CompactionConfig = {
+      contextWindow: 4000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100,
+      minTurnsBeforeRecompact: 0, overheadTokens: 1500,
+    }
+    const s = createSession()
+    append(s, { type: "tool/call", callId: "c1", name: "shell", args: {} })
+    append(s, { type: "tool/result", callId: "c1", name: "shell", output: { out: "x".repeat(100_000) } })
+    const engine = createCompactionEngine({ model: mockModel("x"), config })
+    expect((await engine.maybeCompact(s)).pruned).toBe(true)
+    expect((await engine.maybeCompact(s)).compacted).toBe(false) // sticky: suppressed without new content
+    append(s, { type: "user/message", text: "fresh turn work" }) // new non-marker event
+    expect((await engine.maybeCompact(s)).compacted).toBe(true) // released → attempts again
+  })
+
+  it("until-success + sticky (M34 ⑦d): a manual compact success closes the breaker (until-success)", async () => {
+    const calls = { n: 0 }
+    let fail = true
+    const flip: ModelClient = {
+      async *stream(): AsyncIterable<LLMStreamEvent> {
+        calls.n += 1
+        if (fail) {
+          yield { type: "error", error: new Error("boom") }
+        } else {
+          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) }
+          yield { type: "end" }
+        }
+      },
+    }
+    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100, minTurnsBeforeRecompact: 0 }
+    const s = createSession()
+    for (let i = 0; i < 20; i++) append(s, { type: "user/message", text: "word ".repeat(80) })
+    const engine = createCompactionEngine({ model: flip, config: hotConfig })
+    await engine.maybeCompact(s) // fail 1
+    await engine.maybeCompact(s) // fail 2
+    await engine.maybeCompact(s) // fail 3 → breaker opens
+    fail = false
+    expect((await engine.compact(s)).compacted).toBe(true) // manual seam is ungated and SUCCEEDS
+    // until-success: the success closed the circuit — pressure now compacts again
+    append(s, { type: "user/message", text: "fresh work after the manual success" })
+    expect((await engine.maybeCompact(s)).compacted).toBe(true)
+    expect(calls.n).toBe(5) // 3 auto fails + 1 manual + 1 resumed auto
   })
 
   it("maybeCompact uses the catalog window when profile+modelId are provided (M15)", async () => {
