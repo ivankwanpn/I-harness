@@ -107,10 +107,14 @@ describe("web composition (R-C1)", () => {
     const eff = effectiveProviderProfile(base, user)
     // settings rows aggregate into modelContexts — the contextWindow typed in
     // settings now reaches the resolution chain (the T1 override-chain fix).
+    // M32 T1: maxTokens is the OUTPUT-LENGTH semantic (SettingsModel.maxTokens
+    // = maxOutputTokens card value) — it no longer maps to maxContextWindow, so
+    // the row flattens its contextWindow only (maxTokens stays in the settings
+    // row for the resolution chain's per-field output-length override).
     expect(eff.modelContexts).toEqual({
       small: { contextWindow: 32_000 },
       kept: { contextWindow: 50_000 },
-      fresh: { contextWindow: 64_000, maxContextWindow: 8_000 },
+      fresh: { contextWindow: 64_000 },
     })
     // no id flattening (that dropped the caps) — the base catalog stays as-is
     expect(eff.models).toBeUndefined()

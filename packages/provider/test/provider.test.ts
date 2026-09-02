@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient, buildWireClient, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, buildWireClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -140,21 +140,88 @@ describe("M15 context catalog", () => {
     expect(resolveEffectiveModelContext({ profile, modelId: "m3" })?.contextWindow).toBe(128_000)
   })
 
-  it("resolveEffectiveModelContext: user maxTokens overrides maxContextWindow (per-field merge)", () => {
+  // M32 T1 (G1): SettingsModel.maxTokens semantics FIXED = the model's output
+  // length (maxOutputTokens — the card field), NOT a context-window cap. The
+  // M31 G1 mapping to maxContextWindow is removed: maxTokens NEVER touches
+  // maxContextWindow; it overrides the catalog's maxOutputTokens when present.
+  it("resolveEffectiveModelContext: user maxTokens = output length (maxOutputTokens), NOT maxContextWindow", () => {
     const profile = {
       name: "p", displayName: "P", protocol: "openai-compatible",
       contextWindow: 128_000, modelContexts: { m1: { contextWindow: 64_000, maxContextWindow: 70_000 } },
     } as ProviderProfile
     const r1 = resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { maxTokens: 4096 } })
     expect(r1?.contextWindow).toBe(64_000)
-    expect(r1?.maxContextWindow).toBe(4096)
-    expect(resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { contextWindow: 32_000, maxTokens: 8192 } }))
-      .toEqual({ contextWindow: 32_000, maxContextWindow: 8192 })
+    expect(r1?.maxContextWindow).toBe(70_000) // maxContextWindow keeps its native value — maxTokens no longer maps here
+    expect(r1?.maxOutputTokens).toBe(4096)
+    const r2 = resolveEffectiveModelContext({ profile, modelId: "m1", userModel: { contextWindow: 32_000, maxTokens: 8192 } })
+    expect(r2?.contextWindow).toBe(32_000)
+    expect(r2?.maxContextWindow).toBe(70_000)
+    expect(r2?.maxOutputTokens).toBe(8192)
   })
 
   it("resolveEffectiveModelContext: no window knowledge anywhere → undefined (fail-closed)", () => {
     const profile: ProviderProfile = { name: "p", displayName: "P", protocol: "openai-compatible" }
     expect(resolveEffectiveModelContext({ profile, modelId: "m" })).toBeUndefined()
     expect(resolveEffectiveModelContext({ profile, modelId: "m", userModel: { maxTokens: 100 } })).toBeUndefined()
+  })
+})
+
+// M32 T1: the model-catalog.json data file (capability cards: contextWindow /
+// maxOutputTokens) — the last arm of the unified chain (userModel >
+// modelContexts > profile > CARD > undefined). Seeded values, source-annotated
+// in src/index.ts (vendor docs).
+describe("M32 model catalog", () => {
+  it("resolveModelCard: seeded deepseek cards (1M context / 384K output)", () => {
+    expect(resolveModelCard("deepseek", "deepseek-v4-flash")).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 384_000 })
+    expect(resolveModelCard("deepseek", "deepseek-v4-pro")).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 384_000 })
+    expect(resolveModelCard("deepseek", "deepseek-v4-flash-vision-exp")).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 384_000 })
+  })
+
+  it("resolveModelCard: seeded gemini cards (1M series / 1.5-pro 2M)", () => {
+    expect(resolveModelCard("gemini", "gemini-2.5-pro")).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 65_536 })
+    expect(resolveModelCard("gemini", "gemini-2.5-flash")).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 65_536 })
+    expect(resolveModelCard("gemini", "gemini-1.5-pro")).toEqual({ contextWindow: 2_097_152, maxOutputTokens: 8_192 })
+  })
+
+  it("resolveModelCard: seeded bedrock Claude-3-5 cards (200k / 8192 output)", () => {
+    expect(resolveModelCard("bedrock", "anthropic.claude-3-5-sonnet-20241022")).toEqual({ contextWindow: 200_000, maxOutputTokens: 8_192 })
+    expect(resolveModelCard("bedrock", "anthropic.claude-3-5-haiku-20241022")).toEqual({ contextWindow: 200_000, maxOutputTokens: 8_192 })
+  })
+
+  it("resolveModelCard: unknown route/model → undefined", () => {
+    expect(resolveModelCard("openai", "gpt-4o")).toBeUndefined()
+    expect(resolveModelCard("deepseek", "gpt-4o")).toBeUndefined()
+  })
+
+  it("resolveEffectiveModelContext: the card arm fills unknown windows from the catalog", () => {
+    const profile: ProviderProfile = { name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" }
+    const r = resolveEffectiveModelContext({ profile, modelId: "deepseek-v4-flash" })
+    expect(r?.contextWindow).toBe(1_048_576)
+    expect(r?.maxOutputTokens).toBe(384_000)
+  })
+
+  it("resolveEffectiveModelContext: user row overrides the card per field", () => {
+    const profile: ProviderProfile = { name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible", contextWindow: 96_000 }
+    const r = resolveEffectiveModelContext({
+      profile, modelId: "deepseek-v4-flash",
+      userModel: { contextWindow: 32_000, maxTokens: 4_096 },
+    })
+    expect(r?.contextWindow).toBe(32_000)
+    expect(r?.maxOutputTokens).toBe(4_096)
+  })
+
+  it("resolveEffectiveModelContext: modelContexts win over the card for contextWindow; the card still fills maxOutputTokens", () => {
+    const profile: ProviderProfile = {
+      name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible",
+      contextWindow: 96_000, modelContexts: { "deepseek-v4-flash": { contextWindow: 64_000 } },
+    }
+    const r = resolveEffectiveModelContext({ profile, modelId: "deepseek-v4-flash" })
+    expect(r?.contextWindow).toBe(64_000)
+    expect(r?.maxOutputTokens).toBe(384_000)
+  })
+
+  it("resolveEffectiveModelContext: no card + no window anywhere → undefined (fail-closed unchanged)", () => {
+    const profile: ProviderProfile = { name: "openai", displayName: "O", protocol: "openai-responses" }
+    expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o", userModel: { maxTokens: 500 } })).toBeUndefined()
   })
 })
