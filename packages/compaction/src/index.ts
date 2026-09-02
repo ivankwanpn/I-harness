@@ -29,7 +29,10 @@ export interface CompactionResult {
 
 export interface CompactionEngine {
   maybeCompact(session: Session): Promise<CompactionResult>
-  compact(session: Session): Promise<CompactionResult>
+  // M33 §5: `instructions` is the manual session-compact surface — threaded
+  // into the summarizer prompt as a "User instructions" section. Optional and
+  // additive: absent → pre-M33 behavior; the auto path never passes one.
+  compact(session: Session, instructions?: string): Promise<CompactionResult>
   // M20 (absorbs codex token-budget `start_new_context_window`): new context
   // window — hide everything except the last `retainLast` events, appending a
   // `compaction/reset` marker, NO summary. Used when compact (summary) fails
@@ -61,6 +64,7 @@ export function createCompactionEngine(deps: {
   async function compactOnce(
     session: Session,
     allowPruneOnly: boolean,
+    instructions?: string,
   ): Promise<CompactionResult> {
     const shadowedSeqs = selectShadowableRange(session, config.retainTokens)
     if (shadowedSeqs.length === 0) return { compacted: false, shadowedSeqs: [] }
@@ -76,7 +80,7 @@ export function createCompactionEngine(deps: {
     const model = config.summarizationModel ?? deps.model
     let summary: string
     try {
-      summary = await summarizeWithModel(model, replayText, config.maxTokens)
+      summary = await summarizeWithModel(model, replayText, config.maxTokens, instructions)
     } catch (err) {
       // Fail-soft: never block the agent on a summarizer failure. The warning
       // makes the otherwise-silent retry observable under sustained pressure.
@@ -137,7 +141,7 @@ export function createCompactionEngine(deps: {
       }
       return result
     },
-    compact: (session) => compactOnce(session, false),
+    compact: (session, instructions) => compactOnce(session, false, instructions),
     resetWindow: resetWindowOnce,
   }
 }

@@ -1,6 +1,6 @@
 import { createSession, deriveMessages, type Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor } from "@i-harness/core-agent"
-import type { CompactionConfig } from "@i-harness/compaction"
+import type { CompactionConfig, CompactionResult } from "@i-harness/compaction"
 import type { MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -17,6 +17,38 @@ import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import { createSessionAssembly, type ReasoningEffort } from "@i-harness/session-executor"
+
+// M33 §5: the session-compact command handler — pure (testable) surface.
+// v0 error semantics: busy text while the executor lane is running (the
+// manual compact is only supposed to run on the idle lane), the
+// "No compactable history yet." text when nothing was compacted, and a JSON
+// echo { compacted, shadowedSeqs, summary? } otherwise. `instructions` are
+// forwarded to the summarizer ("User instructions" section).
+export interface SessionCompactCommandDeps {
+  compactNow(instructions?: string): Promise<CompactionResult>
+  isRunning(): boolean
+}
+
+export async function handleSessionCompactCommand(
+  deps: SessionCompactCommandDeps,
+  input: string,
+): Promise<string> {
+  if (deps.isRunning()) {
+    return "session-compact is busy: the agent is still running — wait for the current turn to finish before compacting."
+  }
+  const parsed = JSON.parse(input) as { instructions?: unknown }
+  const instructions = parsed.instructions
+  if (instructions !== undefined && typeof instructions !== "string") {
+    throw new TypeError("session-compact: instructions must be a string")
+  }
+  const result = await deps.compactNow(instructions)
+  if (!result.compacted) return "No compactable history yet."
+  return JSON.stringify({
+    compacted: result.compacted,
+    shadowedSeqs: result.shadowedSeqs,
+    ...(result.summary !== undefined ? { summary: result.summary } : {}),
+  })
+}
 
 export interface HeadlessOptions {
   workspace: string
@@ -269,6 +301,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     registerCommand(assembly.ctx, {
       name: "session-pending",
       execute: async () => JSON.stringify(executor.pending().map((p) => ({ inputId: p.inputId, text: p.text, delivery: p.delivery }))),
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-compact",
+      description: "compact the session now (shadow + summary; optional instructions)",
+      argumentHints: "{ instructions?: string }",
+      execute: (input) => handleSessionCompactCommand(
+        { compactNow: (instructions) => assembly.compactNow(instructions), isRunning: () => executor.isRunning() },
+        input,
+      ),
     })
     // Initial task through the executor (serial lane; a resumed session's
     // recovered pending inputs precede it FIFO). drain REJECTS on the first

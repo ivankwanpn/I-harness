@@ -39,9 +39,19 @@ export async function summarizeWithModel(
   model: ModelClient,
   replayText: string,
   maxTokens: number,
+  instructions?: string,
 ): Promise<string> {
+  // M33 §5: manual session-compact instruction threading — the caller's
+  // instructions enter the prompt as their own section. Absent (undefined) →
+  // byte-identical pre-M33 prompt (the auto path passes none).
+  // NOTE (G1 merge seam): group-1's buildSummaryPrompt(shadowText,
+  // previousSummary?, instructions?) re-places this prompt; the parameter
+  // signature here is the single merge point.
+  const prompt = instructions === undefined || instructions.length === 0
+    ? `${COMPACTION_INSTRUCTION}\n\n${replayText}`
+    : `${COMPACTION_INSTRUCTION}\n\n## User instructions\n${instructions}\n\n${replayText}`
   const request: LLMRequest = {
-    messages: [{ role: "user", content: `${COMPACTION_INSTRUCTION}\n\n${replayText}` }],
+    messages: [{ role: "user", content: prompt }],
     tools: [],
     systemPrompt: "",
   }
