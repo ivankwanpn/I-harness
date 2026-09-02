@@ -71,9 +71,10 @@ export interface AgentDeps {
   reasoningEffort?: ReasoningEffort
 }
 
-// M32: canonical ReasoningEffort lives in @i-harness/llm-seam (T2) — re-export
-// rather than declare (G1 TEMPORARY declaration reconciled at merge).
-export type { ReasoningEffort } from "@i-harness/llm-seam"
+// M32: canonical ReasoningEffort lives in @i-harness/llm-seam (T2) — import
+// for local use and re-export (G1 TEMPORARY declaration reconciled at merge).
+import type { ReasoningEffort } from "@i-harness/llm-seam"
+export type { ReasoningEffort }
 
 export interface AgentResult {
   finalText: string
