@@ -27,6 +27,7 @@
  * it share one live-correct bundle.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import { createHash } from "node:crypto"
 import { realpath, stat } from "node:fs/promises"
 import type { Duplex } from "node:stream"
 import {
@@ -102,7 +103,7 @@ import { ApprovalMuxBridge } from "./approval.ts"
 import { QuestionMuxBridge } from "./questions.ts"
 import type { GoalOperation } from "@i-harness/core-session"
 import type { CommandBridge, CommandEventWire, CommandRequestWire, CommandExecuteRequestWire, FileReferencesBridge, JobKillBridge, ModelSources, PluginRegistryFace } from "./types.ts"
-import { buildModelsCatalog, mergeDirectoryRows, sectionUserProviders } from "./models.ts"
+import { buildModelsCatalog, mergeDirectoryRows, sectionUserProviders, upsertModelRows } from "./models.ts"
 
 // C5 route-local base64 validators (the branch had them in core-session; m26
 // core-session keeps its append-time validation only, and the upload route
@@ -2135,37 +2136,53 @@ export function createWebHost(opts: WebHostOptions): WebHost {
       res.end(JSON.stringify({ directory }))
       return
     }
-    if (req.method === "POST" && url.pathname === "/api/llm/probe") {
-      const registry = modelSources?.providerRegistry
-      if (registry === undefined) { res.writeHead(404); res.end(); return }
-      const body = await readJsonObject(req, res, "probe-invalid")
-      if (body === undefined) return
-      if (typeof body.route !== "string" || body.route.trim() === ""
-        || (body.baseURL !== undefined && typeof body.baseURL !== "string")
-        || (body.apiKey !== undefined && typeof body.apiKey !== "string")
-        || (body.protocol !== undefined && typeof body.protocol !== "string")) {
-        res.writeHead(400, { "content-type": "application/json" })
-        res.end(JSON.stringify({
-          error: "route is required; baseURL/apiKey/protocol must be strings",
-          code: "probe-invalid",
-        }))
-        return
-      }
-      // Controller pin (task 7 review — final rule): the probe protocol is
-      // resolved CONTROLLER-SIDE, chain = section value > SPA-passed DRAFT >
-      // DEFAULT (SEEDED_PROTOCOLS is EMPTY under the amendment — the seeded
-      // profiles were removed; the map arm stays as the defensive tail of the
-      // same chain for embedded registries). The SPA-passed value is trusted
-      // ONLY for a route the user section knows nothing about — the create
-      // dialog's UNSAVED draft: the draft already carries its baseURL/apiKey
-      // to the same host, so the unsigned (three-value-checked) protocol is
-      // unprivileged — and it is the flagship flow (an unsaved anthropic draft
-      // MUST probe with x-api-key + anthropic-version, not Bearer). A route
-      // the section configures always resolves from the section (the SPA value
-      // is discarded there — "never trusted" applies to the configured case);
-      // no draft → the generic default.
-      let userCfg: SettingsProviderConfig | undefined
+    // ── probe chain shared by POST /api/llm/probe + /api/llm/probe-apply ─────
+    /** Shape guard for both probe routes: route is a non-blank string; the
+     * draft fields are optional strings. The type predicate narrows the wire
+     * body (extra keys pass through harmlessly — readJsonObject already
+     * rejected non-objects). */
+    function isProbeInput(body: Record<string, unknown>): body is {
+      route: string; baseURL?: string; apiKey?: string; protocol?: string
+    } {
+      return typeof body.route === "string" && body.route.trim() !== ""
+        && (body.baseURL === undefined || typeof body.baseURL === "string")
+        && (body.apiKey === undefined || typeof body.apiKey === "string")
+        && (body.protocol === undefined || typeof body.protocol === "string")
+    }
+
+    /** Controller pin (task 7 review — final rule): the probe protocol is
+     * resolved CONTROLLER-SIDE, chain = section value > SPA-passed DRAFT >
+     * DEFAULT (SEEDED_PROTOCOLS is EMPTY under the amendment — the seeded
+     * profiles were removed; the map arm stays as the defensive tail of the
+     * same chain for embedded registries). The SPA-passed value is trusted
+     * ONLY for a route the user section knows nothing about — the create
+     * dialog's UNSAVED draft: the draft already carries its baseURL/apiKey
+     * to the same host, so the unsigned (three-value-checked) protocol is
+     * unprivileged — and it is the flagship flow (an unsaved anthropic draft
+     * MUST probe with x-api-key + anthropic-version, not Bearer). A route
+     * the section configures always resolves from the section (the SPA value
+     * is discarded there — "never trusted" applies to the configured case);
+     * no draft → the generic default.
+     * Probe-key chain (bug fix 2): an EXPLICIT (non-empty) draft apiKey wins —
+     * the SPA's unsaved key is the first-class probe secret; a saved route
+     * (userCfg) with an apiKeyEnv resolves it via the credential store's
+     * env>file chain (resolve is the optional seam piece); neither → keyless
+     * (an open gateway probes unchanged). The draft baseURL still passes
+     * VERBATIM (ROOT convention — nothing is stored by probing). A resolve()
+     * rejection (invalid ref) surfaces via the forwardModelsError mapping
+     * (credential-invalid-ref → 400).
+     * The store is LOADED here (fresh-read for the pre-probe protocol
+     * resolution). probe-apply invokes it AGAIN after the probe — the upsert
+     * merges against the freshest stored rows, never a pre-probe snapshot. */
+    async function resolveProbeChain(body: {
+      route: string; baseURL?: string; apiKey?: string; protocol?: string
+    }): Promise<{
+      userCfg: SettingsProviderConfig | undefined
+      protocol: SettingsProviderProtocol
+      probeKey: string | undefined
+    }> {
       const settingsStore = modelSources?.settingsStore
+      let userCfg: SettingsProviderConfig | undefined
       if (settingsStore !== undefined) {
         await settingsStore.load()
         const userProviders = sectionUserProviders(describeSection("llm", settingsStore))
@@ -2183,24 +2200,31 @@ export function createWebHost(opts: WebHostOptions): WebHost {
           : isWireProtocol(body.protocol)
             ? body.protocol
             : DEFAULT_PROVIDER_PROTOCOL
+      const probeKey =
+        body.apiKey !== undefined && body.apiKey !== ""
+          ? body.apiKey
+          : userCfg?.apiKeyEnv !== undefined && userCfg.apiKeyEnv !== ""
+              && modelSources?.credentialStore?.resolve !== undefined
+            ? modelSources.credentialStore.resolve(userCfg.apiKeyEnv)
+            : undefined
+      return { userCfg, protocol, probeKey }
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/llm/probe") {
+      const registry = modelSources?.providerRegistry
+      if (registry === undefined) { res.writeHead(404); res.end(); return }
+      const body = await readJsonObject(req, res, "probe-invalid")
+      if (body === undefined) return
+      if (!isProbeInput(body)) {
+        res.writeHead(400, { "content-type": "application/json" })
+        res.end(JSON.stringify({
+          error: "route is required; baseURL/apiKey/protocol must be strings",
+          code: "probe-invalid",
+        }))
+        return
+      }
       try {
-        // Probe-key chain (bug fix 2): an EXPLICIT (non-empty) draft apiKey
-        // wins — the SPA's unsaved key is the first-class probe secret; a
-        // saved route (userCfg) with an apiKeyEnv resolves it via the
-        // credential store's env>file chain (resolve is the optional seam
-        // piece); neither → keyless (an open gateway probes unchanged).
-        // The draft baseURL still passes VERBATIM (ROOT convention — nothing
-        // is stored by probing; the provider builds {base}/v1/models while
-        // the chat client builds {base}/v1/chat/completions from the same
-        // value). A resolve() rejection (invalid ref) surfaces via the
-        // forwardModelsError mapping (credential-invalid-ref → 400).
-        const probeKey =
-          body.apiKey !== undefined && body.apiKey !== ""
-            ? body.apiKey
-            : userCfg?.apiKeyEnv !== undefined && userCfg.apiKeyEnv !== ""
-                && modelSources?.credentialStore?.resolve !== undefined
-              ? modelSources.credentialStore.resolve(userCfg.apiKeyEnv)
-              : undefined
+        const { protocol, probeKey } = await resolveProbeChain(body)
         const models = await registry.probeModels(body.route, {
           ...(body.baseURL !== undefined ? { baseURL: body.baseURL } : {}),
           ...(probeKey !== undefined ? { apiKey: probeKey } : {}),
@@ -2208,6 +2232,56 @@ export function createWebHost(opts: WebHostOptions): WebHost {
         })
         res.writeHead(200, { "content-type": "application/json" })
         res.end(JSON.stringify({ models }))
+      } catch (error) {
+        if (forwardModelsError(res, error)) return
+        throw error
+      }
+      return
+    }
+    if (req.method === "POST" && url.pathname === "/api/llm/probe-apply") {
+      const registry = modelSources?.providerRegistry
+      const settingsStore = modelSources?.settingsStore
+      if (registry === undefined || settingsStore === undefined) { res.writeHead(404); res.end(); return }
+      const body = await readJsonObject(req, res, "probe-apply-invalid")
+      if (body === undefined) return
+      if (!isProbeInput(body)) {
+        res.writeHead(400, { "content-type": "application/json" })
+        res.end(JSON.stringify({
+          error: "route is required; baseURL/apiKey/protocol must be strings",
+          code: "probe-apply-invalid",
+        }))
+        return
+      }
+      try {
+        // Spec §2.2: probe FIRST (same controller-side chain as /api/llm/probe);
+        // a probe failure keeps settings untouched — never a half-write. The
+        // draft apiKey stays in memory only (never persisted, never echoed).
+        const { protocol, probeKey } = await resolveProbeChain(body)
+        const discovered = await registry.probeModels(body.route, {
+          ...(body.baseURL !== undefined ? { baseURL: body.baseURL } : {}),
+          ...(probeKey !== undefined ? { apiKey: probeKey } : {}),
+          protocol,
+        })
+        // The probe took time — re-resolve so the upsert merges against the
+        // freshest stored rows (a concurrent edit wins, never a pre-probe
+        // snapshot).
+        const { userCfg } = await resolveProbeChain(body)
+        const existing = Array.isArray(userCfg?.models) ? userCfg.models : undefined
+        const merged = upsertModelRows(existing, discovered)
+        await mutateSection("llm", [
+          { op: "set", path: ["providers", body.route, "models"], value: merged },
+        ], settingsStore)
+        const fingerprint = createHash("sha256")
+          .update(body.route).update("\n")
+          .update(body.baseURL ?? "").update("\n")
+          .update(body.apiKey ?? "")
+          .digest("hex")
+        res.writeHead(200, { "content-type": "application/json" })
+        res.end(JSON.stringify({
+          adopted: discovered.length,
+          models: discovered,
+          fingerprint,
+        }))
       } catch (error) {
         if (forwardModelsError(res, error)) return
         throw error
