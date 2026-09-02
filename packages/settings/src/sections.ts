@@ -96,13 +96,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const REASONING_EFFORTS = ["none", "low", "medium", "high"] as const
 
 /**
- * Closed set of provider wire protocols (D2 — explicit three-value dropdown):
+ * Closed set of provider wire protocols (D2 — explicit dropdown):
  * `openai-completions` → llm-openai-compatible, `openai-responses` →
- * llm-openai, `anthropic-messages` → llm-anthropic. The runtime enum lives
- * HERE (not index.ts) because the section schema needs the runtime list while
- * sections.ts stays type-only against index.ts (no runtime cycle).
+ * llm-openai, `anthropic-messages` → llm-anthropic, `gemini` → llm-gemini,
+ * `bedrock` → llm-bedrock (M30 first-class providers). The runtime enum
+ * lives HERE (not index.ts) because the section schema needs the runtime
+ * list while sections.ts stays type-only against index.ts (no runtime cycle).
  */
-export const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "anthropic-messages"] as const
+export const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"] as const
 
 /** The wire protocol of one llm.providers.<route> entry. */
 export type SettingsProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number]

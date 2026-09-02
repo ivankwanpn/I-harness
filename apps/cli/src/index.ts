@@ -3,7 +3,7 @@ import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
 import { ndJsonStream } from "@agentclientprotocol/sdk"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
-import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
+import { createProviderRegistry, buildModelClient, type ProviderModelContext } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
@@ -33,6 +33,27 @@ export function pickWebPort(args: string[], envPort: string | undefined): number
     : envPort !== undefined ? parsePort(envPort) : 4310
 }
 
+// M30: per-model context windows for the built-in gemini/bedrock profiles
+// (M15 records — get_context_remaining / budget consumers read these; a model
+// outside these maps to the profile-level window, absence = "unknown").
+export const GEMINI_MODEL_CONTEXTS: Record<string, ProviderModelContext> = {
+  "gemini-2.5-pro": { contextWindow: 1_048_576 },
+  "gemini-2.5-flash": { contextWindow: 1_048_576 },
+  "gemini-2.5-flash-lite": { contextWindow: 1_048_576 },
+  "gemini-2.0-flash": { contextWindow: 1_048_576 },
+  "gemini-2.0-flash-lite": { contextWindow: 1_048_576 },
+  "gemini-1.5-pro": { contextWindow: 2_097_152 },
+  "gemini-1.5-flash": { contextWindow: 1_048_576 },
+}
+
+export const BEDROCK_MODEL_CONTEXTS: Record<string, ProviderModelContext> = {
+  "anthropic.claude-3-5-sonnet-20241022": { contextWindow: 200_000 },
+  "anthropic.claude-3-7-sonnet-20250219": { contextWindow: 200_000 },
+  "anthropic.claude-sonnet-4-0-20250514": { contextWindow: 200_000 },
+  "anthropic.claude-3-5-haiku-20241022": { contextWindow: 200_000 },
+  "anthropic.claude-3-opus-20240229": { contextWindow: 200_000 },
+}
+
 export function parseModel(modelSpec: string, apiKey: string): ModelClient {
   const [provider, model] = modelSpec.split(":")
   const reg = createProviderRegistry()
@@ -40,6 +61,15 @@ export function parseModel(modelSpec: string, apiKey: string): ModelClient {
   reg.register({ name: "openai", displayName: "OpenAI", protocol: "openai-responses", apiKey, models: [], defaultModel: "gpt-4o" })
   reg.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible", baseUrl: "https://api.deepseek.com", apiKey, models: [], defaultModel: "deepseek-chat" })
   reg.register({ name: "anthropic", displayName: "Anthropic", protocol: "anthropic-messages", apiKey, models: [], defaultModel: "claude-3-5-sonnet-latest" })
+  reg.register({ name: "gemini", displayName: "Google Gemini", protocol: "gemini", apiKey, models: [], defaultModel: "gemini-2.5-pro", modelContexts: GEMINI_MODEL_CONTEXTS })
+  reg.register({
+    name: "bedrock",
+    displayName: "Amazon Bedrock",
+    protocol: "bedrock",
+    models: Object.keys(BEDROCK_MODEL_CONTEXTS),
+    defaultModel: "anthropic.claude-3-5-sonnet-20241022",
+    modelContexts: BEDROCK_MODEL_CONTEXTS,
+  })
   const profile = reg.get(provider ?? "")
   if (!profile) throw new Error(`unknown model provider: ${provider}`)
   return buildModelClient(profile, model)
@@ -151,16 +181,19 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   // --model requires --api-key: fail loud rather than silently falling back.
+  // M30: bedrock is key-less by design (AWS credential chain) — the key
+  // requirement is exempted for the bedrock route only.
   let model: ModelClient | undefined
   if (modelIdx !== -1) {
     const modelSpec = args[modelIdx + 1]
     const apiKey = args[keyIdx + 1]
-    if (keyIdx === -1 || !modelSpec || !apiKey) {
+    const needsApiKey = modelSpec?.split(":")[0] !== "bedrock"
+    if (!modelSpec || (needsApiKey && (keyIdx === -1 || !apiKey))) {
       console.error("--model requires --api-key KEY")
       return Promise.resolve(1)
     }
     try {
-      model = parseModel(modelSpec, apiKey)
+      model = parseModel(modelSpec, apiKey ?? "")
     } catch (err) {
       console.error(err instanceof Error ? err.message : String(err))
       return Promise.resolve(1)
