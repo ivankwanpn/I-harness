@@ -45,7 +45,7 @@ pnpm e2e             # end-to-end: real CLI + real tools (spawned process / runH
 
 Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
 
-## Development status (M1 → M29)
+## Development status (M1 → M34)
 
 The full **backend-complete** milestone wheel (M1–M25) is done, and the
 M26–M29 extension wheel that followed — this is the "backend complete before
@@ -70,11 +70,18 @@ frontend" gate:
 | M27 | Stabilization + integration: cli web --port, external contracts, get_context_remaining, web-host routes + /api/health, crash-repair chain, skills shadow selector, settings layering, `@i-harness/sdk` | ✅ |
 | M28 | Cleanup: SDK wire contract v0 freeze, R-B13 close, MCP OAuth real-AS integration, fs-watch (chokidar), ACP (v0 automation subset) | ✅ |
 | M29 | SQLite persistence split: JSONL-only authority + reconcile-on-search file-backed index, remove `--session-backend` | ✅ |
+| M30 | First-class providers: gemini (native), bedrock (AWS Converse), double dispatch, model contexts | ✅ |
+| M31 | Models/web surface: unified context-window resolution (per-session), `probe-apply` discover→adopt, no hardcoded catalogs, websearch dsh-honest contract + trust notice | ✅ |
+| M32 | Model cards (`model-catalog.json`: `contextWindow`/`maxOutputTokens`) + 6-level reasoning effort × 4 protocol translation tables (generation-aware) | ✅ |
+| M33 | Compaction four-way absorption: anchored summary + 8-section prompt, model-free prune pass, overhead counting, 3-turn hysteresis + 3-strike breaker, `session-compact` command | ✅ |
+| M34 | Compaction policy: per-model `modelPolicies`, `compaction/attempt` analytics, summary degenerate floor, until-success breaker + sticky suppression | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
 
-## Package structure (65 packages + apps/cli)
+**Full capability inventory: `docs/CAPABILITIES.md`**（能力全景/邊界,以 m34 為準）。
+
+## Package structure (63 packages + apps/cli)
 
 ```
 packages/
