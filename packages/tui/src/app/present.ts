@@ -53,8 +53,10 @@ export interface TuiAppState {
   toasts: Array<{ text: string; until: number }>
   panes: Set<string>
   shortcuts: ShortcutBarState
-  /** Screen: "agent" (default) or the welcome hero (spec §2a). */
-  screen?: "agent" | "welcome"
+  /** Screen: "agent" (default), the welcome hero (spec §2a), or "minimal"
+   * (M38a spec §0/§1.1 — the loop drives the live-region writer through the
+   * InlineHost; present() never draws cells on that screen). */
+  screen?: "agent" | "welcome" | "minimal"
   welcome?: WelcomeState
   /** Pane content (todo/tasks/queue/btw) — rendered when Panes flags/data set. */
   paneData?: PaneState
@@ -333,8 +335,18 @@ export function present(
   opts: PresentOptions = {},
 ): { dirty: boolean } {
   const buf = renderer.buffer
-  buf.clear()
   const cap = opts.cap
+
+  // Minimal mode (M38a G2): NO fullscreen cell buffer — the loop routes every
+  // frame to the InlineLiveRegion writer (loop.frameMinimal); this branch
+  // commits an empty diff (the renderer stays untouched; the host teardown
+  // clears the terminal when the process exits).
+  if (app.screen === "minimal") {
+    renderer.commit()
+    return { dirty: false }
+  }
+
+  buf.clear()
   const view = makeDraw(buf, palette, cap)
   const area = { cols: buf.width, rows: buf.height }
 
