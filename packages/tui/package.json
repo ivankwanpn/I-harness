@@ -1,0 +1,19 @@
+{
+  "name": "@i-harness/tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/llm-mock": "workspace:*",
+    "@i-harness/session-executor": "workspace:*",
+    "@i-harness/tui-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@xterm/headless": "^6.0.0",
+    "node-pty": "^1.1.0",
+    "yaml": "^2.6.0"
+  }
+}
