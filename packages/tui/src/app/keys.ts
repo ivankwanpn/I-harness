@@ -71,6 +71,9 @@ export interface KeymapState {
   dropdown?: "slash" | "completion" | "file-search"
   /** True on the welcome screen (spec §2a). */
   welcome?: boolean
+  /** True in minimal mode (M38a — spec §1.1): the prompt is ALWAYS focused
+   * and there is no scrollback surface; Esc is a no-op guard. */
+  minimal?: boolean
 }
 
 const isShiftTab = (ev: Kbd): boolean =>
@@ -81,8 +84,13 @@ const isShiftTab = (ev: Kbd): boolean =>
 export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
   // Welcome screen routes everything through its own table (spec §2a).
   if (state.welcome === true) return welcomeKey(ev)
-  // Overlay/panel/dropdown preempts the base keymap (spec §4).
+  // Overlay/panel/dropdown preempts the base keymap (spec §4) — an open
+  // slash dropdown still gets its accept/nav keys in minimal mode.
   if (state.overlay !== undefined) return overlayKeys(ev, state.overlay)
+  // Minimal mode (M38a): quick-prompt table — Enter submits, Esc is a
+  // no-op guard (no scrollback surface, no quit-arming on the quick prompt;
+  // `/minimal`/`/fullscreen` relay lives in the loop's submit path).
+  if (state.minimal === true) return minimalKey(ev)
 
   if (state.focused === "scrollback") {
     switch (ev.code) {
@@ -152,6 +160,31 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
     if (ev.key === "?" && state.promptText.length === 0) return "open-command-palette"
   }
   // M37b: emacs motion, paste, char editing (the loop edits text directly).
+  return "none"
+}
+
+/**
+ * Minimal-mode keys (M38a, spec §1.1): the quick prompt is the only surface.
+ * Enter submits (Ctrl+Enter interjects); Esc is a no-op GUARD — the draft
+ * is not cleared and there is no quit-arming (Ctrl+C on an empty prompt is
+ * also a no-op); Ctrl+Q quits; Ctrl+S opens the session picker. Slash
+ * commands route through the loop's submit text match (ModeSwitch relay).
+ */
+export function minimalKey(ev: Kbd): AppAction {
+  if (ev.code === "Enter") {
+    if (ev.ctrl) return "interject"
+    if (ev.shift || ev.alt) return "newline"
+    return "submit"
+  }
+  if (ev.code === "Esc") return "none"
+  if (ev.code === "char" && ev.ctrl) {
+    switch (ev.key) {
+      case "q": return "quit"
+      case "s": return "sessions"
+      case "m": return "toggle-multiline"
+      default: return "none"
+    }
+  }
   return "none"
 }
 

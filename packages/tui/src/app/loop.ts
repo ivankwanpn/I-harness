@@ -18,6 +18,10 @@ import { dispatchKey, shortcutsFor } from "./keys.ts"
 import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
 import { present } from "./present.ts"
 import type { TuiAppState } from "./present.ts"
+import type { RegionLine } from "../minimal/contracts.ts"
+import { MinimalCommits, commitDelta, displayToRegion } from "../minimal/commit.ts"
+import { composeRegion } from "../minimal/live-region.ts"
+import { fmtCompact } from "../views/status.ts"
 import type { TurnPhase } from "../views/turn-status.ts"
 import type { PaneState } from "../views/agent.ts"
 import type { SlashEntry } from "../views/slash-dropdown.ts"
@@ -55,6 +59,39 @@ export interface TuiAppOptions {
   completions?: () => CompletionEntry[]
   /** Session listing adapter (G1's listSessionsFromStore plugs in here). */
   listSessions?: () => Promise<SessionSummary[]>
+  /** UI surface mode (M38a G2): fullscreen cell TUI (default) or the minimal
+   * live-region view (spec §0/§1.1 — the terminal's own scrollback holds
+   * history; the loop writes through the InlineHost, not the cell buffer). */
+  mode?: "fullscreen" | "minimal"
+  /** Already-constructed minimal live-region host (G1's engine adapter). */
+  inline?: InlineHost
+  /** Lazy live-region factory — hosts wire G1's module dynamically (dynamic
+   * import keeps the host compiling while G1 is in flight); resolving
+   * undefined falls back to the fullscreen agent view. */
+  inlineFactory?: () => Promise<InlineHost | undefined>
+  /** Slash relay (spec §1): `/minimal`/`/fullscreen` — the host's ModeSwitch
+   * spawns the same session relaunched in the target mode (returns true =
+   * handled; the loop quits). */
+  modeSwitch?: (cmd: string) => boolean
+}
+
+/** Minimal live-region host (M38a G2) — what the loop drives in minimal
+ * mode. A host wraps G1's InlineLiveRegion (contracts.ts): commit pushes
+ * print-once content into the native scrollback; drawRegion repaints the
+ * region rows; everything lands in the app's write sink (ledger). */
+export interface InlineHost {
+  /** Append committed content above the region (print-once). */
+  commit(lines: RegionLine[], write: (s: string) => void): void
+  /** Repaint the live-region rows (tail window + status + prompt). */
+  drawRegion(write: (s: string) => void): void
+  /** Height of the live region at the current geometry. */
+  regionRows(): number
+  /** Resize geometry (next drawRegion full-repaints). */
+  resize(cols: number, rows: number): void
+  /** Push G2-composed region rows (tail window + todos + status + prompt).
+   * OPTIONAL harmonization seam — the G1 contract exposes no region-content
+   * setter; hosts that omit it repaint their own commit-window only. */
+  setRegion?(lines: RegionLine[]): void
 }
 
 const ANIM_MS = 33 // 30fps pump
@@ -93,9 +130,15 @@ export class TuiApp {
   private armedQuit = false
   private turnStartedAt = 0
   private phaseStartedAt = 0
+  /** UI surface mode (M38a): distinct from `app.mode` (normal/plan discipline). */
+  private readonly uiMode: "fullscreen" | "minimal"
+  private inlineHost: InlineHost | undefined
+  private inlineResolved = false
+  private commits: MinimalCommits | undefined
 
   constructor(opts: TuiAppOptions) {
     this.opts = opts
+    this.uiMode = opts.mode ?? "fullscreen"
     const model = "mock-model"
     this.app = {
       title: "untitled",
@@ -125,7 +168,7 @@ export class TuiApp {
       toasts: [],
       panes: new Set<string>(),
       shortcuts: { items: shortcutsFor({ focused: "prompt", multiLine: false, turnRunning: false, mode: "normal" }) },
-      screen: opts.initialScreen ?? "agent",
+      screen: opts.initialScreen ?? (this.uiMode === "minimal" ? "minimal" : "agent"),
       welcome: {
         version: "0.1.0",
         menus: [
@@ -147,10 +190,23 @@ export class TuiApp {
   /** Launch the pumps; resolves when the input/backend iterators finish. */
   async start(): Promise<void> {
     this.stopped = false
+    await this.resolveInlineNow()
+    // Minimal requested without a host (no inline option / factory resolved
+    // undefined) falls back to the fullscreen agent view.
+    if (this.uiMode === "minimal" && this.inlineHost === undefined) {
+      this.app.screen = "agent"
+    }
     this.app.engine.setWidth(this.opts.renderer.buffer.width)
     this.animTimer = setInterval(() => this.animPump(), ANIM_MS)
     this.runP = Promise.all([this.pumpInput(), this.pumpBackend()])
     await this.runP
+  }
+
+  /** Terminal resize relay — engine re-wrap + minimal inline-host geometry
+   * (the host's renderer does not exist in minimal mode). */
+  setSize(cols: number, rows: number): void {
+    this.app.engine.setWidth(cols)
+    this.inlineHost?.resize(cols, rows)
   }
 
   /** Idempotent: stops the pumps/timer (a pending IO iterator ends the run). */
@@ -163,7 +219,9 @@ export class TuiApp {
     await this.runP
   }
 
-  /** One repaint (coalesced) — present + flush; flush("") = zero-byte idle. */
+  /** One repaint (coalesced) — present + flush; flush("") = zero-byte idle.
+   * Minimal mode (M38a): the frame goes to the live-region writer instead —
+   * NO cell renderer (no fullscreen buffer at all). */
   frame(): void {
     if (this.stopped) return
     const t = this.opts.now?.() ?? Date.now()
@@ -173,6 +231,10 @@ export class TuiApp {
       turn.nowMs = t
       turn.phaseMs = t - this.phaseStartedAt
       turn.turnMs = t - this.turnStartedAt
+    }
+    if (this.inlineActive()) {
+      this.frameMinimal()
+      return
     }
     present(this.app, this.opts.renderer, this.opts.palette, this.opts.glyphs, {
       compact: this.opts.compact,
@@ -325,6 +387,11 @@ export class TuiApp {
     if (this.stopped) return
     const t = this.opts.now?.() ?? Date.now()
     this.app.status.tickMs = t
+    // Minimal mode: the 500ms tail-flush sits on THIS pump (idle tick) — a
+    // long assistant stream with no block close commits its partial delta.
+    if (this.inlineActive() && this.minimalCommits().idleFlushDue(t)) {
+      this.commitMinimalDelta()
+    }
     if (this.needsAnim(t)) this.requestFrame()
   }
 
@@ -384,6 +451,7 @@ export class TuiApp {
       overlay: ov?.kind,
       dropdown: ov?.dropdown,
       welcome: this.app.screen === "welcome",
+      minimal: this.inlineActive(),
     }
   }
 
@@ -401,6 +469,9 @@ export class TuiApp {
 
   private onBackend(ev: TuiEvent): void {
     this.opts.engine.append(ev)
+    // Minimal commit pipeline (M38a): boundary events commit the engine
+    // delta print-once; the region repaint rides the frame below.
+    if (this.inlineActive()) this.minimalOnEvent(ev)
     const now = this.opts.now?.() ?? Date.now()
     switch (ev.type) {
       case "turn":
@@ -502,6 +573,15 @@ export class TuiApp {
   private submitPrompt(): void {
     const text = this.app.prompt.text.trim()
     if (text.length === 0) return // queue-top force-send lands M38 (spec §4)
+    // Mode-switch relay (spec §1): "/minimal"/"/fullscreen" text match — the
+    // host spawns the SAME session relaunched in the target mode and the loop
+    // ends this process (quitNow); nothing else is submitted.
+    const modeSwitch = this.opts.modeSwitch
+    if (modeSwitch !== undefined && modeSwitch(text)) {
+      this.clearPrompt()
+      void this.quitNow()
+      return
+    }
     this.app.history.push(this.app.prompt.text)
     this.app.historyIndex = this.app.history.length
     this.clearPrompt()
@@ -857,5 +937,117 @@ export class TuiApp {
       this.frameQueued = false
       if (!this.stopped) this.frame()
     })
+  }
+
+  // ------------------------------------------------------------------ minimal mode (M38a G2)
+
+  /** Active when the minimal host resolved — everything (frame, keys,
+   * commits) routes through the InlineHost + write sink, never the cells. */
+  private inlineActive(): boolean {
+    return this.inlineHost !== undefined
+  }
+
+  private minimalCommits(): MinimalCommits {
+    this.commits ??= new MinimalCommits(this.opts.engine, { now: this.opts.now })
+    return this.commits
+  }
+
+  private async resolveInlineNow(): Promise<void> {
+    if (this.inlineResolved) return
+    this.inlineResolved = true
+    if (this.opts.inline !== undefined) {
+      this.inlineHost = this.opts.inline
+      return
+    }
+    const factory = this.opts.inlineFactory
+    if (factory === undefined || this.uiMode !== "minimal") return
+    this.inlineHost = await factory().catch(() => undefined)
+  }
+
+  /** Boundary → commit the engine delta print-once; otherwise the 500ms
+   * idle check (long stream) may commit right away. */
+  private minimalOnEvent(ev: TuiEvent): void {
+    const commits = this.minimalCommits()
+    const due = commits.onEvent(ev)
+    if (due || commits.idleFlushDue(this.opts.now?.() ?? Date.now())) {
+      this.commitMinimalDelta()
+    }
+  }
+
+  /** pendingDelta → InlineHost.commit; all bytes through the app sink. */
+  private commitMinimalDelta(): void {
+    const host = this.inlineHost
+    if (host === undefined) return
+    commitDelta(host, this.minimalCommits().pendingDelta(), (s) => this.opts.write?.(s))
+  }
+
+  /** Minimal frame: refresh the region content (todos/status/prompt from the
+   * app state — the tail window re-read from the engine) + `drawRegion`
+   * repaint. No cell renderer touch at all. */
+  private frameMinimal(): void {
+    const host = this.inlineHost!
+    host.setRegion?.(this.composeMinimalRegion())
+    host.drawRegion((s) => this.opts.write?.(s))
+  }
+
+  private composeMinimalRegion(): RegionLine[] {
+    const host = this.inlineHost!
+    const budget = Math.max(2, host.regionRows())
+    const total = this.opts.engine.lineCount()
+    // Over-fetch by the todo height +1 so todo rows don't starve the tail
+    // window; composeRegion truncates the tail (keeps the LAST lines).
+    const window = Math.min(total, budget + 1)
+    const tail = this.opts.engine.viewport(Math.max(0, total - window), window).map(displayToRegion)
+    return composeRegion(
+      {
+        tail,
+        todos: this.todoRows(),
+        status: this.statusRow(),
+        prompt: this.promptRow(),
+        info: this.infoRow(),
+      },
+      budget,
+      {},
+    )
+  }
+
+  /** Status row (spec §5.5): `model · flag · context · queued`. */
+  private statusRow(): RegionLine {
+    const s = this.app.status
+    const parts: string[] = [s.model]
+    if (s.plan) parts.push("plan")
+    if (s.contextUsed !== undefined && s.contextUsed >= 0) {
+      const used = fmtCompact(s.contextUsed)
+      parts.push(
+        s.contextTotal !== undefined && s.contextTotal > 0
+          ? `${used} / ${fmtCompact(s.contextTotal)}`
+          : used,
+      )
+    }
+    if (s.queue > 0) parts.push(`+${s.queue}`)
+    return { runs: [{ text: parts.join(" · "), style: "dim" }] }
+  }
+
+  /** Prompt chrome info row (plans/multiline flags; title fallback). */
+  private infoRow(): RegionLine {
+    const p = this.app.prompt
+    const parts: string[] = []
+    if (p.plan) parts.push("plan")
+    if (p.multiLine) parts.push("multiline")
+    const text = parts.length > 0 ? parts.join(" · ") : this.app.title
+    return { runs: [{ text, style: "muted" }] }
+  }
+
+  /** The prompt row — the bottom row, always focused; `❯` pinned glyph. */
+  private promptRow(): RegionLine {
+    const p = this.app.prompt
+    return { runs: [{ text: p.text, style: "text" }], glyph: "❯" }
+  }
+
+  /** Todo summary lines (spec §1.1 `… · todos · …`) — hidden at 0 items. */
+  private todoRows(): RegionLine[] {
+    const t = this.app.status.todo
+    if (t.total <= 0) return []
+    return [{ runs: [{ text: `${t.done}/${t.total}`, style: "muted" }], glyph: "✓" }]
   }
 }

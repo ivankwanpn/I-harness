@@ -9,7 +9,7 @@
 // interaction / @i-harness/session-persistence* — see package.json).
 
 export { TuiApp } from "./app/loop.ts"
-export type { TuiAppOptions, InputSource } from "./app/loop.ts"
+export type { TuiAppOptions, InputSource, InlineHost } from "./app/loop.ts"
 export type { TuiAppState } from "./app/present.ts"
 // G4: the G1↔G2 overlay binder (seam adapters) — a host wires
 // `app.state().overlay = bindPermissionOverlay(surf, state, opts)`.
@@ -27,6 +27,7 @@ export type {
 } from "./app/overlay-seam.ts"
 export type { OverlaySeam } from "./app/present.ts"
 export { createScrollbackEngine } from "./scrollback/engine.ts"
+import type { InlineLiveRegion } from "./minimal/contracts.ts"
 export type { ScrollbackEngineOptions } from "./scrollback/engine.ts"
 export { createEmbeddedBackend, defaultEmbeddedFactory } from "./backend/embedded.ts"
 export type { EmbeddedOptions, EmbeddedFactoryOptions } from "./backend/embedded.ts"
@@ -58,3 +59,30 @@ export type {
   ToolKind,
   TuiEvent,
 } from "./contracts.ts"
+// G1↔G2 minimal-mode contracts (contracts.ts is G1's — re-exported read-only).
+export type { InlineLiveRegion, InlineMetrics, RegionLine } from "./minimal/contracts.ts"
+// M38a G2: minimal-mode views (pure content model) + print-once commit pipeline.
+export { composeRegion } from "./minimal/live-region.ts"
+export type { ComposeRegionOptions, LiveRegionState } from "./minimal/live-region.ts"
+export { MinimalCommits, commitDelta, displayToRegion } from "./minimal/commit.ts"
+export type { CommitEngine, CommitOptions, CommitWriter } from "./minimal/commit.ts"
+export { ModeSwitch, defaultRelaunchSpawn, parseModeArg, relaunchArgs } from "./minimal/mode.ts"
+export type { ModeSwitchOptions, RelaunchSpawn } from "./minimal/mode.ts"
+
+/** G1's inline-engine factory shape (createInlineLiveRegion) — the loader
+ * types it loosely so this surface compiles before G1 lands. */
+export type MinimalHostFactory = (opts?: { cols?: number; rows?: number }) => InlineLiveRegion
+
+/** Lazy G1 inline-engine loader — the DYNAMIC import keeps this surface
+ * compiling while G1's inline.ts is still in flight; when the module is not
+ * there yet it resolves undefined (hosts fall back to fullscreen; a later
+ * relaunch picks it up). Resolved through the app's own package dir. */
+export async function loadMinimalHost(): Promise<MinimalHostFactory | undefined> {
+  const spec: string = "./minimal/inline.ts"
+  try {
+    const mod = (await import(spec)) as { createInlineLiveRegion?: MinimalHostFactory }
+    return mod.createInlineLiveRegion
+  } catch {
+    return undefined
+  }
+}

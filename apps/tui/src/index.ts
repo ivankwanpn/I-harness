@@ -34,8 +34,8 @@ import {
   resolvePalette,
 } from "@i-harness/tui-core"
 import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
-import { createScrollbackEngine, defaultEmbeddedFactory, TuiApp } from "@i-harness/tui"
-import type { BackendClient, InputSource } from "@i-harness/tui"
+import { createScrollbackEngine, defaultEmbeddedFactory, loadMinimalHost, ModeSwitch, TuiApp } from "@i-harness/tui"
+import type { BackendClient, InlineHost, InputSource } from "@i-harness/tui"
 
 // ------------------------------------------------------------------ flags
 
@@ -45,6 +45,9 @@ export interface TuiFlags {
   model?: string
   yes: boolean
   resume?: string
+  /** Minimized UI (M38a spec §0/§1.1): the terminal's own scrollback holds
+   * history; the app writes through the G1 inline live-region engine. */
+  mode?: "minimal" | "fullscreen"
 }
 
 export function parseFlags(argv: string[]): TuiFlags {
@@ -56,11 +59,19 @@ export function parseFlags(argv: string[]): TuiFlags {
       case "--model": flags.model = argv[++i]; break
       case "--yes": flags.yes = true; break
       case "--resume": flags.resume = argv[++i]; break
+      case "--minimal": flags.mode = "minimal"; break
+      case "--fullscreen": flags.mode = "fullscreen"; break
+      case "--mode": {
+        const v = argv[++i]
+        if (v === "minimal") flags.mode = "minimal"
+        else if (v === "fullscreen") flags.mode = "fullscreen"
+        break
+      }
       case "--help":
       case "-h":
         process.stdout.write(
           "usage: tui [--prompt <text>] [--workspace <dir>] [--model <spec>]\n" +
-          "           [--yes] [--resume <sessionId>]\n",
+          "           [--yes] [--resume <sessionId>] [--minimal]\n",
         )
         process.exit(0)
     }
@@ -82,6 +93,33 @@ function out(s: string): void {
     const code = (e as NodeJS.ErrnoException).code
     if (code === "EPIPE") epipe = true
     else throw e
+  }
+}
+
+// ------------------------------------------------------------------ minimal host (M38a)
+
+/**
+ * G1's inline engine, loaded LAZILY (dynamic import in loadMinimalHost):
+ * before G1 lands this resolves undefined → the app falls back to the
+ * fullscreen agent view (the minimal request stays a no-op). The returned
+ * adapter is the loop's InlineHost: commit pushes print-once content into
+ * the native scrollback, drawRegion repaints the region rows, all bytes
+ * through the write sink (ledger). M38a harmonization seam: the composed
+ * region rows (todos/status/prompt) land in G1's region grid at G1↔G2
+ * wiring — the G1 contract (contracts.ts) exposes no region-content setter.
+ */
+async function loadInlineHost(cols: number, rows: number): Promise<InlineHost | undefined> {
+  const factory = await loadMinimalHost()
+  if (factory === undefined) {
+    console.warn("minimal mode requested but the inline engine is unavailable — falling back to fullscreen")
+    return undefined
+  }
+  const region = factory({ cols, rows })
+  return {
+    commit: (lines, write) => region.commit(lines, write),
+    drawRegion: (write) => region.drawRegion(write),
+    regionRows: () => region.regionRows(),
+    resize: (c, r) => region.resize(c, r),
   }
 }
 
@@ -176,6 +214,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     // not a tty → no keyboard; the input pump is simply never wired
   }
 
+  const minimal = flags.mode === "minimal"
   const app = new TuiApp({
     renderer,
     backend,
@@ -185,18 +224,23 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     glyphs: makeGlyphs(true),
     write: out,
     ...(attach !== undefined ? { input } : {}),
+    ...(minimal ? { mode: "minimal" as const, inlineFactory: () => loadInlineHost(cols, rows) } : {}),
+    // Spec §1: the prompt text `/minimal`/`/fullscreen` self-relaunches the
+    // same session with the flipped --mode (ModeSwitch spawns; the loop quits).
+    modeSwitch: (cmd) => new ModeSwitch({ argv: process.argv.slice(2) }).onSlash(cmd),
   })
 
   terminal.init()
 
-  // Resize relay: stdout 'resize' → renderer re-grid + engine re-wrap; the
-  // next frame is a full paint (renderer internal), zero-byte idle untouched.
+  // Resize relay: stdout 'resize' → renderer re-grid + engine re-wrap + the
+  // minimal inline host geometry; the next frame is a full paint (renderer
+  // internal), zero-byte idle untouched.
   process.stdout.on("resize", () => {
     try {
       const c = process.stdout.columns ?? cols
       const r = process.stdout.rows ?? rows
       renderer.resize(c, r)
-      engine.setWidth(c)
+      app.setSize(c, r)
     } catch {
       /* mid-shutdown: ignore */
     }
