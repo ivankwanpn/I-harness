@@ -1,8 +1,10 @@
 # I-harness 能力盤點（2026-09-03，M32 → M34 全貌）
 
-> 64 包 + `apps/cli`。M1–M25 後端完整（8/28）→ M26–M34 七輪擴展全部落地；每一輪經審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）。本文件是**當前能力全景**（以 m34 為準，M36 增量見下），里程碑歷史見 README §Development status。
+> 65 包 + `apps/cli` + `apps/tui-app`。M1–M25 後端完整（8/28）→ M26–M34 七輪擴展全部落地；每一輪經審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）。本文件是**當前能力全景**（以 m34 為準，M36 增量見下），里程碑歷史見 README §Development status。
 >
 > M36（tui-core）增量：TUI 渲染層（cell 雙緩衝 diff + 零字節 idle、input 位元組解析、init/teardown 位元組序、能力探測、屏幕模式政策、GrokNight 主題量化）——**運行時 0 外部依賴**；PTY harness 首例（真終端零字節/字形完整性/resize 不變量）
+>
+> M37a（tui）增量：grok 1:1 agent 屏——scrollback 引擎（Fenwick virtual_y/O(dirty) 增量、verb-group 折疊、regex 搜索、選區、sticky）、視圖（狀態欄 chips/TurnStatus spinner/PromptWidget chrome/ShortcutsBar）、keymap 主組、**embedded SessionService 橋**（16ms batch + seq 游標回放）、`apps/tui`（mock 首映）；PTY case-011（live streaming + **byte-budget 零字節證明**）/ case-014（流中 resize 不變量）。後端零改動。
 
 ## 一、引擎核心
 - **事件驅動 agent 循環**：log-driven（session log 為唯一真相）、並行 tool call 池（≤10）、maxTurns、AbortSignal、退出碼契約

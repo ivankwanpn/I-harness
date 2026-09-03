@@ -7,8 +7,10 @@ headless CLI. **Backend-complete (M1–M25) achieved, then extended by the M26�
 (runtime interaction/tiers, subagent messaging, SDK, ACP, JSONL-only persistence
 + a reconcile-on-search index). Frontend phase opened via the TUI wheel: research
 (M35) → tui-core renderer layer (M36: cell grid/diff + zero-byte idle, terminal
-init/teardown, capability probe, GrokNight theme, PTY harness); the next wheel is
-the TUI app layer (M37: scrollback/minimal views).**
+init/teardown, capability probe, GrokNight theme, PTY harness) → M37a app layer
+(grok 1:1 agent screen: scrollback engine + views + keymap + embedded
+SessionService bridge + `apps/tui`, PTY-proved live streaming). M37b covers
+interaction overlays + Inline/minimal modes.**
 
 ## What it is
 
@@ -80,13 +82,14 @@ frontend" gate:
 | M34 | Compaction policy: per-model `modelPolicies`, `compaction/attempt` analytics, summary degenerate floor, until-success breaker + sticky suppression | ✅ |
 | M35 | TUI research: four-way study + grok-build blueprint + UI 1:1 replication spec (skips: rewind/dashboard/plan-review/credits/voice) | ✅ |
 | M36 | @i-harness/tui-core: cell renderer (zero-byte idle), input parser, terminal init/teardown, capability probe, screen-mode policy, GrokNight theme, PTY harness first case | ✅ |
+| M37a | @i-harness/tui: grok 1:1 agent screen — scrollback engine (virtual_y / folding / selection / search), views (status/turn/prompt/shortcuts), keymap subset, embedded SessionService bridge (16ms batch + seq cursor), `apps/tui`, PTY live-streaming + resize cases (byte-budget zero-idle proof) | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
 
 **Full capability inventory: `docs/CAPABILITIES.md`**（能力全景/邊界,以 m34 為準）。
 
-## Package structure (64 packages + apps/cli)
+## Package structure (65 packages + apps/cli / apps/tui-app)
 
 ```
 packages/
@@ -147,9 +150,11 @@ packages/
 ├── sdk/                  M27 C: stdio NDJSON JSON-RPC SDK (wire contract v0)
 ├── acp/                  M28 C: ACP server (v0 automation subset)
 ├── fs-watch/             M28 B: fs watch (chokidar)
-└── tui-core/             M36 TUI renderer layer (cell grid/diff, input, terminal, probe, theme; runtime deps: none)
+├── tui-core/             M36 TUI renderer layer (cell grid/diff, input, terminal, probe, theme; runtime deps: none)
+└── tui/                  M37a TUI app layer (scrollback engine + views + keymap + embedded bridge)
 apps/
-└── cli/                  headless CLI (run/resume/--telemetry/--sandbox / sdk / acp / web)
+├── cli/                  headless CLI (run/resume/--telemetry/--sandbox / sdk / acp / web)
+└── tui-app/              M37a TUI app (embedded mock agent shell — `tui --prompt "hi"`)
 ```
 
 ## Running the CLI
