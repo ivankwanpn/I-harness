@@ -6,6 +6,8 @@
 >
 > M37a（tui）增量：grok 1:1 agent 屏——scrollback 引擎（Fenwick virtual_y/O(dirty) 增量、verb-group 折疊、regex 搜索、選區、sticky）、視圖（狀態欄 chips/TurnStatus spinner/PromptWidget chrome/ShortcutsBar）、keymap 主組、**embedded SessionService 橋**（16ms batch + seq 游標回放）、`apps/tui`（mock 首映）；PTY case-011（live streaming + **byte-budget 零字節證明**）/ case-014（流中 resize 不變量）。後端零改動。
 >
+> M38a（tui minimal）增量：**快/穩降級面**——Inline insert_before 前向引擎（LF-at-bottom 滾動原生保留 scrollback——CSI S 在 xterm6 被實測丟行、region 零字節 gate、setRegion canon 縫）、minimal live region（tail/todos/status/prompt/info + 500ms tail-flush）、self-relaunch 模式切換（`/minimal` `/fullscreen` 同會話 re-exec）；PTY case-015（native buffer pins baseY=5/42 + **10-write budget** + resize + relaunch exit 0）。
+>
 > M37b（tui）增量：**交互面收官**——permission/question/cancel-turn 覆蓋（approval seam 只讀接線 + 16ms batch + 30s fail-closed 超時、session jsonl 列舉）、todo/tasks/queue//btw 面板（§3.12 全規格）、slash/completion/history/file-search 下拉（§3.6）、session picker + welcome（適配）、keymap 全表（overlay/menu 路由）；PTY case-012（**真鍵面**：打字/Enter/歷史 Esc/Ctrl-C/Shift-Tab——writes-budget 13 次恰數）/ case-013（permission `1 (●)…` + j/k + 決策回寫斷言）。
 
 ## 一、引擎核心
