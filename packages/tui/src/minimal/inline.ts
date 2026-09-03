@@ -208,6 +208,12 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
     this.grid = this.padTo(lines, this.regionRowsForNow())
   }
 
+  /** Interface-name alias (contracts.ts optional `setRegion?` — M38a
+   * harmonization: G2's composeRegion plants the region canon via this). */
+  setRegion(lines: RegionLine[]): void {
+    this.setRegionLines(lines)
+  }
+
   commit(lines: RegionLine[], write: (bytes: string) => void): void {
     if (lines.length === 0 || this.cols === 0) return
     const top = this.regionTop()

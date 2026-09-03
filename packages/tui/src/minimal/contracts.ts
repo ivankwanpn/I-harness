@@ -35,11 +35,15 @@ export interface InlineLiveRegion {
   commit(lines: RegionLine[], write: (bytes: string) => void): void
   /** Repaint the live region (status/prompt rows) — region rows only. */
   drawRegion(write: (bytes: string) => void): void
-  /** Resize geometry (grow/shrink) — recomputes internal grid; next
+    /** Resize geometry (grow/shrink) — recomputes internal grid; next
    * drawRegion full-repaints the region. */
   resize(cols: number, rows: number): void
   /** Rows of the live region at the current geometry. */
   regionRows(): number
   /** Transcript of live-region rows (testing mirror). */
   regionLines(): RegionLine[]
+  /** M38a harmonization seam (G2→G1): plants the composed live-region
+   * content (tail window + todos + status + prompt) for the next
+   * drawRegion. Optional — engines may repaint their own commit window. */
+  setRegion?(lines: RegionLine[]): void
 }
