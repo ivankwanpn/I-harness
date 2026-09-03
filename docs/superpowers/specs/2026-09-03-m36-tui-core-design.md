@@ -80,14 +80,18 @@ test/harness/
 
 ## 5. 交付節點（M36 範圍）
 
-1. **T1** grid/wcwidth/glyphs/style + 單測（diff/width/table 對照）
-2. **T2** renderer ANSI 輸出 + DEC 2026 + 零字節單測（pump 層次）
-3. **T3** input parser（單測矩陣：utf8 多字節/CSI 變體/paste/mouse/kitty 探測）
-4. **T4** terminal init/teardown + signal（子進程真終端驗證 teardown 後無殘留——kitty/alt-screen 復位）
-5. **T5** probe + theme（量化矩陣：truecolor/256/16/ANSI16）
-6. **T6** screen-mode policy（CLI>config>auto；Zellij/tmux 單測為 env 注入）
-7. **T7** **PTY harness 首例**（case-010）——**門檻：`pnpm -r test` 含 idle 零字節 + resize/滾動不變量綠**
-8. **T8** API surface 凍結（public exports：`createTerminal/attachInput/render/sendFrame/teardown/capabilities/screenMode/palette`）
+1. **T1** ✅ grid/wcwidth/glyphs/style + 單測（diff/width/table 對照）
+2. **T2** ✅ renderer ANSI 輸出 + DEC 2026 + 零字節單測（pump 層次）
+3. **T3** ✅ input parser（單測矩陣：utf8 多字節/CSI 變體/paste/mouse/kitty 探測）
+4. **T4** ✅ terminal init/teardown + signal（子進程真終端驗證 teardown 後無殘留——kitty/alt-screen 復位）
+5. **T5** ✅ probe + theme（量化矩陣：truecolor/256/16/ANSI16）
+6. **T6** ✅ screen-mode policy（CLI>config>auto；Zellij/tmux 單測為 env 注入）
+7. **T7** ✅ **PTY harness 首例**（case-010）——**門檻：`pnpm -r test` 含 idle 零字節 + resize/滾動不變量綠**
+8. **T8** ✅ API surface 凍結（public exports：`createRenderer`（renderer.ts 組合層）/`createTerminal`/`attachInput`/`probeCapabilities`/`resolveScreenMode`/`createUnknownCapabilities`+`TerminalCapabilityContext`/`InputParser`+`InputEvent`/`WriterPump`/`resolvePalette`+`quantizeColor`/`GlyphSet`+`makeGlyphs`+`GLYPHS`/`wcwidth`+`clusterWidth`）
+
+> **Harness-caught additions（G4，來自 case-010 真實 PTY）**：兩個低層單測無法覆蓋的 API footgun，組合層（`src/renderer.ts`）為修復而擁有整條 commit→flush 生命週期：
+> - **presenter-vs-front footgun**：`DiffBuffer.commit()` 後 app 持有的 `presenter()` handle 是**上一幀**——若 flush 讀該 handle 會發出整幀空白空格。組合層的 `flush()` 永遠讀內部 commit 後的前幀，**絕不讀公開 `buffer`**（Footgun A）。
+> - **cursor carryover footgun**：每幀新建 `CursorTracker(0,0)` 是錯誤的——第 2 幀 row 0 會被錯置。組合層在 renderer 內跨幀持有 tracker，delta 幀不得假設游標在 (0,0)（Footgun B）。
 
 ## 6. 驗收
 

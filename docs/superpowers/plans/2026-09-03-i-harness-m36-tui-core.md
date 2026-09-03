@@ -11,20 +11,20 @@
 - **G1（core）T1 T2 T4a**：`grid/`（cell 模型+雙緩衝 diff）、`wcwidth/`（vendor）、`glyphs/`、`ansi/`（style 構造）、`render/`（flush: dirty runs + DEC 2026 + width-safety）、`output/`（writer pump + drain 背壓 + 零字節合併）、`theme/`（palette + 量化 + ANSI16 釘色 + Windows 對比提升 + OSC11/12 查詢接口）。單測：diff 正確性、字寬表、glyph fallback、flush 字節輸出 goldens、零字節（同幀 → 0 輸出）、量化矩陣。
 - **G2（io/terminal）T3 T4b T5 T6**：`input/`（raw 讀取 + 位元組解析器：C0/C1/CSI/UTF-8 流式/括號粘貼/mouse SGR/focus/kitty CSI-u 探測/wait-parse 有界）、`terminal/`（init 序列 + 唯一 teardown 冪等 + panic 安全）、`signal/`（首擊優雅/次擊強殺，Windows BREAK+CTRL-C 語義）、`probe/`（能力上下文：XTVERSION/DA1/color/kitty/mouse-leak/Zellij-tmux/OSC11-12）、`screen-mode/`（CLI>config>auto 政策 + 環境啟發；**無 Inline 引擎——結果保守回退 Fullscreen 或標記 pending-inline**）。單測：解析矩陣注入（utf8/CSI 變體/壞序列容忍）、teardown 位元組序 golden、探測 mock 應答、政策決策表。
 - **G3（harness）T7**：`test/harness/`（runner/virtual/referee + case-010 YAML）——依賴 G1+G2 合併。門檻：屏幕 grid 斷言 + idle 1s **0 字節** + resize×10 不變量 + 滾動不變量（子進程真終端）。
-- **G4（surface）T8**：public exports 凍結（`createTerminal/attachInput/render/sendFrame/teardown/capabilities/screenMode/palette`）+ README 里程碑表補 M35/M36 行 + spec 狀態標記。
+- **G4（surface）T8**：public exports 凍結（`createRenderer`（組合層）/`createTerminal`/`attachInput`/`probeCapabilities`/`resolveScreenMode`/`createUnknownCapabilities`/`InputParser`/`WriterPump`/`resolvePalette`+`quantizeColor`/`GlyphSet`+`makeGlyphs`+`GLYPHS`/`wcwidth`+`clusterWidth`）+ README 里程碑表補 M35/M36 行 + spec 狀態標記 ✅（全組 executed）。
 
 ## 節點映射
 
 | T | 內容 | 組 | 門檻 |
 |---|---|---|---|
-| T1 | grid/wcwidth/glyphs/style | G1 | 單測綠 |
-| T2 | renderer flush + DEC 2026 + pump | G1 | 零字節單測 + golden |
-| T3 | input parser | G2 | 解析矩陣綠 |
-| T4 | terminal init/teardown + signal | G2 | teardown golden + 子進程真終端復位斷言 |
-| T5 | probe + theme（量化） | G2 | 能力 mock + 量化矩陣 |
-| T6 | screen-mode 政策 | G2 | 決策表 |
-| T7 | PTY harness 首例（case-010） | G3 | **idle 零字節 + resize/滾動不變量綠** |
-| T8 | API 面 + 文檔 | G4 | exports 凍結 + README |
+| T1 | grid/wcwidth/glyphs/style | G1 | 單測綠 ✅ |
+| T2 | renderer flush + DEC 2026 + pump | G1 | 零字節單測 + golden ✅ |
+| T3 | input parser | G2 | 解析矩陣綠 ✅ |
+| T4 | terminal init/teardown + signal | G2 | teardown golden + 子進程真終端復位斷言 ✅ |
+| T5 | probe + theme（量化） | G2 | 能力 mock + 量化矩陣 ✅ |
+| T6 | screen-mode 政策 | G2 | 決策表 ✅ |
+| T7 | PTY harness 首例（case-010） | G3 | **idle 零字節 + resize/滾動不變量綠** ✅ |
+| T8 | API 面 + 文檔 | G4 | exports 凍結 + README ✅ |
 
 ## 驗證序列
 
@@ -40,3 +40,12 @@
 - 字面字形：見 `docs/research/2026-09-03-tui-grok-ui-spec.md` §6（glyphs 表 + legacy fallback）；配色：§5（GrokNight 全 RGB + 量化策略）。
 - 環境：Windows 11 一等；Node ≥22。
 - 完成後於 `docs/superpowers/plans/` 該檔標記各節點 executed。
+
+## 執行發現（G3 real-pty / G4 修復）
+
+- **chcp 65001（Real-PTY codepage）**：Windows 上 ConPTY 的隱藏 conhost 會以 console 輸出代碼頁轉換線路流——host-010 以 `execSync("chcp.com 65001>NUL")` 將附著到本進程的 console 切到 UTF-8，否則多字節 cell 文本（「世界」）會被毀掉。
+- **`@xterm/headless` 包名真相**：計劃/規格欄寫 `@xterm/xterm`，實際 devDep 是 `@xterm/headless`（xterm.js 的 headless 分發，無 DOM）。
+- **ConPTY resize 位元組**：resize 後真終端對定位/重繪的實際位元組行為依賴 ConPTY；「游標載運」規則（不假設 (0,0)）對 resize 後的整幀重繪同樣成立——G4 的 renderer 在 resize 後將下一次 flush 標記為絕對 CUP 覆蓋的整幀重繪。
+- **harness 抓到的兩個 API footgun（G4 修復）**：
+  1. commit 後 `presenter()`/公開 draw handle 是**舊幀**——組合層 `flush()` 讀內部 commit 後的前幀（Footgun A 回歸測試：draw→commit→flush 絕非整幀空白空格）。
+  2. 每幀新建 `CursorTracker(0,0)` 錯誤——組合層跨幀持有 tracker，第 2 幀 row 0 以顯式 CUP 定位（Footgun B 回歸測試：Byte string 以 `\x1b[1;1H` 開頭）。
