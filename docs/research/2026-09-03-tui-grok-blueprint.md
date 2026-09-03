@@ -51,6 +51,7 @@ packages/tui/               ← M37（app/view 層）
   src/app/                  事件循環（input/backend/notify 三源 + Presenter 合併 + 30fps 動畫 tick 僅有需）
   src/scrollback/           virtual_y 前綴和 + dirty id 集 + 選區/搜索/sticky/Turns（複刻 4512 行模組的責任）
   src/views/                agent view / prompt widget / status bar / slash reg（builtin+ACP 兩bit 完整性）/ permission 隊列(front-only)/ modal / plan approval / completion dropdown / history search(worker) / rewind（prompt_index↔entry）
+                          —— 版面 1:1 複刻 grok：逐 widget 規格見 docs/research/2026-09-03-tui-grok-ui-spec.md §3；跳過清單見其 §10
   src/minimal/              print-once 前沿狀態機 + forward 修復 + full_view /transcript pump + $PAGER 交回
   src/backend/              IH SessionService 橋（內嵌同 sdk/acp；--attach 遠程 mux 客戶端）：
                             事件 = live stream（十六 ms batch + seq 回放游標 + history 分頁）
@@ -68,6 +69,7 @@ packages/tui/               ← M37（app/view 層）
 ## 5. 決策（對 IH 原則的綁定）
 
 - **複刻（照工程屬性）不複用**：自身引入 grok 的 12 屬性；不引它的 crate/棧。
+- **界面 1:1 複刻（用戶 2026-09-03）**：版面/字形/配色/按鍵按 `2026-09-03-tui-grok-ui-spec.md` 照造；後端沒有的功能不複刻（§10「跳過」清單：credits/plan 審閱面/rewind/dashboard v1/mermaid PNG/voice+gboom/memory/視頻/遠程公告——規格留檔，後端補上再啟）。
 - **通用公開庫允許**（依賴原則——m36 確認可用：markdown/hljs/fuse/wcwidth/xterm.js；**禁止**：私有/供應商）。
 - **「零字節 idle」與「minimal 打印即定」為品質紅線**（不做 = 不如做 REPL）。
 - **對接 IH 後端**：TUI 是「SessionService 的另一個客戶端」（同 sdk/acp 的形狀）——**無新後端面**；`--attach` 遠程沿用 mux+auth。
