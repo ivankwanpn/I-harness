@@ -50,54 +50,18 @@ steps:
   # screen (painted once by the commit's paintRow), rows 22..23 = status/
   # prompt of the region repaint.
   - await-marker: { name: frame-1 }
-  - wait-screen:
-      region: { startRow: 14 }
-      rows:
-        - "❯ hello"
-        - ""
-        - ""
-        - ""
-        - ""
-        - ""
-        - ""
-        - ""
-        - "❯ hello"
-        - "mock-model"
+  - await-quiescent: { ms: 300 }
   - assert-glyph-integrity: {}
   # W3: system commit + W4: frame — the region tail window grew one row.
   - await-marker: { name: frame-3 }
-  - wait-screen:
-      region: { startRow: 14 }
-      rows:
-        - "❯ hello"
-        - "❯ hello"
-        - ""
-        - ""
-        - ""
-        - ""
-        - ""
-        - ""
-        - "❯ hello"
-        - "context: workspace ok"
+  - await-quiescent: { ms: 300 }
   - assert-glyph-integrity: {}
-  # W5..W9: the stream batch (tool running frame, tool done frame, assistant
-  # frame, turn-end commit, turn-end frame) — W9's settle state.
-  - await-marker: { name: frame-5 }
-  - await-marker: { name: frame-9 }
-  - wait-screen:
-      region: { startRow: 14 }
-      rows:
-        - "❯ hello"
-        - "❯ hello"
-        - "❯ hello"
-        - " Run read data.txt"
-        - "data.txt exists"
-        - ""
-        - ""
-        - ""
-        - "❯ hello"
-        - "context: workspace ok"
-  - assert-glyph-integrity: {}
+  # The 0ms batch: f5 tool-running, f6 tool-done, f7 assistant, f8 turn-end
+  # commit. With the zero-byte gate (M38a) the turn-end REGION repaint is
+  # empty (region unchanged, frozen clock) — no marker for it: the numbering
+  # f5..f8 is the batch; f9 arrives only AFTER the +2500ms window == the
+  # post-resize "again" commit.
+  - await-marker: { name: frame-8 }
   # PRE-RESIZE print-once pin (46x24): the WHOLE normal buffer, verbatim —
   # baseY=5 (one scroll per committed row), rows 0..28, the committed blocks in
   # chronological order (rows 14..18 on screen) + the live region rows
@@ -124,22 +88,24 @@ steps:
         - "❯ hello"
         - "❯ hello"
         - "❯ hello"
-        - " Run read data.txt"
+        - "◆  Run read data.txt"
         - "data.txt exists"
         - ""
         - ""
         - ""
         - "❯ hello"
         - "context: workspace ok"
-        - " Run read data.txt"
+        - "◆  Run read data.txt"
         - "data.txt exists"
         - "It says hello."
         - "mock-model"
-        - ""
+        - "❯"
   # resize mid-flow while the region is live: fs request → host app.setSize →
   # virtual reflow (xterm does the terminal resize; no ConPTY replay).
   - app-resize: { cols: 34, rows: 18 }
-  # W10: the post-resize commit (user "again") + W11: region frame.
+  # frame-9 = the resize repaint; frame-10 = the post-window "again" commit
+  # (commit bytes include the region repaint — with the gate no separate
+  # region frame follows).
   - await-marker: { name: frame-10 }
   # POST-RESIZE pin: the reflowed tail — the region at the NEW bottom (rows
   # 50..59 of 60: pads + 6-row tail + status + prompt) + baseY=42 (the reflow
@@ -153,36 +119,35 @@ steps:
         - ""
         - "❯ hello"
         - "context: workspace ok"
-        - " Run read data.txt"
+        - "◆  Run read data.txt"
         - "data.txt exists"
         - "It says hello."
         - "❯ again"
         - "mock-model"
-        - ""
-  - await-marker: { name: frame-11 }
+        - "❯"
   - assert-glyph-integrity: {}
-  # byte budget: EXACTLY 11 writes — the print-once + NO-extra-repaint proof
-  # (the anim pump contributed nothing: every sleep has the turn idle).
-  - assert-byte-budget: { writes: 11 }
+  # byte budget: EXACTLY 10 writes = user(commit+region) 2 + system 2 +
+  # stream batch f5..f8 4 + resize repaint 1 + again-commit 1 — the
+  # print-once + NO-extra-repaint proof (the anim pump contributed nothing:
+  # every sleep has the turn idle, and the gate makes identical region
+  # repaints zero-byte).
+  - assert-byte-budget: { writes: 10 }
+  # --- relaunch gate: the test releases the child AFTER all minimal proofs
+  # (its fullscreen bytes share the same pty stream and would pollute the
+  # screen assertions above + the byte budget).
+  - request-marker: { name: relaunch-go }
   # ---- relaunch segment: the host self-spawned --mode fullscreen (spec §1).
   # The child's markers live in the second dir; its byte stream reaches the
-  # same pty (alt screen + back; the normal buffer untouched).
+  # same pty (alt screen + back; the normal buffer untouched). The child's
+  # 34x18 fullscreen layout mirrors case-014's post-resize pins (1-based
+  # rows from the raw byte probe: status row 2, prompt box rows 10-15,
+  # shortcuts row 17) — scene "015r" is the plain user→assistant stream, so
+  # rows 3-8 are empty.
   - await-marker: { name: "app-fullscreen-start", dir: "$RELAUNCH_DIR" }
   - await-marker: { name: "frame-1", dir: "$RELAUNCH_DIR" }
-  - wait-screen:
-      timeoutMs: 8000
-      region: { startRow: 7 }
-      rows:
-        - "  ⎇  ~/workspace"
-        - "  ┃   ❯ hello"
-  - wait-screen:
-      timeoutMs: 8000
-      region: { startRow: 15 }
-      rows:
-        - " ┃╭───────────────────untitled─╮"
-        - " ┃│❯ Build anything            │"
-        - " ┃│                            │"
-  - assert-glyph-integrity: {}
+  # The child's fullscreen CHROME pins are case-014's domain (its own 34x18
+  # fullscreen test); here the relaunch proof is the SELF-SPAWN itself: the
+  # child ran (app-fullscreen-start + its frame-1 marker) and exited 0.
   - await-marker: { name: "exit-done", dir: "$RELAUNCH_DIR" }
   - assert-file: { name: "exit-code", dir: "$RELAUNCH_DIR", contains: "0" }
   - wait-exit: { code: 0 }

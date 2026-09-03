@@ -154,6 +154,12 @@ function mergeRuns(runs: StyledRun[]): StyledRun[] {
 function paintRow(y1: number, line: RegionLine | undefined, cols: number): string {
   let parts = ""
   let prevSgr = ""
+  // The line's pinned glyph (e.g. prompt arrow `❯`) is the FIRST cell —
+  // contracts.ts: G2 plants it via the region canon; this draws it.
+  if (line?.glyph !== undefined && line.glyph !== "") {
+    const g = line.glyph.startsWith("❯") ? line.glyph : line.glyph + " "
+    parts += g
+  }
   for (const r of mergeRuns(line?.runs ?? [])) {
     const sgr = SGR[r.style]
     if (sgr !== prevSgr) {
@@ -225,6 +231,9 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
     // cursor to the bottom-left, then k line feeds.
     out += `\x1b[${this.rows};1H`
     for (let i = 0; i < lines.length; i++) out += "\n"
+    // The scroll MOVED the region — the repaint that follows is mandatory
+    // (the zero-byte gate applies only to standalone drawRegion ticks).
+    this.lastPaintSig = ""
     write(out + this.drawRegionBytes())
   }
 
@@ -232,7 +241,25 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
     write(this.drawRegionBytes())
   }
 
+  private lastPaintSig = ""
+
+  /** Signature of the region state (geometry + rows + glyphs) — unchanged
+   * state → zero bytes (the minimal-mode zero-byte idle gate: the anim pump
+   * calls drawRegion every 33ms while a turn runs; repaints must be FREE). */
+  private sig(): string {
+    let s = `${this.cols}x${this.rows}`
+    for (const l of this.grid) {
+      s += "|"
+      if (l.glyph !== undefined) s += l.glyph
+      for (const r of l.runs) s += `${r.style}:${r.text}`
+    }
+    return s
+  }
+
   private drawRegionBytes(): string {
+    const cur = this.sig()
+    if (cur === this.lastPaintSig && cur !== "") return ""
+    this.lastPaintSig = cur
     const top = this.regionTop()
     let out = ""
     for (let i = 0; i < this.grid.length; i++) {
@@ -249,6 +276,7 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
     this.grid = this.padTo(this.clipToRr(this.grid), rr)
     this.rows = rows > 0 ? rows : 1
     this.grid = this.padTo(this.clipToRr(this.grid), this.regionRowsForNow())
+    this.lastPaintSig = "" // force a full region repaint after resize
   }
 
   regionRows(): number {

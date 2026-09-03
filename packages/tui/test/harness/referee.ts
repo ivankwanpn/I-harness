@@ -160,6 +160,13 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           await awaitMarker(dir, m)
           break
         }
+        case "request-marker": {
+          // Test → host fs channel: writes <markerDir>/<name> (e.g. the
+          // relaunch-gate; the host polls it and reacts once).
+          const m = String(args["name"] ?? "")
+          writeFileSync(`${markerDir}/${m}`, `${Date.now()}`)
+          break
+        }
         case "assert-screen": {
           const rows = (args["rows"] as string[] | undefined) ?? []
           const startRow = Number(((args["region"] as Record<string, unknown> | undefined)?.["startRow"]) ?? 0)
@@ -184,14 +191,18 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           const startRow = Number(((args["region"] as Record<string, unknown> | undefined)?.["startRow"]) ?? 0)
           const timeoutMs = Number(args["timeoutMs"] ?? 2500)
           const deadline = Date.now() + timeoutMs
+          let firstErrors: string[] = []
           for (;;) {
             await virtual.drained()
             const errors = assertRowsMatch(virtual, rows, startRow)
             if (errors.length === 0) break
+            if (firstErrors.length === 0) firstErrors = errors
             if (Date.now() >= deadline) {
               return {
                 ok: false,
-                error: `step ${i} (wait-screen): rows never matched within ${timeoutMs}ms: ${errors.slice(0, 3).join("; ")}`,
+                error:
+                  `step ${i} (wait-screen): rows never matched within ${timeoutMs}ms: ` +
+                  `${errors.slice(0, 2).join("; ")} // FIRST poll was: ${firstErrors.slice(0, 2).join("; ")}`,
               }
             }
             await sleep(50)

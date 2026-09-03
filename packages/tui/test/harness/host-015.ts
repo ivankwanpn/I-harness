@@ -369,6 +369,13 @@ async function main015(): Promise<void> {
   // dir is delivered via env TUI_HOST_MARKER_DIR so the child never touches
   // the parent's markers.
   if (RELAUNCH_DIR !== undefined) {
+    // GATE: the child's fullscreen bytes would pollute the minimal-screen
+    // assertions (same pty stream) — the TEST releases the relaunch only
+    // after its minimal proofs (byte budget included) complete.
+    for (let t = 0; t < 200; t++) {
+      if (existsSync(`${MARKER_DIR}/relaunch-go`)) break
+      await sleep(100)
+    }
     // The child inherits the CURRENT (post-resize) geometry — the pty is at
     // size2 by the time the relaunch runs; the child's fullscreen layout must
     // match the pty (its argv sizing mirrors the production "read the size
