@@ -11,7 +11,7 @@ describe("wcwidth", () => {
       ["a", 1],
       ["é", 1],
       ["•", 1],
-      ["━", 2],
+      ["━", 1],
       ["Ａ", 2],
       ["😀", 2],
       ["́", 0],
@@ -60,7 +60,7 @@ describe("wcwidth", () => {
     expect(wcwidth(cp(0x115f))).toBe(2)
     expect(wcwidth(cp(0x2329))).toBe(2)
     expect(wcwidth(cp(0x232a))).toBe(2)
-    expect(wcwidth(cp(0x2501))).toBe(2)
+    expect(wcwidth(cp(0x2501))).toBe(1)
     expect(wcwidth(cp(0x2e80))).toBe(2)
     expect(wcwidth(cp(0x3000))).toBe(2)
     expect(wcwidth(cp(0x4e00))).toBe(2)
@@ -91,9 +91,9 @@ describe("wcwidth", () => {
     expect(wcwidth(cp(0x3fffd))).toBe(2)
   })
 
-  it("keeps box-drawing narrow except the heavy horizontal", () => {
+  it("keeps box-drawing narrow", () => {
     expect(wcwidth(cp(0x2500))).toBe(1)
-    expect(wcwidth(cp(0x2501))).toBe(2)
+    expect(wcwidth(cp(0x2501))).toBe(1)
     expect(wcwidth(cp(0x2503))).toBe(1)
     expect(wcwidth(cp(0x2550))).toBe(1)
     expect(wcwidth(cp(0x256d))).toBe(1)
