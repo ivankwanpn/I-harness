@@ -117,6 +117,101 @@ describe("dispatchKey — prompt focus: Enter & friends", () => {
   })
 })
 
+describe("dispatchKey — overlay routing (spec §4)", () => {
+  const digit = (key: string): Kbd => kbd({ code: "char", key })
+
+  it("Esc/Enter/arrows/Tab/PageUp-PageDown route to overlay actions", () => {
+    const st = promptState({ overlay: "permission" })
+    expect(dispatchKey(kbd({ code: "Esc", key: "Esc" }), st)).toBe("overlay-dismiss")
+    expect(dispatchKey(kbd({ code: "Enter", key: "Enter" }), st)).toBe("overlay-select")
+    expect(dispatchKey(kbd({ code: "Up", key: "ArrowUp" }), st)).toBe("overlay-nav-prev")
+    expect(dispatchKey(kbd({ code: "Down", key: "ArrowDown" }), st)).toBe("overlay-nav-next")
+    expect(dispatchKey(kbd({ code: "PageUp", key: "PageUp" }), st)).toBe("overlay-page-prev")
+    expect(dispatchKey(kbd({ code: "PageDown", key: "PageDown" }), st)).toBe("overlay-page-next")
+    expect(dispatchKey(kbd({ code: "Tab", key: "\t" }), st)).toBe("overlay-tab")
+    expect(dispatchKey(kbd({ code: "ShiftTab", key: "Tab", shift: true }), st)).toBe("overlay-tab-back")
+  })
+
+  it("number keys select rows in permission/question/cancel-turn (index-carrying)", () => {
+    const p = promptState({ overlay: "permission" })
+    expect(dispatchKey(digit("3"), p)).toEqual({ type: "overlay-accept", index: 3 })
+    expect(dispatchKey(digit("1"), promptState({ overlay: "cancel-turn" }))).toEqual({ type: "overlay-accept", index: 1 })
+    expect(dispatchKey(digit("9"), promptState({ overlay: "question" }))).toEqual({ type: "overlay-accept", index: 9 })
+  })
+
+  it("number keys with NO overlay keep the scrollback table (none); digits don't leak into dropdrops", () => {
+    expect(dispatchKey(digit("1"), scrollState())).toBe("none")
+    expect(dispatchKey(digit("1"), promptState({ overlay: "dropdown" }))).toBe("none")
+    expect(dispatchKey(digit("1"), promptState({ overlay: "permission" }))).not.toBe("none")
+  })
+
+  it("picker keys: j/k nav, y copy, e/E expand, Space toggle, /,i search, f filter", () => {
+    const st = promptState({ overlay: "sessions" })
+    expect(dispatchKey(digit("j"), st)).toBe("overlay-nav-prev")
+    expect(dispatchKey(digit("k"), st)).toBe("overlay-nav-next")
+    expect(dispatchKey(digit("y"), st)).toBe("overlay-copy")
+    expect(dispatchKey(digit("e"), st)).toBe("overlay-expand")
+    expect(dispatchKey(digit("E"), st)).toBe("overlay-collapse")
+    expect(dispatchKey(digit(" "), st)).toBe("overlay-toggle")
+    expect(dispatchKey(digit("/"), st)).toBe("overlay-search")
+    expect(dispatchKey(digit("i"), st)).toBe("overlay-search")
+    expect(dispatchKey(digit("f"), st)).toBe("overlay-filter")
+    // same keys on the permission overlay: search/filter don't apply
+    expect(dispatchKey(digit("f"), promptState({ overlay: "permission" }))).toBe("none")
+  })
+
+  it("permission ←/→ scope; question [ ] prev/next; Ctrl-P/Ctrl-N dropdown nav", () => {
+    const right = kbd({ code: "Right", key: "ArrowRight" })
+    const left = kbd({ code: "Left", key: "ArrowLeft" })
+    expect(dispatchKey(right, promptState({ overlay: "permission" }))).toBe("overlay-range-right")
+    expect(dispatchKey(left, promptState({ overlay: "permission" }))).toBe("overlay-range-left")
+    expect(dispatchKey(right, promptState({ overlay: "sessions" }))).toBe("overlay-expand")
+    expect(dispatchKey(left, promptState({ overlay: "sessions" }))).toBe("overlay-collapse")
+    expect(dispatchKey(kbd({ code: "char", key: "]", ctrl: false }), promptState({ overlay: "question" }))).toBe("overlay-question-next")
+    expect(dispatchKey(kbd({ code: "char", key: "[", ctrl: false }), promptState({ overlay: "question" }))).toBe("overlay-question-prev")
+    expect(dispatchKey(kbd({ code: "char", key: "p", ctrl: true }), promptState({ overlay: "dropdown" }))).toBe("overlay-nav-prev")
+    expect(dispatchKey(kbd({ code: "char", key: "n", ctrl: true }), promptState({ overlay: "dropdown" }))).toBe("overlay-nav-next")
+  })
+
+  it("Ctrl-F expands (permission args); Ctrl-Y closes the question", () => {
+    expect(dispatchKey(kbd({ code: "char", key: "f", ctrl: true }), promptState({ overlay: "permission" }))).toBe("overlay-expand")
+    expect(dispatchKey(kbd({ code: "char", key: "y", ctrl: true }), promptState({ overlay: "question" }))).toBe("overlay-copy")
+  })
+})
+
+describe("dispatchKey — welcome menu (spec §2a)", () => {
+  const letter = (key: string): Kbd => kbd({ code: "char", key })
+
+  it("↑/↓/j/k navigate, Enter activates, g/l top/bottom, q quits", () => {
+    const w = promptState({ welcome: true })
+    expect(dispatchKey(kbd({ code: "Up", key: "ArrowUp" }), w)).toBe("menu-up")
+    expect(dispatchKey(kbd({ code: "Down", key: "ArrowDown" }), w)).toBe("menu-down")
+    expect(dispatchKey(letter("j"), w)).toBe("menu-down")
+    expect(dispatchKey(letter("k"), w)).toBe("menu-up")
+    expect(dispatchKey(kbd({ code: "Enter", key: "Enter" }), w)).toBe("menu-activate")
+    expect(dispatchKey(letter("g"), w)).toBe("menu-top")
+    expect(dispatchKey(letter("G"), w)).toBe("menu-bottom")
+    expect(dispatchKey(letter("l"), w)).toBe("menu-bottom")
+    expect(dispatchKey(letter("q"), w)).toBe("quit")
+    expect(dispatchKey(letter("x"), w)).toBe("none")
+  })
+})
+
+describe("dispatchKey — pane/global additions (spec §4)", () => {
+  it("Ctrl-; queue pane, Ctrl+N new session; Ctrl-T/B unchanged", () => {
+    const c = (key: string): Kbd => kbd({ code: "char", key, ctrl: true })
+    expect(dispatchKey(c(";"), promptState())).toBe("toggle-queue-pane")
+    expect(dispatchKey(c("n"), promptState())).toBe("sessions-new")
+    expect(dispatchKey(c("t"), promptState())).toBe("toggle-todo-pane")
+    expect(dispatchKey(c("b"), promptState())).toBe("toggle-tasks-pane")
+  })
+
+  it("`?` on an empty prompt opens the palette (only when no text)", () => {
+    expect(dispatchKey(kbd({ code: "char", key: "?" }), promptState())).toBe("open-command-palette")
+    expect(dispatchKey(kbd({ code: "char", key: "?" }), promptState({ promptText: "h" }))).toBe("none")
+  })
+})
+
 describe("shortcutsFor — the bar content", () => {
   it("prompt focus shows the submit/interject/multiline/mode group", () => {
     const items = shortcutsFor({ focused: "prompt", multiLine: false, turnRunning: true, mode: "normal" })
