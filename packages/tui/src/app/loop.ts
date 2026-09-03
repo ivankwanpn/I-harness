@@ -987,7 +987,12 @@ export class TuiApp {
   private frameMinimal(): void {
     const host = this.inlineHost!
     host.setRegion?.(this.composeMinimalRegion())
-    host.drawRegion((s) => this.opts.write?.(s))
+    // Zero-byte idle gate (M38a): the engine returns "" when the region is
+    // unchanged (the anim pump ticks at 30fps while a turn runs — identical
+    // repaints must not reach the tty; mirrors the fullscreen diff path).
+    host.drawRegion((s) => {
+      if (s !== "") this.opts.write?.(s)
+    })
   }
 
   private composeMinimalRegion(): RegionLine[] {
