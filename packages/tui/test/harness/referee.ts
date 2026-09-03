@@ -11,7 +11,7 @@
 // empirical finding: 3-byte and 166-byte "idle-window" hits that the strict
 // budget check exonerated). Prefer budgets; keep windows only as smoke.
 
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { awaitMarker } from "./runner.ts"
 import type { HostPty } from "./runner.ts"
 import type { VirtualTerminal } from "./virtual.ts"
@@ -154,7 +154,10 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
       switch (name) {
         case "await-marker": {
           const m = String(args["name"] ?? "")
-          await awaitMarker(markerDir, m)
+          // `dir` (optional) — a SECOND marker dir (the relaunch child's);
+          // the default is the run's own marker dir.
+          const dir = args["dir"] !== undefined ? String(args["dir"]) : markerDir
+          await awaitMarker(dir, m)
           break
         }
         case "assert-screen": {
@@ -202,6 +205,48 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
             return {
               ok: false,
               error: `step ${i} (assert-glyph-integrity): ${errors.slice(0, 3).join("; ")}`,
+            }
+          }
+          break
+        }
+        case "assert-scrollback": {
+          // NORMAL-buffer assert (M38a G3, minimal mode): the terminal's own
+          // no-alt-screen buffer IS the print-once ledger — committed content
+          // rows + the live region rows, in the native buffer after the real
+          // VT parser. `lines` are compared (right-trimmed) against normal
+          // buffer rows starting at `from` (absolute 0-based index); when
+          // `from` is omitted the LAST len(lines) rows are the window (the
+          // canonical "tail" of the whole buffer). baseY (scrollback depth)
+          // pins the exact scroll amount; fromEnd is an alternate absolute
+          // start from the bottom (negative index into normalLine()).
+          const lines = (args["lines"] as string[] | undefined) ?? []
+          const baseYArg = args["baseY"] as number | undefined
+          const fromArg = args["from"] as number | undefined
+          const fromEnd = args["fromEnd"] as number | undefined
+          await virtual.drained()
+          const errors: string[] = []
+          if (baseYArg !== undefined && virtual.normalBaseY() !== baseYArg) {
+            errors.push(`baseY: expected ${baseYArg} got ${virtual.normalBaseY()}`)
+          }
+          let start = -1
+          if (fromArg !== undefined) start = fromArg
+          else if (fromEnd !== undefined) start = virtual.normalLength() - fromEnd - lines.length
+          else start = virtual.normalLength() - lines.length
+          const len = virtual.normalLength()
+          for (let j = 0; j < lines.length; j++) {
+            const actual = virtual.normalLine(start + j)
+            if (actual.trimEnd() !== lines[j]!.trimEnd()) {
+              errors.push(
+                `row ${start + j}: expected ${JSON.stringify(lines[j])} got ${JSON.stringify(actual)}`,
+              )
+            }
+          }
+          if (errors.length > 0) {
+            return {
+              ok: false,
+              error:
+                `step ${i} (assert-scrollback): ${errors.slice(0, 3).join("; ")}` +
+                ` (len=${len}, baseY=${virtual.normalBaseY()})`,
             }
           }
           break
@@ -269,7 +314,8 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           // the host writes a JSON/text file; `contains` is a substring check.
           const name = String(args["name"] ?? "")
           const contains = args["contains"] as string | undefined
-          const path = `${markerDir}/${name}`
+          const dir = args["dir"] !== undefined ? String(args["dir"]) : markerDir
+          const path = `${dir}/${name}`
           if (!existsSync(path)) {
             return { ok: false, error: `step ${i} (assert-file): ${path} not found` }
           }
@@ -340,6 +386,29 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           await virtual.drained()
           virtual.resize(cols, rows)
           virtual.write("\x1b[2J\x1b[H")
+          await sleep(150)
+          await virtual.drained()
+          break
+        }
+        case "app-resize": {
+          // M38a G3: minimal-mode resize — the CHILD-driven app resize (the
+          // ConPTY master resize path is unobservable to the child under this
+          // node-pty pairing — see host-015.ts; and the master's inject-replay
+          // would BURN the minimal buffer). The test requests the resize via an
+          // fs marker, waits for the host's app.setSize ack, then reflows the
+          // virtual terminal to the same size (xterm's own resize/reflow does
+          // the "terminal" work). NO 2J burn here: minimal-mode committed rows
+          // are native-buffer content the app never repaints (the burn step of
+          // the pty `resize` step is fullscreen-discipline).
+          const cols = Number(args["cols"])
+          const rows = Number(args["rows"])
+          if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
+            return { ok: false, error: `step ${i} (app-resize): invalid cols/rows ${cols}/${rows}` }
+          }
+          writeFileSync(`${markerDir}/req-resize-${cols}x${rows}`, `${Date.now()}`)
+          await awaitMarker(markerDir, `host-ack-${cols}x${rows}`)
+          await sleep(200)
+          virtual.resize(cols, rows)
           await sleep(150)
           await virtual.drained()
           break
