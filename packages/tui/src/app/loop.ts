@@ -13,12 +13,18 @@ import type {
   Renderer,
   TerminalCapabilityContext,
 } from "@i-harness/tui-core"
-import type { BackendClient, ScrollbackEngine, TuiEvent } from "../contracts.ts"
+import type { BackendClient, ScrollbackEngine, SessionSummary, TuiEvent } from "../contracts.ts"
 import { dispatchKey, shortcutsFor } from "./keys.ts"
-import type { AppAction, Kbd, KeymapState } from "./keys.ts"
+import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
 import { present } from "./present.ts"
 import type { TuiAppState } from "./present.ts"
 import type { TurnPhase } from "../views/turn-status.ts"
+import type { PaneState } from "../views/agent.ts"
+import type { SlashEntry } from "../views/slash-dropdown.ts"
+import type { CompletionEntry } from "../views/completion-dropdown.ts"
+import type { SearchResult } from "../views/file-search.ts"
+import { flattenSessions } from "../views/session-picker.ts"
+import type { SessionRow } from "../views/session-picker.ts"
 
 export interface InputSource {
   next(): AsyncIterable<InputEvent>
@@ -37,9 +43,45 @@ export interface TuiAppOptions {
   compact?: boolean
   /** Test clock — defaults to Date.now(). */
   now?: () => number
+  /** Pane/overlay seeds (M37b, additive) — content backed by the HOST. */
+  initialPanes?: PaneState
+  /** Start on the welcome screen (spec §2a) instead of the agent screen. */
+  initialScreen?: "agent" | "welcome"
+  /** Slash registry adapter (spec §10 #8: builtin+skill+ACP → this option). */
+  slashCommands?: SlashEntry[]
+  /** `@`-file search adapter (fs-search lands M38-real; host may mock). */
+  searchFiles?: (query: string) => Promise<SearchResult[]>
+  /** Completions for slash args (shell completion is skipped, spec §10 #10). */
+  completions?: () => CompletionEntry[]
+  /** Session listing adapter (G1's listSessionsFromStore plugs in here). */
+  listSessions?: () => Promise<SessionSummary[]>
 }
 
 const ANIM_MS = 33 // 30fps pump
+
+/** Fallback slash registry when the host wires no adapter (spec §10 #8). */
+const DEFAULT_SLASH_COMMANDS: SlashEntry[] = [
+  { command: "help", description: "Shows help for built-in commands" },
+  { command: "compact", description: "Compacts the conversation" },
+  { command: "clear", description: "Clears the screen history" },
+  { command: "tasks", description: "Lists tasks on the current session" },
+  { command: "menu", description: "Shows the menu" },
+]
+
+/** Case-insensitive subsequence hit indices (fuzzy-hit letters, spec §3.6). */
+function fuzzyHits(command: string, query: string): number[] {
+  const c = command.toLowerCase()
+  const q = query.toLowerCase()
+  const out: number[] = []
+  let qi = 0
+  for (let i = 0; i < c.length && qi < q.length; i++) {
+    if (c[i] === q[qi]) {
+      out.push(i)
+      qi++
+    }
+  }
+  return out
+}
 
 export class TuiApp {
   private readonly opts: TuiAppOptions
@@ -83,6 +125,17 @@ export class TuiApp {
       toasts: [],
       panes: new Set<string>(),
       shortcuts: { items: shortcutsFor({ focused: "prompt", multiLine: false, turnRunning: false, mode: "normal" }) },
+      screen: opts.initialScreen ?? "agent",
+      welcome: {
+        version: "0.1.0",
+        menus: [
+          { key: "ctrl+s", label: "Resume session" },
+          { key: "ctrl+n", label: "New session" },
+          { key: "ctrl+q", label: "Quit" },
+        ],
+        cursor: 0,
+      },
+      paneData: opts.initialPanes,
     }
   }
 
@@ -130,6 +183,12 @@ export class TuiApp {
 
   /** Keymap/backend/anim results funnel here; the loop paints after. */
   dispatch(action: AppAction): void {
+    // Index-carrying accept (digits 1-9, spec §4 permission/question/cancel).
+    if (typeof action !== "string") {
+      if (action.type === "overlay-accept") this.overlayAccept(action.index)
+      this.requestFrame()
+      return
+    }
     switch (action) {
       case "scroll-up": this.scrollBy(-3); break
       case "scroll-down": this.scrollBy(3); break
@@ -194,10 +253,40 @@ export class TuiApp {
         this.refreshShortcuts()
         break
       }
-      case "toggle-todo-pane": this.toast("todo pane: M38"); break
-      case "toggle-tasks-pane": this.toast("tasks pane: M38"); break
-      case "sessions": this.toast("session picker: M38"); break
+      case "toggle-todo-pane": this.togglePane("todo"); break
+      case "toggle-tasks-pane": this.togglePane("tasks"); break
+      case "toggle-queue-pane": this.togglePane("queue"); break
+      case "sessions": this.toggleSessions(); break
+      case "sessions-new": this.toast("new session: M38 (backend create)"); break
       case "open-command-palette": this.toast("command palette: M38"); break
+      // ---- overlays / dropdowns / pickers (M37b, spec §4)
+      case "overlay-select": this.overlaySelect(); break
+      case "overlay-nav-prev": this.overlayNav(-1); break
+      case "overlay-nav-next": this.overlayNav(1); break
+      case "overlay-page-prev": this.overlayNav(-this.overlayPage()); break
+      case "overlay-page-next": this.overlayNav(this.overlayPage()); break
+      case "overlay-dismiss": this.overlayDismiss(); break
+      case "overlay-copy": this.toast("Copied!"); break
+      case "overlay-expand":
+      case "overlay-collapse":
+      case "overlay-toggle":
+      case "overlay-tab":
+      case "overlay-tab-back":
+      case "overlay-search":
+      case "overlay-filter":
+      case "overlay-range-left":
+      case "overlay-range-right":
+      case "overlay-question-prev":
+      case "overlay-question-next":
+        // picker-only extras — M37b moves the cursor (tabs/filters: M38).
+        this.overlaySub(action)
+        break
+      // ---- welcome (spec §2a)
+      case "menu-up": this.welcomeNav(-1); break
+      case "menu-down": this.welcomeNav(1); break
+      case "menu-top": this.welcomeNav(-Number.MAX_SAFE_INTEGER); break
+      case "menu-bottom": this.welcomeNav(Number.MAX_SAFE_INTEGER); break
+      case "menu-activate": this.welcomeActivate(); break
       case "quit": void this.quitNow(); break
       case "quit-arm1":
         // First press (Esc-empty / unarmed) arms; a later press quits.
@@ -207,8 +296,8 @@ export class TuiApp {
           this.toast("Press again to quit")
         }
         break
-      case "history-prev": this.historyStep(-1); break
-      case "history-next": this.historyStep(1); break
+      case "history-prev": this.historyPivot(-1); break
+      case "history-next": this.historyPivot(1); break
       case "none": break
     }
     this.requestFrame()
@@ -252,14 +341,18 @@ export class TuiApp {
         const p = this.app.prompt
         p.text = p.text.slice(0, p.cursor) + ev.text + p.text.slice(p.cursor)
         p.cursor += ev.text.length
+        this.refreshDropdowns()
       }
       this.requestFrame()
       return
     }
     if (ev.type !== "key") return
     // Text editing for the prompt comes BEFORE the keymap — M37a subset:
-    // printable chars + Backspace/Delete; emacs motion lands M37b.
-    if (this.app.focused === "prompt") {
+    // printable chars + Backspace/Delete; emacs motion lands M37b. When a
+    // non-dropdown overlay is open (pickers/panels), chars are NOT prompt
+    // edits — they route through the overlay keymap (spec §4).
+    const ov = this.overlayState()
+    if (this.app.focused === "prompt" && (ov === undefined || ov.dropdown !== undefined)) {
       if (ev.code === "char" && !ev.ctrl && !ev.alt) {
         this.insertText(ev.key)
         return
@@ -271,7 +364,7 @@ export class TuiApp {
       if (ev.code === "Delete") {
         const p = this.app.prompt
         p.text = p.text.slice(0, p.cursor) + p.text.slice(p.cursor + 1)
-        this.requestFrame()
+        this.refreshDropdowns()
         return
       }
     }
@@ -280,6 +373,7 @@ export class TuiApp {
   }
 
   private keymapState(): KeymapState {
+    const ov = this.overlayState()
     return {
       focused: this.app.focused,
       promptText: this.app.prompt.text,
@@ -287,7 +381,22 @@ export class TuiApp {
       turnRunning: this.app.turn !== undefined,
       armedQuit: this.armedQuit,
       searchActive: this.app.search?.active === true,
+      overlay: ov?.kind,
+      dropdown: ov?.dropdown,
+      welcome: this.app.screen === "welcome",
     }
+  }
+
+  /** Open interaction surface (spec §4 priority: G1 overlays > pickers > dropdowns). */
+  private overlayState(): { kind: OverlayKind; dropdown?: "slash" | "completion" | "file-search" } | undefined {
+    const ov = this.app.overlay
+    if (ov !== undefined) return { kind: ov.kind }
+    if (this.app.sessions !== undefined) return { kind: "sessions" }
+    if (this.app.historyPanel !== undefined) return { kind: "history" }
+    if (this.app.fileSearch !== undefined) return { kind: "dropdown", dropdown: "file-search" }
+    if (this.app.completion !== undefined) return { kind: "dropdown", dropdown: "completion" }
+    if (this.app.slash !== undefined) return { kind: "dropdown", dropdown: "slash" }
+    return undefined
   }
 
   private onBackend(ev: TuiEvent): void {
@@ -326,6 +435,8 @@ export class TuiApp {
         let done = 0
         for (const item of ev.items) if (item.status === "completed") done++
         this.app.status.todo = { done, total: ev.items.length }
+        // Pane content (spec §3.12) + visibility hint when the pane was seeded.
+        this.app.paneData = { ...(this.app.paneData ?? {}), todo: ev.items }
         break
       }
       case "goal":
@@ -401,7 +512,7 @@ export class TuiApp {
     const p = this.app.prompt
     p.text = p.text.slice(0, p.cursor) + s + p.text.slice(p.cursor)
     p.cursor += s.length
-    this.requestFrame()
+    this.refreshDropdowns()
   }
 
   private backspace(): void {
@@ -409,12 +520,13 @@ export class TuiApp {
     if (p.cursor <= 0) return
     p.text = p.text.slice(0, p.cursor - 1) + p.text.slice(p.cursor)
     p.cursor -= 1
-    this.requestFrame()
+    this.refreshDropdowns()
   }
 
   private clearPrompt(): void {
     this.app.prompt.text = ""
     this.app.prompt.cursor = 0
+    this.refreshDropdowns()
     this.refreshShortcuts()
   }
 
@@ -436,6 +548,23 @@ export class TuiApp {
     this.app.prompt.cursor = h[i].length
   }
 
+  /** Up on an empty prompt with history opens the browser panel (spec §4). */
+  private historyPivot(dir: 1 | -1): void {
+    if (this.app.history.length === 0 || this.app.prompt.text.length !== 0) {
+      this.historyStep(dir)
+      return
+    }
+    if (this.app.historyPanel === undefined && dir === -1) {
+      this.app.historyPanel = {
+        entries: this.app.history.map((t) => ({ text: t, highlight: [] })),
+        cursor: Math.max(0, this.app.history.length - 1),
+      }
+      this.requestFrame()
+      return
+    }
+    this.historyStep(dir)
+  }
+
   private refreshShortcuts(): void {
     this.app.shortcuts = {
       items: shortcutsFor({
@@ -445,6 +574,264 @@ export class TuiApp {
         mode: this.app.mode,
       }),
     }
+  }
+
+  // ------------------------------------------------------------------ panes / pickers / dropdowns (M37b)
+
+  private togglePane(kind: "todo" | "tasks" | "queue"): void {
+    if (this.app.panes.has(kind)) this.app.panes.delete(kind)
+    else this.app.panes.add(kind)
+    this.requestFrame()
+  }
+
+  private toggleSessions(): void {
+    if (this.app.sessions !== undefined) {
+      this.app.sessions = undefined
+      this.requestFrame()
+      return
+    }
+    const loader = this.opts.listSessions
+    const now = this.opts.now?.() ?? Date.now()
+    if (loader === undefined) {
+      this.app.sessions = { groups: [], cursor: 0, now }
+      this.toast("session picker: host listSessions option not wired")
+      return
+    }
+    this.app.sessions = { groups: [], cursor: 0, loading: true, now }
+    void loader().then((list) => {
+      if (this.app.sessions === undefined) return
+      this.app.sessions = {
+        groups: [{ repo: "sessions", sessions: list.map((s): SessionRow => ({
+          id: s.id,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          turnCount: s.turnCount,
+          contextUsed: s.contextUsed,
+          contextTotal: s.contextTotal,
+        })) }],
+        cursor: 0,
+        loading: false,
+        now,
+      }
+      this.requestFrame()
+    })
+  }
+
+  /** Cursor moves: -1/+1 (or a page) over the open panel's rows. */
+  private overlayNav(delta: number): void {
+    const move = (len: number, cursor: number, d: number): number =>
+      len <= 0 ? 0 : Math.max(0, Math.min(len - 1, cursor + d))
+    const s = this.app.slash
+    if (s !== undefined) { s.cursor = move(s.entries.length, s.cursor, delta) }
+    const c = this.app.completion
+    if (c !== undefined) { c.cursor = move(c.entries.length, c.cursor, delta) }
+    const f = this.app.fileSearch
+    if (f !== undefined) { f.cursor = move(f.files.length, f.cursor, delta) }
+    const h = this.app.historyPanel
+    if (h !== undefined) { h.cursor = move(h.entries.length, h.cursor, delta) }
+    const ss = this.app.sessions
+    if (ss !== undefined) {
+      const n = flattenSessions(ss).length
+      ss.cursor = move(n, ss.cursor, delta)
+    }
+    if (this.app.overlay !== undefined) this.app.overlay.act?.(delta < 0 ? "overlay-nav-prev" : "overlay-nav-next")
+    this.requestFrame()
+  }
+
+  private overlayPage(): number {
+    return Math.max(1, Math.floor(this.opts.renderer.buffer.height / 10))
+  }
+
+  /** Enter / Tab — accept the open dropdown/picker entry. */
+  private overlaySelect(): void {
+    const ov = this.app.overlay
+    if (ov !== undefined) { ov.act?.("overlay-select"); return }
+    const s = this.app.slash
+    if (s !== undefined) {
+      const e = s.entries[s.cursor]
+      if (e !== undefined) this.replaceTokenAtCursor(`/${e.command} `)
+      this.app.slash = undefined
+      this.app.completion = undefined
+      return
+    }
+    const c = this.app.completion
+    if (c !== undefined) {
+      const e = c.entries[c.cursor]
+      if (e !== undefined) this.replaceTokenAtCursor(`${e.label} `)
+      this.app.completion = undefined
+      return
+    }
+    const f = this.app.fileSearch
+    if (f !== undefined) {
+      const file = f.files[f.cursor]
+      if (file !== undefined) this.replaceTokenAtCursor(`@${file.path} `)
+      this.app.fileSearch = undefined
+      return
+    }
+    const h = this.app.historyPanel
+    if (h !== undefined) {
+      const e = h.entries[h.cursor]
+      if (e !== undefined) {
+        this.app.prompt.text = e.text
+        this.app.prompt.cursor = e.text.length
+      }
+      this.app.historyPanel = undefined
+      return
+    }
+    const ss = this.app.sessions
+    if (ss !== undefined) {
+      const sel = flattenSessions(ss)[ss.cursor]
+      this.app.sessions = undefined
+      if (sel !== undefined) void this.opts.backend.open(sel.session.id)
+      return
+    }
+  }
+
+  /** Digit accept (1-9). G1 overlays handle it through the seam; my pickers
+   * jump straight to the row. */
+  private overlayAccept(index: number): void {
+    const ov = this.app.overlay
+    if (ov !== undefined) { ov.act?.({ type: "overlay-accept", index }); return }
+    const h = this.app.historyPanel
+    if (h !== undefined) { h.cursor = index; this.overlaySelect(); return }
+    const ss = this.app.sessions
+    if (ss !== undefined) { ss.cursor = index; this.overlaySelect(); return }
+    const s = this.app.slash
+    if (s !== undefined && index < s.entries.length) { s.cursor = index; this.overlaySelect(); return }
+    const c = this.app.completion
+    if (c !== undefined && index < c.entries.length) { c.cursor = index; this.overlaySelect(); return }
+    const f = this.app.fileSearch
+    if (f !== undefined && index < f.files.length) { f.cursor = index; this.overlaySelect(); return }
+  }
+
+  private overlayDismiss(): void {
+    const ov = this.app.overlay
+    if (ov !== undefined) { ov.act?.("overlay-dismiss"); return }
+    this.app.slash = undefined
+    this.app.completion = undefined
+    this.app.fileSearch = undefined
+    this.app.historyPanel = undefined
+    this.app.sessions = undefined
+    this.requestFrame()
+  }
+
+  /** Picker extras whose M37b behavior is cursor-only (tabs/filters: M38). */
+  private overlaySub(action: AppAction): void {
+    switch (action) {
+      case "overlay-search":
+      case "overlay-filter": this.toast("picker search/filter: M38"); break
+      case "overlay-tab":
+      case "overlay-tab-back": this.toast("picker tabs: M38"); break
+      case "overlay-toggle": break // Space — marker toggling lands M38
+      case "overlay-expand":
+      case "overlay-collapse": break // row preview expand: M38
+      case "overlay-range-left":
+      case "overlay-range-right":
+        // permission scope ←/→ — G1's seam owns this; nothing local.
+        this.app.overlay?.act?.(action)
+        break
+      case "overlay-question-prev":
+      case "overlay-question-next": this.app.overlay?.act?.(action); break
+      default: break
+    }
+    this.requestFrame()
+  }
+
+  // ------------------------------------------------------------------ welcome (M37b)
+
+  private welcomeNav(delta: number): void {
+    const w = this.app.welcome
+    if (w === undefined || w.menus.length === 0) return
+    w.cursor = Math.max(0, Math.min(w.menus.length - 1, w.cursor + delta))
+    this.requestFrame()
+  }
+
+  private welcomeActivate(): void {
+    const w = this.app.welcome
+    if (w === undefined) return
+    const m = w.menus[w.cursor]
+    if (m?.key.endsWith("q")) { void this.quitNow(); return }
+    if (m?.key.includes("Resume session")) { this.toast("resume session: M38"); return }
+    // agent screen; the host wires real session creation at G4/harmonization.
+    this.app.screen = "agent"
+    this.toast(`welcome: '${m?.label ?? "activate"}' → agent (host wiring M38)`)
+    this.requestFrame()
+  }
+
+  // ------------------------------------------------------------------ slash / @ token plumbing (M37b)
+
+  /** Token under the caret (last whitespace-separated chunk). */
+  private tokenAt(text: string, cursor: number): string | undefined {
+    const before = text.slice(0, cursor)
+    const sp = before.lastIndexOf(" ")
+    return before.slice(sp + 1)
+  }
+
+  /** Call on every prompt edit: keep the slash/@ dropdowns in sync. */
+  private refreshDropdowns(): void {
+    const p = this.app.prompt
+    const token = this.tokenAt(p.text, p.cursor)
+
+    // Slash dropdown: `/query` — token starts with `/` (empty query = all).
+    if (token === undefined || !token.startsWith("/")) {
+      this.app.slash = undefined
+    } else {
+      const query = token.slice(1)
+      const raw = this.opts.slashCommands ?? DEFAULT_SLASH_COMMANDS
+      this.app.slash = {
+        entries: raw
+          .filter((e) => query.length === 0 || e.command.toLowerCase().includes(query.toLowerCase()))
+          .map((e) => ({ ...e, fuzzyHit: fuzzyHits(e.command, query) })),
+        cursor: 0,
+      }
+    }
+
+    // `@` file search: token starts with `@`; host option resolves results.
+    if (token === undefined || !token.startsWith("@")) {
+      this.app.fileSearch = undefined
+    } else {
+      const query = token.slice(1)
+      if (query.length === 0) {
+        this.app.fileSearch = undefined
+      } else {
+        const prev = this.app.fileSearch
+        this.app.fileSearch = {
+          files: prev?.query === query ? prev.files : [],
+          cursor: 0,
+          loading: true,
+          query,
+        }
+        void this.resolveSearch(query)
+      }
+    }
+
+    // Completion (slash args): host rows when the prompt ends `slashcmd `.
+    const comp = this.opts.completions
+    this.app.completion =
+      comp !== undefined && /(^|\s)\/[-\w]+\s$/.test(p.text.slice(0, p.cursor))
+        ? { entries: comp(), cursor: 0 }
+        : undefined
+    this.requestFrame()
+  }
+
+  private async resolveSearch(query: string): Promise<void> {
+    const searcher = this.opts.searchFiles
+    const files = searcher !== undefined ? await searcher(query) : []
+    const s = this.app.fileSearch
+    if (s !== undefined && s.query === query) {
+      this.app.fileSearch = { files, cursor: 0, loading: false, query }
+      this.requestFrame()
+    }
+  }
+
+  /** Replace the token under the caret (slash/at/completion accept). */
+  private replaceTokenAtCursor(replacement: string): void {
+    const p = this.app.prompt
+    const before = p.text.slice(0, p.cursor)
+    const start = before.lastIndexOf(" ") + 1
+    p.text = p.text.slice(0, start) + replacement + p.text.slice(p.cursor)
+    p.cursor = start + replacement.length
+    this.refreshDropdowns()
   }
 
   private toast(text: string): void {

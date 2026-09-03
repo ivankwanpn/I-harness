@@ -5,11 +5,18 @@
 // h_right=2, top=1, bottom=1 default; compact = vpad 0, hpad 1.
 
 import { wrapPrompt } from "./prompt.ts"
-import type { ScrollbackEngine, TextStyle } from "../contracts.ts"
+import type { ScrollbackEngine, TextStyle, TodoItem } from "../contracts.ts"
 import type { StatusState } from "./status.ts"
 import type { PromptState } from "./prompt.ts"
 import type { TurnState } from "./turn-status.ts"
 import type { ShortcutBarState } from "./shortcuts.ts"
+// Type-only: erased at runtime (mirrors the prompt.ts pattern), so importing
+// the pane/dropdown view types here is cycle-safe.
+import type { TaskGroup } from "./tasks-pane.ts"
+import type { QueueRow } from "./queue-pane.ts"
+import type { BtwState } from "./btw-overlay.ts"
+import { TODO_MAX_ROWS } from "./todo-pane.ts"
+import { QUEUE_MAX_ROWS } from "./queue-pane.ts"
 
 /** Structural mirror of tui-core's Style (the @i-harness/tui-core package does
  * not re-export the raw style type; this shape IS the interop surface). */
@@ -63,6 +70,22 @@ export interface AgentViewState {
   shortcuts: ShortcutBarState
   scroll: { offset: number; follow: boolean; selectionAnchor?: number }
   search: { active: boolean; text: string; matches: number[]; current: number } | undefined
+  /** Visible-pane flags (values "todo" | "tasks" | "queue"; §2.1 rows 3-8). */
+  panes: Set<string>
+  /** Pane content — present/todos/tasks/queue/btw; undefined = no data. */
+  paneData?: PaneState
+  /** Open dropdown/picker overlay above the prompt; rows = panel height. */
+  dropdown?: { kind: "slash" | "completion" | "file-search" | "history" | "sessions"; rows: number }
+}
+
+/** Pane/overlay state shared by layoutAgent + present (spec §2.1 rows 3-8/7).
+ * Visibility is carried by `panes: Set<string>`; presence of data is what the
+ * views render. /btw lives here so the layout can reserve its row. */
+export interface PaneState {
+  todo?: TodoItem[]
+  tasks?: TaskGroup[]
+  queue?: QueueRow[]
+  btw?: BtwState
 }
 
 export interface AgentLayout {
@@ -72,6 +95,13 @@ export interface AgentLayout {
   scrollback: Rect
   prompt: Rect
   shortcuts: Rect
+  /** Pane slots (§2.1 rows 3/5/7/8) — undefined when the pane is hidden. */
+  tasks?: Rect
+  todo?: Rect
+  btw?: Rect
+  queue?: Rect
+  /** Dropdown/picker overlay rect directly above the prompt (h=0 when none). */
+  dropdown: Rect
   /** Blank row(s) between the scrollback/turn region and the prompt box. */
   promptGap: number
   colsPad: number
@@ -91,11 +121,36 @@ export function promptHeightOf(promptLines: number, compact: boolean, rows: numb
   return Math.min(cap, desired)
 }
 
+/** §2.1 pane heights — the panes carry no chrome; content rows only. */
+function tasksHeightOf(groups: TaskGroup[]): number {
+  if (groups.length === 0) return 1 // "No tasks or agents." line
+  let rows = 0
+  for (const g of groups) rows += 1 + g.entries.length
+  return Math.min(rows, 8)
+}
+
+function todoHeightOf(items: TodoItem[]): number {
+  return Math.max(1, Math.min(items.length, TODO_MAX_ROWS))
+}
+
+function queueHeightOf(rows: QueueRow[]): number {
+  return Math.max(1, Math.min(rows.length, QUEUE_MAX_ROWS))
+}
+
+/** `/btw` row (spec §2.1 item 7): box height capped by the screen. */
+function btwHeightOf(areaRows: number): number {
+  return Math.min(14, Math.max(4, Math.floor(areaRows / 2)))
+}
+
 /**
- * Vertical stack (spec §2.1): status (1), scrollback Min(5), [gap 1] turn
- * status row (only while a turn is running), prompt gap, prompt box
- * (border+text+info, max rows/2), gap, shortcuts (last row). Row/col padding
- * is symmetric: default 1/2, compact 0/1.
+ * Vertical stack (spec §2.1): status (1), [tasks row], [todo row], scrollback
+ * Min(5), [/btw row], [queue row], [gap 1] turn status row (only while a turn
+ * is running), prompt gap, prompt box (border+text+info, max rows/2), gap,
+ * shortcuts (last row). Row/col padding is symmetric: default 1/2, compact
+ * 0/1. A dropdown/picker overlay is slotted directly above the prompt box
+ * (overlapping content, like the spec §3.6 dropdowns). Panes need BOTH their
+ * visibility flag in `panes` and data in `paneData` to reserve rows (empty
+ * data still renders the pane's empty-state line).
  */
 export function layoutAgent(
   area: { cols: number; rows: number },
@@ -134,9 +189,49 @@ export function layoutAgent(
   const turnY = prompt.y - turnGap - turnH
   const turn: Rect = { x: innerX, y: turnY, w: innerW, h: turnH }
 
-  // Scrollback — Min(5), never starved; ends above the turn row (or prompt gap).
-  const scrollBottom = turnH > 0 ? turn.y : prompt.y
-  const scrollTop = status.y + 1
+  // Panes below the scrollback: /btw (item 7), queue (item 8) — above the turn
+  // row. btw shows whenever data is present (it's an overlay, not a toggle).
+  const pd = state.paneData
+  const gap = compact ? 0 : 1
+  let cursorBottom = turnH > 0 ? turn.y : prompt.y
+
+  const btwH = pd?.btw !== undefined ? btwHeightOf(area.rows) : 0
+  let btw: Rect | undefined
+  if (btwH > 0) {
+    const y = cursorBottom - gap - btwH
+    btw = { x: innerX, y, w: innerW, h: btwH }
+    cursorBottom = y
+  }
+
+  const showQueue = state.panes.has("queue") && pd?.queue !== undefined
+  const queueH = showQueue ? queueHeightOf(pd.queue!) : 0
+  let queue: Rect | undefined
+  if (queueH > 0) {
+    const y = cursorBottom - gap - queueH
+    queue = { x: innerX, y, w: innerW, h: queueH }
+    cursorBottom = y
+  }
+
+  // Panes above the scrollback: tasks (item 3), todo (item 5).
+  const showTasks = state.panes.has("tasks") && pd?.tasks !== undefined
+  const tasksH = showTasks ? tasksHeightOf(pd.tasks!) : 0
+  const showTodo = state.panes.has("todo") && pd?.todo !== undefined
+  const todoH = showTodo ? todoHeightOf(pd.todo!) : 0
+  let y = status.y + 1
+  let tasks: Rect | undefined
+  if (tasksH > 0) {
+    tasks = { x: innerX, y: y + gap, w: innerW, h: tasksH }
+    y = tasks.y + tasksH
+  }
+  let todo: Rect | undefined
+  if (todoH > 0) {
+    todo = { x: innerX, y: y + gap, w: innerW, h: todoH }
+    y = todo.y + todoH
+  }
+  const scrollTop = y
+
+  // Scrollback — Min(5), never starved; ends above the btw/queue/turn rows.
+  const scrollBottom = cursorBottom
   const scrollback: Rect = {
     x: innerX,
     y: scrollTop,
@@ -144,5 +239,16 @@ export function layoutAgent(
     h: Math.max(5, scrollBottom - scrollTop),
   }
 
-  return { status, turn, scrollback, prompt, shortcuts, promptGap, colsPad }
+  // Dropdown/picker overlay: directly above the prompt box (overlapping).
+  const dd = state.dropdown
+  const dropdown: Rect = dd === undefined
+    ? { x: innerX, y: prompt.y, w: innerW, h: 0 }
+    : {
+        x: prompt.x,
+        y: Math.max(status.y + 1, prompt.y - dd.rows),
+        w: prompt.w,
+        h: dd.rows,
+      }
+
+  return { status, turn, scrollback, prompt, shortcuts, tasks, todo, btw, queue, dropdown, promptGap, colsPad }
 }

@@ -8,7 +8,7 @@ import { clusterWidth, quantizeColor } from "@i-harness/tui-core"
 import type { GlyphSet, Palette, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
 import type { ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
 import { layoutAgent, SCROLLBACK_PAD_W, SCROLLBACK_RAIL_W } from "../views/agent.ts"
-import type { Rect, Style, ViewDraw } from "../views/agent.ts"
+import type { AgentViewState, PaneState, Rect, Style, ViewDraw } from "../views/agent.ts"
 import { renderStatus, strWidth } from "../views/status.ts"
 import type { StatusState } from "../views/status.ts"
 import { renderTurnStatus } from "../views/turn-status.ts"
@@ -17,6 +17,23 @@ import { renderPrompt } from "../views/prompt.ts"
 import type { PromptState } from "../views/prompt.ts"
 import { renderShortcuts } from "../views/shortcuts.ts"
 import type { ShortcutBarState } from "../views/shortcuts.ts"
+import { renderTodoPane } from "../views/todo-pane.ts"
+import { renderTasksPane } from "../views/tasks-pane.ts"
+import { renderQueuePane } from "../views/queue-pane.ts"
+import { renderBtwOverlay } from "../views/btw-overlay.ts"
+import { renderSlashDropdown, SLASH_MAX_ROWS } from "../views/slash-dropdown.ts"
+import type { SlashDropdownState } from "../views/slash-dropdown.ts"
+import { renderCompletionDropdown, COMPLETION_MAX_ROWS } from "../views/completion-dropdown.ts"
+import type { CompletionState } from "../views/completion-dropdown.ts"
+import { renderHistoryPanel } from "../views/history-panel.ts"
+import type { HistoryPanelState } from "../views/history-panel.ts"
+import { renderFileSearch } from "../views/file-search.ts"
+import type { FileSearchState } from "../views/file-search.ts"
+import { renderSessionPicker, flattenSessions } from "../views/session-picker.ts"
+import type { SessionPickerState } from "../views/session-picker.ts"
+import { renderWelcome } from "../views/welcome.ts"
+import type { WelcomeState } from "../views/welcome.ts"
+import type { AppAction } from "./keys.ts"
 
 /** The coordinator state — the loop mutates it, present() only reads it.
  * Superset of AgentViewState (extra fields: history, focused, toasts, panes). */
@@ -36,6 +53,51 @@ export interface TuiAppState {
   toasts: Array<{ text: string; until: number }>
   panes: Set<string>
   shortcuts: ShortcutBarState
+  /** Screen: "agent" (default) or the welcome hero (spec §2a). */
+  screen?: "agent" | "welcome"
+  welcome?: WelcomeState
+  /** Pane content (todo/tasks/queue/btw) — rendered when Panes flags/data set. */
+  paneData?: PaneState
+  /** Top-priority overlay (G1: permission/question/cancel-turn, spec §2.1
+   * prompt-slot precedence). `draw` REPLACES the prompt box; `act` receives
+   * overlay actions from the loop. G1's views plug in at harmonization —
+   * present() never imports them (cross-group contract). */
+  overlay?: OverlaySeam
+  /** Dropdowns/pickers (spec §3.6) — mutually exclusive, drawn above the prompt. */
+  slash?: SlashDropdownState
+  completion?: CompletionState
+  historyPanel?: HistoryPanelState
+  fileSearch?: FileSearchState
+  sessions?: SessionPickerState
+}
+
+/** The active dropdown 1: kind + height (layoutAgent places the rect above
+ * the prompt; the drawer below picks the renderer). */
+function dropdownDescOf(app: TuiAppState): AgentViewState["dropdown"] {
+  if (app.sessions !== undefined) {
+    const g = flattenSessions(app.sessions).length + app.sessions.groups.length
+    return { kind: "sessions", rows: Math.min(3 + g, 14) }
+  }
+  if (app.historyPanel !== undefined) {
+    return { kind: "history", rows: 2 + Math.min(app.historyPanel.entries.length, 10) }
+  }
+  if (app.fileSearch !== undefined) {
+    return { kind: "file-search", rows: 2 + Math.min(app.fileSearch.files.length, 10) }
+  }
+  if (app.completion !== undefined) {
+    return { kind: "completion", rows: Math.min(app.completion.entries.length, COMPLETION_MAX_ROWS) }
+  }
+  if (app.slash !== undefined) {
+    return { kind: "slash", rows: Math.min(app.slash.entries.length, SLASH_MAX_ROWS) }
+  }
+  return undefined
+}
+
+/** G1 harmonization seam (see `overlay` above). */
+export interface OverlaySeam {
+  kind: "permission" | "question" | "cancel-turn"
+  draw(ctx: Rect, view: ViewDraw, palette: Palette, glyphs: GlyphSet): void
+  act?(action: AppAction): void
 }
 
 // ------------------------------------------------------------------ palette → Style
@@ -274,14 +336,60 @@ export function present(
   buf.clear()
   const cap = opts.cap
   const view = makeDraw(buf, palette, cap)
-  const layout = layoutAgent({ cols: buf.width, rows: buf.height }, app, { compact: opts.compact })
+  const area = { cols: buf.width, rows: buf.height }
+
+  // Welcome screen (spec §2a) — the hero replaces the agent layout entirely.
+  if (app.screen === "welcome") {
+    if (app.welcome !== undefined && app.welcome.menus.length > 0) {
+      renderWelcome({ x: 0, y: 0, w: area.cols, h: area.rows }, app.welcome, view, palette, glyphs)
+    }
+    renderer.commit()
+    return { dirty: !renderer.sameFrame() }
+  }
+
+  const layout = layoutAgent(area, { ...app, dropdown: dropdownDescOf(app) }, { compact: opts.compact })
 
   renderStatus(layout.status, app.status, view, palette, glyphs)
+  if (layout.tasks !== undefined && app.paneData?.tasks !== undefined) {
+    renderTasksPane(layout.tasks, { groups: app.paneData.tasks }, view, palette, glyphs)
+  }
+  if (layout.todo !== undefined && app.paneData?.todo !== undefined) {
+    renderTodoPane(layout.todo, app.paneData.todo, view, palette, glyphs)
+  }
+  drawScrollback(buf, layout.scrollback, app, view, palette, glyphs, cap)
+  if (layout.btw !== undefined && app.paneData?.btw !== undefined) {
+    renderBtwOverlay(layout.btw, app.paneData.btw, view, palette, glyphs)
+  }
+  if (layout.queue !== undefined && app.paneData?.queue !== undefined) {
+    renderQueuePane(layout.queue, { rows: app.paneData.queue }, view, palette, glyphs)
+  }
   if (app.turn !== undefined) {
     renderTurnStatus(layout.turn, app.turn, view, palette, glyphs)
   }
-  drawScrollback(buf, layout.scrollback, app, view, palette, glyphs, cap)
-  renderPrompt(layout.prompt, app.prompt, view, palette, glyphs)
+
+  // Prompt slot: G1 overlay (permission/question/cancel-turn) replaces the box.
+  if (app.overlay !== undefined) {
+    app.overlay.draw(layout.prompt, view, palette, glyphs)
+  } else {
+    renderPrompt(layout.prompt, app.prompt, view, palette, glyphs)
+  }
+
+  // Dropdowns/pickers (spec §3.6) — drawn above the prompt, mutually exclusive.
+  if (layout.dropdown.h > 0) {
+    const dd = layout.dropdown
+    const st = app.sessions
+    if (st !== undefined) {
+      renderSessionPicker(dd, st, view, palette, glyphs)
+    } else if (app.historyPanel !== undefined) {
+      renderHistoryPanel(dd, app.historyPanel, view, palette, glyphs)
+    } else if (app.fileSearch !== undefined) {
+      renderFileSearch(dd, app.fileSearch, view, palette, glyphs)
+    } else if (app.completion !== undefined) {
+      renderCompletionDropdown(dd, app.completion, view, palette, glyphs)
+    } else if (app.slash !== undefined) {
+      renderSlashDropdown(dd, app.slash, view, palette, glyphs)
+    }
+  }
   renderShortcuts(layout.shortcuts, app.shortcuts, view, palette)
   // Toasts render M38 (bottom-right card); they only gate the anim pump today.
 
