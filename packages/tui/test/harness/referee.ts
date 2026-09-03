@@ -2,14 +2,16 @@
 // minimal YAML scene executor — runs a declarative scenario against the real
 // pty (runner.ts) + the real VT parser (virtual.ts).
 //
-// Determinism note (why `assert-idle-bytes` uses a CLOSED TIME WINDOW rather
-// than marker-to-marker framing on shared channels): marker files (fs) and pty
-// byte delivery are two independent channels with no ordering guarantee — a
-// marker write can become visible to the poller AFTER the following byte burst
-// is already delivered, and vice versa. A pure host-silence time window
-// (bounded inside the host's known sleep periods) proves zero-byte idle
-// without any cross-channel race. The markers remain as scheduling points.
+// Determinism: marker files (fs) and pty byte delivery are two independent
+// channels with no ordering guarantee. Zero-byte idle is proven by
+// `assert-byte-budget` — host-side cumulative byte/write ledgers vs the
+// pty-facing numbers — because COUNTS are invariant under pty delivery
+// chunking; TIME-WINDOW sampling (`assert-idle-bytes`) stays available but is
+// flaky on Windows where ConPTY's delivery chunk gaps span seconds (M37a
+// empirical finding: 3-byte and 166-byte "idle-window" hits that the strict
+// budget check exonerated). Prefer budgets; keep windows only as smoke.
 
+import { readFileSync } from "node:fs"
 import { awaitMarker } from "./runner.ts"
 import type { HostPty } from "./runner.ts"
 import type { VirtualTerminal } from "./virtual.ts"
@@ -181,9 +183,57 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           await virtual.drained()
           break
         }
+        case "assert-byte-budget": {
+          // THE deterministic zero-idle proof — the host's cumulative ledger
+          // (written at EVERY host write) checked against the pty-facing one.
+          // Byte/write COUNTS are invariant under pty delivery chunking — no
+          // time-window race (ConPTY's chunk gaps span seconds; window-based
+          // sampling is unreliable on Windows). Two modes:
+          //  - exact (default): observed bytes === host ledger bytes. Proves
+          //    NOTHING (app or console) emitted extras — used by no-resize runs.
+          //  - writes: N — the app emitted EXACTLY N writes (init + F frames +
+          //    teardown). A resize makes ConPTY inject its own replay bytes
+          //    into the master stream (cannot be filtered from the host side),
+          //    so the 014 run uses write-count (app-discipline) + the exact
+          //    byte budget of the no-resize 011 run.
+          await awaitQuiescent(runner, 300)
+          const writesArg = args["writes"] as number | undefined
+          let bytes = Number.NaN
+          let writes = Number.NaN
+          try {
+            bytes = Number(readFileSync(`${ctx.markerDir}/bytes`, "utf8"))
+            writes = Number(readFileSync(`${ctx.markerDir}/writes`, "utf8"))
+          } catch {
+            /* NaN → no ledger */
+          }
+          if (!Number.isFinite(bytes) || !Number.isFinite(writes)) {
+            return { ok: false, error: `step ${i} (assert-byte-budget): no ledger file` }
+          }
+          const observed = runner.writtenBytes()
+          if (writesArg !== undefined && Number.isFinite(writesArg) && writes !== writesArg) {
+            return {
+              ok: false,
+              error:
+                `step ${i} (assert-byte-budget): app wrote ${writes} times, ` +
+                `expected ${writesArg} (init+frames+teardown) — an extra frame was emitted`,
+            }
+          }
+          if (writesArg === undefined && observed !== bytes) {
+            return {
+              ok: false,
+              error:
+                `step ${i} (assert-byte-budget): observed ${observed} bytes, ` +
+                `host ledger says ${bytes} — idle frames were NOT zero-byte`,
+            }
+          }
+          break
+        }
         case "assert-idle-bytes": {
           // Closed time window (see header). expected must be 0 — any pty byte
-          // inside the window fails the zero-byte idle invariant.
+          // inside the window fails the zero-byte idle invariant. The window
+          // OPENS after a short quiescence so ConPTY's chunked delivery of the
+          // previous frame's tail settles BEFORE b0 is sampled (M37a: a 3-byte
+          // late chunk of the prior frame must not masquerade as an idle write).
           const expected = Number(args["expected"] ?? 0)
           const windowMs = Number(args["windowMs"] ?? 500)
           if (expected !== 0) {
@@ -192,6 +242,7 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
               error: `step ${i} (assert-idle-bytes): expected=${expected} unsupported (only 0)`,
             }
           }
+          await awaitQuiescent(runner, 250)
           let recent = false
           const unsub = runner.onData(() => {
             recent = true

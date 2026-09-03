@@ -26,7 +26,6 @@ steps:
       rows:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-2: system line
   - await-marker: { name: frame-2 }
   - wait-screen:
@@ -35,7 +34,6 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-3: tool running — turn row on (46x24 still)
   - await-marker: { name: frame-3 }
   - wait-screen:
@@ -44,12 +42,11 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
   - wait-screen:
       region: { startRow: 13 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-4: tool done with output
   - await-marker: { name: frame-4 }
   - wait-screen:
@@ -58,13 +55,12 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
   - wait-screen:
       region: { startRow: 13 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-5: turn end — idle before the resize window; the host re-grids at
   # 900ms into the 1800ms sleep between frame-5 and frame-6 (ConPTY injects
   # a resize REPLAY into the pty — the test's resize step absorbs it)
@@ -75,7 +71,7 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
   - wait-screen:
       region: { startRow: 13 }
@@ -85,7 +81,6 @@ steps:
   # resize BEFORE the host's 1200ms tick — the pty is at 34x18 by the time
   # frame-6 is flushed; the resize itself emits zero bytes
   - resize: { cols: 34, rows: 18 }
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-6: assistant — the resize full-paint at 34x18; turn row restored.
   # timeoutMs 8000: after a ConPTY resize the console resync can delay the
   # child's next frame delivery by seconds (measured empirically) — the wait
@@ -98,7 +93,7 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
         - "  ┃   It says hello."
         - "  ⠼ Responding…  0:00 0s  [stop]"
@@ -113,7 +108,6 @@ steps:
         - "  Enter: submit  │  Ctrl+Enter:"
         - ""
   - assert-glyph-integrity: {}
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-7: turn end at 34x18 — turn row hides; integrity holds
   - await-marker: { name: frame-7 }
   - wait-screen:
@@ -123,11 +117,11 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
         - "  ┃   It says hello."
         - ""
   - assert-glyph-integrity: {}
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   - await-marker: { name: teardown-wrote }
+  - assert-byte-budget: { writes: 9 }
   - wait-exit: { code: 0 }

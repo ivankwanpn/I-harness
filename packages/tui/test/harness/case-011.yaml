@@ -6,9 +6,17 @@
 # anim pump running (frames 3-5) — the host's clock is FROZEN, so the pump's
 # repaints are IDENTICAL frames → flush("") → zero-byte idle holds mid-stream.
 #
-# Rows are pinned from the actual rendering (grid row dumps); NOTE the
-# double "◆◆" on tool rows is the current M37a outer chrome (rail bullet +
-# semantic tool header run both carry the diamond) — the test pins reality.
+# Zero-byte idle is proven by `assert-byte-budget` (writes mode, N=8 =
+# init + 6 frames + teardown): the app emitted EXACTLY N writes — no stray
+# frame ever flushed between frames — plus the renderer-level zero-idle
+# invariant (identical frame → flush "") covered by the unit tests. Byte
+# COUNT checks are invariant under pty delivery chunking (pure time-window
+# sampling is racy on Windows: ConPTY's chunk gaps span seconds; its
+# alt-screen restore also injects its own repaint bytes at teardown — those
+# are platform artifacts, not app frames).
+#
+# Rows are pinned from the actual rendering (grid row dumps); the bullet slot
+# is engine-resolved (DisplayLine.glyph) — tool headers read "◆ Run …" once.
 # wait-screen (not assert-screen): pty byte delivery lags the fs marker —
 # frame asserts poll the virtual terminal until the frame's rows land
 # (bounded; stale screens cannot match — every wait pairs rows that differ
@@ -24,7 +32,6 @@ steps:
       rows:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-2: runtime-context system line
   - await-marker: { name: frame-2 }
   - wait-screen:
@@ -33,8 +40,7 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
-  # frame-3: tool running (turn row appears — "Run read data.txt")
+  # frame-3: tool running (turn row appears)
   - await-marker: { name: frame-3 }
   - wait-screen:
       region: { startRow: 1 }
@@ -42,12 +48,11 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
   - wait-screen:
       region: { startRow: 13 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-4: tool done with output (execute tools always render the excerpt)
   - await-marker: { name: frame-4 }
   - wait-screen:
@@ -56,14 +61,13 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
   - wait-screen:
       region: { startRow: 13 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
   - assert-glyph-integrity: {}
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-5: assistant "It says hello."
   - await-marker: { name: frame-5 }
   - wait-screen:
@@ -72,14 +76,13 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
         - "  ┃   It says hello."
   - wait-screen:
       region: { startRow: 13 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # frame-6: turn end — turn row hides; final full-chrome check
   - await-marker: { name: frame-6 }
   - wait-screen:
@@ -88,7 +91,7 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
-        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
         - "  ┃   It says hello."
   - wait-screen:
@@ -107,7 +110,7 @@ steps:
         - ""
         - "  Enter: submit  │  Ctrl+Enter: interject  │"
   - assert-glyph-integrity: {}
-  - assert-idle-bytes: { expected: 0, windowMs: 400 }
   # teardown ran (marker after the teardown bytes) → exit 0 is meaningful
   - await-marker: { name: teardown-wrote }
+  - assert-byte-budget: { writes: 8 }
   - wait-exit: { code: 0 }

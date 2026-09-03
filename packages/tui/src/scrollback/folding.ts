@@ -178,7 +178,7 @@ function goalRows(b: ExtractedGoal, glyphs: GlyphSet): StyledRun[][] {
 type ExtractedGoal = { label?: string; state?: string }
 
 function toolRows(b: ToolBlock, glyphs: GlyphSet): StyledRun[][] {
-  const rows: StyledRun[][] = [toolHeader(b, glyphs)]
+  const rows: StyledRun[][] = [toolHeader(b)]
   if (b.toolKind === "edit" && b.output !== undefined) {
     for (const r of diffRows(b.output)) rows.push(r)
   } else if (b.output !== undefined && b.output !== "") {
@@ -210,31 +210,45 @@ export function diffRows(output: string): StyledRun[][] {
   })
 }
 
-function toolHeader(b: ToolBlock, glyphs: GlyphSet): StyledRun[] {
-  const bullet = run(glyphs.diamonds[0] + " ", "dim")
+function toolHeader(b: ToolBlock): StyledRun[] {
+  // No leading glyph run — the bullet (◆ / ❙) lives in DisplayLine.glyph and
+  // the Presenter draws it in the bullet slot (single-glyph rule, M37a fix).
+  // The header text begins with one space so the bullet reads "◆ Run …".
   const label = b.summary ?? b.name
   const text = (s: string): StyledRun => run(s, "text")
   switch (b.toolKind) {
-    case "execute": return [bullet, text("Run "), text(label)]
-    case "read": return [bullet, text("Read "), text(label)]
-    case "edit": return [bullet, text("Edit "), text(label)]
+    case "execute": return [text(" Run "), text(label)]
+    case "read": return [text(" Read "), text(label)]
+    case "edit": return [text(" Edit "), text(label)]
     case "search": {
       const n = matchCount(b)
-      const hdr = [bullet, text("Search "), text(label)]
+      const hdr = [text(" Search "), text(label)]
       if (n >= 0) hdr.push(run(` (${n} matches)`, "muted"))
       return hdr
     }
     case "webfetch": {
-      const hdr = [bullet, text("Fetch "), text(label)]
+      const hdr = [text(" Fetch "), text(label)]
       if (b.output !== undefined) hdr.push(run(` (${b.output.length} chars)`, "muted"))
       return hdr
     }
-    case "websearch": return [bullet, text("Search web for "), text(label)]
-    case "skill": return [bullet, text("Invoke "), text(label), text("…")]
-    case "mcp-tool": return [bullet, text("Call "), text(b.name)]
-    case "subagent": return [bullet, text(statusWord(b.status)), text(" " + label)]
-    case "todo": return [bullet, text("Todo "), text(label)]
-    case "other": return [bullet, text("Call "), text(label)]
+    case "websearch": return [text(" Search web for "), text(label)]
+    case "skill": return [text(" Invoke "), text(label), text("…")]
+    case "mcp-tool": return [text(" Call "), text(b.name)]
+    case "subagent": return [text(` ${statusWord(b.status)} `), text(label)]
+    case "todo": return [text(" Todo "), text(label)]
+    case "other": return [text(" Call "), text(label)]
+  }
+}
+
+/** Bullet glyph for a block's header line (◆ blocks, ❙ collapsed, none for
+ * user/assistant/system/todo — user carries ❯, assistant has no bullet). */
+export function rowGlyphFor(b: Block, state: FoldState, glyphs: GlyphSet): string | undefined {
+  switch (b.kind) {
+    case "tool":
+    case "thinking":
+      return state === "collapsed" ? glyphs.collapsedAccent : glyphs.diamonds[0]
+    default:
+      return undefined
   }
 }
 
@@ -248,7 +262,7 @@ function matchCount(b: ToolBlock): number {
 }
 
 function toolFold(b: ToolBlock, full: StyledRun[][], state: FoldState, glyphs: GlyphSet): StyledRun[][] {
-  const hdr = toolHeader(b, glyphs)
+  const hdr = toolHeader(b)
   const body: StyledRun[][] = []
   let errRow: StyledRun[] | undefined
   for (const r of full) {
@@ -294,7 +308,7 @@ function cap(full: StyledRun[][], max: number): StyledRun[][] {
 /* ------------------------------------------------------------------ verb groups */
 
 /** One header row (or header + `◈ N more`) for a verb-group range. */
-export function groupSummaryRows(blocks: ReadonlyArray<Block>, g: GroupRange, glyphs: GlyphSet): StyledRun[][] {
+export function groupSummaryRows(blocks: ReadonlyArray<Block>, g: GroupRange): StyledRun[][] {
   const order: ToolKind[] = []
   const counts = new Map<ToolKind, number>()
   let failed = 0
@@ -306,7 +320,9 @@ export function groupSummaryRows(blocks: ReadonlyArray<Block>, g: GroupRange, gl
     counts.set(b.toolKind, (counts.get(b.toolKind) ?? 0) + 1)
   }
   const shown = order.length > 3 ? order.slice(0, 3) : order
-  const runs: StyledRun[] = [run(glyphs.diamonds[2] + " ", "dim")]
+  // No leading glyph run — the ◈ lives in DisplayLine.glyph (bullet slot); a
+  // one-space lead keeps the visual "◈ Read 2 files…" (space, not a glyph).
+  const runs: StyledRun[] = [run(" ", "text")]
   let shownCalls = 0
   shown.forEach((k, i) => {
     if (i > 0) runs.push(run(", ", "text"))
@@ -322,10 +338,10 @@ export function groupSummaryRows(blocks: ReadonlyArray<Block>, g: GroupRange, gl
     let hidden = 0
     for (const k of order.slice(3)) hidden += counts.get(k) ?? 0
     if (hidden > 0) {
-      rows.push([run(glyphs.diamonds[2] + " ", "dim"), run(`${hidden} more`, "text")])
+      rows.push([run(`${hidden} more`, "text")])
     }
   }
-  if (shownCalls === 0 && rows.length === 1) rows[0] = [run(glyphs.diamonds[2] + " ", "dim")]
+  if (shownCalls === 0 && rows.length === 1) rows[0] = [run("0 tool calls", "text")]
   return rows
 }
 
@@ -341,13 +357,13 @@ function kindLabelRuns(k: ToolKind, n: number): StyledRun[] {
 }
 
 /** Header/organization titles for lineBlock/CopyBlockMeta. */
-export function blockTitle(b: Block, glyphs: GlyphSet): string {
+export function blockTitle(b: Block): string {
   switch (b.kind) {
     case "user": return "User"
     case "user-edit": return "Edit"
     case "assistant": return "Assistant"
     case "thinking": return thinkingHeader(b)
-    case "tool": return toolHeader(b, glyphs).map((r) => r.text).join("")
+    case "tool": return toolHeader(b).map((r) => r.text).join("").replace(/^ /, "")
     case "system": return "System"
     case "todo": return "Todo"
     case "goal": return `Goal${b.label !== undefined ? " · " + b.label : ""}`

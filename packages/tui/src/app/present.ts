@@ -6,7 +6,7 @@
 
 import { clusterWidth, quantizeColor } from "@i-harness/tui-core"
 import type { GlyphSet, Palette, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
-import type { DisplayLine, ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
+import type { ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
 import { layoutAgent, SCROLLBACK_PAD_W, SCROLLBACK_RAIL_W } from "../views/agent.ts"
 import type { Rect, Style, ViewDraw } from "../views/agent.ts"
 import { renderStatus, strWidth } from "../views/status.ts"
@@ -191,18 +191,9 @@ function railColorOf(runs: StyledRun[], palette: Palette): string {
   return palette.grayDim
 }
 
-/** M37a bullet rule (spec §3.1): `◆` for block rows, `❙` for collapsed rows;
- * sticky prompt headers and user prompts (`❯ ` already in the runs) get none;
- * plain content lines (`text`-style first run) get none either. */
-function bulletFor(line: DisplayLine, glyphs: GlyphSet): string | undefined {
-  if (line.sticky) return undefined
-  const first = line.runs[0]?.style
-  if (first === undefined) return undefined
-  if (first === "accent-user") return undefined
-  if (first === "text" || first === "muted" || first === "bold" ||
-      first === "md-heading" || first === "diff-add") return undefined
-  return line.collapsed ? glyphs.collapsedAccent : glyphs.diamonds[0]
-}
+/** M37a bullet slot: the ENGINE resolves the glyph (◆ / ❙ / ◈) into
+ * DisplayLine.glyph — the drawer renders it verbatim. Text runs carry no
+ * glyph duplicates (single-glyph rule; fixes the ◆◆ double-draw artifact). */
 
 function drawScrollback(
   buf: Renderer["buffer"],
@@ -222,8 +213,11 @@ function drawScrollback(
   const lines = app.engine.viewport(off, rect.h)
   const matches = app.search?.active === true ? app.search.matches : []
 
-  // entry chrome: [accent 1][pad 2][content...][pad 2]
-  const contentStart = rect.x + SCROLLBACK_RAIL_W + SCROLLBACK_PAD_W + 1 // bullet col + 1
+  // entry chrome: [accent 1][pad 2][bullet]content...[pad 2] — the bullet is the
+  // FIRST content column; text begins after it. Engine wraps at innerWidth =
+  // cols - 6 (rail 1 + pads 4 + bullet 1) so no line is ever clipped mid-row.
+  const contentStart = rect.x + SCROLLBACK_RAIL_W + SCROLLBACK_PAD_W
+  const textStart = contentStart + 1
   const contentEnd = rect.x + rect.w - SCROLLBACK_PAD_W // exclusive
 
   for (let i = 0; i < lines.length; i++) {
@@ -235,21 +229,21 @@ function drawScrollback(
     if (inverted) railStyle.invert = true
     view.cell(rect.x, y, { text: glyphs.accentBar, style: railStyle, width: 1, continuation: false })
 
-    const bullet = bulletFor(line, glyphs)
+    const bullet = line.glyph
     if (bullet !== undefined) {
       const bStyle = view.color(palette.grayBright)
       if (inverted) bStyle.invert = true
-      view.cell(contentStart - 1, y, { text: bullet, style: bStyle, width: 1, continuation: false })
+      view.cell(contentStart, y, { text: bullet, style: bStyle, width: 1, continuation: false })
     }
 
     const ts = line.timestamp
     const tsW = ts !== undefined ? strWidth(ts) : 0
     const clip = contentEnd - tsW
     const yStyle = view.color(palette.grayDim)
-    let rx = contentStart
+    let rx = textStart
     for (const run of line.runs) {
       const st = inverted ? { ...styleFor(run.style, palette, cap), invert: true } : run.style
-      rx = view.text(rx, y, run.text, st, Math.max(contentStart, clip))
+      rx = view.text(rx, y, run.text, st, Math.max(textStart, clip))
     }
     if (tsW > 0 && ts !== undefined) {
       const tsStyle = { ...yStyle }

@@ -195,8 +195,10 @@ describe("present — status chips (spec §3.3)", () => {
 describe("present — scrollback chrome (spec §3.1)", () => {
   it("draws the accent rail, ◆ bullets, ❙ for collapsed, runs and right-aligned timestamps", () => {
     const engine = new StubEngine([
-      { runs: [{ text: "Run bash", style: "accent-system" }], blockIndex: 0, timestamp: "  6:35 PM" },
-      { runs: [{ text: "Read file", style: "accent-plan" }], blockIndex: 1, collapsed: true },
+      // glyph is engine-resolved into DisplayLine (M37a single-glyph rule);
+      // header text carries the one-space lead so it reads "◆ Read …".
+      { runs: [{ text: " Run bash", style: "accent-system" }], blockIndex: 0, timestamp: "  6:35 PM", glyph: "◆" },
+      { runs: [{ text: " Read file", style: "accent-plan" }], blockIndex: 1, collapsed: true, glyph: "❙" },
       { runs: [{ text: "Plain text", style: "text" }], blockIndex: 2 },
     ])
     const r = make(80, 24)
