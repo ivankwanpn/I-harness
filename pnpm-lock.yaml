@@ -948,16 +948,28 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/interaction':
+        specifier: workspace:*
+        version: link:../interaction
       '@i-harness/llm-mock':
         specifier: workspace:*
         version: link:../llm-mock
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../session-executor
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
       '@i-harness/tui-core':
         specifier: workspace:*
         version: link:../tui-core
     devDependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
       '@xterm/headless':
         specifier: ^6.0.0
         version: 6.0.0

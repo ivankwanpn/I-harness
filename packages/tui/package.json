@@ -7,11 +7,15 @@
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@i-harness/core-session": "workspace:*",
+    "@i-harness/interaction": "workspace:*",
     "@i-harness/llm-mock": "workspace:*",
     "@i-harness/session-executor": "workspace:*",
+    "@i-harness/session-persistence": "workspace:*",
+    "@i-harness/session-persistence-jsonl": "workspace:*",
     "@i-harness/tui-core": "workspace:*"
   },
   "devDependencies": {
+    "@i-harness/core-plugin": "workspace:*",
     "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
     "yaml": "^2.6.0"
