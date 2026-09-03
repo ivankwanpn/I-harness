@@ -5,6 +5,8 @@
 > M36（tui-core）增量：TUI 渲染層（cell 雙緩衝 diff + 零字節 idle、input 位元組解析、init/teardown 位元組序、能力探測、屏幕模式政策、GrokNight 主題量化）——**運行時 0 外部依賴**；PTY harness 首例（真終端零字節/字形完整性/resize 不變量）
 >
 > M37a（tui）增量：grok 1:1 agent 屏——scrollback 引擎（Fenwick virtual_y/O(dirty) 增量、verb-group 折疊、regex 搜索、選區、sticky）、視圖（狀態欄 chips/TurnStatus spinner/PromptWidget chrome/ShortcutsBar）、keymap 主組、**embedded SessionService 橋**（16ms batch + seq 游標回放）、`apps/tui`（mock 首映）；PTY case-011（live streaming + **byte-budget 零字節證明**）/ case-014（流中 resize 不變量）。後端零改動。
+>
+> M37b（tui）增量：**交互面收官**——permission/question/cancel-turn 覆蓋（approval seam 只讀接線 + 16ms batch + 30s fail-closed 超時、session jsonl 列舉）、todo/tasks/queue//btw 面板（§3.12 全規格）、slash/completion/history/file-search 下拉（§3.6）、session picker + welcome（適配）、keymap 全表（overlay/menu 路由）；PTY case-012（**真鍵面**：打字/Enter/歷史 Esc/Ctrl-C/Shift-Tab——writes-budget 13 次恰數）/ case-013（permission `1 (●)…` + j/k + 決策回寫斷言）。
 
 ## 一、引擎核心
 - **事件驅動 agent 循環**：log-driven（session log 為唯一真相）、並行 tool call 池（≤10）、maxTurns、AbortSignal、退出碼契約

@@ -83,6 +83,7 @@ frontend" gate:
 | M35 | TUI research: four-way study + grok-build blueprint + UI 1:1 replication spec (skips: rewind/dashboard/plan-review/credits/voice) | ✅ |
 | M36 | @i-harness/tui-core: cell renderer (zero-byte idle), input parser, terminal init/teardown, capability probe, screen-mode policy, GrokNight theme, PTY harness first case | ✅ |
 | M37a | @i-harness/tui: grok 1:1 agent screen — scrollback engine (virtual_y / folding / selection / search), views (status/turn/prompt/shortcuts), keymap subset, embedded SessionService bridge (16ms batch + seq cursor), `apps/tui`, PTY live-streaming + resize cases (byte-budget zero-idle proof) | ✅ |
+| M37b | Interaction coverage: permission/question/cancel-turn overlays (approval seam, read-only backend), todo/tasks/queue//btw panes, slash/completion/history/file-search dropdowns, session picker + welcome, full keymap, PTY case-012 (real keys) + case-013 (permission flow) | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
