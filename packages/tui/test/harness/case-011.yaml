@@ -1,0 +1,113 @@
+# M37a G4: case-011 — live streaming agent turn across a REAL pty (46x24).
+#
+# The host (host-011.ts, scene "011") feeds a scripted deterministic event
+# stream through the REAL app pipeline (TuiApp + ScrollbackEngine + renderer),
+# one frame per event, 800ms sleeps between frames. The turn keeps the 30fps
+# anim pump running (frames 3-5) — the host's clock is FROZEN, so the pump's
+# repaints are IDENTICAL frames → flush("") → zero-byte idle holds mid-stream.
+#
+# Rows are pinned from the actual rendering (grid row dumps); NOTE the
+# double "◆◆" on tool rows is the current M37a outer chrome (rail bullet +
+# semantic tool header run both carry the diamond) — the test pins reality.
+# wait-screen (not assert-screen): pty byte delivery lags the fs marker —
+# frame asserts poll the virtual terminal until the frame's rows land
+# (bounded; stale screens cannot match — every wait pairs rows that differ
+# from the previous frame).
+name: case-011-live-streaming-agent-turn
+host: test/harness/host-011.ts
+size: [46, 24]
+steps:
+  # frame-1: user "hello"
+  - await-marker: { name: frame-1 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+  - assert-idle-bytes: { expected: 0, windowMs: 400 }
+  # frame-2: runtime-context system line
+  - await-marker: { name: frame-2 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   context: workspace i-harness-main"
+  - assert-idle-bytes: { expected: 0, windowMs: 400 }
+  # frame-3: tool running (turn row appears — "Run read data.txt")
+  - await-marker: { name: frame-3 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   context: workspace i-harness-main"
+        - "  ┃  ◆◆ Run read data.txt"
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  - assert-idle-bytes: { expected: 0, windowMs: 400 }
+  # frame-4: tool done with output (execute tools always render the excerpt)
+  - await-marker: { name: frame-4 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   context: workspace i-harness-main"
+        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃   data.txt exists"
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  - assert-glyph-integrity: {}
+  - assert-idle-bytes: { expected: 0, windowMs: 400 }
+  # frame-5: assistant "It says hello."
+  - await-marker: { name: frame-5 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   context: workspace i-harness-main"
+        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃   data.txt exists"
+        - "  ┃   It says hello."
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  - assert-idle-bytes: { expected: 0, windowMs: 400 }
+  # frame-6: turn end — turn row hides; final full-chrome check
+  - await-marker: { name: frame-6 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   context: workspace i-harness-main"
+        - "  ┃  ◆◆ Run read data.txt"
+        - "  ┃   data.txt exists"
+        - "  ┃   It says hello."
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - ""
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃╰ mock-model─────────────────────────────╯"
+        - ""
+        - "  Enter: submit  │  Ctrl+Enter: interject  │"
+  - assert-glyph-integrity: {}
+  - assert-idle-bytes: { expected: 0, windowMs: 400 }
+  # teardown ran (marker after the teardown bytes) → exit 0 is meaningful
+  - await-marker: { name: teardown-wrote }
+  - wait-exit: { code: 0 }
