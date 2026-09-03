@@ -11,7 +11,7 @@
 // empirical finding: 3-byte and 166-byte "idle-window" hits that the strict
 // budget check exonerated). Prefer budgets; keep windows only as smoke.
 
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { awaitMarker } from "./runner.ts"
 import type { HostPty } from "./runner.ts"
 import type { VirtualTerminal } from "./virtual.ts"
@@ -35,6 +35,34 @@ export interface SceneCtx {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** Escape decoder for `write-pty` data strings. The YAML DOUBLE-QUOTED form
+ * (`data: "\x1b"`) arrives already decoded — pass-through; the LITERAL form
+ * (single quotes) arrives with backslash sequences — decode `\xNN` hex and
+ * the `\r` `\n` `\t` `\\` letter escapes here. */
+function decodePtyEscapes(s: string): string {
+  let out = ""
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!
+    if (c !== "\\" || i + 1 >= s.length) {
+      out += c
+      continue
+    }
+    const n = s[i + 1]!
+    if (n === "r") { out += "\r"; i++; continue }
+    if (n === "n") { out += "\n"; i++; continue }
+    if (n === "t") { out += "\t"; i++; continue }
+    if (n === "\\") { out += "\\"; i++; continue }
+    const hex = s.slice(i + 2, i + 4)
+    if (n === "x" && /^[0-9a-fA-F]{2}$/.test(hex)) {
+      out += String.fromCharCode(parseInt(hex, 16))
+      i += 3
+      continue
+    }
+    out += c
+  }
+  return out
+}
 
 /** Wait until NO pty data event has arrived for `ms` (bail after ms+15s). */
 async function awaitQuiescent(runner: HostPty, ms: number): Promise<void> {
@@ -224,6 +252,34 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
               error:
                 `step ${i} (assert-byte-budget): observed ${observed} bytes, ` +
                 `host ledger says ${bytes} — idle frames were NOT zero-byte`,
+            }
+          }
+          break
+        }
+        case "write-pty": {
+          // Drive the child's KEYBOARD: byte-looking data (escapes decoded —
+          // sent as-is for already-decoded values). The child's stdin flips
+          // into raw mode on the host side (its own concern); the CONSOLE and
+          // the APP never see real keys — the bytes are the keys.
+          runner.write(decodePtyEscapes(String(args["data"] ?? "")))
+          break
+        }
+        case "assert-file": {
+          // Marker-file CONTENT check (markers themselves assert existence):
+          // the host writes a JSON/text file; `contains` is a substring check.
+          const name = String(args["name"] ?? "")
+          const contains = args["contains"] as string | undefined
+          const path = `${markerDir}/${name}`
+          if (!existsSync(path)) {
+            return { ok: false, error: `step ${i} (assert-file): ${path} not found` }
+          }
+          const content = readFileSync(path, "utf8")
+          if (contains !== undefined && !content.includes(contains)) {
+            return {
+              ok: false,
+              error:
+                `step ${i} (assert-file): ${path} does not contain ${JSON.stringify(contains)} ` +
+                `(content: ${JSON.stringify(content.slice(0, 120))})`,
             }
           }
           break

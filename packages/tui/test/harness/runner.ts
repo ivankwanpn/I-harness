@@ -31,6 +31,8 @@ export interface HostPty {
   readonly pty: IPty
   /** Subscribe to pty output; returns unsubscribe. */
   onData(cb: (data: string) => void): () => void
+  /** Write bytes to the child's stdin (synchronous, node-pty .write). */
+  write(data: string): void
   /** Cumulative UTF-8 bytes the child has written (measured at onData). */
   writtenBytes(): number
   /** Date.now() of the most recent data event (0 if none yet). */
@@ -64,6 +66,9 @@ export function spawnHost(opts: SpawnHostOptions): HostPty {
     onData(cb) {
       listeners.add(cb)
       return () => listeners.delete(cb)
+    },
+    write(data) {
+      pty.write(data)
     },
     writtenBytes() {
       return bytes
