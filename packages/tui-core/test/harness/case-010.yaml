@@ -1,0 +1,51 @@
+name: case-010-render-arrow-idle
+host: test/harness/host-010.ts
+size: [40, 12]
+steps:
+  # frame 1 flushed; host is now silent until its 2.5s tick
+  - await-marker: { name: frame-flushed }
+  - await-quiescent: { ms: 300 }
+  - assert-screen:
+      size: [40, 12]
+      rows:
+        - " branch  ~/path"
+        - "hello 世界"
+        - "❯ Build anything"
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+  - assert-glyph-integrity: {}
+  # zero-byte idle window 1 (inside the host's 2.5s sleep)
+  - assert-idle-bytes: { expected: 0, windowMs: 600 }
+  # resize BEFORE the host's fixed 2.5s re-render tick — the pty is at 30x8
+  # by the time frame 2 is flushed; the resize itself emits zero bytes
+  - resize: { cols: 30, rows: 8 }
+  - assert-idle-bytes: { expected: 0, windowMs: 400 }
+  - await-marker: { name: idle-end }
+  - await-marker: { name: frame-flushed-2 }
+  - await-quiescent: { ms: 300 }
+  - assert-screen:
+      region: { startRow: 0 }
+      size: [30, 8]
+      rows:
+        - " branch  ~/path"
+        - "hello 世界"
+        - "❯ Build anything"
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+  - assert-glyph-integrity: {}
+  # zero-byte idle window 2 (host sleep between frame-flushed-2 and idle-end-2)
+  - assert-idle-bytes: { expected: 0, windowMs: 600 }
+  - await-marker: { name: idle-end-2 }
+  # teardown ran (marker after the teardown bytes) → exit 0 is meaningful
+  - await-marker: { name: teardown-wrote }
+  - wait-exit: { code: 0 }

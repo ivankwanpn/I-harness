@@ -6,7 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "devDependencies": {
-    "@xterm/xterm": "^5.5.0",
+    "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
     "yaml": "^2.6.0"
   }
