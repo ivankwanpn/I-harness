@@ -115,4 +115,50 @@ export class VirtualTerminal {
     for (let y = 0; y < this.rows; y++) rows.push(this.rowText(y))
     return rows
   }
+
+  // --- minimal-mode additions (M38a G3): the NORMAL buffer asserts — minimal
+  // mode never enters the alt screen, so the committed print-once content and
+  // the live region live in buffer.normal (scrollback + screen). Mirror
+  // inline.test.ts's oracle facts: getLine(y) is an ABSOLUTE 0-based index
+  // into the whole normal buffer (scrollback = [0, baseY), screen rows =
+  // [baseY, baseY + rows)).
+
+  /** Normal-buffer depth: rows [0, baseY) are the native scrollback tail. */
+  normalBaseY(): number {
+    return this.term.buffer.normal.baseY
+  }
+
+  /** Total normal-buffer lines (scrollback + screen). */
+  normalLength(): number {
+    return this.term.buffer.normal.length
+  }
+
+  /** Absolute normal-buffer line text (right-trimmed); negative y counts back
+   * from the end of the buffer: normalLine(-1) = the last (bottom) row. */
+  normalLine(y: number): string {
+    const buf = this.term.buffer.normal
+    const idx = y >= 0 ? y : buf.length + y
+    const line = buf.getLine(idx)
+    return line === undefined ? "" : line.translateToString(true)
+  }
+
+  /** Every normal-buffer line in order ([0, length)). */
+  bufferLines(): string[] {
+    const buf = this.term.buffer.normal
+    const out: string[] = []
+    for (let i = 0; i < buf.length; i++) out.push(this.normalLine(i))
+    return out
+  }
+
+  /** Per-head widths of one absolute normal-buffer line (0 = continuation). */
+  normalCellWidths(y: number): number[] {
+    const buf = this.term.buffer.normal
+    const idx = y >= 0 ? y : buf.length + y
+    const widths: number[] = []
+    for (let x = 0; x < this.cols; x++) {
+      const cell = buf.getLine(idx)?.getCell(x)
+      widths.push(cell === undefined ? 1 : cell.getWidth())
+    }
+    return widths
+  }
 }

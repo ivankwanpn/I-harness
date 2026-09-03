@@ -1,0 +1,188 @@
+# M38a G3: case-015 — the MINIMAL-MODE red-line: the terminal's OWN native
+# buffer is the print-once ledger, proven across a real pty + the real
+# @xterm/headless parser.
+#
+# The host (host-015.ts, scene "015"): TuiApp in mode "minimal" with the REAL
+# G1 inline engine (createInlineLiveRegion) — NO tui-core terminal (no alt
+# screen; the app writes straight into the pty). Deterministic event stream:
+# user "hello" → system context → [tool running → tool done → assistant →
+# turn end, ONE synchronous batch] → 2500ms (the resize lands in here via the
+# fs app-resize channel) → user "again" (the post-resize commit).
+#
+# Discipline (M37a parity): frozen clock (now: () => 13334) so the 500ms idle
+# flush never fires and every repaint is byte-identical; every pty write is a
+# marker frame-N + the byte/writes ledger. MINIMAL DIFFERENCE: loop.frameMinimal
+# has NO identical-frame suppression (unlike the fullscreen renderer diff →
+# flush ""), so an anim-pump repaint while a turn runs would add real bytes —
+# the scene is therefore paced with the turn IDLE for every sleep and the
+# turn events streamed back-to-back inside one macrotask (anim-tick-proof).
+# The writes ledger is exactly the COMMIT+FRAME discipline, no extras:
+#   writes = 11 = user(commit+frame) + system(commit+frame)
+#                   + tool running(frame) + tool done(frame) + assistant(frame)
+#                   + turn end(commit+frame) + user again(commit+frame)
+#     (no init write at all — the minimal host has no terminal.init; no
+#      teardown write either)
+#
+# Scrollback asserts (the print-once proof): assert-scrollback pins the
+# normal buffer EXACTLY (from the actual @xterm/headless reflow — the buffer
+# grows by one row per committed row; the region rows live bottom-pinned).
+# The pre-resize full-buffer pin (29 rows, baseY=5) holds the committed blocks
+# in chronological order above the live region; the post-resize pin (baseY=42,
+# the reflowed tail) proves the region re-placed at the new bottom with the
+# scrollback intact after one more commit — exactly 2 more writes.
+#
+# Resize: `app-resize` (NOT the pty master `resize`) — under this node-pty
+# ConPTY pairing the child never observes the master's resize, and the
+# master's injected replay burns the native buffer the minimal proof needs;
+# the fs channel drives the SAME app.setSize (host-015.ts header).
+#
+# The relaunch segment: the host spawned ITSELF with --mode fullscreen
+# (relaunchArgs) into $RELAUNCH_DIR; the child's REAL fullscreen screen
+# (alt-screen chrome) is asserted through the same pty stream, then its
+# exit code via its own marker dir, then the leading process's exit code 0.
+name: case-015-minimal-print-once
+host: test/harness/host-015.ts
+size: [46, 24]
+steps:
+  - await-marker: { name: app-minimal-start }
+  # W1: user "hello" commit + W2: region frame — region rows (46x24 0-based
+  # rows 14..23): [tail, ..., status, prompt]; row 14 = the committed row on
+  # screen (painted once by the commit's paintRow), rows 22..23 = status/
+  # prompt of the region repaint.
+  - await-marker: { name: frame-1 }
+  - wait-screen:
+      region: { startRow: 14 }
+      rows:
+        - "❯ hello"
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - "❯ hello"
+        - "mock-model"
+  - assert-glyph-integrity: {}
+  # W3: system commit + W4: frame — the region tail window grew one row.
+  - await-marker: { name: frame-3 }
+  - wait-screen:
+      region: { startRow: 14 }
+      rows:
+        - "❯ hello"
+        - "❯ hello"
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - "❯ hello"
+        - "context: workspace ok"
+  - assert-glyph-integrity: {}
+  # W5..W9: the stream batch (tool running frame, tool done frame, assistant
+  # frame, turn-end commit, turn-end frame) — W9's settle state.
+  - await-marker: { name: frame-5 }
+  - await-marker: { name: frame-9 }
+  - wait-screen:
+      region: { startRow: 14 }
+      rows:
+        - "❯ hello"
+        - "❯ hello"
+        - "❯ hello"
+        - " Run read data.txt"
+        - "data.txt exists"
+        - ""
+        - ""
+        - ""
+        - "❯ hello"
+        - "context: workspace ok"
+  - assert-glyph-integrity: {}
+  # PRE-RESIZE print-once pin (46x24): the WHOLE normal buffer, verbatim —
+  # baseY=5 (one scroll per committed row), rows 0..28, the committed blocks in
+  # chronological order (rows 14..18 on screen) + the live region rows
+  # bottom-pinned (pads + tail + status + prompt at rows 19..28).
+  - await-quiescent: { ms: 300 }
+  - assert-scrollback:
+      baseY: 5
+      from: 0
+      lines:
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - "❯ hello"
+        - "❯ hello"
+        - "❯ hello"
+        - " Run read data.txt"
+        - "data.txt exists"
+        - ""
+        - ""
+        - ""
+        - "❯ hello"
+        - "context: workspace ok"
+        - " Run read data.txt"
+        - "data.txt exists"
+        - "It says hello."
+        - "mock-model"
+        - ""
+  # resize mid-flow while the region is live: fs request → host app.setSize →
+  # virtual reflow (xterm does the terminal resize; no ConPTY replay).
+  - app-resize: { cols: 34, rows: 18 }
+  # W10: the post-resize commit (user "again") + W11: region frame.
+  - await-marker: { name: frame-10 }
+  # POST-RESIZE pin: the reflowed tail — the region at the NEW bottom (rows
+  # 50..59 of 60: pads + 6-row tail + status + prompt) + baseY=42 (the reflow
+  # made the preserved buffer deterministic).
+  - await-quiescent: { ms: 300 }
+  - assert-scrollback:
+      baseY: 42
+      from: 50
+      lines:
+        - ""
+        - ""
+        - "❯ hello"
+        - "context: workspace ok"
+        - " Run read data.txt"
+        - "data.txt exists"
+        - "It says hello."
+        - "❯ again"
+        - "mock-model"
+        - ""
+  - await-marker: { name: frame-11 }
+  - assert-glyph-integrity: {}
+  # byte budget: EXACTLY 11 writes — the print-once + NO-extra-repaint proof
+  # (the anim pump contributed nothing: every sleep has the turn idle).
+  - assert-byte-budget: { writes: 11 }
+  # ---- relaunch segment: the host self-spawned --mode fullscreen (spec §1).
+  # The child's markers live in the second dir; its byte stream reaches the
+  # same pty (alt screen + back; the normal buffer untouched).
+  - await-marker: { name: "app-fullscreen-start", dir: "$RELAUNCH_DIR" }
+  - await-marker: { name: "frame-1", dir: "$RELAUNCH_DIR" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 7 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────untitled─╮"
+        - " ┃│❯ Build anything            │"
+        - " ┃│                            │"
+  - assert-glyph-integrity: {}
+  - await-marker: { name: "exit-done", dir: "$RELAUNCH_DIR" }
+  - assert-file: { name: "exit-code", dir: "$RELAUNCH_DIR", contains: "0" }
+  - wait-exit: { code: 0 }
