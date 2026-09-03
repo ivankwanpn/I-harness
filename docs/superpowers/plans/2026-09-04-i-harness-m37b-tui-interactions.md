@@ -4,10 +4,10 @@
 
 ## 分組
 
-- **G1（interaction 覆蓋 + 橋擴展）** `src/views/permission.ts` `question.ts` `cancel-turn.ts` + `src/backend/approval.ts`（BackendClient 擴展：`approvals()/answerApproval()/questions()/answerQuestion()`——embedded 用 `onAssembly` + `registerApprovalAnswerer` + decision queue）+ `test/{permission,approval}.test.ts`。單測：行模板 golden（`1 (●) Always allow: …`）、範圍 ←→ 鍵、freeform RejectOnce 輸入、question `1-9/a-f/z`、決策回寫 stream 順序、cancel-turn 1-4。**新依賴**：`@i-harness/session-persistence` + `-jsonl`（store 列舉——package.json 更新 + lockfile）。
-- **G2（panes + dropdowns + pickers + welcome + keymap 全表）** `src/views/{todo-pane,tasks-pane,queue-pane,btw-overlay}.ts` + `src/views/{slash-dropdown,completion-dropdown,history-panel,file-search}.ts` + `src/views/session-picker.ts` `welcome.ts` + `src/app/keys.ts` 補全（modal/dropdown/picker 鍵）+ agent.ts layoutAgent 擴充（面板 row 槽 + overlay 佔位優先序 §2.1）+ `test/{panes,dropdowns,picker,welcome,keys-full}.test.ts`。
-- **G4（host + PTY）** host-012/013 + case-012/013（用 M37a harness 基建：byte-budget / wait-screen / marker）——case-012：打字 → Enter 提交 → mock 第二 turn；歷史 Up；Ctrl-C 清草稿；Ctrl-M multiline；Shift-Tab 循環。case-013：scripted approval 請求 → modal 屏幕模板 → `1` 選擇 → 決策回寫斷言（假 backend 的 answer 流）。+ 橋擴展的 surface 導出。
-- **G5（docs + 全驗證）** README M37b 行 + CAPABILITIES + spec/plan 標記 + `pnpm typecheck` / `pnpm -r test` / `pnpm e2e`。
+- **G1（interaction 覆蓋 + 橋擴展）✅** `src/views/permission.ts` `question.ts` `cancel-turn.ts` + `src/backend/approval.ts`（BackendClient 擴展：`approvals()/answerApproval()/questions()/answerQuestion()`——embedded 用 `onAssembly` + `registerApprovalAnswerer` + decision queue）+ `test/{permission,approval}.test.ts`。單測：行模板 golden（`1 (●) Always allow: …`）、範圍 ←→ 鍵、freeform RejectOnce 輸入、question `1-9/a-f/z`、決策回寫 stream 順序、cancel-turn 1-4。**新依賴**：`@i-harness/session-persistence` + `-jsonl`（store 列舉——package.json 更新 + lockfile）。
+- **G2（panes + dropdowns + pickers + welcome + keymap 全表）✅** `src/views/{todo-pane,tasks-pane,queue-pane,btw-overlay}.ts` + `src/views/{slash-dropdown,completion-dropdown,history-panel,file-search}.ts` + `src/views/session-picker.ts` `welcome.ts` + `src/app/keys.ts` 補全（modal/dropdown/picker 鍵）+ agent.ts layoutAgent 擴充（面板 row 槽 + overlay 佔位優先序 §2.1）+ `test/{panes,dropdowns,picker,welcome,keys-full}.test.ts`。
+- **G4（host + PTY）✅** host-012/013 + case-012/013（用 M37a harness 基建：byte-budget / wait-screen / marker）——case-012：打字 → Enter 提交 → mock 第二 turn；歷史 Up；Ctrl-C 清草稿；Ctrl-M multiline；Shift-Tab 循環。case-013：scripted approval 請求 → modal 屏幕模板 → `1` 選擇 → 決策回寫斷言（假 backend 的 answer 流）。+ 橋擴展的 surface 導出。
+- **G5（docs + 全驗證）✅** README M37b 行 + CAPABILITIES + spec/plan 標記 + `pnpm typecheck` / `pnpm -r test` / `pnpm e2e`。
 
 ## 硬規
 
@@ -21,3 +21,12 @@
 1. G1∥G2 → 調和 → `pnpm --filter @i-harness/tui test` + typecheck
 2. G4 → case-012/013 綠 → apps/tui 手動 smoke
 3. G5 → 全量 typecheck/`-r test`/e2e → push → 用戶確認 → FF main
+
+
+## 執行發現（G4 調和）
+
+1. **digit accept 1-based vs 0-based**：keys.ts 送 1..9、G1 行 0-based——seam 平移 index-1（case-013 首跑抓到了「1 按了卻 Never」）。
+2. **lone ESC 需 drain**：tui-core parser 僅在 drain() 發 Esc；hosts 掛 40ms drain 計時器（否則 lone ESC + `[A` 合併成 Esc+Up）。
+3. **permission detail 在 46x24 不外露**：prompt 槽 6 行被標題+選項填滿——detailMax 0（規格相符收縮）。
+4. **byte budgets（確定性）**：case-012 = 13 寫（init+11 幀+teardown——含每鍵一幀、Ctrl-C arm 幀與退出幀因相同而 0 字節）、case-013 = 5 寫（j-clamp 幀 identical → 0）。
+5. **marker 碰撞**：decision 改存 decision.json（不與 answered marker 衝突）。
