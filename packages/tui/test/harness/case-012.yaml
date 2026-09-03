@@ -1,0 +1,142 @@
+# M37b G4: case-012 — REAL-KEY interaction across a real pty (46x24).
+#
+# The host (host-012.ts) is host-011's deterministic pipeline PLUS a live
+# keyboard: the test's pty writes go into the child's raw-mode stdin and
+# through the REAL tui-core InputParser into the TuiApp input pump, so every
+# key here is a genuine key event (the input path apps/tui wires). Keys used:
+#   "hi"        → two char events (prompt edit, one frame each)
+#   \r          → Enter → submit("hi") → scripted backend batch 2
+#   \x1b[A      → CSI Up → history panel (empty prompt + history exists)
+#   \x1b        → lone ESC (40ms drain in the host) → overlay-dismiss
+#   \x03        → Ctrl-C → empty prompt → cancel-turn → ARM (no visible
+#                 change — identical frame flushes "") — proves the screen
+#                 keeps rendering + exit not fired (the next steps still
+#                 produce frames/exit 0 via the final ESC quit)
+#   \x1b[Z      → CSI Z → Shift-Tab → cycle-mode → plan chip (status row +
+#                 prompt info line `mock-model · plan`)
+#   \x1b        → lone ESC → armed → "quit" → backend.close → teardown → 0
+#
+# Rows pinned from the actual renderer grid (identical frame numbering as
+# host-011: frame-N markers = non-empty flushes). Byte budget: writes mode
+# (N = init + F non-empty frames + teardown) — every keystroke repaints, so
+# each visible state change is exactly one write; no-resize run.
+name: case-012-real-key-interaction
+host: test/harness/host-012.ts
+size: [46, 24]
+steps:
+  # batch 1: user "hello" → assistant "hi there" → turn end (frames 1-3)
+  - await-marker: { name: frame-1 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+  - await-marker: { name: frame-2 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   hi there"
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  - await-marker: { name: frame-3 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   hi there"
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃╰ mock-model─────────────────────────────╯"
+        - ""
+        - "  Enter: submit  │  Ctrl+Enter: interject  │"
+  - assert-glyph-integrity: {}
+  # type "hi" → each char is one frame (4, 5) — prompt row shows the draft
+  - write-pty: { data: "hi" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 16 }
+      rows:
+        - " ┃│❯ hi                                    │"
+  # Enter → submit("hi") → prompt clears (frame 6); batch 2 (frames 7-8):
+  # assistant "world" + turn end. The user line is NOT re-added — only the
+  # engine's new events appear.
+  - write-pty: { data: "\r" }
+  - await-marker: { name: submitted-2 }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 4 }
+      rows:
+        - "  ┃   world"
+  - await-marker: { name: turned-2 }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+  # Up (CSI A, empty prompt + history ["hi"]) → history panel (frame 9)
+  - write-pty: { data: "\x1b[A" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 12 }
+      rows:
+        - "  ╭ history ──────────────────────────────1╮"
+        - "  │❯ hi                                    │"
+        - "  ╰────────────────────────────────────────╯"
+  # Esc (lone — the host's 40ms drain resolves it) → overlay-dismiss (frame 10)
+  - write-pty: { data: "\x1b" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 12 }
+      rows:
+        - ""
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+  # Ctrl-C on an empty prompt → cancel-turn: NO turn running → arms the quit
+  # (invisible — toast chrome is M38). The screen keeps rendering: the NEXT
+  # wait-screen (plan frame) must match and the process must still be alive.
+  - write-pty: { data: "\x03" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+  # Shift-Tab (CSI Z) → cycle-mode → plan (frame 11): status chip + info line
+  - write-pty: { data: "\x1b[Z" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace                        plan"
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 20 }
+      rows:
+        - " ┃╰ mock-model · plan──────────────────────╯"
+  - assert-glyph-integrity: {}
+  # Final lone Esc → armed → "quit" → backend.close → host teardown → exit 0.
+  # (The quit produces no visible frame; only the teardown write is added.)
+  - write-pty: { data: "\x1b" }
+  - await-marker: { name: teardown-wrote }
+  # writes = 1 init + 11 non-empty frames + 1 teardown = 13:
+  #   f1 user · f2 assistant · f3 turn end · f4 "h" · f5 "i" · f6 clear prompt
+  #   · f7 world · f8 turn-2 end · f9 up/history · f10 esc/dismiss
+  #   · f11 shifttab/plan — no write for the j-style clamp (Ctrl-C arm frame
+  #   is identical → flush "") and no write for the final quit (identical).
+  - assert-byte-budget: { writes: 13 }
+  - wait-exit: { code: 0 }

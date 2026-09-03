@@ -1,0 +1,64 @@
+# M37b G4: case-013 — PERMISSION OVERLAY through the production G4 seam.
+#
+# The host (host-013.ts) builds the modal DIRECTLY:
+#   app.state().overlay = bindPermissionOverlay(surf, state, { onDecision / onClose })
+# (the wheel's public binder) + marker "overlay-p1" + a frame — the modal is
+# drawn by the REAL present() overlay path (prompt-slot precedence §2.1) and
+# the test's keys go through the REAL loop dispatch + seam act adapters:
+#   j  → overlay-nav-prev (cursor 0 → clamp 0 — no visible change)
+#   k  → overlay-nav-next → cursor 1 → `2 (●)`
+#   1  → overlay-accept index 0 → Always allow → onDecision
+#        {surfaceId:"p1", verdict:"always", approved:true, index:0,
+#         scope:"command", feedback:""} → <markerDir>/answered →
+#        onClose clears the overlay (modal gone frame)
+#
+# Modal rows pinned from the actual renderer grid (46x24 → the prompt slot
+# band y15..y20; the detail is capped at 0 rows at this height — title + 5
+# rows fill the band). Byte budget: init + modal frame + k frame + modal-gone
+# frame + teardown = 5 writes (j's clamped no-op frame is identical → "").
+name: case-013-permission-overlay
+host: test/harness/host-013.ts
+size: [46, 24]
+steps:
+  # modal appeared (single frame after overlay-p1)
+  - await-marker: { name: overlay-p1 }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - "  ┃ echo hi"
+        - "  ┃ 1 (●) Always allow: command"
+        - "  ┃ 2 (○) Never allow: command"
+        - "  ┃ 3 (○) Yes, proceed"
+        - "  ┃ 4 (○) No, I trust it"
+        - "  ┃ 5 (○) No, reject (type to add feedback)"
+  # j → nav-prev at cursor 0 (clamped, no visible change), k → nav-next → row 2
+  - write-pty: { data: "j" }
+  - write-pty: { data: "k" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 16 }
+      rows:
+        - "  ┃ 1 (○) Always allow: command"
+        - "  ┃ 2 (●) Never allow: command"
+  - assert-glyph-integrity: {}
+  # 1 → Always allow → decision recorded → modal gone (base prompt back)
+  - write-pty: { data: "1" }
+  - await-marker: { name: answered }
+  - assert-file: { name: "decision.json", contains: '"approved":true' }
+  - assert-file: { name: "decision.json", contains: '"surfaceId":"p1"' }
+  - assert-file: { name: "decision.json", contains: '"verdict":"always"' }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃╰ mock-model─────────────────────────────╯"
+  - assert-glyph-integrity: {}
+  - await-marker: { name: teardown-wrote }
+  - assert-byte-budget: { writes: 5 }
+  - wait-exit: { code: 0 }
