@@ -57,8 +57,15 @@ function marker(name: string): void {
 }
 
 let epipe = false
+let totalBytes = 0
+let totalWrites = 0
 
-/** writeSync wrapper: EPIPE on a dead pty is swallowed; anything else rethrows. */
+/** writeSync wrapper: EPIPE on a dead pty is swallowed; anything else rethrows.
+ * Every byte the host emits passes here — a cumulative ledger is written to
+ * <markerDir>/bytes + <markerDir>/writes so the referee's `assert-byte-budget`
+ * can prove the whole run emitted EXACTLY init + N frames + teardown.
+ * Byte/write COUNTS are immutable under pty delivery chunking (unlike
+ * time-window sampling, which ConPTY's multi-second chunk gaps make racy). */
 function out(s: string): void {
   if (epipe) return
   try {
@@ -67,6 +74,14 @@ function out(s: string): void {
     const code = (e as NodeJS.ErrnoException).code
     if (code === "EPIPE") epipe = true
     else throw e
+  }
+  totalBytes += Buffer.byteLength(s)
+  totalWrites += 1
+  try {
+    writeFileSync(`${MARKER_DIR}/bytes`, String(totalBytes))
+    writeFileSync(`${MARKER_DIR}/writes`, String(totalWrites))
+  } catch {
+    /* ledger is best-effort */
   }
 }
 

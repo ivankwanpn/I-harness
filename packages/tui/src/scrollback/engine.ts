@@ -22,7 +22,8 @@ import { SearchState } from "./search.ts"
 import { SelectionState } from "./selection.ts"
 
 export interface ScrollbackEngineOptions {
-  /** Terminal width in columns (default 80). Content width = cols - 5. */
+  /** Terminal width in columns (default 80). Content width = cols - 6
+ * (rail 1 + pads 4 + bullet column 1 — matches the Presenter's region). */
   width?: number
   /** Right-align `  %-I:%M %p` timestamps on first content lines. */
   showTimestamps?: boolean
@@ -119,13 +120,13 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     if (short !== null && index === g!.start) {
       const row = short[inner]
       const runs = row !== undefined ? row.runs : []
-      return { title: rowText(runs), runs }
+      return { title: rowText(runs).replace(/^ /, ""), runs }
     }
     if (short !== null && index !== g!.start) return { title: "", runs: [] }
     const rows = blockRows(b, this.glyphs)
     const first = rows.length > 0 ? rows[0] : []
     return {
-      title: blockTitle(b, this.glyphs),
+      title: blockTitle(b),
       runs: first.length > 0 ? first : [{ text: "", style: "text" }],
     }
   }

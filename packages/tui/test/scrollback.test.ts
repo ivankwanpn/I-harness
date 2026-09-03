@@ -81,12 +81,12 @@ describe("basic sequence", () => {
       "❯ hi there",
       "Thought for 0.5s",
       "ok here we go",
-      "◆ Read src/x.ts",
+      " Read src/x.ts",
     ])
     // styles
     expect(vp[0].runs[0]).toEqual({ text: "❯ ", style: "accent-user" })
     expect(vp[1].runs[0].style).toBe("muted")
-    expect(vp[3].runs[0]).toEqual({ text: "◆ ", style: "dim" })
+    expect(vp[3].glyph).toBe("◆")
     // anchors: user = user:seq, tool = tool:callId
     expect(vp[0].anchor).toBe("user:1")
     expect(vp[3].anchor).toBe("tool:r1")
@@ -109,19 +109,19 @@ describe("basic sequence", () => {
     expect(e.lineCount()).toBe(7)
     const mid = texts(e.viewport(0, 10))
     expect(mid).toEqual([
-      "◆ Run node b.js",
+      " Run node b.js",
       "o1", "o2", " …", "o5", "o6", "o7",
     ])
     e.append(toolEv({ callId: "b1", name: "bash", kind: "execute", status: "done", summary: "node b.js", output: "done1\ndone2", seq: 3, ts: 0 }))
     expect(e.lineCount()).toBe(3)
-    expect(texts(e.viewport(0, 10))).toEqual(["◆ Run node b.js", "done1", "done2"])
+    expect(texts(e.viewport(0, 10))).toEqual([" Run node b.js", "done1", "done2"])
   })
 
   it("error tool shows error row in collapsed (header-only) blocks", () => {
     const e = eng({ width: 80 })
     e.append(toolEv({ callId: "s1", name: "grep", kind: "search", status: "error", summary: "needle", output: "x:1", error: "pattern too big", seq: 1, ts: 0 }))
     expect(texts(e.viewport(0, 10))).toEqual([
-      "◆ Search needle (1 matches)",
+      " Search needle (1 matches)",
       "✗ pattern too big",
     ])
     expect(e.viewport(1, 1)[0].runs[0].style).toBe("accent-error")
@@ -167,14 +167,14 @@ describe("verb-group folding", () => {
     group(e)
     expect(e.lineCount()).toBe(2) // user + group header
     const hdr = e.viewport(0, 8)[1]
-    expect(lineText(hdr)).toBe("◈ Read 3 files, Searched 1 pattern, Searched 1 web query")
+    expect(lineText(hdr)).toBe(" Read 3 files, Searched 1 pattern, Searched 1 web query")
     expect(hdr.collapsed).toBe(true)
     expect(hdr.anchor).toBe("group:1")
     // count runs are BOLD
     const bolds = hdr.runs.filter((r) => r.style === "bold")
     expect(bolds.map((r) => r.text)).toEqual(["3", "1", "1"])
-    // lineBlock on the group header returns its summary
-    expect(e.lineBlock(1)?.title).toBe("◈ Read 3 files, Searched 1 pattern, Searched 1 web query")
+    // lineBlock on the group header returns its summary (bullet-lead trimmed)
+    expect(e.lineBlock(1)?.title).toBe("Read 3 files, Searched 1 pattern, Searched 1 web query")
   })
 
   it("expands/collapses as a unit", () => {
@@ -184,11 +184,11 @@ describe("verb-group folding", () => {
     expect(e.lineCount()).toBe(6)
     expect(texts(e.viewport(0, 10))).toEqual([
       "❯ run reads",
-      "◆ Read a.txt",
-      "◆ Read b.txt",
-      "◆ Read c.txt",
-      "◆ Search findMe (2 matches)",
-      "◆ Search web for north star",
+      " Read a.txt",
+      " Read b.txt",
+      " Read c.txt",
+      " Search findMe (2 matches)",
+      " Search web for north star",
     ])
     e.toggleFoldAt(1) // collapse back
     expect(e.lineCount()).toBe(2)
@@ -205,7 +205,7 @@ describe("verb-group folding", () => {
     e.toggleFoldAt(2) // expand member m2 (was header-only)
     expect(e.lineCount()).toBe(4)
     expect(texts(e.viewport(0, 10)).slice(1)).toEqual([
-      "◆ Read A", "◆ Read B", "b1",
+      " Read A", " Read B", "b1",
     ])
     e.toggleFoldAt(1) // toggle group → collapses the whole unit again
     expect(e.lineCount()).toBe(2)
@@ -218,7 +218,7 @@ describe("verb-group folding", () => {
     e.append(toolEv({ callId: "f2", name: "read", kind: "read", status: "error", summary: "b.txt", error: "no such file", seq: 3 }))
     e.append(toolEv({ callId: "f3", name: "read", kind: "read", status: "done", summary: "c.txt", output: "c1", seq: 4 }))
     const hdr = e.viewport(0, 2)[1]
-    expect(lineText(hdr)).toBe("◈ Read 3 files · 1 failed")
+    expect(lineText(hdr)).toBe(" Read 3 files · 1 failed")
     expect(hdr.runs[hdr.runs.length - 1].style).toBe("accent-error")
   })
 })
@@ -239,16 +239,16 @@ describe("1000-block append", () => {
     // offset past the user pins the sticky prompt header instead (below).
     const all = e.viewport(0, 1 + N)
     expect(texts(all)[0]).toBe("❯ go")
-    expect(texts(all)[10]).toBe("◆ Run task 9")
-    expect(texts(all)[500]).toBe("◆ Run task 499")
-    expect(texts(all)[N]).toBe("◆ Run task 998")
+    expect(texts(all)[10]).toBe(" Run task 9")
+    expect(texts(all)[500]).toBe(" Run task 499")
+    expect(texts(all)[N]).toBe(" Run task 998")
     // O(rendered): only the requested lines are returned. offset 100 is past
     // the sticky user → the returned view starts with the pinned prompt and
     // then the 6 real lines at 100..105.
     expect(e.viewport(100, 7)).toHaveLength(7)
     expect(texts(e.viewport(100, 7))).toEqual([
-      "❯ go", "◆ Run task 99", "◆ Run task 100", "◆ Run task 101",
-      "◆ Run task 102", "◆ Run task 103", "◆ Run task 104",
+      "❯ go", " Run task 99", " Run task 100", " Run task 101",
+      " Run task 102", " Run task 103", " Run task 104",
     ])
     // direct offset past the last user line → sticky overlay (1 line: "go")
     expect(texts(e.viewport(10, 1))).toEqual(["❯ go"])
@@ -295,7 +295,7 @@ describe("folding toggle / expandAll / sticky", () => {
     seeded(e)
     e.toggleExpandAll()
     expect(texts(e.viewport(0, 20)).slice(5)).toEqual(
-      ["a done thing", "◆ Run node b.js", "l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8"],
+      ["a done thing", " Run node b.js", "l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8"],
     )
   })
 
@@ -333,14 +333,14 @@ describe("folding toggle / expandAll / sticky", () => {
     expect(e.lineCount()).toBe(6)
     const vp = e.viewport(0, 10)
     expect(texts(vp)).toEqual([
-      "◆ Edit src/app.ts", "+a", "-b", "@@ -1,3 +1,3 @@", " context", "+c",
+      " Edit src/app.ts", "+a", "-b", "@@ -1,3 +1,3 @@", " context", "+c",
     ])
     expect(vp[1].runs[0].style).toBe("diff-add")
     expect(vp[2].runs[0].style).toBe("diff-del")
     expect(vp[4].runs[0].style).toBe("text")
     e.toggleFoldAt(0)
     expect(e.lineCount()).toBe(1)
-    expect(texts(e.viewport(0, 2))).toEqual(["◆ Edit src/app.ts (+2/-1)"])
+    expect(texts(e.viewport(0, 2))).toEqual([" Edit src/app.ts (+2/-1)"])
   })
 })
 
@@ -476,7 +476,7 @@ describe("every event type", () => {
     expect(vp).toEqual([
       "❯ edit me",
       "system note",
-      "◆ Started helper job",
+      " Started helper job",
       "□ task a",
       "✓ task b",
       "◆ Ship it — Planning",

@@ -96,6 +96,10 @@ export interface DisplayLine {
   collapsed?: boolean
   /** Anchor for folding interactions (callId of a tool, etc.). */
   anchor?: string
+  /** Engine-resolved bullet glyph for the block's header line (◆ / ❙ / ◈).
+   * The Presenter draws it in the bullet slot; text runs carry NO glyph
+   * duplicates (M37a fix: the old ◆◆ / ◈◆ double-draw artifact). */
+  glyph?: string
 }
 
 export interface ScrollbackSearchResult { matchLine: number; matchCol: number }

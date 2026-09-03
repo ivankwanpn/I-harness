@@ -10,15 +10,17 @@ import type { DisplayLine, StyledRun } from "../contracts.ts"
 import type { Block } from "./entries.ts"
 import { blockIdOf } from "./entries.ts"
 import type { FoldState, GroupRange } from "./folding.ts"
-import { groupSummaryRows, selectRows } from "./folding.ts"
+import { groupSummaryRows, rowGlyphFor, selectRows } from "./folding.ts"
 
-// §2: `[accent 1] [pad 2] [content flex] [pad 2]` — content = cols - 5.
+// §2: `[accent 1] [pad 2] [bullet]content [pad 2]` — content = cols - 6.
 export const ACCENT_COLS = 1
 export const INNER_PAD_LEFT = 2
 export const INNER_PAD_RIGHT = 2
 
+/** Content width budget: cols − rail(1) − pads(4) − bullet column(1). The
+ * Presenter's scrollback text region matches this exactly — no mid-row clip. */
 export function innerWidth(cols: number): number {
-  return Math.max(cols - ACCENT_COLS - INNER_PAD_LEFT - INNER_PAD_RIGHT, 2)
+  return Math.max(cols - ACCENT_COLS - INNER_PAD_LEFT - INNER_PAD_RIGHT - 1, 2)
 }
 
 /** Timestamp column: 1 leading space + 10-col right-aligned "h:mm AM/PM". */
@@ -81,7 +83,8 @@ export function wrapRuns(runs: StyledRun[], width: number): StyledRun[][] {
   return out
 }
 
-/** Row sequence → DisplayLines. Timestamp reserved on row 0 (first line). */
+/** Row sequence → DisplayLines. Timestamp reserved on row 0 (first line);
+ * glyph lands on the FIRST wrapped line only (the block's header line). */
 export function rowsToLines(
   rows: StyledRun[][],
   width: number,
@@ -91,6 +94,7 @@ export function rowsToLines(
     sticky?: boolean
     ts?: string
     tsReserve?: boolean
+    glyph?: string
   } = {},
 ): DisplayLine[] {
   const out: DisplayLine[] = []
@@ -105,6 +109,7 @@ export function rowsToLines(
         anchor: op.anchor,
         collapsed: op.collapsed === true ? true : undefined,
         sticky: op.sticky === true ? true : undefined,
+        ...(out.length === 0 && op.glyph !== undefined ? { glyph: op.glyph } : {}),
       })
     }
   }
@@ -299,10 +304,11 @@ export class SegmentIndex {
   private groupLines(g: GroupRange): DisplayLine[] {
     const hit = this.groupCache.get(g.start)
     if (hit !== undefined && hit.end === g.end) return hit.lines
-    const rows = groupSummaryRows(this.blocks, g, this.opts.glyphs)
+    const rows = groupSummaryRows(this.blocks, g)
     const lines = rowsToLines(rows, this.width, {
       anchor: `group:${g.start}`,
       collapsed: true,
+      glyph: this.opts.glyphs.diamonds[2], // ◈ — verb-group rows carry their own glyph
     })
     this.groupCache.set(g.start, { end: g.end, lines })
     return lines
@@ -318,7 +324,12 @@ export class SegmentIndex {
       (b.kind === "user" || b.kind === "user-edit" || b.kind === "assistant" || b.kind === "tool")
       ? formatTimestamp(b.ts)
       : undefined
-    const lines = rowsToLines(rows, this.width, { anchor: blockIdOf(b), ts, tsReserve: ts !== undefined })
+    const lines = rowsToLines(rows, this.width, {
+      anchor: blockIdOf(b),
+      ts,
+      tsReserve: ts !== undefined,
+      glyph: rowGlyphFor(b, q.stateOf(index), this.opts.glyphs),
+    })
     this.linesCache[index] = lines
     return lines
   }
