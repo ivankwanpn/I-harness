@@ -169,7 +169,7 @@ function scriptedBackend(s: SceneState): BackendClient {
           // UI contract: targetTurn is the DISPLAY turn number (the picker
           // row label = store index + 1) → the engine line reads
           // "Rewound to turn 1"; mode rides the contract shape verbatim.
-          s.rewindQueue.push({ type: "rewind", targetTurn: ev.targetTurn + 1, mode: ev.mode, seq: 0, ts: 600 })
+          s.rewindQueue.push({ type: "rewind", targetTurn: ev.targetTurn + 1, anchorSeq: ev.anchorSeq, mode: ev.mode, seq: 0, ts: 600 })
           s.wakeEv?.()
         },
       })

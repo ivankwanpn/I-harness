@@ -14,7 +14,7 @@
 // deriveMessages cut is core-session model level, not the TUI engine) — see
 // the M43 report.
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -50,6 +50,11 @@ test(
       off = runner.onData((d) => virtual.write(d))
 
       const result = await runScenario(scene, { runner, virtual, markerDir })
+      if (!result.ok) {
+        const dump: string[] = []
+        for (let y = 0; y < 30; y++) dump.push(`${y}: ${JSON.stringify(virtual.rowText(y))}`)
+        writeFileSync(join(markerDir, "screen-dump.txt"), dump.join("\n"))
+      }
       expect(result.ok, result.ok ? "ok" : `scenario failed: ${result.error}`).toBe(true)
 
       // (a) the byte-exact disk assert — the M42 restore wrote "v1" back.
@@ -65,7 +70,8 @@ test(
           /* already dead */
         }
       }
-      rmSync(markerDir, { recursive: true, force: true })
+      if ((process.env.TUI_KEEP_DIR ?? "") !== "") console.log(`[keep] markerDir=${markerDir}`)
+      else rmSync(markerDir, { recursive: true, force: true })
     }
   },
   150_000,

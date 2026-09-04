@@ -265,6 +265,22 @@ export class SegmentIndex {
     for (let i = 0; i < this.blocks.length; i++) this.markDirty(i)
   }
 
+  /** M43: hard rebuild after engine-side block-list replacement (rewind cut).
+   * Every index shifted — the Fenwick is recreated (stale high counts would
+   * otherwise leak into total()) and all indices marked dirty for the lazy
+   * recount. */
+  resetAll(blocks: Block[]): void {
+    // COPY — the engine's array is live (the next pushBlock must not silently
+    // appear here too, else the segment's index skews against the engine's).
+    this.blocks = [...blocks]
+    this.linesCache = blocks.map(() => null)
+    this.groupCache.clear()
+    this.fw = new Fenwick(Math.max(16, blocks.length * 2))
+    this.dirty = []
+    this.dirtySet.clear()
+    for (let i = 0; i < blocks.length; i++) this.markDirty(i)
+  }
+
   setWidth(cols: number): void {
     this.width = innerWidth(cols)
     this.invalidateAll()

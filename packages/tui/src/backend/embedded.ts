@@ -207,6 +207,7 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
       return {
         type: "rewind",
         targetTurn: ev.targetTurn,
+        anchorSeq: ev.anchorSeq,
         mode: ev.mode,
         seq: eventSeq(ev, state),
         ts,
