@@ -32,7 +32,7 @@
 
 import type { GlyphSet, Palette } from "@i-harness/tui-core"
 import type { AppAction } from "./keys.ts"
-import type { OverlaySeam } from "./present.ts"
+import type { OverlayFreeform, OverlaySeam } from "./present.ts"
 import type { Rect, ViewDraw } from "../views/agent.ts"
 import type { PermissionSurface, PermissionState } from "../views/permission.ts"
 import { renderPermission } from "../views/permission.ts"
@@ -50,8 +50,13 @@ type SeamDraw = (ctx: Rect, view: ViewDraw, palette: Palette, glyphs: GlyphSet) 
 export type SeamKind = OverlaySeam["kind"]
 
 /** Baseline OverlaySeam composition helper (a binder's output shape). */
-export function overlaySeam(kind: SeamKind, draw: SeamDraw, act?: (action: AppAction) => void): OverlaySeam {
-  return { kind, draw, ...(act === undefined ? {} : { act }) }
+export function overlaySeam(
+  kind: SeamKind,
+  draw: SeamDraw,
+  act?: (action: AppAction) => void,
+  freeform?: OverlayFreeform,
+): OverlaySeam {
+  return { kind, draw, ...(act === undefined ? {} : { act }), ...(freeform === undefined ? {} : { freeform }) }
 }
 
 // ------------------------------------------------------------------ permission
@@ -122,6 +127,11 @@ export function bindPermissionOverlay(
     close()
   }
 
+  // M39 wheel close: freeform capture — the reject row (last row when
+  // surf.freeform) is the input slider; chars go to state.freeformText, the
+  // carrier reaches the decision as `feedback` (see decide()).
+  const freeformRow = surf.freeform ? permissionRowCount(surf) - 1 : -1
+
   return overlaySeam("permission", (ctx, view, palette, glyphs) => {
     renderPermission(ctx, surf, state, view, palette, glyphs)
   }, (action: AppAction) => {
@@ -147,7 +157,13 @@ export function bindPermissionOverlay(
         break
       default: break // overlay-copy/expand/collapse/toggle: M38 chrome
     }
-  })
+  }, freeformRow >= 0 ? {
+    active: () => state.cursor === freeformRow,
+    append: (t: string) => { state.freeformText += t },
+    backspace: () => { state.freeformText = state.freeformText.slice(0, -1) },
+    submit: () => decide(freeformRow), // decide() carries feedback
+    abort: () => close(),
+  } : undefined)
 }
 
 // ------------------------------------------------------------------ question
@@ -237,7 +253,13 @@ export function bindQuestionOverlay(
       case "overlay-dismiss": close(); break // Esc back — no answer (host's question REJECTS on timeout)
       default: break // overlay-copy (y): toast is the loop's; M38 clipboard
     }
-  })
+  }, q.freeform ? {
+    active: () => state.freeformFocused,
+    append: (t: string) => { state.freeformText += t },
+    backspace: () => { state.freeformText = state.freeformText.slice(0, -1) },
+    submit: () => answer("freeform", undefined, state.freeformText),
+    abort: () => { state.freeformFocused = false },
+  } : undefined)
 }
 
 // ------------------------------------------------------------------ cancel-turn

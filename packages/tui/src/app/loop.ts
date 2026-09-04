@@ -496,6 +496,18 @@ export class TuiApp {
         return
       }
     }
+    // M39 wheel close: overlay freeform capture — the permission reject row /
+    // question `z` row own the printable chars while focused (the shipped
+    // keymap has no char case for overlays; without this, typed feedback was
+    // dropped — case-017 needed a host-side gutter, now the production path).
+    const ff = this.app.overlay?.freeform
+    if (ff !== undefined && ff.active()) {
+      if (ev.code === "char" && !ev.ctrl && !ev.alt) { ff.append(ev.key); this.requestFrame(); return }
+      if (ev.code === "Backspace") { ff.backspace(); this.requestFrame(); return }
+      if (ev.code === "Enter") { ff.submit(); this.requestFrame(); return }
+      if (ev.code === "Esc") { ff.abort(); this.requestFrame(); return }
+      // fall through — nav/scope keys stay keymap-routed
+    }
     const kbd: Kbd = { code: ev.code, key: ev.key, ctrl: ev.ctrl, alt: ev.alt, shift: ev.shift }
     this.dispatch(dispatchKey(kbd, this.keymapState()))
   }
