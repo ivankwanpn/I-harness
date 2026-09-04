@@ -103,6 +103,22 @@
 
 **凍結後變更流程（v1 起）**：只做**加性**變更——新方法、新通知字段、新錯誤碼可加；既有字段 shape / 錯誤碼**只加不改**。改變或刪除既有 surface = breaking：`PROTOCOL_VERSION` bump + migration 註記。
 
+### Wire Contract v1 addendum（M41a，2026-09-04 — ADDITIVE-only）
+
+> 上文 v0 全部內容**不變**；v1 = 只加：`PROTOCOL_VERSION` 1 → **2**（`SDK_SERVER_PROTOCOL_VERSION` 同步）。break 流程（凍結後變更流程）不變——v1 起仍**只加不改**。v0 客戶端（僅 initialize / session/prompt / session/status / shutdown）不受影響：其方法面照 v0 shape 應答，新方法不存在於其調用面。
+
+| 方向 | 方法 / 通知 | 參數 | 響應 |
+|---|---|---|---|
+| call | `session/history` | `{ sessionId, afterSeq?, limit? }` | `{ events: SessionEvent[], nextSeq }`（`afterSeq` **內斥**（exclusive），預設 0；`limit` 預設 500，clamp 上限 1000；`nextSeq` = 下一個未回傳事件的 seq（全回傳時 == log 長度）；未知 sessionId → `-32602` + 明確「session not found」（fail-closed：read 永不 auto-create）；log 空 → `{ events: [], nextSeq: 0 }`） |
+| call | `session/list` | `{}` | `{ sessions: SessionListEntry[], listingUnavailable? }`（source 為 server 選配 `listSessions`；缺省 → `{ sessions: [], listingUnavailable: true }` 誠實「未知」，絕不偽造空表；source throw → `-32603` fail-closed） |
+| call | `initialize`（v1 響應） | `{}` | 同 v0 外殼不變，且 `protocolVersion: 2`；capabilities **增加** `"session-history": ["1"]`、`"session-list": ["1"]`（v0 行 byte-identical）。 |
+
+**`session/history` 語意**：server 以 `service.liveSession(sessionId)` 解析（in-process live log——session/prompt 同一 session 源之 assembly log；seq 為 0-based 追加位置，故 walk = slice `[afterSeq, nextSeq)`）。
+
+**`session/list` 組態**：apps/cli 的 `sdk` 命令在 `--session-dir` 給定時以 **coordinator 面** 注入 listing（`coordinator.list()` + `profile()` 逐行 header 讀，web-host 鏡像）；profile 敗行仍呈 `{ id }` 行（誠實行）並 loud 於 stderr；未給 `--session-dir` → 無源 → `listingUnavailable: true`。
+
+**`SessionListEntry`**：`{ id, title?, updatedAt?, turnCount?, contextUsed?, contextTotal? }`——`title` 以外均為**可選**（header-only profile 只給 `id`/`title`；`updatedAt`/`turnCount`/context 需要完整 log 讀，不在 v1 源面承諾）。消費端須容忍缺省字段。
+
 ## 版本 / 健康
 
 `GET /api/health`（web-host）→ `{ "healthy": true, "version": string }`；version 源 = `apps/cli` package.json 常量（M27-H-1 注入）。

@@ -13,4 +13,5 @@ export {
   type RunInput,
   type RunResult,
   type QueueState,
+  type HistoryOptions,
 } from "./client.ts"

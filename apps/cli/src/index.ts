@@ -11,7 +11,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
-import { encodeFrame } from "@i-harness/sdk"
+import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
 import { parsePort, runWebServer } from "./web.ts"
 import type { WebServerOptions } from "./web.ts"
@@ -241,6 +241,29 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const rl = createInterface({ input: process.stdin, terminal: false })
   const server = createSdkServer(service, {
     coordinator,
+    // M41a v1: session/list source — the store listing, web-host mirror
+    // (coordinator.list() + header-only profile per row, settled per row so a
+    // single corrupt/missing file never fails the whole list; the row is still
+    // SERVED with just the id and the failure is loud on stderr).
+    listSessions:
+      coordinator === undefined
+        ? undefined
+        : async () => {
+            const ids = await coordinator.list()
+            const profiles = await Promise.allSettled(ids.map((id) => coordinator.profile(id)))
+            const sessions: SessionListEntry[] = []
+            profiles.forEach((profile, index) => {
+              const id = ids[index]!
+              if (profile.status === "rejected") {
+                console.error(`[i-harness sdk] session list: profile for "${id}" failed: ${String(profile.reason)}`)
+                sessions.push({ id })
+                return
+              }
+              const meta = profile.value.meta
+              sessions.push({ id, ...(meta.title !== undefined ? { title: meta.title } : {}) })
+            })
+            return { sessions }
+          },
     onWrite: (message) => process.stdout.write(encodeFrame(message)),
     onShutdown: () => rl.close(),
   })

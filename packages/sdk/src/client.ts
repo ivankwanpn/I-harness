@@ -10,9 +10,11 @@ import {
   makeNotification,
   makeRequest,
   RpcError,
+  type HistoryRange,
   type RpcFailure,
   type RpcNotification,
   type RpcSuccess,
+  type SessionListResult,
 } from "./protocol.ts"
 
 export interface ServerInfo {
@@ -65,6 +67,13 @@ export interface RunResult {
 export interface QueueState {
   running: boolean
   queued: number
+}
+
+/** M41a v1: session/history paging options (all optional — defaults live in
+ * the server: afterSeq 0, limit 500 capped at 1000). */
+export interface HistoryOptions {
+  afterSeq?: number
+  limit?: number
 }
 
 interface Pending {
@@ -192,6 +201,24 @@ export class HarnessClient {
     return state as QueueState
   }
 
+  /** M41a v1: walk a session's live event log from `afterSeq` (exclusive),
+   * paging up to `limit` events. Rejects with RpcError(-32602, "session not
+   * found") for an unknown session. */
+  async history(sessionId: string, opts: HistoryOptions = {}): Promise<HistoryRange> {
+    const params: { sessionId: string; afterSeq?: number; limit?: number } = { sessionId }
+    if (opts.afterSeq !== undefined) params.afterSeq = opts.afterSeq
+    if (opts.limit !== undefined) params.limit = opts.limit
+    const result = await this.request("session/history", params)
+    return result as HistoryRange
+  }
+
+  /** M41a v1: list store sessions. `listingUnavailable` is true when the
+   * server has no listing source (an honest "unknown", not a real empty). */
+  async listSessions(): Promise<SessionListResult> {
+    const result = await this.request("session/list", {})
+    return result as SessionListResult
+  }
+
   /** Graceful close: shutdown notification, end the write side, await the
    * subprocess exit (kill after 2s when the server does not exit). */
   async close(): Promise<void> {
@@ -250,6 +277,11 @@ export class HarnessSession {
 
   status(): Promise<QueueState> {
     return this.client.status(this.sessionId)
+  }
+
+  /** M41a v1: history walk for this session (afterSeq exclusive, limit paging). */
+  history(opts?: HistoryOptions): Promise<HistoryRange> {
+    return this.client.history(this.sessionId, opts)
   }
 }
 

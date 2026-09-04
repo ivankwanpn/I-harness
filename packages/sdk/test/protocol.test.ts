@@ -193,3 +193,39 @@ describe("HarnessClient (low level, in-process transport)", () => {
     expect(ended).toBe(true)
   })
 })
+
+describe("HarnessClient v1 helpers (history / listSessions, in-process transport)", () => {
+  it("history() and listSessions() round-trip typed helpers over the in-process transport", async () => {
+    const clientRead = new PassThrough() // server → client
+    const clientWrite = new PassThrough() // client → server
+    const client = new HarnessClient(clientRead, clientWrite)
+    const rl = createInterface({ input: clientWrite })
+    const seen: Array<{ method: string; params: unknown }> = []
+    rl.on("line", (line) => {
+      const msg = decodeFrame(line)
+      if (!isRpcRequest(msg)) return
+      seen.push({ method: msg.method, params: msg.params })
+      if (msg.method === "session/history") {
+        clientRead.write(encodeFrame(makeSuccess(msg.id, { events: [{ type: "turn/start", seq: 0 }], nextSeq: 1 })))
+      } else if (msg.method === "session/list") {
+        clientRead.write(encodeFrame(makeSuccess(msg.id, { sessions: [{ id: "s1", title: "t" }] })))
+      } else {
+        clientRead.write(encodeFrame(makeFailure(msg.id, INTERNAL_ERROR, "boom")))
+      }
+    })
+    try {
+      const range = await client.history("s1", { afterSeq: 7, limit: 3 })
+      expect(range).toEqual({ events: [{ type: "turn/start", seq: 0 }], nextSeq: 1 })
+      const list = await client.listSessions()
+      expect(list).toEqual({ sessions: [{ id: "s1", title: "t" }] })
+      // the wire params are exactly the typed options (undefined omitted)
+      expect(seen).toEqual([
+        { method: "session/history", params: { sessionId: "s1", afterSeq: 7, limit: 3 } },
+        { method: "session/list", params: {} },
+      ])
+    } finally {
+      rl.close()
+      await client.close()
+    }
+  })
+})
