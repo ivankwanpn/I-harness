@@ -1,0 +1,189 @@
+# M39 G1: case-017 — the M37b interaction matrix at REAL-PTY level (46x24).
+#
+# The host (host-017.ts) is the production-shaped pathway: a REAL
+# createApprovalBridge over a fake SessionService ctx → approval/question
+# surfaces stream through the bridge → the host binds them with the PUBLIC
+# bindPermissionOverlay / bindQuestionOverlay seams → the pty's REAL keys
+# (raw stdin → tui-core InputParser → TuiApp) drive everything:
+#
+#   1. PERMISSION FREEFORM — "dont trust" (chars captured by the host's
+#      freeform gutter — the loop ships NO overlay freeform-text routing, see
+#      host-017.ts header) then `5` → decision-1.json
+#      { surfaceId, verdict:"reject", approved:false, index:4, scope,
+#        feedback:"dont trust" } → bridge round-trip resolves the parked
+#      promise (marker approval-no) → onClose clears the modal.
+#   2. QUESTION — `1` → decision-2.json { questionId, mode:"option", index:0,
+#      value:"Apple" } → bridge answerQuestion resolves → modal closes.
+#   3. /BTW — "/btw why" + Enter → real submit → the fake backend drives the
+#      btw pane answering (⠋ Answering…) → done (body pin) → host closes it.
+#   4. SESSION PICKER — Ctrl-S → listSessions (3 sessions) → j (clamp) / k
+#      (cursor 1) → Enter → record-open.json { sessionId:"s-2" } → picker closes.
+#   5. HISTORY — CSI Up (2-entry history, empty prompt) → panel pin → lone Esc
+#      (40ms drain) → dismiss → request-exit gate → teardown → 0.
+#
+# Rows pinned from the actual renderer grids (TUI_DUMP_DIR frames). Byte
+# budget: writes mode (N = init + non-empty frames + teardown) — pinned from
+# the run; identical frames flush "" (no-leak proof).
+name: case-017-interaction-matrix
+host: test/harness/host-017.ts
+size: [46, 24]
+steps:
+  # ---- interaction 1: permission modal (bridge surface) --------------------
+  - await-marker: { name: overlay-p1 }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - "  ┃ rm -rf node_modules"
+        - "  ┃ 1 (●) Always allow: rm -rf node_modules"
+        - "  ┃ 2 (○) Never allow: rm -rf node_modules"
+        - "  ┃ 3 (○) Yes, proceed"
+        - "  ┃ 4 (○) No, I trust it"
+        - "  ┃ 5 (○) No, reject (type to add feedback)"
+  # type the rejection feedback — the freeform row flips to `❯ {preview}`
+  - write-pty: { data: "dont trust" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 20 }
+      rows:
+        - "  ┃ 5 (○) ❯ dont trust"
+  # 5 → No, reject → decision + bridge resolution + modal gone
+  - write-pty: { data: "5" }
+  - await-marker: { name: answered-1 }
+  - assert-file: { name: "decision-1.json", contains: '"verdict":"reject"' }
+  - assert-file: { name: "decision-1.json", contains: '"approved":false' }
+  - assert-file: { name: "decision-1.json", contains: '"feedback":"dont trust"' }
+  - await-marker: { name: approval-no }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃╰ mock-model─────────────────────────────╯"
+  # ---- interaction 2: question modal (same bridge) -------------------------
+  - await-marker: { name: overlay-q1 }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - "  ┃ Pick a fruit"
+        - "  ┃ 1 (○) Apple"
+        - "  ┃ 2 (●) Banana"
+  - write-pty: { data: "1" }
+  - await-marker: { name: answered-q1 }
+  - assert-file: { name: "decision-2.json", contains: '"mode":"option"' }
+  - assert-file: { name: "decision-2.json", contains: '"index":0' }
+  - assert-file: { name: "decision-2.json", contains: '"value":"Apple"' }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃╰ mock-model─────────────────────────────╯"
+  # ---- interaction 3: /btw -------------------------------------------------
+  - write-pty: { data: "/btw why" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 16 }
+      rows:
+        - " ┃│❯ /btw why                              │"
+  - write-pty: { data: "\r" }
+  - await-marker: { name: btw-submitted }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 2 }
+      rows:
+        - "  ╭ /btw why ──────────────────────↑↓  [Esc]"
+        - "  │ ⠋ Answering…                           │"
+  - await-marker: { name: btw-done }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 2 }
+      rows:
+        - "  ╭ /btw why ──────────────────────↑↓  [Esc]"
+        - "  │ the files are already committed        │"
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 2 }
+      rows:
+        - ""
+        - ""
+  - assert-file: { name: "record-submit.json", contains: '"/btw why"' }
+  # ---- interaction 4: session picker ---------------------------------------
+  # NOTE: app keys.ts binds Ctrl-S → sessions = 0x13 (the milestone brief's
+  # "\x15" is ASCII Ctrl-U/NAK — an UNBOUND key; \x13 is the real trigger).
+  - write-pty: { data: "\x13" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 8 }
+      rows:
+        - "  ╭ sessions ──────────────────────────────╮"
+        - "  │ sessions                               │"
+        - "  │❯ build a game                 just now │"
+        - "  │  debug tokens                 just now │"
+        - "  │  plan the notes               just now │"
+        - "  │ID  s-1Updated just nowTurns 3          │"
+        - "  ╰────────────────────────────────────────╯"
+  - write-pty: { data: "j" }
+  - write-pty: { data: "k" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 10 }
+      rows:
+        - "  │  build a game                 just now │"
+        - "  │❯ debug tokens                 just now │"
+  - write-pty: { data: "\r" }
+  - await-marker: { name: opened }
+  - assert-file: { name: "record-open.json", contains: '"sessionId":"s-2"' }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 8 }
+      rows:
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+  # ---- interaction 5: history ----------------------------------------------
+  - write-pty: { data: "\x1b[A" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 11 }
+      rows:
+        - "  ╭ history ──────────────────────────────2╮"
+        - "  │❯ build a game                          │"
+        - "  │❯ /btw why                              │"
+        - "  ╰────────────────────────────────────────╯"
+  - write-pty: { data: "\x1b" }
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 11 }
+      rows:
+        - ""
+        - ""
+        - ""
+        - ""
+  # ---- close -----------------------------------------------------------------
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote }
+  - assert-glyph-integrity: {}
+  # 23 writes = init + 21 non-empty frames + teardown:
+  #   f1 permission modal · f2 freeform preview (the "dont trust" burst
+  #   coalesces — the freeform gutter does not yield between captured chars,
+  #   host-side; one frame shows the full preview) · f3 modal gone
+  #   · f4 question modal · f5 modal gone · f6-f13 "/btw why" (8 chars)
+  #   · f14 btw answering · f15 btw done · f16 btw closed · f17 picker open
+  #   · f18 k-nav cursor · f19 picker closed+opened record · f20 history panel
+  #   · f21 history dismissed
+  - assert-byte-budget: { writes: 23 }
+  - wait-exit: { code: 0 }
