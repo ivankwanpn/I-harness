@@ -18,6 +18,8 @@ import { dispatchKey, shortcutsFor } from "./keys.ts"
 import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
 import { present } from "./present.ts"
 import type { TuiAppState } from "./present.ts"
+import { bindRewindOverlay, isRewindOverlay } from "./overlay-seam.ts"
+import type { RewindState } from "../views/rewind.ts"
 import { FpsMeter } from "./hud.ts"
 import type { HudState } from "./hud.ts"
 import type { RegionLine } from "../minimal/contracts.ts"
@@ -141,6 +143,10 @@ export class TuiApp {
   private animTimer: ReturnType<typeof setInterval> | null = null
   private runP: Promise<unknown> = Promise.resolve()
   private armedQuit = false
+  /** M43: the empty-Esc rewind arming arm (spec §4: Esc 空+≥1 turn → rewind
+   * picker on the second press; distinct from armedQuit — Ctrl+Q/Ctrl+C own
+   * that). */
+  private armedRewind = false
   private turnStartedAt = 0
   private phaseStartedAt = 0
   /** UI surface mode (M38a): distinct from `app.mode` (normal/plan discipline). */
@@ -404,6 +410,30 @@ export class TuiApp {
         // picker-only extras — M37b moves the cursor (tabs/filters: M38).
         this.overlaySub(action)
         break
+      // ---- rewind (M43, spec §3.9) — the seam's act fn owns the semantics;
+      // the loop only forwards (the action names are phase-agnostic: the
+      // binder interprets "rewind-y" as cancel-rewind or confirm per phase).
+      case "rewind-y":
+      case "rewind-n":
+      case "rewind-a":
+      case "rewind-b":
+      case "rewind-f":
+      case "rewind-back":
+        this.app.overlay?.act?.(action)
+        break
+      case "rewind-arm1":
+        this.armedRewind = true
+        this.toast("Press again to open Rewind")
+        break
+      case "rewind-open":
+        if (this.armedRewind) this.openRewind()
+        else {
+          // defensive — keys only emit rewind-open while armed; a desync
+          // re-arms rather than silently dropping the press.
+          this.armedRewind = true
+          this.toast("Press again to open Rewind")
+        }
+        break
       // ---- welcome (spec §2a)
       case "menu-up": this.welcomeNav(-1); break
       case "menu-down": this.welcomeNav(1); break
@@ -552,6 +582,8 @@ export class TuiApp {
       dropdown: ov?.dropdown,
       welcome: this.app.screen === "welcome",
       minimal: this.inlineActive(),
+      rewindAvailable: this.rewindEligible(),
+      rewindArmed: this.armedRewind,
     }
   }
 
@@ -635,6 +667,20 @@ export class TuiApp {
       case "user/edit":
       case "system":
         break // engine.append handled the visible surface
+      case "rewind": {
+        // M43: the durable marker landed — the engine drew the row and set the
+        // anchor; jump the viewport to it (the rewound era dims from there
+        // while any rewind overlay is open). No toast: grok has none (§3.9).
+        const anchor = this.opts.engine.rewindAnchor?.()
+        if (anchor !== undefined && !this.inlineActive()) {
+          const page = this.opts.renderer.buffer.height
+          this.app.scroll = { follow: false, offset: Math.max(0, anchor - Math.floor(page / 2)) }
+          // dim-from sync (spec §3.9: the anchor-era dim rides the OPEN panel).
+          const ov = this.app.overlay
+          if (ov !== undefined && isRewindOverlay(ov)) this.app.dimFrom = anchor
+        }
+        break
+      }
     }
     this.requestFrame()
   }
@@ -955,6 +1001,40 @@ export class TuiApp {
     this.app.fileSearch = undefined
     this.app.historyPanel = undefined
     this.app.sessions = undefined
+    this.requestFrame()
+  }
+
+  // ------------------------------------------------------------------ rewind (M43)
+
+  /** Esc-Esc eligibility (spec §4 — empty prompt + ≥1 turn): the backend must
+   * expose the rewind bridge AND the scrollback must have content (≥1 turn).
+   * The mock factory wires no bridge ⇒ Esc-empty keeps the pre-M43 quit arm. */
+  private rewindEligible(): boolean {
+    return this.opts.backend.rewind !== undefined
+      && !this.inlineActive()
+      && this.opts.engine.lineCount() > 0
+  }
+
+  /** Open the rewind overlay (the armed second Esc): a FRESH state object per
+   * open; the binder drives loading → picker → … via backend.rewind. The
+   * engine itself is never touched — its `Rewound to turn {N}` marker + anchor
+   * ARRIVE through the event stream when a rewind executes. G2's dim-from
+   * (TuiAppState.dimFrom — present.ts) is set to the anchor on open and
+   * cleared on close (anchor undefined before any rewind ⇒ no dim). */
+  private openRewind(): void {
+    if (this.opts.backend.rewind === undefined) return
+    this.armedRewind = false
+    const state: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [] }
+    this.app.dimFrom = this.opts.engine.rewindAnchor?.()
+    this.app.overlay = bindRewindOverlay(state, {
+      backend: this.opts.backend,
+      onClose: () => {
+        this.app.overlay = undefined
+        this.app.dimFrom = undefined
+        this.armedRewind = false
+        this.requestFrame()
+      },
+    })
     this.requestFrame()
   }
 

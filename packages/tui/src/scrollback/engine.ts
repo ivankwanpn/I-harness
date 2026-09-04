@@ -48,6 +48,9 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
   /** state-only (no scrollback entry — reserved for the app header). */
   private sessionTitle: string = ""
   private planMode: boolean = false
+  /** M43: block index of the LAST rewind marker row (`Rewound to turn {N}`)
+   * — the dim-from anchor. -1 = no rewind yet. */
+  private rewindMarkerBlock: number = -1
 
   constructor(opts: ScrollbackEngineOptions = {}) {
     this.glyphs = opts.glyphs ?? GLYPHS
@@ -85,6 +88,7 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
       case "title": this.sessionTitle = ev.title; break
       case "plan": this.planMode = ev.phase === "on"; break
       case "system": this.pushBlock(makeSystemBlock(ev)); break
+      case "rewind": this.appendRewind(ev); break
       default:
         this.debugNote(`engine: unknown event type ignored (${(ev as { type: string }).type})`)
     }
@@ -291,6 +295,20 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     return this.planMode
   }
 
+  /** M43: display line of the last rewind marker (`Rewound to turn {N}`) —
+   * computed ON DEMAND so folding above the marker never goes stale. undefined
+   * before the first rewind event or when the marker was trimmed by retain. */
+  rewindAnchor(): number | undefined {
+    if (this.rewindMarkerBlock < 0) return undefined
+    if (this.rewindMarkerBlock < this.seg.truncatedBlocks()) return undefined
+    const q = this.foldQuery()
+    this.seg.flush(q)
+    // marker shift: with a retain marker, display line 0 IS the marker —
+    // every kept block's first line shifts by one.
+    const shifted = this.seg.truncatedBlocks() > 0 ? 1 : 0
+    return this.seg.sumBefore(this.rewindMarkerBlock) + shifted
+  }
+
   /* ------------------------------------------------------ event handling */
 
   private appendUser(ev: Extract<TuiEvent, { type: "user" } | { type: "user/edit" }>): void {
@@ -338,6 +356,18 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
       return
     }
     this.pushBlock(makeToolBlock(ev))
+  }
+
+  /** M43: one system-style marker row `Rewound to turn {N}` (muted like every
+   * system block — the Presenter's rail stays gray_dim ⇒ the `┃` look from
+   * §3.9) + record the anchor block for rewindAnchor(). */
+  private appendRewind(ev: Extract<TuiEvent, { type: "rewind" }>): void {
+    this.rewindMarkerBlock = this.pushBlock(makeSystemBlock({
+      type: "system",
+      text: `Rewound to turn ${ev.targetTurn}`,
+      seq: ev.seq,
+      ts: ev.ts,
+    }))
   }
 
   private closeOpenBlocks(ts: number): void {

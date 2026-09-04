@@ -38,6 +38,14 @@ export type AppAction =
   | "overlay-range-left" | "overlay-range-right"     // ←/→ permission scope
   | "overlay-question-prev" | "overlay-question-next" // [ ] question
   | { type: "overlay-accept"; index: number }        // digits 1-9
+  // M43 rewind overlay keys (spec §3.9: y/n/a/b/f/bksp via the rewind view's
+  // semantics — the seam's act switch is phase-driven, so the action names are
+  // phase-agnostic: "rewind-y" = the yes answer, cancel-offer's "Cancel turn
+  // and rewind" OR confirm's "Confirm rewind").
+  | "rewind-y" | "rewind-n" | "rewind-a" | "rewind-b" | "rewind-f" | "rewind-back"
+  // M43 Esc-Esc opening (spec §4: `Esc` empty + ≥1 turn = rewind picker):
+  // `rewind-arm1` = first empty-Esc (toast), `rewind-open` = the armed second.
+  | "rewind-arm1" | "rewind-open"
   // welcome (spec §2a)
   | "menu-up" | "menu-down" | "menu-top" | "menu-bottom"
   | "menu-activate"
@@ -56,6 +64,7 @@ export interface Kbd {
 export type OverlayKind =
   | "permission" | "question" | "cancel-turn"
   | "dropdown" | "history" | "sessions"
+  | "rewind" // M43 (§3.9) — the runtime kind string from the seam's closed-union cast
 
 export interface KeymapState {
   focused: "prompt" | "scrollback"
@@ -74,6 +83,12 @@ export interface KeymapState {
   /** True in minimal mode (M38a — spec §1.1): the prompt is ALWAYS focused
    * and there is no scrollback surface; Esc is a no-op guard. */
   minimal?: boolean
+  /** M43: the empty-prompt Esc means REWIND arming (spec §4 — `Esc` empty +
+   * ≥1 turn opens the rewind picker) when the backend exposes the rewind
+   * bridge AND history exists; absent/false → Esc keeps the quit arm. */
+  rewindAvailable?: boolean
+  /** M43: the previous empty-Esc armed the rewind (toast) — the next opens. */
+  rewindArmed?: boolean
 }
 
 const isShiftTab = (ev: Kbd): boolean =>
@@ -128,6 +143,13 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
   }
   if (ev.code === "Esc") {
     if (state.promptText.length > 0) return "cancel-turn" // loop clears the draft
+    // M43 (spec §4): empty prompt + ≥1 turn → Esc-Esc arms/opens the rewind
+    // picker. The rewind gate takes precedence over the quit arm (Ctrl+Q/
+    // Ctrl+C stay the quit paths); when the backend has no rewind bridge the
+    // quit arm is unchanged.
+    if (state.rewindAvailable === true) {
+      return state.rewindArmed === true ? "rewind-open" : "rewind-arm1"
+    }
     return state.armedQuit ? "quit" : "quit-arm1"
   }
   if (ev.code === "Tab") {
@@ -212,6 +234,8 @@ export function overlayKeys(ev: Kbd, kind: OverlayKind): AppAction {
     case "Right": return kind === "permission" ? "overlay-range-right" : "overlay-expand"
     case "Tab": return isShiftTab(ev) ? "overlay-tab-back" : "overlay-tab"
     case "ShiftTab": return "overlay-tab-back"
+    // M43: Bksp = the rewind Back (§3.9 confirm `Bksp Back` / mode-select back).
+    case "Backspace": return kind === "rewind" ? "rewind-back" : "none"
   }
 
   if (ev.code === "char") {
@@ -226,6 +250,17 @@ export function overlayKeys(ev: Kbd, kind: OverlayKind): AppAction {
       return "none"
     }
     if (ev.alt) return "none"
+    // M43 §3.9 rewind keys: y/n/a/b/f — the rewind view's own letters; they
+    // preempt the generic overlay letters (y=copy, f=filter, a/b unhandled).
+    if (kind === "rewind") {
+      switch (ev.key) {
+        case "y": return "rewind-y"
+        case "n": return "rewind-n"
+        case "a": return "rewind-a"
+        case "b": return "rewind-b"
+        case "f": return "rewind-f"
+      }
+    }
     switch (ev.key) {
       case "j": return "overlay-nav-prev"
       case "k": return "overlay-nav-next"
