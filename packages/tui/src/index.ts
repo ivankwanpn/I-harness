@@ -11,6 +11,10 @@
 export { TuiApp } from "./app/loop.ts"
 export type { TuiAppOptions, InputSource, InlineHost } from "./app/loop.ts"
 export type { TuiAppState } from "./app/present.ts"
+// M39 G2: FPS/scroll-debug HUD — zero overhead (allocated only when the app
+// option hud:true is on; renderHud draws the top-right 32-col band).
+export { FpsMeter, HUD_PANEL_W, renderHud } from "./app/hud.ts"
+export type { HudState } from "./app/hud.ts"
 // G4: the G1↔G2 overlay binder (seam adapters) — a host wires
 // `app.state().overlay = bindPermissionOverlay(surf, state, opts)`.
 export { bindPermissionOverlay, bindQuestionOverlay, bindCancelTurnOverlay, overlaySeam } from "./app/overlay-seam.ts"

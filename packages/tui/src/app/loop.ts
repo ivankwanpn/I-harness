@@ -18,6 +18,8 @@ import { dispatchKey, shortcutsFor } from "./keys.ts"
 import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
 import { present } from "./present.ts"
 import type { TuiAppState } from "./present.ts"
+import { FpsMeter } from "./hud.ts"
+import type { HudState } from "./hud.ts"
 import type { RegionLine } from "../minimal/contracts.ts"
 import { MinimalCommits, commitDelta, displayToRegion } from "../minimal/commit.ts"
 import { composeRegion } from "../minimal/live-region.ts"
@@ -68,6 +70,12 @@ export interface TuiAppOptions {
    * live-region view (spec §0/§1.1 — the terminal's own scrollback holds
    * history; the loop writes through the InlineHost, not the cell buffer). */
   mode?: "fullscreen" | "minimal"
+  /** FPS/scroll debug HUD (M39, spec §3.12): the top-right 32-col panel
+   * (`fps:.. p50:..ms p95:..ms` + `scroll: {lineCount} lines`), drawn last
+   * after every present. OFF by default — no meter is allocated and no panel
+   * is drawn (zero overhead). Fullscreen real only; minimal mode has no cell
+   * buffer, so the panel has no surface there (the loop still samples). */
+  hud?: boolean
   /** Already-constructed minimal live-region host (G1's engine adapter). */
   inline?: InlineHost
   /** Lazy live-region factory — hosts wire G1's module dynamically (dynamic
@@ -143,10 +151,16 @@ export class TuiApp {
   /** In-flight backend.context() probe (M38b G2) — never two concurrent
    * refreshes; the promise itself is the guard. */
   private contextProbe: Promise<void> | undefined
+  /** M39 debug HUD meter — allocated ONLY when opts.hud is on (zero otherwise). */
+  private fpsMeter: FpsMeter | undefined
 
   constructor(opts: TuiAppOptions) {
     this.opts = opts
     this.uiMode = opts.mode ?? "fullscreen"
+    if (opts.hud === true) {
+      this.fpsMeter = new FpsMeter()
+      this.fpsMeter.start()
+    }
     // M38b G2: REAL model label — the host's --model spec when wired, else the
     // backend's own knowledge (embedded's modelLabel seam); the "mock-model"
     // fallback stays for hosts that pass neither (existing tests' text).
@@ -218,10 +232,33 @@ export class TuiApp {
   }
 
   /** Terminal resize relay — engine re-wrap + minimal inline-host geometry
-   * (the host's renderer does not exist in minimal mode). */
+   * (the host's renderer does not exist in minimal mode). M39: the resize also
+   * drives the documented auto-retain heuristic (large-history memory release). */
   setSize(cols: number, rows: number): void {
     this.app.engine.setWidth(cols)
     this.inlineHost?.resize(cols, rows)
+    this.maybeAutoRetain()
+  }
+
+  /**
+   * M39 memory-release heuristic (documented, OFF by default — it only fires
+   * when the scrollback actually grew past the threshold): after a re-wrap,
+   * a >2000-line scrollback trims its display trunk to 1500 visible lines.
+   * Block-granular + marker-pinned; the seq cursor is untouched.
+   */
+  private maybeAutoRetain(): void {
+    if (this.opts.engine.lineCount() <= 2000) return
+    this.opts.engine.retain?.({ maxLines: 1500 })
+    this.requestFrame()
+  }
+
+  /** Manual memory-release hook (app.retain(maxLines?)) — trims the display
+   * trunk to `maxLines` visible lines (default 1500); returns the newly
+   * trimmed block count (0 = nothing trimmed). */
+  retain(maxLines?: number): { trimmedBlocks: number } {
+    const r = this.opts.engine.retain?.({ maxLines })
+    this.requestFrame()
+    return r ?? { trimmedBlocks: 0 }
   }
 
   /** Idempotent: stops the pumps/timer (a pending IO iterator ends the run). */
@@ -247,6 +284,9 @@ export class TuiApp {
       turn.phaseMs = t - this.phaseStartedAt
       turn.turnMs = t - this.turnStartedAt
     }
+    // M39: sample the frame interval per coalesced repaint (the meter is
+    // undefined when the HUD is off — zero cost).
+    this.fpsMeter?.tick(t)
     if (this.inlineActive()) {
       this.frameMinimal()
       return
@@ -254,8 +294,14 @@ export class TuiApp {
     present(this.app, this.opts.renderer, this.opts.palette, this.opts.glyphs, {
       compact: this.opts.compact,
       cap: this.opts.capabilities,
+      ...(this.fpsMeter !== undefined ? { hud: this.hudState() } : {}),
     })
     this.opts.renderer.flush((s) => this.opts.write?.(s))
+  }
+
+  /** Per-frame HUD snapshot — meter + the honest visible line count. */
+  private hudState(): HudState {
+    return { meter: this.fpsMeter!, lineCount: this.opts.engine.lineCount() }
   }
 
   /** Keymap/backend/anim results funnel here; the loop paints after. */

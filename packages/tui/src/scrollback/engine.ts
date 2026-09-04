@@ -113,6 +113,8 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     const q = this.foldQuery()
     const total = this.seg.total(q)
     if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= total) return undefined
+    // The retain marker has no block behind it — no block metadata (safe no-op).
+    if (this.seg.truncatedBlocks() > 0 && lineIndex === 0) return undefined
     const { index, inner } = this.seg.blockIndexAtLine(lineIndex)
     const b = this.blocks[index]
     const g = this.groupOf(index)
@@ -135,6 +137,8 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     const q = this.foldQuery()
     const total = this.seg.total(q)
     if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= total) return
+    // The marker is not a block — toggling it is a safe no-op (M39).
+    if (this.seg.truncatedBlocks() > 0 && lineIndex === 0) return
     const { index } = this.seg.blockIndexAtLine(lineIndex)
     const b = this.blocks[index]
     const g = this.groupOf(index)
@@ -203,6 +207,79 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
   setWidth(cols: number): void {
     this.seg.setWidth(Math.max(cols, 8))
     this.searchNeedsUpdate = true
+  }
+
+  /**
+   * M39 memory release — TRIM THE DISPLAY TRUNK: the leading blocks (wholly
+   * above the keep horizon; block-granular — a block's display lines are
+   * atomic) collapse into ONE marker row `  … earlier {N} lines` (muted,
+   * collapsed, no glyph/anchor). The BLOCK MODEL stays — folding/search see
+   * the marker, event semantics display correctly: lineCount drops to the
+   * horizon + marker, the seq cursor is untouched, appends keep working
+   * (tail-only), and search scope = the visible display lines (the trimmed
+   * region no longer matches — honest, documented).
+   *
+   * Idempotent; monotonic (never re-expands). Guards: mutable/streaming
+   * blocks (open assistant/thinking, running tool) and the sticky-latest user
+   * block are never trimmed; the keep boundary never splits a verb group.
+   *
+   * @returns the number of NEWLY trimmed blocks (0 = no-op).
+   */
+  retain(opts: { maxLines?: number } = {}): { trimmedBlocks: number } {
+    const q = this.foldQuery()
+    const total = this.seg.total(q) // flushes all dirty counts first
+    const cur = this.seg.truncatedBlocks()
+    const max = Math.max(1, opts.maxLines ?? 1500)
+    if (this.blocks.length - cur <= 1) return { trimmedBlocks: 0 }
+    if (total <= max) return { trimmedBlocks: 0 }
+
+    // Walk the tail backwards, accumulating display lines (fold-aware) until
+    // the next group of blocks would exceed the budget.
+    let t = this.blocks.length - 1
+    let kept = this.seg.countOf(t, q)
+    while (t - 1 >= cur) {
+      const prev = t - 1
+      const g = this.groupOf(prev)
+      // A group is a unit: including any member keeps the WHOLE group
+      // (the boundary must never split one).
+      const start = g !== undefined && g.start < prev ? g.start : prev
+      let extra = 0
+      for (let i = start; i < t; i++) extra += this.seg.countOf(i, q)
+      if (kept + extra > max) break
+      t = start
+      kept += extra
+    }
+
+    // Never trim mutable/streaming blocks or the sticky-pinned latest user.
+    const firstMutable = this.firstMutableBlock()
+    if (firstMutable >= 0 && t > firstMutable) t = firstMutable
+    if (this.latestUser >= 0 && t > this.latestUser) t = this.latestUser
+    // Re-clean the boundary after the clamps (t could have landed mid-group).
+    for (let clean = true; clean;) {
+      clean = false
+      const g = this.groupOf(t)
+      if (g !== undefined && g.start < t) {
+        t = g.start
+        clean = true
+      }
+    }
+    if (t <= cur) return { trimmedBlocks: 0 }
+
+    const suppressed = this.seg.sumBefore(t) // visible lines [0..t) — marker text
+    this.seg.truncate(t, suppressed)
+    this.searchNeedsUpdate = true
+    return { trimmedBlocks: t - cur }
+  }
+
+  /** Lowest block index that can still receive stream updates (or -1). */
+  private firstMutableBlock(): number {
+    for (let i = 0; i < this.blocks.length; i++) {
+      const b = this.blocks[i]
+      if (isOpenThinking(b)) return i
+      if (b.kind === "assistant" && !b.finished) return i
+      if (b.kind === "tool" && b.status === "running") return i
+    }
+    return -1
   }
 
   /** Non-contract accessors for the app layer (G2): header title/plan state. */
@@ -372,7 +449,10 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
   private stickyLines(offset: number, height: number): DisplayLine[] {
     const user = this.current(this.latestUser)
     if (user === undefined || (user.kind !== "user" && user.kind !== "user-edit")) return []
-    const userEnd = this.seg.sumBefore(this.latestUser + 1)
+    // M39: a trimmed latest-user block is display-absent — no sticky pin.
+    if (this.latestUser < this.seg.truncatedBlocks()) return []
+    const markerCount = this.seg.truncatedBlocks() > 0 ? 1 : 0
+    const userEnd = this.seg.sumBefore(this.latestUser + 1) + markerCount
     if (userEnd <= 0 || offset < userEnd) return []
     const lines = this.seg.stickyUserLines(user)
     return lines.slice(0, height)

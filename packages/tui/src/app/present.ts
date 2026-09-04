@@ -34,6 +34,8 @@ import type { SessionPickerState } from "../views/session-picker.ts"
 import { renderWelcome } from "../views/welcome.ts"
 import type { WelcomeState } from "../views/welcome.ts"
 import type { AppAction } from "./keys.ts"
+import { HUD_PANEL_W, renderHud } from "./hud.ts"
+import type { HudState } from "./hud.ts"
 
 /** The coordinator state — the loop mutates it, present() only reads it.
  * Superset of AgentViewState (extra fields: history, focused, toasts, panes). */
@@ -374,6 +376,9 @@ export interface PresentOptions {
   compact?: boolean
   /** Color-depth quantization; omitted = raw RGB passthrough (truecolor). */
   cap?: TerminalCapabilityContext
+  /** Debug HUD (M39): the top-right 32-col panel, drawn LAST (above every
+   * view). Absent = zero overhead (no panel). */
+  hud?: HudState
 }
 
 /** THE single draw point: clear → layoutAgent → every view → commit.
@@ -455,6 +460,16 @@ export function present(
   }
   renderShortcuts(layout.shortcuts, app.shortcuts, view, palette)
   // Toasts render M38 (bottom-right card); they only gate the anim pump today.
+
+  // Debug HUD (M39) — top-right, LAST, above the status row and everything.
+  if (opts.hud !== undefined && area.cols >= 12) {
+    renderHud(buf, opts.hud, {
+      x: area.cols - Math.min(HUD_PANEL_W, area.cols),
+      y: 0,
+      w: Math.min(HUD_PANEL_W, area.cols),
+      h: 2,
+    }, view, palette)
+  }
 
   renderer.commit()
   return { dirty: !renderer.sameFrame() }
