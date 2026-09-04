@@ -51,7 +51,7 @@
 ## 四、服務面（前端之前最後一關——完成）
 - **SessionService**（engine-owned）+ **web-host**：HTTP unary + WS mux（40+ 路由）、live 流四端點、seq 回放 + 分頁
 - 認證（HMAC cookie + launch token + DNS-rebind 柵欄 + CORS）/ `/api/health`
-- **`@i-harness/sdk`**（NDJSON JSON-RPC，**Wire Contract v0 已鎖**，v1 只加性）
+- **`@i-harness/sdk`**（NDJSON JSON-RPC，**Wire Contract v0 已鎖**，**v1 加性落地（M41a）**：`session/history`（afterSeq 增量+limit 分頁）+`session/list`（可選源 + `listingUnavailable`）+ protocolVersion 2 + capabilities 兩行——`--attach` 回放/列表缺口閉合）
 - **ACP**（官方 SDK 子集）/ 模型目錄 + per-session model selection + **`/api/llm/probe-apply`**（discover→adopt 全鏈——**真 DeepSeek 實測 3 模型**）
 - 四宿主命令：`run` / `web` / `sdk` / `acp`
 
