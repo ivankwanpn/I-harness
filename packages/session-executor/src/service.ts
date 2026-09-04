@@ -163,7 +163,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         }
         const lane = lanes.get(sessionId)!
         try {
-          lane.submit({ tier: "send", text: prompt })
+          // M41b: the submit signal now rides INTO the lane — the agent's
+          // run() gets it and aborts at step boundaries/yields (in-flight
+          // cancel reaches the engine, not just the queue gate).
+          lane.submit({ tier: "send", text: prompt, signal })
         } catch (error) {
           // A synchronous lane failure still settles this turn.
           if (!closed) telemetry?.emit({
