@@ -1,0 +1,169 @@
+# M38b G3: case-016 — markdown checkpoint streaming across a REAL pty (46x24).
+#
+# The host (host-016.ts, scene "016") drives the REAL app pipeline
+# (TuiApp + ScrollbackEngine + Presenter + tui-core renderer) with a scripted
+# deterministic event stream: user "explain", then a markdown assistant stream
+# in 6 chunks (one frame per chunk, 800ms windows, frozen clock 13_334 so the
+# 30fps anim pump's repaints stay identical → zero-byte idle mid-stream).
+# The engine re-lexes the whole assistant buffer per chunk (foldRows →
+# markdownRows = the streaming checkpoint machine): paragraph closes flush on
+# the blank line (append-only rows), the open tail re-renders its row in place,
+# the code fence body renders PLAIN (md_code color on md_code_bg, NO hljs)
+# while the fence is open and HIGHLIGHTED (keyword bold + accent-assistant
+# number) once the closing ``` arrives.
+#
+# Row pins come from the renderer frame dumps; color pins are cell-level on
+# the RENDERED virtual (the parsed SGR — @xterm/headless packs RGB cells as
+# mode 3<<24, value 0xRRGGBB): md_code=#3a95ab, accent-assistant=#bb9af7.
+# Frame 5 = fence OPEN (plain, bold:false), frame 6 = fence CLOSED (keyword
+# bold:true, number accent-assistant). The frame-6 rows are byte-identical in
+# TEXT to frame-5 (only the SGR changes) — the assert-cell-colors step polls
+# until the closure's color bytes land.
+# NOTE (M38b G3 finding): md_code_bg (#1c1c1c) is NOT visible in the fullscreen
+# scrollback path — present.ts draws the code runs via view.text → resolve →
+# styleFor(style, palette, cap) which drops StyledRun.codeBg (only the
+# search-invert branch reads it). The pins therefore prove the FG story only;
+# bg stays "default" on those cells (deviation — no src/ touch per this wheel).
+#
+# Byte budget asserts writes: 10 = init(1) + 8 frames + teardown(1) (the
+# frozen clock makes every anim-pump repaint an identical frame → flush "").
+name: case-016-markdown-checkpoint-streaming
+host: test/harness/host-016.ts
+size: [46, 24]
+steps:
+  # frame-1: user "explain"
+  - await-marker: { name: frame-1 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ explain"
+  # frame-2: chunk 1 "Para one line.\n\n" — the blank-line paragraph flushes
+  # (row pinned; the trailing-newline reserve rows are the plain path shape)
+  - await-marker: { name: frame-2 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ explain"
+        - "  ┃   Para one line."
+        - "  ┃   "
+        - "  ┃   "
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  # frame-3: chunk 2 "Para two " — the OPEN paragraph tail row appears
+  - await-marker: { name: frame-3 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ explain"
+        - "  ┃   Para one line."
+        - "  ┃   "
+        - "  ┃   Para two"
+  # frame-4: chunk 3 "line.\n\n" — the tail row RE-RENDERS IN PLACE
+  # ("Para two " → "Para two line."); the emptied tail keeps its row
+  - await-marker: { name: frame-4 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ explain"
+        - "  ┃   Para one line."
+        - "  ┃   "
+        - "  ┃   Para two line."
+        - "  ┃   "
+        - "  ┃   "
+  # frame-5: chunk 4 "```python\nprint(1)\n" — fence OPEN: the body row exists
+  # with PLAIN styling — md_code #3a95ab fg on md_code_bg #1c1c1c, NO bold
+  # (row 7 = the code body row; the whole "print(1)" is one plain run)
+  - await-marker: { name: frame-5 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ explain"
+        - "  ┃   Para one line."
+        - "  ┃   "
+        - "  ┃   Para two line."
+        - "  ┃   "
+        - "  ┃   print(1)"
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  - assert-cell-colors:
+      # fence OPEN: plain body — md_code color, non-bold, no hljs yet
+      cells:
+        - { row: 7, col: 6, text: "p", fg: "#3a95ab", bold: false }
+        - { row: 7, col: 12, text: "1", fg: "#3a95ab", bold: false }
+  # frame-6: chunk 5 "```\n" — fence CLOSED: hljs applies — `print` (py
+  # hljs-built_in → md-code) BOLD at #3a95ab, `1` (hljs-number →
+  # accent-assistant #bb9af7) non-bold, parens back to plain md-code-text.
+  # Row text is unchanged from frame-5 — only the SGR slid — so this step is
+  # POLL-until-match on the cell colors.
+  - await-marker: { name: frame-6 }
+  - assert-cell-colors:
+      cells:
+        - { row: 7, col: 6, text: "p", fg: "#3a95ab", bold: true }
+        - { row: 7, col: 11, text: "(", fg: "#3a95ab", bold: false }
+        - { row: 7, col: 12, text: "1", fg: "#bb9af7", bold: false }
+        - { row: 7, col: 2, text: "┃", fg: "#3a95ab" }
+  # frame-7: chunk 6 "Last para.\n" — post-fence tail paragraph (9th block row);
+  # the code highlight persists
+  - await-marker: { name: frame-7 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ explain"
+        - "  ┃   Para one line."
+        - "  ┃   "
+        - "  ┃   Para two line."
+        - "  ┃   "
+        - "  ┃   print(1)"
+        - "  ┃   Last para."
+  - assert-cell-colors:
+      cells:
+        - { row: 7, col: 6, text: "p", fg: "#3a95ab", bold: true }
+  # frame-8: turn end — finished=true; the turn row hides; full-chrome check
+  - await-marker: { name: frame-8 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ explain"
+        - "  ┃   Para one line."
+        - "  ┃   "
+        - "  ┃   Para two line."
+        - "  ┃   "
+        - "  ┃   print(1)"
+        - "  ┃   Last para."
+  - wait-screen:
+      region: { startRow: 13 }
+      rows:
+        - ""
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭───────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃│                                        │"
+        - " ┃╰ mock-model─────────────────────────────╯"
+        - ""
+        - "  Enter: submit  │  Ctrl+Enter: interject  │"
+  - assert-glyph-integrity: {}
+  - assert-cell-colors:
+      # final state: code row still hljs-highlighted (turn end re-lexes with
+      # finished=true but the closed fence stays a closed fence)
+      cells:
+        - { row: 7, col: 6, text: "p", fg: "#3a95ab", bold: true }
+        - { row: 7, col: 12, text: "1", fg: "#bb9af7", bold: false }
+  # teardown ran (marker after the teardown bytes) → exit 0 is meaningful
+  - await-marker: { name: teardown-wrote }
+  - assert-byte-budget: { writes: 10 }
+  - wait-exit: { code: 0 }

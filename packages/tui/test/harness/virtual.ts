@@ -161,4 +161,39 @@ export class VirtualTerminal {
     }
     return widths
   }
+
+  // --- cell colors (M38b G3): the markdown SGR proof — md_code fg/bg on the
+  // parsed cells. @xterm/headless packs the ColorMode into the high byte of
+  // getFgColorMode/getBgColorMode (kind << 24): 0 = default, 1 = ANSI16 index,
+  // 2 = ANSI256 index, 3 = RGB (getFgColor() = 0xRRGGBB). Verified empirically
+  // on 6.0.0 (see host-016.yaml's pins: RGB cells report mode 50331648).
+
+  /** Color info of one cell (0-based row/col); undefined = off-grid. */
+  cellColor(y: number, x: number): CellColor | undefined {
+    const line = this.line(y)
+    if (line === undefined) return undefined
+    const cell = line.getCell(x)
+    if (cell === undefined) return undefined
+    return {
+      fg: packedColor(cell.getFgColorMode(), cell.getFgColor()),
+      bg: packedColor(cell.getBgColorMode(), cell.getBgColor()),
+      bold: cell.isBold() !== 0,
+    }
+  }
+}
+
+/** One cell's parsed colors: "#rrggbb" (RGB mode), "i<N>" (palette index),
+ * undefined (default SGR — the terminal's own colors). */
+export interface CellColor {
+  fg: string | undefined
+  bg: string | undefined
+  bold: boolean
+}
+
+/** kind<<24 mode word → normalized color string. */
+function packedColor(mode: number, value: number): string | undefined {
+  const kind = mode >> 24
+  if (kind <= 0 || value < 0) return undefined
+  if (kind === 3) return `#${(value >>> 0).toString(16).padStart(6, "0")}`
+  return `i${value}`
 }
