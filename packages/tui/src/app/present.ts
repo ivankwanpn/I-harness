@@ -98,10 +98,25 @@ function dropdownDescOf(app: TuiAppState): AgentViewState["dropdown"] {
 }
 
 /** G1 harmonization seam (see `overlay` above). */
+/** Freeform capture widget on an open overlay (M39 wheel close): while the
+ * overlay's freeform row is FOCUSED, printable chars/Backspace/Enter/Esc route
+ * here (before the keymap — the shipped keymap has no char case otherwise). */
+export interface OverlayFreeform {
+  active(): boolean
+  append(text: string): void
+  backspace(): void
+  /** Accept/answer with the current freeform text. */
+  submit(): void
+  /** Unfocus / dismiss the freeform row. */
+  abort(): void
+}
+
 export interface OverlaySeam {
   kind: "permission" | "question" | "cancel-turn"
   draw(ctx: Rect, view: ViewDraw, palette: Palette, glyphs: GlyphSet): void
   act?(action: AppAction): void
+  /** Freeform capture (permission reject row / question `z` row). */
+  freeform?: OverlayFreeform
 }
 
 // ------------------------------------------------------------------ palette → Style
