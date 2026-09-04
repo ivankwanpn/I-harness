@@ -471,9 +471,15 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
       // masked — the controller stays registered by this submit).
       const again = await server.handleLine(encodeFrame(makeRequest(142, "session/cancel", { sessionId: "c1" })))
       expect((decodeFrame(again!) as RpcSuccess).result).toEqual({ cancelled: true })
-      release() // the engine's turn still drains (the lane owns its own signal)
+      // M41b signal threading: cancel NOW aborts the running turn at the
+      // engine — the submit settles as a FAILURE (aborted signal), not the
+      // old "turn completes afterwards" semantics. The queued-gate abort is
+      // the service's pre-submit check (tested separately).
+      release()
       const promptReply = await promptPromise
-      expect((decodeFrame(promptReply!) as RpcSuccess).result).toEqual({ sessionId: "c1", ok: true })
+      const frame = decodeFrame(promptReply!) as RpcFailure
+      expect(frame.error).toBeDefined()
+      expect(frame.error?.message).toMatch(/abort/i)
       await waitStatus(server, "c1", { running: false })
       // known + idle now → not-running
       const idle = await server.handleLine(encodeFrame(makeRequest(143, "session/cancel", { sessionId: "c1" })))
