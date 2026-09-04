@@ -65,9 +65,20 @@ import { registerCommand, listCommands, parseCommandLine, runCommand } from "@i-
 export const DEFAULT_WEB_PORT = 4310
 
 // M27-H-1: the host's /api/health version — the CLI package's own version is
-// the single constant (read at module load; the CLI is never bundled).
+// the single constant (read at module load). M45: the bundle drops the
+// manifest BESIDE the bundle (dist/package.json → "./package.json"); the
+// source run has it ONE LEVEL UP (apps/cli/package.json → "../package.json").
+// The dual-path fallback serves both; the bundle's require is esbuild-safe
+// (a scoped createRequire — calls are not rewritten).
 const require = createRequire(import.meta.url)
-export const CLI_VERSION = (require("../package.json") as { version: string }).version
+function packageJsonVersion(): string {
+  try {
+    return (require("./package.json") as { version: string }).version
+  } catch {
+    return (require("../package.json") as { version: string }).version
+  }
+}
+export const CLI_VERSION = packageJsonVersion()
 
 /**
  * PORT parsing (review fix): `Number(process.env.PORT)` is NaN for PORT=abc,

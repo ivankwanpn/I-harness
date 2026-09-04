@@ -20,9 +20,7 @@ import { createAcpServer } from "@i-harness/acp"
 import { parsePort, runWebServer } from "./web.ts"
 import type { WebServerOptions } from "./web.ts"
 import { parseFlags, runTui } from "@i-harness/tui-app"
-
-/** M44: the CLI's own version (the bin shim forwards --version here). */
-const CLI_VERSION = "0.1.0"
+import { CLI_VERSION } from "./web.ts"
 
 const USAGE =
   "usage: i-harness [<run|web|sdk|acp|tui> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
