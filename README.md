@@ -89,6 +89,7 @@ frontend" gate:
 | M39 | Quality wheel: 12-attribute replication checklist (1–10+12 verified; mermaid skip = spec'd), PTY case-017 interaction matrix (freeform reject real-key path, question, /btw, picker, history), FPS HUD (default-off), scrollback retain display-trunk trim, bench numbers | ✅ |
 | M40 | Inventory-driven gap harvest: todo_write/read_image mount, CLI plugin-registry+job-kill wiring, settings/changed emitter (+ dormant detector fix), guardian breaker all-verdicts, toasts, real context values, mouse wheel scroll (case-018), mermaid unicode art, plan-review adapt (case-019) | ✅ |
 | M41a | SDK wire v1: `session/history` + `session/list` + protocolVersion 2 handshake (additive-only, v0 frozen intact) — `--attach` replay/list gaps close (real subprocess e2e) | ✅ |
+| M42 | Rewind engine: `packages/rewind` (store/recorder/service — grok-style tool-report pre-images, RewindPoint jsonl, clean/conflict lazy compare, two-phase restore) + `rewind/point` event + deriveMessages cut projection (append-only conversation rewind; compaction interplay) | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
