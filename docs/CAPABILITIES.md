@@ -78,6 +78,13 @@
 - 已知問題實錄：README quirks（vitest worker flake 已 M31 修復——web-host forks pool）
 - 多輪執行模式：worktree 隔離 + 雙組平行 + 調和審查 + 可追溯的執行者報告
 
+## 八&frac34;、Rewind（M42 新增——原「跳過」變「有後端」）
+
+- **後端**：`packages/rewind`——RewindStore（`rewind/<sid>/points.jsonl` + content-addressed blobs 原子寫）、RewindRecorder（take-once per turn、turn/end finalize + afterHash）、RewindService（points/plan/execute——clean/conflict 三型惰性比對、unTracked 誠實、兩階段恢復）。
+- **通道**：fs 寫管道報告 pre-image（write/edit/apply_patch 精確鉤點；結果帶 preImageRef/isNewFile——日誌即通道；shell 不攔截誠實標記）。
+- **對話回滾**：`rewind/point` 事件 + deriveMessages cut 投影（重疊 meld、append-only 鐵則保持；與 compaction 遮蔽組合）。
+- 注：rewind/v1（遠程）與 UI（M43 複刻 §3.9 + case-020）待後。
+
 ## 九、明確邊界
 - **不做**：PTC/run_code、workflow worker、provider 註冊表化、插件執行
 - **遠期/觀望**：R-A10 memories、rollover、執行策略深化、R-B4 git undo（M27+）、分享/webhook/身份/外部進程子代理、macOS 沙箱
