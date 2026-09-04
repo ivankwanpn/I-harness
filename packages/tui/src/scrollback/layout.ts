@@ -222,6 +222,11 @@ export class SegmentIndex {
   private fw = new Fenwick(16)
   private width: number
   private opts: SegmentOptions
+  /** M39 retain: leading blocks hidden behind the marker. `truncated` is the
+   * first KEPT block index; `trimmedLineTotal` is the display-line count the
+   * marker text reports. Layout counts them 0 (the marker replaces them). */
+  private truncated = 0
+  private trimmedLineTotal = 0
 
   constructor(width: number, opts: Partial<SegmentOptions> = {}) {
     this.width = innerWidth(width)
@@ -265,6 +270,34 @@ export class SegmentIndex {
     this.invalidateAll()
   }
 
+  /**
+   * M39 retain: suppress the first `blocks` leading blocks from display —
+   * they contribute 0 lines afterward and the marker line replaces them in
+   * total()/lineAt(). Monotonic (never re-expands; appends keep working).
+   * `suppressedDisplayLines` feeds the marker text. Callers compute both
+   * before flipping (counts must still be live).
+   */
+  truncate(blocks: number, suppressedDisplayLines: number): void {
+    const b = Math.min(Math.max(blocks, this.truncated), this.blocks.length)
+    for (let i = this.truncated; i < b; i++) this.fw.set(i, 0)
+    this.truncated = b
+    this.trimmedLineTotal = suppressedDisplayLines
+  }
+
+  /** First kept block index (0 = nothing trimmed). */
+  truncatedBlocks(): number {
+    return this.truncated
+  }
+
+  /** The single marker line (`  … earlier {N} lines`) — muted, collapsed. */
+  markerLine(): DisplayLine {
+    return {
+      runs: [{ text: `  … earlier ${this.trimmedLineTotal} lines`, style: "muted" }],
+      blockIndex: 0,
+      collapsed: true,
+    }
+  }
+
   /* ---------------------------------------------------------- read paths */
 
   private markDirty(index: number): void {
@@ -283,7 +316,7 @@ export class SegmentIndex {
 
   total(q: FoldQuery): number {
     this.flush(q)
-    return this.fw.total()
+    return this.fw.total() + (this.truncated > 0 ? 1 : 0)
   }
 
   sumBefore(index: number): number {
@@ -291,6 +324,7 @@ export class SegmentIndex {
   }
 
   countOf(index: number, q: FoldQuery): number {
+    if (index < this.truncated) return 0 // marker-zone blocks are suppressed
     const short = this.shortLines(index, q)
     return short !== null ? short.length : this.blockLinesAt(index, q).length
   }
@@ -337,16 +371,21 @@ export class SegmentIndex {
     return lines
   }
 
-  /** 0-based display line → (block index, inner line index). */
+  /** 0-based display line → (block index, inner line index). With a marker
+   * set (truncated > 0), display line 0 IS the marker — the fenwick order of
+   * visible line L is L (L+1 otherwise) and inner lines shift by one. Callers
+   * must never ask for line 0 while truncated (lineAt/toggle/lineBlock guard). */
   blockIndexAtLine(lineIndex: number): { index: number; inner: number } {
-    const order = lineIndex + 1
+    const shifted = this.truncated > 0 ? 1 : 0
+    const order = Math.max(1, lineIndex + 1 - shifted)
     const index = this.fw.select(order)
-    const inner = lineIndex - this.fw.sumBefore(index)
+    const inner = lineIndex - this.fw.sumBefore(index) - shifted
     return { index, inner }
   }
 
-  /** 0-based display line (folding and groups resolved). */
+  /** 0-based display line (folding, groups and the retain marker resolved). */
   lineAt(lineIndex: number, q: FoldQuery): DisplayLine {
+    if (this.truncated > 0 && lineIndex === 0) return this.markerLine()
     const { index, inner } = this.blockIndexAtLine(lineIndex)
     const short = this.shortLines(index, q)
     const lines = short !== null ? short : this.blockLinesAt(index, q)

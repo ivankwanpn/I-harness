@@ -152,4 +152,14 @@ export interface ScrollbackEngine {
   prevMatch(fromLine: number): number
   /** Wrap width (recomputed on resize). */
   setWidth(cols: number): void
+  /** M39 memory release — TRIM THE DISPLAY TRUNK (OPTIONAL). Engines that
+   * cannot release history omit the member; the app probes with `retain?.`.
+   * Trims the DISPLAY history to keep the last `maxLines` visible display
+   * lines (block-granular): the leading blocks collapse into one marker row
+   * `  … earlier {N} lines`. The BLOCK MODEL and the seq cursor are untouched;
+   * appends keep working (tail-only). Search scope becomes the visible display
+   * lines — the trimmed region no longer matches (honest, documented).
+   * Idempotent + monotonic: mutable/streaming blocks and the sticky-pinned
+   * latest user block are never trimmed. Returns newly-trimmed block count. */
+  retain?(opts: { maxLines?: number }): { trimmedBlocks: number }
 }
