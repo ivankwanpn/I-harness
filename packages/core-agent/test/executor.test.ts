@@ -126,3 +126,30 @@ describe("SessionExecutor", () => {
     expect(reg.get("sess-a")).toBeUndefined()
   })
 })
+
+describe("SessionExecutor — M41b per-submit signal", () => {
+  it("reaches agent.run so an IN-FLIGHT turn aborts at the engine", async () => {
+    const session = createSession()
+    const inbox = new Inbox(session)
+    // A fake agent that runs until its signal aborts — deterministic proof
+    // that the lane forwards the submit's signal (not just the queue gate).
+    let signalSeen: AbortSignal | undefined = undefined
+    const agent = {
+      run: async (_task: string, signal?: AbortSignal): Promise<unknown> => {
+        signalSeen = signal
+        await new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("aborted-by-signal")))
+        })
+        return { finalText: "", turns: 1, reasoning: [] }
+      },
+    }
+    const executor = createSessionExecutor({ session, agent: agent as never, inbox })
+    const controller = new AbortController()
+    executor.submit({ tier: "send", text: "run me", signal: controller.signal })
+    await new Promise((r) => setTimeout(r, 10)) // let the pump start the turn
+    expect(signalSeen).toBeDefined()
+    controller.abort()
+    await expect(executor.drain()).rejects.toThrow("aborted-by-signal")
+    expect(executor.pending()).toEqual([]) // the turn died; the lane is free
+  })
+})

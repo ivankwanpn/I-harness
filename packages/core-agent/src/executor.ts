@@ -4,9 +4,12 @@ import { Inbox, type AdmittedInput, type PendingInput } from "@i-harness/core-se
 import type { AgentResult } from "./index.ts"
 
 export type InputSubmit =
-  | { tier: "send"; text: string }
-  | { tier: "followup"; text: string }
-  | { tier: "steer"; text: string }
+  /** `signal` (M41b): the per-turn abort — the pump forwards it to
+   * agent.run so an in-flight turn can be cancelled at step boundaries /
+   * stream yields (not just the queued gate). */
+  | { tier: "send"; text: string; signal?: AbortSignal }
+  | { tier: "followup"; text: string; signal?: AbortSignal }
+  | { tier: "steer"; text: string; signal?: AbortSignal }
   | { tier: "inject"; text: string; description: string; scope: "turn" | "session" }
 
 export interface AgentRunSurface {
@@ -69,6 +72,8 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   // report success on a failed turn. Captured; thrown by drain(); cleared when
   // a later turn succeeds.
   let lastError: unknown
+  // M41b: per-submit signals ride in by inputId (the FIFO may hold several).
+  const turnSignals = new Map<string, AbortSignal>()
 
   function pump(): Promise<void> {
     chain = chain.then(async () => {
@@ -81,7 +86,9 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           deps.inbox.promote(next.inputId)
           // turn/start + user/message are appended BY the agent loop here
           // (agent.run), so the promoted marker immediately precedes them.
-          await deps.agent.run(next.text, deps.signal)
+          const sig = turnSignals.get(next.inputId) ?? deps.signal
+          turnSignals.delete(next.inputId)
+          await deps.agent.run(next.text, sig)
           lastError = undefined
         } catch (err) {
           lastError = err
@@ -99,9 +106,11 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   }
 
   return {
-    submit(input) {
+    submit(input: InputSubmit) {
       const admission = mapSubmitToAdmission(input)
       deps.inbox.admit(admission)
+      const signal = (input as InputSubmit & { signal?: AbortSignal }).signal
+      if (signal !== undefined) turnSignals.set(admission.inputId, signal)
       void pump()
       return { inputId: admission.inputId }
     },
