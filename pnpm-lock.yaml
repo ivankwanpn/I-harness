@@ -985,6 +985,9 @@ importers:
       '@i-harness/llm-mock':
         specifier: workspace:*
         version: link:../llm-mock
+      '@i-harness/rewind':
+        specifier: workspace:*
+        version: link:../rewind
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../session-executor

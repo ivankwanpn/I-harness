@@ -73,6 +73,12 @@ export interface TuiAppState {
   historyPanel?: HistoryPanelState
   fileSearch?: FileSearchState
   sessions?: SessionPickerState
+  /** M43 rewind UI (spec §3.9 "scrollback dimmed from the rewind anchor",
+   * `with_dim_from`): the GLOBAL display-line index of the rewind anchor;
+   * rows at/after it render blended 0.66 toward the terminal bg while the
+   * rewind UI is open / the anchor is active. Undefined = no dim (zero
+   * overhead — no per-row math on the scrollback draw path). */
+  dimFrom?: number
 }
 
 /** The active dropdown 1: kind + height (layoutAgent places the rect above
@@ -189,6 +195,28 @@ export function styleFor(
     style.bg = cap !== undefined ? quantizeColor(bg, cap, true) : bg
   }
   return style
+}
+
+/** M43 (spec §3.9 `with_dim_from`): the rewind-anchor dim — an RGB fg blended
+ * 0.66 toward the terminal background (palette.bgBase), so the row reads
+ * washed-out instead of recolored. Accepts an unresolved TextStyle (dimmed
+ * plain runs resolve here) or an already-resolved Style; returns a Style
+ * (resolved, blended). Truthful on index-quantized styles too: the two blend
+ * endpoints are RGB, and a legacy terminal's indexed palette has no honest
+ * inverse — those stay untouched (the anchor dim is a truecolor effect;
+ * monochrome/ansi16 terminals keep the style as-is). */
+function dimTowardBg(
+  style: Style | TextStyle,
+  palette: Palette,
+  cap: TerminalCapabilityContext | undefined,
+): Style {
+  const resolved: Style = typeof style === "string" ? styleFor(style, palette, cap, false) : style
+  const fg = resolved.fg
+  if (fg === undefined || !("r" in fg)) return resolved
+  const bg = hexToRgbLocal(palette.bgBase)
+  const blend = (c: number): number => Math.round(c + (bg.r - c) * 0.66)
+  const fgOut = { r: blend(fg.r), g: blend(fg.g), b: blend(fg.b) }
+  return { ...resolved, fg: cap !== undefined ? quantizeColor(fgOut, cap, true) : fgOut }
 }
 
 // ------------------------------------------------------------------ text drawing
@@ -350,15 +378,27 @@ function drawScrollback(
     const y = rect.y + i
     if (y >= buf.height) break
     const inverted = matches.includes(off + i)
+    // M43 rewind UI: the anchor dim (spec §3.9) applies to EVERY cell of the
+    // rows at/after the anchor line — rail, bullet, runs and timestamp alike
+    // (a "row blend", not a text-only recolor).
+    const dimmed = app.dimFrom !== undefined && off + i >= app.dimFrom
     const railStyle = view.color(railColorOf(line.runs, palette))
     if (inverted) railStyle.invert = true
-    view.cell(rect.x, y, { text: glyphs.accentBar, style: railStyle, width: 1, continuation: false })
+    view.cell(rect.x, y, {
+      text: glyphs.accentBar,
+      style: dimmed ? dimTowardBg(railStyle, palette, cap) : railStyle,
+      width: 1, continuation: false,
+    })
 
     const bullet = line.glyph
     if (bullet !== undefined) {
       const bStyle = view.color(palette.grayBright)
       if (inverted) bStyle.invert = true
-      view.cell(contentStart, y, { text: bullet, style: bStyle, width: 1, continuation: false })
+      view.cell(contentStart, y, {
+        text: bullet,
+        style: dimmed ? dimTowardBg(bStyle, palette, cap) : bStyle,
+        width: 1, continuation: false,
+      })
     }
 
     const ts = line.timestamp
@@ -369,18 +409,22 @@ function drawScrollback(
     for (const run of line.runs) {
       // codeBg must reach styleFor: a plain TextStyle name through view.text
       // would drop the run's md_code_bg (M38b finding: fullscreen code blocks
-      // painted no background behind the code body).
-      const st = inverted
+      // painted no background behind the code body). Dimmed rows resolve the
+      // style here too — the blend needs the concrete RGB.
+      const resolved = inverted
         ? { ...styleFor(run.style, palette, cap, run.codeBg === true), invert: true }
         : run.codeBg === true
           ? styleFor(run.style, palette, cap, true)
-          : run.style
+          : dimmed
+            ? styleFor(run.style, palette, cap, false)
+            : run.style
+      const st = dimmed ? dimTowardBg(resolved, palette, cap) : resolved
       rx = view.text(rx, y, run.text, st, Math.max(textStart, clip))
     }
     if (tsW > 0 && ts !== undefined) {
       const tsStyle = { ...yStyle }
       if (inverted) tsStyle.invert = true
-      rightAlign(buf, contentEnd - 1, y, ts, tsStyle)
+      rightAlign(buf, contentEnd - 1, y, ts, dimmed ? dimTowardBg(tsStyle, palette, cap) : tsStyle)
     }
   }
 }

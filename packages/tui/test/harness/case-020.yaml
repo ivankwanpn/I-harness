@@ -1,0 +1,96 @@
+# M43 G2 (case-020): the REWIND end-to-end proof at REAL-PTY level.
+# The host (host-020.ts) drives the REAL app pipeline + the real stdin path
+# against a TEMP workspace `src/data.txt`:
+#   turn 1: user "write" → REAL fs write v2 (M42 recorder take "v1")
+#   turn 2: user "modify" → REAL fs write v3 (take "v2")
+# → 2 REAL points in a REAL RewindStore; then the REWIND UI over the REAL
+#   RewindService: Esc-Esc → picker ("Rewind to which turn?") → Enter (turn 1
+#   row) → `a` (both conversation + files) → Confirm (src/data.txt is a
+#   MODIFIED conflict — turn 2's write diverged the target's after-state; M42
+#   executes anyway, marked, per the grok two-phase semantics) → `y` →
+#   execute() restores "v1" on disk + truncates the journal + the rewind/point
+#   marker becomes the TuiEvent rewind → the engine shows `Rewound to turn 1`).
+#
+# The strict asserts: (a) the yaml's after-rewind data snapshot contains "v1"
+# (the TEST additionally reads the REAL workspace file byte-exact), (b) the
+# scrollback `Rewound to turn 1` line (engine marker row), (c) conflicts
+# marked honestly in the Confirm (current disk v3 ≠ turn-1 afterHash v2).
+# NOT asserted: the old turn-2 rows GONE — G1's engine appends the marker row
+# WITHOUT hiding the rewound content (the cut lives in core-session's
+# deriveMessages, not the TUI engine's append log) — the M43 report documents
+# that delta. Frame count deterministic: 6 event frames + key frames; frozen
+# clock 13_334 keeps the anim pump + toasts identical (zero-byte idle).
+name: case-020-rewind-restore-proof
+host: test/harness/host-020.ts
+size: [80, 24]
+steps:
+  # ── phase A: the two REAL recording turns settle (6 event frames).
+  - await-marker: { name: scene-ready }
+  - await-marker: { name: points-seeded }
+  - await-marker: { name: frame-6 }
+  - await-quiescent: { ms: 300 }
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃   ❯ write"
+        - "  ┃  ◆ Edit src/data.txt"
+        - "  ┃   wrote v2"
+        - "  ┃   ❯ modify"
+        - "  ┃  ◆ Edit src/data.txt"
+        - "  ┃   wrote v3"
+      timeoutMs: 3000
+  - assert-glyph-integrity: {}
+  # ── phase B: the rewind UI over the real service.
+  # Esc (empty prompt) arm → second Esc → rewind picker (N=2 points).
+  - write-pty: { data: "\x1b" }
+  - await-quiescent: { ms: 200 }
+  - write-pty: { data: "\x1b" }
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - "  ┃ Rewind to which turn?"
+        - "  ┃ · write · 1 files"
+        - "  ┃ · modify · 1 files"
+      timeoutMs: 5000
+  # Enter → the first picker row = turn 1 (store index 0) → ModeSelect.
+  - write-pty: { data: "\r" }
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - "  ┃ What do you want to rewind?"
+        - "  ┃ a (●) Both conversation and file changes"
+        - "  ┃ b (○) Conversation only"
+        - "  ┃ f (○) File changes only"
+      timeoutMs: 5000
+  # `a` → both conversation and file changes → Confirm (with the honest
+  # MODIFIED conflict row — turn 2 moved the disk after turn 1 ended).
+  - write-pty: { data: "a" }
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - '  ┃ Rewind file changes and conversation to "write"? (1 files)'
+        - "  ┃ ! src/data.txt (modified)"
+        - "  ┃ y (●) Confirm rewind"
+        - "  ┃ Bksp (○) Back"
+      timeoutMs: 5000
+  # `y` → execute: REAL file restore + marker. The host's execute wrapper
+  # writes the disk snapshot + result marker.
+  - write-pty: { data: "y" }
+  - await-marker: { name: rewind-executed }
+  - assert-file: { name: after-rewind-data.txt, contains: "v1" }
+  # (b) the engine's rewind system row — the marker line (tail-anchored jump).
+  - wait-screen:
+      region: { startRow: 8 }
+      rows:
+        - "  ┃   Rewound to turn 1"
+      timeoutMs: 5000
+  - assert-glyph-integrity: {}
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote }
+  # byte budget: 17 = init 1 + 15 frames + teardown 1. The 15 frames:
+  #   6 event frames + Esc-arm + picker opening (loading) + picker rows +
+  #   mode-select + planning + confirm + rewinding + rewind-event frame +
+  #   overlay-close frame (the frozen clock keeps the anim pump + the
+  #   never-expiring toast identical → zero-byte idle in between).
+  - assert-byte-budget: { writes: 17 }
+  - wait-exit: { code: 0 }
