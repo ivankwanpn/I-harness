@@ -53,6 +53,14 @@ export interface SessionSummary {
   contextTotal?: number
 }
 
+/** Per-session context usage — the info/status chip's real values (M38b G2).
+ * `total` is absent when the host does not know the model window (the UI then
+ * renders only the used count; renderers never fabricate). */
+export interface BackendContextUsage {
+  used: number
+  total?: number
+}
+
 /** The single UI consumption surface (embedded impl in src/backend/embedded.ts;
  * remote/SDK impl arrives later for --attach). */
 export interface BackendClient {
@@ -69,6 +77,13 @@ export interface BackendClient {
   replay(afterSeq: number): Promise<TuiEvent[]>
   /** Current live status bits (queue surface). */
   status(): { running: boolean; queued: number }
+  /** Real per-session context usage (M38b G2). OPTIONAL: a backend that cannot
+   * price the session honestly has no member — the loop renders only what
+   * exists, never an estimate. */
+  context?(): Promise<BackendContextUsage | undefined>
+  /** Info-line/status model label (M38b G2). OPTIONAL: the host may know it
+   * (--model spec) while the wire cannot carry it (no session/meta RPC v0). */
+  readonly modelLabel?: string
   close(): Promise<void>
 }
 

@@ -31,6 +31,12 @@ import type { InlineLiveRegion } from "./minimal/contracts.ts"
 export type { ScrollbackEngineOptions } from "./scrollback/engine.ts"
 export { createEmbeddedBackend, defaultEmbeddedFactory } from "./backend/embedded.ts"
 export type { EmbeddedOptions, EmbeddedFactoryOptions } from "./backend/embedded.ts"
+// M38b G2: remote/SDK backend (--attach) — the stdio wire client
+// (spawnSdkSubprocess, mirrors @i-harness/sdk HarnessClient.spawn without the
+// dep) + the BackendClient adapter (createRemoteBackend; SdkClientLike is the
+// structural seam a host with the REAL HarnessClient can plug instead).
+export { createRemoteBackend, spawnSdkSubprocess } from "./backend/remote.ts"
+export type { RemoteBackendOptions, SdkClientLike, SdkNotification } from "./backend/remote.ts"
 // G1 interaction surfaces (spec §3.7/§3.8/§3.11) — what a host builds and
 // passes into the seam binders.
 export type {
@@ -49,6 +55,7 @@ export type { ApprovalBridge, ApprovalBridgeService, ApprovalClient, StoredSessi
 export { toolKindOf } from "./contracts.ts"
 export type {
   BackendClient,
+  BackendContextUsage,
   DisplayLine,
   ScrollbackEngine,
   ScrollbackSearchResult,

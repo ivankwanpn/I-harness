@@ -241,8 +241,17 @@ export interface EmbeddedOptions {
   /** Initial prompt for a FRESH session (log empty): auto-submitted once by
    * open() — the TUI app needs no explicit kickoff call. */
   prompt?: string
-  /** Label seam (M38: model badge in the header). Unused in M37a. */
+  /** Info-line/status model label (M38b G2 — plumbed now). The label is
+   * HOST-KNOWN (the --model spec): the resolution chain's ModelClient exposes
+   * no name (llm-seam interface is stream() only), so the backend cannot
+   * derive it itself. Absent → the loop's "mock-model" fallback text. */
   modelLabel?: string
+  /** Model context window (tokens) when the HOST resolved it (M38b G2,
+   * read-only). Absent → contextTotal is unknown and the chip renders only
+   * what exists. Used-token PRICING needs @i-harness/token-meter (activeTokens)
+   * which is NOT a dependency today (no new private deps; package.json is
+   * untouchable while G1 lands marked/highlight.js) — see context() below. */
+  contextWindow?: number
   /** Stream batching window in ms. Default 16 (§3.5). */
   batchMs?: number
   /** Read-only session listing seam; ABSENT → current-session stub row
@@ -270,6 +279,13 @@ export interface EmbeddedFactoryOptions {
   /** M38 (accepted + ignored in M37a): jsonl session store root. The mock-only
    * factory cannot persist without the session-persistence deps. */
   storeRoot?: string
+  /** M38b G2: info-line/status model label — the HOST's --model spec (the
+   * resolved ModelClient exposes no name; see EmbeddedOptions.modelLabel).
+   * Absent → the loop falls back to "mock-model". */
+  modelLabel?: string
+  /** M38b G2: model context window (tokens) the host resolved (read-only;
+   * see EmbeddedOptions.contextWindow). */
+  contextWindow?: number
 }
 
 // ------------------------------------------------------------------ backend
@@ -441,6 +457,23 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
 
     status: () => service.queueState(sessionId),
 
+    modelLabel: opts.modelLabel,
+
+    async context(): Promise<{ used: number; total?: number } | undefined> {
+      // LOUD (M38b G2): the per-session used-token PRICING lives in
+      // @i-harness/token-meter (activeTokens(session)) — the SAME estimator
+      // the engine's get_context_remaining tool and the M25 token/usage
+      // telemetry event use. token-meter is NOT a dependency of packages/tui
+      // (milestone: no new private deps; package.json is untouchable while G1
+      // lands marked/highlight.js) and the assembly exposes no read-only
+      // usage getter (SessionAssembly: ctx/agent/session/model/inbox — no
+      // token surface). So: undefined — never a fabricated estimate. When the
+      // dep (or a v1 SDK session/metrics RPC) lands, this one function body
+      // becomes real; the contract shape, the loop wiring and the
+      // host-supplied contextWindow are already in place.
+      return undefined
+    },
+
     async close(): Promise<void> {
       if (closed) return
       closed = true
@@ -480,5 +513,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
     service,
     sessionId: `sess-${randomUUID().slice(0, 8)}`,
     prompt: opts.prompt,
+    ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
+    ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
   })
 }
