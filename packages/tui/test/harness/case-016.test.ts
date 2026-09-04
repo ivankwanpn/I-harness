@@ -42,7 +42,7 @@ const HOST_FILE = fileURLToPath(new URL("./host-016.ts", import.meta.url))
  *  - the tail-row in-place rewrite: row 6 (1-based) re-rendered from
  *    "Para two " to "Para two line." — the flushed tail keeps its prefix and
  *    the completion lands in the same row (CUP 6;7H + text color 225;225;225). */
-const SGR_FENCE_OPEN_PLAIN = "\x1b[38;2;58;149;171m\x1b[3Cprint(1)"
+const SGR_FENCE_OPEN_PLAIN = "[38;2;58;149;171m[48;2;28;28;28m[3Cprint(1)"
 const SGR_FENCE_CLOSED_KEYWORD_BOLD = "\x1b[1m\x1b[3Cprint"
 const SGR_FENCE_CLOSED_NUMBER = "\x1b[38;2;187;154;247m\x1b[22m\x1b[1C1"
 const SGR_TAIL_REWRITE = "\x1b[6;7HPara two \x1b[m\x1b[38;2;225;225;225mline."
