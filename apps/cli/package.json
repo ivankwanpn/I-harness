@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "tsx": "^4.19.0",
     "@agentclientprotocol/sdk": "^1.4.0",
     "@i-harness/acp": "workspace:*",
     "@i-harness/agent-team": "workspace:*",
@@ -63,6 +64,11 @@
     "@i-harness/web-host": "workspace:*",
     "@i-harness/workflow": "workspace:*",
     "@i-harness/workspace": "workspace:*",
-    "@vscode/ripgrep": "^1.18.0"
+    "@vscode/ripgrep": "^1.18.0",
+    "@i-harness/tui-app": "workspace:*"
+  },
+  "bin": {
+    "i-harness": "./bin/i-harness.js",
+    "ih": "./bin/i-harness.js"
   }
 }

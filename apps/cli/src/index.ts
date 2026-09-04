@@ -19,6 +19,16 @@ import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
 import { parsePort, runWebServer } from "./web.ts"
 import type { WebServerOptions } from "./web.ts"
+import { parseFlags, runTui } from "@i-harness/tui-app"
+
+/** M44: the CLI's own version (the bin shim forwards --version here). */
+const CLI_VERSION = "0.1.0"
+
+const USAGE =
+  "usage: i-harness [<run|web|sdk|acp|tui> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
+  "  tui [--prompt <text>] [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>] [--attach <id>] [--minimal|--fullscreen] |\n" +
+  "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] |\n" +
+  "  web [--port N] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve]"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -100,9 +110,24 @@ export async function main(argv: string[]): Promise<number> {
   if (args[0] === "acp") {
     return runAcpCommand(args)
   }
+  // M44: the `tui` subcommand + the GROK-STYLE DEFAULT — a bare `i-harness`
+  // (or any non-subcommand first token) launches the TUI in the current
+  // folder (workspace = cwd), exactly like `grok` in a project folder.
+  if (args[0] === "tui") {
+    return Promise.resolve(runTui(parseFlags(args.slice(1))))
+  }
+  if (args[0] === "--version" || args[0] === "-v") {
+    console.log(CLI_VERSION)
+    return Promise.resolve(0)
+  }
+  if (args[0] === "help" || args[0] === "--help" || args[0] === "-h") {
+    console.error(USAGE)
+    return Promise.resolve(0)
+  }
   if (args[0] !== "run") {
-    console.error("usage: i-harness <run|web|sdk|acp> ... — run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] | web [--port N] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve]")
-    return Promise.resolve(1)
+    // Bare launch == TUI (grok-style); the `run`/`web`/`sdk`/`acp` set stays
+    // the headless/backend surface.
+    return Promise.resolve(runTui(parseFlags(args)))
   }
 
   const yes = args.includes("--yes")
