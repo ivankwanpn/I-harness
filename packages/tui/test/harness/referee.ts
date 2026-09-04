@@ -100,6 +100,54 @@ function assertRowsMatch(virtual: VirtualTerminal, expected: string[], startRow:
   return errors
 }
 
+/** Per-spec cell color checks on the virtual terminal. Each spec: row/col
+ * (0-based) + any of the optional fg/bg/bold/text keys. */
+function cellColorErrors(
+  virtual: VirtualTerminal,
+  specs: Array<Record<string, unknown>>,
+): string[] {
+  const errors: string[] = []
+  for (const spec of specs) {
+    const y = Number(spec["row"])
+    const x = Number(spec["col"])
+    if (!Number.isInteger(y) || !Number.isInteger(x)) {
+      errors.push(`invalid spec row=${y} col=${x}`)
+      continue
+    }
+    const got = virtual.cellColor(y, x)
+    if (got === undefined) {
+      errors.push(`row ${y} col ${x}: no cell`)
+      continue
+    }
+    if (spec["text"] !== undefined) {
+      // Text anchored at the cell's column: concatenate head-cell chars
+      // (continuation cells of width-2 glyphs contribute nothing). Enough
+      // columns for the expected text + room for a width-2 grapheme.
+      const want = String(spec["text"])
+      const row = virtual.getRow(y)
+      let seen = ""
+      let limit = x + want.length * 2 + 1
+      for (let cx = x; cx < limit && cx < virtual.cols; cx++) {
+        if (row.cells[cx].text !== "") seen += row.cells[cx].text
+        if (seen.length >= want.length) break
+      }
+      if (seen !== want) {
+        errors.push(`row ${y} col ${x}: text expected ${JSON.stringify(want)} got ${JSON.stringify(seen)}`)
+      }
+    }
+    if (spec["fg"] !== undefined && got.fg !== String(spec["fg"])) {
+      errors.push(`row ${y} col ${x}: fg expected ${spec["fg"]} got ${got.fg}`)
+    }
+    if (spec["bg"] !== undefined && got.bg !== String(spec["bg"])) {
+      errors.push(`row ${y} col ${x}: bg expected ${spec["bg"]} got ${got.bg}`)
+    }
+    if (spec["bold"] !== undefined && got.bold !== (spec["bold"] === true)) {
+      errors.push(`row ${y} col ${x}: bold expected ${spec["bold"] === true} got ${got.bold}`)
+    }
+  }
+  return errors
+}
+
 /** Walk every row: widths must exactly sum to cols, width-2 heads must be
  * followed by a continuation (width 0, empty text), no orphan continuations,
  * and no control chars inside cell text. */
@@ -259,6 +307,35 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
                 `step ${i} (assert-scrollback): ${errors.slice(0, 3).join("; ")}` +
                 ` (len=${len}, baseY=${virtual.normalBaseY()})`,
             }
+          }
+          break
+        }
+        case "assert-cell-colors": {
+          // M38b G3: cell-level color proof on the RENDERED virtual — the
+          // markdown SGR assertions (md_code fg/bg, hljs bold/keyword).
+          // Poll-until-match (the marker and the pty bytes are two channels —
+          // the row text may match while the closure's SGR bytes are still in
+          // flight; a code-body row's TEXT does not change across fence
+          // closure, only its colors). `cells` entries: { row, col } plus any
+          // of { fg, bg, bold, text } to check (all provided keys must match).
+          const cells = (args["cells"] as Array<Record<string, unknown>> | undefined) ?? []
+          const timeoutMs = Number(args["timeoutMs"] ?? 2500)
+          const deadline = Date.now() + timeoutMs
+          let firstErrors: string[] = []
+          for (;;) {
+            await virtual.drained()
+            const errors = cellColorErrors(virtual, cells)
+            if (errors.length === 0) break
+            if (firstErrors.length === 0) firstErrors = errors
+            if (Date.now() >= deadline) {
+              return {
+                ok: false,
+                error:
+                  `step ${i} (assert-cell-colors): cells never matched within ${timeoutMs}ms: ` +
+                  `${errors.slice(0, 3).join("; ")} // FIRST poll was: ${firstErrors.slice(0, 3).join("; ")}`,
+              }
+            }
+            await sleep(50)
           }
           break
         }
