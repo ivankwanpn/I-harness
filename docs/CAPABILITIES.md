@@ -6,6 +6,8 @@
 >
 > M37a（tui）增量：grok 1:1 agent 屏——scrollback 引擎（Fenwick virtual_y/O(dirty) 增量、verb-group 折疊、regex 搜索、選區、sticky）、視圖（狀態欄 chips/TurnStatus spinner/PromptWidget chrome/ShortcutsBar）、keymap 主組、**embedded SessionService 橋**（16ms batch + seq 游標回放）、`apps/tui`（mock 首映）；PTY case-011（live streaming + **byte-budget 零字節證明**）/ case-014（流中 resize 不變量）。後端零改動。
 >
+> M40（盤點收獲）增量：多模態 `read_image`（attachment 系）；`todo_write` 掛載（盤點時發現從未註冊）；CLI 接 pluginRegistry+jobKillBridge（原 404）；settings/changed emitter（順帶修休眠偵測分支）；guardian 熔斷全判定；TUI——toast 卡、context 真值（token-meter）、鼠標滾輪（1015/1016 解碼 + wheel 路由修復 + **case-018**）、mermaid Unicode art（flowchart 子集 + fallback box）、plan-review 適配（a/c/q 動作條 + **case-019**）。
+>
 > M39（tui 質量）增量：**12 屬性核對表**（blueprint §1：1–10、12 全落地——零字節 idle/backpressure writer/單一 teardown/雙級信號/屏幕模式政策/能力上下文/O(dirty) 虛擬化/checkpoint 流式/時間分片/有需才轉/PTY e2e；11=mermaid 跳過=規格留檔）+ **case-017 交互矩陣**（freeform reject 真鍵路徑——輪尾發現並修復「覆蓋 freeform 無字元路由」生產缺口、question、/btw、picker、history）+ **FPS HUD**（默認關零開銷、120 幀滾窗 p50/p95）+ **retain() 顯示層裁切**（`… earlier (N lines)` 標記、塊級原子、seq 不變、>2000 行自動觸發）+ **bench**（append 5k 事件 3.2ms / search 23k 行 19.7ms / retain 6170 塊 0.9ms——本機）。
 >
 > M38b（tui 內容）增量：**markdown checkpoint**（marked 詞法——段落空行/列表/圍欄閉合=刷新點、尾重渲染、未閉合圍欄 plain-on-md_code_bg）+ **hljs 極性安全高亮**（class→TextStyle 映射、md 六級標題/md_code_bg 全規格）+ info 行實值（modelLabel 宿主傳導；context 形狀就位待 metrics RPC）+ **`--attach` 遠程後端**（SDK stdio 客戶端——wire v0 凍結消費、16ms 批次、真子進程 e2e）；PTY case-016（逐段上屏 + 圍欄閉合高亮 pins + writes=10）。誠實缺口：遠程 replay/list 無 v0 RPC、contextUsed 需 token-meter 依賴（下一輪一個函數體即真）。

@@ -87,6 +87,7 @@ frontend" gate:
 | M38a | Minimal mode: Inline insert_before engine (native-scrollback commit, print-once, LF-at-bottom scroll — CSI S proved lossy in xterm 6), live region + 500ms flush, self-relaunch /minimal /fullscreen, PTY case-015 (scrollback pins + 10-write budget + resize + relaunch) | ✅ |
 | M38b | Content wheel: markdown checkpoint rendering (marked lexer — paragraph/list/fence closure boundaries) + hljs polarity-safe highlighting, md_code_bg code blocks, info-line real values (model label; context shape), `--attach` remote backend (SDK stdio client), PTY case-016 (per-paragraph flush + fence-close highlight) | ✅ |
 | M39 | Quality wheel: 12-attribute replication checklist (1–10+12 verified; mermaid skip = spec'd), PTY case-017 interaction matrix (freeform reject real-key path, question, /btw, picker, history), FPS HUD (default-off), scrollback retain display-trunk trim, bench numbers | ✅ |
+| M40 | Inventory-driven gap harvest: todo_write/read_image mount, CLI plugin-registry+job-kill wiring, settings/changed emitter (+ dormant detector fix), guardian breaker all-verdicts, toasts, real context values, mouse wheel scroll (case-018), mermaid unicode art, plan-review adapt (case-019) | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
