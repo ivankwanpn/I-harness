@@ -21,7 +21,7 @@
 # until the closure's color bytes land.
 # NOTE (M38b G3 finding): md_code_bg (#1c1c1c) is NOT visible in the fullscreen
 # scrollback path — present.ts draws the code runs via view.text → resolve →
-# styleFor(style, palette, cap) which drops StyledRun.codeBg (only the
+# codeBg — FIXED M38b wheel close: styleFor now receives run.codeBg in the
 # search-invert branch reads it). The pins therefore prove the FG story only;
 # bg stays "default" on those cells (deviation — no src/ touch per this wheel).
 #
