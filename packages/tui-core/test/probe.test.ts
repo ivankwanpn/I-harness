@@ -49,9 +49,9 @@ describe("ProbeClient", () => {
     vi.useRealTimers()
   })
 
-  it("sends XTVERSION, kitty and OSC11 queries in order", async () => {
+  it("sends XTVERSION, DA1, kitty and OSC11 queries in order", async () => {
     const { writes } = await probeWith({ TERM: "xterm-256color" }, ALL_REPLIES("xterm-378"))
-    expect(writes).toEqual(["\x1b[>0q", "\x1b[?27u", "\x1b]11;?\x07"])
+    expect(writes).toEqual(["\x1b[>0q", "\x1b[c", "\x1b[?27u", "\x1b]11;?\x07"])
   })
 
   it("parses the XTVERSION DCS brand heuristics", async () => {
@@ -68,6 +68,38 @@ describe("ProbeClient", () => {
   it("recognizes the Windows Terminal DA reply (\\x1b[>1;95…c)", async () => {
     const { cap } = await probeWith({}, ["\x1b[>1;95;0c", "\x1b[?27;1$p", "\x1b]11;rgb:ee/ee/ee\x07"])
     expect(cap.brand).toBe("WindowsTerminal")
+  })
+
+  it("DA1 reply (\\x1b[?1;2c) → brand xterm (no DA2/XTVERSION better)", async () => {
+    // DA1 is the WEAK identification: it must not early-finish (kitty answers
+    // the same 1;2 params), so the DA1-only sweep rides out the 500ms deadline.
+    vi.useFakeTimers()
+    const stream = mockStream()
+    const client = new ProbeClient(stream)
+    withEnv({ TERM: "xterm" })
+    const p = client.probe()
+    client.feed("\x1b[?1;2c")
+    await vi.advanceTimersByTimeAsync(501)
+    const cap = await p
+    expect(cap.brand).toBe("xterm")
+    // bare parameter (VT100+ alone) and a VT400-class 4 are xterm-ish too
+    const bare = new ProbeClient(mockStream())
+    const p2 = bare.probe()
+    bare.feed("\x1b[?1c")
+    await vi.advanceTimersByTimeAsync(501)
+    expect((await p2).brand).toBe("xterm")
+    const four = new ProbeClient(mockStream())
+    const p3 = four.probe()
+    four.feed("\x1b[?1;2;4c")
+    await vi.advanceTimersByTimeAsync(501)
+    expect((await p3).brand).toBe("xterm")
+  })
+
+  it("DA2 WindowsTerminal and XTVERSION outrank the DA1 xterm hint", async () => {
+    const wt = await probeWith({}, ["\x1b[>1;95;0c", "\x1b[?1;2c", "\x1b[?27;1$p", "\x1b]11;rgb:ee/ee/ee\x07"])
+    expect(wt.cap.brand).toBe("WindowsTerminal")
+    const kit = await probeWith({}, ["\x1bP>|kitty-0.29.0\x1b\\", "\x1b[?1;2c", "\x1b[?27;1$p", "\x1b]11;rgb:ee/ee/ee\x07"])
+    expect(kit.cap.brand).toBe("kitty")
   })
 
   it("parses the kitty DECRPM 27 reply (standard and variant forms)", async () => {
@@ -131,7 +163,7 @@ describe("ProbeClient", () => {
     const p = probeCapabilities(() => stream)
     await vi.advanceTimersByTimeAsync(501)
     const cap = await p
-    expect(stream.writes).toEqual(["\x1b[>0q", "\x1b[?27u", "\x1b]11;?\x07"])
+    expect(stream.writes).toEqual(["\x1b[>0q", "\x1b[c", "\x1b[?27u", "\x1b]11;?\x07"])
     expect(cap.multiplexer).toBe("none")
   })
 })
