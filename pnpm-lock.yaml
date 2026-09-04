@@ -167,6 +167,9 @@ importers:
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../../packages/tool-search
+      '@i-harness/tui-app':
+        specifier: workspace:*
+        version: link:../tui
       '@i-harness/web':
         specifier: workspace:*
         version: link:../../packages/web
@@ -182,6 +185,9 @@ importers:
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.12
 
   apps/tui:
     dependencies:

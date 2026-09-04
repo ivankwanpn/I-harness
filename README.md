@@ -39,6 +39,28 @@ pnpm typecheck       # tsc --noEmit for every package
 pnpm e2e             # end-to-end: real CLI + real tools (spawned process / runHeadless)
 ```
 
+## Install once — launch like `grok` (M44)
+
+`i-harness` / `ih` — type the name in ANY folder's cmd/PowerShell to launch the
+TUI there (workspace = cwd), exactly like `grok` in a project folder:
+
+```bash
+# from the repo (one-time global link; both names go on PATH)
+cd apps/cli
+pnpm link -g            # or: npm i -g ./apps/cli
+
+# from ANY project folder
+i-harness               # TUI (fullscreen) in the current folder
+ih --minimal            # native-scrollback mode
+ih --prompt "hi"        # auto-kick a prompt
+ih --attach <session-id>  # remote SDK session
+ih help                 # full usage (run / web / sdk / acp / tui)
+```
+
+The bin shim resolves the tsx loader by ABSOLUTE path from its own install —
+no bundle, no dist: the repo stays source-run. (A single-exe distribution is a
+separate packaging track — out of scope.)
+
 ## Scripts
 
 | Script           | Purpose                                              |
