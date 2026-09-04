@@ -9,9 +9,13 @@
 //                [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>]
 //
 // M37a seams (see packages/tui/src/backend/embedded.ts module header):
-//   - the session store is MOCK-ONLY (in-memory, per-process); --resume /
-//     --model are accepted and ignored (TODO M38: wire the coordinator +
-//     modelBuilder with settings/credentials like apps/cli/src/web.ts).
+//   - the session store is MOCK-ONLY (in-memory, per-process); --resume is
+//     accepted and ignored (TODO M38: wire the coordinator + modelBuilder with
+//     settings/credentials like apps/cli/src/web.ts).
+//   - M38b G2: --model now carries a REAL INFO-LINE label (the loop renders it
+//     in the prompt chrome + status row; the model RESOLUTION chain still
+//     mock-first). --attach <sessionId> switches the backend to the REMOTE
+//     SDK stdio server (see the spawn block in runTui).
 //   - capabilities: probeCapabilities() with a 2 s outer cap; a PTY / no-
 //     answer terminal falls back to createUnknownCapabilities() (its
 //     env-derived colorLevel still lands even without replies). The deep
@@ -22,8 +26,9 @@
 //     the embedded stream (no keyboard, no way to quit) — by design; the
 //     automated proof is packages/tui/test/harness (PTY cases 011/014).
 
-import { pathToFileURL } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { execSync } from "node:child_process"
+import { join } from "node:path"
 import {
   attachInput,
   createRenderer,
@@ -34,7 +39,15 @@ import {
   resolvePalette,
 } from "@i-harness/tui-core"
 import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
-import { createScrollbackEngine, defaultEmbeddedFactory, loadMinimalHost, ModeSwitch, TuiApp } from "@i-harness/tui"
+import {
+  createRemoteBackend,
+  createScrollbackEngine,
+  defaultEmbeddedFactory,
+  loadMinimalHost,
+  ModeSwitch,
+  spawnSdkSubprocess,
+  TuiApp,
+} from "@i-harness/tui"
 import type { BackendClient, InlineHost, InputSource } from "@i-harness/tui"
 
 // ------------------------------------------------------------------ flags
@@ -45,6 +58,10 @@ export interface TuiFlags {
   model?: string
   yes: boolean
   resume?: string
+  /** M38b G2: attach to a REMOTE session — spawns `i-harness sdk` (the CLI's
+   * stdio JSON-RPC server) and drives the session over the wire (the SDK
+   * backend). Absent → the embedded (mock-first) backend. */
+  attach?: string
   /** Minimized UI (M38a spec §0/§1.1): the terminal's own scrollback holds
    * history; the app writes through the G1 inline live-region engine. */
   mode?: "minimal" | "fullscreen"
@@ -59,6 +76,7 @@ export function parseFlags(argv: string[]): TuiFlags {
       case "--model": flags.model = argv[++i]; break
       case "--yes": flags.yes = true; break
       case "--resume": flags.resume = argv[++i]; break
+      case "--attach": flags.attach = argv[++i]; break
       case "--minimal": flags.mode = "minimal"; break
       case "--fullscreen": flags.mode = "fullscreen"; break
       case "--mode": {
@@ -71,13 +89,21 @@ export function parseFlags(argv: string[]): TuiFlags {
       case "-h":
         process.stdout.write(
           "usage: tui [--prompt <text>] [--workspace <dir>] [--model <spec>]\n" +
-          "           [--yes] [--resume <sessionId>] [--minimal]\n",
+          "           [--yes] [--resume <sessionId>] [--attach <sessionId>] [--minimal]\n",
         )
         process.exit(0)
     }
   }
   return flags
 }
+
+// ------------------------------------------------------------------ sdk server spawn (M38b G2)
+
+const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url))
+// Absolute file URL of tsx's loader entry — resolves from ANY cwd (the sdk e2e
+// precedent; the host may be invoked from anywhere).
+const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
+const CLI_ENTRY = join(REPO_ROOT, "apps", "cli", "src", "index.ts")
 
 // ------------------------------------------------------------------ stdout
 
@@ -149,14 +175,33 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     .then((c) => (c === "timeout" ? createUnknownCapabilities() : c))
     .catch(() => createUnknownCapabilities())
 
-  // Backend: M37a mock-first — forceMock:true keeps the cyclic mock default.
-  // TODO M38: --model → modelBuilder (settings+credentials seam like apps/cli
-  // buildModelFor); --resume/storeRoot → coordinator loadMeta + seed.
-  const base = await defaultEmbeddedFactory({
-    workspace,
-    prompt: flags.prompt ?? "",
-    forceMock: true,
-  })
+  // Backend (M38b G2): `--attach <sessionId>` → the REMOTE SDK backend — spawn
+  // `i-harness sdk` (the CLI's stdio JSON-RPC server, mock model default) and
+  // drive that session over the FROZEN v0 wire. The spawned subprocess dies
+  // with backend.close() (shutdown → exit). LOUD: the wire has no history RPC,
+  // so an --attach shows the session from THIS moment (pre-attach log lines are
+  // NOT replayed — wire v0 append-only rule; history replay needs a v1 RPC).
+  // Otherwise: the embedded mock-first backend (M37a) — forceMock:true keeps
+  // the cyclic mock default; TODO M38: --model → modelBuilder (settings+
+  // credentials seam like apps/cli buildModelFor); --resume/storeRoot →
+  // coordinator loadMeta + seed.
+  const base = flags.attach !== undefined
+    ? createRemoteBackend({
+        client: spawnSdkSubprocess({
+          command: process.execPath,
+          args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk"],
+          cwd: workspace,
+        }),
+        sessionId: flags.attach,
+        title: flags.attach,
+        modelLabel: flags.model,
+      })
+    : await defaultEmbeddedFactory({
+        workspace,
+        prompt: flags.prompt ?? "",
+        forceMock: true,
+        modelLabel: flags.model,
+      })
 
   const cols = process.stdout.columns ?? 80
   const rows = process.stdout.rows ?? 24
@@ -223,6 +268,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     palette: resolvePalette(cap),
     glyphs: makeGlyphs(true),
     write: out,
+    // M38b G2: real info-line model label (the --model spec, e.g.
+    // "openai:gpt-4o"); absent → the "mock-model" fallback.
+    modelLabel: flags.model,
     ...(attach !== undefined ? { input } : {}),
     ...(minimal ? { mode: "minimal" as const, inlineFactory: () => loadInlineHost(cols, rows) } : {}),
     // Spec §1: the prompt text `/minimal`/`/fullscreen` self-relaunches the

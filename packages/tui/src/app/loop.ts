@@ -43,6 +43,11 @@ export interface TuiAppOptions {
   glyphs: GlyphSet
   /** Sink for flush bytes ("", when a frame is identical, writes nothing). */
   write?: (s: string) => void
+  /** Info-line/status model label (M38b G2): a REAL value known by the HOST
+   * (the --model spec) — the backend's own modelLabel (e.g. the embedded
+   * bridge's seam) is the second source; an honest fallback text when both
+   * are absent. Never a fabricated model identity. */
+  modelLabel?: string
   input?: InputSource
   compact?: boolean
   /** Test clock — defaults to Date.now(). */
@@ -135,11 +140,17 @@ export class TuiApp {
   private inlineHost: InlineHost | undefined
   private inlineResolved = false
   private commits: MinimalCommits | undefined
+  /** In-flight backend.context() probe (M38b G2) — never two concurrent
+   * refreshes; the promise itself is the guard. */
+  private contextProbe: Promise<void> | undefined
 
   constructor(opts: TuiAppOptions) {
     this.opts = opts
     this.uiMode = opts.mode ?? "fullscreen"
-    const model = "mock-model"
+    // M38b G2: REAL model label — the host's --model spec when wired, else the
+    // backend's own knowledge (embedded's modelLabel seam); the "mock-model"
+    // fallback stays for hosts that pass neither (existing tests' text).
+    const model = this.opts.modelLabel ?? this.opts.backend.modelLabel ?? "mock-model"
     this.app = {
       title: "untitled",
       mode: "normal",
@@ -199,6 +210,10 @@ export class TuiApp {
     this.app.engine.setWidth(this.opts.renderer.buffer.width)
     this.animTimer = setInterval(() => this.animPump(), ANIM_MS)
     this.runP = Promise.all([this.pumpInput(), this.pumpBackend()])
+    // Real-value refresh (M38b G2): the initial context/queue snapshots land
+    // before the first frame — afterwards they ride the turn boundaries.
+    this.refreshContext()
+    this.refreshQueue()
     await this.runP
   }
 
@@ -477,6 +492,10 @@ export class TuiApp {
       case "turn":
         if (ev.phase === "start") this.beginTurn("thinking", now)
         else this.app.turn = undefined // finish() → row hides (spec §7)
+        // Real-value refresh at the turn boundary (M38b G2): context usage and
+        // the queued-turn count — the status chip renders only what exists.
+        this.refreshContext()
+        this.refreshQueue()
         break
       case "thinking": {
         const t = this.ensureTurn(now)
@@ -585,7 +604,13 @@ export class TuiApp {
     this.app.history.push(this.app.prompt.text)
     this.app.historyIndex = this.app.history.length
     this.clearPrompt()
-    void this.opts.backend.submit(text)
+    // Catch: a SUBMIT failure surfaces as a toast instead of an unhandled
+    // rejection (the remote bridge rethrows server -32603 + connection
+    // errors; the embedded path has the same rejection profile). The turn's
+    // events — success or failure — flow through events() regardless.
+    void this.opts.backend.submit(text).catch((error: unknown) => {
+      this.toast(`submit failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
   }
 
   private insertText(s: string): void {
@@ -937,6 +962,39 @@ export class TuiApp {
       this.frameQueued = false
       if (!this.stopped) this.frame()
     })
+  }
+
+  // ------------------------------------------------------------------ real values (M38b G2)
+
+  /** OPTIONAL backend.context() → app.status.contextUsed/contextTotal. A
+   * backend without the member never probes (the chip stays hidden); a probe
+   * resolving undefined leaves the previous values untouched. Never concurrent
+   * (the owning promise is the guard). */
+  private refreshContext(): void {
+    const probe = this.opts.backend.context
+    if (probe === undefined || this.contextProbe !== undefined) return
+    this.contextProbe = probe()
+      .then((usage) => {
+        this.contextProbe = undefined
+        if (usage === undefined) return
+        this.app.status.contextUsed = usage.used
+        if (usage.total !== undefined) this.app.status.contextTotal = usage.total
+        this.requestFrame()
+      })
+      .catch(() => {
+        this.contextProbe = undefined
+      })
+  }
+
+  /** Sync status bits (queue surface) → app.status.queue — refreshed at the
+   * turn boundaries + start (the embedded backend is sync; the remote backend
+   * serves its notification-cached snapshot). */
+  private refreshQueue(): void {
+    const q = this.opts.backend.status()
+    if (this.app.status.queue !== q.queued) {
+      this.app.status.queue = q.queued
+      this.requestFrame()
+    }
   }
 
   // ------------------------------------------------------------------ minimal mode (M38a G2)
