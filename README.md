@@ -85,6 +85,7 @@ frontend" gate:
 | M37a | @i-harness/tui: grok 1:1 agent screen — scrollback engine (virtual_y / folding / selection / search), views (status/turn/prompt/shortcuts), keymap subset, embedded SessionService bridge (16ms batch + seq cursor), `apps/tui`, PTY live-streaming + resize cases (byte-budget zero-idle proof) | ✅ |
 | M37b | Interaction coverage: permission/question/cancel-turn overlays (approval seam, read-only backend), todo/tasks/queue//btw panes, slash/completion/history/file-search dropdowns, session picker + welcome, full keymap, PTY case-012 (real keys) + case-013 (permission flow) | ✅ |
 | M38a | Minimal mode: Inline insert_before engine (native-scrollback commit, print-once, LF-at-bottom scroll — CSI S proved lossy in xterm 6), live region + 500ms flush, self-relaunch /minimal /fullscreen, PTY case-015 (scrollback pins + 10-write budget + resize + relaunch) | ✅ |
+| M38b | Content wheel: markdown checkpoint rendering (marked lexer — paragraph/list/fence closure boundaries) + hljs polarity-safe highlighting, md_code_bg code blocks, info-line real values (model label; context shape), `--attach` remote backend (SDK stdio client), PTY case-016 (per-paragraph flush + fence-close highlight) | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
