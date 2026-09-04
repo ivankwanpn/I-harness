@@ -16,12 +16,22 @@
 //                          → { sessions, listingUnavailable? } (injectable
 //                            listSessions source; absent source → honest
 //                            listingUnavailable: true)
+//   session/cancel {sessionId}   [M41b v1.1]
+//                          → { cancelled, reason? } — aborts the in-flight
+//                            submit's per-session AbortController
+//   session/rewind/points {sessionId}            [M41b v1.1]
+//   session/rewind/plan {sessionId, target, mode?}
+//   session/rewind/execute {sessionId, target, mode?}
+//                          → wire shapes documented in protocol.ts; driven by
+//                            the injectable rewindFactory (absent →
+//                            -32603 "rewind not enabled"); unknown session →
+//                            -32602 "session not found" (never auto-creates)
 //   shutdown               → { ok: true } (then onShutdown fires)
 // Notifications (server → client):
 //   session/event  { sessionId, event }   — every appended session event
 //   session/status { sessionId, status, error? } — lifecycle transitions
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602.
-import { subscribe, type SessionEvent } from "@i-harness/core-session"
+import { append, subscribe, type SessionEvent } from "@i-harness/core-session"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import {
@@ -39,6 +49,10 @@ import {
   type RpcMessage,
   type RpcNotification,
   type SessionListResult,
+  type RewindPointsResponse,
+  type RewindPlanResponse,
+  type RewindExecuteResponse,
+  type RewindMode,
 } from "./protocol.ts"
 
 export const SDK_SERVER_NAME = "i-harness"
@@ -62,10 +76,35 @@ export interface SdkServerOptions {
    * answers `{ sessions: [], listingUnavailable: true }` (an honest blank —
    * "unknown" is never served as "empty"). */
   listSessions?: () => Promise<SessionListResult>
+  /** M41b v1.1: the rewind seam — a per-session resolve of the engine surface
+   * (packages/rewind RewindService rebuilt over the live assembly's rewind
+   * handle, embedded-bridge style). The host provides it; the server only
+   * calls it per request (the factory resolves the CURRENT assembly fresh —
+   * a host/store mismatch must never be cached). `undefined` return value →
+   * the rewind methods answer -32603 "rewind not enabled". Absent option →
+   * every rewind method answers "rewind not enabled" (honest capability
+   * absence; the client gates on the "session-rewind" capability row). */
+  rewindFactory?: (sessionId: string) => RewindServiceSurface | undefined
   /** Server info version payload (defaults to "0.1.0"). */
   version?: string
   /** Fired after a successful shutdown request. */
   onShutdown?: () => void
+}
+
+/** M41b v1.1: the host-side rewind surface the server invokes per request.
+ * The shapes are the WIRE shapes (protocol.ts mirrors packages/rewind); the
+ * host maps the engine's domain types onto them when implementing the factory
+ * (the wire cannot depend on packages/rewind — independent). `appendEvent`
+ * receives the engine's rewind/point conversation marker; the server appends
+ * it into the LIVE session log (session/event flows to the client). */
+export interface RewindServiceSurface {
+  points(): Promise<RewindPointsResponse>
+  plan(targetTurnIndex: number, mode: RewindMode): Promise<RewindPlanResponse>
+  execute(
+    targetTurnIndex: number,
+    mode: RewindMode,
+    hooks: { appendEvent: (event: unknown) => void },
+  ): Promise<RewindExecuteResponse>
 }
 
 export interface SdkServer {
@@ -81,9 +120,14 @@ export interface SdkServer {
 }
 
 /** A session/prompt submission in flight (per-session serialization needed to
- * keep the notification stream ordered for the client). */
+ * keep the notification stream ordered for the client). M41b v1.1: the
+ * controller is the per-session cancel slot — session/prompt creates it
+ * before submit, session/cancel aborts it, and the submit's own finally clears
+ * it (only when the slot still holds THIS submit's controller — a staggered
+ * second submit must not be clobbered early). */
 interface Inflight {
   prompt: string
+  controller: AbortController
 }
 
 export function createSdkServer(service: SessionService, opts: SdkServerOptions = {}): SdkServer {
@@ -118,6 +162,11 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}) }))
   }
 
+  /** M41b v1.1: resolve the host's rewind surface per request, or null when
+   * the seam is absent (never cached — the host may have (re)wired it). */
+  const rewindSurfaceFor = (sessionId: string): RewindServiceSurface | null =>
+    opts.rewindFactory === undefined ? null : opts.rewindFactory(sessionId) ?? null
+
   /** Make sure the session exists in the coordinator (create once per id). */
   async function ensureSession(sessionId: string): Promise<void> {
     if (opts.coordinator === undefined) return
@@ -135,8 +184,11 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   async function handleRequest(method: string, params: unknown, id: number | string): Promise<RpcMessage> {
     switch (method) {
       case "initialize": {
-        // M41a v1: protocolVersion 2; the capabilities object only GAINS the
-        // two rows below (the v0 rows are byte-identical — additive-only).
+        // M41a v1: protocolVersion 2; the capabilities object only GAINS rows
+        // (the v0 rows are byte-identical — additive-only). M41b v1.1: four
+        // more additive rows total ("session-history"/"session-list" + the
+        // "session-cancel"/"session-rewind" appendix rows) — protocolVersion
+        // STAYS 2; the v1.1 surface is capability-advertised.
         return makeSuccess(id, {
           name: SDK_SERVER_NAME,
           version: opts.version ?? "0.1.0",
@@ -146,6 +198,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],
             "session-list": ["1"],
+            "session-cancel": ["1"],
+            "session-rewind": ["1"],
           },
         })
       }
@@ -155,6 +209,29 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/status requires a non-empty sessionId")
         }
         return makeSuccess(id, service.queueState(p.sessionId))
+      }
+      case "session/cancel": {
+        // M41b v1.1: abort the in-flight submit's controller (the same one the
+        // session/prompt handler created and passed to service.submit). The
+        // engine decides what an aborted signal does (a queued turn never
+        // starts — service.submit checks signal.aborted); the server's answer
+        // is the honest slot state: cancelled:true (aborted) / not-running
+        // (known + idle) / not-found (never seen by this server). Unknown
+        // sessions are answered inside the success payload — never an error
+        // frame — because "nothing to cancel" is a legitimate client question.
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/cancel requires a non-empty sessionId")
+        }
+        const inFlight = inflight.get(p.sessionId)
+        if (inFlight !== undefined) {
+          inFlight.controller.abort()
+          return makeSuccess(id, { cancelled: true })
+        }
+        const known = service.liveSession(p.sessionId) !== undefined || knownSessions.has(p.sessionId)
+        return known
+          ? makeSuccess(id, { cancelled: false, reason: "not-running" })
+          : makeSuccess(id, { cancelled: false, reason: "not-found" })
       }
       case "session/history": {
         // M41a v1: event-log walk over the LIVE in-process session (the
@@ -201,6 +278,82 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INTERNAL_ERROR, message)
         }
       }
+      case "session/rewind/points": {
+        // M41b v1.1: the rewind engine's durable-point list (host-wired
+        // rewindFactory; the wire shapes mirror packages/rewind — documented
+        // in protocol.ts). Fail-closed chain: live session required (never
+        // auto-created), factory required ("rewind not enabled"), engine
+        // errors surface with their raw message (-32603).
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/rewind/points requires a non-empty sessionId")
+        }
+        if (service.liveSession(p.sessionId) === undefined) {
+          return makeFailure(id, INVALID_PARAMS, `session/rewind/points: session not found: ${p.sessionId}`)
+        }
+        const surface = rewindSurfaceFor(p.sessionId)
+        if (surface === null) {
+          return makeFailure(id, INTERNAL_ERROR, "session/rewind/points: rewind not enabled")
+        }
+        try {
+          return makeSuccess(id, await surface.points())
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return makeFailure(id, INTERNAL_ERROR, `session/rewind/points: ${message}`)
+        }
+      }
+      case "session/rewind/plan": {
+        const p = params as { sessionId?: unknown; target?: unknown; mode?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/rewind/plan requires a non-empty sessionId")
+        }
+        const parsed = parseRewindTargetMode(p, "session/rewind/plan")
+        if (!parsed.ok) return makeFailure(id, INVALID_PARAMS, parsed.message)
+        if (service.liveSession(p.sessionId) === undefined) {
+          return makeFailure(id, INVALID_PARAMS, `session/rewind/plan: session not found: ${p.sessionId}`)
+        }
+        const surface = rewindSurfaceFor(p.sessionId)
+        if (surface === null) {
+          return makeFailure(id, INTERNAL_ERROR, "session/rewind/plan: rewind not enabled")
+        }
+        try {
+          return makeSuccess(id, await surface.plan(parsed.target, parsed.mode))
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return makeFailure(id, INTERNAL_ERROR, `session/rewind/plan: ${message}`)
+        }
+      }
+      case "session/rewind/execute": {
+        // M41b v1.1: apply the rewind — the engine restores file ops + the
+        // server appends the conversation marker (appendEvent) into the LIVE
+        // session log, so the rewind/point event flows to the client on the
+        // existing session/event stream (G2 owns the derived-view projection).
+        const p = params as { sessionId?: unknown; target?: unknown; mode?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/rewind/execute requires a non-empty sessionId")
+        }
+        const parsed = parseRewindTargetMode(p, "session/rewind/execute")
+        if (!parsed.ok) return makeFailure(id, INVALID_PARAMS, parsed.message)
+        const live = service.liveSession(p.sessionId)
+        if (live === undefined) {
+          return makeFailure(id, INVALID_PARAMS, `session/rewind/execute: session not found: ${p.sessionId}`)
+        }
+        const surface = rewindSurfaceFor(p.sessionId)
+        if (surface === null) {
+          return makeFailure(id, INTERNAL_ERROR, "session/rewind/execute: rewind not enabled")
+        }
+        try {
+          // The appendEvent closure binds the LIVE session (the same identity
+          // session/prompt submits to — the marker's append target)).
+          const result = await surface.execute(parsed.target, parsed.mode, {
+            appendEvent: (event) => { append(live, event as SessionEvent) },
+          })
+          return makeSuccess(id, result)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return makeFailure(id, INTERNAL_ERROR, `session/rewind/execute: ${message}`)
+        }
+      }
       case "session/prompt": {
         const p = params as { sessionId?: unknown; prompt?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
@@ -219,10 +372,15 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             error: error instanceof Error ? error.message : String(error),
           })
         }
-        // lifecycle: submit chains behind an active turn → notify both states
-        statusNotify(sessionId, "queued")
-        inflight.set(sessionId, { prompt })
+        // M41b v1.1 — the per-session cancel slot: ONE controller per submit,
+        // registered BEFORE service.submit (session/cancel aborts it), cleared
+        // after. A staggered second submit overwrites the slot (its abort
+        // becomes the cancel target — the queued turn is the one at risk); the
+        // clear is conditional so an earlier submit's settle never unseats a
+        // later in-flight one.
         const controller = new AbortController()
+        statusNotify(sessionId, "queued")
+        inflight.set(sessionId, { prompt, controller })
         try {
           await service.submit(sessionId, prompt, controller.signal)
           statusNotify(sessionId, "idle")
@@ -235,7 +393,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             events: liveEventsFor(service, sessionId),
           })
         } finally {
-          inflight.delete(sessionId)
+          if (inflight.get(sessionId)?.controller === controller) inflight.delete(sessionId)
         }
       }
       case "shutdown": {
@@ -280,4 +438,23 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
 function liveEventsFor(service: SessionService, sessionId: string): SessionEvent[] {
   const live = service.liveSession(sessionId)
   return live?.events ?? []
+}
+
+/** M41b v1.1: validate the shared rewind target/mode params (mode defaults to
+ * "all"; a non-integer negative target and any unknown mode are fail-closed
+ * INVALID_PARAMS — the engine never sees them). */
+function parseRewindTargetMode(
+  p: { target?: unknown; mode?: unknown } | undefined,
+  method: string,
+): { ok: true; target: number; mode: RewindMode } | { ok: false; message: string } {
+  const rawTarget = p?.target === undefined ? -1 : p.target
+  if (typeof rawTarget !== "number" || !Number.isInteger(rawTarget) || rawTarget < 0) {
+    return { ok: false, message: `${method} target must be a non-negative integer` }
+  }
+  const rawMode = p?.mode === undefined ? "all" : p.mode
+  const mode = rawMode === "all" || rawMode === "files" || rawMode === "conversation" ? rawMode : undefined
+  if (mode === undefined) {
+    return { ok: false, message: `${method} mode must be one of all|files|conversation` }
+  }
+  return { ok: true, target: rawTarget, mode }
 }

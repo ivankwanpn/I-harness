@@ -73,12 +73,13 @@ describe("createSdkServer", () => {
     }
   })
 
-  // M28 S-1 + M41a A1: sdk wire contract field-level lock (drift sentinel). Every
-  // field the default initialize emits is part of the (v1) contract — a change
-  // here is a breaking protocol change for embedders (see protocol.ts JSDoc +
-  // docs/contracts.md "SDK Wire Contract v1"). v1 is the additive bump: the v0
-  // rows are byte-identical and protocolVersion moved 1 → 2.
-  it("initialize wire contract v1 (field-level lock)", async () => {
+  // M28 S-1 + M41a A1 + M41b v1.1: sdk wire contract field-level lock (drift
+  // sentinel). Every field the default initialize emits is part of the v1.1
+  // contract — a change here is a breaking protocol change for embedders (see
+  // protocol.ts JSDoc + docs/contracts.md "SDK Wire Contract v1/v1.1"). v1/v1.1
+  // are additive bumps: protocolVersion stayed 2 (v1.1 is an APPENDIX — the
+  // new surface is capability-advertised rows, the v0/v1 rows byte-identical).
+  it("initialize wire contract v1.1 (field-level lock)", async () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // default version = "0.1.0" (contract)
@@ -96,6 +97,8 @@ describe("createSdkServer", () => {
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],
             "session-list": ["1"],
+            "session-cancel": ["1"],
+            "session-rewind": ["1"],
           },
         },
       })
@@ -393,6 +396,264 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       expect((decodeFrame(status!) as RpcSuccess).result).toEqual({ running: false, queued: 0 })
       const shutdown = await server.handleLine(encodeFrame(makeRequest(133, "shutdown", {})))
       expect((decodeFrame(shutdown!) as RpcSuccess).result).toEqual({ ok: true })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+})
+
+describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
+  /** A model whose stream parks on a test-controlled gate ("scripted slow
+   * step") so the turn is observable IN flight. `release` is idempotent so a
+   * test's finally can always free the gate (an unreleased gate would make
+   * service.close() await the parked turn forever). */
+  function gatedModel(): { model: unknown; release: () => void } {
+    let released = false
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = () => {
+        if (released) return
+        released = true
+        resolve()
+      }
+    })
+    return {
+      release,
+      model: {
+        async *stream(_request: never) {
+          await gate
+          yield { type: "text/chunk", text: "slow ok" }
+          yield { type: "end" }
+        },
+      },
+    }
+  }
+
+  /** Poll session/status until it reports the expected running/queued flags
+   * (polled — the post-submit state is written by async handlers, so a single
+   * request can race ahead of them). */
+  async function waitStatus(
+    server: SdkServer,
+    sessionId: string,
+    expected: { running?: boolean; queued?: number },
+  ): Promise<void> {
+    const deadline = Date.now() + 5000
+    for (;;) {
+      const reply = await server.handleLine(encodeFrame(makeRequest(90, "session/status", { sessionId })))
+      const result = (decodeFrame(reply!) as RpcSuccess).result as { running: boolean; queued: number }
+      const ok = (expected.running === undefined || result.running === expected.running)
+        && (expected.queued === undefined || result.queued === expected.queued)
+      if (ok) return
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for status ${JSON.stringify(expected)} (status: ${JSON.stringify(result)})`)
+      }
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  }
+
+  it("session/cancel answers cancelled:true for a running prompt (the per-session controller is aborted)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-sdk-cancel-run-"))
+    const { model, release } = gatedModel()
+    const service = createSessionService({ workspace: dir, approveAll: true, model: model as never })
+    try {
+      const server = createSdkServer(service)
+      const drv = drive(server)
+      const promptPromise = server.handleLine(
+        encodeFrame(makeRequest(140, "session/prompt", { sessionId: "c1", prompt: "go" })),
+      )
+      await waitStatus(server, "c1", { running: true }) // the turn is in flight (stream parked on the gate)
+      const cancelReply = await server.handleLine(encodeFrame(makeRequest(141, "session/cancel", { sessionId: "c1" })))
+      expect((decodeFrame(cancelReply!) as RpcSuccess).result).toEqual({ cancelled: true })
+      // The slot is cleared only when the submit settles; until then a second
+      // cancel reports "already aborted" honestly (no in-flight slot hole is
+      // masked — the controller stays registered by this submit).
+      const again = await server.handleLine(encodeFrame(makeRequest(142, "session/cancel", { sessionId: "c1" })))
+      expect((decodeFrame(again!) as RpcSuccess).result).toEqual({ cancelled: true })
+      release() // the engine's turn still drains (the lane owns its own signal)
+      const promptReply = await promptPromise
+      expect((decodeFrame(promptReply!) as RpcSuccess).result).toEqual({ sessionId: "c1", ok: true })
+      await waitStatus(server, "c1", { running: false })
+      // known + idle now → not-running
+      const idle = await server.handleLine(encodeFrame(makeRequest(143, "session/cancel", { sessionId: "c1" })))
+      expect((decodeFrame(idle!) as RpcSuccess).result).toEqual({ cancelled: false, reason: "not-running" })
+      expect(drv.out.length).toBeGreaterThan(0)
+      await server.close()
+    } finally {
+      release() // idempotent — never leaves a gated turn holding close()
+      await service.close()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("session/cancel aborts a QUEUED submit (the signal reaches the service chain — it never runs)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-sdk-cancel-queued-"))
+    const { model, release } = gatedModel()
+    const service = createSessionService({ workspace: dir, approveAll: true, model: model as never })
+    try {
+      const server = createSdkServer(service)
+      const first = server.handleLine(encodeFrame(makeRequest(150, "session/prompt", { sessionId: "cq", prompt: "first" })))
+      await waitStatus(server, "cq", { running: true })
+      // second submit chains behind the running turn → queued; its controller
+      // is the per-session cancel slot (the latest submit — set before submit).
+      const second = server.handleLine(encodeFrame(makeRequest(151, "session/prompt", { sessionId: "cq", prompt: "second" })))
+      await waitStatus(server, "cq", { running: true, queued: 1 })
+      const cancelReply = await server.handleLine(encodeFrame(makeRequest(153, "session/cancel", { sessionId: "cq" })))
+      expect((decodeFrame(cancelReply!) as RpcSuccess).result).toEqual({ cancelled: true })
+      release()
+      // both submits settle (the aborted queued turn never started)…
+      expect((decodeFrame((await second)!) as RpcSuccess).result).toEqual({ sessionId: "cq", ok: true })
+      await first
+      // …and the session log carried exactly ONE turn: the abort reached the
+      // engine (service.submit checks signal.aborted before the lane runs).
+      const historyReply = await server.handleLine(
+        encodeFrame(makeRequest(154, "session/history", { sessionId: "cq" })),
+      )
+      const history = (decodeFrame(historyReply!) as RpcSuccess).result as { events: SessionEvent[] }
+      expect(history.events.filter((ev) => ev.type === "turn/start")).toHaveLength(1)
+      await server.close()
+    } finally {
+      release() // idempotent — never leaves a gated turn holding close()
+      await service.close()
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("session/cancel: unknown session → not-found; empty sessionId → -32602; param guard", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const unknown = await server.handleLine(encodeFrame(makeRequest(160, "session/cancel", { sessionId: "nope" })))
+      expect((decodeFrame(unknown!) as RpcSuccess).result).toEqual({ cancelled: false, reason: "not-found" })
+      const bad = await server.handleLine(encodeFrame(makeRequest(161, "session/cancel", { sessionId: "" })))
+      expect((decodeFrame(bad!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/rewind round-trips through a factory (points/plan/execute; execute appends the rewind/point marker into the live log)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service, {
+        rewindFactory: () => ({
+          points: async () => ({ points: [{ turnIndex: 0, preview: "turn zero", files: 1 }] }),
+          plan: async (_target: number, mode: "all" | "files" | "conversation") => ({
+            clean: [{ path: "a.txt", op: "restore-blob" }],
+            conflicts: [{ path: "b.txt", kind: "modified" }],
+            unTracked: ["c.txt"],
+            ops: mode === "conversation" ? [] : [{ path: "a.txt", op: "restore-blob" }],
+          }),
+          execute: async (target: number, mode: "all" | "files" | "conversation", hooks: { appendEvent: (ev: unknown) => void }) => {
+            hooks.appendEvent({
+              type: "rewind/point", version: 1, targetTurn: target, anchorSeq: 0, mode, fileOps: [],
+            })
+            return { revertedFiles: 1, conflicts: [] }
+          },
+        }),
+      })
+      const drv = drive(server)
+      // the live session must exist (never auto-created by a rewind read)
+      const promptReply = await server.handleLine(
+        encodeFrame(makeRequest(170, "session/prompt", { sessionId: "r1", prompt: "hello" })),
+      )
+      expect((decodeFrame(promptReply!) as RpcSuccess).result).toEqual({ sessionId: "r1", ok: true })
+
+      const points = await server.handleLine(encodeFrame(makeRequest(171, "session/rewind/points", { sessionId: "r1" })))
+      expect((decodeFrame(points!) as RpcSuccess).result).toEqual({ points: [{ turnIndex: 0, preview: "turn zero", files: 1 }] })
+
+      const plan = await server.handleLine(encodeFrame(makeRequest(172, "session/rewind/plan", { sessionId: "r1", target: 0, mode: "conversation" })))
+      expect((decodeFrame(plan!) as RpcSuccess).result).toEqual({
+        clean: [{ path: "a.txt", op: "restore-blob" }],
+        conflicts: [{ path: "b.txt", kind: "modified" }],
+        unTracked: ["c.txt"],
+        ops: [],
+      })
+      // mode omitted → server default "all" (ops present)
+      const planDefault = await server.handleLine(encodeFrame(makeRequest(173, "session/rewind/plan", { sessionId: "r1", target: 0 })))
+      expect((decodeFrame(planDefault!) as RpcSuccess).result).toMatchObject({ ops: [{ path: "a.txt", op: "restore-blob" }] })
+
+      const execute = await server.handleLine(encodeFrame(makeRequest(174, "session/rewind/execute", { sessionId: "r1", target: 0, mode: "conversation" })))
+      expect((decodeFrame(execute!) as RpcSuccess).result).toEqual({ revertedFiles: 1, conflicts: [] })
+      // the marker the factory pushed through appendEvent landed in the LIVE
+      // session and flowed on the session/event notification stream
+      const marker = drv.out.find((m) => {
+        if (!isRpcNotification(m) || m.method !== "session/event") return false
+        const event = (m.params as { event?: { type?: string } }).event
+        return event?.type === "rewind/point"
+      })
+      expect(marker).toBeDefined()
+      if (marker !== undefined && isRpcNotification(marker)) {
+        expect((marker.params as { event: unknown }).event).toMatchObject({
+          type: "rewind/point", targetTurn: 0, mode: "conversation",
+        })
+      } else {
+        throw new Error("rewind/point marker did not flow as a session/event notification")
+      }
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/rewind without a factory → -32603 'rewind not enabled'; unknown session → -32602 'session not found'", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service) // no rewindFactory wired
+      // unknown session wins the check order (never auto-creates)
+      const unknown = await server.handleLine(encodeFrame(makeRequest(180, "session/rewind/points", { sessionId: "u1" })))
+      const unknownMsg = decodeFrame(unknown!) as RpcFailure
+      expect(unknownMsg.error.code).toBe(INVALID_PARAMS)
+      expect(String(unknownMsg.error.message)).toContain("session not found")
+
+      const promptReply = await server.handleLine(
+        encodeFrame(makeRequest(181, "session/prompt", { sessionId: "r2", prompt: "hello" })),
+      )
+      expect((decodeFrame(promptReply!) as RpcSuccess).result).toEqual({ sessionId: "r2", ok: true })
+      for (const [method, params] of [
+        ["session/rewind/points", { sessionId: "r2" }],
+        ["session/rewind/plan", { sessionId: "r2", target: 0 }],
+        ["session/rewind/execute", { sessionId: "r2", target: 0, mode: "all" }],
+      ] as const) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(182, method, params)))
+        const msg = decodeFrame(reply!) as RpcFailure
+        expect(msg.error.code).toBe(INTERNAL_ERROR)
+        expect(String(msg.error.message)).toContain("rewind not enabled")
+      }
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/rewind validates target and mode (non-integer/negative target, unknown mode → -32602)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service, {
+        rewindFactory: () => ({
+          points: async () => ({ points: [] }),
+          plan: async () => ({ clean: [], conflicts: [], unTracked: [], ops: [] }),
+          execute: async (_target: number, _mode: "all" | "files" | "conversation", hooks) => {
+            hooks.appendEvent({ type: "rewind/point", version: 1, targetTurn: 0, anchorSeq: 0, mode: "all", fileOps: [] })
+            return { revertedFiles: 0, conflicts: [] }
+          },
+        }),
+      })
+      await server.handleLine(encodeFrame(makeRequest(190, "session/prompt", { sessionId: "r3", prompt: "hello" })))
+      for (const bad of [
+        { sessionId: "r3", target: -1 },
+        { sessionId: "r3", target: 1.5 },
+        { sessionId: "r3", target: 0, mode: "everything" },
+        { sessionId: "", target: 0 },
+      ]) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(191, "session/rewind/plan", bad)))
+        expect((decodeFrame(reply!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      }
       await server.close()
     } finally {
       await service.close()
