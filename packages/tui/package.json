@@ -14,6 +14,7 @@
     "@i-harness/core-session": "workspace:*",
     "@i-harness/interaction": "workspace:*",
     "@i-harness/llm-mock": "workspace:*",
+    "@i-harness/rewind": "workspace:*",
     "@i-harness/session-executor": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-persistence-jsonl": "workspace:*",

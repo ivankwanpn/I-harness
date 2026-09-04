@@ -219,6 +219,79 @@ describe("present — scrollback chrome (spec §3.1)", () => {
   })
 })
 
+describe("present — rewind anchor dim (M43 spec §3.9 with_dim_from)", () => {
+  /** Style-bearing cell reader (the committed front frame). */
+  const cellAt = (r: Renderer, x: number, y: number): { text: string; style: Record<string, unknown> } => {
+    const inner = r as unknown as { db: { front: { cells: Array<{ text: string; style: Record<string, unknown> }>; width: number } } }
+    const { cells, width } = inner.db.front
+    return cells[y * width + x]
+  }
+  const textOf = (cell: { text: string }): string => cell.text
+  const fgOf = (st: Record<string, unknown>): unknown => st["fg"]
+
+  it("rows at/after the anchor blend 0.66 toward bgBase; rows before keep exact styles", () => {
+    const engine = new StubEngine([
+      // line 0 — ABOVE the anchor: exact styles (accent rail, bullet, ts).
+      { runs: [{ text: " Run bash", style: "accent-system" }], blockIndex: 0, timestamp: "  6:35 PM", glyph: "◆" },
+      // lines 1-2 — AT/after the anchor: every cell fg blended toward #141414.
+      { runs: [{ text: " Read file", style: "accent-plan" }], blockIndex: 1, timestamp: "  6:36 PM", glyph: "◆" },
+      { runs: [{ text: "Plain text", style: "text" }], blockIndex: 2 },
+    ])
+    const r = make(80, 24)
+    const state = baseState(engine)
+    state.dimFrom = 1 // anchor = global line 1 (the read row)
+    present(state, r, palette, GLYPHS, {})
+    r.flush(() => {})
+
+    // Row 0 (line index 0 < dimFrom) — untouched: rail ┃ accentSystem at
+    // x=2, bullet ◆ grayBright at x=5, text starts at x=7, ts cols 67..75.
+    expect(textOf(cellAt(r, 2, 2))).toBe("┃")
+    expect(fgOf(cellAt(r, 2, 2).style)).toEqual({ r: 0x7a, g: 0xa2, b: 0xf7 })
+    expect(textOf(cellAt(r, 5, 2))).toBe("◆")
+    expect(fgOf(cellAt(r, 5, 2).style)).toEqual({ r: 0x78, g: 0x78, b: 0x78 })
+    expect(textOf(cellAt(r, 7, 2))).toBe("R")
+    expect(fgOf(cellAt(r, 7, 2).style)).toEqual({ r: 0x7a, g: 0xa2, b: 0xf7 })
+    expect(fgOf(cellAt(r, 67, 2).style)).toEqual({ r: 0x58, g: 0x58, b: 0x58 })
+
+    // Row 1 (line index 1) — blended 0.66 toward bg #141414:
+    //   accentPlan (255,219,141) → (100,88,61) — the rail follows the line's
+    //   own first accent (accentPlan here), no exception for it;
+    //   grayBright → (54,54,54); grayDim ts → (43,43,43).
+    expect(textOf(cellAt(r, 2, 3))).toBe("┃")
+    expect(fgOf(cellAt(r, 2, 3).style)).toEqual({ r: 100, g: 88, b: 61 })
+    expect(textOf(cellAt(r, 5, 3))).toBe("◆")
+    expect(fgOf(cellAt(r, 5, 3).style)).toEqual({ r: 54, g: 54, b: 54 })
+    expect(textOf(cellAt(r, 7, 3))).toBe("R")
+    expect(fgOf(cellAt(r, 7, 3).style)).toEqual({ r: 100, g: 88, b: 61 })
+    expect(fgOf(cellAt(r, 67, 3).style)).toEqual({ r: 43, g: 43, b: 43 })
+
+    // Row 2 (line index 2, no glyph → text starts at x=6) — also blended:
+    //   text (225,225,225) → (90,90,90).
+    expect(textOf(cellAt(r, 6, 4))).toBe("P")
+    expect(fgOf(cellAt(r, 6, 4).style)).toEqual({ r: 90, g: 90, b: 90 })
+
+    // The exact-style control: dimFrom undefined → rows keep their colors
+    // (the same engine renders fully saturated).
+    const r2 = make(80, 24)
+    present(baseState(engine), r2, palette, GLYPHS, {})
+    r2.flush(() => {})
+    expect(fgOf(cellAt(r2, 7, 3).style)).toEqual({ r: 0xff, g: 0xdb, b: 0x8d })
+    expect(fgOf(cellAt(r2, 6, 4).style)).toEqual({ r: 0xe1, g: 0xe1, b: 0xe1 })
+  })
+
+  it("dimFrom 0 dims every scrollback row (anchor at the top)", () => {
+    const engine = new StubEngine([
+      { runs: [{ text: " Run bash", style: "accent-system" }], blockIndex: 0, timestamp: "  6:35 PM", glyph: "◆" },
+    ])
+    const r = make(80, 24)
+    const state = baseState(engine)
+    state.dimFrom = 0
+    present(state, r, palette, GLYPHS, {})
+    r.flush(() => {})
+    expect(fgOf(cellAt(r, 7, 2).style)).toEqual({ r: 55, g: 68, b: 97 })
+  })
+})
+
 describe("present — turn status row (spec §3.4)", () => {
   it("draws spinner + label + phase/turn timers + ⇣12k + [stop]", () => {
     const r = make(80, 24)
