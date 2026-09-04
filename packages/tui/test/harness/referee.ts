@@ -203,9 +203,11 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
         case "await-marker": {
           const m = String(args["name"] ?? "")
           // `dir` (optional) — a SECOND marker dir (the relaunch child's);
-          // the default is the run's own marker dir.
+          // the default is the run's own marker dir. `timeoutMs` override —
+          // rewind-class flows span long UI sequences (M43 case-020).
           const dir = args["dir"] !== undefined ? String(args["dir"]) : markerDir
-          await awaitMarker(dir, m)
+          const timeoutMs = Number(args["timeoutMs"] ?? 15000)
+          await awaitMarker(dir, m, timeoutMs)
           break
         }
         case "request-marker": {

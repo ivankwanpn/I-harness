@@ -232,19 +232,19 @@ describe("engine — rewind marker row + anchor accessor", () => {
     const engine = createScrollbackEngine({ width: 80 })
     expect(engine.rewindAnchor!()).toBeUndefined()
     engine.append({ type: "user", text: "hi", seq: 0, ts: 0 })
-    engine.append({ type: "rewind", targetTurn: 1, mode: "all", seq: 1, ts: 0 })
+    engine.append({ type: "rewind", targetTurn: 1, anchorSeq: 12, mode: "all", seq: 1, ts: 0 })
     const lines = engine.viewport(0, 10)
     expect(lines.find((l) => l.runs.some((r) => r.text === "Rewound to turn 1"))).toBeDefined()
     expect(engine.rewindAnchor!()).toBe(1)
     // a second rewind moves the anchor to the newer marker
-    engine.append({ type: "rewind", targetTurn: 3, mode: "conversation", seq: 2, ts: 0 })
+    engine.append({ type: "rewind", targetTurn: 3, anchorSeq: 12, mode: "conversation", seq: 2, ts: 0 })
     expect(engine.rewindAnchor!()).toBe(2)
   })
 
   it("re-delivered seq is ignored (no marker, anchor stays)", () => {
     const engine = createScrollbackEngine({ width: 80 })
-    engine.append({ type: "rewind", targetTurn: 1, mode: "all", seq: 5, ts: 0 })
-    engine.append({ type: "rewind", targetTurn: 1, mode: "all", seq: 5, ts: 0 })
+    engine.append({ type: "rewind", targetTurn: 1, anchorSeq: 12, mode: "all", seq: 5, ts: 0 })
+    engine.append({ type: "rewind", targetTurn: 1, anchorSeq: 12, mode: "all", seq: 5, ts: 0 })
     expect(engine.rewindAnchor!()).toBe(0)
     expect(engine.lineCount()).toBe(1)
   })
@@ -258,7 +258,7 @@ describe("engine — rewind marker row + anchor accessor", () => {
       text: Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n"),
       seq: 0, ts: 0,
     })
-    engine.append({ type: "rewind", targetTurn: 0, mode: "all", seq: 1, ts: 0 })
+    engine.append({ type: "rewind", targetTurn: 0, anchorSeq: 12, mode: "all", seq: 1, ts: 0 })
     expect(engine.rewindAnchor!()).toBe(3) // collapsed cap-3
     engine.toggleFoldAt(0) // expand → 12 rows above the marker
     expect(engine.rewindAnchor!()).toBe(12)
@@ -268,7 +268,7 @@ describe("engine — rewind marker row + anchor accessor", () => {
 describe("engine — rewind event plumbing types", () => {
   it("contract event round-trips through append", () => {
     const engine = createScrollbackEngine({ width: 80 })
-    const ev: TuiEvent = { type: "rewind", targetTurn: 2, mode: "files", seq: 4, ts: 1 }
+    const ev: TuiEvent = { type: "rewind", targetTurn: 2, anchorSeq: 12, mode: "files", seq: 4, ts: 1 }
     engine.append(ev)
     const row = engine.viewport(0, 10)[0]
     expect(row?.runs[0]).toMatchObject({ text: "Rewound to turn 2" })

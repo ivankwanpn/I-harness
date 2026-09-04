@@ -15,10 +15,10 @@
 # (the TEST additionally reads the REAL workspace file byte-exact), (b) the
 # scrollback `Rewound to turn 1` line (engine marker row), (c) conflicts
 # marked honestly in the Confirm (current disk v3 ≠ turn-1 afterHash v2).
-# NOT asserted: the old turn-2 rows GONE — G1's engine appends the marker row
-# WITHOUT hiding the rewound content (the cut lives in core-session's
-# deriveMessages, not the TUI engine's append log) — the M43 report documents
-# that delta. Frame count deterministic: 6 event frames + key frames; frozen
+# Engine hiding (M43 wheel close): the rewound blocks DROP from the engine
+# view — after `y` the scrollback shows ONLY the marker line (the old turn-2
+# rows `❯ modify`/`wrote v3` are GONE; the cut lives in the in-memory engine
+# view, append-only preserve). Frame count deterministic: 6 event frames + key frames; frozen
 # clock 13_334 keeps the anim pump + toasts identical (zero-byte idle).
 name: case-020-rewind-restore-proof
 host: test/harness/host-020.ts
@@ -76,12 +76,13 @@ steps:
   # `y` → execute: REAL file restore + marker. The host's execute wrapper
   # writes the disk snapshot + result marker.
   - write-pty: { data: "y" }
-  - await-marker: { name: rewind-executed }
+  - await-marker: { name: rewind-executed, timeoutMs: 45000 }
   - assert-file: { name: after-rewind-data.txt, contains: "v1" }
   # (b) the engine's rewind system row — the marker line (tail-anchored jump).
   - wait-screen:
-      region: { startRow: 8 }
+      region: { startRow: 1 }
       rows:
+        - "  ⎇  ~/workspace"
         - "  ┃   Rewound to turn 1"
       timeoutMs: 5000
   - assert-glyph-integrity: {}

@@ -35,7 +35,7 @@ export type TuiEvent =
   // M43: the durable rewind marker (bridge maps core-session rewind/point) —
   // the engine renders one system row `Rewound to turn {N}` and anchors the
   // dim-from point (rewindAnchor).
-  | { type: "rewind"; targetTurn: number; mode: RewindMode; seq: number; ts: number }
+  | { type: "rewind"; targetTurn: number; anchorSeq: number; mode: RewindMode; seq: number; ts: number }
 
 export type ToolKind =
   | "execute" | "read" | "edit" | "search" | "webfetch" | "websearch"

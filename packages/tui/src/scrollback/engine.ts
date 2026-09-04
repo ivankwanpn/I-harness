@@ -362,6 +362,33 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
    * system block — the Presenter's rail stays gray_dim ⇒ the `┃` look from
    * §3.9) + record the anchor block for rewindAnchor(). */
   private appendRewind(ev: Extract<TuiEvent, { type: "rewind" }>): void {
+    // M43 wheel close: the rewound turn is HIDDEN in the view (grok's
+    // in-memory truncation equivalent) — blocks at/after the anchor seq drop
+    // from the index; the marker row stands in their place. New turns appended
+    // AFTER this marker (seq > ev.seq) remain visible.
+    if (Number.isFinite(ev.anchorSeq)) {
+      const removed = new Set<string>()
+      this.blocks = this.blocks.filter((b) => {
+        if (b.seq >= ev.anchorSeq) {
+          if (b.kind === "tool") removed.add(b.callId)
+          return false
+        }
+        return true
+      })
+      for (const id of removed) this.toolById.delete(id)
+      this.folds.clear()
+      this.groupStates.clear()
+      // Hard rebuild: the Fenwick/segment caches are keyed by block index —
+      // the removal shifts every index, so reset all state and rescan.
+      this.seg.resetAll(this.blocks)
+      this.groups = []
+      for (let i = 1; i < this.blocks.length; i++) this.maintainGroups(i)
+      this.latestUser = -1
+      for (let i = this.blocks.length - 1; i >= 0; i--) {
+        if (this.blocks[i]?.kind === "user") { this.latestUser = i; break }
+      }
+      this.searchNeedsUpdate = true
+    }
     this.rewindMarkerBlock = this.pushBlock(makeSystemBlock({
       type: "system",
       text: `Rewound to turn ${ev.targetTurn}`,

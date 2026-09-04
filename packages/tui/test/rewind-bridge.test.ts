@@ -358,7 +358,7 @@ describe("mapSessionEvent — rewind/point → TuiEvent rewind", () => {
       type: "rewind/point", version: 1, targetTurn: 3, anchorSeq: 10,
       mode: "files", fileOps: [{ path: "a.txt", op: "restore" }], seq: 21,
     } as never, state)
-    expect(mapped).toEqual({ type: "rewind", targetTurn: 3, mode: "files", seq: 21, ts: expect.any(Number) })
+    expect(mapped).toEqual({ type: "rewind", targetTurn: 3, anchorSeq: 10, mode: "files", seq: 21, ts: expect.any(Number) })
   })
 })
 
