@@ -39,8 +39,10 @@ export type { EmbeddedOptions, EmbeddedFactoryOptions } from "./backend/embedded
 // (spawnSdkSubprocess, mirrors @i-harness/sdk HarnessClient.spawn without the
 // dep) + the BackendClient adapter (createRemoteBackend; SdkClientLike is the
 // structural seam a host with the REAL HarnessClient can plug instead).
+// M41a: the wire v1 result shapes (session/history + session/list) the seam
+// exposes to hosts that use the mirror's typed helpers.
 export { createRemoteBackend, spawnSdkSubprocess } from "./backend/remote.ts"
-export type { RemoteBackendOptions, SdkClientLike, SdkNotification } from "./backend/remote.ts"
+export type { HistoryResult, RemoteBackendOptions, SdkClientLike, SdkNotification, SessionListResult } from "./backend/remote.ts"
 // G1 interaction surfaces (spec §3.7/§3.8/§3.11) — what a host builds and
 // passes into the seam binders.
 export type {
