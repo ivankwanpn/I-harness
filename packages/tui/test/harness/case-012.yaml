@@ -108,15 +108,21 @@ steps:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
   # Ctrl-C on an empty prompt → cancel-turn: NO turn running → arms the quit
-  # (invisible — toast chrome is M38). The screen keeps rendering: the NEXT
-  # wait-screen (plan frame) must match and the process must still be alive.
+  # AND toasts "Press again to quit" — the M40 G2 toast card renders
+  # bottom-right (frame 11) and, under the frozen clock, never expires (the
+  # anim pump keeps repainting identical frames → flush "" thereafter).
   - write-pty: { data: "\x03" }
   - wait-screen:
       timeoutMs: 8000
       region: { startRow: 1 }
       rows:
         - "  ⎇  ~/workspace"
-  # Shift-Tab (CSI Z) → cycle-mode → plan (frame 11): status chip + info line
+  - wait-screen:
+      timeoutMs: 8000
+      region: { startRow: 23 }
+      rows:
+        - "                          Press again to quit "
+  # Shift-Tab (CSI Z) → cycle-mode → plan (frame 12): status chip + info line
   - write-pty: { data: "\x1b[Z" }
   - wait-screen:
       timeoutMs: 8000
@@ -133,10 +139,10 @@ steps:
   # (The quit produces no visible frame; only the teardown write is added.)
   - write-pty: { data: "\x1b" }
   - await-marker: { name: teardown-wrote }
-  # writes = 1 init + 11 non-empty frames + 1 teardown = 13:
+  # writes = 1 init + 12 non-empty frames + 1 teardown = 14:
   #   f1 user · f2 assistant · f3 turn end · f4 "h" · f5 "i" · f6 clear prompt
   #   · f7 world · f8 turn-2 end · f9 up/history · f10 esc/dismiss
-  #   · f11 shifttab/plan — no write for the j-style clamp (Ctrl-C arm frame
-  #   is identical → flush "") and no write for the final quit (identical).
-  - assert-byte-budget: { writes: 13 }
+  #   · f11 ctrl-c arm toast card · f12 shifttab/plan — no write for the
+  #   final quit (identical; the toast's anim-pump repaints flush "").
+  - assert-byte-budget: { writes: 14 }
   - wait-exit: { code: 0 }

@@ -52,7 +52,7 @@ export interface TuiAppState {
   search: { active: boolean; text: string; matches: number[]; current: number } | undefined
   status: StatusState
   turn: TurnState | undefined
-  toasts: Array<{ text: string; until: number }>
+  toasts: ToastEntry[]
   panes: Set<string>
   shortcuts: ShortcutBarState
   /** Screen: "agent" (default), the welcome hero (spec §2a), or "minimal"
@@ -385,6 +385,45 @@ function drawScrollback(
   }
 }
 
+// ------------------------------------------------------------------ toasts (M40 G2)
+
+/** One toast: `text` plus the expiry clock (`until` — the loop filters at
+ * every frame; toasts also gate the anim pump). */
+export interface ToastEntry {
+  text: string
+  until: number
+}
+
+/** Bottom-right toast card (M38 spec phrase; landed M40 G2): ONLY the newest
+ * toast renders (the loop keeps ≤3; newest = the LAST array entry — toast()
+ * pushes at the end and the frame filter preserves order). Card = one row at
+ * the bottom, right-anchored, fit-to-width (width = min(rect.w, textW + 2));
+ * the card background paints palette.bgBase behind text+pad(1); the text is
+ * bold palette.accentUser. An empty toast array is a no-op (zero cells). */
+export function renderToasts(
+  buf: Renderer["buffer"],
+  toasts: ToastEntry[],
+  rect: Rect,
+  view: ViewDraw,
+  palette: Palette,
+): void {
+  const latest = toasts[toasts.length - 1]
+  if (latest === undefined) return
+  const pad = 1
+  const w = Math.min(rect.w, strWidth(latest.text) + pad * 2)
+  const x = rect.x + rect.w - w
+  const y = rect.y + rect.h - 1
+  // Fill the card bg FIRST (bg-only cells), then the text on top.
+  const bg = view.color(palette.bgBase)
+  const fill: Style = { bg: bg.fg }
+  for (let cx = x; cx < x + w; cx++) {
+    view.cell(cx, y, { text: " ", style: fill, width: 1, continuation: false })
+  }
+  const textStyle: Style = { ...view.color(palette.accentUser, { bold: true }) }
+  textStyle.bg = bg.fg
+  drawText(buf, x + pad, y, latest.text, textStyle, x + w - pad)
+}
+
 // ------------------------------------------------------------------ present
 
 export interface PresentOptions {
@@ -474,9 +513,9 @@ export function present(
     }
   }
   renderShortcuts(layout.shortcuts, app.shortcuts, view, palette)
-  // Toasts render M38 (bottom-right card); they only gate the anim pump today.
 
-  // Debug HUD (M39) — top-right, LAST, above the status row and everything.
+  // Debug HUD (M39) — top-right band; toasts draw AFTER it (M40 G2: the toast
+  // card is above everything — bottom-right, newest-only, fit-to-width).
   if (opts.hud !== undefined && area.cols >= 12) {
     renderHud(buf, opts.hud, {
       x: area.cols - Math.min(HUD_PANEL_W, area.cols),
@@ -485,6 +524,7 @@ export function present(
       h: 2,
     }, view, palette)
   }
+  renderToasts(buf, app.toasts, { x: 0, y: 0, w: area.cols, h: area.rows }, view, palette)
 
   renderer.commit()
   return { dirty: !renderer.sameFrame() }

@@ -3,7 +3,9 @@
 // Covers the codepaths a TUI actually needs: C0 controls (\r\n/ctrl-char/
 // backspace/tab), 2-byte Alt combos, CSI (`\x1b[`) finals (arrows / Home-End /
 // PageUp-Down / Insert-Delete / F-keys / ShiftTab / focus / kitty CSI-u), SS3
-// (`\x1bO`), bracketed paste (200~/201~ raw passthrough), SGR 1006 mouse,
+// (`\x1bO`), bracketed paste (200~/201~ raw passthrough), SGR mouse
+// (1006 `<b;x;yM|m`; 1015 urxvt `b;x;yM|m` — no `<`, button field +32; 1016
+// SGR-pixels — wire-identical to 1006 with pixel units),
 // OSC/DCS swallowing (the probe intercepts raw replies BEFORE the parser in
 // production; onOsc/onDcs hooks keep the parser self-sufficient), UTF-8
 // streaming decode split across chunks.
@@ -56,6 +58,12 @@ export interface InputParserOptions {
 const ESC = 0x1b
 const ESC_MAX = 64
 const OSC_MAX = 512
+
+/** urxvt 1015 mouse: `CSI b;x;y M/m` — no `<` prefix; the button field keeps
+ * the X10 +32 offset (left press = 32, motion = 64, wheel = 96/97; modifiers
+ * add 4/8/16 — so the first field is ALWAYS ≥ 32). Three decimal fields only,
+ * which keeps this from hijacking a single-parameter CSI M (Delete Line). */
+const URXVT_MOUSE = /^\d{1,3};\d{1,4};\d{1,4}$/
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder("utf-8", { fatal: false })
@@ -343,10 +351,29 @@ export class InputParser {
     const f = String.fromCharCode(final)
 
     if (text.startsWith("<") && (f === "M" || f === "m")) {
+      // 1006 SGR AND 1016 SGR-pixels: IDENTICAL `<b;x;y` wire layout (1016's
+      // x/y are pixel units; the field order/button bits are the same — the
+      // app gates by capability and uses only the wheel/button semantics).
+      // (The M40 "1106" inventory item is a misread: no mouse mode 1106 exists
+      // in the xterm family — 1015/1016 are the contiguous variants.)
       const ev = this.decodeMouse(text.slice(1), f === "m")
       if (ev !== null) this.emit(ev)
       else this.emitUnknown(raw)
       return
+    }
+    // 1015 (urxvt): `b;x;yM/m` — same field layout as 1006 without `<`, the
+    // button field holding the +32 X10 offset (URXVT_MOUSE guard + ≥32 check).
+    // NOTE: `text` INCLUDES the final byte (csi() pushes before csiFinal) —
+    // slice it off for the parameter-body regex.
+    if ((f === "M" || f === "m") && URXVT_MOUSE.test(text.slice(0, -1))) {
+      const parts = text.slice(0, -1).split(";")
+      const rawB = parseInt(parts[0] ?? "0", 10) || 0
+      if (rawB >= 32) {
+        const ev = this.decodeMouse(`${rawB - 32};${parts[1] ?? "0"};${parts[2] ?? "0"}`, f === "m")
+        if (ev !== null) this.emit(ev)
+        else this.emitUnknown(raw)
+        return
+      }
     }
     if (f === "u") {
       const ev = cap?.kitty === true ? this.decodeKitty(text) : null

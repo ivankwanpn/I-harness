@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { append } from "@i-harness/core-session"
 import type { MockStep } from "@i-harness/llm-mock"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
+import { activeTokens } from "@i-harness/token-meter"
 import {
   createEmbeddedBackend,
   createEventMapState,
@@ -240,6 +241,36 @@ describe("embedded backend", () => {
       await sleep(60)
     }
     expect(users.filter((t) => t === "idle steer")).toEqual(["idle steer"])
+  })
+
+  it("context(): REAL token-meter usage (M40 G2) — no total when the host did not resolve a window", async () => {
+    const sessionId = "s-ctx1"
+    const service = makeService({ sessionId })
+    const backend = createEmbeddedBackend({ service, sessionId })
+    backends.push(backend)
+    const assembly = await service.assemblyFor(sessionId)
+    const session = assembly.session
+    append(session, { type: "user/message", text: "hello world" })
+    append(session, { type: "assistant/message", text: "ok" })
+    const ctx = await backend.context?.()
+    expect(ctx).toBeDefined()
+    // the used count IS the token-meter projection over this session's log
+    // (deriveMessages output — the same estimator the engine's context tool
+    // and the M25 usage telemetry use; never a fabricated estimate).
+    expect(ctx!.used).toBe(activeTokens(session))
+    expect(ctx!.used).toBeGreaterThan(0)
+    expect("total" in (ctx!)).toBe(false)
+  })
+
+  it("context(): total present when the host resolved a context window (shape with total)", async () => {
+    const sessionId = "s-ctx2"
+    const service = makeService({ sessionId })
+    const backend = createEmbeddedBackend({ service, sessionId, contextWindow: 128_000 })
+    backends.push(backend)
+    const assembly = await service.assemblyFor(sessionId)
+    append(assembly.session, { type: "user/message", text: "hi" })
+    const ctx = await backend.context?.()
+    expect(ctx).toEqual({ used: activeTokens(assembly.session), total: 128_000 })
   })
 
   it("defaultEmbeddedFactory: mock turn + auto-submit of the initial prompt on open", async () => {

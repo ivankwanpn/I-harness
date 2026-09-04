@@ -36,14 +36,16 @@ function run(text: string, style: TextStyle): StyledRun {
 
 /* ------------------------------------------------------------------ rows */
 
-/** Full unfolded semantic rows for a block (state-independent). */
-export function blockRows(b: Block, glyphs: GlyphSet): StyledRun[][] {
+/** Full unfolded semantic rows for a block (state-independent). `width`
+ * (optional, M40 G2/C12) is the mermaid art budget — the layout threads the
+ * real wrap width so the art never wraps mid-diagram. */
+export function blockRows(b: Block, glyphs: GlyphSet, width?: number): StyledRun[][] {
   switch (b.kind) {
     case "user":
     case "user-edit": return userRows(b.text, glyphs.promptArrow)
     // M38b G1: markdown checkpoint rows (§3.1/§8) — markdownRows falls back
     // to EXACTLY plainRows for text without markdown structure (regression).
-    case "assistant": return markdownRows(b.text, b.finished)
+    case "assistant": return markdownRows(b.text, b.finished, width)
     case "thinking": return thinkingRows(b, glyphs)
     case "tool": return toolRows(b, glyphs)
     case "system": return plainRows(b.text, "muted")
@@ -81,8 +83,8 @@ function autoToolState(b: ToolBlock): FoldState {
 }
 
 /** Resolve + apply fold to the block's full rows → the rows that get wrapped. */
-export function selectRows(b: Block, state: FoldState, glyphs: GlyphSet): StyledRun[][] {
-  const full = blockRows(b, glyphs)
+export function selectRows(b: Block, state: FoldState, glyphs: GlyphSet, width?: number): StyledRun[][] {
+  const full = blockRows(b, glyphs, width)
   const s = state === "auto" ? autoStateOf(b, full) : state
   switch (b.kind) {
     case "tool": return toolFold(b, full, s, glyphs)

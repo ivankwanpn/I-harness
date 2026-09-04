@@ -162,4 +162,9 @@ export interface ScrollbackEngine {
    * Idempotent + monotonic: mutable/streaming blocks and the sticky-pinned
    * latest user block are never trimmed. Returns newly-trimmed block count. */
   retain?(opts: { maxLines?: number }): { trimmedBlocks: number }
+  /** Engine-observed plan-mode flag (plan/mode events), M40 G2 (C13):
+   * plan-review detection. OPTIONAL accessor — an engine without the
+   * non-contract accessors omits it; the app then falls back to its own
+   * app.mode flag alone. */
+  plan?(): boolean
 }

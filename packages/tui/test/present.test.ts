@@ -252,3 +252,45 @@ describe("present — turn status row (spec §3.4)", () => {
     expect(row).not.toContain("[stop]")
   })
 })
+
+describe("present — toasts (M40 G2)", () => {
+  /** Style-bearing cell reader (the committed front frame). */
+  const cellAt = (r: Renderer, x: number, y: number): { text: string; style: Record<string, unknown> } => {
+    const inner = r as unknown as { db: { front: { cells: Array<{ text: string; style: Record<string, unknown> }>; width: number } } }
+    const { cells, width } = inner.db.front
+    return cells[y * width + x]
+  }
+
+  it("renders ONLY the newest toast — bottom-row card, bold accent-user on bgBase, pad 1", () => {
+    const r = make(80, 24)
+    const state = baseState(new StubEngine())
+    state.toasts = [
+      { text: "older toast", until: 1e12 },
+      { text: "Copied!", until: 1e12 + 1 },
+    ]
+    present(state, r, palette, GLYPHS, {})
+    r.flush(() => {})
+    const row = rowText(r, 23) // the blank bottom pad row (shortcuts sit on 22)
+    expect(row).toContain("Copied!")
+    expect(row).not.toContain("older")
+    // right-anchored fit-to-width card: x=71..79 (9 cols), text 72..78, pad 71+79
+    expect(row.slice(78, 79)).toBe("!")
+    // pad cell: bgBase fills behind; text cell: bold accent-user on bgBase
+    const padCell = cellAt(r, 71, 23)
+    expect(padCell.text).toBe(" ")
+    expect(padCell.style["bg"]).toEqual({ r: 0x14, g: 0x14, b: 0x14 })
+    const textCell = cellAt(r, 72, 23)
+    expect(textCell.text).toBe("C")
+    expect(textCell.style["bold"]).toBe(true)
+    expect(textCell.style["fg"]).toEqual({ r: 0xc8, g: 0xc8, b: 0xc8 })
+    expect(textCell.style["bg"]).toEqual({ r: 0x14, g: 0x14, b: 0x14 })
+  })
+
+  it("no toasts → no card (zero cells at the bottom row)", () => {
+    const r = make(80, 24)
+    const state = baseState(new StubEngine())
+    present(state, r, palette, GLYPHS, {})
+    r.flush(() => {})
+    expect(rowText(r, 23).trim()).toBe("")
+  })
+})

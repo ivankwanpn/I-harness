@@ -17,6 +17,7 @@
     "@i-harness/session-executor": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-persistence-jsonl": "workspace:*",
+    "@i-harness/token-meter": "workspace:*",
     "@i-harness/tui-core": "workspace:*",
     "highlight.js": "^11.12.0",
     "marked": "^18.0.11"

@@ -172,6 +172,26 @@ describe("InputParser — paste / mouse / focus", () => {
     expect((e[0] as { drag: boolean }).drag).toBe(true)
   })
 
+  it("decodes 1015 (urxvt) mouse: b;x;y without `<`, button field +32 (M40 G2)", () => {
+    const p = new InputParser()
+    // left press = 0+32; wheel-up = 64+32=96; wheel-down = 65+32=97; motion = 32+32
+    const press = p.push(bytes("\x1b[32;10;5M"))
+    expect(press[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    const rel = p.push(bytes("\x1b[32;10;5m"))
+    expect(rel[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    const wheelUp = p.push(bytes("\x1b[96;4;7M"))
+    expect(wheelUp[0]).toEqual({ type: "mouse", x: 4, y: 7, button: "wheel-up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    const wheelDown = p.push(bytes("\x1b[97;4;7M"))
+    expect(wheelDown[0]).toEqual({ type: "mouse", x: 4, y: 7, button: "wheel-down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    const motion = p.push(bytes("\x1b[64;10;5M"))
+    expect((motion[0] as { drag: boolean }).drag).toBe(true)
+    // single-parameter CSI M (Delete Line) is NOT hijacked by the 1015 branch
+    // (three-field + first field ≥ 32 guards) — it stays the plain unknown
+    // CSI event it has always been.
+    const dl = p.push(bytes("\x1b[2M"))
+    expect(dl).toEqual([{ type: "unknown", bytes: [0x1b, 0x5b, 0x32, 0x4d] }])
+  })
+
   it("emits focus gained/lost (1004)", () => {
     const p = new InputParser()
     expect(p.push(bytes("\x1b[I"))).toEqual([{ type: "focus", gained: true }])
