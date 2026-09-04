@@ -61,10 +61,13 @@ export function wrapRuns(runs: StyledRun[], width: number): StyledRun[][] {
   for (const run of runs) {
     let chunk = ""
     const style = run.style
+    const piece = (text: string): StyledRun => run.codeBg === true
+      ? { text, style, codeBg: true }
+      : { text, style }
     for (const g of graphemesOf(run.text)) {
       const w = clusterWidth(g)
       if (chunk !== "" && used + w > width) {
-        line.push({ text: chunk, style })
+        line.push(piece(chunk))
         chunk = ""
         flush()
       }
@@ -72,12 +75,12 @@ export function wrapRuns(runs: StyledRun[], width: number): StyledRun[][] {
       chunk += g
       used += w
       if (used >= width && chunk !== "") {
-        line.push({ text: chunk, style })
+        line.push(piece(chunk))
         chunk = ""
         flush()
       }
     }
-    if (chunk !== "") line.push({ text: chunk, style })
+    if (chunk !== "") line.push(piece(chunk))
   }
   if (line.length > 0 || (runs.length > 0 && out.length === 0)) out.push(line)
   return out

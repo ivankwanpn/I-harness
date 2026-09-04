@@ -95,8 +95,20 @@ export type TextStyle =
   | "accent-user" | "accent-assistant" | "accent-system" | "accent-error"
   | "accent-success" | "accent-plan" | "accent-model" | "warning"
   | "md-code" | "md-heading" | "md-muted" | "diff-add" | "diff-del" | "link"
+  // M38b: markdown checkpoint rendering (§3.1/§5) — additive, present.ts
+  // tokenHex/styleFor map these to the md palette slots; md-heading/md-code
+  // stay mapped (previous wheels) so old rows never break.
+  | "md-h1" | "md-h2" | "md-h3" | "md-h4" | "md-h5" | "md-h6"
+  | "md-code-text" | "md-em" | "md-strong"
+  | "md-task-checked" | "md-task-unchecked"
 
-export interface StyledRun { text: string; style: TextStyle }
+export interface StyledRun {
+  text: string
+  style: TextStyle
+  /** Markdown code body/inline-code: Presenter paints md_code_bg behind the
+   * run's cells (the scrollback's only bg besides the diff hunk bar). */
+  codeBg?: boolean
+}
 
 /** One display line of the scrollback (a wrapped segment row), already folded. */
 export interface DisplayLine {

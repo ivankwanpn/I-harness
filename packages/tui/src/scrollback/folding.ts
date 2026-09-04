@@ -7,6 +7,7 @@
 import type { GlyphSet } from "@i-harness/tui-core"
 import type { StyledRun, TextStyle, ToolKind } from "../contracts.ts"
 import type { Block, ThinkingBlock, TodoBlock, ToolBlock } from "./entries.ts"
+import { markdownRows } from "../render/markdown.ts"
 
 export type FoldState = "auto" | "collapsed" | "expanded" | "truncated"
 
@@ -40,7 +41,9 @@ export function blockRows(b: Block, glyphs: GlyphSet): StyledRun[][] {
   switch (b.kind) {
     case "user":
     case "user-edit": return userRows(b.text, glyphs.promptArrow)
-    case "assistant": return plainRows(b.text, "text")
+    // M38b G1: markdown checkpoint rows (§3.1/§8) — markdownRows falls back
+    // to EXACTLY plainRows for text without markdown structure (regression).
+    case "assistant": return markdownRows(b.text, b.finished)
     case "thinking": return thinkingRows(b, glyphs)
     case "tool": return toolRows(b, glyphs)
     case "system": return plainRows(b.text, "muted")

@@ -84,6 +84,19 @@ const SGR: Record<TextStyle, string> = {
   "diff-add": "\x1b[32m",
   "diff-del": "\x1b[31m",
   "link": "\x1b[4m",
+  // M38b markdown styles — minimal mode is native-16-color only: headings/
+  // strong → bold, em → italic, code family → cyan, tasks → green/default.
+  "md-h1": "\x1b[1m",
+  "md-h2": "\x1b[1m",
+  "md-h3": "\x1b[1m",
+  "md-h4": "\x1b[1m",
+  "md-h5": "\x1b[1m",
+  "md-h6": "\x1b[1m",
+  "md-code-text": "\x1b[36m",
+  "md-em": "\x1b[3m",
+  "md-strong": "\x1b[1m",
+  "md-task-checked": "\x1b[32m",
+  "md-task-unchecked": "",
 }
 
 /** Region height policy: default min(10, max(3, rows-2)); degenerate rows<5 → 2. */

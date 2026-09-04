@@ -125,6 +125,19 @@ export function tokenHex(token: TextStyle, palette: Palette): string {
     case "diff-add": return palette.diffInsertFg
     case "diff-del": return palette.diffDeleteFg
     case "link": return palette.linkFg
+    // M38b markdown (spec §5 md palette) — additive cases; old tokens above
+    // keep their exact mappings (md-heading stays for legacy rows).
+    case "md-h1": return palette.mdHeading[0]
+    case "md-h2": return palette.mdHeading[1]
+    case "md-h3": return palette.mdHeading[2]
+    case "md-h4": return palette.mdHeading[3]
+    case "md-h5": return palette.mdHeading[4]
+    case "md-h6": return palette.mdHeading[5]
+    case "md-code-text": return palette.mdCode
+    case "md-em": return palette.textSecondary
+    case "md-strong": return palette.textPrimary
+    case "md-task-checked": return palette.mdTaskChecked
+    case "md-task-unchecked": return palette.mdTaskUnchecked
   }
 }
 
@@ -138,16 +151,26 @@ function hexToRgbLocal(hex: string): { r: number; g: number; b: number } {
 }
 
 /** TextStyle → tui-core Style via the theme palette. `cap` quantizes to the
- * terminal color depth (raw truecolor RGB when omitted). */
+ * terminal color depth (raw truecolor RGB when omitted). `codeBg` paints
+ * md_code_bg behind the run (markdown code bodies/spans, §3.1/§8). */
 export function styleFor(
   textStyle: TextStyle,
   palette: Palette,
   cap?: TerminalCapabilityContext,
+  codeBg = false,
 ): Style {
   const rgb = hexToRgbLocal(tokenHex(textStyle, palette))
-  const bold = textStyle === "bold" || textStyle === "md-heading" || textStyle === "md-code"
+  const bold =
+    textStyle === "bold" || textStyle === "md-heading" || textStyle === "md-code"
+    || textStyle === "md-strong"
+    || textStyle === "md-h1" || textStyle === "md-h2" || textStyle === "md-h3"
+    || textStyle === "md-h4" || textStyle === "md-h5" // h6 is NOT bold (§5)
   const style: Style = { fg: cap !== undefined ? quantizeColor(rgb, cap, true) : rgb }
   if (bold) style.bold = true
+  if (codeBg) {
+    const bg = hexToRgbLocal(palette.mdCodeBg)
+    style.bg = cap !== undefined ? quantizeColor(bg, cap, true) : bg
+  }
   return style
 }
 
@@ -193,7 +216,7 @@ export function runs2buf(
 ): number {
   let cx = x
   for (const run of runs) {
-    cx = drawText(buf, cx, y, run.text, styleFor(run.style, palette, cap), limitX)
+    cx = drawText(buf, cx, y, run.text, styleFor(run.style, palette, cap, run.codeBg === true), limitX)
   }
   return cx
 }
@@ -248,11 +271,32 @@ export function makeDraw(
 
 function railColorOf(runs: StyledRun[], palette: Palette): string {
   for (const r of runs) {
-    if (r.style === "text" || r.style === "muted" || r.style === "dim" ||
-        r.style === "bold" || r.style === "md-muted") continue
+    if (isNeutralStyle(r.style)) continue
     return tokenHex(r.style, palette)
   }
   return palette.grayDim
+}
+
+/** Styles that never tint the accent rail (AgentMessage has no rail accent;
+ * markdown body/emphasis/task glyphs + gray families stay neutral). */
+function isNeutralStyle(s: TextStyle): boolean {
+  switch (s) {
+    case "text":
+    case "muted":
+    case "dim":
+    case "bold":
+    case "md-muted":
+    case "md-h1": case "md-h2": case "md-h3": case "md-h4": case "md-h5": case "md-h6":
+    case "md-code-text":
+    case "md-em":
+    case "md-strong":
+    case "md-task-checked":
+    case "md-task-unchecked":
+    case "link":
+      return true
+    default:
+      return false
+  }
 }
 
 /** M37a bullet slot: the ENGINE resolves the glyph (◆ / ❙ / ◈) into
@@ -306,7 +350,9 @@ function drawScrollback(
     const yStyle = view.color(palette.grayDim)
     let rx = textStart
     for (const run of line.runs) {
-      const st = inverted ? { ...styleFor(run.style, palette, cap), invert: true } : run.style
+      const st = inverted
+        ? { ...styleFor(run.style, palette, cap, run.codeBg === true), invert: true }
+        : run.style
       rx = view.text(rx, y, run.text, st, Math.max(textStart, clip))
     }
     if (tsW > 0 && ts !== undefined) {

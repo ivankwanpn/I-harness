@@ -3,8 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@i-harness/core-session": "workspace:*",
     "@i-harness/interaction": "workspace:*",
@@ -12,7 +17,9 @@
     "@i-harness/session-executor": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-persistence-jsonl": "workspace:*",
-    "@i-harness/tui-core": "workspace:*"
+    "@i-harness/tui-core": "workspace:*",
+    "highlight.js": "^11.12.0",
+    "marked": "^18.0.11"
   },
   "devDependencies": {
     "@i-harness/core-plugin": "workspace:*",
