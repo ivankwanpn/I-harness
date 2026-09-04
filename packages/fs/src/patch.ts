@@ -19,6 +19,16 @@ export interface PatchHunk {
 }
 export type PathResolver = (path: string) => string
 
+// M42 rewind (G1): the pre-image sink the write pipeline reports into — the
+// SAME structural shape index.ts wires as `createFsTools({ rewind })` without
+// importing packages/rewind (fs never depends on rewind; the assembly glues
+// them). `take` receives the RAW patch path (recorder normalizes + guards);
+// returns the restore blob id (null = new file) so the result can carry
+// preImageRef/isNewFile (the log is the rewind channel, spec §2).
+export interface RewindCapture {
+  take(relPath: string, beforeBytes: Uint8Array | null): { blobId: string | null; isNewFile: boolean }
+}
+
 // 解析 `*** Begin Patch` 格式（codex 語法的簡化吸收版；含行號錯誤）
 export function parsePatch(patchContent: string): PatchHunk[] {
   const lines = patchContent.split("\n")
@@ -162,8 +172,12 @@ function findLines(lines: string[], pattern: string[], fromIndex: number): numbe
 }
 
 // 應用 hunks（逐 hunk；同 path 已由 parsePatch 擋；失敗即停 + 回報已應用/錯誤）
-export async function applyPatch(resolve: PathResolver, hunks: PatchHunk[]): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated" }[]; errors: { path: string; message: string }[] }> {
-  const applied: { path: string; action: "added" | "deleted" | "updated" }[] = []
+export async function applyPatch(
+  resolve: PathResolver,
+  hunks: PatchHunk[],
+  rewind?: RewindCapture,
+): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; preImageRef?: string; isNewFile?: boolean }[]; errors: { path: string; message: string }[] }> {
+  const applied: { path: string; action: "added" | "deleted" | "updated"; preImageRef?: string; isNewFile?: boolean }[] = []
   const errors: { path: string; message: string }[] = []
   for (const hunk of hunks) {
     const target = resolve(hunk.path)
@@ -174,11 +188,30 @@ export async function applyPatch(resolve: PathResolver, hunks: PatchHunk[]): Pro
         if (existing !== null) {
           throw new FsToolError("FS_ALREADY_EXISTS", `Add File: target already exists: ${hunk.path}`)
         }
+        // M42 rewind: new file — no pre-image to restore (before = null)
+        let isNewFile: boolean | undefined
+        if (rewind !== undefined) {
+          rewind.take(hunk.path, null)
+          isNewFile = true
+        }
         await writeFileAtomic(target, hunk.contents ?? "")
-        applied.push({ path: hunk.path, action: "added" })
+        applied.push({ path: hunk.path, action: "added", ...(isNewFile !== undefined ? { isNewFile } : {}) })
       } else if (hunk.kind === "delete") {
+        // M42 rewind: the pre-image of a deleted file is the file itself —
+        // read it before unlink (best-effort: unreadable/missing → no capture;
+        // the unlink below surfaces its own error for missing).
+        let preImageRef: string | undefined
+        if (rewind !== undefined) {
+          try {
+            const raw = new Uint8Array(await readFile(target))
+            const r = rewind.take(hunk.path, raw)
+            if (r.blobId !== null) preImageRef = r.blobId
+          } catch {
+            // capture skipped — delete proceeds untracked (honest)
+          }
+        }
         await unlink(target)
-        applied.push({ path: hunk.path, action: "deleted" })
+        applied.push({ path: hunk.path, action: "deleted", ...(preImageRef !== undefined ? { preImageRef } : {}) })
       } else {
         // update
         const st = await stat(target).catch(() => { throw new FsToolError("FS_NOT_FOUND", `file not found: ${hunk.path}`) })
@@ -199,8 +232,14 @@ export async function applyPatch(resolve: PathResolver, hunks: PatchHunk[]): Pro
         const normalized = normalizeLineEndings(text)
         const result = computeReplacements(normalized, hunk.chunks ?? [])
         if ("error" in result) throw new FsToolError("FS_EDIT_NOT_FOUND", `${result.error} (in ${hunk.path})`)
+        // M42 rewind: capture the just-read pre-image right before the write.
+        let preImageRef: string | undefined
+        if (rewind !== undefined) {
+          const r = rewind.take(hunk.path, raw)
+          if (r.blobId !== null) preImageRef = r.blobId
+        }
         await writeFileAtomic(target, restoreLineEndings(result.text, style))
-        applied.push({ path: hunk.path, action: "updated" })
+        applied.push({ path: hunk.path, action: "updated", ...(preImageRef !== undefined ? { preImageRef } : {}) })
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
