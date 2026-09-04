@@ -31,6 +31,8 @@
 // `app.state().overlay = undefined` there (the binders never touch the app).
 
 import type { GlyphSet, Palette } from "@i-harness/tui-core"
+import type { RewindMode, RewindResult } from "@i-harness/rewind"
+import type { BackendClient } from "../contracts.ts"
 import type { AppAction } from "./keys.ts"
 import type { OverlayFreeform, OverlaySeam } from "./present.ts"
 import type { Rect, ViewDraw } from "../views/agent.ts"
@@ -40,6 +42,8 @@ import type { QuestionQuestion, QuestionState } from "../views/question.ts"
 import { renderQuestion } from "../views/question.ts"
 import type { CancelTurnState } from "../views/cancel-turn.ts"
 import { CANCEL_OPTIONS, renderCancelTurn } from "../views/cancel-turn.ts"
+import type { RewindState } from "../views/rewind.ts"
+import { filesDisabled, renderRewind } from "../views/rewind.ts"
 
 // ------------------------------------------------------------------ share
 
@@ -305,4 +309,222 @@ export function bindCancelTurnOverlay(
       default: break
     }
   })
+}
+
+// ------------------------------------------------------------------ rewind (M43)
+
+export interface RewindDecision {
+  target: number
+  mode: RewindMode
+  result: RewindResult
+}
+
+export interface RewindBindOptions {
+  /** The backend whose rewind member drives points/plan/execute + the
+   * running-status probe (cancel-offer) + cancel() (the offered stop). */
+  backend: BackendClient
+  /** The host records the executed decision ({target, mode, result}). */
+  onDecision?: (d: RewindDecision) => void
+  /** The host clears the surface (app.state().overlay = undefined). */
+  onClose?: () => void
+}
+
+/** Runtime probe: the rewind seam's kind string. The OverlaySeam.kind union
+ * in present.ts is a G2-owned closed set ("permission"|"question"|
+ * "cancel-turn") — the "rewind" kind is added at runtime here WITHOUT touching
+ * present.ts; the loop/keys branch on this probe (and overlayState()'s kind
+ * string, which flows to keys.ts OverlayKind "rewind"). */
+export function isRewindOverlay(ov: OverlaySeam): boolean {
+  return (ov as { kind: string }).kind === "rewind"
+}
+
+/**
+ * Binder: THE rewind phase machine (spec §3.9) over backend.rewind —
+ *
+ *   loading --points()--> picker --accept--> [status().running? cancel-offer :
+ *   mode-select] --y(cancel+mode)/n(close)--> mode-select --a/b/f-->
+ *   planning --plan()--> confirm --y--> executing --execute()--> decision+close
+ *
+ * Errors from every async hop land in phase "error" ("Rewind failed" + msg +
+ * Esc Dismiss). The binder kicks points() on bind (the host never preloads);
+ * it owns NO app state — `state` is mutated in place and onClose is the only
+ * way the overlay leaves the app (permission-binder parity).
+ */
+export function bindRewindOverlay(
+  state: RewindState,
+  opts: RewindBindOptions,
+): OverlaySeam {
+  const close = (): void => opts.onClose?.()
+  const rw = opts.backend.rewind
+
+  const dumpError = (error: unknown): void => {
+    state.error = error instanceof Error ? error.message : String(error)
+    state.phase = "error"
+  }
+
+  const loadPoints = (): void => {
+    state.phase = "loading"
+    if (rw === undefined) {
+      dumpError("rewind is not enabled on this backend")
+      return
+    }
+    void rw.points().then(
+      (points) => {
+        state.points = points
+        state.cursor = Math.max(0, Math.min(state.cursor, Math.max(0, points.length - 1)))
+        state.phase = "picker"
+      },
+      (error: unknown) => dumpError(error),
+    )
+  }
+  loadPoints()
+
+  const rowCountOfPhase = (): number => {
+    switch (state.phase) {
+      case "picker": return state.points.length
+      case "cancel-offer": return 2
+      case "mode-select": return filesDisabled(state) ? 2 : 3
+      case "confirm": return 2
+      default: return 0
+    }
+  }
+
+  const nav = (delta: -1 | 1): void => {
+    const n = rowCountOfPhase()
+    if (n <= 0) return
+    state.cursor = Math.max(0, Math.min(n - 1, state.cursor + delta))
+  }
+
+  const cursorBackToPicked = (): void => {
+    let i = state.points.findIndex((p) => p.turnIndex === state.selectedTurn)
+    if (i < 0) i = 0
+    state.cursor = i
+  }
+
+  const cancelOfferY = (): void => {
+    if (state.phase !== "cancel-offer") return
+    // "Cancel turn and rewind" — the turn abort is fire-and-forget (the
+    // backend's cancellation contract); the flow proceeds to the mode select.
+    void opts.backend.cancel().catch(() => {})
+    state.cursor = 0
+    state.phase = "mode-select"
+    state.cancelOfferTarget = undefined
+  }
+
+  const cancelOfferN = (): void => {
+    if (state.phase !== "cancel-offer") return
+    // "Let it finish" — the rewind flow ends here; the turn keeps running and
+    // a later Esc-Esc re-invokes the picker.
+    close()
+  }
+
+  const chooseMode = (mode: RewindMode): void => {
+    if (state.phase !== "mode-select" || state.selectedTurn === undefined) return
+    if (mode === "files" && filesDisabled(state)) return // f disabled (○)
+    if (rw === undefined) {
+      dumpError("rewind is not enabled on this backend")
+      return
+    }
+    const target = state.selectedTurn
+    state.mode = mode
+    state.cursor = mode === "all" ? 0 : mode === "conversation" ? 1 : 2
+    // plan() BEFORE the confirm (§3.9: Previewing file changes... → Confirm).
+    state.phase = "planning"
+    void rw.plan(target, mode).then(
+      (plan) => {
+        state.cleanPaths = plan.clean.map((op) => op.path)
+        state.conflicts = plan.conflicts
+        state.cursor = 0
+        state.phase = "confirm"
+      },
+      (error: unknown) => dumpError(error),
+    )
+  }
+
+  const confirmY = (): void => {
+    if (state.phase !== "confirm" || state.selectedTurn === undefined || state.mode === undefined) return
+    if (rw === undefined) {
+      dumpError("rewind is not enabled on this backend")
+      return
+    }
+    const target = state.selectedTurn
+    const mode = state.mode
+    state.cursor = 0
+    state.phase = "executing"
+    void rw.execute(target, mode).then(
+      (result) => {
+        state.cursor = 0
+        opts.onDecision?.({ target, mode, result })
+        close()
+      },
+      (error: unknown) => dumpError(error),
+    )
+  }
+
+  const back = (): void => {
+    switch (state.phase) {
+      case "confirm": // Bksp Back → mode select (mode may change)
+        state.phase = "mode-select"
+        state.cursor = state.mode === "conversation" ? 1 : state.mode === "files" ? 2 : 0
+        break
+      case "mode-select": // Back → picker
+        state.phase = "picker"
+        cursorBackToPicked()
+        break
+      default: break
+    }
+  }
+
+  const accept = (): void => {
+    switch (state.phase) {
+      case "picker": {
+        const p = state.points[state.cursor]
+        if (p === undefined) return
+        state.selectedTurn = p.turnIndex
+        state.cancelOfferTarget = p.turnIndex
+        state.cursor = 0
+        // §3.9: a running turn gets the cancel offer first.
+        state.phase = opts.backend.status().running ? "cancel-offer" : "mode-select"
+        break
+      }
+      case "cancel-offer": cancelOfferY(); break // Enter = y
+      case "mode-select": {
+        const mode = state.cursor === 0 ? "all" : state.cursor === 1 ? "conversation" : "files"
+        chooseMode(mode)
+        break
+      }
+      case "confirm": confirmY(); break // Enter = y
+      default: break
+    }
+  }
+
+  return {
+    // present.ts's kind union is closed (G2-owned); the runtime string is the
+    // dispatch key — see isRewindOverlay + keys.ts OverlayKind "rewind".
+    kind: "rewind" as unknown as OverlaySeam["kind"],
+    draw: (ctx, view, palette, glyphs) => renderRewind(ctx, state, view, palette, glyphs),
+    act: (action: AppAction) => {
+      if (typeof action !== "string") return // digits: rewind has no digit rows
+      switch (action) {
+        case "overlay-select": accept(); break
+        case "overlay-nav-prev": nav(-1); break
+        case "overlay-nav-next": nav(1); break
+        case "overlay-dismiss":
+          // Esc during "Rewinding..." is a NO-OP — the destructive execute is
+          // in flight; the decision (or error phase) is the exit.
+          if (state.phase !== "executing") close()
+          break
+        case "rewind-y":
+          if (state.phase === "cancel-offer") cancelOfferY()
+          else if (state.phase === "confirm") confirmY()
+          break
+        case "rewind-n": cancelOfferN(); break
+        case "rewind-a": chooseMode("all"); break
+        case "rewind-b": chooseMode("conversation"); break
+        case "rewind-f": chooseMode("files"); break
+        case "rewind-back": back(); break
+        default: break
+      }
+    },
+  }
 }

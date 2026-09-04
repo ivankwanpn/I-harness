@@ -55,8 +55,9 @@
 //    synthetic seq = highest-seen+1 in arrival order (documented seam for
 //    malformed/external events only).
 import { randomUUID } from "node:crypto"
-import { subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
-import { createSessionService, type SessionService, type SessionServiceOptions } from "@i-harness/session-executor"
+import { append, subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
+import { RewindService } from "@i-harness/rewind"
+import { createSessionService, type SessionAssembly, type SessionService, type SessionServiceOptions } from "@i-harness/session-executor"
 import { activeTokens } from "@i-harness/token-meter"
 import { toolKindOf, type BackendClient, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
@@ -199,6 +200,17 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
       return { type: "title", title: ev.title, seq: eventSeq(ev, state), ts }
     case "plan/mode":
       return { type: "plan", phase: ev.mode, seq: eventSeq(ev, state), ts }
+    // M43: the rewind engine's durable marker — surface the REWIND event
+    // (engine draws `Rewound to turn {N}` + the dim anchor; the projection
+    // semantics (deriveMessages cut) are core-session's, not ours).
+    case "rewind/point":
+      return {
+        type: "rewind",
+        targetTurn: ev.targetTurn,
+        mode: ev.mode,
+        seq: eventSeq(ev, state),
+        ts,
+      }
     case "command/run":
       return {
         type: "system",
@@ -259,6 +271,12 @@ export interface EmbeddedOptions {
    * (contract-sanctioned M37a fallback; the M38 host passes a
    * coordinator-backed implementation). */
   listSessions?: () => Promise<SessionSummary[]>
+  /** M43: workspace root for the rewind bridge's disk side — MUST be the SAME
+   * root the service's assemblies were created with (createSessionService
+   * rewindStoreRoot). Absent ⇒ the client has NO `rewind` member (the loop's
+   * Esc-Esc arming stays off). The member's methods still fail loudly when the
+   * resolved assembly carries no rewind handle (store not enabled). */
+  rewindWorkspace?: string
 }
 
 export interface EmbeddedFactoryOptions {
@@ -287,6 +305,11 @@ export interface EmbeddedFactoryOptions {
   /** M38b G2: model context window (tokens) the host resolved (read-only;
    * see EmbeddedOptions.contextWindow). */
   contextWindow?: number
+  /** M43: rewind store root — forwarded to createSessionService (assembly
+   * creates RewindStore+Recorder for the fs-write pre-image channel, M42).
+   * When set (with the factory's sessionId) the client exposes the `rewind`
+   * bridge; ABSENT = rewind off (mock factory default — no member). */
+  rewindStoreRoot?: string
 }
 
 // ------------------------------------------------------------------ backend
@@ -297,7 +320,6 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
   const liveState = createEventMapState()
 
   let sessionId = opts.sessionId
-  let session: Session | undefined
   let closed = false
   let currentSubmit: AbortController | undefined
   // -1 = nothing applied yet. replay() is EXCLUSIVE (seqs > afterSeq), so the
@@ -337,11 +359,20 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
   }
 
   async function ensureSession(): Promise<Session> {
+    return (await ensureAssembly()).session
+  }
+
+  /** Assembly cache (gets .rewind handle + the session for appendEvent hooks). */
+  let cachedAssembly: SessionAssembly | undefined
+  let assemblyForId: string | undefined
+
+  async function ensureAssembly(): Promise<SessionAssembly> {
     if (closed) throw new Error("embedded backend closed")
-    if (session !== undefined) return session
-    const assembly = await service.assemblyFor(sessionId)
-    session = assembly.session
-    return session
+    if (cachedAssembly !== undefined && assemblyForId === sessionId) return cachedAssembly
+    const a = await service.assemblyFor(sessionId)
+    cachedAssembly = a
+    assemblyForId = sessionId
+    return a
   }
 
   return {
@@ -355,7 +386,8 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     async open(id: string): Promise<void> {
       if (closed) throw new Error("embedded backend closed")
       sessionId = id
-      session = undefined // re-resolve per session id
+      cachedAssembly = undefined // re-resolve per session id
+      assemblyForId = undefined
       cursor = -1
       const s = await ensureSession()
       if (opts.prompt !== undefined && opts.prompt !== "" && s.events.length === 0 && !promptSubmittedFor.has(id)) {
@@ -478,6 +510,13 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       return { used }
     },
 
+    // M43: the rewind bridge — present only when the host wired a workspace
+    // (rewind store on); absent ⇒ BackendClient.rewind === undefined and the
+    // loop's Esc-Esc rewind gate stays off (mock factory: no member).
+    ...(opts.rewindWorkspace !== undefined
+      ? { rewind: buildRewindMember(opts.rewindWorkspace, ensureAssembly) }
+      : {}),
+
     async close(): Promise<void> {
       if (closed) return
       closed = true
@@ -489,6 +528,40 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       // Best-effort: the caller handed us the service; we own its shutdown
       // (shared coordinator/telemetry are the CALLER's — never closed here).
       await service.close().catch(() => {})
+    },
+  }
+}
+
+// ------------------------------------------------------------------ rewind member (M43)
+
+/** Build the conditional `rewind` member of a createEmbeddedBackend client.
+ * Present only when the host wired a rewind workspace (the assembly-side
+ * rewindStoreRoot was on); every call resolves the CURRENT assembly's rewind
+ * handle fresh (open() may have switched sessions) and fails loudly when the
+ * assembly has none (host/store mismatch — never a silent no-op). */
+function buildRewindMember(
+  workspace: string,
+  ensureAssembly: () => Promise<SessionAssembly>,
+): NonNullable<BackendClient["rewind"]> {
+  const svcFor = async (): Promise<{ svc: RewindService; session: Session }> => {
+    const assembly = await ensureAssembly()
+    if (assembly.rewind === undefined) {
+      throw new Error("rewind not enabled on this session (assembled without rewindStoreRoot)")
+    }
+    return { svc: new RewindService({ store: assembly.rewind.store, workspace }), session: assembly.session }
+  }
+  return {
+    async points() {
+      return (await svcFor()).svc.points()
+    },
+    async plan(target, mode) {
+      return (await svcFor()).svc.plan(target, mode)
+    },
+    async execute(target, mode) {
+      const { svc, session } = await svcFor()
+      // appendEvent = append into the LIVE session log → subscribe() fans the
+      // rewind/point TuiEvent to the app (engine marker row + anchor).
+      return svc.execute(target, mode, { appendEvent: (ev) => append(session, ev) })
     },
   }
 }
@@ -512,6 +585,9 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
     ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}),
     // M37a: deliberately NO coordinator / loadMeta / contextWindowFor /
     // telemetry — in-memory session only (module header item 1).
+    // M43: rewind store — opt-in; the assembly creates the store+recorder only
+    // when BOTH rewindStoreRoot and a sessionId exist (both here).
+    ...(opts.rewindStoreRoot !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}),
   })
   return createEmbeddedBackend({
     service,
@@ -519,5 +595,8 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
     prompt: opts.prompt,
     ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
     ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
+    // rewind bridge on the client iff the store was on (workspace root is the
+    // same one the assembly resolved against).
+    ...(opts.rewindStoreRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}),
   })
 }

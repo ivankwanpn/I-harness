@@ -1,6 +1,17 @@
 // @i-harness/tui — shared contracts (M37a).
 // G1 (scrollback) / G2 (views+app) / G3 (backend bridge) interlock HERE.
 // Consumers import ONLY from this file across groups (no cross-group src imports).
+//
+// M43 (G1): rewind — the TuiEvent member + BackendClient.rewind (bridge over
+// the M42 RewindService) + the engine's rewindAnchor accessor are declared
+// here so the G1 view/binder/loop and G2's present dimFrom share one surface.
+
+import type {
+  RewindMode,
+  RewindPlan,
+  RewindPointSummary,
+  RewindResult,
+} from "@i-harness/rewind"
 
 // ------------------------------------------------------------------ events
 
@@ -21,6 +32,10 @@ export type TuiEvent =
   | { type: "title"; title: string; seq: number; ts: number }
   | { type: "plan"; phase: "on" | "off"; seq: number; ts: number }
   | { type: "system"; text: string; seq: number; ts: number }
+  // M43: the durable rewind marker (bridge maps core-session rewind/point) —
+  // the engine renders one system row `Rewound to turn {N}` and anchors the
+  // dim-from point (rewindAnchor).
+  | { type: "rewind"; targetTurn: number; mode: RewindMode; seq: number; ts: number }
 
 export type ToolKind =
   | "execute" | "read" | "edit" | "search" | "webfetch" | "websearch"
@@ -84,6 +99,15 @@ export interface BackendClient {
   /** Info-line/status model label (M38b G2). OPTIONAL: the host may know it
    * (--model spec) while the wire cannot carry it (no session/meta RPC v0). */
   readonly modelLabel?: string
+  /** M43: rewind bridge — the M42 RewindService surface over the session's
+   * assembly rewind handle. OPTIONAL (absent ⇒ the loop's Esc-Esc rewind
+   * arming stays off — the mock factory has no member). Types are the
+   * @i-harness/rewind shapes verbatim (contract imports them, no re-decoding). */
+  rewind?: {
+    points(): Promise<RewindPointSummary[]>
+    plan(target: number, mode: RewindMode): Promise<RewindPlan>
+    execute(target: number, mode: RewindMode): Promise<RewindResult>
+  }
   close(): Promise<void>
 }
 
@@ -167,4 +191,10 @@ export interface ScrollbackEngine {
    * non-contract accessors omits it; the app then falls back to its own
    * app.mode flag alone. */
   plan?(): boolean
+  /** M43: display line index of the LAST rewind marker block (the `Rewound to
+   * turn {N}` row) — the dim-from point for the rewind overlay (§3.9 opens →
+   * scrollback dims BELOW the anchor). Undefined before any rewind event (or
+   * after the marker was trimmed by retain). OPTIONAL: engines without the
+   * accessor simply never dim. */
+  rewindAnchor?(): number | undefined
 }
