@@ -46,12 +46,43 @@
  * Versioning rules: v1 may only ADD — new methods, new notification fields,
  * new error codes. Changing or removing an existing shape/field/code is a
  * breaking change: bump PROTOCOL_VERSION and document the migration path.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SDK Wire Contract v1 — ADDITIVE-ONLY (M41a, 2026-09-04).
+ *
+ * PROTOCOL_VERSION is now 2. The ENTIRE v0 surface above is UNCHANGED — same
+ * shapes, same methods, same error codes. v1 only ADDS:
+ *
+ *   initialize       → capabilities gains two rows (additive fields, nothing
+ *                      removed on the v0 rows):
+ *                        "session-history": ["1"]
+ *                        "session-list":    ["1"]
+ *                      protocolVersion is now 2 (the v0 rows stay verbatim).
+ *   session/history { sessionId, afterSeq?, limit? }
+ *                  → { events, nextSeq }   — always `{ events, nextSeq }`,
+ *                    never null. afterSeq is EXCLUSIVE (default 0); limit
+ *                    defaults to 500, clamped to a 1000 cap; the source log
+ *                    is the live in-process session (service.liveSession);
+ *                    nextSeq = seq of the next unreturned event (== the
+ *                    source log length when the walk returned everything).
+ *                    Unknown sessionId → -32602 INVALID_PARAMS with an
+ *                    explicit "session not found" message (no auto-create).
+ *   session/list   {}       → { sessions, listingUnavailable? } — driven by
+ *                    the OPTIONAL server `listSessions` source. Absent source
+ *                    → { sessions: [], listingUnavailable: true } (an honest
+ *                    blank — never fabricated rows); a throwing source fails
+ *                    with -32603 (fail-closed).
+ *
+ * A v0 client that only speaks the v0 methods is unaffected — the server
+ * answers every v0 request per the v0 shapes above. Breaking-change policy
+ * is unchanged: v1 (and any later version) stays additive-only.
  */
 
 import { createInterface, type Interface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
+import type { SessionEvent } from "@i-harness/core-session"
 
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 export const PARSE_ERROR = -32700
 export const INVALID_REQUEST = -32600
@@ -85,6 +116,35 @@ export interface RpcFailure {
 }
 
 export type RpcMessage = RpcRequest | RpcNotification | RpcSuccess | RpcFailure
+
+/** M41a v1: one page of a session's event log walk (session/history). */
+export interface HistoryRange {
+  /** Events strictly after `afterSeq`, in seq order, at most `limit` of them. */
+  events: SessionEvent[]
+  /** Seq of the next unreturned event (== the log length when returned in full). */
+  nextSeq: number
+}
+
+/** M41a v1: one row of a session/list result. All fields beyond `id` are
+ * optional — a listing source may not be able to derive them (header-only
+ * profiles give `title`; `updatedAt`/`turnCount`/context windows need deeper
+ * reads). Every field is additive; consumers must tolerate absent fields. */
+export interface SessionListEntry {
+  id: string
+  title?: string
+  updatedAt?: number
+  turnCount?: number
+  contextUsed?: number
+  contextTotal?: number
+}
+
+/** M41a v1: the session/list response payload. */
+export interface SessionListResult {
+  sessions: SessionListEntry[]
+  /** True when no listing source was wired — proud "unknown" instead of a
+   * fabricated empty list being read as "no sessions exist". */
+  listingUnavailable?: boolean
+}
 
 /** Transport-level RpcError: an error RESPONSE from the server (the message
  * the client rejects with). */

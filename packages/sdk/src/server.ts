@@ -9,6 +9,13 @@
 //                            error response -32603 on a failed turn (data.event
 //                            carries the collected events)
 //   session/status {sessionId} → { running, queued }
+//   session/history {sessionId, afterSeq?, limit?}  [M41a v1]
+//                          → { events, nextSeq }; unknown session → -32602
+//                            with an explicit "session not found" message
+//   session/list {}        [M41a v1]
+//                          → { sessions, listingUnavailable? } (injectable
+//                            listSessions source; absent source → honest
+//                            listingUnavailable: true)
 //   shutdown               → { ok: true } (then onShutdown fires)
 // Notifications (server → client):
 //   session/event  { sessionId, event }   — every appended session event
@@ -31,10 +38,15 @@ import {
   PROTOCOL_VERSION,
   type RpcMessage,
   type RpcNotification,
+  type SessionListResult,
 } from "./protocol.ts"
 
 export const SDK_SERVER_NAME = "i-harness"
 export const SDK_SERVER_PROTOCOL_VERSION = PROTOCOL_VERSION
+
+// M41a v1: session/history paging defaults (additive — v0 never had this).
+const HISTORY_DEFAULT_LIMIT = 500
+const HISTORY_LIMIT_CAP = 1000
 
 export interface SdkServerOptions {
   /** Server → client writer (responses AND notifications both flow here when
@@ -45,6 +57,11 @@ export interface SdkServerOptions {
   /** Session creation source — when given, session/prompt auto-creates an
    * unknown session before submit (durability requires the session to exist). */
   coordinator?: SessionCoordinator
+  /** M41a v1: session/list source — the host's store listing (apps/cli: the
+   * coordinator's list()+profile(), web-host mirror). When absent, session/list
+   * answers `{ sessions: [], listingUnavailable: true }` (an honest blank —
+   * "unknown" is never served as "empty"). */
+  listSessions?: () => Promise<SessionListResult>
   /** Server info version payload (defaults to "0.1.0"). */
   version?: string
   /** Fired after a successful shutdown request. */
@@ -118,6 +135,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   async function handleRequest(method: string, params: unknown, id: number | string): Promise<RpcMessage> {
     switch (method) {
       case "initialize": {
+        // M41a v1: protocolVersion 2; the capabilities object only GAINS the
+        // two rows below (the v0 rows are byte-identical — additive-only).
         return makeSuccess(id, {
           name: SDK_SERVER_NAME,
           version: opts.version ?? "0.1.0",
@@ -125,6 +144,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           capabilities: {
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
+            "session-history": ["1"],
+            "session-list": ["1"],
           },
         })
       }
@@ -134,6 +155,51 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/status requires a non-empty sessionId")
         }
         return makeSuccess(id, service.queueState(p.sessionId))
+      }
+      case "session/history": {
+        // M41a v1: event-log walk over the LIVE in-process session (the
+        // assembly's log is the session source — same identity as
+        // session/prompt's submit target). Fail-closed: an unknown session is
+        // NEVER auto-created by a read; it fails with an explicit message.
+        const p = params as { sessionId?: unknown; afterSeq?: unknown; limit?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/history requires a non-empty sessionId")
+        }
+        const afterSeq = p.afterSeq === undefined ? 0 : p.afterSeq
+        if (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0) {
+          return makeFailure(id, INVALID_PARAMS, "session/history afterSeq must be a non-negative integer")
+        }
+        const rawLimit = p.limit === undefined ? HISTORY_DEFAULT_LIMIT : p.limit
+        if (typeof rawLimit !== "number" || !Number.isInteger(rawLimit) || rawLimit <= 0) {
+          return makeFailure(id, INVALID_PARAMS, "session/history limit must be a positive integer")
+        }
+        const limit = Math.min(rawLimit, HISTORY_LIMIT_CAP)
+        const session = service.liveSession(p.sessionId)
+        if (session === undefined) {
+          return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
+        }
+        // The live log seqs are the 0-based positions in events (assigned at
+        // append), so the walk is a slice: [afterSeq exclusive, nextSeq).
+        const start = Math.min(afterSeq, session.events.length)
+        const end = Math.min(start + limit, session.events.length)
+        return makeSuccess(id, { events: session.events.slice(start, end), nextSeq: end })
+      }
+      case "session/list": {
+        // M41a v1: the listing source is an INJECTABLE server option — the
+        // server itself knows nothing about the store (the session source and
+        // the listing source are both host concerns). Absent → an honest
+        // "unavailable" flag, never a fabricated empty list.
+        if (opts.listSessions === undefined) {
+          return makeSuccess(id, { sessions: [], listingUnavailable: true })
+        }
+        try {
+          return makeSuccess(id, await opts.listSessions())
+        } catch (error) {
+          // same convention as session/prompt's failure frame: the raw error
+          // message rides in `message` (never a silent empty list)
+          const message = error instanceof Error ? error.message : String(error)
+          return makeFailure(id, INTERNAL_ERROR, message)
+        }
       }
       case "session/prompt": {
         const p = params as { sessionId?: unknown; prompt?: unknown } | undefined

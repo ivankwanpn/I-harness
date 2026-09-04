@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { SessionEvent } from "@i-harness/core-session"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 import {
@@ -64,7 +65,7 @@ describe("createSdkServer", () => {
       const output = await server.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
       const msg = decodeFrame(output!) as RpcSuccess
       expect(msg.id).toBe(1)
-      expect(msg.result).toMatchObject({ name: "i-harness", protocolVersion: 1, version: "9.9" })
+      expect(msg.result).toMatchObject({ name: "i-harness", protocolVersion: 2, version: "9.9" })
       await server.close()
     } finally {
       await service.close()
@@ -72,11 +73,12 @@ describe("createSdkServer", () => {
     }
   })
 
-  // M28 S-1: sdk wire contract v0 field-level lock (drift sentinel). Every field
-  // the default initialize emits is part of the frozen v0 contract — a change
+  // M28 S-1 + M41a A1: sdk wire contract field-level lock (drift sentinel). Every
+  // field the default initialize emits is part of the (v1) contract — a change
   // here is a breaking protocol change for embedders (see protocol.ts JSDoc +
-  // docs/contracts.md "SDK Wire Contract v0").
-  it("initialize wire contract v0 (field-level lock)", async () => {
+  // docs/contracts.md "SDK Wire Contract v1"). v1 is the additive bump: the v0
+  // rows are byte-identical and protocolVersion moved 1 → 2.
+  it("initialize wire contract v1 (field-level lock)", async () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // default version = "0.1.0" (contract)
@@ -88,10 +90,12 @@ describe("createSdkServer", () => {
         result: {
           name: "i-harness",
           version: "0.1.0",
-          protocolVersion: 1,
+          protocolVersion: 2,
           capabilities: {
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
+            "session-history": ["1"],
+            "session-list": ["1"],
           },
         },
       })
@@ -217,6 +221,182 @@ describe("createSdkServer", () => {
     } finally {
       await service.close()
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("createSdkServer v1 (session/history + session/list)", () => {
+  it("session/history walks the live log (afterSeq exclusive, limit, nextSeq)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      // Drive one turn so the live session exists and has a full event log
+      // (submit resolves AFTER the turn drained, so the log is stable).
+      const promptReply = await server.handleLine(
+        encodeFrame(makeRequest(100, "session/prompt", { sessionId: "h1", prompt: "hello" })),
+      )
+      expect((decodeFrame(promptReply!) as RpcSuccess).result).toEqual({ sessionId: "h1", ok: true })
+
+      // Full walk (defaults: afterSeq 0, limit 500) — every event of the turn.
+      const allReply = await server.handleLine(encodeFrame(makeRequest(101, "session/history", { sessionId: "h1" })))
+      const all = decodeFrame(allReply!) as RpcSuccess
+      expect(all.id).toBe(101)
+      const range = all.result as { events: SessionEvent[]; nextSeq: number }
+      expect(range.events.length).toBeGreaterThan(0)
+      const types = range.events.map((e) => e.type)
+      expect(types).toContain("turn/start")
+      expect(types).toContain("user/message")
+      expect(types).toContain("assistant/message")
+      expect(types).toContain("turn/end")
+      // seqs are 0-based positions: nextSeq == length when returned in full.
+      expect(range.nextSeq).toBe(range.events.length)
+      expect(range.events[0]!.seq).toBe(0)
+
+      // afterSeq is EXCLUSIVE: only later events, same tail.
+      const cut = 2
+      const laterReply = await server.handleLine(
+        encodeFrame(makeRequest(102, "session/history", { sessionId: "h1", afterSeq: cut })),
+      )
+      const later = decodeFrame(laterReply!) as RpcSuccess
+      expect(later.result).toEqual({ events: range.events.slice(cut), nextSeq: range.nextSeq })
+
+      // limit pages the log: first page of 1, nextSeq continues at 1.
+      const pageReply = await server.handleLine(
+        encodeFrame(makeRequest(103, "session/history", { sessionId: "h1", limit: 1 })),
+      )
+      expect(decodeFrame(pageReply!)).toMatchObject({
+        result: { events: range.events.slice(0, 1), nextSeq: 1 },
+      })
+
+      // afterSeq past the end → empty page, nextSeq = log length (the final seq).
+      const pastReply = await server.handleLine(
+        encodeFrame(makeRequest(104, "session/history", { sessionId: "h1", afterSeq: 10_000 })),
+      )
+      expect(decodeFrame(pastReply!)).toMatchObject({
+        result: { events: [], nextSeq: range.nextSeq },
+      })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/history unknown sessionId → -32602 with an explicit 'session not found' message", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const reply = await server.handleLine(encodeFrame(makeRequest(110, "session/history", { sessionId: "nope" })))
+      const msg = decodeFrame(reply!) as RpcFailure
+      expect(msg.id).toBe(110)
+      expect(msg.error.code).toBe(INVALID_PARAMS)
+      expect(String(msg.error.message)).toContain("session not found")
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/history validates afterSeq/limit (non-integer or negative → -32602)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      for (const bad of [
+        { sessionId: "h1", afterSeq: -1 },
+        { sessionId: "h1", afterSeq: 1.5 },
+        { sessionId: "h1", limit: 0 },
+        { sessionId: "h1", limit: -2 },
+      ]) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(111, "session/history", bad)))
+        expect((decodeFrame(reply!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      }
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/list without a listing source → { sessions: [], listingUnavailable: true }", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service) // no listSessions option wired
+      const reply = await server.handleLine(encodeFrame(makeRequest(120, "session/list", {})))
+      expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({ sessions: [], listingUnavailable: true })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/list passes the listing source through verbatim", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service, {
+        listSessions: async () => ({
+          sessions: [
+            { id: "a", title: "Alpha" },
+            { id: "b", turnCount: 3, updatedAt: 1_720_000_000_000, contextUsed: 100, contextTotal: 500 },
+          ],
+        }),
+      })
+      const reply = await server.handleLine(encodeFrame(makeRequest(121, "session/list", {})))
+      expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({
+        sessions: [
+          { id: "a", title: "Alpha" },
+          { id: "b", turnCount: 3, updatedAt: 1_720_000_000_000, contextUsed: 100, contextTotal: 500 },
+        ],
+      })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("session/list source failure → -32603 (fail-closed, never a fake empty list)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service, {
+        listSessions: () => Promise.reject(new Error("store exploded")),
+      })
+      const reply = await server.handleLine(encodeFrame(makeRequest(122, "session/list", {})))
+      const msg = decodeFrame(reply!) as RpcFailure
+      expect(msg.error.code).toBe(INTERNAL_ERROR)
+      expect(String(msg.error.message)).toContain("store exploded") // raw message, prompt-failure convention
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("v0-shaped client surface still works after the v1 bump (additive guarantee)", async () => {
+    // A hand-written v0 client knows ONLY: initialize / session/prompt /
+    // session/status / shutdown. Every one of its requests must behave exactly
+    // per the v0 contract — the new methods neither change nor break it.
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const init = await server.handleLine(encodeFrame(makeRequest(130, "initialize", {})))
+      expect((decodeFrame(init!) as RpcSuccess).result).toMatchObject({
+        name: "i-harness",
+        protocolVersion: 2, // the version moved — but the v0 METHOD surface is intact
+      })
+      const prompt = await server.handleLine(
+        encodeFrame(makeRequest(131, "session/prompt", { sessionId: "v0c", prompt: "hello" })),
+      )
+      expect((decodeFrame(prompt!) as RpcSuccess).result).toEqual({ sessionId: "v0c", ok: true })
+      const status = await server.handleLine(encodeFrame(makeRequest(132, "session/status", { sessionId: "v0c" })))
+      expect((decodeFrame(status!) as RpcSuccess).result).toEqual({ running: false, queued: 0 })
+      const shutdown = await server.handleLine(encodeFrame(makeRequest(133, "shutdown", {})))
+      expect((decodeFrame(shutdown!) as RpcSuccess).result).toEqual({ ok: true })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
     }
   })
 })

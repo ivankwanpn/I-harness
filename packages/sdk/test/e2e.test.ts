@@ -37,10 +37,13 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         cwd: workspace,
       })
       try {
-        // handshake: the server answers initialize
+        // handshake: the server answers initialize — v1: protocolVersion 2 and
+        // the two additive capability rows
         const info = (await client.request("initialize", {})) as ServerInfo
         expect(info.name).toBe("i-harness")
-        expect(info.protocolVersion).toBe(1)
+        expect(info.protocolVersion).toBe(2)
+        expect(info.capabilities["session-history"]).toEqual(["1"])
+        expect(info.capabilities["session-list"]).toEqual(["1"])
 
         // high-level run through the real engine (mock model default)
         const result = await client.run({ sessionId: "sdk-e2e-1", prompt: "hello" })
@@ -59,6 +62,17 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         // status surface after the run
         const state = await client.status("sdk-e2e-1")
         expect(state).toEqual({ running: false, queued: 0 })
+
+        // M41a v1: session/history returns REAL data over the live log (the
+        // turn events above, in seq order) and session/list is served by the
+        // CLI's coordinator-backed source (--session-dir given).
+        const range = await client.history("sdk-e2e-1")
+        expect(range.events.length).toBeGreaterThan(0)
+        expect(range.events.map((e) => e.type)).toContain("turn/end")
+        expect(range.nextSeq).toBe(range.events.length)
+        const list = await client.listSessions()
+        expect(list.listingUnavailable).toBeUndefined()
+        expect(list.sessions.map((s) => s.id)).toContain("sdk-e2e-1")
       } finally {
         await client.close().catch(() => {})
         rmSync(workspace, { recursive: true, force: true })
