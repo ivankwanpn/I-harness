@@ -272,6 +272,10 @@ export interface ShortcutStateFor {
   multiLine: boolean
   turnRunning: boolean
   mode: "normal" | "plan"
+  /** M40 G2 (C13): plan review active — plan mode on AND the last assistant
+   * block is the plan (the loop's detection); the bar shows the plan actions
+   * FIRST (`a approve / c comment / q quit plan`). */
+  planReview?: boolean
 }
 
 /** ShortcutsBar content (spec §3.5) for the current focus/state. */
@@ -288,13 +292,21 @@ export function shortcutsFor(state: ShortcutStateFor): Shortcut[] {
       { key: "Ctrl+Q", label: "quit" },
     ]
   }
-  const items: Shortcut[] = [
+  const items: Shortcut[] = []
+  if (state.planReview === true) {
+    items.push(
+      { key: "a", label: "approve" },
+      { key: "c", label: "comment" },
+      { key: "q", label: "quit plan" },
+    )
+  }
+  items.push(
     { key: "Enter", label: state.multiLine ? "newline" : "submit" },
     { key: "Ctrl+Enter", label: "interject" },
     { key: "Ctrl+M", label: "multiline" },
     { key: "Shift+Tab", label: "mode" },
     { key: "Esc", label: "clear" },
-  ]
+  )
   if (state.turnRunning) items.push({ key: "Ctrl+C", label: "stop" })
   items.push({ key: "Ctrl+S", label: "sessions" })
   items.push({ key: "Ctrl+Q", label: "quit" })

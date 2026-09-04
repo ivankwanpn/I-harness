@@ -356,7 +356,7 @@ export class SegmentIndex {
     const hit = this.linesCache[index]
     if (hit !== null) return hit
     const b = this.blocks[index]
-    const rows = selectRows(b, q.stateOf(index), this.opts.glyphs)
+    const rows = selectRows(b, q.stateOf(index), this.opts.glyphs, this.width)
     const ts = this.opts.showTimestamps &&
       (b.kind === "user" || b.kind === "user-edit" || b.kind === "assistant" || b.kind === "tool")
       ? formatTimestamp(b.ts)
@@ -395,7 +395,7 @@ export class SegmentIndex {
 
   /** Collapsed user block → sticky header lines (sticky:true, §3.1). */
   stickyUserLines(user: Block): DisplayLine[] {
-    const rows = selectRows(user, "collapsed", this.opts.glyphs)
+    const rows = selectRows(user, "collapsed", this.opts.glyphs, this.width)
     const ts = this.opts.showTimestamps ? formatTimestamp(user.ts) : undefined
     return rowsToLines(rows, this.width, {
       anchor: blockIdOf(user),

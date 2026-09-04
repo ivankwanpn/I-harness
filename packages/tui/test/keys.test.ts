@@ -226,3 +226,21 @@ describe("shortcutsFor — the bar content", () => {
     expect(items.some((s) => s.key === "Tab" && s.label === "prompt")).toBe(true)
   })
 })
+
+describe("shortcutsFor — plan review (M40 G2 / C13)", () => {
+  it("plan review active → the bar opens with `a approve / c comment / q quit plan`", () => {
+    const items = shortcutsFor({ focused: "prompt", multiLine: false, turnRunning: false, mode: "plan", planReview: true })
+    expect(items.slice(0, 3)).toEqual([
+      { key: "a", label: "approve" },
+      { key: "c", label: "comment" },
+      { key: "q", label: "quit plan" },
+    ])
+    // the normal group still follows
+    expect(items.some((s) => s.key === "Enter" && s.label === "submit")).toBe(true)
+  })
+
+  it("no plan review (mode normal) → the bar stays the plain group", () => {
+    const items = shortcutsFor({ focused: "prompt", multiLine: false, turnRunning: false, mode: "normal" })
+    expect(items[0]).toEqual({ key: "Enter", label: "submit" })
+  })
+})

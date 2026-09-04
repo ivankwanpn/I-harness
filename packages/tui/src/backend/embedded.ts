@@ -57,6 +57,7 @@
 import { randomUUID } from "node:crypto"
 import { subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
 import { createSessionService, type SessionService, type SessionServiceOptions } from "@i-harness/session-executor"
+import { activeTokens } from "@i-harness/token-meter"
 import { toolKindOf, type BackendClient, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ mapping
@@ -248,9 +249,9 @@ export interface EmbeddedOptions {
   modelLabel?: string
   /** Model context window (tokens) when the HOST resolved it (M38b G2,
    * read-only). Absent → contextTotal is unknown and the chip renders only
-   * what exists. Used-token PRICING needs @i-harness/token-meter (activeTokens)
-   * which is NOT a dependency today (no new private deps; package.json is
-   * untouchable while G1 lands marked/highlight.js) — see context() below. */
+   * what exists. Used-token PRICING comes from @i-harness/token-meter
+   * (activeTokens — the same estimator as the engine's context_remaining tool
+   * and the M25 token/usage telemetry), a workspace dependency since M40 G2. */
   contextWindow?: number
   /** Stream batching window in ms. Default 16 (§3.5). */
   batchMs?: number
@@ -460,18 +461,21 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     modelLabel: opts.modelLabel,
 
     async context(): Promise<{ used: number; total?: number } | undefined> {
-      // LOUD (M38b G2): the per-session used-token PRICING lives in
-      // @i-harness/token-meter (activeTokens(session)) — the SAME estimator
+      // M40 G2 — REAL values: used = the token-meter projection over the live
+      // session (activeTokens(deriveMessages(session)) — the SAME estimator
       // the engine's get_context_remaining tool and the M25 token/usage
-      // telemetry event use. token-meter is NOT a dependency of packages/tui
-      // (milestone: no new private deps; package.json is untouchable while G1
-      // lands marked/highlight.js) and the assembly exposes no read-only
-      // usage getter (SessionAssembly: ctx/agent/session/model/inbox — no
-      // token surface). So: undefined — never a fabricated estimate. When the
-      // dep (or a v1 SDK session/metrics RPC) lands, this one function body
-      // becomes real; the contract shape, the loop wiring and the
-      // host-supplied contextWindow are already in place.
-      return undefined
+      // telemetry use: M15's single projection rule, the model only ever sees
+      // deriveMessages(session), so tokens are counted on that exact output).
+      // total = the host-resolved context window (M38b G2 seam); absent total
+      // → the chip renders only the used count (never a fabricated total).
+      // A closed/failed assembly resolve returns undefined (never a fake 0).
+      const s = await ensureSession().catch(() => undefined)
+      if (s === undefined) return undefined
+      const used = activeTokens(s)
+      if (opts.contextWindow !== undefined && opts.contextWindow > 0) {
+        return { used, total: opts.contextWindow }
+      }
+      return { used }
     },
 
     async close(): Promise<void> {

@@ -474,7 +474,34 @@ export class TuiApp {
       this.requestFrame()
       return
     }
+    if (ev.type === "mouse") {
+      // Wheel → the existing scroll actions (M40 G2 / C11): ±3, follow-aware
+      // (scrollBy resolves the follow pin before offsetting — one notch leaves
+      // the tail, no jump to the top). 1006/1015/1016 wheel reports decode in
+      // tui-core; the coordinates are unused (no hit-testing in this wheel).
+      // Minimal mode has no fullscreen scrollback surface → no-op there.
+      if (!this.inlineActive()) {
+        if (ev.button === "wheel-up") { this.dispatch("scroll-up"); return }
+        if (ev.button === "wheel-down") { this.dispatch("scroll-down"); return }
+      }
+      return
+    }
     if (ev.type !== "key") return
+    // M40 G2 (C13): plan-review keys — while the plan bar is active, no
+    // overlay/dropdown is open and the prompt is EMPTY, `a`/`c`/`q`
+    // steer/prefill BEFORE the prompt edit path (typing wins once the prompt
+    // has content — approve/comment/quit are deliberate single presses on
+    // the plain empty editor).
+    if (
+      ev.code === "char" && !ev.ctrl && !ev.alt
+      && this.overlayState() === undefined
+      && this.app.prompt.text.length === 0
+      && this.planReviewActive()
+    ) {
+      if (ev.key === "a") { this.planApprove(); this.requestFrame(); return }
+      if (ev.key === "c") { this.planComment(); this.requestFrame(); return }
+      if (ev.key === "q") { this.planQuit(); this.requestFrame(); return }
+    }
     // Text editing for the prompt comes BEFORE the keymap — M37a subset:
     // printable chars + Backspace/Delete; emacs motion lands M37b. When a
     // non-dropdown overlay is open (pickers/panels), chars are NOT prompt
@@ -598,6 +625,10 @@ export class TuiApp {
         this.app.mode = ev.phase === "on" ? "plan" : "normal"
         this.app.status.plan = this.app.mode === "plan"
         this.app.prompt.plan = this.app.mode === "plan"
+        // M40 G2 (C13): the plan-review bar depends on this transition —
+        // refresh so `a approve / c comment / q quit plan` appear exactly
+        // when the engine's plan/mode event lands.
+        this.refreshShortcuts()
         break
       }
       case "user":
@@ -639,8 +670,12 @@ export class TuiApp {
     const total = this.opts.engine.lineCount()
     const page = this.opts.renderer.buffer.height
     const max = Math.max(0, total - page + 1)
+    // M40 G2 (C11): follow-aware base — while following, the effective offset
+    // is the tail (max); an offset above it would jump to the TOP of history
+    // instead of one notch away from the tail (the pre-G2 behavior).
+    const cur = this.app.scroll.follow ? max : this.app.scroll.offset
     this.app.scroll.follow = false
-    this.app.scroll.offset = Math.max(0, Math.min(max, this.app.scroll.offset + dy))
+    this.app.scroll.offset = Math.max(0, Math.min(max, cur + dy))
   }
 
   private pageStep(): number {
@@ -735,8 +770,53 @@ export class TuiApp {
         multiLine: this.app.prompt.multiLine,
         turnRunning: this.app.turn !== undefined,
         mode: this.app.mode,
+        planReview: this.planReviewActive(),
       }),
     }
+  }
+
+  /** M40 G2 (C13): plan review is active when plan mode is on (app-side AND
+   * engine-observed — a local Shift+Tab flip without an engine plan/mode
+   * event never arms the bar) and the LAST display line belongs to an
+   * assistant block (the plan text is the last assistant message — plan-mode
+   * discipline). The bar shows `a approve / c comment / q quit plan`; the
+   * keys route while the prompt is EMPTY (typing wins once it has content). */
+  private planReviewActive(): boolean {
+    if (this.app.mode !== "plan") return false
+    if (this.opts.engine.plan?.() !== true) return false
+    const total = this.opts.engine.lineCount()
+    if (total <= 0) return false
+    return this.opts.engine.lineBlock(total - 1)?.title === "Assistant"
+  }
+
+  // ------------------------------------------------------------------ plan review (C13)
+
+  /** `a` — approve the plan: steer the confirmation (the turned model takes
+   * it as the plan's approval annotation; the embedded backend degrades an
+   * idle steer to a send-tier turn). */
+  private planApprove(): void {
+    void this.opts.backend.steer("Approved — proceed").catch((error: unknown) => {
+      this.toast(`plan approve failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    this.toast("Plan approved")
+  }
+
+  /** `c` — comment: prefill the prompt with `comment: ` so the user's text
+   * rides the plan conversation. */
+  private planComment(): void {
+    this.app.prompt.text = "comment: "
+    this.app.prompt.cursor = "comment: ".length
+    this.refreshDropdowns()
+    this.refreshShortcuts()
+  }
+
+  /** `q` — quit plan mode: steer the exit sentence (the exit_plan_mode
+   * discipline stays the MODEL's tool; the shortcut steers the intent). */
+  private planQuit(): void {
+    void this.opts.backend.steer("quit plan mode").catch((error: unknown) => {
+      this.toast(`plan quit failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    this.toast("Exiting plan mode")
   }
 
   // ------------------------------------------------------------------ panes / pickers / dropdowns (M37b)

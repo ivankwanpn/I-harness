@@ -20,6 +20,7 @@
 import { marked, type Token } from "marked"
 import type { StyledRun, TextStyle } from "../contracts.ts"
 import { highlightCode, plainCodeRows } from "./highlight.ts"
+import { renderMermaidArt } from "./mermaid.ts"
 
 /* ------------------------------------------------------------------ parts */
 
@@ -37,12 +38,19 @@ export interface DocPart {
   codeOpen?: boolean
 }
 
-/** Rows of ONE part — the layout's StyledRun[][] (no fence marker rows). */
-export function partRows(p: DocPart): StyledRun[][] {
+/** Rows of ONE part — the layout's StyledRun[][] (no fence marker rows).
+ * M40 G2 (C12): a CLOSED mermaid fence body is replaced by the Unicode
+ * diagram art (plain "text" style rows, NO codeBg — spec §8: Unicode diagram
+ * art replaces the body); `width` is the render column budget (absent → the
+ * module default; the layout passes the real segment width). */
+export function partRows(p: DocPart, width?: number): StyledRun[][] {
   switch (p.kind) {
     case "code-body": {
       const code = (p.codeLines ?? []).join("\n")
       if (p.codeOpen === true) return plainCodeRows(code)
+      if ((p.codeLang ?? "").toLowerCase().trim() === "mermaid") {
+        return renderMermaidArt(code, width ?? MERMAID_WIDTH_FALLBACK).lines.map((ln) => [run(ln, "text")])
+      }
       return highlightCode(p.codeLang ?? "", code)
     }
     case "code-open":
@@ -55,9 +63,13 @@ export function partRows(p: DocPart): StyledRun[][] {
   }
 }
 
-export function partsToRows(parts: DocPart[]): StyledRun[][] {
+/** Column budget for mermaid art when no width is threaded (markdownRows
+ * callers that are width-agnostic — folding/layout pass the real width). */
+export const MERMAID_WIDTH_FALLBACK = 56
+
+export function partsToRows(parts: DocPart[], width?: number): StyledRun[][] {
   const rows: StyledRun[][] = []
-  for (const p of parts) rows.push(...partRows(p))
+  for (const p of parts) rows.push(...partRows(p, width))
   return rows
 }
 
@@ -78,13 +90,15 @@ export function renderMarkdown(text: string, finished = true): DocPart[] {
 }
 
 /** folding.ts entry: assistant block text → semantic rows. Plain text keeps
- * the EXACT plainRows shape (regression-safe; see module header). */
-export function markdownRows(text: string, finished = true): StyledRun[][] {
+ * the EXACT plainRows shape (regression-safe; see module header). `width`
+ * (optional) is the mermaid art budget — the engine/layout thread the real
+ * wrap width so the art is width-safe before wrapping. */
+export function markdownRows(text: string, finished = true, width?: number): StyledRun[][] {
   if (!hasMarkdown(text)) {
     const lines = text.split("\n")
     return lines.map((ln) => [run(ln, "text")])
   }
-  return partsToRows(renderMarkdown(text, finished))
+  return partsToRows(renderMarkdown(text, finished), width)
 }
 
 /* ------------------------------------------------------------- checkpointer */

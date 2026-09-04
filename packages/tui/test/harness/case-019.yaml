@@ -1,0 +1,72 @@
+# M40 G2 (C13): plan-review adapt at REAL-PTY level. The host (host-019.ts)
+# drives the REAL app pipeline + the real stdin input path: plan/mode on →
+# user → ASSISTANT PLAN TEXT → turn/end — the app idles with plan mode on and
+# the last display line in an Assistant block → planReviewActive(): the
+# shortcuts bar shows `a approve / c comment / q quit plan` and the keys route
+# (empty prompt). The test:
+#   - pins the plan bar + the status chip `plan`,
+#   - `a` → backend.steer("Approved — proceed") recorded (record-steer-1.json)
+#     + the toast card "Plan approved" (bottom-right),
+#   - `c` → the prompt prefills "comment: " (the prompt box row flips),
+#   - `q` → backend.steer("quit plan mode") recorded (record-steer-2.json)
+#     + the newest toast flips to "Exiting plan mode".
+# Byte budget writes: 9 = init(1) + 4 event frames + 3 key frames + teardown(1)
+# (the frozen clock keeps the anim pump + the never-expiring toast
+# identical → zero-byte idle).
+name: case-019-plan-review-adapt
+host: test/harness/host-019.ts
+size: [46, 24]
+steps:
+  # W1 plan on · W2 user · W3 assistant plan · W4 turn end — the settled
+  # plan-review state: status chip plan (row 1) + the plan bar (row 22:
+  # a approve / c comment / q quit plan first) + the prompt options after.
+  - await-marker: { name: frame-4 }
+  - await-quiescent: { ms: 300 }
+  - wait-screen:
+      region: { startRow: 0 }
+      rows:
+        - ""
+        - "  ⎇  ~/workspace                        plan"
+      timeoutMs: 3000
+  - wait-screen:
+      region: { startRow: 22 }
+      rows:
+        - "  a: approve  │  c: comment  │  q: quit plan"
+      timeoutMs: 3000
+  # `a` — approve: the production plan key routes → steer("Approved — proceed")
+  # + the toast card (bottom-right, right-anchored: 18 cols → x=28).
+  - write-pty: { data: "a" }
+  - await-marker: { name: steered-1 }
+  - assert-file: { name: record-steer-1.json, contains: "Approved — proceed" }
+  - wait-screen:
+      region: { startRow: 23 }
+      rows:
+        - "                                Plan approved "
+      timeoutMs: 3000
+  # `q` — quit plan mode: steer("quit plan mode") + the newest toast flips.
+  # (routed while the prompt is STILL empty — after `a`.)
+  - write-pty: { data: "q" }
+  - await-marker: { name: steered-2 }
+  - assert-file: { name: record-steer-2.json, contains: "quit plan mode" }
+  - wait-screen:
+      region: { startRow: 23 }
+      rows:
+        - "                            Exiting plan mode "
+      timeoutMs: 3000
+  # `c` — comment: the prompt prefills `comment: ` (the prompt box text row).
+  # Last on purpose: the prefill fills the editor, so after it the a/c/q keys
+  # stop routing (typing wins — documented plan-review discipline).
+  - write-pty: { data: "c" }
+  - wait-screen:
+      region: { startRow: 16 }
+      rows:
+        - " ┃│❯ comment:                              │"
+      timeoutMs: 3000
+  - assert-glyph-integrity: {}
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote }
+  # byte budget: EXACTLY 9 writes (init 1 + 4 event frames + 3 key frames +
+  # teardown 1) — one repaint per key; the frozen-clock anim pump contributed
+  # nothing (zero-byte idle).
+  - assert-byte-budget: { writes: 9 }
+  - wait-exit: { code: 0 }
