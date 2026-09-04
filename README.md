@@ -90,6 +90,7 @@ frontend" gate:
 | M40 | Inventory-driven gap harvest: todo_write/read_image mount, CLI plugin-registry+job-kill wiring, settings/changed emitter (+ dormant detector fix), guardian breaker all-verdicts, toasts, real context values, mouse wheel scroll (case-018), mermaid unicode art, plan-review adapt (case-019) | ✅ |
 | M41a | SDK wire v1: `session/history` + `session/list` + protocolVersion 2 handshake (additive-only, v0 frozen intact) — `--attach` replay/list gaps close (real subprocess e2e) | ✅ |
 | M42 | Rewind engine: `packages/rewind` (store/recorder/service — grok-style tool-report pre-images, RewindPoint jsonl, clean/conflict lazy compare, two-phase restore) + `rewind/point` event + deriveMessages cut projection (append-only conversation rewind; compaction interplay) | ✅ |
+| M43 | Rewind UI 1:1 (§3.9 phases/strings/keys via grok's rewind.rs) — Esc-Esc picker, mode-select, two-phase confirm with clean/conflict lists, engine hidement of rewound blocks, dim-from-anchor; PTY case-020 (real service restore: disk byte-exact v1 + journal truncate + marker line) | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
