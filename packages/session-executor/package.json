@@ -30,6 +30,7 @@
     "@i-harness/plan-mode": "workspace:*",
     "@i-harness/preset": "workspace:*",
     "@i-harness/provider": "workspace:*",
+    "@i-harness/rewind": "workspace:*",
     "@i-harness/runtime-context": "workspace:*",
     "@i-harness/sandbox": "workspace:*",
     "@i-harness/sandbox-local": "workspace:*",

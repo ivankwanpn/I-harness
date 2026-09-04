@@ -6,7 +6,8 @@
 // output-spill/plan-mode/guardian/instructions/runtime-context/mcp-oauth —
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
-import { createSession, Inbox, type Session } from "@i-harness/core-session"
+import { createSession, Inbox, subscribe, type Session } from "@i-harness/core-session"
+import { RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
@@ -92,6 +93,12 @@ export interface AssemblyOptions {
   team?: Partial<TeamConfig> // M19: mount the agent-team domain
   sessionQuery?: SessionQuery // M10b: session_search + lineage tools
   compact?: CompactionConfig // M11
+  /** M42 G1: rewind engine — store root. When set (together with sessionId,
+   * which keys the storage dir `rewind/<sessionId>/`) the assembly creates the
+   * RewindStore + RewindRecorder, subscribes user/message → begin / turn/end →
+   * finalize, and injects the pre-image sink into the fs write tools. Absent →
+   * rewind is entirely off (pre-M42 behavior, zero cost). */
+  rewindStoreRoot?: string
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
   guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient } // R-A9
@@ -125,6 +132,13 @@ export interface AssemblyOptions {
   reasoningEffort?: ReasoningEffort
 }
 
+/** M42 G1: the rewind slice of an assembly — the host (run.ts / the web
+ * service) builds a RewindService over these for the rewind surface. */
+export interface RewindAssemblyHandle {
+  store: RewindStore
+  recorder: RewindRecorder
+}
+
 export interface SessionAssembly {
   ctx: PluginContext // host wires approval/question answerers here (via onAssembly)
   agent: Agent // the per-session agent; tier-1 turns flow through it
@@ -143,6 +157,9 @@ export interface SessionAssembly {
   compactNow(instructions?: string): Promise<CompactionResult>
   /** Per-server mount outcome of the plugin MCP servers (serverName → success). */
   pluginMcpResults: Map<string, boolean>
+  /** M42 G1: rewind engine handle — present only when the host supplied
+   * rewindStoreRoot (with a sessionId). */
+  rewind?: RewindAssemblyHandle
   /** Best-effort teardown: reverse-order unmount of mcp/lsp/teams/skills/
    * workflow, terminal dispose, win32 ACL sandbox dispose. NEVER closes the
    * coordinator or the telemetry stream — the owner owns those. Never throws. */
@@ -199,7 +216,21 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   })
   // M26-B3: web surface (webfetch + websearch) — no provider → fail closed.
   registerWeb(ctx, tools)
-  for (const tool of createFsTools({ workspace: opts.workspace })) tools.register(tool)
+  // M42 G1: rewind engine — Store+Recorder created BEFORE the fs tools (they
+  // receive the pre-image sink in their deps). Requires a sessionId (storage
+  // keys on it); the recorder subscription is wired below once the live
+  // session exists (subscribe is append-onward, so host-seeded history is
+  // not recorded — a documented v1 scope).
+  let rewindStore: RewindStore | undefined
+  let rewindRecorder: RewindRecorder | undefined
+  if (opts.rewindStoreRoot !== undefined && opts.sessionId !== undefined) {
+    rewindStore = new RewindStore({ root: opts.rewindStoreRoot, sessionId: opts.sessionId })
+    rewindRecorder = new RewindRecorder({ store: rewindStore, workspace: opts.workspace })
+  }
+  const fsToolsDeps = rewindRecorder !== undefined
+    ? { workspace: opts.workspace, rewind: { take: (path: string, before: Uint8Array | null) => rewindRecorder.take(path, before) } }
+    : { workspace: opts.workspace }
+  for (const tool of createFsTools(fsToolsDeps)) tools.register(tool)
   createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
 
   // M10a guards + M12 retry (retry MUST mount BEFORE timeout — cascade order,
@@ -247,6 +278,27 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (ev.type === "turn/end") void opts.coordinator.flush(opts.sessionId).catch(() => {})
   })
   const inbox = new Inbox(session)
+  // M42 G1: recorder subscription — the turn's anchor is its first
+  // user/message (begin, first-wins — a mid-turn spliced message must not
+  // re-anchor), turn/end finalizes + appends the durable point. Finalize is
+  // detached: the rewind journal is a backend concern — a failure must never
+  // break the live agent loop (warn only; the turn completes regardless).
+  let rewindSubscription: (() => void) | undefined
+  if (rewindRecorder !== undefined && rewindStore !== undefined) {
+    const recorder = rewindRecorder
+    const store = rewindStore
+    rewindSubscription = subscribe(session, (ev) => {
+      if (ev.type === "user/message") {
+        recorder.begin(ev.seq ?? 0, ev.text)
+      } else if (ev.type === "turn/end") {
+        void (async () => {
+          const point = await recorder.finalize()
+          if (point === null) return
+          await store.appendPoint(point)
+        })().catch((err) => console.warn(`[rewind] point append failed: ${err instanceof Error ? err.message : String(err)}`))
+      }
+    })
+  }
   // M27-R-A8: context budget tool — registered against the live session (the
   // M15 projection source) only when the composition supplied a window.
   registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session })
@@ -433,6 +485,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       compactNow: async (instructions?: string) =>
         agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
       pluginMcpResults,
+      ...(rewindStore !== undefined && rewindRecorder !== undefined
+        ? { rewind: { store: rewindStore, recorder: rewindRecorder } }
+        : {}),
       dispose,
     }
   } catch (err) {
@@ -442,6 +497,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   async function dispose(): Promise<void> {
+    // M42 G1: stop the rewind recorder subscription first (no more finalizes).
+    rewindSubscription?.()
     // Unmount in REVERSE mount order (last-mounted unmounts first), best-effort:
     // one handle's failure must not block the rest — and dispose never throws.
     const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]

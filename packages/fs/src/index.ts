@@ -5,11 +5,12 @@ import { FsToolError } from "./error.ts"
 import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit } from "./text.ts"
-import { parsePatch, applyPatch } from "./patch.ts"
+import { parsePatch, applyPatch, type RewindCapture } from "./patch.ts"
 
 export { FsToolError, type FsToolErrorCode } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
 export { assertSnapshotFresh, type FileSnapshot } from "./version.ts"
+export type { RewindCapture } from "./patch.ts"
 export {
   normalizeLineEndings,
   detectLineEndings,
@@ -34,6 +35,45 @@ export function resolvePath(workspace: string, path: string): string {
 
 export interface FsToolDeps {
   workspace: string
+  /** M42 rewind (G1): optional pre-image sink at the write points — absent ⇒
+   * byte-identical behavior (zero cost). Present ⇒ every write tool captures
+   * the BEFORE content it is about to overwrite (write does ONE extra read —
+   * only when wired; edit/apply_patch already hold the bytes from their
+   * read-modify-write path) and the tool result carries preImageRef/isNewFile
+   * (additive — the log is the rewind channel, spec §2). The sink's take
+   * returns the restore-blob id the result reports; capture failure must never
+   * change tool behavior (untracked, honest). */
+  rewind?: RewindCapture
+}
+
+// M42: workspace-relative key for rewind capture — null when the target
+// escapes the workspace (absolute inputs / `..`) — the recorder is
+// workspace-scoped, so such writes proceed UNTRACKED (honest).
+function relForRewind(workspace: string, target: string): string | null {
+  const rel = relative(workspace, target)
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return null
+  return rel.replaceAll("\\", "/")
+}
+
+async function capturePreimage(
+  rewind: RewindCapture,
+  workspace: string,
+  target: string,
+): Promise<{ preImageRef?: string; isNewFile?: boolean }> {
+  const rel = relForRewind(workspace, target)
+  if (rel === null) return {}
+  let before: Uint8Array | null
+  try {
+    before = new Uint8Array(await readFile(target))
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") before = null
+    else return {} // unreadable pre-image → write proceeds untracked (honest)
+  }
+  const r = rewind.take(rel, before)
+  const captured = r.blobId !== null || r.isNewFile
+  return captured
+    ? { preImageRef: r.blobId ?? undefined, isNewFile: r.isNewFile }
+    : {}
 }
 
 export function createFsTools(deps: FsToolDeps): Tool[] {
@@ -45,14 +85,19 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isConcurrencySafe: true,
     execute: async ({ path }) => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") }),
   }
-  const write: Tool<{ path: string; text: string }, { ok: boolean }> = {
+  const write: Tool<{ path: string; text: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean }> = {
     name: "write",
     description: "write a file",
     inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" } }, required: ["path", "text"] },
     isReadOnly: false,
     execute: async ({ path, text }) => {
+      // M42 rewind: writeFileAtomic OVERWRITES without reading — when rewind
+      // is wired, do one extra read (ENOENT ⇒ new file); otherwise zero cost.
+      const captured = deps.rewind !== undefined
+        ? await capturePreimage(deps.rewind, deps.workspace, resolvePath(deps.workspace, path))
+        : {}
       await writeFile(resolvePath(deps.workspace, path), text, "utf-8")
-      return { ok: true }
+      return { ok: true, ...captured }
     },
   }
   const list_dir: Tool<{ path: string }, { entries: string[] }> = {
@@ -63,7 +108,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isConcurrencySafe: true,
     execute: async ({ path }) => ({ entries: await readdir(resolvePath(deps.workspace, path)) }),
   }
-  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number }, { ok: boolean; path: string; replacements: number }> = {
+  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number }, { ok: boolean; path: string; replacements: number; preImageRef?: string; isNewFile?: boolean }> = {
     name: "edit",
     description: "edit a file by literal string replacement (single occurrence unless replace_all)",
     inputSchema: {
@@ -111,8 +156,24 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         throw new FsToolError("FS_NOT_FOUND", `file disappeared during edit: ${path}`)
       }
       assertSnapshotFresh({ mtimeMs: st.mtimeMs, size: st.size }, { mtimeMs: stAfter.mtimeMs, size: stAfter.size })
+      // M42 rewind: the loaded pre-image (raw, before mutation) captured here —
+      // right after the TOCTOU check, right before the write.
+      let preImageRef: string | undefined
+      if (deps.rewind !== undefined) {
+        const rel = relForRewind(deps.workspace, target)
+        if (rel !== null) {
+          const r = deps.rewind.take(rel, raw)
+          if (r.blobId !== null) preImageRef = r.blobId
+        }
+      }
       await writeFileAtomic(target, finalText)
-      return { ok: true, path, replacements: result.replacements }
+      return {
+        ok: true,
+        path,
+        replacements: result.replacements,
+        ...(preImageRef !== undefined ? { preImageRef } : {}),
+        ...(deps.rewind !== undefined ? { isNewFile: false } : {}),
+      }
     },
   }
   const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string }[]; errors: { path: string; message: string }[] }> = {
@@ -124,8 +185,8 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       // CRLF 正規化：patch 內容若帶 \r，parsePatch 會把 \r 當行內容 → replace 誤報
       // FS_EDIT_NOT_FOUND、純 add 寫入字面 \r。先統一成 LF 再解析。
       const hunks = parsePatch(normalizeLineEndings(patch_content))
-      // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入
-      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks)
+      // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入；rewind sink 透傳
+      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, deps.rewind)
       if (errors.length > 0) {
         // 回報已應用清單 + 錯誤（不 throw——讓模型看到進行到哪）
         return { ok: false, applied, errors }
