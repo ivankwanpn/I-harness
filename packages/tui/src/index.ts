@@ -40,9 +40,22 @@ export type { EmbeddedOptions, EmbeddedFactoryOptions } from "./backend/embedded
 // dep) + the BackendClient adapter (createRemoteBackend; SdkClientLike is the
 // structural seam a host with the REAL HarnessClient can plug instead).
 // M41a: the wire v1 result shapes (session/history + session/list) the seam
-// exposes to hosts that use the mirror's typed helpers.
+// exposes to hosts that use the mirror's typed helpers; M41b v1.1: the
+// capability-gated cancel/rewind result shapes (session/cancel +
+// session/rewind/* — the mirror's typed helpers) the same way.
 export { createRemoteBackend, spawnSdkSubprocess } from "./backend/remote.ts"
-export type { HistoryResult, RemoteBackendOptions, SdkClientLike, SdkNotification, SessionListResult } from "./backend/remote.ts"
+export type {
+  HistoryResult,
+  RemoteBackendOptions,
+  SdkClientLike,
+  SdkNotification,
+  SessionListResult,
+  CancelResult,
+  RewindPointsResult,
+  RewindPlanResult,
+  RewindExecuteResult,
+  RewindFileOpWire,
+} from "./backend/remote.ts"
 // G1 interaction surfaces (spec §3.7/§3.8/§3.11) — what a host builds and
 // passes into the seam binders.
 export type {

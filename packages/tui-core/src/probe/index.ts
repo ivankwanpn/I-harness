@@ -1,9 +1,12 @@
 // G2 capabilities probe — one async sweep, ≤500ms total, never throws.
 //
 // Queries (in order): XTVERSION (\x1b[>0q → DCS reply \x1bP>|name-version\x1b\\),
-// kitty keyboard protocol (DECRPM 27: \x1b[?27u → \x1b[?27;1$p, or the
-// \x1b[?27u;1… variant), OSC 11 background (\x1b]11;?\x07 → \x1b]11;rgb:…\x07).
-// DA2-style \x1b[>…c heuristics map Windows Terminal (version 1.95+) / xterm.
+// DA1 primary device attributes (\x1b[c → \x1b[?…c), kitty keyboard protocol
+// (DECRPM 27: \x1b[?27u → \x1b[?27;1$p, or the \x1b[?27u;1… variant),
+// OSC 11 background (\x1b]11;?\x07 → \x1b]11;rgb:…\x07). DA2-style \x1b[>…c
+// heuristics map Windows Terminal (version 1.95+); DA1 replies (\x1b[?…c with
+// a leading 1 — VT100+-class, or an xterm-ish 4) give a WEAK band "xterm"
+// hint used only when DA2/XTVERSION are no better (they never outrank them).
 //
 // Replies reach the client through feed(data) — the app's raw reader routes
 // bytes here BEFORE the InputParser (or wires parser onDcs/onOsc payloads into
@@ -57,12 +60,25 @@ function brandFromDa(csi: string): string | null {
   return null
 }
 
+/** DA1 primary DA reply (\x1b[?…c) → the WEAK xterm-family hint. First param 1
+ * = VT100+-class; a 4 (VT400-class claim) or a leading 1 is xterm-ish. NOT
+ * brand-specific for Windows Terminal (also answers 1;2) — the DA2 95 row and
+ * XTVERSION keep precedence, and WT_SESSION env outranks it too. */
+function brandFromDa1(csi: string): string | null {
+  const m = /^\x1b\[\?(\d+(?:;\d+)*)c$/.exec(csi)
+  if (m === null) return null
+  const params = m[1]!.split(";")
+  if (params[0] === "1" || params.includes("4")) return "xterm"
+  return null
+}
+
 export class ProbeClient {
   private readonly stream: ProbeStream
   private buffer = ""
   private got = { xtversion: false, kitty: false, osc11: false }
   private xtversionPayload = ""
   private daBrand: string | null = null
+  private da1Brand: string | null = null
   private kitty = false
   private dark: boolean | null = null
   private doneResolve: (() => void) | null = null
@@ -72,15 +88,17 @@ export class ProbeClient {
     this.stream = stream
   }
 
-  /** Send the three queries and await answers (or the overall 500ms deadline). */
+  /** Send the sweep queries and await answers (or the overall 500ms deadline). */
   probe(): Promise<TerminalCapabilityContext> {
     this.buffer = ""
     this.got = { xtversion: false, kitty: false, osc11: false }
     this.xtversionPayload = ""
     this.daBrand = null
+    this.da1Brand = null
     this.kitty = false
     this.dark = null
     this.stream.write("\x1b[>0q")
+    this.stream.write("\x1b[c")
     this.stream.write("\x1b[?27u")
     this.stream.write("\x1b]11;?\x07")
     return new Promise<TerminalCapabilityContext>((resolve) => {
@@ -207,6 +225,14 @@ export class ProbeClient {
       this.daBrand = brand
       this.got.xtversion = true
       this.tryFinish()
+      return
+    }
+    // DA1 (\x1b[?…c) — the weak xterm-family hint. It must NOT early-finish:
+    // XTVERSION/DA2 carry the stronger brand, and a kitty/wezterm answers
+    // DA1 with the same 1;2 params — finishing on DA1 would misbrand them.
+    const da1 = brandFromDa1(csi)
+    if (da1 !== null) {
+      this.da1Brand = da1
     }
   }
 
@@ -220,8 +246,10 @@ export class ProbeClient {
       : "ansi16"
     const brand =
       (this.xtversionPayload !== "" ? brandFromXtversion(this.xtversionPayload) : null)
-      ?? this.daBrand
-      ?? (env.WT_SESSION !== undefined ? "WindowsTerminal" : "unknown")
+      ?? this.daBrand                       // DA2 (the strongest DA heuristic — WT 95)
+      ?? (env.WT_SESSION !== undefined ? "WindowsTerminal" : null) // env beats the weak DA1 hint
+      ?? this.da1Brand                      // DA1 xterm-ish hint — weakest identification
+      ?? "unknown"
     const multiplexer: "zellij" | "tmux" | "none" =
       env.ZELLIJ !== undefined ? "zellij"
       : env.TMUX !== undefined ? "tmux"

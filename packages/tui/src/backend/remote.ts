@@ -1,19 +1,24 @@
-// @i-harness/tui G2 (M38b/M41a) — REMOTE backend: a BackendClient over the
-// @i-harness/sdk JSON-RPC wire (v0 FROZEN — the field-level lock lives in
+// @i-harness/tui G2 (M38b/M41a/M41b) — REMOTE backend: a BackendClient over
+// the @i-harness/sdk JSON-RPC wire (v0 FROZEN — the field-level lock lives in
 // packages/sdk/test/server.test.ts "initialize wire contract v0"; M41a adds
 // the v1 methods session/history + session/list per the versioning rules:
-// v1 may ONLY add — the v0 surface stays untouched). This is the
+// v1 may ONLY add — the v0 surface stays untouched; M41b adds the v1.1
+// appendix session/cancel + session/rewind/* the same additive way —
+// protocolVersion stays 2, the new surface gates on the initialize
+// CAPABILITY ROWS ("session-cancel" / "session-rewind"). This is the
 // `--attach <sessionId>` path: the host spawns an `i-harness sdk` stdio
 // subprocess (apps/cli), the TUI drives a remote session over it.
 //
 // Wire surface used here (client → server):
 //   initialize {}                         → { name, version, protocolVersion,
-//                                           capabilities } — the version
-//                                           handshake: THE m41a capability
+//                                           capabilities } — the handshake:
+//                                           THE m41a/m41b capability
 //                                           detection. The backend captures
-//                                           protocolVersion itself (once,
-//                                           cached); < 2 → the v0 degrade
-//                                           paths below.
+//                                           protocolVersion AND capabilities
+//                                           (once, cached); protocolVersion <
+//                                           2 → the v0 degrade paths below;
+//                                           the capabilities ROWS gate the
+//                                           v1.1 cancel/rewind surface.
 //   session/prompt { sessionId, prompt }   → { sessionId, ok: true }; the
 //                                           response resolves AFTER the turn
 //                                           DRAINS; a failed turn is a -32603
@@ -35,6 +40,25 @@
 //                                           (title/updatedAt/turnCount) are
 //                                           OPTIONAL per the v1 wire — the
 //                                           client fills honest defaults)
+//   session/cancel { sessionId }          → { cancelled, reason? } (wire v1.1,
+//                                           session-cancel-row GATED)
+//   session/rewind/points { sessionId }   → { points: [{turnIndex, preview,
+//                                           files}] } (wire v1.1, session-
+//                                           rewind-row GATED)
+//   session/rewind/plan { sessionId, target, mode }
+//                                         → { clean, conflicts, unTracked,
+//                                           ops } (wire v1.1, same gate —
+//                                           target/mode echo back from the
+//                                           request into the mapped RewindPlan)
+//   session/rewind/execute { sessionId, target, mode }
+//                                         → { revertedFiles, conflicts,
+//                                           error? } (wire v1.1, same gate;
+//                                           the server appends the
+//                                           rewind/point marker into the
+//                                           session log — it arrives here via
+//                                           the session/event notification
+//                                           flow, mapped by the shared mapper
+//                                           exactly as before)
 //   shutdown                               → { ok: true } (host teardown)
 // Notifications (server → client):
 //   session/event  { sessionId, event }    — the APPEND-ONLY event stream
@@ -57,11 +81,18 @@
 // untouchable while G1 lands marks/marked) — hosts with the real client wire
 // it themselves; the wire names are the contract.
 //
-// LOUD GAPS (each documented honestly; 3/4 are CLOSED on wire v1 and degrade
-// to the v0 behavior on an old server — the dual path is at the member):
-//   1. cancel — v0 has NO cancel RPC (every session/prompt owns an internal
-//      AbortController; the client has no handle to it). cancel() no-ops and
-//      pushes ONE system note into the stream so the UI stays honest.
+// LOUD GAPS (each documented honestly; 2/4 are CLOSED on wire v1, 1/4 CLOSED
+// on wire v1.1 and degrade to the v0 behavior on an old server — the dual
+// path is at the member):
+//   1. cancel — CLOSED on v1.1: session/cancel, gated by the initialize
+//      capabilities ROW "session-cancel" (NOT protocolVersion — the v1.1
+//      appendix keeps 2). The v0 hole is why the degrade exists: v0 had NO
+//      cancel RPC (every session/prompt owns an internal AbortController; the
+//      client has no handle to it) — cancel() no-ops and pushes ONE system
+//      note into the stream so the UI stays honest. A v1.1 server answers
+//      { cancelled: false, reason: "not-running"|"not-found" } honestly — the
+//      client surfaces that as an in-stream note (never a silent no-op), and
+//      a wire failure degrades to a note too.
 //   2. steer — v0 exposes only the send tier (session/prompt). A steer during
 //      a running turn CHAINS behind it (the executor lane); when idle it
 //      degrades to submit — the SAME behavior as the embedded bridge's idle
@@ -83,10 +114,26 @@
 //   6. model label — the session's meta (modelSelection) is server-side and
 //      v0 has no session/meta RPC: modelLabel exists only when the HOST knows
 //      it (the -‑model spec it passed to the spawn).
+//   7. rewind — CLOSED on v1.1: the OPTIONAL BackendClient.rewind member
+//      (M43) is built ONLY when the handshake advertises the "session-rewind"
+//      row; an old server keeps the member ABSENT (undefined) — the loop's
+//      Esc-Esc rewind gate stays off, honestly (same contract as embedded's
+//      no-workspace default). The member is exposed over a GETTER: the
+//      handshake is async, so the member fills moments after construction —
+//      the loop keys on `rewind !== undefined`, never `in`.
 import type { Readable, Writable } from "node:stream"
 import { createInterface, type Interface } from "node:readline"
 import { spawn, type ChildProcess } from "node:child_process"
 import type { SessionEvent } from "@i-harness/core-session"
+import type {
+  ConflictOp,
+  FileOp,
+  RewindExecuteError,
+  RewindMode,
+  RewindPlan,
+  RewindPointSummary,
+  RewindResult,
+} from "@i-harness/rewind"
 import { createEventMapState, mapSessionEvent, type EventMapState } from "./embedded.ts"
 import type { BackendClient, SessionSummary, TuiEvent } from "../contracts.ts"
 
@@ -212,6 +259,187 @@ function parseListResult(result: unknown): SessionListResult {
   return { sessions, ...(unavailable ? { listingUnavailable: true } : {}) }
 }
 
+// -------------------------------------------------- v1.1 response parsing
+//
+// The v1.1 appendix (session/cancel + session/rewind/*), the same parser
+// discipline as the v1 section above: malformed TOP-LEVEL shapes are an
+// SdkWireError (-32603-style internal) — NEVER a fabricated result, callers
+// degrade; malformed ENTRIES inside a wire list are skipped (never a
+// fabricated point row / file op / conflict). The mapped client shapes are
+// the @i-harness/rewind types verbatim (contracts.ts already imports them —
+// no re-decoding).
+
+/** session/cancel result (wire v1.1): the server's honest abort answer. */
+export interface CancelResult {
+  cancelled: boolean
+  reason?: "not-running" | "not-found"
+}
+
+/** session/rewind/points result (wire v1.1): the point list — the
+ * RewindPointSummary shape verbatim (turnIndex/preview/files). */
+export interface RewindPointsResult {
+  points: RewindPointSummary[]
+}
+
+/** One file op on the M41b wire: { path, op } — mirror of the engine FileOp
+ * minus the store-internal blob id (the wire never leaks store keys). */
+export interface RewindFileOpWire {
+  path: string
+  op: "restore-blob" | "delete-added"
+}
+
+/** session/rewind/plan result (wire v1.1): the dry-run — the RewindPlan minus
+ * target/mode, those echo back from the request (the client mapper fills them
+ * into the client-side RewindPlan); file ops ride as { path, op } entries. */
+export interface RewindPlanResult {
+  clean: RewindFileOpWire[]
+  conflicts: ConflictOp[]
+  unTracked: string[]
+  ops: RewindFileOpWire[]
+}
+
+/** session/rewind/execute result (wire v1.1): the slim completion summary —
+ * `error` is the engine's had_errors message (a string; retry data kept
+ * server-side). The embedded bookkeeping bits (truncated / eventAppended)
+ * are NOT on the committed wire: they are honored only when the server
+ * carries them additively, else false — the rewind/point marker itself
+ * arrives via session/event independently of these two bits. */
+export interface RewindExecuteResult {
+  revertedFiles: number
+  conflicts: ConflictOp[]
+  error?: string
+  truncated?: boolean
+  eventAppended?: boolean
+}
+
+function parseCancelResult(result: unknown): CancelResult {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/cancel response: result is not an object")
+  }
+  const r = result as { cancelled?: unknown; reason?: unknown }
+  if (typeof r.cancelled !== "boolean") {
+    throw new SdkWireError(-32603, "malformed session/cancel response: cancelled is not a boolean")
+  }
+  return {
+    cancelled: r.cancelled,
+    ...(r.reason === "not-running" || r.reason === "not-found" ? { reason: r.reason } : {}),
+  }
+}
+
+/** One entry → engine FileOp. The COMMITTED wire discriminator is `op`
+ * (RewindFileOpWire); a `kind`-spelled entry (a host mapping the engine
+ * FileOp fields verbatim — the G1 in-flight race) is accepted too; both map
+ * to the client FileOp's `kind` (an engine-side blobId rides along when the
+ * server carries it — additive, never required). */
+function fileOpEntry(e: unknown): FileOp | undefined {
+  if (e === null || typeof e !== "object") return undefined
+  const o = e as { path?: unknown; op?: unknown; kind?: unknown; blobId?: unknown }
+  if (typeof o.path !== "string") return undefined
+  const kind =
+    o.kind === "restore-blob" || o.kind === "delete-added" ? o.kind
+    : o.op === "restore-blob" || o.op === "delete-added" ? o.op
+    : undefined
+  if (kind === undefined) return undefined
+  return {
+    path: o.path,
+    kind,
+    ...(typeof o.blobId === "string" && o.blobId !== "" ? { blobId: o.blobId } : {}),
+  }
+}
+
+function isConflictOpEntry(e: unknown): e is ConflictOp {
+  if (e === null || typeof e !== "object") return false
+  const o = e as { path?: unknown; kind?: unknown }
+  return (
+    typeof o.path === "string"
+    && (o.kind === "modified" || o.kind === "deleted" || o.kind === "created")
+  )
+}
+
+function fileOpEntries(raw: unknown): FileOp[] {
+  if (!Array.isArray(raw)) return []
+  const out: FileOp[] = []
+  for (const e of raw) {
+    const op = fileOpEntry(e)
+    if (op !== undefined) out.push(op)
+  }
+  return out
+}
+
+function conflictOpEntries(raw: unknown): ConflictOp[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(isConflictOpEntry)
+}
+
+function parseRewindPoints(result: unknown): RewindPointSummary[] {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/rewind/points response: result is not an object")
+  }
+  const points = (result as { points?: unknown }).points
+  if (!Array.isArray(points)) {
+    throw new SdkWireError(-32603, "malformed session/rewind/points response: points is not an array")
+  }
+  const out: RewindPointSummary[] = []
+  for (const raw of points) {
+    if (raw === null || typeof raw !== "object") continue
+    const p = raw as { turnIndex?: unknown; preview?: unknown; files?: unknown }
+    if (typeof p.turnIndex !== "number" || typeof p.preview !== "string" || typeof p.files !== "number") continue
+    out.push({ turnIndex: p.turnIndex, preview: p.preview, files: p.files })
+  }
+  return out
+}
+
+function parseRewindPlan(result: unknown, target: number, mode: RewindMode): RewindPlan {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/rewind/plan response: result is not an object")
+  }
+  const r = result as { clean?: unknown; conflicts?: unknown; unTracked?: unknown; ops?: unknown }
+  if (!Array.isArray(r.clean) || !Array.isArray(r.conflicts) || !Array.isArray(r.unTracked) || !Array.isArray(r.ops)) {
+    throw new SdkWireError(-32603, "malformed session/rewind/plan response: required arrays missing or malformed")
+  }
+  return {
+    target,
+    mode,
+    clean: fileOpEntries(r.clean),
+    conflicts: conflictOpEntries(r.conflicts),
+    unTracked: r.unTracked.filter((s): s is string => typeof s === "string" && s !== ""),
+    ops: fileOpEntries(r.ops),
+  }
+}
+
+function isExecuteErrorEntry(e: unknown): e is RewindExecuteError {
+  if (e === null || typeof e !== "object") return false
+  const o = e as { path?: unknown; message?: unknown }
+  return typeof o.path === "string" && typeof o.message === "string"
+}
+
+function parseRewindExecute(result: unknown, target: number, mode: RewindMode): RewindResult {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/rewind/execute response: result is not an object")
+  }
+  const r = result as { revertedFiles?: unknown; conflicts?: unknown; error?: unknown; truncated?: unknown; eventAppended?: unknown }
+  if (typeof r.revertedFiles !== "number" || !Array.isArray(r.conflicts)) {
+    throw new SdkWireError(-32603, "malformed session/rewind/execute response: revertedFiles/conflicts malformed")
+  }
+  const errors: RewindExecuteError[] =
+    typeof r.error === "string" ? [{ path: "", message: r.error }]
+    : Array.isArray(r.error) ? r.error.filter(isExecuteErrorEntry)
+    : isExecuteErrorEntry(r.error) ? [r.error]
+    : []
+  return {
+    target,
+    mode,
+    revertedFiles: r.revertedFiles,
+    conflicts: conflictOpEntries(r.conflicts),
+    errors,
+    // embedded bookkeeping not on the minimal wire — honored only when the
+    // server carries the fields additively; the marker arrives via
+    // session/event independently of these two bits
+    truncated: r.truncated === true,
+    eventAppended: r.eventAppended === true,
+  }
+}
+
 // ------------------------------------------------- subprocess wire client
 
 /** One in-flight request. */
@@ -331,6 +559,37 @@ class SdkStdioClient implements SdkClientLike {
     return parseListResult(await this.request("session/list", {}, REQUEST_TIMEOUT_MS))
   }
 
+  /** Wire v1.1: session/cancel — the mirror's typed request helper. The
+   * methods are additive (the caller gates on the handshake's session-cancel
+   * row); an old server answers -32601 → SdkWireError (callers degrade). */
+  async cancel(sessionId: string): Promise<CancelResult> {
+    return parseCancelResult(await this.request("session/cancel", { sessionId }, REQUEST_TIMEOUT_MS))
+  }
+
+  /** Wire v1.1: session/rewind/points — the point list (typed helper). */
+  async rewindPoints(sessionId: string): Promise<RewindPointSummary[]> {
+    return parseRewindPoints(await this.request("session/rewind/points", { sessionId }, REQUEST_TIMEOUT_MS))
+  }
+
+  /** Wire v1.1: session/rewind/plan — the dry-run plan, target/mode suffixed
+   * into the client-side RewindPlan from the request itself. */
+  async rewindPlan(sessionId: string, target: number, mode: RewindMode): Promise<RewindPlan> {
+    return parseRewindPlan(
+      await this.request("session/rewind/plan", { sessionId, target, mode }, REQUEST_TIMEOUT_MS),
+      target,
+      mode,
+    )
+  }
+
+  /** Wire v1.1: session/rewind/execute — the slim completion result. */
+  async rewindExecute(sessionId: string, target: number, mode: RewindMode): Promise<RewindResult> {
+    return parseRewindExecute(
+      await this.request("session/rewind/execute", { sessionId, target, mode }, REQUEST_TIMEOUT_MS),
+      target,
+      mode,
+    )
+  }
+
   private onLine(line: string): void {
     const decoded = decodeLine(line)
     if (decoded === null || typeof decoded !== "object") return
@@ -436,24 +695,50 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     }
   }
 
-  // ---- M41a capability detection: the initialize handshake's
-  // protocolVersion, captured on first wire need and cached. < 2 (an OLD
+  // ---- M41a/M41b capability detection: the initialize ServerInfo —
+  // protocolVersion AND capabilities — captured on first wire need (the
+  // handshake is fired EAGERLY at construction below) and cached. < 2 (an OLD
   // server — wire v0) → the honest dual path: replay [] and the
-  // active-session list stub, exactly as before the v1 methods existed.
-  let wireVersion: number | undefined
+  // active-session list stub, exactly as before the v1 methods existed. The
+  // M41b v1.1 appendix keeps protocolVersion 2 (additive-only) — the
+  // cancel/rewind surface gates on the capabilities ROWS instead.
+  let handshake: { protocolVersion: number; capabilities: Record<string, string[]> } | undefined
 
-  async function probeVersion(): Promise<number> {
-    if (wireVersion !== undefined) return wireVersion
-    let version = 1
+  async function probeHandshake(): Promise<{ protocolVersion: number; capabilities: Record<string, string[]> }> {
+    if (handshake !== undefined) return handshake
+    let h: { protocolVersion: number; capabilities: Record<string, string[]> } = { protocolVersion: 1, capabilities: {} }
     try {
-      const info = (await opts.client.request("initialize", {}, REQUEST_TIMEOUT_MS)) as { protocolVersion?: unknown } | null
-      version = typeof info?.protocolVersion === "number" ? info.protocolVersion : 1
+      const info = (await opts.client.request("initialize", {}, REQUEST_TIMEOUT_MS)) as
+        | { protocolVersion?: unknown; capabilities?: unknown }
+        | null
+        | undefined
+      h = {
+        protocolVersion: typeof info?.protocolVersion === "number" ? info.protocolVersion : 1,
+        capabilities:
+          typeof info?.capabilities === "object" && info.capabilities !== null && !Array.isArray(info.capabilities)
+            ? (info.capabilities as Record<string, string[]>)
+            : {},
+      }
     } catch {
       // a server that cannot complete initialize is treated as v0 — the
       // safest degrade (no new-method calls; the stub row stays honest)
     }
-    wireVersion = version
-    return version
+    handshake = h
+    return h
+  }
+
+  /** The v1 gate: protocolVersion ≥ 2 (session/history + session/list). */
+  async function probeVersion(): Promise<number> {
+    return (await probeHandshake()).protocolVersion
+  }
+
+  /** The v1.1 gate: a capabilities ROW is present (a non-empty array — the
+   * committed shape "session-cancel": ["1"]). The ROW NAME is the runtime
+   * contract: a G1 with a differently named row simply reports false → the
+   * honest old-server degrade (never a guessed method call). */
+  async function hasCapability(key: string): Promise<boolean> {
+    const rows = (await probeHandshake()).capabilities[key]
+    return Array.isArray(rows) && rows.length > 0
   }
 
   /** Wire v1 history — the raw wire method (the seam contract = the wire
@@ -473,6 +758,49 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     const result = await opts.client.request("session/list", {}, REQUEST_TIMEOUT_MS)
     return parseListResult(result)
   }
+
+  // ---- M41b: the conditional rewind bridge — BackendClient.rewind, the M43
+  // OPTIONAL member, over the v1.1 wire methods. Present ONLY when the
+  // handshake advertises the session-rewind row; an old server keeps the
+  // member ABSENT (undefined) so the loop's Esc-Esc rewind gate stays off —
+  // honest, same contract as embedded's no-workspace default. Exposed via a
+  // GETTER over this slot: the handshake is async, so the member fills when
+  // the eager probe below resolves (a few ms — before any human keypress);
+  // the loop always keys on `rewind !== undefined`, never `in`.
+  let rewindMember: NonNullable<BackendClient["rewind"]> | undefined
+
+  function buildRemoteRewindMember(): NonNullable<BackendClient["rewind"]> {
+    return {
+      async points() {
+        const result = await opts.client.request("session/rewind/points", { sessionId }, REQUEST_TIMEOUT_MS)
+        return parseRewindPoints(result)
+      },
+      async plan(target, mode) {
+        const result = await opts.client.request("session/rewind/plan", { sessionId, target, mode }, REQUEST_TIMEOUT_MS)
+        return parseRewindPlan(result, target, mode)
+      },
+      async execute(target, mode) {
+        // The server executes and APPENDS the rewind/point marker into the
+        // session log (the same appendEvent path as embedded) — the marker
+        // arrives back through the existing session/event notification flow
+        // (mapped by the shared mapper as before); the wire result is only
+        // the slim completion summary.
+        const result = await opts.client.request("session/rewind/execute", { sessionId, target, mode }, REQUEST_TIMEOUT_MS)
+        return parseRewindExecute(result, target, mode)
+      },
+    }
+  }
+
+  // Eager handshake fire: the initialize runs right away so the conditional
+  // rewind slot settles before the first keypress (and the first
+  // cancel/listSessions/replay call shares the cached result instead of
+  // paying this round-trip itself).
+  void probeHandshake().then((h) => {
+    const rows = h.capabilities["session-rewind"]
+    if (Array.isArray(rows) && rows.length > 0) {
+      rewindMember = buildRemoteRewindMember()
+    }
+  })
 
   async function submit(prompt: string): Promise<void> {
     if (closed) throw new Error("remote backend closed")
@@ -497,10 +825,32 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
   }
 
   async function cancel(): Promise<void> {
-    // LOUD gap 1: no cancel RPC — surface one honest note, never silent.
-    if (cancelNoted) return
-    cancelNoted = true
-    pushError("cancel unavailable over --attach (sdk wire v0: no cancel RPC)")
+    // M41b: the session-cancel row gates the WIRE cancel (v1.1). The v0
+    // degrade (one honest note, never silent) stays ONLY for servers that do
+    // not advertise the row.
+    if (!(await hasCapability("session-cancel"))) {
+      if (cancelNoted) return
+      cancelNoted = true
+      pushError("cancel unavailable over --attach (server did not advertise session-cancel)")
+      return
+    }
+    try {
+      const result = await opts.client.request("session/cancel", { sessionId }, REQUEST_TIMEOUT_MS)
+      const parsed = parseCancelResult(result)
+      if (!parsed.cancelled) {
+        // honest no-op note: the server's AbortSignal found nothing to abort.
+        pushError(
+          parsed.reason === "not-found"
+            ? `cancel: session ${sessionId} not found on the server`
+            : "cancel: nothing to interrupt — the session is not running",
+        )
+      }
+      // cancelled: true → the signal fired; the in-flight session/prompt ends
+      // on its own (its rejection is the loop's failure toast — never faked).
+    } catch (error) {
+      // wire failure → an honest note (never a silent no-op), per call
+      pushError(`cancel failed over --attach (${error instanceof Error ? error.message : String(error)})`)
+    }
   }
 
   async function *events(): AsyncIterable<TuiEvent> {
@@ -616,6 +966,13 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     status: () => lastStatus,
 
     modelLabel: opts.modelLabel,
+
+    // M41b: the conditional rewind bridge — a getter over the handshake slot
+    // (undefined until the eager initialize resolves; on an old server,
+    // never — Esc-Esc stays off honestly).
+    get rewind() {
+      return rewindMember
+    },
 
     async close(): Promise<void> {
       if (closed) return

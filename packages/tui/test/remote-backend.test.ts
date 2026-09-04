@@ -1,4 +1,4 @@
-// M38b G2 (M41a) — remote (SDK wire) backend tests.
+// M38b G2 (M41a/M41b) — remote (SDK wire) backend tests.
 //
 // Two strata:
 //   1. UNIT (in-process fake wire client): the BackendClient semantics over
@@ -7,7 +7,12 @@
 //      — byte-identical mapping, no copy), the sync status cache, the open()
 //      session filter switch, AND the M41a v1 consumption: the initialize
 //      handshake's protocolVersion (2 → session/history + session/list are
-//      used; 1 → the v0 degrade: replay [] + the active-session stub).
+//      used; 1 → the v0 degrade: replay [] + the active-session stub). The
+//      M41b v1.1 appendix (capability-Row gated — the handshake's
+//      capabilities, NOT protocolVersion): session/cancel wire vs. the honest
+//      system-note degrade, the conditional rewind member (points/plan/
+//      execute mapped round-trip + the rewind/point marker ride on
+//      session/event), and malformed-response degrades.
 //   2. E2E (REAL subprocess): package/tui cannot import @i-harness/sdk (not a
 //      dependency — the milestone forbids new private deps, package.json is
 //      untouchable while G1 lands marked/highlight.js), so the real server is
@@ -18,7 +23,8 @@
 //      (replay non-empty + list includes the session) are gated on the
 //      handshake's protocolVersion: when the server is still v0 (G1 not
 //      landed), the test falls back to the v0 assertions with a LOUD console
-//      warning and must be re-run once the v1 server is live.
+//      warning and must be re-run once the v1 server is live. The v1.1
+//      cancel/rewind assertions are likewise gated on the capabilities rows.
 import { spawnSync } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -30,6 +36,7 @@ import type { TuiEvent } from "../src/contracts.ts"
 import {
   createRemoteBackend,
   spawnSdkSubprocess,
+  SdkWireError,
   type SdkClientLike,
   type SdkNotification,
 } from "../src/backend/remote.ts"
@@ -43,6 +50,16 @@ async function waitFor(cond: () => boolean, timeoutMs: number): Promise<void> {
     await sleep(10)
   }
   throw new Error("waitFor: condition not met within budget")
+}
+
+/** Drain a backend's event stream in the background (the real loop's only
+ * consumer) — returns the seen array. */
+function startConsumer(backend: ReturnType<typeof createRemoteBackend>): TuiEvent[] {
+  const seen: TuiEvent[] = []
+  void (async () => {
+    for await (const ev of backend.events()) seen.push(ev)
+  })().catch(() => { /* stopped by close */ })
+  return seen
 }
 
 // ------------------------------------------------------------------ fake wire client
@@ -97,16 +114,6 @@ function emitTurn(client: FakeWireClient, sessionId: string, base: number): void
 }
 
 describe("createRemoteBackend (fake wire client)", () => {
-  /** Drain the backend's event stream in the background (the real loop's
-   * only consumer) — returns the seen array. */
-  function startConsumer(backend: ReturnType<typeof createRemoteBackend>): TuiEvent[] {
-    const seen: TuiEvent[] = []
-    void (async () => {
-      for await (const ev of backend.events()) seen.push(ev)
-    })().catch(() => { /* stopped by close */ })
-    return seen
-  }
-
   it("submits via session/prompt and streams the mapped turn with real seqs", async () => {
     const client = fakeWireClient()
     client.setHandler((method, params) => {
@@ -124,8 +131,13 @@ describe("createRemoteBackend (fake wire client)", () => {
     await backend.submit("hello")
     await waitFor(() => seen.some((e) => e.type === "turn" && e.phase === "end"), 2000)
 
-    // the wire method + params are EXACT (FROZEN contract names)
-    expect(client.requests[0]).toMatchObject({ method: "session/prompt", params: { sessionId: "s1", prompt: "hello" } })
+    // the wire method + params are EXACT (FROZEN contract names); the
+    // constructor also fires the EAGER initialize handshake (the M41b
+    // capability probe) — the prompt call is found, not index 0
+    expect(client.requests.find((r) => r.method === "session/prompt")).toMatchObject({
+      method: "session/prompt",
+      params: { sessionId: "s1", prompt: "hello" },
+    })
     // mapped 1:1 with the server's own seqs (mapSessionEvent reused verbatim
     // from the embedded bridge — the determinism anchor)
     expect(seen[0]).toEqual({ type: "user", text: "hello", seq: 100, ts: expect.any(Number) })
@@ -148,7 +160,7 @@ describe("createRemoteBackend (fake wire client)", () => {
     await backend.close()
   })
 
-  it("cancel: one honest stream note (no wire RPC); close idempotent", async () => {
+  it("cancel without the session-cancel row: one honest stream note, NO wire RPC; close idempotent", async () => {
     const client = fakeWireClient()
     const backend = createRemoteBackend({ client, sessionId: "s1" })
     const seen = startConsumer(backend)
@@ -159,6 +171,8 @@ describe("createRemoteBackend (fake wire client)", () => {
     const systems = seen.filter((e) => e.type === "system")
     expect(systems).toHaveLength(1)
     expect(systems[0]).toMatchObject({ text: expect.stringContaining("cancel unavailable") })
+    // the degrade is the honest old-server path: the wire never sees it
+    expect(client.requests.some((r) => r.method === "session/cancel")).toBe(false)
 
     await backend.close()
     await backend.close()
@@ -169,7 +183,10 @@ describe("createRemoteBackend (fake wire client)", () => {
     const client = fakeWireClient()
     const backend = createRemoteBackend({ client, sessionId: "s1" })
     await backend.steer("go go")
-    expect(client.requests[0]).toMatchObject({ method: "session/prompt", params: { sessionId: "s1", prompt: "go go" } })
+    expect(client.requests.find((r) => r.method === "session/prompt")).toMatchObject({
+      method: "session/prompt",
+      params: { sessionId: "s1", prompt: "go go" },
+    })
     await backend.close()
   })
 
@@ -342,6 +359,269 @@ describe("createRemoteBackend (wire v1: protocolVersion ≥ 2 handshake)", () =>
   })
 })
 
+describe("createRemoteBackend (wire v1.1: capability-row cancel + rewind)", () => {
+  it("cancel with the session-cancel row: wire session/cancel; cancelled:true → no fabricated note", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-cancel": ["1"] } }
+      if (method === "session/cancel") return { cancelled: true }
+      if (method === "session/status") return { running: false, queued: 0 }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    const seen = startConsumer(backend)
+
+    await backend.cancel()
+    // exact wire method + params (the v1.1 request shape)
+    expect(client.requests.find((r) => r.method === "session/cancel")).toMatchObject({
+      method: "session/cancel",
+      params: { sessionId: "s1" },
+    })
+    // a real abort fired → NO in-stream note at all (the in-flight prompt's
+    // own rejection is the loop's failure toast — never faked here)
+    expect(seen.filter((e) => e.type === "system")).toHaveLength(0)
+
+    await backend.close()
+  })
+
+  it("cancel cancelled:false + not-running → one honest no-op note", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-cancel": ["1"] } }
+      if (method === "session/cancel") return { cancelled: false, reason: "not-running" }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    const seen = startConsumer(backend)
+
+    await backend.cancel()
+    await waitFor(() => seen.some((e) => e.type === "system"), 1000)
+    const systems = seen.filter((e) => e.type === "system")
+    expect(systems).toHaveLength(1)
+    expect(systems[0]).toMatchObject({ text: expect.stringContaining("not running") })
+
+    await backend.close()
+  })
+
+  it("rewind with the session-rewind row: points/plan/execute round-trip; the rewind/point marker rides session/event", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-rewind": ["1"] } }
+      if (method === "session/rewind/points") {
+        return {
+          points: [
+            { turnIndex: 0, preview: "first", files: 2 },
+            { turnIndex: 1, preview: "second", files: 0 },
+          ],
+        }
+      }
+      if (method === "session/rewind/plan") {
+        // the COMMITTED wire shape: file ops are { path, op } (no blob ids)
+        return {
+          clean: [{ path: "src/a.ts", op: "restore-blob" }],
+          conflicts: [{ path: "src/b.ts", kind: "modified" }],
+          unTracked: ["old.txt"],
+          ops: [{ path: "src/a.ts", op: "restore-blob" }],
+        }
+      }
+      if (method === "session/rewind/execute") return { revertedFiles: 1, conflicts: [] }
+      if (method === "session/status") return { running: false, queued: 0 }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    const seen = startConsumer(backend)
+
+    // the conditional member appears once the eager handshake resolves
+    await waitFor(() => backend.rewind !== undefined, 1000)
+    const rw = backend.rewind!
+
+    const points = await rw.points()
+    expect(points).toEqual([
+      { turnIndex: 0, preview: "first", files: 2 },
+      { turnIndex: 1, preview: "second", files: 0 },
+    ])
+    expect(client.requests.find((r) => r.method === "session/rewind/points")).toMatchObject({
+      method: "session/rewind/points",
+      params: { sessionId: "s1" },
+    })
+
+    const plan = await rw.plan(1, "files")
+    // wire { path, op } → client FileOp { path, kind } (the structural mirror)
+    expect(plan).toEqual({
+      target: 1,
+      mode: "files",
+      clean: [{ path: "src/a.ts", kind: "restore-blob" }],
+      conflicts: [{ path: "src/b.ts", kind: "modified" }],
+      unTracked: ["old.txt"],
+      ops: [{ path: "src/a.ts", kind: "restore-blob" }],
+    })
+    expect(client.requests.find((r) => r.method === "session/rewind/plan")).toMatchObject({
+      method: "session/rewind/plan",
+      params: { sessionId: "s1", target: 1, mode: "files" },
+    })
+
+    const result = await rw.execute(1, "files")
+    expect(result).toEqual({
+      target: 1,
+      mode: "files",
+      revertedFiles: 1,
+      conflicts: [],
+      errors: [],
+      truncated: false,
+      eventAppended: false,
+    })
+    expect(client.requests.find((r) => r.method === "session/rewind/execute")).toMatchObject({
+      method: "session/rewind/execute",
+      params: { sessionId: "s1", target: 1, mode: "files" },
+    })
+
+    // execute's remote append lands in the server session log → the EXISTING
+    // session/event notification flow carries the rewind/point marker, mapped
+    // by the shared mapper exactly as before (the M43 TuiEvent::rewind row)
+    sendEvent(client, "s1", {
+      type: "rewind/point",
+      version: 1,
+      targetTurn: 1,
+      anchorSeq: 42,
+      mode: "files",
+      fileOps: [{ path: "src/a.ts", op: "restore" }],
+      seq: 50,
+    })
+    await waitFor(() => seen.some((e) => e.type === "rewind"), 1000)
+    expect(seen.find((e) => e.type === "rewind")).toMatchObject({ targetTurn: 1, anchorSeq: 42, mode: "files", seq: 50 })
+
+    await backend.close()
+  })
+
+  it("v1-only server (no v1.1 rows): cancel keeps the honest note; NO rewind member; v1 methods unaffected", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-history": ["1"], "session-list": ["1"] } }
+      if (method === "session/history") return { events: [], nextSeq: 0 }
+      if (method === "session/list") return { sessions: [] }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    const seen = startConsumer(backend)
+
+    await backend.cancel() // awaits the handshake → the member slot is settled
+    expect(backend.rewind).toBeUndefined()
+    await waitFor(() => seen.some((e) => e.type === "system"), 1000)
+    expect(seen.filter((e) => e.type === "system")[0]).toMatchObject({
+      text: expect.stringContaining("cancel unavailable"),
+    })
+    // the old server never sees the v1.1 methods (rows absent = gate off)
+    expect(client.requests.some((r) => r.method === "session/cancel")).toBe(false)
+    expect(client.requests.some((r) => r.method?.startsWith("session/rewind/"))).toBe(false)
+    // the v1 row-gated methods still work — rows are NOT a version bump
+    expect(await backend.replay(0)).toEqual([])
+
+    await backend.close()
+  })
+
+  it("malformed responses degrade: cancel → honest note; rewind rejects with SdkWireError", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-cancel": ["1"], "session-rewind": ["1"] } }
+      if (method === "session/cancel") return { cancelled: "yes" }
+      if (method === "session/rewind/points") return { points: "not-an-array" }
+      if (method === "session/rewind/plan") return { clean: 42 }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    const seen = startConsumer(backend)
+
+    // a malformed {cancelled} is never a fabricated result — honest note
+    await backend.cancel()
+    await waitFor(() => seen.some((e) => e.type === "system"), 1000)
+    expect(seen.filter((e) => e.type === "system")[0]).toMatchObject({
+      text: expect.stringContaining("cancel failed"),
+    })
+
+    await waitFor(() => backend.rewind !== undefined, 1000)
+    const rw = backend.rewind!
+    await expect(rw.points()).rejects.toBeInstanceOf(SdkWireError)
+    await expect(rw.plan(0, "all")).rejects.toBeInstanceOf(SdkWireError)
+
+    await backend.close()
+  })
+
+  it("rewind plan: both wire file-op spellings ({path,op} committed + {path,kind} engine-verbatim) map to FileOp.kind", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-rewind": ["1"] } }
+      if (method === "session/rewind/plan") {
+        return {
+          clean: [{ path: "a", op: "restore-blob" }],
+          conflicts: [],
+          unTracked: [],
+          ops: [{ path: "b", kind: "delete-added" }, { path: "c", op: "nonsense" }],
+        }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.rewind !== undefined, 1000)
+
+    const plan = await backend.rewind!.plan(1, "all")
+    expect(plan.clean).toEqual([{ path: "a", kind: "restore-blob" }])
+    expect(plan.ops).toEqual([{ path: "b", kind: "delete-added" }]) // nonsense discriminator → skipped
+
+    await backend.close()
+  })
+
+  it("rewind list entries: malformed rows are skipped, never fabricated", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-rewind": ["1"] } }
+      if (method === "session/rewind/points") {
+        return { points: [{ turnIndex: "bad" }, { turnIndex: 5, preview: "ok", files: 1 }] }
+      }
+      if (method === "session/rewind/plan") {
+        return { clean: [{ kind: "restore-blob" }], conflicts: [{ path: 1 }], unTracked: ["ok", ""], ops: [] }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.rewind !== undefined, 1000)
+    const rw = backend.rewind!
+
+    expect(await rw.points()).toEqual([{ turnIndex: 5, preview: "ok", files: 1 }])
+    const plan = await rw.plan(0, "all")
+    expect(plan.clean).toEqual([])
+    expect(plan.conflicts).toEqual([])
+    expect(plan.unTracked).toEqual(["ok"])
+    expect(plan.ops).toEqual([])
+
+    await backend.close()
+  })
+
+  it("rewind execute: wire error string → errors[{path:\"\",message}]; the additive truncated bit is honored", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-rewind": ["1"] } }
+      if (method === "session/rewind/execute") {
+        return { revertedFiles: 0, conflicts: [], error: "disk readonly", truncated: true }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.rewind !== undefined, 1000)
+
+    const result = await backend.rewind!.execute(2, "all")
+    expect(result).toMatchObject({
+      target: 2,
+      mode: "all",
+      revertedFiles: 0,
+      errors: [{ path: "", message: "disk readonly" }],
+      truncated: true,
+      eventAppended: false,
+    })
+
+    await backend.close()
+  })
+})
+
 describe("real i-harness sdk subprocess (wire-level end-to-end)", () => {
   const REPO_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)))
   const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
@@ -412,6 +692,34 @@ describe("real i-harness sdk subprocess (wire-level end-to-end)", () => {
           expect(typeof row!.title).toBe("string")
           expect(typeof row!.updatedAt).toBe("number")
           expect(typeof row!.turnCount).toBe("number")
+          // (c) M41b v1.1 — gate on the initialize CAPABILITIES ROWS (not
+          //     protocolVersion; the appendix keeps 2). G1 may be in flight
+          //     at runtime: a server without the rows degrades honestly (no
+          //     rewind member + the cancel note) and the LOUD warn is the
+          //     re-run marker once the v1.1 server is live.
+          const capabilities = (info as { capabilities?: Record<string, string[]> }).capabilities ?? {}
+          const hasCancelRow = Array.isArray(capabilities["session-cancel"]) && capabilities["session-cancel"]!.length > 0
+          const hasRewindRow = Array.isArray(capabilities["session-rewind"]) && capabilities["session-rewind"]!.length > 0
+          if (hasRewindRow) {
+            await waitFor(() => backend!.rewind !== undefined, 2000)
+            const points = await backend!.rewind!.points()
+            expect(Array.isArray(points)).toBe(true)
+          } else {
+            console.warn(
+              "[remote-backend e2e] server advertises no session-rewind row: asserting the v1-only rewind surface (member absent). Re-run once the v1.1 server lands.",
+            )
+            expect(backend.rewind).toBeUndefined()
+          }
+          // cancel must never throw: idle session → cancelled:false honest
+          // note, or the no-row degrade note (or a real abort — never a
+          // silent no-op either way)
+          await backend.cancel()
+          if (!hasCancelRow) {
+            await waitFor(() => seen.some((e) => e.type === "system"), 2000)
+            console.warn(
+              "[remote-backend e2e] server advertises no session-cancel row: cancel degraded to the honest note (no wire call). Re-run once the v1.1 server lands.",
+            )
+          }
         } else {
           // G1 (the v1 server) has not landed at runtime: the honest v0 dual
           // path — replay [] + the active-session stub. The v1 assertions
