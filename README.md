@@ -72,6 +72,23 @@ separate packaging track — out of scope.)
 
 Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
 
+### Building a distribution (M45)
+
+```
+node scripts/build-dist.mjs    # esbuild bundle + native deploy → dist/ (gitignored)
+node scripts/verify-dist.mjs   # smoke gate: --version / tui --help / help must pass
+```
+
+`build-dist.mjs` bundles `apps/cli/src/index.ts` with esbuild (platform node,
+ESM, node22) into `dist/ih.mjs` and deploys the three NATIVE externals —
+`node-pty`, `koffi`, `@vscode/ripgrep` (+ their platform optionals) into
+`dist/node_modules` from the pinned manifest `installer/dist-package.json`
+(exact versions, build-time drift check). The dist layout is
+`dist/{ih.mjs, model-catalog.json, package.json, README-dist.txt, node_modules/}`
+and runs with plain `node` — no tsx needed. `verify-dist.mjs` is the gate
+(fails loud on any mismatch). The `Distribution` story (installing the produced
+dist) is owned by the packaging milestone.
+
 ## Development status (M1 → M34)
 
 The full **backend-complete** milestone wheel (M1–M25) is done, and the

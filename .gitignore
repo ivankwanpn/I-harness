@@ -9,10 +9,14 @@ yarn-error.log*
 
 # 建置 / 測試 artifacts
 dist/
+build/
 coverage/
 .tmp/
 *.log
 *.tmp
+
+# NSIS installer staging（build-installer.mjs 產出的可重造 artifact）
+installer/staging/
 
 # e2e 臨時工作區（e2e 測試建立的 tmp）
 e2e/.tmp/

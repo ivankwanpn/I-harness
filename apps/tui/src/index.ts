@@ -99,7 +99,12 @@ export function parseFlags(argv: string[]): TuiFlags {
 
 // ------------------------------------------------------------------ sdk server spawn (M38b G2)
 
-const REPO_ROOT = fileURLToPath(new URL("../../../", import.meta.url))
+// M45: I_HARNESS_HOME — the dist-layout escape hatch. A bundled host (dist/
+// ih.mjs) computes this path RELATIVE TO THE BUNDLE, which is not the project
+// root anymore; the env override points the SDK spawn (tsx loader + CLI entry)
+// at a real source checkout. ENV wins ONLY when set — source-run unchanged
+// (this file is 3 levels deep; the URL default is still the project root).
+const REPO_ROOT = process.env.I_HARNESS_HOME ?? fileURLToPath(new URL("../../../", import.meta.url))
 // Absolute file URL of tsx's loader entry — resolves from ANY cwd (the sdk e2e
 // precedent; the host may be invoked from anywhere).
 const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
@@ -320,6 +325,11 @@ export async function runTui(flags: TuiFlags): Promise<number> {
 // the process entry point (e.g. `node --import tsx apps/tui/src/index.ts`),
 // never when imported (tests, other modules). File-URL comparison — same
 // pattern as apps/cli.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// M45: in the DIST bundle esbuild merges every module into one file with a
+// SINGLE import.meta.url — this guard would fire whenever the CLI bundle is
+// run (`node dist/ih.mjs --version` would ALSO boot the TUI: double-entry).
+// build-dist.mjs defines I_HARNESS_DIST=1 for the bundle, so the guard is
+// skipped there; source-run never sets it (semantics unchanged).
+if (process.argv[1] && process.env.I_HARNESS_DIST !== "1" && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runTui(parseFlags(process.argv.slice(2))).then((code) => process.exit(code))
 }
