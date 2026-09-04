@@ -1,21 +1,46 @@
-// @i-harness/tui G2 (M38b) — REMOTE backend: a BackendClient over the
-// @i-harness/sdk JSON-RPC wire contract v0 (FROZEN — the field-level lock
-// lives in packages/sdk/test/server.test.ts "initialize wire contract v0").
-// This is the `--attach <sessionId>` path: the host spawns an `i-harness sdk`
-// stdio subprocess (apps/cli), the TUI drives a remote session over it.
+// @i-harness/tui G2 (M38b/M41a) — REMOTE backend: a BackendClient over the
+// @i-harness/sdk JSON-RPC wire (v0 FROZEN — the field-level lock lives in
+// packages/sdk/test/server.test.ts "initialize wire contract v0"; M41a adds
+// the v1 methods session/history + session/list per the versioning rules:
+// v1 may ONLY add — the v0 surface stays untouched). This is the
+// `--attach <sessionId>` path: the host spawns an `i-harness sdk` stdio
+// subprocess (apps/cli), the TUI drives a remote session over it.
 //
 // Wire surface used here (client → server):
+//   initialize {}                         → { name, version, protocolVersion,
+//                                           capabilities } — the version
+//                                           handshake: THE m41a capability
+//                                           detection. The backend captures
+//                                           protocolVersion itself (once,
+//                                           cached); < 2 → the v0 degrade
+//                                           paths below.
 //   session/prompt { sessionId, prompt }   → { sessionId, ok: true }; the
 //                                           response resolves AFTER the turn
 //                                           DRAINS; a failed turn is a -32603
 //                                           error (data.events = the live
 //                                           collected events)
 //   session/status { sessionId }           → { running, queued }
+//   session/history { sessionId, afterSeq?, limit? }   → { events, nextSeq }
+//                                           (wire v1: the durable log walk —
+//                                           the M38b replay gap, CLOSED)
+//   session/list {}                       → { sessions: [...],
+//                                           listingUnavailable? } (wire v1:
+//                                           the M38b list gap, CLOSED;
+//                                           listingUnavailable: true — and the
+//                                           design-spec's status "listing-
+//                                           unavailable" marker, accepted too —
+//                                           = the server has no listing
+//                                           source → the client returns []
+//                                           honestly; entry fields beyond id
+//                                           (title/updatedAt/turnCount) are
+//                                           OPTIONAL per the v1 wire — the
+//                                           client fills honest defaults)
 //   shutdown                               → { ok: true } (host teardown)
 // Notifications (server → client):
 //   session/event  { sessionId, event }    — the APPEND-ONLY event stream
-//                                           (never replayed to a fresh
-//                                           subscription — wire v0 rule)
+//                                           (live only; historical events
+//                                           come back via session/history on
+//                                           a v1 server)
 //   session/status { sessionId, status }   — lifecycle transitions (queued /
 //                                           idle / error)
 //
@@ -32,7 +57,8 @@
 // untouchable while G1 lands marks/marked) — hosts with the real client wire
 // it themselves; the wire names are the contract.
 //
-// LOUD GAPS on wire v0 (never fabricated, each documented at the member):
+// LOUD GAPS (each documented honestly; 3/4 are CLOSED on wire v1 and degrade
+// to the v0 behavior on an old server — the dual path is at the member):
 //   1. cancel — v0 has NO cancel RPC (every session/prompt owns an internal
 //      AbortController; the client has no handle to it). cancel() no-ops and
 //      pushes ONE system note into the stream so the UI stays honest.
@@ -40,11 +66,17 @@
 //      a running turn CHAINS behind it (the executor lane); when idle it
 //      degrades to submit — the SAME behavior as the embedded bridge's idle
 //      path (embedded.ts module header item 3).
-//   3. replay — append-only wire: no history() RPC in v0, so replay(afterSeq)
-//      is [] and the TUI starts at the attach moment. Resuming OLD history
-//      over --attach needs a v1 `session/history` RPC (additive per the
-//      versioning rules: v1 may only ADD).
-//   4. listSessions — no list RPC in v0: the ACTIVE session only (stub row).
+//   3. replay — CLOSED on v1: session/history (handshake ≥ 2). On an OLD or
+//      errant server (protocolVersion < 2 — the initialize handshake) the
+//      append-only v0 rule still applies: replay(afterSeq) is [] and the TUI
+//      starts at the attach moment. A v1 history call failure also degrades
+//      to [] + a debug note (never fake events).
+//   4. listSessions — CLOSED on v1: session/list (handshake ≥ 2). v0/present
+//      degrade: the ACTIVE session only (stub row — contract-allowed), and a
+//      v1 server without a listing source answers with the unavailability
+//      marker (committed wire: `listingUnavailable: true`; design-spec's
+//      status "listing-unavailable" is accepted too) → the client returns []
+//      (honest empty; no fabricated rows).
 //   5. context — no per-session metrics RPC in v0: the OPTIONAL
 //      BackendClient.context() member is absent (the loop renders only what
 //      exists — the chip is hidden, never estimated).
@@ -66,8 +98,34 @@ export interface SdkNotification {
   params?: unknown
 }
 
+/** session/history result (wire v1): the durable SessionEvent log walk. */
+export interface HistoryResult {
+  events: SessionEvent[]
+  /** The server's suggested next cursor (kept as emitted; the backend tracks
+   * its own cursor from the mapped events — same as the embedded bridge). */
+  nextSeq: number
+}
+
+/** session/list result (wire v1, NORMALIZED for the TUI): the row fields are
+ * the SessionSummary's required ones (title "Session" / updatedAt 0 /
+ * turnCount 0 fallbacks when the wire row carries only the id — the v1 wire's
+ * entry fields beyond id are OPTIONAL per the contract; context fields parse
+ * only when present), and the unavailability markers normalized to one flag:
+ * `listingUnavailable: true` (the committed v1 shape) OR the design-spec's
+ * `status: "listing-unavailable"` are both accepted on the wire. */
+export interface SessionListResult {
+  sessions: SessionSummary[]
+  /** true when the server has no listing source (normalized marker) — the
+   * client must NOT present [] as "the store is empty". */
+  listingUnavailable?: true
+}
+
 /** Structural subset of @i-harness/sdk HarnessClient — the wire methods the
- * remote backend uses. A real HarnessClient satisfies this exactly. */
+ * remote backend uses. A real HarnessClient satisfies this exactly. The seam
+ * stays the WIRE METHODS (request()): the backend speaks session/history and
+ * session/list by their wire names directly (a v0-era client on an old server
+ * is gated by the version probe; the typed history()/listSessions() request
+ * helpers live on the concrete stdio mirror below for hosts' convenience). */
 export interface SdkClientLike {
   request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown>
   /** Server → client notifications (session/event, session/status). */
@@ -93,6 +151,65 @@ export class SdkWireError extends Error {
     this.code = code
     this.data = data
   }
+}
+
+// -------------------------------------------------- v1 response parsing
+//
+// Both wire consumers (the stdio mirror's typed helpers AND the backend's raw
+// request() calls) run these parsers so a v1 response is validated
+// identically no matter which path produced it. Malformed shapes are an
+// SdkWireError (-32603-style internal) — NEVER a fabricated result; callers
+// degrade.
+
+/** Validate one session/history result (wire v1). */
+function parseHistoryResult(result: unknown): HistoryResult {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/history response: result is not an object")
+  }
+  const r = result as { events?: unknown; nextSeq?: unknown }
+  if (!Array.isArray(r.events)) {
+    throw new SdkWireError(-32603, "malformed session/history response: events is not an array")
+  }
+  return {
+    events: r.events as SessionEvent[],
+    nextSeq: typeof r.nextSeq === "number" ? r.nextSeq : -1,
+  }
+}
+
+/** Validate one session/list result (wire v1) and NORMALIZE it. Both the
+ * committed v1 marker (`listingUnavailable: true`) and the design-spec's
+ * `status: "listing-unavailable"` are accepted; a missing/insane `sessions`
+ * array is the unavailability shape too — never a fabricated set. Entry
+ * fields beyond id are OPTIONAL on the v1 wire (a header-only listing source
+ * serves `{ id }`): the SessionSummary's required fields get honest defaults
+ * (title "Session" = unknown, updatedAt 0 = unknown, turnCount 0), and
+ * contextUsed/contextTotal are copied only when present (never a zero). */
+function parseListResult(result: unknown): SessionListResult {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/list response: result is not an object")
+  }
+  const r = result as { sessions?: unknown; status?: unknown; listingUnavailable?: unknown }
+  const unavailable =
+    r.listingUnavailable === true || r.status === "listing-unavailable"
+  if (!Array.isArray(r.sessions)) {
+    // e.g. { listingUnavailable: true } without a sessions array
+    return { sessions: [], ...(unavailable ? { listingUnavailable: true } : {}) }
+  }
+  const sessions: SessionSummary[] = []
+  for (const raw of r.sessions) {
+    if (raw === null || typeof raw !== "object") continue
+    const e = raw as Record<string, unknown>
+    if (typeof e.id !== "string" || e.id === "") continue
+    sessions.push({
+      id: e.id,
+      title: typeof e.title === "string" && e.title !== "" ? e.title : "Session",
+      updatedAt: typeof e.updatedAt === "number" ? e.updatedAt : 0,
+      turnCount: typeof e.turnCount === "number" ? e.turnCount : 0,
+      ...(typeof e.contextUsed === "number" ? { contextUsed: e.contextUsed } : {}),
+      ...(typeof e.contextTotal === "number" ? { contextTotal: e.contextTotal } : {}),
+    })
+  }
+  return { sessions, ...(unavailable ? { listingUnavailable: true } : {}) }
 }
 
 // ------------------------------------------------- subprocess wire client
@@ -192,6 +309,26 @@ class SdkStdioClient implements SdkClientLike {
     ])
     if (!exited) this.child.kill()
     this.rl.close()
+  }
+
+  /** Wire v1: session/history — the mirror's typed request helper. The
+   * request/response matching is the existing per-request-id path inside
+   * request() (the pending map); this only shapes the call + validates the
+   * result shape (parseHistoryResult). An old v0 server answers -32601 →
+   * the helper rejects with SdkWireError (callers degrade). */
+  async history(sessionId: string, afterSeq?: number, limit?: number): Promise<HistoryResult> {
+    const result = await this.request(
+      "session/history",
+      { sessionId, ...(afterSeq !== undefined ? { afterSeq } : {}), ...(limit !== undefined ? { limit } : {}) },
+      REQUEST_TIMEOUT_MS,
+    )
+    return parseHistoryResult(result)
+  }
+
+  /** Wire v1: session/list — the mirror's typed request helper (response
+   * matching per-request-id as in request(); result validated). */
+  async listSessions(): Promise<SessionListResult> {
+    return parseListResult(await this.request("session/list", {}, REQUEST_TIMEOUT_MS))
   }
 
   private onLine(line: string): void {
@@ -299,6 +436,44 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     }
   }
 
+  // ---- M41a capability detection: the initialize handshake's
+  // protocolVersion, captured on first wire need and cached. < 2 (an OLD
+  // server — wire v0) → the honest dual path: replay [] and the
+  // active-session list stub, exactly as before the v1 methods existed.
+  let wireVersion: number | undefined
+
+  async function probeVersion(): Promise<number> {
+    if (wireVersion !== undefined) return wireVersion
+    let version = 1
+    try {
+      const info = (await opts.client.request("initialize", {}, REQUEST_TIMEOUT_MS)) as { protocolVersion?: unknown } | null
+      version = typeof info?.protocolVersion === "number" ? info.protocolVersion : 1
+    } catch {
+      // a server that cannot complete initialize is treated as v0 — the
+      // safest degrade (no new-method calls; the stub row stays honest)
+    }
+    wireVersion = version
+    return version
+  }
+
+  /** Wire v1 history — the raw wire method (the seam contract = the wire
+   * names; a host's real client — typed helpers of any shape or none — always
+   * speaks the same names through request()). */
+  async function wireHistory(afterSeq: number, limit?: number): Promise<HistoryResult> {
+    const result = await opts.client.request(
+      "session/history",
+      { sessionId, afterSeq, ...(limit !== undefined ? { limit } : {}) },
+      REQUEST_TIMEOUT_MS,
+    )
+    return parseHistoryResult(result)
+  }
+
+  /** Wire v1 list — the raw wire method (same seam reasoning). */
+  async function wireList(): Promise<SessionListResult> {
+    const result = await opts.client.request("session/list", {}, REQUEST_TIMEOUT_MS)
+    return parseListResult(result)
+  }
+
   async function submit(prompt: string): Promise<void> {
     if (closed) throw new Error("remote backend closed")
     try {
@@ -368,7 +543,26 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
 
   return {
     async listSessions(): Promise<SessionSummary[]> {
-      // LOUD gap 4: no list RPC — the active session only (contract allows it).
+      // Wire v1 (handshake ≥ 2): session/list — the server's real listing.
+      // The server has no listing source → listingUnavailable (the committed
+      // v1 marker; the design-spec's status marker is normalized too) → []
+      // (HONEST empty — never a row the server did not provide).
+      if ((await probeVersion()) >= 2) {
+        try {
+          const result = await wireList()
+          if (result.listingUnavailable === true) {
+            return []
+          }
+          return result.sessions
+        } catch (error) {
+          // honest degrade: [] + a debug note (a dead/errant server must not
+          // produce fabricated rows)
+          console.debug(`[remote] listSessions: wire session/list failed — ${error instanceof Error ? error.message : String(error)}`)
+          return []
+        }
+      }
+      // v0 degrade (protocolVersion < 2): no session/list RPC — the ACTIVE
+      // session only (contract-allowed stub row), exactly as before.
       return [{ id: sessionId, title: opts.title ?? "Session", updatedAt: Date.now(), turnCount }]
     },
 
@@ -391,8 +585,30 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     seqCursor: () => cursor,
 
     async replay(afterSeq: number): Promise<TuiEvent[]> {
-      // LOUD gap 3: append-only wire — no history() in v0, so a pre-attach gap
-      // is unreplayable. [] is honest (never fake events).
+      // Wire v1 (handshake ≥ 2): session/history — the durable log walk,
+      // mapped by the SAME shared mapper the embedded bridge and the live
+      // notification path use (byte-identical mapping; the determinism
+      // anchor), with a fresh map state over the whole walk so the
+      // assistant-chunk dedupe sees every step.
+      if ((await probeVersion()) >= 2) {
+        try {
+          const { events } = await wireHistory(afterSeq)
+          const state = createEventMapState()
+          const out: TuiEvent[] = []
+          for (const ev of events) {
+            const mapped = mapSessionEvent(ev, state)
+            if (mapped !== undefined && mapped.seq > afterSeq) out.push(mapped)
+          }
+          if (out.length > 0) cursor = Math.max(cursor, out[out.length - 1]!.seq)
+          return out
+        } catch (error) {
+          // honest degrade: [] + a debug note — never fabricated events.
+          console.debug(`[remote] replay: wire session/history failed — ${error instanceof Error ? error.message : String(error)}`)
+          return []
+        }
+      }
+      // v0 degrade (protocolVersion < 2): append-only wire — no history RPC,
+      // so a pre-attach gap is unreplayable. [] is honest (never fake events).
       void afterSeq
       return []
     },
