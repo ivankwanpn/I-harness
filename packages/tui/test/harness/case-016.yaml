@@ -107,9 +107,9 @@ steps:
   - await-marker: { name: frame-6 }
   - assert-cell-colors:
       cells:
-        - { row: 7, col: 6, text: "p", fg: "#3a95ab", bold: true }
-        - { row: 7, col: 11, text: "(", fg: "#3a95ab", bold: false }
-        - { row: 7, col: 12, text: "1", fg: "#bb9af7", bold: false }
+        - { row: 7, col: 6, text: "p", fg: "#3a95ab", bg: "#1c1c1c", bold: true }
+        - { row: 7, col: 11, text: "(", fg: "#3a95ab", bg: "#1c1c1c", bold: false }
+        - { row: 7, col: 12, text: "1", fg: "#bb9af7", bg: "#1c1c1c", bold: false }
         - { row: 7, col: 2, text: "┃", fg: "#3a95ab" }
   # frame-7: chunk 6 "Last para.\n" — post-fence tail paragraph (9th block row);
   # the code highlight persists

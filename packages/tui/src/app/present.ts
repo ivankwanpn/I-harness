@@ -350,9 +350,14 @@ function drawScrollback(
     const yStyle = view.color(palette.grayDim)
     let rx = textStart
     for (const run of line.runs) {
+      // codeBg must reach styleFor: a plain TextStyle name through view.text
+      // would drop the run's md_code_bg (M38b finding: fullscreen code blocks
+      // painted no background behind the code body).
       const st = inverted
         ? { ...styleFor(run.style, palette, cap, run.codeBg === true), invert: true }
-        : run.style
+        : run.codeBg === true
+          ? styleFor(run.style, palette, cap, true)
+          : run.style
       rx = view.text(rx, y, run.text, st, Math.max(textStart, clip))
     }
     if (tsW > 0 && ts !== undefined) {
