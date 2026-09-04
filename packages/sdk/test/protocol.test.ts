@@ -229,3 +229,63 @@ describe("HarnessClient v1 helpers (history / listSessions, in-process transport
     }
   })
 })
+
+describe("HarnessClient v1.1 helpers (cancel / rewind*, in-process transport)", () => {
+  it("cancel / rewindPoints / rewindPlan / rewindExecute (and the session-level mirrors) round-trip", async () => {
+    const clientRead = new PassThrough() // server → client
+    const clientWrite = new PassThrough() // client → server
+    const client = new HarnessClient(clientRead, clientWrite)
+    const rl = createInterface({ input: clientWrite })
+    const seen: Array<{ method: string; params: unknown }> = []
+    rl.on("line", (line) => {
+      const msg = decodeFrame(line)
+      if (!isRpcRequest(msg)) return
+      seen.push({ method: msg.method, params: msg.params })
+      switch (msg.method) {
+        case "session/cancel":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, { cancelled: false, reason: "not-running" })))
+          break
+        case "session/rewind/points":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, { points: [{ turnIndex: 0, preview: "p", files: 1 }] })))
+          break
+        case "session/rewind/plan":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, { clean: [], conflicts: [{ path: "b", kind: "modified" }], unTracked: ["u"], ops: [] })))
+          break
+        case "session/rewind/execute":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, { revertedFiles: 3, conflicts: [], error: "warn" })))
+          break
+        default:
+          clientRead.write(encodeFrame(makeFailure(msg.id, INTERNAL_ERROR, "boom")))
+      }
+    })
+    try {
+      expect(await client.cancel("s1")).toEqual({ cancelled: false, reason: "not-running" })
+      expect(await client.rewindPoints("s1")).toEqual({ points: [{ turnIndex: 0, preview: "p", files: 1 }] })
+      expect(await client.rewindPlan("s1", 2, "all")).toEqual({
+        clean: [], conflicts: [{ path: "b", kind: "modified" }], unTracked: ["u"], ops: [],
+      })
+      expect(await client.rewindExecute("s1", 2, "files")).toEqual({ revertedFiles: 3, conflicts: [], error: "warn" })
+      // session-level handle mirrors
+      const session = client.session("s1")
+      expect(await session.cancel()).toEqual({ cancelled: false, reason: "not-running" })
+      expect(await session.rewindPoints()).toEqual({ points: [{ turnIndex: 0, preview: "p", files: 1 }] })
+      expect(await session.rewindPlan(2, "conversation")).toEqual({
+        clean: [], conflicts: [{ path: "b", kind: "modified" }], unTracked: ["u"], ops: [],
+      })
+      expect(await session.rewindExecute(2, "all")).toEqual({ revertedFiles: 3, conflicts: [], error: "warn" })
+      expect(seen).toEqual([
+        { method: "session/cancel", params: { sessionId: "s1" } },
+        { method: "session/rewind/points", params: { sessionId: "s1" } },
+        { method: "session/rewind/plan", params: { sessionId: "s1", target: 2, mode: "all" } },
+        { method: "session/rewind/execute", params: { sessionId: "s1", target: 2, mode: "files" } },
+        { method: "session/cancel", params: { sessionId: "s1" } },
+        { method: "session/rewind/points", params: { sessionId: "s1" } },
+        { method: "session/rewind/plan", params: { sessionId: "s1", target: 2, mode: "conversation" } },
+        { method: "session/rewind/execute", params: { sessionId: "s1", target: 2, mode: "all" } },
+      ])
+    } finally {
+      rl.close()
+      await client.close()
+    }
+  })
+})

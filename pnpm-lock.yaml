@@ -110,6 +110,9 @@ importers:
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../../packages/provider
+      '@i-harness/rewind':
+        specifier: workspace:*
+        version: link:../../packages/rewind
       '@i-harness/runtime-context':
         specifier: workspace:*
         version: link:../../packages/runtime-context

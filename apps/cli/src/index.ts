@@ -1,6 +1,8 @@
 import { pathToFileURL } from "node:url"
 import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
+import { stat } from "node:fs/promises"
+import { join } from "node:path"
 import { ndJsonStream } from "@agentclientprotocol/sdk"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
@@ -10,6 +12,8 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createSessionService } from "@i-harness/session-executor"
+import type { SessionAssembly } from "@i-harness/session-executor"
+import { RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
@@ -225,6 +229,11 @@ async function runSdkCommand(args: string[]): Promise<number> {
     workspace: process.cwd(),
     ...(coordinator !== undefined ? { coordinator } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
+    // M41b v1.1: rewind engine — the assembly creates the RewindStore +
+    // RewindRecorder per session (keyed on sessionId) and records turns; the
+    // rewindFactory below serves the rewind surface over that handle. Only
+    // meaningful with a --session-dir (a store root to hang rewind/ under).
+    ...(storeRoot !== undefined ? { rewindStoreRoot: storeRoot } : {}),
     ...(coordinator !== undefined
       ? {
           loadMeta: async (id: string) => {
@@ -238,13 +247,62 @@ async function runSdkCommand(args: string[]): Promise<number> {
       : {}),
   })
 
+  // M41b v1.1: the server-side rewind seam — mirror of the embedded bridge's
+  // svcFor pattern: watch assemblies (the onAssembly hook fires once per live
+  // assembly), then resolve the CURRENT assembly's rewind handle per request.
+  // The RewindService is rebuilt per call over that handle (never cached — a
+  // session switch must not serve a stale store), and the factory returns
+  // undefined (→ -32603 "rewind not enabled" on the wire) for an assembly
+  // built without rewind or a session this process never opened.
+  const liveAssemblies = new Map<string, SessionAssembly>()
+  service.onAssembly((assembly) => {
+    if (assembly.sessionId !== undefined) liveAssemblies.set(assembly.sessionId, assembly)
+  })
+  const workspaceRoot = process.cwd()
+  const rewindFor = (sessionId: string) => {
+    const assembly = liveAssemblies.get(sessionId)
+    if (assembly === undefined || assembly.rewind === undefined) return undefined
+    const svc = new RewindService({ store: assembly.rewind.store, workspace: workspaceRoot })
+    return {
+      points: async () => ({
+        points: (await svc.points()).map((p) => ({ turnIndex: p.turnIndex, preview: p.preview, files: p.files })),
+      }),
+      plan: async (target: number, mode: "all" | "files" | "conversation") => {
+        const plan = await svc.plan(target, mode)
+        // wire FileOp mirrors the engine FileOp minus the blob id (strip)
+        return {
+          clean: plan.clean.map((f) => ({ path: f.path, op: f.kind })),
+          conflicts: plan.conflicts,
+          unTracked: plan.unTracked,
+          ops: plan.ops.map((f) => ({ path: f.path, op: f.kind })),
+        }
+      },
+      execute: async (target: number, mode: "all" | "files" | "conversation", hooks: { appendEvent: (ev: unknown) => void }) => {
+        const result = await svc.execute(target, mode, { appendEvent: (ev) => hooks.appendEvent(ev) })
+        return {
+          revertedFiles: result.revertedFiles,
+          conflicts: result.conflicts,
+          ...(result.errors.length > 0
+            ? { error: result.errors.map((e) => `${e.path}: ${e.message}`).join("; ") }
+            : {}),
+        }
+      },
+    }
+  }
+
   const rl = createInterface({ input: process.stdin, terminal: false })
   const server = createSdkServer(service, {
     coordinator,
+    // M41b v1.1: the rewind seam (wire-level "session-rewind" capability).
+    // Present only with --session-dir (the assembly-side rewindStoreRoot chain
+    // above); without it, every rewind method answers "rewind not enabled".
+    ...(storeRoot !== undefined ? { rewindFactory: rewindFor } : {}),
     // M41a v1: session/list source — the store listing, web-host mirror
     // (coordinator.list() + header-only profile per row, settled per row so a
     // single corrupt/missing file never fails the whole list; the row is still
-    // SERVED with just the id and the failure is loud on stderr).
+    // SERVED with just the id and the failure is loud on stderr). M41b v1.1:
+    // rows are enriched — updatedAt (artifact mtime, createdAt fallback) +
+    // turnCount (turn/start count from a full-log read — both per-row settled).
     listSessions:
       coordinator === undefined
         ? undefined
@@ -252,16 +310,42 @@ async function runSdkCommand(args: string[]): Promise<number> {
             const ids = await coordinator.list()
             const profiles = await Promise.allSettled(ids.map((id) => coordinator.profile(id)))
             const sessions: SessionListEntry[] = []
-            profiles.forEach((profile, index) => {
+            for (let index = 0; index < ids.length; index++) {
               const id = ids[index]!
+              const profile = profiles[index]!
               if (profile.status === "rejected") {
                 console.error(`[i-harness sdk] session list: profile for "${id}" failed: ${String(profile.reason)}`)
                 sessions.push({ id })
-                return
+                continue
               }
               const meta = profile.value.meta
-              sessions.push({ id, ...(meta.title !== undefined ? { title: meta.title } : {}) })
-            })
+              const row: SessionListEntry = { id, ...(meta.title !== undefined ? { title: meta.title } : {}) }
+              // updatedAt — the artifact mtime (SessionEvents carry no
+              // timestamp; SessionMeta has only createdAt — M37b store-listing
+              // convention), createdAt ISO as the fallback. (`storeRoot` is
+              // defined whenever this source is wired — see the dirIdx guard
+              // above; the closure's coordinator presence implies it.)
+              const updatedAt = await stat(join(storeRoot!, `${id}.jsonl`))
+                .then((s) => s.mtimeMs)
+                .catch(() => undefined)
+              if (updatedAt !== undefined) {
+                row.updatedAt = updatedAt
+              } else {
+                const parsed = Date.parse(meta.createdAt)
+                if (!Number.isNaN(parsed)) row.updatedAt = parsed
+              }
+              // turnCount — full-log read (turn/start events); a failing load
+              // keeps the row honest without the count (loud on stderr).
+              try {
+                const { session } = await coordinator.load(id)
+                row.turnCount = session.events.filter((ev) => ev.type === "turn/start").length
+              } catch (error) {
+                console.error(
+                  `[i-harness sdk] session list: load for "${id}" failed: ${error instanceof Error ? error.message : String(error)}`,
+                )
+              }
+              sessions.push(row)
+            }
             return { sessions }
           },
     onWrite: (message) => process.stdout.write(encodeFrame(message)),

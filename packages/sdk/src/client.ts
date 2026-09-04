@@ -15,6 +15,11 @@ import {
   type RpcNotification,
   type RpcSuccess,
   type SessionListResult,
+  type CancelResult,
+  type RewindPointsResponse,
+  type RewindPlanResponse,
+  type RewindExecuteResponse,
+  type RewindMode,
 } from "./protocol.ts"
 
 export interface ServerInfo {
@@ -219,6 +224,39 @@ export class HarnessClient {
     return result as SessionListResult
   }
 
+  /** M41b v1.1: abort the session's in-flight submit (the server aborts the
+   * per-session AbortController session/prompt created). `cancelled` false +
+   * reason "not-running" (known, idle) or "not-found" (server never saw the
+   * session) — an honest answer, never an error frame. */
+  async cancel(sessionId: string): Promise<CancelResult> {
+    const result = await this.request("session/cancel", { sessionId })
+    return result as CancelResult
+  }
+
+  /** M41b v1.1: the rewind engine's durable points of a live session.
+   * Rejects with RpcError(-32602, "session not found") for an unknown
+   * session, -32603 "rewind not enabled" when the host wired no rewind seam. */
+  async rewindPoints(sessionId: string): Promise<RewindPointsResponse> {
+    const result = await this.request("session/rewind/points", { sessionId })
+    return result as RewindPointsResponse
+  }
+
+  /** M41b v1.1: the lazy two-phase rewind dry run (engine plan against the
+   * target turn — clean/conflicts/unTracked/ops; wire shapes mirror
+   * packages/rewind). */
+  async rewindPlan(sessionId: string, target: number, mode: RewindMode): Promise<RewindPlanResponse> {
+    const result = await this.request("session/rewind/plan", { sessionId, target, mode })
+    return result as RewindPlanResponse
+  }
+
+  /** M41b v1.1: apply the rewind — file restore + the rewind/point
+   * conversation marker appended to the live session log (flows on
+   * session/event). */
+  async rewindExecute(sessionId: string, target: number, mode: RewindMode): Promise<RewindExecuteResponse> {
+    const result = await this.request("session/rewind/execute", { sessionId, target, mode })
+    return result as RewindExecuteResponse
+  }
+
   /** Graceful close: shutdown notification, end the write side, await the
    * subprocess exit (kill after 2s when the server does not exit). */
   async close(): Promise<void> {
@@ -282,6 +320,26 @@ export class HarnessSession {
   /** M41a v1: history walk for this session (afterSeq exclusive, limit paging). */
   history(opts?: HistoryOptions): Promise<HistoryRange> {
     return this.client.history(this.sessionId, opts)
+  }
+
+  /** M41b v1.1: abort this session's in-flight submit. */
+  cancel(): Promise<CancelResult> {
+    return this.client.cancel(this.sessionId)
+  }
+
+  /** M41b v1.1: this session's rewind points. */
+  rewindPoints(): Promise<RewindPointsResponse> {
+    return this.client.rewindPoints(this.sessionId)
+  }
+
+  /** M41b v1.1: rewind dry run against `target` (turn index) in `mode`. */
+  rewindPlan(target: number, mode: RewindMode): Promise<RewindPlanResponse> {
+    return this.client.rewindPlan(this.sessionId, target, mode)
+  }
+
+  /** M41b v1.1: apply the rewind to this session. */
+  rewindExecute(target: number, mode: RewindMode): Promise<RewindExecuteResponse> {
+    return this.client.rewindExecute(this.sessionId, target, mode)
   }
 }
 

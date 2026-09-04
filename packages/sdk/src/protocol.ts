@@ -76,6 +76,53 @@
  * A v0 client that only speaks the v0 methods is unaffected — the server
  * answers every v0 request per the v0 shapes above. Breaking-change policy
  * is unchanged: v1 (and any later version) stays additive-only.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SDK Wire Contract v1.1 addendum — M41b, 2026-09-05 (ADDITIVE-ONLY).
+ *
+ * v1.1 is an APPENDIX of v1: PROTOCOL_VERSION STAYS 2 (capability rows carry
+ * the new surface; breaking-change policy unchanged). v1.1 only ADDS:
+ *
+ *   initialize       → capabilities gains two more rows:
+ *                        "session-cancel": ["1"]
+ *                        "session-rewind": ["1"]
+ *   session/cancel { sessionId } → { cancelled: boolean, reason? }
+ *                     The server holds the in-flight submit's AbortController
+ *                     per session (session/prompt creates it) and aborts it.
+ *                     cancelled:true = the in-flight submit was aborted.
+ *                     cancelled:false + reason "not-running" = the session is
+ *                     known and idle (nothing in flight); + reason
+ *                     "not-found" = the server has never seen the session
+ *                     (no live assembly / never created by this server).
+ *                     Unknown sessionId → never an error frame — an honest
+ *                     { cancelled: false, reason: "not-found" } answer.
+ *   session/rewind/points { sessionId } → { points: [{ turnIndex, preview,
+ *                     files }] }
+ *   session/rewind/plan { sessionId, target, mode? }
+ *                      → { clean: [{ path, op }], conflicts: [{ path, kind }],
+ *                          unTracked: [string], ops: [{ path, op }] }
+ *   session/rewind/execute { sessionId, target, mode? }
+ *                      → { revertedFiles: number, conflicts: [{ path, kind }],
+ *                          error? }
+ *
+ *   - The rewind request/response shapes STRUCTURALLY MIRROR packages/rewind
+ *     (the wire cannot depend on the engine package — independent): the
+ *     server-side host wiring maps the engine types onto these wire shapes at
+ *     request time. package-specific internals (blob ids) never leak; a file
+ *     op on the wire is `{ path, op: "restore-blob" | "delete-added" }`.
+ *   - `mode` defaults to "all"; an invalid mode / non-integer negative target
+ *     → -32602 INVALID_PARAMS (fail-closed).
+ *   - Unknown sessionId → -32602 with the explicit "session not found"
+ *     message (the session/history convention — rewind NEVER auto-creates).
+ *   - The host may wire `rewindFactory` as absent → every rewind method
+ *     answers -32603 "rewind not enabled" (an honest capability failure).
+ *   - session/rewind/execute's `appendEvent` seam appends the engine's
+ *     rewind/point conversation marker into the LIVE session log — the marker
+ *     flows to the client on the existing session/event notification stream
+ *     (no new notification; G2 owns the derived-view projection semantics).
+ *
+ * v1/v0 clients are unaffected: every pre-v1.1 request still answers per the
+ * v0/v1 shapes (each appendix is additive-only, forever).
  */
 
 import { createInterface, type Interface } from "node:readline"
@@ -144,6 +191,73 @@ export interface SessionListResult {
   /** True when no listing source was wired — proud "unknown" instead of a
    * fabricated empty list being read as "no sessions exist". */
   listingUnavailable?: boolean
+}
+
+// ── M41b v1.1: session/cancel + session/rewind/* wire types ─────────────────
+// All shapes below STRUCTURALLY MIRROR packages/rewind's types (the wire can't
+// depend on the engine package — independent); the host's server-side
+// rewindFactory maps engine values onto these at request time.
+
+/** M41b v1.1: session/cancel answer. `reason` is present only when
+ * `cancelled` is false — "not-running" (the session is known and idle) or
+ * "not-found" (the server has never seen the session). */
+export interface CancelResult {
+  cancelled: boolean
+  reason?: "not-running" | "not-found"
+}
+
+/** M41b v1.1: rewind mode union (mirrors packages/rewind RewindMode). */
+export type RewindMode = "all" | "files" | "conversation"
+
+/** M41b v1.1: ONE rewind file op on the wire — mirror of the engine FileOp
+ * minus the store-internal blob id (the wire never leaks store keys). `op`
+ * discriminates: "restore-blob" rewrites the file from its pre-image;
+ * "delete-added" removes a file the target turn created. */
+export interface RewindFileOpWire {
+  path: string
+  op: "restore-blob" | "delete-added"
+}
+
+/** M41b v1.1: a path whose current disk state diverged from the target
+ * turn's recorded after-state (externally changed since the turn ended). */
+export interface RewindConflictOpWire {
+  path: string
+  kind: "modified" | "deleted" | "created"
+}
+
+/** M41b v1.1: one session/rewind/points row (mirror of the engine
+ * RewindPointSummary). */
+export interface RewindPointRowWire {
+  turnIndex: number
+  preview: string
+  files: number
+}
+
+/** M41b v1.1: session/rewind/points response. */
+export interface RewindPointsResponse {
+  points: RewindPointRowWire[]
+}
+
+/** M41b v1.1: session/rewind/plan response — the lazy two-phase dry run
+ * (engine semantics: clean = still-restorable-delta files, conflicts =
+ * externally diverged but still executed, unTracked = recorded-later paths the
+ * restore does not cover, ops = the executable file-op list — empty for a
+ * "conversation" mode plan). */
+export interface RewindPlanResponse {
+  clean: RewindFileOpWire[]
+  conflicts: RewindConflictOpWire[]
+  unTracked: string[]
+  ops: RewindFileOpWire[]
+}
+
+/** M41b v1.1: session/rewind/execute response — the rewind/point conversation
+ * marker is appended to the LIVE session log by the server (flows on
+ * session/event); `error` is present when the engine had file-op errors
+ * (retry data kept — engine had_errors semantics, mirrored as a string). */
+export interface RewindExecuteResponse {
+  revertedFiles: number
+  conflicts: RewindConflictOpWire[]
+  error?: string
 }
 
 /** Transport-level RpcError: an error RESPONSE from the server (the message

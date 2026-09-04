@@ -37,13 +37,15 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         cwd: workspace,
       })
       try {
-        // handshake: the server answers initialize — v1: protocolVersion 2 and
-        // the two additive capability rows
+        // handshake: the server answers initialize — v1/v1.1: protocolVersion
+        // still 2; the v1 rows plus the v1.1 additive capability rows
         const info = (await client.request("initialize", {})) as ServerInfo
         expect(info.name).toBe("i-harness")
         expect(info.protocolVersion).toBe(2)
         expect(info.capabilities["session-history"]).toEqual(["1"])
         expect(info.capabilities["session-list"]).toEqual(["1"])
+        expect(info.capabilities["session-cancel"]).toEqual(["1"])
+        expect(info.capabilities["session-rewind"]).toEqual(["1"])
 
         // high-level run through the real engine (mock model default)
         const result = await client.run({ sessionId: "sdk-e2e-1", prompt: "hello" })

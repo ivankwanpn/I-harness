@@ -119,6 +119,21 @@
 
 **`SessionListEntry`**：`{ id, title?, updatedAt?, turnCount?, contextUsed?, contextTotal? }`——`title` 以外均為**可選**（header-only profile 只給 `id`/`title`；`updatedAt`/`turnCount`/context 需要完整 log 讀，不在 v1 源面承諾）。消費端須容忍缺省字段。
 
+### Wire Contract v1.1 addendum（M41b，2026-09-05 — v1 的附錄，**additive-only**）
+
+> v1.1 是 v1 的**附錄**：`PROTOCOL_VERSION` **保持 2**（新面走 capabilities 行）；v0/v1 全部 shape 不變。break 流程（凍結後變更流程）不變——仍只加不改。v0/v1 客戶端不受影響。
+
+| 方法 | 參數 | 響應 | 語意 |
+|---|---|---|---|
+| `session/cancel` | `{ sessionId }` | `{ cancelled: boolean, reason?: "not-running" \| "not-found" }` | 服務端持有每 session 的 in-flight `AbortController`（`session/prompt` 建、submit 前入槽、submit 落定後清槽）→ `abort()`。`cancelled:true` = 已中止（in-flight 槽存在）；`false` + `not-running` = 已知 session 且閒置；`false` + `not-found` = 服務端從未見面（無 live assembly / 本服務端未建過）。未知 session **不回錯誤幀**——誠實 `{ cancelled: false, reason: "not-found" }`。中止語意到引擎：queued turn（未開跑）被 service.submit 的 `signal.aborted` 擋下——**永不開跑**（加性驗證）；running turn 的流中止依賴引擎 lane 的 signal 注入（session-executor 現況未注入——見 M41b 偏差註記）。 |
+| `session/rewind/points` | `{ sessionId }` | `{ points: [{ turnIndex, preview, files }] }` | host `rewindFactory` 直調（每請求解析當前 assembly 的 rewind handle——embedded 橋模式）。未知 session → `-32602` 明確「session not found」（read 永不 auto-create）；缺 factory / factory 回 undefined → `-32603`「rewind not enabled」。 |
+| `session/rewind/plan` | `{ sessionId, target, mode? }` | `{ clean: [{ path, op }], conflicts: [{ path, kind }], unTracked: [string], ops: [{ path, op }] }` | 引擎 lazy 兩階段 dry-run（clean = 仍可純重放；conflicts = 外部已漂移但仍會執行；unTracked = 記錄在 target 之後、restore 不覆蓋的後續路徑；ops = 可執行文件操作——conversation 模式為空）。`mode` 缺省 `all`；enum 非法 / target 非 non-negative integer → `-32602`。 |
+| `session/rewind/execute` | `{ sessionId, target, mode? }` | `{ revertedFiles: number, conflicts: [{ path, kind }], error? }` | 文件還原（conflict 照樣執行、如實標記）+ `appendEvent` → **服務端落 live session log**（rewind/point 標記 → 既有 `session/event` 通知流，無新通知；投影語意 G2 屬）。`error` = 引擎 had_errors（points.jsonl 保留重試數據）。 |
+| `initialize`（v1.1 響應） | `{}` | 同 v1 外殼不變、`protocolVersion: 2`；capabilities **增加** `"session-cancel": ["1"]`、`"session-rewind": ["1"]`（v0/v1 行 byte-identical）。 |
+
+- **rewind wire shape 鏡像引擎**：`session/rewind/*` 的 shape 是 packages/rewind 類型的**結構鏡像**（wire 不能依賴 rewind 包——獨立）；宿主側（apps/cli）factory 於請求時做引擎型 → wire 型映射；引擎內部鍵（blob id）永不洩漏——wire 文件操作為 `{ path, op: "restore-blob" \| "delete-added" }`。
+- **list 行豐富（v1.1 源面）**：apps/cli `sdk` 命令的 `listSessions` 源在 `--session-dir` 給定時補 `updatedAt`（artifact mtime——M37b store-listing 慣例；stat 失敗回退 `meta.createdAt` 解析）+ `turnCount`（`coordinator.load` 的 turn/start 計數——唯讀路徑，非 mutating）。其餘 context 字段（contextUsed/contextTotal）仍可選缺省；單行 load 失敗 → 行保留（無 turnCount）並 loud 於 stderr（profile 敗行維持 M41a 的「唯 id 誠實行」）。
+
 ## 版本 / 健康
 
 `GET /api/health`（web-host）→ `{ "healthy": true, "version": string }`；version 源 = `apps/cli` package.json 常量（M27-H-1 注入）。
