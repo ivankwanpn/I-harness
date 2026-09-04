@@ -3,6 +3,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
+import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createExecService } from "@i-harness/exec"
 import { registerSubagent } from "@i-harness/subagent"
@@ -77,6 +78,35 @@ describe("guardian review", () => {
     }, { name: "write", reason: "r", args: { path: "x" } })
     expect(verdict.outcome).toBe("deny")
     expect(verdict.rationale).toContain("malformed")
+    // M40 A7: the fail-closed cause is tagged for the breaker counting.
+    expect(verdict.cause).toBe("malformed")
+  })
+
+  it("M40 A7: a review timeout denies fail-closed with cause=timeout", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    // Slow reviewer: the first chunk arrives quickly, the turn only SETTLES
+    // after 300ms — the 50ms runner timeout wins the race.
+    const slowModel: ModelClient = {
+      async *stream() {
+        yield { type: "text/chunk", text: "slow review" }
+        await new Promise((r) => setTimeout(r, 300))
+        yield { type: "end" }
+      },
+    }
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, slowModel)
+    const verdict = await runGuardianReview({
+      subagents: sub, parentRegistry, parentSession, parentCtx: ctx,
+      providers: createProviderRegistry(), parentModel: slowModel,
+      model: slowModel, timeoutMs: 50,
+    }, { name: "write", reason: "timed", args: { path: "x" } })
+    expect(verdict.outcome).toBe("deny")
+    expect(verdict.rationale).toContain("timed out")
+    expect(verdict.cause).toBe("timeout")
+    // transient reviewer is cleaned up despite the timeout
+    expect(sub.table.entries().size).toBe(0)
+    expect(sub.agents.entries().size).toBe(0)
   })
 
   it("registerGuardian runs the full pipeline: deny skips the human answerer", async () => {

@@ -80,6 +80,9 @@ importers:
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../../packages/interaction
+      '@i-harness/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
       '@i-harness/llm-mock':
         specifier: workspace:*
         version: link:../../packages/llm-mock
@@ -98,6 +101,9 @@ importers:
       '@i-harness/plan-mode':
         specifier: workspace:*
         version: link:../../packages/plan-mode
+      '@i-harness/plugin-registry':
+        specifier: workspace:*
+        version: link:../../packages/plugin-registry
       '@i-harness/preset':
         specifier: workspace:*
         version: link:../../packages/preset
@@ -236,6 +242,12 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/fs':
+        specifier: workspace:*
+        version: link:../fs
 
   packages/compaction:
     dependencies:
@@ -665,6 +677,9 @@ importers:
       '@i-harness/agent-team':
         specifier: workspace:*
         version: link:../agent-team
+      '@i-harness/attachment':
+        specifier: workspace:*
+        version: link:../attachment
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../compaction
@@ -767,6 +782,9 @@ importers:
       '@i-harness/terminal':
         specifier: workspace:*
         version: link:../terminal
+      '@i-harness/todo':
+        specifier: workspace:*
+        version: link:../todo
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../tool-search
@@ -833,7 +851,11 @@ importers:
         specifier: workspace:*
         version: link:../session-persistence
 
-  packages/settings: {}
+  packages/settings:
+    dependencies:
+      '@i-harness/telemetry':
+        specifier: workspace:*
+        version: link:../telemetry
 
   packages/shell:
     dependencies:
@@ -963,6 +985,9 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../session-persistence-jsonl
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
       '@i-harness/tui-core':
         specifier: workspace:*
         version: link:../tui-core

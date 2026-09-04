@@ -108,11 +108,22 @@ export function renderGuardianMessage(
   ].join("\n")
 }
 
+/** The reviewer's verdict plus a fail-closed cause. The outbound GuardianVerdict
+ * contract (core-tools) stays unchanged; `cause` is the guard-approval-internal
+ * distinction the breaker needs (M40 A7): a "deny" the MODEL produced vs a
+ * deny the RUNNER fail-closed (timeout / strict-JSON malformed). */
+export interface GuardianReviewVerdict extends GuardianVerdict {
+  /** Present only when the runner fail-closed: "timeout" (the review race was
+   * lost) or "malformed" (strict JSON contract failed). Model-verdict paths
+   * (approve/allow/deny) never carry it. */
+  cause?: "timeout" | "malformed"
+}
+
 // R-A9 reviewer runner: spawns the dedicated reviewer subagent via the EXISTING
 // subagent machinery (spawnChild, forkTurns "none" — the reviewer sees only the
 // request + bounded transcript), races a timeout (fail-closed → deny), parses
 // the strict JSON verdict, and reclaims the transient child in a finally.
-export async function runGuardianReview(deps: GuardianReviewDeps, request: GuardianRequest): Promise<GuardianVerdict> {
+export async function runGuardianReview(deps: GuardianReviewDeps, request: GuardianRequest): Promise<GuardianReviewVerdict> {
   const role = ensureReviewerRole(deps.subagents.roles)
   const timeoutMs = deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS
   const model = deps.model ?? deps.parentModel
@@ -149,7 +160,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     ])
     if (settled === "timeout") {
       entry.controller.abort()
-      return { outcome: "deny", rationale: `guardian review timed out after ${timeoutMs}ms (fail-closed)` }
+      return { outcome: "deny", rationale: `guardian review timed out after ${timeoutMs}ms (fail-closed)`, cause: "timeout" }
     }
     const finalText = entry.finalText
     if (finalText === undefined) {
@@ -157,7 +168,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     }
     const parsed = parseGuardianAssessment(finalText)
     if (parsed === undefined) {
-      return { outcome: "deny", rationale: "guardian review produced malformed output (fail-closed)" }
+      return { outcome: "deny", rationale: "guardian review produced malformed output (fail-closed)", cause: "malformed" }
     }
     return { outcome: parsed.outcome, rationale: parsed.rationale }
   } finally {

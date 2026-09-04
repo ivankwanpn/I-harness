@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { SettingsStore, resolveSettingsPath, type SettingsProviderConfig } from "@i-harness/settings"
+import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createProviderRegistry, resolveModelContext, type ProviderProfile } from "@i-harness/provider"
 import { createCredentialStore } from "@i-harness/credentials"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
@@ -229,6 +230,39 @@ describe("web composition (R-C1)", () => {
       await server.executor.submit("plain", "turn", new AbortController().signal)
       expect(captured[0]).toBe("high")
       expect(captured[1]).toBeUndefined()
+    } finally {
+      await server.close()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  // M40 A2: the plugin registry + jobs-kill seams are wired into the host —
+  // /api/plugins/* and POST /api/sessions/:id/jobs/:jobId/kill answer (the
+  // optional-seam 404s exist only when the embedder omits them).
+  it("M40 A2: plugin + jobs-kill seams are reachable (catalog/runtime 200, unknown job kill 409)", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-a2-"))
+    const pluginsRoot = join(workspace, ".i-harness", "plugins")
+    const server = await createWebServer(options(workspace, {
+      pluginRegistry: { registry: new PluginRegistry({ root: pluginsRoot }), root: pluginsRoot },
+    }))
+    try {
+      const post = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, { method: "POST", body: "{}", headers: { "content-type": "application/json" } })
+      expect(post.status).toBe(200)
+      const { id } = (await post.json()) as { id: string }
+
+      // plugin catalog + runtime views serve the (empty) seam verbatim
+      const catalog = await fetch(`http://127.0.0.1:${server.port}/api/plugins/catalog`)
+      expect(catalog.status).toBe(200)
+      expect(await catalog.json()).toEqual({ sources: [], plugins: [] })
+      const runtime = await fetch(`http://127.0.0.1:${server.port}/api/plugins/runtime`)
+      expect(runtime.status).toBe(200)
+      expect(await runtime.json()).toEqual({ plugins: [] })
+
+      // jobs kill: the bridge is composed over the session's assembly — an
+      // unknown job answers the bridge's 409 (unknown-job), NOT the 404 that
+      // an absent seam would produce.
+      const kill = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${id}/jobs/no-such-job/kill`, { method: "POST" })
+      expect(kill.status).toBe(409)
     } finally {
       await server.close()
       rmSync(workspace, { recursive: true, force: true })

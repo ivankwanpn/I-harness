@@ -106,6 +106,25 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
+  it("M40 A1: todo_write (session-scoped) + read_image are mounted model-visible", async () => {
+    let toolNames: string[] = []
+    const spy: ModelClient = {
+      async *stream(request: LLMRequest) {
+        toolNames = request.tools.map((t) => t.name)
+        yield { type: "text/chunk", text: "ok" }
+        yield { type: "end" }
+      },
+    }
+    const assembly = await createSessionAssembly({ workspace: process.cwd(), model: spy, sessionId: "a1" })
+    try {
+      await assembly.agent.run("hi")
+      expect(toolNames).toContain("todo_write")
+      expect(toolNames).toContain("read_image")
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
   it("M33: compactNow with instructions forwards them to the summarizer prompt", async () => {
     const s = createSession()
     append(s, { type: "user/message", text: "kickoff" })

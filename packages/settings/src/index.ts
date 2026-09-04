@@ -20,6 +20,7 @@ import { homedir } from "node:os"
 // is one-directional (this module → sections.ts) — no evaluation-order cycle.
 import { PROVIDER_PROTOCOLS } from "./sections.ts"
 import type { SettingsProviderProtocol } from "./sections.ts"
+import type { Telemetry } from "@i-harness/telemetry"
 
 /** Sandbox mode: mirrors the @i-harness/sandbox union (kept local to stay
  * dependency-free — the settings package must not import sandbox). */
@@ -685,6 +686,11 @@ export interface LayeredStoreOptions {
   /** Polling interval for the internal hot-reload watcher (default 500ms).
    * `false` disables it. */
   watchIntervalMs?: number | false
+  /** M40 A6: host telemetry stream for the hot-reload change notification
+   * (`settings/changed` — the manifest code is declared; this is its producer).
+   * Per-change emits carry `data: { path }` (the changed file). Absent → the
+   * store stays telemetry-free (existing behavior). */
+  telemetry?: Telemetry
 }
 
 /** The structural surface the section protocol needs from a settings store
@@ -826,7 +832,9 @@ export class LayeredSettingsStore {
 
   /** Polling watcher (500ms default — no fs events, no chokidar): when a
    * source's mtime/size changed, reload merged view + notify (settings/changed
-   * analog at the store surface: `onChange`). */
+   * analog at the store surface: `onChange`). M40 A6: the DETECTED CHANGE
+   * (subsequent ticks only — the first tick snapshots, see watchSettings)
+   * also emits `settings/changed` to the injected telemetry stream. */
   private ensureWatcher(): void {
     if (this.watcher !== undefined || this.options.watchIntervalMs === false) return
     const intervalMs = this.options.watchIntervalMs ?? 500
@@ -835,10 +843,15 @@ export class LayeredSettingsStore {
       .filter((p): p is string => p !== null && p !== undefined)
     if (paths.length === 0) return
     this.watcher = watchSettings(paths, (path) => {
+      // The pre-reload view is the change baseline: reloadFromDisk → load()
+      // ALREADY assigns this.current, so comparing against this.current here
+      // would always compare the merged view to itself (the dormant
+      // store-level detection — M40 A6 fixes it by snapshotting BEFORE).
+      const before = this.current
       void this.reloadFromDisk().then((settings) => {
-        if (JSON.stringify(settings) !== JSON.stringify(this.current)) {
-          this.current = settings
+        if (JSON.stringify(settings) !== JSON.stringify(before)) {
           for (const cb of [...this.listeners]) cb(path)
+          this.options.telemetry?.emit({ type: "settings/changed", ts: Date.now(), data: { path } })
         }
       }).catch(() => {})
     }, { intervalMs })

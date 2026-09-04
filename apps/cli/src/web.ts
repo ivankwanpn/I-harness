@@ -9,6 +9,7 @@
 // composed here directly (the plan's E-flip is the port itself), so the
 // host's settings/credentials/llm/models route family activates.
 import { dirname, join } from "node:path"
+import { existsSync, readdirSync } from "node:fs"
 import { createRequire } from "node:module"
 import { randomBytes } from "node:crypto"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
@@ -26,8 +27,20 @@ import {
   createWebHost,
   type CommandBridge,
   type CredentialStoreFace,
+  type PluginRegistryFace,
+  type PluginRuntimeView,
   type WebHost,
 } from "@i-harness/web-host"
+import {
+  PluginRegistry,
+  describeCommands,
+  evaluatePlugin,
+  inspectCapabilities,
+  loadStateSync,
+  mcpServerKey,
+  readMcpServersSync,
+} from "@i-harness/plugin-registry"
+import { JobKillUnknownJobError } from "@i-harness/jobs"
 import {
   createProviderRegistry,
   buildWireClient,
@@ -85,6 +98,10 @@ export interface WebServerOptions {
   /** Explicit provider registry. Absent → a FRESH EMPTY registry (amendment:
    * no built-in profiles — every provider is settings-managed). */
   providerRegistry?: ProviderRegistry
+  /** Explicit plugin registry + its root (M40 A2). Absent → a fresh one rooted
+   * at `<workspace>/.i-harness/plugins` — the host's /api/plugins routes serve
+   * over it (catalog + runtime views + source/install/enable mutations). */
+  pluginRegistry?: { registry: PluginRegistry; root: string }
   /** Auth: enable by passing EITHER (a missing half is randomized at start). */
   auth?: { launchToken?: string; hmacSecret?: string }
   /** Print the login URL (with the launch token) at startup. */
@@ -269,6 +286,73 @@ function registerDefaultCommands(target: PluginContext, settings: SettingsStore,
   })
 }
 
+// ── M40 A2: plugin seam composition ────────────────────────────────────────
+// The host's PluginRegistryFace is an adapter contract — the raw registry's
+// catalog() lacks the sources view and it has no runtime() — so the CLI
+// composes the wrapper here (host.ts comment: "the embedder composes the
+// seam"). Runtime observations are evaluated from the materialized overlays
+// (skills/, commands/) plus the interaction catalog: the registry's own
+// runtimeInputs() is what ENABLES plugins mount; the views here REPORT.
+// v0 observation limits: connectedMcpServers = empty (no global MCP session
+// set exists on the web path — plugin MCP mounts are per-assembly; a plugin
+// declaring MCP reports mcp=failed until a host-global session set lands).
+function createPluginRegistryFace(
+  registry: PluginRegistry,
+  root: string,
+  commandNames: () => Set<string>,
+): PluginRegistryFace {
+  return {
+    catalog: async () => {
+      const [sources, catalog] = await Promise.all([registry.listSources(), registry.catalog()])
+      return { sources, plugins: catalog.plugins }
+    },
+    runtime: (): PluginRuntimeView[] => {
+      const state = loadStateSync(root)
+      const names = commandNames()
+      const views: PluginRuntimeView[] = []
+      for (const rec of state.plugins) {
+        const caps = inspectCapabilities(rec.installPath)
+        const expectedCommandNames: string[] = [
+          ...describeCommands(join(root, "commands", rec.id)).map((d) => d.name),
+          ...(rec.conflicts ?? []).map((c) => c.name),
+        ]
+        const skillNamesByDir = new Map<string, string[]>()
+        const skillDir = join(root, "skills", rec.id)
+        if (existsSync(skillDir)) {
+          const skillNames = readdirSync(skillDir, { withFileTypes: true })
+            .filter((e) => e.name !== ".DS_Store")
+            .map((e) => e.name)
+          if (skillNames.length > 0) skillNamesByDir.set(rec.id, skillNames)
+        }
+        const expectedMcpServerNames = Object.keys(readMcpServersSync(rec.installPath)).map((s) => mcpServerKey(rec.id, s))
+        const result = evaluatePlugin(rec, caps, {
+          skillNamesByDir,
+          commandNames: new Set(names),
+          expectedCommandNames,
+          expectedMcpServerNames,
+          connectedMcpServers: new Set<string>(),
+          initialized: true,
+        })
+        views.push({
+          id: rec.id,
+          enabled: rec.enabled,
+          overall: result.overall,
+          capabilities: result.capabilities,
+          commandStatuses: result.commandStatuses,
+        })
+      }
+      return views
+    },
+    addSource: async (source) => { await registry.addSource(source) },
+    refreshSource: async (name) => { await registry.refreshSource(name) },
+    removeSource: async (name) => { await registry.removeSource(name) },
+    install: async (id) => { await registry.install(id) },
+    uninstall: async (id) => { await registry.uninstall(id) },
+    enable: async (id) => { await registry.enable(id) },
+    disable: async (id) => { await registry.disable(id) },
+  }
+}
+
 /** Append the UI-plane command run/done pair to the session's LIVE log
  * (best-effort — the events are model-invisible and never break the command). */
 function appendCommandEvents(executor: SessionService, sessionId: string, name: string, args: string | undefined, commandId: string, phase: "run" | "done", text?: string): void {
@@ -320,6 +404,13 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
 
   const hostCtx: PluginContext = createContext()
   registerDefaultCommands(hostCtx, settings, providerRegistry)
+  // M40 A2: plugin seam — the default root sits under the workspace
+  // (attachments/workspace convention); the face composes the registry's
+  // catalog + runtime views for the host's /api/plugins routes.
+  const pluginSeam = opts.pluginRegistry ?? {
+    registry: new PluginRegistry({ root: join(opts.workspace, ".i-harness", "plugins") }),
+    root: join(opts.workspace, ".i-harness", "plugins"),
+  }
   const approvals = new ApprovalMuxBridge(hostCtx)
   approvals.attach()
   const questions = new QuestionMuxBridge(hostCtx)
@@ -382,6 +473,25 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     attachments,
     workspaceRegistry,
     modelSources: { settingsStore: settings, credentialStore: credentials, providerRegistry },
+    // M40 A2: the plugin + jobs-kill seams — /api/plugins/* and
+    // POST /api/sessions/:id/jobs/:jobId/kill stop answering 404.
+    pluginRegistry: createPluginRegistryFace(
+      pluginSeam.registry,
+      pluginSeam.root,
+      () => new Set(listCommands(hostCtx).map((c) => c.name)),
+    ),
+    jobKillBridge: {
+      kill: async (sessionId, jobId) => {
+        const assembly = await executor.assemblyFor(sessionId)
+        try {
+          return assembly.killJob(jobId)
+        } catch {
+          // The only failure the model-facing registry throws is an unknown
+          // job id — mapped to the host's 409 contract (JobKillUnknownJobError).
+          throw new JobKillUnknownJobError(jobId)
+        }
+      },
+    },
     ...(auth !== undefined ? { auth } : {}),
     // M27-H-1: the health route's version — the CLI package.json constant.
     version: CLI_VERSION,

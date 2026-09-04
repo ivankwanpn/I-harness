@@ -17,6 +17,8 @@ import { registerShell, type ShellRetentionOptions } from "@i-harness/shell"
 import { registerTerminal, type TerminalMountHandle } from "@i-harness/terminal"
 import { registerWeb } from "@i-harness/web"
 import { createFsTools } from "@i-harness/fs"
+import { createTodoTool } from "@i-harness/todo"
+import { createReadImageTool } from "@i-harness/attachment"
 import { createApprovalPolicy, registerGuardian } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createOutputSpillGuard, type OutputSpillGuardConfig } from "@i-harness/output-retention"
@@ -248,6 +250,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // M27-R-A8: context budget tool — registered against the live session (the
   // M15 projection source) only when the composition supplied a window.
   registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session })
+
+  // M40 A1/B8: session-scoped tools — todo_write (M21 whole-list snapshot,
+  // model-visible via todo/write events) + read_image (M14 multimodal read:
+  // workspace-resolved path → ImageInput { mediaType, dataBase64 }).
+  tools.register(createTodoTool({ session }))
+  tools.register(createReadImageTool({ workspace: opts.workspace }))
 
   // R-A4/R-A5: dynamic system context — sections render at every step boundary
   // via the agent/pre-step hook. Instructions load as one section.

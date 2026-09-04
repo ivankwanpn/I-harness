@@ -38,6 +38,17 @@ describe("GuardianBreaker", () => {
     expect(b.check()).toBe("open")
   })
 
+  it("M40 A7: timeout + malformed fail-closed verdicts count toward opening (deny+deny+timeout = open)", () => {
+    const b = new GuardianBreaker()
+    b.record("deny"); b.record("deny"); b.record("timeout")
+    expect(b.check()).toBe("open")
+    const b2 = new GuardianBreaker()
+    b2.record("timeout"); b2.record("malformed"); b2.record("allow")
+    expect(b2.check()).toBe("closed")
+    b2.record("malformed")
+    expect(b2.check()).toBe("open")
+  })
+
   it("a window of 10 keeps only the last 10 reviews (old denials age out)", () => {
     const b = new GuardianBreaker()
     for (let i = 0; i < 9; i += 1) b.record("allow")
@@ -55,5 +66,14 @@ describe("GuardianBreaker", () => {
     expect(isGuardianBreakerState(null)).toBe(false)
     expect(isGuardianBreakerState({ formatVersion: 2, window: [] })).toBe(false)
     expect(b.snapshot().window).toHaveLength(3)
+  })
+
+  it("M40 A7: the four kinds round-trip through snapshot/restore + shape guard", () => {
+    expect(isGuardianBreakerState({ formatVersion: 1, window: ["timeout", "malformed"] })).toBe(true)
+    const b = new GuardianBreaker({ formatVersion: 1, window: ["allow", "deny", "timeout", "malformed"] })
+    expect(b.snapshot().window).toEqual(["allow", "deny", "timeout", "malformed"])
+    // mixed counting: deny + timeout + malformed = 3 fail-closed → open
+    expect(b.check()).toBe("open")
+    expect(isGuardianBreakerState({ formatVersion: 1, window: ["maybe"] })).toBe(false)
   })
 })
