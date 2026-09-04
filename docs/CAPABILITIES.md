@@ -38,7 +38,7 @@
 - **budget 階梯**：maybeCompact（≥0.8×窗）→ resetWindow(20) → `prompt_too_long` fail-closed
 
 ## 三、工具面
-- shell（bash/pwsh，timeout/retention/spill）、fs（read/write/edit/**apply_patch**（mtime+TOCTOU）/read-image）、glob/grep（ripgrep）
+- shell（bash/pwsh，timeout/retention/spill）、fs（read/write/edit/**apply_patch**（mtime+TOCTOU））、**`read_image`**（attachment 系多模態——workspace 路徑解析 → png/jpeg/gif/webp → ImageInput base64 inline 送達模型）、glob/grep（ripgrep）
 - 統一 output spill / todo / **tool_search**（BM25 deferred）/ skill_search+skill_get（SKILL.md + 影子選擇器）
 - **MCP**（OAuth 2.1 PKCE+dynamic registration、roots、資源工具、blocked/direct、重連 supervisor、真 AS 測試）
 - **LSP**（六面：hover/definition/references/diagnostics/symbol/call hierarchy）

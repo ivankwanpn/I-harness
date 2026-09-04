@@ -7,6 +7,7 @@
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@i-harness/agent-team": "workspace:*",
+    "@i-harness/attachment": "workspace:*",
     "@i-harness/compaction": "workspace:*",
     "@i-harness/core-agent": "workspace:*",
     "@i-harness/core-plugin": "workspace:*",
@@ -41,6 +42,7 @@
     "@i-harness/subagent": "workspace:*",
     "@i-harness/telemetry": "workspace:*",
     "@i-harness/terminal": "workspace:*",
+    "@i-harness/todo": "workspace:*",
     "@i-harness/tool-search": "workspace:*",
     "@i-harness/web": "workspace:*",
     "@i-harness/workflow": "workspace:*"

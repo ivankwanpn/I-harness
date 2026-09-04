@@ -11,6 +11,7 @@ import { join, dirname } from "node:path"
 import type { ImageInput, ImageMediaType } from "@i-harness/core-session"
 
 export type { ImageMediaType }
+export { createReadImageTool, type ReadImageToolDeps } from "./read-image.ts"
 
 export interface ImageAttachmentLimits {
   maxImageBytes: number

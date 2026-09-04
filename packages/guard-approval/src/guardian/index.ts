@@ -49,7 +49,14 @@ export async function registerGuardian(ctx: PluginContext, config: GuardianConfi
     }
     const verdict = await runGuardianReview(config, request)
     if (isGuardianVerdict(verdict) && breaker && config.breaker) {
-      breaker.record(verdict.outcome)
+      // M40 A7: timeout/malformed fail-closed denials COUNT in the breaker too
+      // (the runner tags them via `cause`); model verdicts record the plain
+      // deny/allow kind as before.
+      breaker.record(
+        verdict.cause === "timeout" ? "timeout"
+          : verdict.cause === "malformed" ? "malformed"
+          : verdict.outcome === "deny" ? "deny" : "allow",
+      )
       const key = BREAKER_STATE_PREFIX + config.breaker.sessionId
       // fail-soft doc mirror: putDocument reports internally and never rejects
       void config.breaker.coordinator.putDocument(key, breaker.snapshot())

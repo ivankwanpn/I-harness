@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createLayeredStore, resolveLayeredSources, watchSettings, mergeRawLayers, type LayerSource } from "../src/index.ts"
 import { mutateSection } from "../src/sections.ts"
+import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 
 async function tmpRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "ih-layers-"))
@@ -174,6 +175,39 @@ describe("watchSettings (polling hot-reload)", () => {
       await writeFile(file, JSON.stringify({ model: "c" }), "utf8")
       await new Promise((r) => setTimeout(r, 200))
       expect(changed.length).toBe(fired)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("M40 A6: settings/changed telemetry on hot-reload", () => {
+  it("emits settings/changed (path-payload) only on a DETECTED change — the load-time snapshot never fires", async () => {
+    const root = await tmpRoot()
+    try {
+      const file = join(root, "s.json")
+      await writeFile(file, JSON.stringify({ theme: "dark" }), "utf8")
+      const events: TelemetryEvent[] = []
+      const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
+      const store = createLayeredStore({ files: [file], watchIntervalMs: 10, telemetry })
+      await store.load()
+      // First tick snapshots only: the pre-existing state emits nothing.
+      await new Promise((r) => setTimeout(r, 60))
+      expect(events).toHaveLength(0)
+      // Mutation → later tick detects + reloads + emits with the changed path.
+      await writeFile(file, JSON.stringify({ theme: "light" }), "utf8")
+      await new Promise((r) => setTimeout(r, 200))
+      expect(store.get().theme).toBe("light")
+      const changed = events.filter((e) => e.type === "settings/changed")
+      expect(changed.length).toBe(1)
+      expect(changed[0]!.data.path).toBe(file)
+      // onChange listeners still get the same change (store surface unchanged).
+      let notified: string | undefined
+      store.onChange((p) => { notified = p })
+      await writeFile(file, JSON.stringify({ theme: "system" }), "utf8")
+      await new Promise((r) => setTimeout(r, 200))
+      expect(notified).toBe(file)
+      expect(events.filter((e) => e.type === "settings/changed")).toHaveLength(2)
     } finally {
       await rm(root, { recursive: true, force: true })
     }
