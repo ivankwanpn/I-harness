@@ -1,0 +1,11 @@
+{
+  "name": "i-harness-dist",
+  "version": "0.1.0",
+  "private": true,
+  "description": "M45: deploy manifest for the dist node_modules (the NATIVE pieces esbuild externalizes; everything else is bundled into ih.mjs). build-dist.mjs installs these into <dist>/node_modules. Versions are EXACT pins with a build-time store check (scripts/build-dist.mjs fails loud on drift).",
+  "dependencies": {
+    "node-pty": "1.1.0",
+    "koffi": "3.1.6",
+    "@vscode/ripgrep": "1.18.0"
+  }
+}
