@@ -113,6 +113,19 @@ export type SessionEvent =
     // message (default branches) and is unindexed.
     | { type: "command/run"; commandId: string; name: string; args?: string; source: { kind: "user" }; seq?: number }
     | { type: "command/done"; commandId: string; kind: "success" | "error"; text?: string; seq?: number }
+    // M42 conversation rewind (G2): the rewind engine's durable point —
+    // APPENDED by the rewind service (packages/rewind) at the moment a rewind
+    // is applied; core-session owns the union entry + the projection
+    // semantics only. Spec §3: after a rewind, events in [anchorSeq, marker)
+    // are HIDDEN on the model surface; events appended AFTER the marker (new
+    // turns) are visible again. deriveMessages applies `rewindCuts` as a
+    // SECOND skip mechanism alongside compaction shadowedSeqs (same
+    // append-only iron rule: the raw log is never rewritten — recovery
+    // replays the full history plus the marker). Log-only and unindexed:
+    // deriveMessages' default branch keeps it model-invisible and
+    // deriveSearchText returns "" (team/* precedent). version 1 (M19/M21
+    // convention for structured new event slots).
+    | { type: "rewind/point"; version: 1; targetTurn: number; anchorSeq: number; mode: "all" | "files" | "conversation"; fileOps: Array<{ path: string; op: "restore" | "delete" }>; seq?: number }
   )
   & { ignorable?: true }
 
@@ -205,6 +218,63 @@ export function derivePruneSubstitutes(session: Session): Map<string, PruneRecor
     for (const record of ev.pruned ?? []) map.set(record.callId, record)
   }
   return map
+}
+
+// M42 (G2): conversation rewind — the resolved hidden region derived from one
+// `rewind/point` event. Spec §3: after a rewind at markerSeq, every event with
+// seq in [cutFrom, markerSeq) is HIDDEN on the projection surface (cutFrom =
+// the rewind's anchorSeq; markerSeq = the rewind/point event's own seq — the
+// marker itself is log-only). Events with seq >= markerSeq (new turns appended
+// after the rewind) are visible again unless a LATER rewind's window covers
+// them.
+export interface RewindCut {
+  cutFrom: number // first hidden seq (inclusive) — the rewind anchor
+  markerSeq: number // the rewind/point event's own seq (exclusive bound)
+}
+
+/**
+ * The resolved, NON-OVERLAPPING rewind cut windows of a session, in log
+ * order — or [] when the session carries no rewind/point events (the
+ * zero-change path, identical to the surface a pre-M42 reader derives).
+ *
+ * Composition (multiple rewinds): each rewind/point contributes a raw window
+ * [anchorSeq, seq). Windows whose intervals OVERLAP meld into one union window
+ * (from the earliest anchor to the latest marker — the later rewinds reach
+ * back into / past an earlier hidden era, so the union is the conservative,
+ * monotone projection any single skip predicate must satisfy). Windows never
+ * overlap in the resolved view; the skip rule is `cutFrom <= seq < markerSeq`
+ * per window.
+ *
+ * Defensive (Ruling 7): a malformed persisted rewind/point without a numeric
+ * `seq` or `anchorSeq` contributes no window (cannot be keyed — same rule as
+ * compaction/reset: unsealed events are NEVER hidden); `anchorSeq >= seq`
+ * (empty window) also contributes nothing.
+ */
+export function rewindCuts(session: Session): RewindCut[] {
+  const resolved: RewindCut[] = []
+  for (const ev of session.events) {
+    if (ev.type !== "rewind/point") continue
+    // defensive (Ruling 7): malformed persisted logs bypass append validation
+    if (typeof ev.seq !== "number" || typeof ev.anchorSeq !== "number") continue
+    if (ev.anchorSeq >= ev.seq) continue // empty window — nothing to hide
+    meldRewindCut(resolved, ev.anchorSeq, ev.seq)
+  }
+  return resolved
+}
+
+// M42: append one raw rewind window to a resolved, non-overlapping cut list.
+// Events stream in log order, so markers are monotonic; a window opening at
+// or before a previous window's end overlaps it → meld into the union window
+// (monotone skip predicate: any seq hidden by EITHER rewind stays hidden —
+// the later rewind reaches back into / past an earlier hidden era).
+function meldRewindCut(resolved: RewindCut[], cutFrom: number, markerSeq: number): void {
+  const last = resolved[resolved.length - 1]
+  if (last !== undefined && cutFrom < last.markerSeq) {
+    if (cutFrom < last.cutFrom) last.cutFrom = cutFrom
+    if (markerSeq > last.markerSeq) last.markerSeq = markerSeq
+  } else {
+    resolved.push({ cutFrom, markerSeq })
+  }
 }
 
 export interface Session {
@@ -319,18 +389,38 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // shadow mechanism — their `removedSeqs` are collected additively, so an
   // append-only resetWindow hides exactly its removed tail without ever
   // truncating the durable log.
+  // M42 (G2): the rewind cut windows are collected in the SAME single pre-pass
+  // — a session without rewind/point events pays nothing extra (zero-change
+  // fast path; rewindCuts is exported for callers that only need the resolved
+  // view). Once resolved, the skip test costs O(cuts) per event.
   const shadowed = new Set<number>()
+  const cuts: RewindCut[] = []
   for (const ev of session.events) {
     if (ev.type === "compaction/summary") for (const seq of ev.shadowedSeqs) shadowed.add(seq)
     // defensive `?? []`: persisted logs bypass append validation, so a
     // malformed marker without removedSeqs must not throw here
     else if (ev.type === "compaction/reset") for (const seq of ev.removedSeqs ?? []) shadowed.add(seq)
+    // defensive (Ruling 7): a malformed persisted rewind/point without a
+    // numeric seq/anchorSeq (or with an empty window) contributes no cut
+    else if (ev.type === "rewind/point") {
+      if (typeof ev.seq === "number" && typeof ev.anchorSeq === "number" && ev.anchorSeq < ev.seq) {
+        meldRewindCut(cuts, ev.anchorSeq, ev.seq)
+      }
+    }
   }
   // M33 model-free prune pass: the substitute map is applied to the
   // tool/result projection ONLY (the raw log keeps the full output).
   const pruned = derivePruneSubstitutes(session)
+  // M42 (G2): a seq is skipped when EITHER a compaction marker shadowed it OR
+  // a rewind cut window contains it (union, not substitution — a rewind NEVER
+  // un-shadows a compaction's removed seqs, inside or outside cut windows).
+  // ORDER rule: events with seq >= a cut's markerSeq (new turns appended after
+  // the rewind) stay INCLUDED unless a LATER cut's window covers them — each
+  // resolved window is disjoint, so the per-window predicate above is exact.
+  // Unkeyed events (seq === undefined) are never hidden (compaction/reset
+  // precedent).
   for (const ev of session.events) {
-    if (ev.seq !== undefined && shadowed.has(ev.seq)) continue
+    if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
     if (ev.type === "user/message") {
       flushToolBlock()
       const images = ev.images as ImageInput[] | undefined
@@ -379,6 +469,15 @@ export function deriveMessages(session: Session): LLMMessage[] {
   }
   flushToolBlock()
   return result
+
+  // M42 (G2): O(cuts) per event — a no-rewind session has cuts === [] so the
+  // loop body never runs (path-identical to pre-M42 deriveMessages).
+  function hideByRewind(seq: number): boolean {
+    for (const cut of cuts) {
+      if (seq >= cut.cutFrom && seq < cut.markerSeq) return true
+    }
+    return false
+  }
 
   function flushToolBlock() {
     if (pendingCalls) {
