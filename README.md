@@ -91,6 +91,7 @@ frontend" gate:
 | M41a | SDK wire v1: `session/history` + `session/list` + protocolVersion 2 handshake (additive-only, v0 frozen intact) — `--attach` replay/list gaps close (real subprocess e2e) | ✅ |
 | M42 | Rewind engine: `packages/rewind` (store/recorder/service — grok-style tool-report pre-images, RewindPoint jsonl, clean/conflict lazy compare, two-phase restore) + `rewind/point` event + deriveMessages cut projection (append-only conversation rewind; compaction interplay) | ✅ |
 | M43 | Rewind UI 1:1 (§3.9 phases/strings/keys via grok's rewind.rs) — Esc-Esc picker, mode-select, two-phase confirm with clean/conflict lists, engine hidement of rewound blocks, dim-from-anchor; PTY case-020 (real service restore: disk byte-exact v1 + journal truncate + marker line) | ✅ |
+| M41b | Wire v1.1 appendix: `session/cancel` (in-flight abort now reaches the engine — per-submit signal threading) + `session/rewind/*` (points/plan/execute via rewindFactory), capability-gated remote consumption, CLI list-row enrichment (updatedAt/turnCount), DA1 probe | ✅ |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
