@@ -8,12 +8,13 @@ import { parseFlags } from "../src/index.ts"
 describe("tui flag parser", () => {
   it("parses value flags in any order plus the boolean --yes", () => {
     expect(
-      parseFlags(["--prompt", "hi there", "--workspace", "C:\\w", "--model", "deepseek:deepseek-chat", "--yes", "--resume", "s-123"]),
+      parseFlags(["--prompt", "hi there", "--workspace", "C:\\w", "--model", "deepseek:deepseek-chat", "--yes", "--session-dir", "C:\\sessions", "--resume", "s-123"]),
     ).toEqual({
       prompt: "hi there",
       workspace: "C:\\w",
       model: "deepseek:deepseek-chat",
       yes: true,
+      sessionDir: "C:\\sessions",
       resume: "s-123",
     })
   })
