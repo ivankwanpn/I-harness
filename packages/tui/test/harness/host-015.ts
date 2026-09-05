@@ -49,7 +49,7 @@
 //
 // Errors: any throw → best-effort marker "host-failed" + message → exit 3.
 
-import { execSync } from "node:child_process"
+import { setUtf8CodePage } from "./codepage.ts"
 import { spawn as spawnProcess } from "node:child_process"
 import { writeFileSync, writeSync, mkdirSync, readdirSync, unlinkSync, existsSync } from "node:fs"
 import { join } from "node:path"
@@ -181,7 +181,7 @@ function sceneBackend015(): BackendClient {
  * user "hello" → turn end (one frame each), teardown, explicit exit-code
  * marker. Markers/ledger go to TUI_HOST_MARKER_DIR (set by the parent). */
 async function main015r(): Promise<void> {
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  setUtf8CodePage()
 
   const terminal = createTerminal({
     stream: { write: (s: string): boolean => { out(s); return true } },
@@ -261,7 +261,7 @@ async function main015r(): Promise<void> {
 // ------------------------------------------------------------------ main ("015")
 
 async function main015(): Promise<void> {
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  setUtf8CodePage()
 
   // Geometry: the renderer is STILL constructed (the loop reads
   // renderer.buffer.width for the engine width); in minimal mode the loop

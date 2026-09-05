@@ -9,10 +9,9 @@
 //                [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>]
 //                [--session-dir <dir>]
 //
-// M37a seams (see packages/tui/src/backend/embedded.ts module header):
-//   - the session store is MOCK-ONLY (in-memory, per-process); --resume is
-//     accepted and ignored (TODO M38: wire the coordinator + modelBuilder with
-//     settings/credentials like apps/cli/src/web.ts).
+// M48 embedded mode supports durable JSONL sessions through --session-dir;
+// --resume restores the selected session and keeps subsequent turns durable.
+// Without --session-dir, the embedded session remains intentionally ephemeral.
 //   - M38b G2: --model now carries a REAL INFO-LINE label (the loop renders it
 //     in the prompt chrome + status row; the model RESOLUTION chain still
 //     mock-first). --attach <sessionId> switches the backend to the REMOTE

@@ -29,7 +29,7 @@
 //
 // Errors: any throw → best-effort marker "host-failed" + message → exit 3.
 
-import { execSync } from "node:child_process"
+import { setUtf8CodePage } from "./codepage.ts"
 import { writeFileSync, writeSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { createRenderer, createTerminal, createUnknownCapabilities, makeGlyphs, resolvePalette } from "@i-harness/tui-core"
@@ -203,7 +203,7 @@ async function main(): Promise<void> {
   // with the console output codepage unless the console is UTF-8 — TUI glyphs
   // (❯ ◆ ⠼) would be mangled. chcp flips the console attached to this process;
   // its own stdout is redirected so no answer bytes reach the pty.
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  setUtf8CodePage()
 
   const terminal = createTerminal({
     stream: { write: (s: string): boolean => { out(s); return true } },

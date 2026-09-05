@@ -10,7 +10,7 @@
 // Frame count deterministic: frozen clock 13_334; every key is scripted.
 // Errors: throw → marker "host-failed" + message → exit 3.
 
-import { execSync } from "node:child_process"
+import { setUtf8CodePage } from "./codepage.ts"
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, writeSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -155,7 +155,7 @@ function wireInput(): { source: InputSource; endInput: () => void } {
 // ------------------------------------------------------------------ main
 
 async function main(): Promise<void> {
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  setUtf8CodePage()
 
   const terminal = createTerminal({ stream: { write: (s: string): boolean => { out(s); return true } }, cap })
   const renderer = createRenderer({ cols: size.cols, rows: size.rows, cap })

@@ -31,7 +31,7 @@
 //
 // Errors: any throw → best-effort marker "host-failed" + message → exit 3.
 
-import { execSync } from "node:child_process"
+import { setUtf8CodePage } from "./codepage.ts"
 import { existsSync, mkdirSync, writeFileSync, writeSync } from "node:fs"
 import { join } from "node:path"
 import { createRenderer, createTerminal, createUnknownCapabilities, makeGlyphs, resolvePalette, InputParser } from "@i-harness/tui-core"
@@ -190,7 +190,7 @@ function scriptedBackend(events: () => AsyncIterable<TuiEvent>): BackendClient {
 
 /** The main fullscreen scene: the whole matrix + the late permission overlay. */
 async function main023(): Promise<void> {
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  setUtf8CodePage()
 
   const terminal = createTerminal({ stream: { write: (s: string): boolean => { out(s); return true } }, cap })
   const renderer = createRenderer({ cols: size.cols, rows: size.rows, cap })
@@ -306,7 +306,7 @@ async function main023(): Promise<void> {
 /** The minimal no-capture scene: mode "minimal" + the REAL inline engine —
  * NO tui-core terminal (never an init/teardown, never the five-mode set). */
 async function main023m(): Promise<void> {
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  setUtf8CodePage()
 
   const renderer = createRenderer({ cols: size.cols, rows: size.rows, cap })
   const engine = createScrollbackEngine({ width: size.cols })

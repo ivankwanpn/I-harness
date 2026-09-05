@@ -39,7 +39,7 @@
 //
 // Errors: any throw → best-effort marker "host-failed" + message → exit 3.
 
-import { execSync } from "node:child_process"
+import { setUtf8CodePage } from "./codepage.ts"
 import { existsSync, writeFileSync, writeSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 import {
@@ -245,7 +245,7 @@ function wireInput(
 // ------------------------------------------------------------------ main
 
 async function main(): Promise<void> {
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  setUtf8CodePage()
 
   const terminal = createTerminal({
     stream: { write: (s: string): boolean => { out(s); return true } },
