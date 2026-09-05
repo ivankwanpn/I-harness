@@ -58,8 +58,30 @@ ih help                 # full usage (run / web / sdk / acp / tui)
 ```
 
 The bin shim resolves the tsx loader by ABSOLUTE path from its own install —
-no bundle, no dist: the repo stays source-run. (A single-exe distribution is a
-separate packaging track — out of scope.)
+no bundle, no dist: the repo stays source-run.
+
+### Distribution — NSIS self-contained installer (M45)
+
+```bash
+node scripts/build-installer.mjs    # → build/I-harness-Setup-0.1.0.exe
+```
+
+- **Self-contained**: bundles the Node v22.16.0 runtime + a single esbuild
+  bundle (`dist/ih.mjs`) + platform native modules (node-pty / koffi /
+  ripgrep via a flat hoisted deploy). ~50 MB of install media; no Node
+  requirement on the target. `I-harness-Setup-0.1.0.exe` (and the `-test.exe`
+  variant that installs user-level without PATH/registry writes).
+- **Installs** to `Program Files\I-harness`, appends PATH (HKLM, with
+  `WM_SETTINGCHANGE` broadcast), Start Menu shortcuts, and a full uninstaller
+  (registry + PATH cleanup). `i-harness` and `ih` both work in any cmd after
+  install.
+- **Verify**: `node scripts/verify-installer.mjs` — silent install → both
+  commands + `--version`/`tui --help` → clean uninstall (currently 17/17
+  de-verified on this machine).
+- Honest dist limits (documented): `--attach` SDK spawn, the Windows-ACL
+  sandbox runner, and minimal-mode `/minimal` relaunch still expect the
+  source + tsx (`I_HARNESS_HOME` is the dev-only override). Version is the
+  single constant `apps/cli/package.json` (0.1.0).
 
 ## Scripts
 
