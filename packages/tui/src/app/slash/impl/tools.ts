@@ -1,8 +1,12 @@
 // @i-harness/tui — G2 (M46a): tools slash commands — /doctor /copy /export
 // /transcript /help /quit.
-// Backend truth: /doctor reports the SESSION'S terminal capability context
-// (the startup probe result — re-running probeCapabilities mid-frame would
-// interleave raw escape queries with TUI bytes; see light-doctor.ts).
+// Backend truth (M47 G2): /doctor is a LIVE probe now — the command opens the
+// doctor panel in the "Probing…" state FIRST, then the loop's probeReport
+// suspends the frame pump (≤800ms), re-issues the capability queries through
+// the app's write sink and merges the answers into the context; the report
+// rows land when the run settles. (The M46a note — re-running mid-frame would
+// interleave raw escape queries with TUI bytes — is superseded by the
+// paint-suspend: NO frames are written while the probe owns the tty.)
 // /copy = the existing `y` copy-block action (toast; clipboard M38).
 // /export writes a real transcript txt into the workspace (fs).
 // /transcript serializes the engine rows to a temp .ansi/txt and spawns
@@ -11,13 +15,23 @@
 
 import type { SlashCommand } from "../types.ts"
 import type { LightPanelRow } from "../../../views/light-panel.ts"
+import { doctorProbingRows } from "../../../views/light-doctor.ts"
 
 export const toolsCommands: SlashCommand[] = [
   {
     name: "doctor",
-    description: "Terminal capability report",
+    description: "Terminal capability report (live probe)",
     run: async (ctx) => {
-      const rows = (await ctx.probeReport?.()) ?? [{ label: "probe report unavailable" }]
+      // LIVE probe (M47 G2): the panel opens in the Probing… state FIRST (that
+      // frame paints before the probe's paint-suspend engages) — then the
+      // loop's probeReport re-runs the probe against the terminal and the rows
+      // land when the run settles (answers or the ≤800ms window).
+      if (ctx.probeReport === undefined) {
+        ctx.openPanel({ kind: "doctor", title: "TUI doctor", rows: [{ label: "probe report unavailable" }] })
+        return
+      }
+      ctx.openPanel({ kind: "doctor", title: "TUI doctor", rows: doctorProbingRows() })
+      const rows = (await ctx.probeReport()) ?? [{ label: "probe report unavailable" }]
       ctx.openPanel({ kind: "doctor", title: "TUI doctor", rows })
     },
   },
