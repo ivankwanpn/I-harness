@@ -11,6 +11,7 @@ import { createHash } from "node:crypto"
 import { append } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { RewindService } from "@i-harness/rewind"
+import { RewindStore } from "@i-harness/rewind"
 import { createSessionAssembly } from "../src/assembly.ts"
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
@@ -109,6 +110,95 @@ describe("assembly rewind wiring", () => {
       expect(assembly.rewind).toBeUndefined()
     } finally {
       await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("dispose waits for a pending rewind journal append", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "i-harness-rewind-drain-ws-"))
+    const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-drain-store-"))
+    cleanup.push(workspace, storeRoot)
+    await writeFile(join(workspace, "greet.txt"), "before")
+    const originalAppendPoint = RewindStore.prototype.appendPoint
+    let appendEntered = false
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    RewindStore.prototype.appendPoint = async function (point) {
+      appendEntered = true
+      await gate
+      return originalAppendPoint.call(this, point)
+    }
+    let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+    try {
+      assembly = await createSessionAssembly({
+        workspace,
+        sessionId: "drain-1",
+        rewindStoreRoot: storeRoot,
+        model: createMockClient([
+          { role: "assistant", toolCalls: [{ name: "write", args: { path: "greet.txt", text: "after" } }] },
+          { role: "assistant", text: "done" },
+        ]),
+      })
+      await assembly.agent.run("rewrite")
+      await waitFor(async () => appendEntered)
+      let closed = false
+      const closing = assembly.dispose().then(() => { closed = true })
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(closed).toBe(false)
+      release()
+      await closing
+      expect(await assembly.rewind!.store.readPoints()).toHaveLength(1)
+      assembly = undefined
+    } finally {
+      release()
+      RewindStore.prototype.appendPoint = originalAppendPoint
+      await assembly?.dispose()
+    }
+  }, 30_000)
+
+  it("serializes consecutive rewind journal appends", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "i-harness-rewind-serial-ws-"))
+    const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-serial-store-"))
+    cleanup.push(workspace, storeRoot)
+    await writeFile(join(workspace, "a.txt"), "a-before")
+    await writeFile(join(workspace, "b.txt"), "b-before")
+    const originalAppendPoint = RewindStore.prototype.appendPoint
+    let appendCalls = 0
+    let releaseFirst: () => void = () => {}
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    RewindStore.prototype.appendPoint = async function (point) {
+      appendCalls++
+      if (appendCalls === 1) await firstGate
+      return originalAppendPoint.call(this, point)
+    }
+    let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+    try {
+      assembly = await createSessionAssembly({
+        workspace,
+        sessionId: "serial-1",
+        rewindStoreRoot: storeRoot,
+        model: createMockClient([
+          { role: "assistant", toolCalls: [{ name: "write", args: { path: "a.txt", text: "a-after" } }] },
+          { role: "assistant", text: "first done" },
+          { role: "assistant", toolCalls: [{ name: "write", args: { path: "b.txt", text: "b-after" } }] },
+          { role: "assistant", text: "second done" },
+        ]),
+      })
+      const store = assembly.rewind!.store
+      await assembly.agent.run("first")
+      await waitFor(async () => appendCalls === 1)
+      await assembly.agent.run("second")
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      expect(appendCalls).toBe(1)
+      releaseFirst()
+      await assembly.dispose()
+      const points = await store.readPoints()
+      expect(points).toHaveLength(2)
+      expect(points.map((point) => point.turnIndex)).toEqual([0, 1])
+      assembly = undefined
+    } finally {
+      releaseFirst()
+      RewindStore.prototype.appendPoint = originalAppendPoint
+      await assembly?.dispose()
     }
   }, 30_000)
 })
