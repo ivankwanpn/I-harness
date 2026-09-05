@@ -27,7 +27,7 @@
 //     automated proof is packages/tui/test/harness (PTY cases 011/014).
 
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { execSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import { join } from "node:path"
 import {
   attachInput,
@@ -188,7 +188,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // multibyte TUI glyphs (❯ ◆ ⠼ …) would be mangled on a legacy codepage.
   if (process.platform === "win32") {
     try {
-      execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+    execFileSync(`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\chcp.com`, ["65001"], { stdio: "ignore" })
     } catch {
       /* best-effort; UTF-8 conhost is the common case */
     }
