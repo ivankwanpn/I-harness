@@ -86,6 +86,13 @@ export function buildEmbeddedSessionOptions(flags: Pick<TuiFlags, "sessionDir" |
   }
 }
 
+export interface TuiShutdownController { shutdown(): Promise<void> }
+
+export function createTuiShutdownController(options: { close: () => Promise<void>; stop: () => void; teardown: () => void }): TuiShutdownController {
+  let promise: Promise<void> | undefined
+  return { shutdown: () => promise ??= (async () => { try { options.stop() } catch {} await options.close(); try { options.teardown() } catch {} })() }
+}
+
 export function parseFlags(argv: string[]): TuiFlags {
   const flags: TuiFlags = { yes: false }
   for (let i = 0; i < argv.length; i++) {
@@ -376,21 +383,17 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // Lifecycle: the app quit path (Ctrl-Q / armed Ctrl-C) → backend.close →
   // input ended → start() resolves → graceful teardown. SIGINT/SIGTERM are
   // the first-graceful paths (raw mode means Ctrl-C never becomes SIGINT).
-  let shutdownStarted = false
-  const shutdown = (): void => {
-    if (shutdownStarted) return
-    shutdownStarted = true
-    try { attach?.stop() } catch { /* already gone */ }
-    try { terminal.teardown() } catch { /* already gone */ }
+  const shutdownController = createTuiShutdownController({ close: () => backend.close(), stop: () => attach?.stop(), teardown: () => terminal.teardown() })
+  const shutdown = (): Promise<void> => shutdownController.shutdown()
+  const onSignal = (code: number): void => {
+    process.removeListener("SIGINT", onSigint)
+    process.removeListener("SIGTERM", onSigterm)
+    void shutdown().then(() => process.exit(code), () => process.exit(code))
   }
-  process.once("SIGINT", () => {
-    shutdown()
-    process.exit(130)
-  })
-  process.once("SIGTERM", () => {
-    shutdown()
-    process.exit(143)
-  })
+  const onSigint = (): void => onSignal(130)
+  const onSigterm = (): void => onSignal(143)
+  process.once("SIGINT", onSigint)
+  process.once("SIGTERM", onSigterm)
 
   await app.start()
 
