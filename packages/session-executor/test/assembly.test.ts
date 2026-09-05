@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
@@ -146,6 +147,31 @@ describe("createSessionAssembly", () => {
       await assembly.compactNow("keep the constraint X in mind")
       expect(captured).toContain("## User instructions")
       expect(captured).toContain("keep the constraint X in mind")
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("does not duplicate persistence for a host-owned session", async () => {
+    const mirrored: SessionEvent[] = []
+    const coordinator = {
+      enqueue: (_sessionId: string, events: SessionEvent[]) => { mirrored.push(...events) },
+      flush: async (_sessionId: string) => {},
+    } as unknown as SessionCoordinator
+    const sessionId = "mirror-session"
+    const session = createSession((ev) => {
+      mirrored.push(ev)
+    })
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      sessionId,
+      session,
+      coordinator,
+      model: createMockClient([{ role: "assistant", text: "ok" }]),
+    })
+    try {
+      await assembly.agent.run("hello")
+      expect(mirrored).toEqual(session.events)
     } finally {
       await assembly.dispose()
     }

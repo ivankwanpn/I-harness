@@ -39,7 +39,7 @@
 //    synthetic seq = highest-seen+1 in arrival order (documented seam for
 //    malformed/external events only).
 import { randomUUID } from "node:crypto"
-import { append, subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
 import { RewindService } from "@i-harness/rewind"
 import { applyTitle, normalizeTitle } from "@i-harness/session-title"
 import { createSessionService, type SessionAssembly, type SessionService, type SessionServiceOptions } from "@i-harness/session-executor"
@@ -272,9 +272,8 @@ export interface EmbeddedFactoryOptions {
   workspace: string
   /** Initial prompt (see EmbeddedOptions.prompt). */
   prompt: string
-  /** M38 model seam — the ONLY accepted wiring surface; ALSO gives the engine
-   * the SessionServiceOptions.modelBuilder position for loadMeta-driven
-   * resolution (pass apps/cli-style settings+credentials in M38). */
+  /** Host model resolution seam. When forceMock is false, the resolved client
+   * is built per session by this callback; undefined keeps the mock fallback. */
   modelBuilder?: SessionServiceOptions["modelBuilder"]
   /** true (default): force the mock client (cyclic "ok" — repeated turns on
    * one assembly survive). false + modelBuilder → production resolution chain
@@ -283,8 +282,8 @@ export interface EmbeddedFactoryOptions {
   /** Assembly auto-approval (M37a default true — the approval bridge via
    * service.onAssembly is an M37b host task; fail-closed otherwise). */
   approveAll?: boolean
-  /** M38 (accepted + ignored in M37a): jsonl session store root. The mock-only
-   * factory cannot persist without the session-persistence deps. */
+  /** JSONL session store root. When set, the factory owns the coordinator
+   * lifecycle and enables durable create/list/resume/flush behavior. */
   storeRoot?: string
   /** M38b G2: info-line/status model label — the HOST's --model spec (the
    * resolved ModelClient exposes no name; see EmbeddedOptions.modelLabel).
@@ -574,14 +573,11 @@ function buildRewindMember(
   }
 }
 
-// ------------------------------------------------------------------ factory (mock-only M37a)
+// ------------------------------------------------------------------ factory
 
-/** Default host wiring — mirrors apps/cli's createSessionService call shape
- * MINUS the coordinator/store/meta chain (seam: not importable here without
- * adding @i-harness/session-persistence deps — see module header). Mock first,
- * modelBuilder passthrough (M38), approveAll default true, cyclic mock so
- * repeated turns survive. The returned client's session is fresh and
- * in-memory; callers wanting durability must M38 the factory. */
+/** Default embedded host wiring. Without `storeRoot` it uses an ephemeral
+ * session; with a coordinator/store it provides durable create/list/resume/
+ * flush lifecycle and optionally the durable rewind bridge. */
 export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Promise<BackendClient> {
   const forceMock = opts.forceMock ?? true
   // A resumed injected coordinator is transferred to this factory instance because
@@ -593,13 +589,21 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
   try {
     if (coordinator !== undefined) {
       if (sessionId !== undefined) {
-        session = (await coordinator.load(sessionId)).session
+        const restored = (await coordinator.load(sessionId)).session
+        session = createSession((ev) => {
+          coordinator.enqueue(sessionId!, [ev])
+          if (ev.type === "turn/end") void coordinator.flush(sessionId!).catch(() => {})
+        })
+        session.events.push(...restored.events)
+        session.formatVersion = restored.formatVersion
+        session.header = restored.header
         await coordinator.adoptOwnership(sessionId)
       } else {
         sessionId = (await coordinator.create()).id
       }
     }
     sessionId ??= `sess-${randomUUID().slice(0, 8)}`
+    const durableRewindRoot = coordinator === undefined ? undefined : opts.rewindStoreRoot
     const service: SessionService = createSessionService({
       workspace: opts.workspace, sessionId,
       ...(session !== undefined ? { session } : {}),
@@ -607,7 +611,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
       ...(coordinator !== undefined ? { beforeDispose: async () => coordinator.flush(sessionId!) } : {}),
       approveAll: opts.approveAll ?? true, mockCycles: true,
       ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}),
-      ...(opts.rewindStoreRoot !== undefined && coordinator !== undefined && session !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}),
+      ...(durableRewindRoot !== undefined ? { rewindStoreRoot: durableRewindRoot } : {}),
     })
     const listSessions = coordinator === undefined ? undefined : async (): Promise<SessionSummary[]> => {
       const ids = await coordinator.list()
@@ -617,7 +621,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
         return { id, title: meta.title ?? "Session", updatedAt: updatedAt ?? Date.parse(meta.createdAt), turnCount: restored.session.events.filter((event) => event.type === "turn/start").length }
       }))
     }
-    const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(opts.rewindStoreRoot !== undefined && coordinator !== undefined && session !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
+    const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(durableRewindRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
     if (coordinator === undefined) return backend
     const close = backend.close.bind(backend)
     let closePromise: Promise<void> | undefined

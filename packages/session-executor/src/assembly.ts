@@ -284,6 +284,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // detached: the rewind journal is a backend concern — a failure must never
   // break the live agent loop (warn only; the turn completes regardless).
   let rewindSubscription: (() => void) | undefined
+  let rewindDrain: Promise<void> = Promise.resolve()
   if (rewindRecorder !== undefined && rewindStore !== undefined) {
     const recorder = rewindRecorder
     const store = rewindStore
@@ -291,11 +292,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       if (ev.type === "user/message") {
         recorder.begin(ev.seq ?? 0, ev.text)
       } else if (ev.type === "turn/end") {
-        void (async () => {
-          const point = await recorder.finalize()
+        // Snapshot immediately so the next turn can begin while journal I/O
+        // remains serialized and tracked for shutdown.
+        const finalized = recorder.finalize()
+        rewindDrain = rewindDrain.then(async () => {
+          const point = await finalized
           if (point === null) return
-          await store.appendPoint(point)
-        })().catch((err) => console.warn(`[rewind] point append failed: ${err instanceof Error ? err.message : String(err)}`))
+          // Finalization may overlap a prior append; commit at the current
+          // journal frontier while this chain owns the append slot.
+          const committed = { ...point, turnIndex: (await store.readPoints()).length }
+          await store.appendPoint(committed)
+        }).catch((err) => {
+          console.warn(`[rewind] point append failed: ${err instanceof Error ? err.message : String(err)}`)
+        })
       }
     })
   }
@@ -497,8 +506,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   async function dispose(): Promise<void> {
-    // M42 G1: stop the rewind recorder subscription first (no more finalizes).
+    // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
+    rewindSubscription = undefined
+    await rewindDrain
     // Unmount in REVERSE mount order (last-mounted unmounts first), best-effort:
     // one handle's failure must not block the rest — and dispose never throws.
     const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]

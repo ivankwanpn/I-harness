@@ -311,7 +311,12 @@ describe("embedded backend", () => {
     expect(resumedRows[0]).toMatchObject({ id, turnCount: 2 })
     expect(restored.filter((e) => e.type === "user" && (e as { text: string }).text === "kickoff")).toHaveLength(1)
     expect(restored.some((e) => e.type === "user" && (e as { text: string }).text === "distinct history")).toBe(true)
+    await second.submit("after resume")
     await second.close()
+    const third = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff", storeRoot: root, resumeSessionId: id })
+    const persistedAfterResume = await third.replay(-1)
+    expect(persistedAfterResume.some((e) => e.type === "user" && (e as { text: string }).text === "after resume")).toBe(true)
+    await third.close()
   })
 
   it("durable TUI factory rejects an unknown resume session", async () => {
