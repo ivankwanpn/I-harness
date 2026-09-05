@@ -433,6 +433,7 @@ describe("createEmbeddedBackend — the conditional rewind member", () => {
     const storeA = new RewindStore({ root: storeRoot, sessionId: sessionA })
     for (let i = 0; i < 250 && (await storeA.readPoints()).length === 0; i++) await new Promise((r) => setTimeout(r, 20))
     expect(await storeA.readPoints()).toHaveLength(1)
+    expect(await readFile(join(workspace, "a.txt"), "utf-8")).toBe("after")
     expect(await first.rewind!.points()).toEqual([{ turnIndex: 0, preview: "rewrite a", files: 1 }])
     const plan = await first.rewind!.plan(0, "all")
     expect(plan.clean).toEqual([{ path: "a.txt", kind: "restore-blob", blobId: expect.any(String) }])
