@@ -81,6 +81,24 @@ describe("createSessionService", () => {
     expect(again.hasAssembly("s1")).toBe(true)
   }, 60_000)
 
+  it("settles a queued successor after a failed predecessor without an unhandled rejection", async () => {
+    let loadCount = 0
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, loadMeta: async () => { if (++loadCount === 1) throw new Error("load failed"); return undefined } })
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      const first = service.submit("s1", "first", new AbortController().signal)
+      const second = service.submit("s1", "second", new AbortController().signal)
+      const settled = await Promise.race([Promise.allSettled([first, second]), new Promise<never>((_, reject) => setTimeout(() => reject(new Error("successor remained pending")), 2000))])
+      expect(settled[0].status).toBe("rejected")
+      expect(settled[1].status).toBe("fulfilled")
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(unhandled).toEqual([])
+      expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
+    } finally { process.off("unhandledRejection", onUnhandled); await service.close() }
+  }, 60_000)
+
   it("queueState reports running/queued from the per-session lane", async () => {
     const service: SessionService = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
     expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
