@@ -17,7 +17,7 @@
 //
 // Errors: any throw → best-effort marker "host-failed" + message → exit 3.
 
-import { execSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 import { writeFileSync, writeSync, mkdirSync } from "node:fs"
 import { DiffBuffer } from "../../src/grid/index.ts"
 import type { CellBuffer } from "../../src/grid/index.ts"
@@ -137,7 +137,11 @@ async function main(): Promise<void> {
   // switched to UTF-8 — multibyte cell text (世界) would be mangled. chcp
   // flips the console attached to this process; its own stdout is redirected
   // so no answer bytes reach the pty.
-  execSync("chcp.com 65001>NUL", { stdio: "ignore" })
+  if (process.platform === "win32") {
+    execFileSync(`${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\chcp.com`, ["65001"], {
+      stdio: "ignore",
+    })
+  }
 
   out(initSequence(cap))
   renderAt(size1.cols, size1.rows)
