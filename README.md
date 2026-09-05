@@ -28,20 +28,23 @@ I-harness 是一個**完整的 Agent 產品後端 + 終端前端**：
 # 1. 安裝依賴
 pnpm install
 
-# 2. 開箱體驗（無需 API Key——內置 mock 模型）
-node --import tsx apps/tui/src/index.ts                        # 全屏 TUI
-node --import tsx apps/cli/src/index.ts run "say hi" --yes     # 無頭運行
+# 2. 用真實模型跑（以 DeepSeek 為例——任意 OpenAI 兼容/五協議提供商同法）
+$env:DEEPSEEK_API_KEY = "sk-..."     # 或經 TUI /provider 三步錄入（存為憑證引用）
+node --import tsx apps/tui/src/index.ts --model deepseek:deepseek-chat          # 全屏 TUI（真實模型會話）
+node --import tsx apps/cli/src/index.ts run "say hi" --model deepseek:deepseek-chat --api-key $env:DEEPSEEK_API_KEY --yes
 
 # 3. 全局命令（grok 式：任意文件夾敲名字）
 cd apps/cli && pnpm link -g
-i-harness           # 在當前文件夾啟動 TUI（workspace = cwd）
+i-harness           # 在當前文件夾啟動 TUI（workspace = cwd；模型取 settings/provider 默認）
 ih --minimal        # 原生 scrollback 模式
-ih --prompt "hello"
+ih --prompt "hello" --model deepseek:deepseek-chat
 ih --attach <session-id>
 ih help             # 全部子命令（run / web / sdk / acp / tui）
 ```
 
-**Windows 安裝器**（自包含：捆入 Node v22.16.0 運行時 + esbuild 捆包 + 平台原生模塊，~50MB）：
+> 未配置任何提供商時回退 **mock 模型**（開發友好；解析鏈 `--model` > settings 默認 > mock，每一步缺都以醒目 warn 告知）。
+
+**Windows 安裝器**（自包含——見「分發與打包」）：
 
 ```bash
 node scripts/build-installer.mjs    # → build\I-harness-Setup-0.1.0.exe
@@ -81,6 +84,43 @@ node scripts/build-installer.mjs    # → build\I-harness-Setup-0.1.0.exe
 ### TUI 常用斜杠
 
 `/minimal` `/fullscreen` `/btw` `/theme` `/timestamps` `/multiline` `/compact-mode` `/find` `/jump` `/history` `/resume` `/new` `/delete` `/rename` `/session-info` `/context` `/usage` `/rewind` `/plan` `/view-plan` `/compact` `/queue` `/tasks` `/doctor` `/copy` `/export` `/transcript` `/help` `/quit` `/always-approve` `/auto` `/effort` `/model` `/provider` `/settings` `/skills` `/mcps` `/hooks` `/plugins` `/marketplace` `/personas` `/config-agents` `/workflow` `/tutorial` `/timeline` —— 完整清單見 `docs/CAPABILITIES-DETAIL.md` §TUI。
+
+---
+
+## 分發與打包
+
+**兩種「安裝」途徑，產權一致**（同一 shim 啟動器）：
+
+### 1. 全局鏈接（開發/源碼模式）
+
+```bash
+cd apps/cli && pnpm link -g
+```
+
+- 註冊 `i-harness` 與 `ih` 兩個命令名（同一個 bin shim）
+- shim 以**自身安裝的絕對路徑**解析 tsx loader + CLI 入口——任意 cwd 可用；`pnpm link -g`/`npm i -g ./apps/cli` 皆可
+- 要求：Node ≥ 22（源碼直跑無構建產物）
+
+### 2. NSIS 自包含安裝器（發布模式）
+
+```bash
+node scripts/build-installer.mjs   # dist 構建 + Node 運行時下載 + makensis 編譯
+node scripts/verify-installer.mjs  # 17 項安裝驗證（靜默裝 → 雙命令冒煙 → 淨卸載）
+```
+
+產物：`build\I-harness-Setup-0.1.0.exe`（**~50MB 自包含**——捆入 Node v22.16.0 運行時、esbuild 單捆 `dist/ih.mjs`、平台原生模塊（node-pty/koffi/ripgrep——平樹 hoisted 部署）；**目標機零前置**）。
+
+安裝器行為（`installer/ih.nsi`，NSIS 3.x/MUI2）：
+
+| 項 | 行為 |
+|---|---|
+| 安裝目錄 | `Program Files\I-harness`（管理員；測試模式為用戶級） |
+| PATH | HKLM 追加（僅當不含；段級精確匹配），`WM_SETTINGCHANGE` 廣播 |
+| 開始選單 | `I-harness` / `ih` 快捷方式 + README |
+| 卸載器 | 文件/目錄清除 + 註冊表 + PATH 回寫 + 自刪 |
+| 測試模式 | `-test.exe`（`IH_NSIS_TEST` 編譯變體：不寫 PATH/註冊表——供自動化驗證） |
+
+**誠實限制**：dist 包中 `--attach` 的 SDK spawn、Windows-ACL 沙箱 runner 與 minimal `/minimal` 自重啟仍需源碼 + tsx（`I_HARNESS_HOME` 為開發覆蓋）——真機安裝的完整功能集以「純 TUI + 首選會話」為準。
 
 ---
 
