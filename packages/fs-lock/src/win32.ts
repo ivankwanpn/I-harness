@@ -48,6 +48,8 @@ const GENERIC_WRITE = 0x40000000
 const FILE_SHARE_READ = 0x00000001
 /** FILE_SHARE_WRITE: other opens may write (winnt.h). */
 const FILE_SHARE_WRITE = 0x00000002
+/** FILE_SHARE_DELETE: allow cleanup of the lock file after lease release. */
+const FILE_SHARE_DELETE = 0x00000004
 /** OPEN_ALWAYS: create the lock file if absent, open it otherwise (fileapi.h). */
 const OPEN_ALWAYS = 4
 /** LOCKFILE_FAIL_IMMEDIATELY: fail instead of waiting (winbase.h). */
@@ -188,7 +190,7 @@ export async function acquireWin32(opts: AcquireOptions): Promise<SessionLock> {
         const opened = api.createFileW(
           opts.lockPath,
           GENERIC_READ | GENERIC_WRITE,
-          FILE_SHARE_READ | FILE_SHARE_WRITE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
           null, OPEN_ALWAYS, 0, null,
         )
         if (isInvalidHandle(opened)) {
