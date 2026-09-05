@@ -12,6 +12,14 @@ import type {
   RewindPointSummary,
   RewindResult,
 } from "@i-harness/rewind"
+// M46c G2: the /workflow surface — the @i-harness/workflow READ shapes verbatim
+// (workflow_list entries + workflow_run output); the job view is re-declared
+// structurally (the same BackgroundJobView shape) because @i-harness/exec is
+// NOT a tui dependency.
+import type {
+  WorkflowListEntry,
+  WorkflowRunOutput,
+} from "@i-harness/workflow"
 
 // ------------------------------------------------------------------ events
 
@@ -221,4 +229,40 @@ export interface ScrollbackEngine {
    * after the marker was trimmed by retain). OPTIONAL: engines without the
    * accessor simply never dim. */
   rewindAnchor?(): number | undefined
+  /** M46c G1: the turn anchors — one entry per User prompt block, in display
+   * order: the block's header display LINE (the /jump goTo target) + `preview`
+   * (the prompt's first line, strip-prefixed, ≤40 chars for the panel/popup).
+   * O(turns) — the block walk, no per-line scanning. OPTIONAL: engines without
+   * the accessor fall back (the /jump walk + the timeline gate turn OFF). */
+  turnAnchors?(): Array<{ lineIndex: number; preview: string }>
+}
+
+// ------------------------------------------------------------------ workflow surface (M46c G2)
+
+/** One workflow job snapshot (the @i-harness/exec BackgroundJobView shape
+ * re-declared structurally — @i-harness/exec is NOT a tui dependency). */
+export interface WorkflowJobView {
+  id: string
+  status: "running" | "completed" | "killed" | "error"
+  stdout: string
+  stderr: string
+  exitCode?: number
+}
+
+/** M46c G2: the /workflow host — the panel surface behind `/workflow run
+ * <name> | status [id] | list`. Method names mirror the @i-harness/workflow
+ * exports (workflow_run / workflow_list + the executor's job surface). The
+ * loop builds the default (createWorkflowRegistry + createWorkflowExecutor —
+ * real scanning + real local spawn); tests inject the fake. */
+export interface WorkflowSurface {
+  /** workflow_list — registered workflow definitions (name/steps/params). */
+  list(): Promise<WorkflowListEntry[]>
+  /** workflow_run — start a named workflow with params; resolves the run's
+   * job ids + "running" (the run keeps flowing as one background job). */
+  run(name: string, params: Record<string, string>): Promise<WorkflowRunOutput>
+  /** Job status snapshot (status [id] → that one job; bare status → all). */
+  status(id?: string): Promise<WorkflowJobView[]>
+  /** Stop a running job. OPTIONAL — a surface without cancel drives the
+   * honest "(M46d)" toast on the [stop] row activation. */
+  cancel?(id: string): Promise<"cancellation-requested" | "already-finished">
 }

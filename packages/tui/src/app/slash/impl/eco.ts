@@ -1,21 +1,22 @@
 // @i-harness/tui — G2 (M46a): ecosystem slash commands — /skills /mcps /hooks
-// /plugins /marketplace /personas /config-agents /workflow.
+// /plugins /marketplace /personas /config-agents (/workflow moved to
+// impl/workflow2.ts — the M46c surface).
 // DATA FROM THE REAL BACKENDS (read-only listings — the editing surfaces are
 // v2 per spec): skills = @i-harness/skills registry (workspace + global scan);
 // hooks = @i-harness/hooks config (9-event map + sha256 per handler);
 // plugins/marketplace = @i-harness/plugin-registry catalog (installed/enabled
 // + market shelf); config-agents = @i-harness/subagent builtin roles;
-// workflow = @i-harness/workflow registry + job store. mcps = plugin runtime
-// inputs mcpServerConfigs (the per-server config keys — there is NO aggregated
-// status registry in @i-harness/mcp-client; live supervisor states are the
-// session assembly's mount outcomes — see light-mcps.ts).
+// workflow = @i-harness/workflow registry + job store (the M46c surface —
+// see workflow2.ts). mcps = plugin runtime inputs mcpServerConfigs (the
+// per-server config keys — there is NO aggregated status registry in
+// @i-harness/mcp-client; live supervisor states are the session assembly's
+// mount outcomes — see light-mcps.ts).
 
 import { dirname, join } from "node:path"
 import { resolveHooksConfigPath, loadHooksConfig, HOOK_EVENTS } from "@i-harness/hooks"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createSkillRegistry } from "@i-harness/skills"
 import { builtinRoles } from "@i-harness/subagent"
-import { createWorkflowJobStore, createWorkflowRegistry } from "@i-harness/workflow"
 import type { SlashCommand } from "../types.ts"
 import { skillsRows, SKILLS_EMPTY } from "../../../views/light-skills.ts"
 import { mcpsRows, MCPS_EMPTY } from "../../../views/light-mcps.ts"
@@ -23,8 +24,11 @@ import { hooksRows, HOOKS_EMPTY } from "../../../views/light-hooks.ts"
 import { pluginRows, marketplaceRows, PLUGINS_EMPTY, MARKETPLACE_EMPTY } from "../../../views/light-plugins.ts"
 import { PERSONAS_EMPTY } from "../../../views/light-personas.ts"
 import { configAgentRows, CONFIG_AGENTS_EMPTY } from "../../../views/light-config-agents.ts"
-import { workflowDefRows, workflowJobRows, WORKFLOW_DEFS_EMPTY, WORKFLOW_JOBS_EMPTY } from "../../../views/light-workflow.ts"
 import type { LightPanelRow } from "../../../views/light-panel.ts"
+
+// M46c G2: the /workflow entry MOVED to impl/workflow2.ts (the new surface —
+// run <name> | status [id] | list — supersedes this file's combined
+// registry+jobs listing; name collisions in the registry would throw).
 
 function workspaceOf(ctx: Parameters<SlashCommand["run"]>[0]): string {
   return ctx.workspace ?? process.cwd()
@@ -121,20 +125,6 @@ export const ecoCommands: SlashCommand[] = [
     run: (ctx) => {
       const roles = builtinRoles()
       ctx.openPanel({ kind: "config-agents", title: "Config agents", rows: emptyOr(configAgentRows(roles), CONFIG_AGENTS_EMPTY) })
-    },
-  },
-  {
-    name: "workflow",
-    description: "Workflow registry + job list",
-    run: (ctx) => {
-      const defs = createWorkflowRegistry({ workspace: workspaceOf(ctx) }).list()
-      const jobs = createWorkflowJobStore().list()
-      const rows = [
-        ...emptyOr(workflowDefRows(defs), WORKFLOW_DEFS_EMPTY),
-        { label: "jobs", detail: String(jobs.length), header: true } as LightPanelRow,
-        ...emptyOr(workflowJobRows(jobs), WORKFLOW_JOBS_EMPTY),
-      ]
-      ctx.openPanel({ kind: "workflow", title: "Workflows", rows })
     },
   },
 ]

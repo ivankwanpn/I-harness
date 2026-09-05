@@ -31,6 +31,9 @@ export interface LightPanelState {
   emptyText?: string
   /** Enter on a row → onSelect(index) (e.g. /jump jumps the viewport). */
   onSelect?: (index: number) => void
+  /** M46c G2: the /workflow status panel's [r] refresh — the loop's key
+   * intercept calls this closure while the panel is open (no-pump). */
+  refresh?: () => void
 }
 
 export const LIGHT_EMPTY_LOADING = "  Loading..."

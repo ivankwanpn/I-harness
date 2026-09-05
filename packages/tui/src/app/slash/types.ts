@@ -2,7 +2,7 @@
 // registry shape: SlashCommand + visible() gating).
 // Pure types — impls import this module only; the loop wires the context.
 
-import type { BackendClient, ScrollbackEngine } from "../../contracts.ts"
+import type { BackendClient, ScrollbackEngine, WorkflowSurface } from "../../contracts.ts"
 import type { TuiAppState } from "../present.ts"
 
 // ------------------------------------------------------------------ panels
@@ -39,6 +39,9 @@ export interface SlashPanelRequest {
   cursor?: number
   /** Panel is loading (empty rows render "  Loading..."). */
   loading?: boolean
+  /** M46c G2: [r] refresh closure (the /workflow status panel re-fetches its
+   * rows — the loop calls it from the key intercept while the panel is open). */
+  refresh?: () => void
 }
 
 // ------------------------------------------------------------------ command
@@ -128,4 +131,11 @@ export interface SlashContext {
   openTranscriptPager(): Promise<boolean>
   /** /doctor — the capability report (tui-core probe context). */
   probeReport?(): Promise<SlashPanelRow[]>
+  // ---- M46c G2: /workflow surface (additive members)
+  /** The /workflow host (contracts.ts WorkflowSurface) — the loop wires the
+   * default @i-harness/workflow-backed surface; tests inject a fake. */
+  workflow?: WorkflowSurface
+  /** Open the text-input overlay (the /workflow run params line — the same
+   * bindTextInput seam /btw uses). Absent → the command toasts honestly. */
+  openTextInput?(opts: { title: string; initial?: string; onSubmit(text: string): void; onCancel?(): void }): void
 }
