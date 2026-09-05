@@ -17,11 +17,14 @@ export type AppAction =
   // prompt (spec §4)
   | "submit" | "newline" | "interject" | "cancel-turn"
   | "toggle-multiline" | "cycle-mode"
-  // global / panes / sessions (spec §4 · Ctrl-T/B/;/S/N/Q/P)
+  // global / panes / sessions (spec §4 · Ctrl-T/G/;/N/Q/P — M46a keys truth:
+  // Ctrl+S is the DRAFT STASH now, F3 is the session picker, Ctrl+B is the
+  // send-to-background slot, Ctrl+R is the mouse-reporting opt-in slot)
   | "toggle-todo-pane" | "toggle-tasks-pane" | "toggle-queue-pane"
   | "sessions" | "sessions-new"
   | "quit" | "quit-arm1"
   | "history-prev" | "history-next"
+  | "stash-draft" | "send-background" | "edit-prompt-editor"
   | "open-command-palette"
   | "none"
   // overlay / modal / dropdown / picker (spec §4 modal & dropdown keys)
@@ -49,6 +52,11 @@ export type AppAction =
   // welcome (spec §2a)
   | "menu-up" | "menu-down" | "menu-top" | "menu-bottom"
   | "menu-activate"
+  // M46a G1 (provider/model): F2/Ctrl+, = the settings modal (grok parity);
+  // Ctrl+M on the SCROLLBACK screen (agent screen non-prompt) = the model
+  // picker — the prompt-focused Ctrl+M keeps multiline (grok's collision
+  // resolution precedent).
+  | "open-settings" | "open-model-picker"
 
 /** The keymap sees a normalized key event (mirrors tui-core KeyEvent). */
 export interface Kbd {
@@ -65,6 +73,8 @@ export type OverlayKind =
   | "permission" | "question" | "cancel-turn"
   | "dropdown" | "history" | "sessions"
   | "rewind" // M43 (§3.9) — the runtime kind string from the seam's closed-union cast
+  | "provider" | "settings" | "model-picker" // M46a G1 — runtime kind strings (closed-union cast)
+  | "light" // M46a G2 — light panels (skills/mcps/hooks/plugins/...) in the dropdown slot
 
 export interface KeymapState {
   focused: "prompt" | "scrollback"
@@ -118,6 +128,23 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
       case "Left": case "Right": return "toggle-fold"
       case "Tab": return "focus-prompt"
       case "Esc": return "none" // M37b: unselect / close search
+      case "F2": return "open-settings" // M46a G1: settings modal (grok F2)
+      case "F3": return "sessions" // M46a keys truth: F3 = session picker (was Ctrl+S)
+    }
+    if (ev.code === "char" && ev.ctrl) {
+      // M46a G1: Ctrl+M on the agent screen (scrollback focused) = the model
+      // picker — the prompt-focused Ctrl+M keeps multiline (grok collision
+      // resolution); Ctrl+, = the settings modal.
+      switch (ev.key) {
+        case "m": return "open-model-picker"
+        case ",": return "open-settings"
+        // M46a G2 (keys truth): Ctrl+G tasks pane, Ctrl+B send-to-background
+        // slot, Ctrl+R mouse-reporting opt-in (registered 'none' — inert
+        // until M46b); sessions moved to F3.
+        case "g": return "toggle-tasks-pane"
+        case "b": return "send-background"
+        case "r": return "none" // M46b: mouse-reporting opt-in slot
+      }
     }
     if (ev.code === "char" && !ev.ctrl && !ev.alt) {
       switch (ev.key) {
@@ -156,9 +183,13 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
     if (isShiftTab(ev)) return "cycle-mode" // Normal → Plan → Always-Approve
     return "focus-scrollback"
   }
+  if (ev.code === "F2") return "open-settings" // M46a G1: settings modal (grok F2)
+  if (ev.code === "F3") return "sessions" // M46a keys truth: F3 = session picker
   if (ev.code === "ShiftTab") return "cycle-mode"
   if (ev.code === "Up") return state.promptText.length === 0 ? "history-prev" : "none"
   if (ev.code === "Down") return state.promptText.length === 0 ? "history-next" : "none"
+  // M46a keys truth (grok): Alt+S = the draft stash too (Alt+S same as Ctrl+S).
+  if (ev.code === "char" && !ev.ctrl && ev.alt && ev.key === "s") return "stash-draft"
   if (ev.code === "char" && ev.ctrl) {
     switch (ev.key) {
       case "c":
@@ -166,14 +197,20 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
         // the SECOND empty Ctrl-C (armed) goes through quit-arm1 → quit.
         if (state.promptText.length > 0) return "cancel-turn"
         return state.armedQuit ? "quit-arm1" : "cancel-turn"
-      case "m": return "toggle-multiline"
+      case "m": return "toggle-multiline" // M46a: prompt-focused Ctrl+M keeps multiline
       case "q": return "quit"
       case "t": return "toggle-todo-pane"
-      case "b": return "toggle-tasks-pane"
+      // M46a keys truth: Ctrl+G tasks pane (agent screen), Ctrl+B the
+      // send-to-background slot, Ctrl+R the mouse-reporting opt-in slot
+      // (registered 'none' — inert until M46b), Ctrl+S the DRAFT STASH.
+      case "g": return "toggle-tasks-pane"
+      case "b": return "send-background"
+      case "r": return "none" // M46b: mouse-reporting opt-in slot
       case ";": return "toggle-queue-pane" // spec §4: Ctrl+; queue pane
-      case "s": return "sessions"
+      case "s": return "stash-draft" // keys truth: Ctrl+S = stash/pop the draft
       case "n": return "sessions-new" // spec §4: Ctrl+N new session
       case "p": return "open-command-palette"
+      case ",": return "open-settings" // M46a G1: Ctrl+, = settings modal (grok parity)
       default: return "none"
     }
   }
@@ -186,11 +223,11 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
 }
 
 /**
- * Minimal-mode keys (M38a, spec §1.1): the quick prompt is the only surface.
- * Enter submits (Ctrl+Enter interjects); Esc is a no-op GUARD — the draft
- * is not cleared and there is no quit-arming (Ctrl+C on an empty prompt is
- * also a no-op); Ctrl+Q quits; Ctrl+S opens the session picker. Slash
- * commands route through the loop's submit text match (ModeSwitch relay).
+ * Minimal-mode keys (M38a, spec §1.1 + M46a keys truth): the quick prompt is
+ * the only surface. Enter submits (Ctrl+Enter interjects); Esc is a no-op
+ * GUARD; Ctrl+Q quits; Ctrl+S = the DRAFT STASH (quick-prompt focus — the
+ * session picker moved to F3); Ctrl+G = edit the quick prompt in $EDITOR.
+ * Slash commands route through the loop's submit (registry run).
  */
 export function minimalKey(ev: Kbd): AppAction {
   if (ev.code === "Enter") {
@@ -199,10 +236,12 @@ export function minimalKey(ev: Kbd): AppAction {
     return "submit"
   }
   if (ev.code === "Esc") return "none"
+  if (ev.code === "F3") return "sessions" // keys truth: F3 = session picker
   if (ev.code === "char" && ev.ctrl) {
     switch (ev.key) {
       case "q": return "quit"
-      case "s": return "sessions"
+      case "s": return "stash-draft" // keys truth: Ctrl+S = stash/pop the draft
+      case "g": return "edit-prompt-editor" // keys truth: minimal Ctrl+G = $EDITOR
       case "m": return "toggle-multiline"
       default: return "none"
     }
@@ -343,7 +382,8 @@ export function shortcutsFor(state: ShortcutStateFor): Shortcut[] {
     { key: "Esc", label: "clear" },
   )
   if (state.turnRunning) items.push({ key: "Ctrl+C", label: "stop" })
-  items.push({ key: "Ctrl+S", label: "sessions" })
+  items.push({ key: "Ctrl+S", label: "stash" }) // M46a keys truth: draft stash/pop
+  items.push({ key: "F3", label: "sessions" }) // M46a keys truth: the picker trigger
   items.push({ key: "Ctrl+Q", label: "quit" })
   return items
 }

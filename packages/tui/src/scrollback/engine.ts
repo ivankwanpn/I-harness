@@ -62,6 +62,12 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
 
   /* ------------------------------------------------------- public surface */
 
+  /** M46a G1: the LIVE timestamps toggle — flips the layout option (the next
+   * layout pass right-aligns the timestamp column per line; the app repaints). */
+  setShowTimestamps(on: boolean): void {
+    this.seg.setShowTimestamps(on)
+  }
+
   append(ev: TuiEvent): void {
     // Stream is seq-ordered; ignore a re-delivered seq (replay seams).
     if (ev.seq >= 0 && ev.seq <= this.lastSeq) {

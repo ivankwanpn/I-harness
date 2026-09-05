@@ -42,13 +42,18 @@ import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
 import {
   createRemoteBackend,
   createScrollbackEngine,
+  createTuiModelBuilder,
   defaultEmbeddedFactory,
   loadMinimalHost,
   ModeSwitch,
+  ProviderStore,
   spawnSdkSubprocess,
   TuiApp,
 } from "@i-harness/tui"
 import type { BackendClient, InlineHost, InputSource } from "@i-harness/tui"
+import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
+import { createCredentialStore } from "@i-harness/credentials"
+import { dirname } from "node:path"
 
 // ------------------------------------------------------------------ flags
 
@@ -170,6 +175,20 @@ export async function runTui(flags: TuiFlags): Promise<number> {
 
   const workspace = flags.workspace ?? process.cwd()
 
+  // M46a G1: the provider/model resolution chain (the M37a TODO seam — the
+  // same settings+credentials composition apps/cli/src/web.ts buildModelFor
+  // serves, keyed to the TUI provider store). The modelBuilder's undefined
+  // resolve = the embedded service's mock fallback (today's behavior — no
+  // provider configured → mock). The engine + loop read the durable TUI prefs
+  // (timestamps/compact apply NOW; the modal can also flip them live).
+  const settings = new SettingsStore()
+  await settings.load()
+  const credentials = createCredentialStore(
+    join(dirname(resolveSettingsPath()), "credentials.json"),
+  )
+  const providerStore = new ProviderStore({ settings, credentials })
+  const tuiPrefs = settings.get().tui.prefs
+
   // Capabilities: the probe writes its queries to stdout; a PTY / no-answer
   // terminal resolves to the env-derived defaults (2 s outer cap on top of
   // the probe's own 500 ms deadline).
@@ -186,10 +205,13 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // with backend.close() (shutdown → exit). LOUD: the wire has no history RPC,
   // so an --attach shows the session from THIS moment (pre-attach log lines are
   // NOT replayed — wire v0 append-only rule; history replay needs a v1 RPC).
-  // Otherwise: the embedded mock-first backend (M37a) — forceMock:true keeps
-  // the cyclic mock default; TODO M38: --model → modelBuilder (settings+
-  // credentials seam like apps/cli buildModelFor); --resume/storeRoot →
-  // coordinator loadMeta + seed.
+  // Otherwise (M46a G1 — the M37a TODO seam resolved): the embedded factory
+  // runs the PRODUCTION modelBuilder chain (settings `tui.providers` → active
+  // provider → credential ref → buildModelClient — createTuiModelBuilder, the
+  // app/cli buildModelFor twin) with the mock as the clean fallback (no
+  // provider configured → mock, today's behavior). --model wins over the
+  // settings default (flag > settings); --resume/storeRoot stays a TODO
+  // (coordinator seam).
   const base = flags.attach !== undefined
     ? createRemoteBackend({
         client: spawnSdkSubprocess({
@@ -204,8 +226,15 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     : await defaultEmbeddedFactory({
         workspace,
         prompt: flags.prompt ?? "",
-        forceMock: true,
+        forceMock: false,
+        modelBuilder: createTuiModelBuilder({ store: providerStore, flagModel: flags.model }),
         modelLabel: flags.model,
+        // M46a: the durable TUI prefs drive the assembly's approval stance —
+        // guardian ON means tool asks reach the approval bridge (approval
+        // without a bridge fails closed — the bridge is G1's createApprovalBridge;
+        // the default factory never attaches one, so guardian stays the
+        // durable knob + the honest "asks" semantics at the ask surface).
+        approveAll: !tuiPrefs.guardian || tuiPrefs.alwaysApprove,
       })
 
   const cols = process.stdout.columns ?? 80
@@ -215,7 +244,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     cap,
   })
   const renderer = createRenderer({ cols, rows, cap })
-  const engine = createScrollbackEngine({ width: cols })
+  const engine = createScrollbackEngine({ width: cols, showTimestamps: tuiPrefs.timestamps })
 
   // Input bridge: attachInput pushes parser events into a queue the TuiApp's
   // input pump drains; when the backend close()s (app quit path), the queue
@@ -276,6 +305,14 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     // M38b G2: real info-line model label (the --model spec, e.g.
     // "openai:gpt-4o"); absent → the "mock-model" fallback.
     modelLabel: flags.model,
+    // M46a G1: the provider/model modal surfaces + the durable prefs' layout
+    // density (compact); the providerStore drives /provider /model /settings.
+    ...(attach === undefined ? { providerStore } : {}),
+    compact: tuiPrefs.compact,
+    // M46a G2: the slash registry's workspace root (skills/hooks/plugins/
+    // workflow scans) + the session id when the host knows it (--attach).
+    workspace,
+    ...(attach !== undefined ? { sessionId: flags.attach } : {}),
     ...(attach !== undefined ? { input } : {}),
     ...(minimal ? { mode: "minimal" as const, inlineFactory: () => loadInlineHost(cols, rows) } : {}),
     // Spec §1: the prompt text `/minimal`/`/fullscreen` self-relaunches the

@@ -13,6 +13,7 @@ import type {
   Renderer,
   TerminalCapabilityContext,
 } from "@i-harness/tui-core"
+import { resolvePalette } from "@i-harness/tui-core"
 import type { BackendClient, ScrollbackEngine, SessionSummary, TuiEvent } from "../contracts.ts"
 import { dispatchKey, shortcutsFor } from "./keys.ts"
 import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
@@ -20,6 +21,11 @@ import { present } from "./present.ts"
 import type { TuiAppState } from "./present.ts"
 import { bindRewindOverlay, isRewindOverlay } from "./overlay-seam.ts"
 import type { RewindState } from "../views/rewind.ts"
+// M46a G1: provider menu/wizard + settings modal + model picker overlays.
+import { bindProviderOverlay, makeWizard, type ProviderBindOptions, type ProviderViewState } from "../views/provider.ts"
+import { bindModelPickerOverlay, modelPickerEntries, type ModelPickerState } from "../views/model-picker.ts"
+import { bindSettingsOverlay, type SettingsModalState } from "../views/settings.ts"
+import type { FetchedModel, ProviderEntry, ProviderStore } from "./provider-store.ts"
 import { FpsMeter } from "./hud.ts"
 import type { HudState } from "./hud.ts"
 import type { RegionLine } from "../minimal/contracts.ts"
@@ -33,6 +39,13 @@ import type { CompletionEntry } from "../views/completion-dropdown.ts"
 import type { SearchResult } from "../views/file-search.ts"
 import { flattenSessions } from "../views/session-picker.ts"
 import type { SessionRow } from "../views/session-picker.ts"
+// M46a G2: the slash command registry (builtin map + visible gating) + the
+// light panel/kitchen seams the commands' ctx exposes.
+import { CommandRegistry, defaultRegistry } from "./slash/registry.ts"
+import type { SlashCommand, SlashContext, SlashPanelRequest } from "./slash/types.ts"
+import { bindTextInput } from "./slash/impl/text-input.ts"
+import type { LightPanelState } from "../views/light-panel.ts"
+import { doctorRows } from "../views/light-doctor.ts"
 
 export interface InputSource {
   next(): AsyncIterable<InputEvent>
@@ -88,6 +101,17 @@ export interface TuiAppOptions {
    * spawns the same session relaunched in the target mode (returns true =
    * handled; the loop quits). */
   modeSwitch?: (cmd: string) => boolean
+  /** M46a G1: the provider/model store behind `/provider`, `/model`,
+   * `/settings` + Ctrl+M/F2/Ctrl+, — host-constructed over real settings +
+   * credentials (the injected fetchFn is the CI discovery seam). Absent →
+   * the modal slash surfaces toast "provider UI: host store not wired". */
+  providerStore?: ProviderStore
+  /** M46a G2: workspace root — the skills/hooks/plugins/workflow scans
+   * (eco panels) land under it. Absent → process.cwd() at run time. */
+  workspace?: string
+  /** M46a G2: the session id when the host knows it (e.g. --attach; embedded
+   * sessions are in-process and the app cannot introspect their id). */
+  sessionId?: string
 }
 
 /** Minimal live-region host (M38a G2) — what the loop drives in minimal
@@ -111,14 +135,8 @@ export interface InlineHost {
 
 const ANIM_MS = 33 // 30fps pump
 
-/** Fallback slash registry when the host wires no adapter (spec §10 #8). */
-const DEFAULT_SLASH_COMMANDS: SlashEntry[] = [
-  { command: "help", description: "Shows help for built-in commands" },
-  { command: "compact", description: "Compacts the conversation" },
-  { command: "clear", description: "Clears the screen history" },
-  { command: "tasks", description: "Lists tasks on the current session" },
-  { command: "menu", description: "Shows the menu" },
-]
+/** M46a G1: the TUI provider protocol vocabulary (the /provider arg parse). */
+const TUI_PROTOCOLS = ["openai-responses", "openai-compatible", "anthropic", "gemini", "bedrock"] as const
 
 /** Case-insensitive subsequence hit indices (fuzzy-hit letters, spec §3.6). */
 function fuzzyHits(command: string, query: string): number[] {
@@ -159,10 +177,16 @@ export class TuiApp {
   private contextProbe: Promise<void> | undefined
   /** M39 debug HUD meter — allocated ONLY when opts.hud is on (zero otherwise). */
   private fpsMeter: FpsMeter | undefined
+  /** M46a G2: the slash command registry (builtin map + visible gate). */
+  private readonly slash: CommandRegistry = defaultRegistry()
+  /** M46a G2: the ACTIVE palette — the host's at start; /theme re-resolves
+   * (resolvePalette groknight/grokday/auto) and every frame draws with it. */
+  private palette: Palette
 
   constructor(opts: TuiAppOptions) {
     this.opts = opts
     this.uiMode = opts.mode ?? "fullscreen"
+    this.palette = opts.palette
     if (opts.hud === true) {
       this.fpsMeter = new FpsMeter()
       this.fpsMeter.start()
@@ -210,6 +234,13 @@ export class TuiApp {
         cursor: 0,
       },
       paneData: opts.initialPanes,
+      // M46a G2: the real toggle knobs (theme auto = the capability guess).
+      theme: "auto",
+      timestamps: false,
+      compactMode: false,
+      autoApprove: false,
+      draft: undefined,
+      lightPanel: undefined,
     }
   }
 
@@ -297,7 +328,7 @@ export class TuiApp {
       this.frameMinimal()
       return
     }
-    present(this.app, this.opts.renderer, this.opts.palette, this.opts.glyphs, {
+    present(this.app, this.opts.renderer, this.palette, this.opts.glyphs, {
       compact: this.opts.compact,
       cap: this.opts.capabilities,
       ...(this.fpsMeter !== undefined ? { hud: this.hudState() } : {}),
@@ -387,6 +418,12 @@ export class TuiApp {
       case "toggle-queue-pane": this.togglePane("queue"); break
       case "sessions": this.toggleSessions(); break
       case "sessions-new": this.toast("new session: M38 (backend create)"); break
+      // M46a keys truth — the stash (Ctrl+S/Alt+S), the send-to-background
+      // slot (Ctrl+B — jobs bridge absent ⇒ honest toast), minimal $EDITOR
+      // (Ctrl+G in minimal mode).
+      case "stash-draft": this.stashDraft(); break
+      case "send-background": this.toast("send-to-background (M46b)"); break
+      case "edit-prompt-editor": this.editPromptInEditor(); break
       case "open-command-palette": this.toast("command palette: M38"); break
       // ---- overlays / dropdowns / pickers (M37b, spec §4)
       case "overlay-select": this.overlaySelect(); break
@@ -440,6 +477,10 @@ export class TuiApp {
       case "menu-top": this.welcomeNav(-Number.MAX_SAFE_INTEGER); break
       case "menu-bottom": this.welcomeNav(Number.MAX_SAFE_INTEGER); break
       case "menu-activate": this.welcomeActivate(); break
+      // M46a G1: the provider/model modal surfaces (F2/Ctrl+, → settings;
+      // Ctrl+M on the agent screen → the model picker).
+      case "open-settings": this.openSettings(); break
+      case "open-model-picker": this.openModelPicker(); break
       case "quit": void this.quitNow(); break
       case "quit-arm1":
         // First press (Esc-empty / unarmed) arms; a later press quits.
@@ -517,6 +558,9 @@ export class TuiApp {
       return
     }
     if (ev.type !== "key") return
+    // M46a: /find search mode — chars/Backspace/Enter/Esc own the search bar
+    // (scrollback focus while active); everything else falls through.
+    if (this.searchKey(ev)) return
     // M40 G2 (C13): plan-review keys — while the plan bar is active, no
     // overlay/dropdown is open and the prompt is EMPTY, `a`/`c`/`q`
     // steer/prefill BEFORE the prompt edit path (typing wins once the prompt
@@ -593,6 +637,8 @@ export class TuiApp {
     if (ov !== undefined) return { kind: ov.kind }
     if (this.app.sessions !== undefined) return { kind: "sessions" }
     if (this.app.historyPanel !== undefined) return { kind: "history" }
+    // M46a G2: light panels ride the dropdown keymap (Enter accepts, Esc ends).
+    if (this.app.lightPanel !== undefined) return { kind: "light" }
     if (this.app.fileSearch !== undefined) return { kind: "dropdown", dropdown: "file-search" }
     if (this.app.completion !== undefined) return { kind: "dropdown", dropdown: "completion" }
     if (this.app.slash !== undefined) return { kind: "dropdown", dropdown: "slash" }
@@ -731,9 +777,26 @@ export class TuiApp {
   private submitPrompt(): void {
     const text = this.app.prompt.text.trim()
     if (text.length === 0) return // queue-top force-send lands M38 (spec §4)
-    // Mode-switch relay (spec §1): "/minimal"/"/fullscreen" text match — the
-    // host spawns the SAME session relaunched in the target mode and the loop
-    // ends this process (quitNow); nothing else is submitted.
+    // M46a G1 slash modals: /provider, /model, /settings (each = the modal
+    // surface; harmonized with G2's registry below — the G1 text-match stays
+    // FIRST: it owns those three names and never fights the registry run).
+    if (this.tryG1SlashModal(text)) {
+      this.clearPrompt()
+      return
+    }
+    // M46a G2: the slash REGISTRY run — every backend-supported command hits
+    // here (the M37b text-match relay is superseded). Matched → run + return;
+    // UNKNOWN "/x" falls through to the normal submit (spec §2 fallback).
+    const matched = this.slash.matches(text, this.slashCtx(text))
+    if (matched !== undefined) {
+      this.app.history.push(this.app.prompt.text)
+      this.app.historyIndex = this.app.history.length
+      this.clearPrompt()
+      void this.runSlashCommand(matched.command, matched.arg, text)
+      return
+    }
+    // Mode-switch relay (spec §1, still the /minimal //fullscreen host path
+    // when a host wires it without the registry relay — harmless fallback).
     const modeSwitch = this.opts.modeSwitch
     if (modeSwitch !== undefined && modeSwitch(text)) {
       this.clearPrompt()
@@ -750,6 +813,17 @@ export class TuiApp {
     void this.opts.backend.submit(text).catch((error: unknown) => {
       this.toast(`submit failed: ${error instanceof Error ? error.message : String(error)}`)
     })
+  }
+
+  /** Run a matched command; errors surface as toasts (never an unhandled
+   * rejection — the registry's run is user-paced and must not abort a frame). */
+  private async runSlashCommand(command: SlashCommand, arg: string, input: string): Promise<void> {
+    try {
+      await command.run(this.slashCtx(input, arg))
+    } catch (error) {
+      this.toast(`/${command.name} failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    this.requestFrame()
   }
 
   private insertText(s: string): void {
@@ -865,6 +939,726 @@ export class TuiApp {
     this.toast("Exiting plan mode")
   }
 
+  // ------------------------------------------------------------------ slash registry wiring (M46a G2)
+
+  /** The per-invocation SlashContext: every command behavior is a closure
+   * here (the impls never import the loop — unit-testable against a fake ctx). */
+  private slashCtx(input: string, arg = ""): SlashContext {
+    const app = this.app
+    return {
+      app,
+      backend: this.opts.backend,
+      engine: this.opts.engine,
+      input,
+      arg,
+      workspace: this.opts.workspace,
+      sessionId: this.opts.sessionId,
+      toast: (text) => this.toast(text),
+      turns: () => this.turnAnchors().length,
+      jumpAnchors: () => this.turnAnchors(),
+      gotoLine: (line) => {
+        app.scroll = { offset: Math.max(0, line), follow: false }
+        this.requestFrame()
+      },
+      openPanel: (req) => this.openLightPanel(req),
+      openSessions: () => {
+        if (app.sessions === undefined) this.toggleSessions()
+      },
+      openHistoryPanel: () => this.openHistoryPicker(),
+      openRewind: () => this.openRewind(),
+      startSearch: () => this.activateSearch(),
+      planRows: () => this.lastAssistantRows(),
+      toggleBtwWith: (question) => this.toggleBtwWith(question),
+      openBtwInput: () => this.openBtwInput(),
+      togglePane: (kind) => this.togglePane(kind),
+      setScreen: (screen) => {
+        app.screen = screen
+        if (screen === "welcome") {
+          app.welcome = { version: "0.1.0", menus: app.welcome?.menus ?? [], cursor: 0 }
+        }
+        this.requestFrame()
+      },
+      setTheme: (kind) => this.setTheme(kind),
+      setTimestamps: (on) => this.setTimestamps(on),
+      setMultiline: (on) => {
+        app.prompt.multiLine = on
+        this.refreshShortcuts()
+      },
+      setCompactMode: (on) => {
+        app.compactMode = on
+      },
+      setAutoApprove: (on) => {
+        app.autoApprove = on
+      },
+      focusPrompt: () => this.focus("prompt"),
+      resetSession: () => this.resetSession(),
+      renameSession: (title) => void this.renameSession(title),
+      deleteSession: () => this.deleteSession(),
+      relaunch: () => this.relaunchSlash(input),
+      quitApp: () => void this.quitNow(),
+      copyBlock: () => this.toast("Copied!"), // clipboard M38 (parity with `y`)
+      editPromptInEditor: () => this.editPromptInEditor(),
+      exportTranscript: () => this.exportTranscript(),
+      openTranscriptPager: () => this.openTranscriptPager(),
+      probeReport: async () => doctorRows(this.opts.capabilities),
+      g1Modal: (line) => this.tryG1SlashModal(line),
+      effort: (level) => this.effort(level),
+    }
+  }
+
+  /** Open/assure the prompt-history picker (the existing panel). */
+  private openHistoryPicker(): void {
+    if (this.app.history.length === 0) {
+      this.toast("no prompt history yet")
+      return
+    }
+    this.app.historyPanel = {
+      entries: this.app.history.map((t) => ({ text: t, highlight: [] })),
+      cursor: Math.max(0, this.app.history.length - 1),
+    }
+    this.requestFrame()
+  }
+
+  /** The light panel: state on app.lightPanel (dropdown slot). */
+  private openLightPanel(req: SlashPanelRequest): void {
+    const panel: LightPanelState = {
+      kind: req.kind,
+      title: req.title,
+      rows: req.rows,
+      cursor: req.cursor ?? 0,
+      loading: req.loading,
+      emptyText: undefined,
+      onSelect: req.onSelect,
+    }
+    // Mutually exclusive with the other dropdowns (sessions/history/slash/…).
+    this.app.slash = undefined
+    this.app.completion = undefined
+    this.app.fileSearch = undefined
+    this.app.historyPanel = undefined
+    this.app.sessions = undefined
+    this.app.lightPanel = panel
+    this.requestFrame()
+  }
+
+  /** Ctrl+S / Alt+S: the draft stash/pop — SWAP semantics (store the current
+   * text, restore the stashed one). Toast states per the keys truth. */
+  private stashDraft(): void {
+    const current = this.app.prompt.text
+    if (this.app.draft === undefined) {
+      if (current.trim().length === 0) {
+        this.toast("nothing to stash")
+        return
+      }
+      this.app.draft = current
+      this.app.prompt.text = ""
+      this.app.prompt.cursor = 0
+      this.toast("Draft stashed")
+    } else {
+      const stashed = this.app.draft
+      this.app.draft = current // swap — the current text returns to the slot
+      this.app.prompt.text = stashed
+      this.app.prompt.cursor = stashed.length
+      this.toast("Draft restored")
+    }
+    this.refreshDropdowns()
+    this.refreshShortcuts()
+    this.requestFrame()
+  }
+
+  /** /find: activate the scrollback search mode (the prompt box becomes the
+   * search bar; the loop intercepts chars while search is active). */
+  private activateSearch(): void {
+    this.app.search = { active: true, text: "", matches: [], current: 1 }
+    this.focus("scrollback")
+    this.toast("find: type the pattern · Enter applies · Esc exits")
+  }
+
+  /** Search-mode capture (before the keymap): plain chars/Backspace edit the
+   * pattern, Enter applies it (engine.search), Esc exits. */
+  private searchKey(ev: InputEvent): boolean {
+    const s = this.app.search
+    if (s === undefined || s.active !== true || this.app.focused !== "scrollback") return false
+    if (ev.type !== "key") return false
+    if (ev.code === "char" && !ev.ctrl && !ev.alt) {
+      s.text += ev.key
+      this.requestFrame()
+      return true
+    }
+    if (ev.code === "Backspace") {
+      s.text = s.text.slice(0, -1)
+      this.requestFrame()
+      return true
+    }
+    if (ev.code === "Enter") {
+      const count = this.opts.engine.search(s.text)
+      if (count < 0) this.toast("invalid pattern")
+      else if (count === 0) this.toast("no matches")
+      else {
+        s.matches = this.opts.engine.matches()
+        s.current = 0
+        this.toast(`find: ${count} match${count === 1 ? "" : "es"}`)
+      }
+      this.requestFrame()
+      return true
+    }
+    if (ev.code === "Esc") {
+      this.opts.engine.clearSearch()
+      this.app.search = undefined
+      this.toast("find closed")
+      return true
+    }
+    return false
+  }
+
+  /** /jump anchors: every User block header line (display line → label). */
+  private turnAnchors(): Array<{ line: number; n: number; text?: string }> {
+    const total = this.opts.engine.lineCount()
+    const out: Array<{ line: number; n: number; text?: string }> = []
+    let n = 0
+    for (let line = 0; line < total; line++) {
+      const block = this.opts.engine.lineBlock(line)
+      if (block === undefined || block.title !== "User") continue
+      n++
+      const text = block.runs.map((r) => r.text).join("").replace(/^[❯\s]+/, "").slice(0, 40)
+      out.push({ line, n, text })
+    }
+    return out
+  }
+
+  /** The LAST assistant block's display rows (the /plan //view-plan viewer —
+   * C13's plan text = the last assistant message). */
+  private lastAssistantRows(): Array<{ label: string }> {
+    const total = this.opts.engine.lineCount()
+    for (let start = total - 1; start >= 0; start--) {
+      const block = this.opts.engine.lineBlock(start)
+      if (block === undefined || block.title !== "Assistant") continue
+      const rows: Array<{ label: string }> = []
+      const lines = this.opts.engine.viewport(start, Math.min(24, total - start))
+      for (const line of lines) {
+        rows.push({ label: line.runs.map((r) => r.text).join("") })
+      }
+      return rows.length > 0 ? rows : [{ label: "(empty plan)" }]
+    }
+    return [{ label: "(no plan yet)" }]
+  }
+
+  /** /btw <question>: show the btw overlay + steer the question (real
+   * interject); a bare /btw when one is open closes it. */
+  private toggleBtwWith(question: string): void {
+    if (question.trim().length === 0) {
+      this.toggleBtwInput()
+      return
+    }
+    const existing = this.app.paneData?.btw
+    this.app.paneData = { ...(this.app.paneData ?? {}), btw: { question, state: "asking", nowMs: this.opts.now?.() ?? Date.now() } }
+    if (existing !== undefined) {
+      // second /btw with a question — toast + re-steer (no toggle confusion).
+      this.toast(`btw: ${question}`)
+    }
+    void this.opts.backend.steer(question).catch((error: unknown) => {
+      this.toast(`btw failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
+    this.requestFrame()
+  }
+
+  /** The btw input overlay (bare /btw — asks for the question). */
+  private toggleBtwInput(): void {
+    if (this.app.paneData?.btw !== undefined && this.app.overlay === undefined) {
+      this.app.paneData = { ...(this.app.paneData ?? {}) }
+      delete this.app.paneData.btw
+      this.toast("btw closed")
+      this.requestFrame()
+      return
+    }
+    this.openBtwInput()
+  }
+
+  private openBtwInput(): void {
+    this.app.overlay = bindTextInput({
+      title: "btw",
+      initial: "",
+      onSubmit: (text) => {
+        this.app.overlay = undefined
+        if (text.trim().length > 0) this.toggleBtwWith(text)
+        else this.toast("btw cancelled")
+      },
+      onCancel: () => {
+        this.app.overlay = undefined
+        this.toast("btw cancelled")
+      },
+    })
+    this.requestFrame()
+  }
+
+  /** /theme — re-resolve the palette (groknight/grokday/auto via tui-core). */
+  private setTheme(kind: "groknight" | "grokday" | "auto"): void {
+    this.app.theme = kind
+    this.palette = resolvePalette(this.opts.capabilities, kind === "auto" ? undefined : kind)
+    this.requestFrame()
+  }
+
+  /** /timestamps — the engine's runtime toggle (rows gain ts on the next
+   * viewport draw); engines without the accessor → honest toast. */
+  private setTimestamps(on: boolean): void {
+    this.app.timestamps = on
+    const engine = this.opts.engine
+    if (engine.setShowTimestamps === undefined) {
+      this.toast("timestamps: engine has no runtime toggle")
+      return
+    }
+    engine.setShowTimestamps(on)
+    this.requestFrame()
+  }
+
+  /** /new //delete — the in-session reset (persistence limits documented in
+   * the commands' descriptions; the embedded session is in-process M38). */
+  private resetSession(): void {
+    this.app.history = []
+    this.app.historyIndex = 0
+    this.app.prompt.text = ""
+    this.app.prompt.cursor = 0
+    this.app.prompt.multiLine = false
+    this.app.prompt.title = "untitled"
+    this.app.title = "untitled"
+    this.app.mode = "normal"
+    this.app.status.plan = false
+    this.app.prompt.plan = false
+    this.app.status.todo = { done: 0, total: 0 }
+    this.app.paneData = undefined
+    this.app.panes.clear()
+    this.app.turn = undefined
+    this.app.search = undefined
+    this.app.lightPanel = undefined
+    this.app.sessions = undefined
+    this.app.historyPanel = undefined
+    this.app.slash = undefined
+    this.app.completion = undefined
+    this.refreshShortcuts()
+    this.refreshDropdowns()
+    this.toast("new session (in-process reset — persistence lands M38)")
+    this.requestFrame()
+  }
+
+  /** /rename — app title + the backend rename bridge (the session-title
+   * backend; embedded appends the session/title event → the title event
+   * flows back through the stream). */
+  private async renameSession(title: string): Promise<void> {
+    const norm = title.trim().slice(0, 200)
+    if (norm.length === 0) {
+      this.toast("rename: empty title")
+      return
+    }
+    this.app.title = norm
+    this.app.prompt.title = norm
+    this.toast(`session title: ${norm}`)
+    if (this.opts.backend.rename !== undefined) {
+      await this.opts.backend.rename(norm).catch((error: unknown) => {
+        this.toast(`rename failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+      return
+    }
+    this.toast("rename: backend seam absent — title updated in-session only")
+  }
+
+  /** /delete — confirm → the deleted marker + welcome (the honest embedded
+   * limits: an in-process session has no durable store to delete). */
+  private deleteSession(): void {
+    this.resetSession()
+    this.app.screen = "welcome"
+    this.toast("session deleted (embedded store is in-process — persistence M38)")
+    this.requestFrame()
+  }
+
+  /** /minimal //fullscreen — the host's ModeSwitch relay (spawns the same
+   * session in the target mode); true ⇒ the command's run quits the loop. */
+  private relaunchSlash(input: string): boolean {
+    const modeSwitch = this.opts.modeSwitch
+    if (modeSwitch !== undefined && modeSwitch(input)) return true
+    this.toast("mode relay: host modeSwitch not wired")
+    return false
+  }
+
+  /** /effort — the REAL settings write (llm.defaultModel.reasoningEffort via
+   * G1's settings store surface); the interactive 6-dial ArgPicker is the
+   * settings modal's Models class. No arg → report the current effort. */
+  private effort(level: string): void {
+    const store = this.opts.providerStore
+    if (store === undefined) {
+      this.toast("effort: settings host store not wired")
+      return
+    }
+    const dm = store.defaultModel()
+    if (level.trim() === "") {
+      this.toast(`effort: ${dm.reasoningEffort ?? "default"} — /effort <level> to set`)
+      return
+    }
+    const lv = level.trim()
+    const surface = store.settingsSurface()
+    const cur = surface.get()
+    void surface
+      .set({ llm: { ...cur.llm, defaultModel: { ...cur.llm.defaultModel, reasoningEffort: lv } } })
+      .then(
+        () => this.toast(`effort: ${lv}`),
+        (error: unknown) => this.toast(`effort failed: ${error instanceof Error ? error.message : String(error)}`),
+      )
+  }
+
+  /** Minimal Ctrl+G: spawn $EDITOR over the current prompt text (temp file
+   * round-trip — honest simple; Windows fallback notepad). */
+  private editPromptInEditor(): void {
+    void this.editorRoundTrip()
+  }
+
+  private async editorRoundTrip(): Promise<void> {
+    try {
+      const { writeFileSync, readFileSync } = await import("node:fs")
+      const { tmpdir } = await import("node:os")
+      const { join } = await import("node:path")
+      const file = join(tmpdir(), `ih-prompt-${Date.now()}.txt`)
+      writeFileSync(file, this.app.prompt.text, "utf8")
+      const editor = process.env.EDITOR ?? (process.platform === "win32" ? "notepad" : "vi")
+      const { spawn } = await import("node:child_process")
+      const child = spawn(editor, [file], { stdio: "inherit", shell: process.platform === "win32" })
+      await new Promise<void>((resolve) => child.once("close", () => resolve()))
+      const text = readFileSync(file, "utf8")
+      this.app.prompt.text = text
+      this.app.prompt.cursor = text.length
+      this.refreshDropdowns()
+      this.toast("prompt edited")
+    } catch (error) {
+      this.toast(`$EDITOR failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  /** /export — serialize the engine rows into <workspace>/transcript-*.txt (a
+   * REAL write; the transcript is the display rows' text). */
+  private async exportTranscript(): Promise<string | undefined> {
+    try {
+      const { writeFileSync } = await import("node:fs")
+      const { join } = await import("node:path")
+      const dir = this.opts.workspace ?? process.cwd()
+      const file = join(dir, `transcript-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`)
+      writeFileSync(file, this.transcriptText(), "utf8")
+      this.toast(`exported: ${file}`)
+      return file
+    } catch (error) {
+      this.toast(`export failed: ${error instanceof Error ? error.message : String(error)}`)
+      return undefined
+    }
+  }
+
+  /** /transcript — same serialization into a temp .ansi and spawn $PAGER
+   * (honest simple: PAGER env honored; Windows fallback `cmd /c start`). */
+  private async openTranscriptPager(): Promise<boolean> {
+    try {
+      const { writeFileSync } = await import("node:fs")
+      const { tmpdir } = await import("node:os")
+      const { join } = await import("node:path")
+      const file = join(tmpdir(), `ih-transcript-${Date.now()}.ansi`)
+      writeFileSync(file, this.transcriptText(), "utf8")
+      const { spawn } = await import("node:child_process")
+      const pager = process.env.PAGER
+      if (pager !== undefined && pager !== "") {
+        const child = spawn(pager, [file], { stdio: "inherit", shell: true })
+        await new Promise<void>((resolve) => child.once("close", () => resolve()))
+        return true
+      }
+      if (process.platform === "win32") {
+        const child = spawn("cmd", ["/c", "start", "", file], { stdio: "ignore", detached: true })
+        child.unref()
+        return true
+      }
+      const child = spawn("less", [file], { stdio: "inherit" })
+      await new Promise<void>((resolve) => child.once("close", () => resolve()))
+      return true
+    } catch (error) {
+      this.toast(`transcript failed: ${error instanceof Error ? error.message : String(error)}`)
+      return false
+    }
+  }
+
+  /** The plain-transcript text (display rows, one per line). */
+  private transcriptText(): string {
+    const total = this.opts.engine.lineCount()
+    const lines = this.opts.engine.viewport(0, total)
+    return lines.map((l) => l.runs.map((r) => r.text).join("")).join("\n") + "\n"
+  }
+
+  // ------------------------------------------------------------------ provider/settings/model modals (M46a G1)
+
+  /** The G1 slash-text interception: "/provider [variant]", "/model [name]",
+   * "/settings" — returns true when handled (the prompt is cleared; the modal
+   * opens or a toast explains). Unrecognized G1 text (e.g. "/effort" — G2's)
+   * falls through to the backend. */
+  private tryG1SlashModal(line: string): boolean {
+    const store = this.opts.providerStore
+    if (store === undefined) {
+      if (/^\/provider(?:\s|$)/.test(line) || /^\/model(?:\s|$)/.test(line) || line === "/settings") {
+        this.toast("provider UI: host store not wired")
+        return true
+      }
+      return false
+    }
+    if (line === "/settings" || line.startsWith("/settings ")) {
+      this.openSettings()
+      return true
+    }
+    if (line.startsWith("/model")) {
+      const arg = line.slice("/model".length).trim()
+      this.openModelPicker(arg.startsWith("(") ? undefined : arg === "" ? undefined : arg)
+      return true
+    }
+    if (/^\/provider(\s|$)/.test(line)) {
+      const arg = line.slice("/provider".length).trim()
+      this.openProvider(arg)
+      return true
+    }
+    return false
+  }
+
+  /** `/provider [args]` — variants: show|list → the menu; add <id> [base] →
+   * the wizard prefilled; update <id> → the wizard editing; use|switch <id> →
+   * setActive + toast; delete [id] → the delete view (row preselected); reload
+   * → re-run discovery over the active provider (toast result/error). A bare
+   * `/provider` = the menu (cc parity). */
+  private openProvider(args: string): void {
+    const store = this.opts.providerStore
+    if (store === undefined) {
+      this.toast("provider UI: host store not wired")
+      return
+    }
+    const tokens = args.split(/\s+/).filter((t) => t !== "")
+    const cmd = tokens[0] ?? ""
+
+    if (cmd === "reload") {
+      const active = store.activeEntry()
+      if (active === undefined) {
+        this.toast("no active provider — add one with /provider add first")
+        return
+      }
+      this.toast(`discovering models for ${active.id}…`)
+      void store.discoverModels(active.id, { force: true }).then(
+        (models) => this.toast(`discovered ${models.length} model(s) for ${active.id}`),
+        (error: unknown) => this.toast(error instanceof Error ? error.message : String(error)),
+      )
+      return
+    }
+    if (cmd === "use" || cmd === "switch" || cmd === "show" || cmd === "list") {
+      const id = tokens[1] ?? store.activeId()
+      if (id === "") {
+        if (cmd === "show" || cmd === "list") this.openProviderMenu()
+        else this.toast("no active provider — add one with /provider add first")
+        return
+      }
+      if (cmd === "show" || cmd === "list") {
+        this.openProviderMenu()
+        return
+      }
+      void store.setActive(id).then(
+        () => this.toast(`active provider: ${id}`),
+        (error: unknown) => this.toast(error instanceof Error ? error.message : String(error)),
+      )
+      return
+    }
+    if (cmd === "add" || cmd === "update") {
+      const id = tokens[1]
+      const base = tokens[2]
+      // protocol=x / modelsUrl=y optional tokens (arg form only — the wizard
+      // itself defaults protocol to openai-compatible).
+      let protocol: ProviderEntry["protocol"] | undefined
+      for (const t of tokens.slice(1)) {
+        const m = /^protocol=(.+)$/.exec(t)
+        if (m !== null) {
+          const p = m[1]
+          if (p !== undefined && (TUI_PROTOCOLS as readonly string[]).includes(p)) {
+            protocol = p as ProviderEntry["protocol"]
+          }
+        }
+      }
+      const editing = cmd === "update" ? store.get(id ?? "") : undefined
+      if (cmd === "update" && editing === undefined) {
+        this.toast(`provider "${id}" is not configured`)
+        return
+      }
+      if (id !== undefined && base !== undefined) {
+        // Prefilled save path (arg form): create/update + activate + discover.
+        void (async () => {
+          try {
+            const entry: ProviderEntry = {
+              id,
+              baseUrl: base.replace(/\/+$/, ""),
+              protocol: protocol ?? (editing?.protocol ?? "openai-compatible"),
+              ...(editing?.name !== undefined ? { name: editing.name } : {}),
+            }
+            await store.upsert(entry)
+            await store.setActive(id)
+            void store.discoverModels(id).catch(() => {})
+            this.toast(`provider saved & active: ${id}`)
+          } catch (error) {
+            this.toast(error instanceof Error ? error.message : String(error))
+          }
+        })()
+        return
+      }
+      // Interactive wizard (prefilled only with the id/base token — the key
+      // field starts empty: "Leave empty to keep the current key.").
+      const state: ProviderViewState = {
+        phase: "wizard",
+        cursor: 0,
+        providers: store.list(),
+        wizard: editing !== undefined
+          ? makeWizard(editing, store.maskFor(editing.id) !== "not set")
+          : makeWizard(id !== undefined ? { id, baseUrl: "" } : undefined, false),
+        error: undefined,
+        pendingId: undefined,
+      }
+      this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(store))
+      this.requestFrame()
+      return
+    }
+    if (cmd === "delete") {
+      const rows = store.list()
+      const target = tokens[1]
+      const cursor = target === undefined ? 0 : Math.max(0, rows.findIndex((p) => p.id === target))
+      const state: ProviderViewState = {
+        phase: "delete",
+        cursor,
+        providers: rows,
+        error: undefined,
+        pendingId: undefined,
+        wizard: undefined,
+      }
+      this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(store))
+      this.requestFrame()
+      return
+    }
+    // bare /provider → the menu (cc parity)
+    this.openProviderMenu()
+  }
+
+  private openProviderMenu(): void {
+    const store = this.opts.providerStore
+    if (store === undefined) {
+      this.toast("provider UI: host store not wired")
+      return
+    }
+    const state: ProviderViewState = {
+      phase: "menu",
+      cursor: 0,
+      providers: store.list(),
+      error: undefined,
+      pendingId: undefined,
+      wizard: undefined,
+    }
+    this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(store))
+    this.requestFrame()
+  }
+
+  /** The shared provider-binder options: the loop's close + toast channels. */
+  private providerBindOptions(store: ProviderStore): ProviderBindOptions {
+    return {
+      store,
+      activeId: store.activeId(),
+      onSaved: (outcome) => {
+        const verb = outcome.kind === "delete" ? "deleted" : outcome.kind === "add" ? "saved & active" : "updated"
+        this.toast(`provider ${verb}: ${outcome.id}`)
+      },
+      onClose: () => this.closeModal(),
+      onToast: (text) => this.toast(text),
+    }
+  }
+
+  private closeModal(): void {
+    this.app.overlay = undefined
+    this.requestFrame()
+  }
+
+  /** The settings modal (F2/Ctrl+,//settings) — keys per the new-new truth
+   * (sidebar categories; Enter browses; Esc backs). */
+  private openSettings(): void {
+    const store = this.opts.providerStore
+    if (store === undefined || store === null) {
+      this.toast("settings modal: host provider store not wired")
+      return
+    }
+    const state: SettingsModalState = { phase: "categories", cursor: 0, category: undefined, error: undefined }
+    this.app.overlay = bindSettingsOverlay(state, {
+      settings: store.settingsSurface(),
+      providerStore: store,
+      onTimestamps: (on) => {
+        // Live engine flip (the knob renders what the engine does).
+        this.opts.engine.setShowTimestamps?.(on)
+        this.requestFrame()
+      },
+      onOpenPicker: () => {
+        // Models default_model → the same picker Ctrl+M//model use; its
+        // select writes the settings default (settings modal reopens below).
+        this.openModelPicker(undefined, true)
+      },
+      onClose: () => this.closeModal(),
+    })
+    this.requestFrame()
+  }
+
+  /** The model picker (Ctrl+M on the agent screen, /model, settings Models).
+   * The list comes from the ACTIVE provider's discovered catalog (runtime
+   * memo); an un-discovered provider kicks discovery (loading state).
+   * `reopenSettings` — after the picker select, reopen the settings modal
+   * (the default_model row now shows the pick). */
+  private openModelPicker(_preselect?: string, reopenSettings = false): void {
+    const store = this.opts.providerStore
+    if (store === undefined) {
+      this.toast("model picker: host provider store not wired")
+      return
+    }
+    const active = store.activeEntry()
+    if (active === undefined) {
+      this.toast("no active provider — /provider add first")
+      return
+    }
+    const cached = store.cachedModels(active.id)
+    const state: ModelPickerState = {
+      entries: cached !== undefined ? modelPickerEntries(cached) : [],
+      cursor: 0,
+      loading: cached === undefined,
+      provider: active.id,
+    }
+    this.app.overlay = bindModelPickerOverlay(state, {
+      onSelect: (value) => {
+        const choice = value === undefined || value === "" ? "(no override)" : value
+        void store.setDefaultModel(value ?? "").then(
+          () => this.toast(`default model: ${choice}`),
+          (error: unknown) => this.toast(error instanceof Error ? error.message : String(error)),
+        )
+        if (reopenSettings) this.openSettings()
+      },
+      onClose: () => this.closeModal(),
+    })
+    if (cached === undefined) {
+      void store.discoverModels(active.id).then(
+        (models: FetchedModel[]) => {
+          // The picker may have closed (Esc) before discovery resolved — guard.
+          if (this.app.overlay === undefined) return
+          const cur = this.app.overlay
+          if ((cur as { kind?: string }).kind !== "model-picker") return
+          state.entries = modelPickerEntries(models)
+          state.loading = false
+          this.requestFrame()
+        },
+        (error: unknown) => {
+          if (this.app.overlay === undefined) return
+          const cur = this.app.overlay
+          if ((cur as { kind?: string }).kind !== "model-picker") return
+          state.entries = []
+          state.loading = false
+          this.toast(error instanceof Error ? error.message : String(error))
+          this.requestFrame()
+        },
+      )
+    }
+    this.requestFrame()
+  }
+
   // ------------------------------------------------------------------ panes / pickers / dropdowns (M37b)
 
   private togglePane(kind: "todo" | "tasks" | "queue"): void {
@@ -918,6 +1712,8 @@ export class TuiApp {
     if (f !== undefined) { f.cursor = move(f.files.length, f.cursor, delta) }
     const h = this.app.historyPanel
     if (h !== undefined) { h.cursor = move(h.entries.length, h.cursor, delta) }
+    const lp = this.app.lightPanel
+    if (lp !== undefined) { lp.cursor = move(lp.rows.length, lp.cursor, delta) }
     const ss = this.app.sessions
     if (ss !== undefined) {
       const n = flattenSessions(ss).length
@@ -974,6 +1770,16 @@ export class TuiApp {
       if (sel !== undefined) void this.opts.backend.open(sel.session.id)
       return
     }
+    // M46a G2 light panels: Enter fires the panel's onSelect (e.g. /jump
+    // jumps the viewport; /tutorial swaps to the topic's content — the
+    // handler may reopen a panel which re-opens/clears the state below).
+    const lp = this.app.lightPanel
+    if (lp !== undefined) {
+      this.app.lightPanel = undefined
+      lp.onSelect?.(lp.cursor)
+      this.requestFrame()
+      return
+    }
   }
 
   /** Digit accept (1-9). G1 overlays handle it through the seam; my pickers
@@ -1001,6 +1807,7 @@ export class TuiApp {
     this.app.fileSearch = undefined
     this.app.historyPanel = undefined
     this.app.sessions = undefined
+    this.app.lightPanel = undefined
     this.requestFrame()
   }
 
@@ -1100,7 +1907,9 @@ export class TuiApp {
       this.app.slash = undefined
     } else {
       const query = token.slice(1)
-      const raw = this.opts.slashCommands ?? DEFAULT_SLASH_COMMANDS
+      // M46a G2: the dropdown is the REGISTRY's visible set (visibility-gated
+      // completion entries) unless the host still wires the M37b adapter.
+      const raw = this.opts.slashCommands ?? this.slash.completionEntries(this.slashCtx(p.text))
       this.app.slash = {
         entries: raw
           .filter((e) => query.length === 0 || e.command.toLowerCase().includes(query.toLowerCase()))
