@@ -11,6 +11,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@i-harness/credentials": "workspace:*",
+    "@i-harness/provider": "workspace:*",
+    "@i-harness/settings": "workspace:*",
     "@i-harness/tui": "workspace:*",
     "@i-harness/tui-core": "workspace:*"
   }

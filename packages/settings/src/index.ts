@@ -108,6 +108,60 @@ export interface SettingsLlm {
   defaultModel: SettingsDefaultModel
 }
 
+// ── M46a G1: appended `tui` section (no migration) ───────────────────────────
+// The TUI's provider registry + UI preferences — a SEPARATE section from `llm`
+// (the web/CLI route store): the TUI ProviderEntry owns a richer shape (its own
+// protocol vocabulary incl. "anthropic" name, `modelsUrl` discovery override)
+// keyed by id, with the ACTIVE provider pin. Additive-only: an old document
+// loads with the defaults below; nothing here is ever migrated.
+
+/** The TUI provider-entry wire protocol vocabulary (cc-custom v2 shape — the
+ * entry values are TUI-facing; the factory maps "anthropic" →
+ * "anthropic-messages" when assembling the provider profile). */
+export type SettingsTuiProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic" | "gemini" | "bedrock"
+
+/** One configured TUI provider (cc-custom v2 shape, refs-not-values stance:
+ * the raw key NEVER touches this document — `apiKeyRef` names a credential). */
+export interface SettingsTuiProviderEntry {
+  id: string
+  name?: string
+  /** Host ROOT (no trailing slash, no /v1 segment — the adapters assemble /v1). */
+  baseUrl: string
+  /** Wire protocol; absent = the universal default ("openai-compatible") the
+   * wizard/factory apply at their boundary (never a normalize-written value). */
+  protocol?: SettingsTuiProviderProtocol
+  /** Credential-ref name (packages/credentials grammar); absent = no key yet. */
+  apiKeyRef?: string
+  /** Models-endpoint override; absent → the built-in candidate strategy
+   * ({base}/v1/models, {base}/models, compat-stripped roots). */
+  modelsUrl?: string
+}
+
+/** The section payload (`settings.tui.providers`). */
+export interface SettingsTuiProviders {
+  version: 1
+  activeProviderId: string
+  providers: Record<string, SettingsTuiProviderEntry>
+}
+
+/** TUI UI-preference knobs (M46a modal categories — durable, host-honored). */
+export interface SettingsTuiPrefs {
+  /** Scrollback timestamps (the engine's showTimestamps). */
+  timestamps: boolean
+  /** UI density compaction (the loop's layout compact mode). */
+  compact: boolean
+  /** Approval guardian: ON = tool asks go to the user (approveAll off). */
+  guardian: boolean
+  /** Always-approve default for permission asks (with the guardian on). */
+  alwaysApprove: boolean
+}
+
+/** The appended TUI section. */
+export interface SettingsTui {
+  providers: SettingsTuiProviders
+  prefs: SettingsTuiPrefs
+}
+
 /** Appended section (no migration): UI lifecycle acknowledgements. */
 export interface SettingsOnboarding {
   welcomeNoticeVersion: string
@@ -131,6 +185,8 @@ export interface Settings {
   /** Appended in this plan: previously-absent top-level key, additive-only. */
   llm: SettingsLlm
   onboarding: SettingsOnboarding
+  /** Appended M46a G1: TUI provider registry + UI preference knobs. */
+  tui: SettingsTui
 }
 
 export const SETTINGS_DEFAULTS: Settings = {
@@ -161,6 +217,14 @@ export const SETTINGS_DEFAULTS: Settings = {
   // welcomeNoticeVersion !== "2026-08-30.1" (Task 9) — the empty default keeps
   // the first-run notice visible, while a plain old document stays unset.
   onboarding: { welcomeNoticeVersion: "" },
+  // M46a G1 appended section: empty registry, no active provider, current
+  // behavior-preserving prefs (timestamps off — the engine default; compact
+  // off — the fullscreen default; guardian off — the embedded factory's
+  // approveAll:true default; always-approve on — the "no asks" stance).
+  tui: {
+    providers: { version: 1, activeProviderId: "", providers: {} },
+    prefs: { timestamps: false, compact: false, guardian: false, alwaysApprove: true },
+  },
 }
 
 /** Bounds for font size (dsh font-size row: 13–16 px). */
@@ -297,6 +361,67 @@ function normalizeOnboarding(raw: unknown, base: SettingsOnboarding): SettingsOn
   }
 }
 
+/** One TUI provider entry (validation at the TUI-boundary — the entry's own
+ * fields are loose strings here; the normalize never invents defaults). */
+const TUI_PROTOCOLS: readonly SettingsTuiProviderProtocol[] =
+  ["openai-responses", "openai-compatible", "anthropic", "gemini", "bedrock"]
+
+function normalizeTuiProviderEntry(raw: unknown): SettingsTuiProviderEntry | null {
+  if (!isRecord(raw)) return null
+  if (typeof raw.id !== "string" || raw.id === "") return null
+  if (typeof raw.baseUrl !== "string" || raw.baseUrl === "") return null
+  const entry: SettingsTuiProviderEntry = { id: raw.id, baseUrl: raw.baseUrl }
+  if (typeof raw.name === "string" && raw.name !== "") entry.name = raw.name
+  if (typeof raw.protocol === "string" && (TUI_PROTOCOLS as readonly string[]).includes(raw.protocol)) {
+    entry.protocol = raw.protocol as SettingsTuiProviderProtocol
+  }
+  if (typeof raw.apiKeyRef === "string" && raw.apiKeyRef !== "") entry.apiKeyRef = raw.apiKeyRef
+  if (typeof raw.modelsUrl === "string" && raw.modelsUrl !== "") entry.modelsUrl = raw.modelsUrl
+  return entry
+}
+
+/** Appended TUI section: corrupt input degrades per field; a provider entry
+ * without a usable id/baseUrl drops; activeProviderId must resolve to a
+ * stored id (else "" — no active provider, the honest unset). The section
+ * payload is `tui.providers = { version, activeProviderId, providers:
+ * Record<id, entry> }` — the ENTRIES live at `.providers.providers`. */
+function normalizeTui(raw: unknown, base: SettingsTui): SettingsTui {
+  if (!isRecord(raw)) {
+    return {
+      providers: { version: 1, activeProviderId: "", providers: {} },
+      prefs: { ...base.prefs },
+    }
+  }
+  const p = isRecord(raw.providers) ? raw.providers : {}
+  const entryMap = isRecord(p.providers) ? p.providers : {}
+  const providers: Record<string, SettingsTuiProviderEntry> = {}
+  for (const [id, value] of Object.entries(entryMap)) {
+    const entry = normalizeTuiProviderEntry(value)
+    // The id must be the entry's own addressable id (folder-keyed storage —
+    // a mismatch between map key and entry.id is a corrupt document).
+    if (entry !== null && entry.id === id) providers[id] = entry
+  }
+  const activeProviderId =
+    typeof p.activeProviderId === "string" && p.activeProviderId !== "" && p.activeProviderId in providers
+      ? p.activeProviderId
+      : ""
+  const prefsRaw = isRecord(raw.prefs) ? raw.prefs : {}
+  const b = base.prefs
+  return {
+    providers: {
+      version: 1,
+      activeProviderId,
+      providers,
+    },
+    prefs: {
+      timestamps: typeof prefsRaw.timestamps === "boolean" ? prefsRaw.timestamps : b.timestamps,
+      compact: typeof prefsRaw.compact === "boolean" ? prefsRaw.compact : b.compact,
+      guardian: typeof prefsRaw.guardian === "boolean" ? prefsRaw.guardian : b.guardian,
+      alwaysApprove: typeof prefsRaw.alwaysApprove === "boolean" ? prefsRaw.alwaysApprove : b.alwaysApprove,
+    },
+  }
+}
+
 /**
  * Merge a possibly-partial/unknown on-disk document onto the defaults so a
  * corrupt or older file degrades to sane values instead of throwing.
@@ -305,7 +430,15 @@ function normalizeOnboarding(raw: unknown, base: SettingsOnboarding): SettingsOn
  */
 export function normalizeSettings(raw: unknown): Settings {
   const base = SETTINGS_DEFAULTS
-  if (!isRecord(raw)) return { ...base, plugins: { ...base.plugins }, llm: normalizeLlm(undefined, base.llm), onboarding: { ...base.onboarding } }
+  if (!isRecord(raw)) {
+    return {
+      ...base,
+      plugins: { ...base.plugins },
+      llm: normalizeLlm(undefined, base.llm),
+      onboarding: { ...base.onboarding },
+      tui: normalizeTui(undefined, base.tui),
+    }
+  }
   const pluginsRaw = isRecord(raw.plugins) ? raw.plugins : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
@@ -326,6 +459,7 @@ export function normalizeSettings(raw: unknown): Settings {
     // and the original top-level keys are never rewritten.
     llm: normalizeLlm(raw.llm, base.llm),
     onboarding: normalizeOnboarding(raw.onboarding, base.onboarding),
+    tui: normalizeTui(raw.tui, base.tui),
   }
 }
 
@@ -426,6 +560,7 @@ export class SettingsStore {
     // expectedRevision guard ("mutated elsewhere" → 409 → reload/replay).
     if ("llm" in patch) this.revision.llm = (this.revision.llm ?? 0) + 1
     if ("onboarding" in patch) this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
+    if ("tui" in patch) this.revision.tui = (this.revision.tui ?? 0) + 1
     await this.persist()
     return this.settings
   }
@@ -437,6 +572,7 @@ export class SettingsStore {
     // client holding a pre-reset revision refetches instead of stale-mutating.
     this.revision.llm = (this.revision.llm ?? 0) + 1
     this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
+    this.revision.tui = (this.revision.tui ?? 0) + 1
     await this.persist()
     return this.settings
   }
@@ -755,6 +891,7 @@ export class LayeredSettingsStore {
     this.current = normalizeSettings(mergeRawLayers([...this.resolvedRoots, { raws: patch }]))
     if ("llm" in patch) this.revision.llm = (this.revision.llm ?? 0) + 1
     if ("onboarding" in patch) this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
+    if ("tui" in patch) this.revision.tui = (this.revision.tui ?? 0) + 1
     await this.writeMaster(patch, { ...this.revision })
     return this.current
   }
@@ -764,6 +901,7 @@ export class LayeredSettingsStore {
     this.current = normalizeSettings(undefined)
     this.revision.llm = (this.revision.llm ?? 0) + 1
     this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
+    this.revision.tui = (this.revision.tui ?? 0) + 1
     await this.writeMaster({}, { ...this.revision })
     return this.current
   }

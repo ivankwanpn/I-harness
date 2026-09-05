@@ -108,6 +108,16 @@ export interface BackendClient {
     plan(target: number, mode: RewindMode): Promise<RewindPlan>
     execute(target: number, mode: RewindMode): Promise<RewindResult>
   }
+  /** M46a: rename the session title (session-title backend: the embedded
+   * bridge appends a `session/title` event via applyTitle, which the mapper
+   * turns into the TuiEvent title → the app title follows). OPTIONAL — absent
+   * ⇒ `/rename` updates the in-session title only (toast notes the
+   * persistence/canonical-store seam). */
+  rename?(title: string): Promise<void>
+  /** M46a: compile the session now (session-executor assembly compactNow —
+   * the M33 `session-compact` command surface). OPTIONAL — absent ⇒ `/compact`
+   * toasts the missing seam (never a silent no-op). */
+  compact?(instructions?: string): Promise<{ compacted: boolean }>
   close(): Promise<void>
 }
 
@@ -176,6 +186,11 @@ export interface ScrollbackEngine {
   prevMatch(fromLine: number): number
   /** Wrap width (recomputed on resize). */
   setWidth(cols: number): void
+  /** M46a G1: the LIVE timestamps toggle (the settings modal's Appearance
+   * knob — the engine repaints the right-aligned timestamp column on the
+   * next frame). OPTIONAL: an engine without the member degrades to
+   * apply-on-launch (the persisted prefs still drive the next construction). */
+  setShowTimestamps?(on: boolean): void
   /** M39 memory release — TRIM THE DISPLAY TRUNK (OPTIONAL). Engines that
    * cannot release history omit the member; the app probes with `retain?.`.
    * Trims the DISPLAY history to keep the last `maxLines` visible display

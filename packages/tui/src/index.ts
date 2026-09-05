@@ -94,6 +94,87 @@ export { MinimalCommits, commitDelta, displayToRegion } from "./minimal/commit.t
 export type { CommitEngine, CommitOptions, CommitWriter } from "./minimal/commit.ts"
 export { ModeSwitch, defaultRelaunchSpawn, parseModeArg, relaunchArgs } from "./minimal/mode.ts"
 export type { ModeSwitchOptions, RelaunchSpawn } from "./minimal/mode.ts"
+// M46a G1: provider/model TUI management — the store, the factory chain and
+// the three modal surfaces (provider menu/wizard, settings 8-category modal,
+// model picker) + their binders/views.
+export {
+  ProviderStore,
+  DISCOVERY_TIMEOUT_MS,
+  PROVIDER_STORE_VERSION,
+  discoveryCandidates,
+  maskKey,
+  parseModelsBody,
+  providerApiKeyRef,
+} from "./app/provider-store.ts"
+export type {
+  CredentialFace,
+  FetchedModel,
+  ProviderEntry,
+  ProviderProtocol,
+  ProviderStoreOptions,
+} from "./app/provider-store.ts"
+export { createTuiModelBuilder, mapTuiProtocol, providerProfileFromEntry, resolveTuiModel } from "./app/model-factory.ts"
+export type { TuiModelResolution } from "./app/model-factory.ts"
+export {
+  bindProviderOverlay,
+  isProviderOverlay,
+  makeWizard,
+  menuRows,
+  renderProviderOverlay,
+  wizardAdvance,
+  wizardAppend,
+  wizardBackspace,
+  wizardEntryOf,
+  wizardSwitchField,
+} from "./views/provider.ts"
+export type {
+  MenuRow,
+  ProviderBindOptions,
+  ProviderViewPhase,
+  ProviderViewState,
+  ProviderWizardState,
+} from "./views/provider.ts"
+export {
+  MODEL_MORE,
+  MODEL_NO_OVERRIDE,
+  MODEL_PICKER_MAX_ROWS,
+  MODEL_PICKER_TITLE,
+  bindModelPickerOverlay,
+  isModelPickerOverlay,
+  modelPickerEntries,
+  modelPickerWindow,
+  renderModelPicker,
+} from "./views/model-picker.ts"
+export type { ModelPickerBindOptions, ModelPickerEntry, ModelPickerState } from "./views/model-picker.ts"
+export {
+  SETTINGS_CATEGORIES,
+  SETTINGS_NOT_AVAILABLE,
+  SETTINGS_TITLE,
+  bindSettingsOverlay,
+  isSettingsOverlay,
+  nextTheme,
+  renderSettingsModal,
+  settingsCategoryWindow,
+  settingsKnobRows,
+  settingsSnapshot,
+  themeDisplayName,
+} from "./views/settings.ts"
+export type {
+  SettingsBindOptions,
+  SettingsCategory,
+  SettingsKnobRow,
+  SettingsModalState,
+  SettingsSnapshot,
+} from "./views/settings.ts"
+// M46a G2: the slash command registry (backend-supported builtin map + the
+// visibility-gated skip-list inventory) + the light-panel row model/renderer
+// + the text-input overlay binder (registry ctx seams).
+export { CommandRegistry, builtinCommands, defaultRegistry } from "./app/slash/registry.ts"
+export type { SlashCommand, SlashContext, SlashPanelRequest, SlashPanelRow } from "./app/slash/types.ts"
+export { bindTextInput } from "./app/slash/impl/text-input.ts"
+export type { TextInputOptions } from "./app/slash/impl/text-input.ts"
+export { renderLightPanel } from "./views/light-panel.ts"
+export type { LightPanelRow, LightPanelState } from "./views/light-panel.ts"
 
 /** G1's inline-engine factory shape (createInlineLiveRegion) — the loader
  * types it loosely so this surface compiles before G1 lands. */

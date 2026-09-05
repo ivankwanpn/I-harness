@@ -194,6 +194,15 @@ importers:
 
   apps/tui:
     dependencies:
+      '@i-harness/credentials':
+        specifier: workspace:*
+        version: link:../../packages/credentials
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../../packages/provider
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../../packages/settings
       '@i-harness/tui':
         specifier: workspace:*
         version: link:../../packages/tui
@@ -991,12 +1000,27 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/credentials':
+        specifier: workspace:*
+        version: link:../credentials
+      '@i-harness/hooks':
+        specifier: workspace:*
+        version: link:../hooks
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../interaction
       '@i-harness/llm-mock':
         specifier: workspace:*
         version: link:../llm-mock
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/plugin-registry':
+        specifier: workspace:*
+        version: link:../plugin-registry
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
       '@i-harness/rewind':
         specifier: workspace:*
         version: link:../rewind
@@ -1009,12 +1033,27 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../session-persistence-jsonl
+      '@i-harness/session-title':
+        specifier: workspace:*
+        version: link:../session-title
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
+      '@i-harness/skills':
+        specifier: workspace:*
+        version: link:../skills
+      '@i-harness/subagent':
+        specifier: workspace:*
+        version: link:../subagent
       '@i-harness/token-meter':
         specifier: workspace:*
         version: link:../token-meter
       '@i-harness/tui-core':
         specifier: workspace:*
         version: link:../tui-core
+      '@i-harness/workflow':
+        specifier: workspace:*
+        version: link:../workflow
       highlight.js:
         specifier: ^11.12.0
         version: 11.12.0
