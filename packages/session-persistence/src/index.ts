@@ -61,7 +61,7 @@ export interface PersistenceBackend {
   /** C5: cheap per-session meta profile (header read only on jsonl; no event
    * decode). `blank` = the log has no turn/start yet. Throws for an unknown
    * session — the caller surfaces it (never a silent default row). */
-  profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }>
+  profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
   /** C5: rewrite the durable session meta (merge patch atomically — jsonl:
    * header line replaced via temp+rename, event lines byte-exact; sqlite:
    * whitelisted-column UPDATE). Throws for an unknown session. */
@@ -94,7 +94,7 @@ export interface SessionCoordinator {
   list(): Promise<string[]>
   /** C5: cheap per-session meta profile (header read only; no event decode).
    * Read-only — never acquires the ownership lease. */
-  profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean }>
+  profile(sessionId: string): Promise<{ meta: SessionMeta; blank: boolean; updatedAt?: number }>
   /** C5: merge a meta patch durably. MUTATING — runs under the ownership
    * lease (M23 discipline, same as append); a conflicting writer fails closed. */
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>

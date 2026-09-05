@@ -88,16 +88,17 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async profile(sessionId) {
       const path = filePath(sessionId)
+      const updatedAt = (await stat(path)).mtimeMs
       // Blank probe (coldBlankProbeMaxBytes policy): a small artifact is read
       // whole for the exact answer; a big one is served non-blank.
       if ((await stat(path)).size <= BLANK_PROBE_MAX_BYTES) {
         const lines = (await readFile(path, "utf-8")).split("\n")
         return {
           meta: parseHeader(lines[0]!),
-          blank: parseEventLines(lines.slice(1)).every((ev) => ev.type !== "turn/start"),
+          blank: parseEventLines(lines.slice(1)).every((ev) => ev.type !== "turn/start"), updatedAt,
         }
       }
-      return { meta: await readHeader(path), blank: false }
+      return { meta: await readHeader(path), blank: false, updatedAt }
     },
 
     async updateMeta(sessionId, patch) {

@@ -232,8 +232,6 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // provider → credential ref → buildModelClient — createTuiModelBuilder, the
   // app/cli buildModelFor twin) with the mock as the clean fallback (no
   // provider configured → mock, today's behavior). --model wins over the
-  // settings default (flag > settings); --resume/storeRoot stays a TODO
-  // (coordinator seam).
   const base = flags.attach !== undefined
     ? createRemoteBackend({
         client: spawnSdkSubprocess({

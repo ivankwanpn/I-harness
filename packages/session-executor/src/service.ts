@@ -28,6 +28,7 @@ import type { Telemetry } from "@i-harness/telemetry"
 import { createSessionAssembly, type AssemblyOptions, type SessionAssembly } from "./assembly.ts"
 
 export interface SessionServiceOptions extends AssemblyOptions {
+  beforeDispose?: () => Promise<void>
   /** Shared host event stream (also handed to each assembly). */
   telemetry?: Telemetry
   /** Metadata source for an assembly's FIRST build (the tier-1 model chain
@@ -207,13 +208,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   async function close(): Promise<void> {
+    if (closed) return
     closed = true
     await Promise.allSettled([...active])
+    let failure: unknown
+    try { await opts.beforeDispose?.() } catch (error) { failure = error }
     const handles = [...assemblies.values()]
     assemblies.clear()
     lanes.clear()
     chains.clear()
     for (const handle of handles) await handle.dispose().catch(() => {})
+    if (failure !== undefined) throw failure
   }
 
   return {
