@@ -16,8 +16,10 @@ import { runCommands } from "./impl/run.ts"
 import { sessionCommands } from "./impl/sessions.ts"
 import { skippedCommands } from "./impl/skipped.ts"
 import { surfaceCommands } from "./impl/surfaces.ts"
+import { timelineCommands } from "./impl/timeline.ts"
 import { toolsCommands } from "./impl/tools.ts"
 import { visualCommands } from "./impl/visual.ts"
+import { workflowCommands } from "./impl/workflow2.ts"
 
 /** Builtin command map (the M46a backend-supported set + the skip-list). */
 export function builtinCommands(): SlashCommand[] {
@@ -38,8 +40,14 @@ export function builtinCommands(): SlashCommand[] {
     ...toolsCommands,
     // eco (light panels over the real backends)
     ...ecoCommands,
+    // M46c G2: /workflow surface — run <name> | status [id] | list (owns the
+    // "workflow" name; the eco listing entry was superseded).
+    ...workflowCommands,
     // new surfaces
     ...surfaceCommands,
+    // M46c G1: /timeline — the turn rail toggle (own file — the G2 registry
+    // merge boundary lives one import above).
+    ...timelineCommands,
     // M46b G1: mouse surfaces — /toggle-mouse-reporting (feature-gated:
     // visible + executable ONLY when [ui] mouse_reporting_toggle is on).
     ...mouseCommands(),

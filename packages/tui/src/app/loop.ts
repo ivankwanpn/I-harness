@@ -49,6 +49,11 @@ import { CommandRegistry, defaultRegistry } from "./slash/registry.ts"
 import type { SlashCommand, SlashContext, SlashPanelRequest } from "./slash/types.ts"
 import { bindTextInput } from "./slash/impl/text-input.ts"
 import type { LightPanelState } from "../views/light-panel.ts"
+// M46c G2: paste source retention helpers (the chip labels/threshold) + the
+// default /workflow surface (the real @i-harness/workflow-backed host).
+import { isSizeablePaste, pasteLabel } from "../views/prompt.ts"
+import type { WorkflowSurface } from "../contracts.ts"
+import { createDefaultWorkflowSurface } from "./slash/impl/workflow2.ts"
 import { doctorRows } from "../views/light-doctor.ts"
 // M46b G2: mouse click semantics — the dispatch core + the injectable
 // clipboard (the only copy path). G1's hover engine lives on app.mouse.engine
@@ -142,6 +147,14 @@ export interface TuiAppOptions {
    * OFF (default): Ctrl+R stays 'none' + /toggle-mouse-reporting stays
    * hidden+inert. ON: both toggle `app.mouse.enabled` (capture/hover). */
   mouseToggleFeature?: boolean
+  /** M46c G2: the /workflow surface host (contracts.ts WorkflowSurface) —
+   * the real @i-harness/workflow-backed surface is the default (registry scan
+   * + executor with the local exec shim); hosts/tests inject a fake instead. */
+  workflow?: WorkflowSurface
+  /** M46c G1: the turn timeline rail ON (app.showTimeline) — the host opt-in
+   * (default OFF; the rail replaces the scrollback's right 2 columns only
+   * while ON && pane width >= 60 && turns >= 2; /timeline toggles it). */
+  showTimeline?: boolean
 }
 
 /** Minimal live-region host (M38a G2) — what the loop drives in minimal
@@ -205,6 +218,9 @@ export class TuiApp {
   /** In-flight backend.context() probe (M38b G2) — never two concurrent
    * refreshes; the promise itself is the guard. */
   private contextProbe: Promise<void> | undefined
+  /** M46c G2: the /workflow surface (host option else the default real host) —
+   * cached per app so the executor's process-shared job store is one instance. */
+  private workflowHost: WorkflowSurface | undefined
   /** M39 debug HUD meter — allocated ONLY when opts.hud is on (zero otherwise). */
   private fpsMeter: FpsMeter | undefined
   /** M46a G2: the slash command registry (builtin map + visible gate). */
@@ -267,7 +283,7 @@ export class TuiApp {
       title: "untitled",
       mode: "normal",
       engine: opts.engine,
-      prompt: { text: "", cursor: 0, multiLine: false, focused: true, model, plan: false, title: "untitled" },
+      prompt: { text: "", cursor: 0, multiLine: false, focused: true, model, plan: false, title: "untitled", pasteStash: [] },
       promptCursor: 0,
       history: [],
       historyIndex: 0,
@@ -307,6 +323,12 @@ export class TuiApp {
       timestamps: false,
       compactMode: false,
       autoApprove: false,
+      // M46c G1: the turn timeline rail (spec §3.12) — HOST-opt-in default OFF
+      // (the existing scene tests pin exact 80-col rows; the rail replaces the
+      // right 2 columns only when on — deviation loud in the report: grok
+      // defaults appearance.show_timeline ON, we default OFF for test/stability
+      // parity with the compact/wt option style; /timeline toggles).
+      showTimeline: opts.showTimeline === true,
       draft: undefined,
       lightPanel: undefined,
       // M46b G1+G2: the hover state — the loop constructs the engine (the
@@ -351,6 +373,15 @@ export class TuiApp {
           title: "Plan",
           rows: this.lastAssistantRows().map((r) => ({ label: r.label })),
         }),
+        // M46c G1: timeline tick/chevron click → jump the viewport to the
+        // turn anchor display line (the /jump goTo seam — same scroll set).
+        timelineJump: (line) => {
+          this.app.scroll = { offset: Math.max(0, line), follow: false }
+          this.requestFrame()
+        },
+        // M46c G2: paste-chip double-click → INSERT the retained source at the
+        // cursor (the honest "source not retained" toast is superseded).
+        insertPasteStash: (index) => this.insertPasteStash(index),
         onChanged: () => this.requestFrame(),
       },
     })
@@ -488,7 +519,10 @@ export class TuiApp {
       case "goto-bottom": this.app.scroll = { offset: 0, follow: true }; break
       case "prev-turn":
       case "next-turn":
-        // Turn navigation needs the engine's turn index — M38.
+        // M46c G1: the L/H turn navigation — the REAL transition now (the
+        // M38 note is superseded by the engine turn-anchor accessor): jump
+        // the viewport to the previous/next turn anchor.
+        this.gotoTurnRel(action === "prev-turn" ? -1 : 1)
         break
       case "toggle-fold": {
         if (this.app.search?.active === true) break
@@ -689,10 +723,14 @@ export class TuiApp {
 
   private onInput(ev: InputEvent): void {
     if (ev.type === "paste") {
+      // Bracketed paste AND Ctrl+V both arrive as `paste` events (the binding
+      // in tui-core). The INSERT stays immediate (M37a behavior); M46c G2
+      // additionally RETAINS the source text under a [Pasted: N lines] chip.
       if (this.app.focused === "prompt") {
         const p = this.app.prompt
         p.text = p.text.slice(0, p.cursor) + ev.text + p.text.slice(p.cursor)
         p.cursor += ev.text.length
+        this.retainPasteSource(ev.text)
         this.refreshDropdowns()
       }
       this.requestFrame()
@@ -782,6 +820,9 @@ export class TuiApp {
       if (ev.code === "Esc") { ff.abort(); this.requestFrame(); return }
       // fall through — nav/scope keys stay keymap-routed
     }
+    // M46c G2: workflow panel refresh — [r] while the /workflow status panel is
+    // open re-fetches its rows (no-pump discipline: refresh on open + here).
+    if (this.workflowRefreshKey(ev)) return
     const kbd: Kbd = { code: ev.code, key: ev.key, ctrl: ev.ctrl, alt: ev.alt, shift: ev.shift }
     this.dispatch(dispatchKey(kbd, this.keymapState()))
   }
@@ -1051,9 +1092,48 @@ export class TuiApp {
     this.refreshDropdowns()
   }
 
+  /** M46c G2: paste source retention — a sizeable paste (multi-line or ≥100
+   * chars) stashes the RAW text under its `[Pasted: N lines]` label (the
+   * INSERT above stays immediate; single short pastes keep no chip). */
+  private retainPasteSource(text: string): void {
+    if (!isSizeablePaste(text)) return
+    const p = this.app.prompt
+    p.pasteStash = [...(p.pasteStash ?? []), { label: pasteLabel(text), text }]
+  }
+
+  /** M46c G2: paste-chip double-click seam — INSERT the retained source of
+   * stash `index` AT THE CURSOR (byte-exact — the paste event's own string). */
+  private insertPasteStash(index: number): void {
+    const p = this.app.prompt
+    const item = (p.pasteStash ?? [])[index]
+    if (item === undefined) {
+      this.toast("paste chip expand: stale chip")
+      return
+    }
+    const text = item.text
+    p.text = p.text.slice(0, p.cursor) + text + p.text.slice(p.cursor)
+    p.cursor += text.length
+    this.refreshDropdowns()
+  }
+
+  /** M46c G2: the [r] key while the /workflow panel is open → re-fetch its
+   * rows (the panel's own refresh closure, stored on the lightPanel state). */
+  private workflowRefreshKey(ev: InputEvent): boolean {
+    if (ev.type !== "key" || ev.code !== "char" || ev.ctrl || ev.alt) return false
+    if (ev.key.toLowerCase() !== "r") return false
+    const lp = this.app.lightPanel
+    if (lp === undefined || lp.kind !== "workflow" || lp.refresh === undefined) return false
+    lp.refresh()
+    this.requestFrame()
+    return true
+  }
+
   private clearPrompt(): void {
     this.app.prompt.text = ""
     this.app.prompt.cursor = 0
+    // M46c G2: the paste stash is session-scoped-until-submitted — submit and
+    // every clear path releases the retained paste sources.
+    this.app.prompt.pasteStash = []
     this.refreshDropdowns()
     this.refreshShortcuts()
   }
@@ -1214,7 +1294,36 @@ export class TuiApp {
       g1Modal: (line) => this.tryG1SlashModal(line),
       effort: (level) => this.effort(level),
       mouseReportingToggle: this.mouseToggleFeature(),
+      // M46c G2: the /workflow surface + the text-input seam (workflow run
+      // params line — the existing bindTextInput overlay under a ctx call).
+      workflow: this.workflowSurface(),
+      openTextInput: (opts) => this.openTextInputOverlay(opts),
     }
+  }
+
+  /**
+   * M46c G2: the /workflow surface — the host's option when wired, else the
+   * default @i-harness/workflow-backed surface. Cached per app (the executor
+   * sits on the process-shared job store — real runs stay visible across
+   * invocations). Absent default is never a thing here: command-level honesty
+   * lives in the fake-surface tests.
+   */
+  private workflowSurface(): WorkflowSurface {
+    this.workflowHost ??= this.opts.workflow ?? createDefaultWorkflowSurface(this.opts.workspace)
+    return this.workflowHost
+  }
+
+  /** M46c G2: open the text-input overlay (the /workflow run params line —
+   * G1-M46a bindTextInput is the existing seam, already in use for /btw).
+   * The ctx signature's onCancel is optional; the binder wants a function. */
+  private openTextInputOverlay(opts: { title: string; initial?: string; onSubmit(text: string): void; onCancel?(): void }): void {
+    this.app.overlay = bindTextInput({
+      title: opts.title,
+      ...(opts.initial !== undefined ? { initial: opts.initial } : {}),
+      onSubmit: opts.onSubmit,
+      onCancel: () => opts.onCancel?.(),
+    })
+    this.requestFrame()
   }
 
   /** Open/assure the prompt-history picker (the existing panel). */
@@ -1240,6 +1349,9 @@ export class TuiApp {
       loading: req.loading,
       emptyText: undefined,
       onSelect: req.onSelect,
+      // M46c G2: the /workflow status panel's [r] refresh closure (re-fetch
+      // rows; the loop's key intercept calls it while the panel is open).
+      refresh: req.refresh,
     }
     // Mutually exclusive with the other dropdowns (sessions/history/slash/…).
     this.app.slash = undefined
@@ -1321,19 +1433,47 @@ export class TuiApp {
     return false
   }
 
-  /** /jump anchors: every User block header line (display line → label). */
+  /** /jump anchors + turn navigation: the ENGINE's O(turns) turnAnchors when
+   * present (M46c G1), else the lineBlock walk fallback. Every User block
+   * header line (display line → label). */
   private turnAnchors(): Array<{ line: number; n: number; text?: string }> {
-    const total = this.opts.engine.lineCount()
+    const eng = this.opts.engine
+    if (eng.turnAnchors !== undefined) {
+      return eng.turnAnchors().map((a, i) => ({ line: a.lineIndex, n: i + 1, text: a.preview }))
+    }
+    const total = eng.lineCount()
     const out: Array<{ line: number; n: number; text?: string }> = []
     let n = 0
     for (let line = 0; line < total; line++) {
-      const block = this.opts.engine.lineBlock(line)
+      const block = eng.lineBlock(line)
       if (block === undefined || block.title !== "User") continue
       n++
       const text = block.runs.map((r) => r.text).join("").replace(/^[❯\s]+/, "").slice(0, 40)
       out.push({ line, n, text })
     }
     return out
+  }
+
+  /** M46c G1: turn navigation — jump the viewport to the previous/next turn
+   * RELATIVE to the current view (the LAST turn anchored at/above the
+   * viewport's bottom line is the active — the L/H keys + the timeline
+   * chevrons share it). */
+  private gotoTurnRel(dir: -1 | 1): void {
+    const anchors = this.turnAnchors()
+    if (anchors.length === 0) return
+    const off = this.app.scroll.follow
+      ? Math.max(0, this.opts.engine.lineCount() - this.opts.renderer.buffer.height + 1)
+      : this.app.scroll.offset
+    // active anchor = the LAST anchor at/above the viewport's bottom line.
+    let active = 0
+    for (let i = 0; i < anchors.length; i++) {
+      if (anchors[i]!.line <= off + this.opts.renderer.buffer.height - 1) active = i
+    }
+    const target = active + dir
+    if (target < 0 || target >= anchors.length) return
+    const line = anchors[target]!.line
+    this.app.scroll = { offset: Math.max(0, line), follow: false }
+    this.requestFrame()
   }
 
   /** The LAST assistant block's display rows (the /plan //view-plan viewer —

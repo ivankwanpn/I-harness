@@ -17,7 +17,8 @@
 //   scrollbar   down = latch + fraction jump (grok thumb: Top/Bottom/Offset),
 //               drag continuous, up ends
 //   prompt      click = cursor at cell · double on file-ref = line viewer ·
-//               double on paste chip = expand (toast, source not retained) ·
+//               double on paste chip = expand (M46c G2: INSERT the retained
+//               source from prompt.pasteStash) ·
 //               drag = text selection + copy on up
 //   permission  single = active row · double (≤300ms same index) fires
 //               (binder's decide reused via the seam's act)
@@ -48,8 +49,11 @@ import { SLASH_MAX_ROWS } from "../views/slash-dropdown.ts"
 import { COMPLETION_MAX_ROWS } from "../views/completion-dropdown.ts"
 import { flattenSessions } from "../views/session-picker.ts"
 import { statusChipsOf, statusPathSpan, strWidth } from "../views/status.ts"
-import { promptCursorAtCell, promptLineAtRow } from "../views/prompt.ts"
-import type { TuiAppState } from "./present.ts"
+import { pasteChipRowAt, pasteChipRowCount, promptCursorAtCell, promptLineAtRow } from "../views/prompt.ts"
+// M46c G1: the selection ✗ geometry (shared pure box) + the timeline gate
+// (the rail replaces the scrollbar slot while the gate holds).
+import { selectionBoxOf, type TuiAppState } from "./present.ts"
+import { activeTurnIndex, timelineActive, TIMELINE_W } from "../views/timeline.ts"
 import type { Clipboard } from "./clipboard.ts"
 import {
   CLIPBOARD_TOAST_DEBOUNCE,
@@ -86,7 +90,14 @@ export interface MouseHooks {
   openSubagentViewer?(label: string): void
   queueCancel?(n: number): void
   queueSendNow?(n: number): void
-  openPasteChip?(nLines: number): void
+  /** M46c G2: paste-chip double-click — INSERT the retained paste-source at
+   * the cursor (the prompt state's pasteStash[`index`]; absent hook → honest
+   * toast — the old "source not retained" path is replaced by this seam). */
+  insertPasteStash?(index: number): void
+  /** M46c G1: timeline tick/chevron click → jump the viewport to the turn
+   * anchor display line (the /jump goTo seam; absent → the router's own
+   * changeScroll fallback). */
+  timelineJump?(line: number): void
   openLink?(url: string): void
   /** A repaint was requested (the loop arms a frame). */
   onChanged?(): void
@@ -220,6 +231,7 @@ export class MouseRouter {
     this.linkArm = undefined
     this.autoscrollDir = 0
     this.autoscrollDist = 0
+    this.app.selectionDragLine = undefined // M46c G1: reset leaves no tape
     if (this.contextTimer !== undefined) clearTimeout(this.contextTimer)
     this.contextTimer = undefined
   }
@@ -396,22 +408,24 @@ export class MouseRouter {
     // gesture probe per click (a ref+chip double-probe would consume the
     // multi-click slot twice and HIDE the second click — count logic below
     // keys on the resolved target kind).
-    const line = promptLineAtRow(ctx, p.text, ev.y)
+    // M46c G2: the paste chip is a REAL stash row now — double-click INSERTS
+    // the retained source at the cursor (the honest-toast path is superseded).
+    const chipIdx = pasteChipRowAt(ctx, p, ev.y)
+    const line = chipIdx === undefined ? promptLineAtRow(ctx, p.text, ev.y, pasteChipRowCount(ctx, p)) : undefined
     if (line !== undefined) {
       const colInLine = ev.x - (ctx.x + 1)
       const ref = fileRefAt(line.text, colInLine)
-      const chip = ref === undefined ? pasteChipAt(line.text, colInLine) : undefined
-      const target = ref !== undefined
-        ? { key: "ref" as const, fn: () => this.hookOr(this.hooks.openLineViewer, "line viewer (M46c)", ref.file, ref.line) }
-        : chip !== undefined
-          ? { key: "chip" as const, fn: () => this.hookOr(this.hooks.openPasteChip, "paste chip (M46c)", chip.lines) }
-          : undefined
-      if (target !== undefined && this.nextClick(`prompt:${target.key}:${ev.x}:${ev.y}`) === 2) {
-        target.fn()
+      if (ref !== undefined && this.nextClick(`prompt:ref:${ev.x}:${ev.y}`) === 2) {
+        this.hookOr(this.hooks.openLineViewer, "line viewer (M46c)", ref.file, ref.line)
         return
       }
+    } else if (chipIdx !== undefined && this.nextClick(`prompt:chip:${ev.x}:${ev.y}`) === 2) {
+      // The chip row is a hint; double-click RESTORES the full source.
+      this.hookOr(this.hooks.insertPasteStash, "paste chip expand: source not retained", chipIdx)
+      return
     }
-    // Click → cursor at that cell (approximate column mapping).
+    // Click → cursor at that cell (approximate column mapping; a chip hint row
+    // keeps the current cursor).
     p.cursor = promptCursorAtCell(ctx, p, ev.x, ev.y)
     this.changed()
     this.press = { x: ev.x, y: ev.y, region: "prompt", char: p.cursor, moved: false, button: ev.button }
@@ -422,12 +436,34 @@ export class MouseRouter {
   private scrollbackDown(ev: MouseCellEvent, layout: AgentLayout): void {
     const total = this.engine.lineCount()
     const sb = layout.scrollback
+    const timelineOn = timelineActive(this.app, sb, this.engine)
+    if (timelineOn && ev.x >= sb.x + sb.w - TIMELINE_W && ev.x < sb.x + sb.w) {
+      // M46c G1: the TIMELINE RAIL replaces the scrollbar slot — clicks on
+      // the right 2 columns are tick/chevron jumps (no latch).
+      this.timelineDown(ev, layout)
+      return
+    }
     if (ev.x === sb.x + sb.w - 1) {
       // SCROLLBAR column: latch + fraction jump (grok thumb math). Latched
-      // even with few lines — the jump clamps to 0.
+      // even with few lines — the jump clamps to 0. (Unreachable while the
+      // timeline gate holds — the rail owns the column.)
       this.scrollbarLatchY = ev.y
       this.jumpToFraction(ev.y, sb)
       return
+    }
+    // M46c G1: the ✗ click-to-clear — the selection box's top-right cell
+    // (geometry shared with the renderer; the flash/hold state drops).
+    const sel = this.engine.selection?.()
+    if (sel !== undefined) {
+      const off = this.scrollOff(layout, total)
+      const box = selectionBoxOf(sb, off, sel, timelineOn)
+      if (box !== undefined && ev.y === sb.y + (box.rows[0] - off) && ev.x === box.right) {
+        this.engine.clearSelection?.()
+        this.app.selectionFlashUntil = undefined
+        this.app.selectionDragLine = undefined
+        this.changed()
+        return
+      }
     }
     const line = this.lineAt(layout, ev.y, total)
     if (total <= 0) return
@@ -653,6 +689,9 @@ export class MouseRouter {
       } else {
         this.drag.pointerLine = ptr
       }
+      // M46c G1: the live pointer line — the selection tape (`▏`) draws at its
+      // row while the drag is open (cleared on finalize/cancel).
+      this.app.selectionDragLine = this.drag.pointerLine
       this.engine.setSelection(Math.min(this.drag.anchorLine ?? ptr, ptr), Math.max(this.drag.anchorLine ?? ptr, ptr))
       this.updateAutoscroll(ev.y, layout.scrollback)
       this.changed()
@@ -694,6 +733,8 @@ export class MouseRouter {
     const pointer = this.drag.pointerLine ?? anchor
     const ptrNow = next + (pointer - cur)
     this.drag.pointerLine = Math.max(0, Math.min(total - 1, ptrNow))
+    // M46c G1: the tape follows the autoscrolled pointer row.
+    this.app.selectionDragLine = this.drag.pointerLine
     const a = Math.min(anchor, this.drag.pointerLine)
     const b = Math.max(anchor, this.drag.pointerLine)
     this.engine.setSelection(a, b)
@@ -724,6 +765,7 @@ export class MouseRouter {
     this.press = undefined
     this.autoscrollDir = 0
     this.autoscrollDist = 0
+    this.app.selectionDragLine = undefined // M46c G1: the tape drops at drag end
     if (d === undefined) return
     if (d.region === "prompt") {
       const p = this.app.prompt
@@ -807,6 +849,46 @@ export class MouseRouter {
     this.changeScroll(offset, false)
   }
 
+  /* ------------------------------------------------------------ timeline rail (M46c G1) */
+
+  /** Rail click: the top `▴` = previous turn, the bottom `▾` = next turn (both
+   * RELATIVE to the current view — the active turn), an anchor tick row jumps
+   * to that turn. Same goTo seam as /jump. */
+  private timelineDown(ev: MouseCellEvent, layout: AgentLayout): void {
+    const anchors = this.engine.turnAnchors?.() ?? []
+    if (anchors.length < 2) return
+    const sb = layout.scrollback
+    const total = this.engine.lineCount()
+    const off = this.scrollOff(layout, total)
+    if (ev.y === sb.y) {
+      const idx = activeTurnIndex(anchors, off + Math.max(0, sb.h - 1)) - 1
+      if (idx >= 0) this.jumpToAnchor(anchors[idx]!.lineIndex)
+      return
+    }
+    if (ev.y === sb.y + sb.h - 1) {
+      const idx = activeTurnIndex(anchors, off + Math.max(0, sb.h - 1)) + 1
+      if (idx < anchors.length) this.jumpToAnchor(anchors[idx]!.lineIndex)
+      return
+    }
+    const line = off + (ev.y - sb.y)
+    for (const a of anchors) {
+      if (a.lineIndex === line) {
+        this.jumpToAnchor(a.lineIndex)
+        return
+      }
+    }
+  }
+
+  /** The /jump goTo seam (the loop's hook — same scroll set as the slash
+   * command's gotoLine); absent → the router's own changeScroll. */
+  private jumpToAnchor(line: number): void {
+    if (this.hooks.timelineJump !== undefined) {
+      this.hooks.timelineJump(Math.max(0, line))
+      return
+    }
+    this.changeScroll(Math.max(0, line), false)
+  }
+
   /* ----------------------------------------------------------- dropdowns */
 
   private setDropdownCursor(index: number): void {
@@ -873,7 +955,9 @@ export function fileRefAt(text: string, col: number): { file: string; line?: num
   return undefined
 }
 
-/** `[Pasted: N lines]` chip at an in-line column. */
+/** `[Pasted: N lines]` chip at an in-line column. Retained as a pure helper
+ * for the legacy text-embedded form (M46c G2: the REAL chips are prompt-state
+ * stash rows — pasteChipRowAt — not text tokens). */
 export function pasteChipAt(text: string, col: number): { lines: number } | undefined {
   const re = /\[Pasted:\s*(\d+)\s*lines?\]/g
   let m: RegExpExecArray | null

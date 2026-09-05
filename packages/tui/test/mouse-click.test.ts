@@ -383,15 +383,43 @@ describe("prompt — click / file-ref / paste chip / drag", () => {
     expect(r.toasts().some((t) => t.includes("line viewer"))).toBe(true)
   })
 
-  it("double-click on a [Pasted: N lines] chip → honest toast (source not retained)", () => {
+  it("M46c G2: double-click on the [Pasted: N lines] chip row → insertPasteStash", () => {
     const engine = seeded()
-    const text = "[Pasted: 5 lines] big blob"
-    const r = timedRig(engine, { prompt: { text, cursor: 0, multiLine: false, focused: true, model: "m", plan: false, title: "t" } })
+    const source = "alpha\nbeta\ngamma\ndelta\nomega"
+    const app = base(engine, {
+      prompt: {
+        text: "hello world", cursor: 6, multiLine: false, focused: true, model: "m", plan: false, title: "t",
+        pasteStash: [{ label: "5 lines", text: source }],
+      },
+    })
+    let t = 0
+    const clipboard = makeClipboard()
+    const inserted: number[] = []
+    const router = new MouseRouter({
+      app, engine, size: () => AREA, now: () => t, clipboard, glyphs: GLYPHS, compact: false,
+      hooks: { focus: (tg) => { app.focused = tg }, insertPasteStash: (i) => inserted.push(i) },
+    })
+    const p = layoutAgent(AREA, { ...app, dropdown: undefined }, { compact: false }).prompt
+    const row = p.y + 1 // the chip row (pasteStash renders at the TOP of content)
+    clickAt(router, p.x + 3, row)
+    expect(inserted).toEqual([]) // single click = hint (no insert)
+    t = 100
+    clickAt(router, p.x + 3, row)
+    expect(inserted).toEqual([0])
+  })
+
+  it("M46c G2: chip-row double-click with NO insert hook → honest fallback toast", () => {
+    const engine = seeded()
+    const r = timedRig(engine, {
+      prompt: {
+        text: "hello world", cursor: 0, multiLine: false, focused: true, model: "m", plan: false, title: "t",
+        pasteStash: [{ label: "5 lines", text: "source" }],
+      },
+    })
     const p = r.layout().prompt
     const row = p.y + 1
-    const col = p.x + 1 + 2 + text.indexOf("[Pasted:") + 2
-    r.at(0); click(r, col, row)
-    r.at(100); click(r, col, row)
+    r.at(0); click(r, p.x + 3, row)
+    r.at(100); click(r, p.x + 3, row)
     expect(r.toasts().some((t) => t.includes("paste chip"))).toBe(true)
   })
 
