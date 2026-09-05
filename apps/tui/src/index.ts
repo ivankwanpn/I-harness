@@ -74,6 +74,18 @@ export interface TuiFlags {
   mode?: "minimal" | "fullscreen"
 }
 
+export function buildSdkArgs(flags: Pick<TuiFlags, "sessionDir">): string[] {
+  return ["sdk", ...(flags.sessionDir !== undefined ? ["--session-dir", flags.sessionDir] : [])]
+}
+
+export function buildEmbeddedSessionOptions(flags: Pick<TuiFlags, "sessionDir" | "resume" | "prompt">): { prompt: string; storeRoot?: string; rewindStoreRoot?: string; resumeSessionId?: string } {
+  return {
+    prompt: flags.resume === undefined ? flags.prompt ?? "" : "",
+    ...(flags.sessionDir !== undefined ? { storeRoot: flags.sessionDir, rewindStoreRoot: flags.sessionDir } : {}),
+    ...(flags.resume !== undefined ? { resumeSessionId: flags.resume } : {}),
+  }
+}
+
 export function parseFlags(argv: string[]): TuiFlags {
   const flags: TuiFlags = { yes: false }
   for (let i = 0; i < argv.length; i++) {
@@ -97,7 +109,7 @@ export function parseFlags(argv: string[]): TuiFlags {
       case "-h":
         process.stdout.write(
           "usage: tui [--prompt <text>] [--workspace <dir>] [--model <spec>]\n" +
-          "           [--yes] [--resume <sessionId>] [--attach <sessionId>] [--minimal]\n",
+          "           [--yes] [--session-dir <dir>] [--resume <sessionId>] [--attach <sessionId>] [--minimal]\n",
         )
         process.exit(0)
     }
@@ -219,7 +231,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     ? createRemoteBackend({
         client: spawnSdkSubprocess({
           command: process.execPath,
-          args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk"],
+          args: ["--import", TSX_LOADER, CLI_ENTRY, ...buildSdkArgs(flags)],
           cwd: workspace,
         }),
         sessionId: flags.attach,
@@ -228,9 +240,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
       })
     : await defaultEmbeddedFactory({
         workspace,
-        prompt: flags.resume === undefined ? flags.prompt ?? "" : "",
-        ...(flags.sessionDir !== undefined ? { storeRoot: flags.sessionDir, rewindStoreRoot: flags.sessionDir } : {}),
-        ...(flags.resume !== undefined ? { resumeSessionId: flags.resume } : {}),
+        ...buildEmbeddedSessionOptions(flags),
         forceMock: false,
         modelBuilder: createTuiModelBuilder({ store: providerStore, flagModel: flags.model }),
         modelLabel: flags.model,
@@ -366,7 +376,10 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // Lifecycle: the app quit path (Ctrl-Q / armed Ctrl-C) → backend.close →
   // input ended → start() resolves → graceful teardown. SIGINT/SIGTERM are
   // the first-graceful paths (raw mode means Ctrl-C never becomes SIGINT).
+  let shutdownStarted = false
   const shutdown = (): void => {
+    if (shutdownStarted) return
+    shutdownStarted = true
     try { attach?.stop() } catch { /* already gone */ }
     try { terminal.teardown() } catch { /* already gone */ }
   }
