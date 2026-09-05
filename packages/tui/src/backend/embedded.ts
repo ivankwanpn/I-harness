@@ -60,6 +60,8 @@ import { RewindService } from "@i-harness/rewind"
 import { applyTitle, normalizeTitle } from "@i-harness/session-title"
 import { createSessionService, type SessionAssembly, type SessionService, type SessionServiceOptions } from "@i-harness/session-executor"
 import { activeTokens } from "@i-harness/token-meter"
+import { createSessionCoordinator, type SessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { toolKindOf, type BackendClient, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ mapping
@@ -312,6 +314,8 @@ export interface EmbeddedFactoryOptions {
    * When set (with the factory's sessionId) the client exposes the `rewind`
    * bridge; ABSENT = rewind off (mock factory default — no member). */
   rewindStoreRoot?: string
+  coordinator?: SessionCoordinator
+  resumeSessionId?: string
 }
 
 // ------------------------------------------------------------------ backend
@@ -596,27 +600,17 @@ function buildRewindMember(
  * in-memory; callers wanting durability must M38 the factory. */
 export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Promise<BackendClient> {
   const forceMock = opts.forceMock ?? true
-  const service: SessionService = createSessionService({
-    workspace: opts.workspace,
-    approveAll: opts.approveAll ?? true,
-    // the default mock cycles ("ok" per turn); also the fallback when a
-    // modelBuilder run resolves undefined — never the destructive one-shot.
-    mockCycles: true,
-    ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}),
-    // M37a: deliberately NO coordinator / loadMeta / contextWindowFor /
-    // telemetry — in-memory session only (module header item 1).
-    // M43: rewind store — opt-in; the assembly creates the store+recorder only
-    // when BOTH rewindStoreRoot and a sessionId exist (both here).
-    ...(opts.rewindStoreRoot !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}),
-  })
-  return createEmbeddedBackend({
-    service,
-    sessionId: `sess-${randomUUID().slice(0, 8)}`,
-    prompt: opts.prompt,
-    ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
-    ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
-    // rewind bridge on the client iff the store was on (workspace root is the
-    // same one the assembly resolved against).
-    ...(opts.rewindStoreRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}),
-  })
+  const ownsCoordinator = opts.coordinator === undefined && opts.storeRoot !== undefined
+  const coordinator = opts.coordinator ?? (opts.storeRoot === undefined ? undefined : createSessionCoordinator(createJsonlBackend(opts.storeRoot), { lock: { enabled: true, lockRoot: opts.storeRoot } }))
+  let sessionId = opts.resumeSessionId
+  let session: Session | undefined
+  if (coordinator !== undefined) {
+    if (sessionId !== undefined) { session = (await coordinator.load(sessionId)).session; await coordinator.adoptOwnership(sessionId) }
+    else sessionId = (await coordinator.create()).id
+  }
+  sessionId ??= `sess-${randomUUID().slice(0, 8)}`
+  const service = createSessionService({ workspace: opts.workspace, sessionId, ...(session !== undefined ? { session } : {}), ...(coordinator !== undefined ? { coordinator } : {}), approveAll: opts.approveAll ?? true, mockCycles: true, ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}), ...(opts.rewindStoreRoot !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}) })
+  const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(opts.rewindStoreRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
+  if (ownsCoordinator && coordinator !== undefined) { const close = backend.close.bind(backend); backend.close = async () => { await close(); await coordinator.flush(sessionId!).catch(() => {}); await coordinator.close() } }
+  return backend
 }
