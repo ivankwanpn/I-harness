@@ -9,6 +9,8 @@ import { afterEach, describe, expect, it } from "vitest"
 import { append } from "@i-harness/core-session"
 import type { MockStep } from "@i-harness/llm-mock"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { activeTokens } from "@i-harness/token-meter"
 import {
   createEmbeddedBackend,
@@ -293,4 +295,34 @@ describe("embedded backend", () => {
     expect(assistant !== undefined && (assistant as { text: string }).text).toBe("ok")
     expect(backend.status()).toEqual({ running: false, queued: 0 })
   })
+  it("durable TUI session survives close and reopen without repeating kickoff", async () => {
+    const root = tmp()
+    const first = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff", storeRoot: root })
+    const rows = await first.listSessions()
+    expect(rows).toHaveLength(1)
+    const id = rows[0]!.id
+    await first.open(id)
+    await first.close()
+    const second = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff", storeRoot: root, resumeSessionId: id })
+    await second.open(id)
+    const restored = await second.replay(-1)
+    expect(restored.filter((e) => e.type === "user" && (e as { text: string }).text === "kickoff")).toHaveLength(1)
+    await second.close()
+  })
+
+  it("durable TUI factory rejects an unknown resume session", async () => {
+    await expect(defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: tmp(), resumeSessionId: "missing" })).rejects.toThrow()
+  })
+
+  it("durable session ownership rejects a second adopter", async () => {
+    const root = tmp()
+    const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    const id = (await seed.create()).id
+    await seed.close()
+    const first = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: id })
+    const secondCoordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    await expect(defaultEmbeddedFactory({ workspace: tmp(), prompt: "", coordinator: secondCoordinator, resumeSessionId: id })).rejects.toThrow()
+    await first.close(); await secondCoordinator.close()
+  })
+
 })
