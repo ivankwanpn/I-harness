@@ -239,9 +239,15 @@ export async function runTui(flags: TuiFlags): Promise<number> {
 
   const cols = process.stdout.columns ?? 80
   const rows = process.stdout.rows ?? 24
+  // M46b G1: minimal mode NEVER initializes the 5-mode mouse capture (spec §7
+  // red line — the terminal keeps native selection; hover/scroll/hit areas are
+  // fullscreen-only). The flag ALSO gates the wheel/click paths app-side (the
+  // loop drops every mouse event while inlineActive).
+  const minimalMode = flags.mode === "minimal"
   const terminal = createTerminal({
     stream: { write: (s: string): boolean => { out(s); return true } },
     cap,
+    mouseReporting: minimalMode ? false : undefined,
   })
   const renderer = createRenderer({ cols, rows, cap })
   const engine = createScrollbackEngine({ width: cols, showTimestamps: tuiPrefs.timestamps })
@@ -294,6 +300,12 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   }
 
   const minimal = flags.mode === "minimal"
+  // M46b G1: the mouse-reporting feature gate — GROK_MOUSE_REPORTING_TOGGLE=1
+  // OR the settings knob turns the Ctrl+R binding + /toggle-mouse-reporting
+  // on (default OFF per grok). It does NOT turn capture off (capture is on
+  // for fullscreen; the TOGGLE is what lets the user hand it back).
+  const mouseToggleFeature = process.env.GROK_MOUSE_REPORTING_TOGGLE === "1"
+    || tuiPrefs.mouseReportingToggle
   const app = new TuiApp({
     renderer,
     backend,
@@ -315,6 +327,16 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     ...(attach !== undefined ? { sessionId: flags.attach } : {}),
     ...(attach !== undefined ? { input } : {}),
     ...(minimal ? { mode: "minimal" as const, inlineFactory: () => loadInlineHost(cols, rows) } : {}),
+    // M46b G1: the durable mouse knobs (settings modal Mouse category) → the
+    // scroll stream's brand profile math + the toggle feature gate. The host
+    // is the ONLY loader of the settings store — the loop reads what it gets.
+    mousePrefs: {
+      speed: tuiPrefs.scrollSpeed,
+      mode: tuiPrefs.scrollMode,
+      lines: tuiPrefs.scrollLines,
+      invert: tuiPrefs.invertScroll,
+    },
+    mouseToggleFeature,
     // Spec §1: the prompt text `/minimal`/`/fullscreen` self-relaunches the
     // same session with the flipped --mode (ModeSwitch spawns; the loop quits).
     modeSwitch: (cmd) => new ModeSwitch({ argv: process.argv.slice(2) }).onSlash(cmd),

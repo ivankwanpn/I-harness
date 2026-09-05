@@ -144,7 +144,20 @@ export interface SettingsTuiProviders {
   providers: Record<string, SettingsTuiProviderEntry>
 }
 
-/** TUI UI-preference knobs (M46a modal categories — durable, host-honored). */
+/** M46b G1: keep_text_selection modes (grok `ui.keep_text_selection`). */
+export type SettingsKeepTextSelection = "flash" | "hold" | "word_select"
+
+/** M46b G1: scroll input classification (grok `ui.scroll_mode`). */
+export type SettingsScrollMode = "auto" | "wheel" | "trackpad"
+
+/** M46b G1: the grok default word-separator set (text_selection.rs:
+ * DEFAULT_WORD_SEPARATORS `!"#$%&'()*+,-./:;<=>?@[\]^`{|}~`). */
+export const SETTINGS_DEFAULT_WORD_SEPARATORS = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
+
+/** TUI UI-preference knobs (M46a modal categories — durable, host-honored).
+ * M46b G1 appends the mouse knobs (grok's Mouse settings category): the
+ * scroll-stream profile math, the selection-hold semantics and the opt-in
+ * mouse-reporting toggle (Ctrl+R binding + /toggle-mouse-reporting). */
 export interface SettingsTuiPrefs {
   /** Scrollback timestamps (the engine's showTimestamps). */
   timestamps: boolean
@@ -154,6 +167,25 @@ export interface SettingsTuiPrefs {
   guardian: boolean
   /** Always-approve default for permission asks (with the guardian on). */
   alwaysApprove: boolean
+  /** Mouse/trackpad scroll speed multiplier (1–100; 1→0.1×, 50→1.0×, 100→6.0×). */
+  scrollSpeed: number
+  /** Scroll input classification (auto-detect wheel vs trackpad, or forced). */
+  scrollMode: SettingsScrollMode
+  /** Lines per scroll tick for both wheel and trackpad (1–10). Unset (3 in the
+   * schema default) keeps the per-terminal profile in charge; the loop's
+   * normalizer treats it as the override when present. */
+  scrollLines: number
+  /** Reverse vertical scroll direction (natural scrolling). */
+  invertScroll: boolean
+  /** In-app selection: brief flash, hold, or double-click word select. */
+  keepTextSelection: SettingsKeepTextSelection
+  /** Word separators for double-click word-select (grok default set). */
+  wordSeparators: string
+  /** Opt-in mouse-reporting toggle (grok `ui.mouse_reporting_toggle`, default
+   * off): ON exposes the Ctrl+R scrollback binding + /toggle-mouse-reporting
+   * that flips mouse capture/hover at runtime (and GROK_MOUSE_REPORTING_TOGGLE
+   * forces it ON at startup). */
+  mouseReportingToggle: boolean
 }
 
 /** The appended TUI section. */
@@ -223,7 +255,16 @@ export const SETTINGS_DEFAULTS: Settings = {
   // approveAll:true default; always-approve on — the "no asks" stance).
   tui: {
     providers: { version: 1, activeProviderId: "", providers: {} },
-    prefs: { timestamps: false, compact: false, guardian: false, alwaysApprove: true },
+    // M46b G1 mouse defaults: speed 50 (1.0×), auto mode, scroll_lines 3 (the
+    // registry default — per-terminal profile in charge), invert off, flash
+    // selection, grok's word separators, mouse-reporting-toggle opt-in OFF
+    // (the Ctrl+R binding + /toggle-mouse-reporting stay inert until ON).
+    prefs: {
+      timestamps: false, compact: false, guardian: false, alwaysApprove: true,
+      scrollSpeed: 50, scrollMode: "auto", scrollLines: 3, invertScroll: false,
+      keepTextSelection: "flash", wordSeparators: SETTINGS_DEFAULT_WORD_SEPARATORS,
+      mouseReportingToggle: false,
+    },
   },
 }
 
@@ -418,6 +459,23 @@ function normalizeTui(raw: unknown, base: SettingsTui): SettingsTui {
       compact: typeof prefsRaw.compact === "boolean" ? prefsRaw.compact : b.compact,
       guardian: typeof prefsRaw.guardian === "boolean" ? prefsRaw.guardian : b.guardian,
       alwaysApprove: typeof prefsRaw.alwaysApprove === "boolean" ? prefsRaw.alwaysApprove : b.alwaysApprove,
+      // M46b G1 mouse knobs (loose on-disk values degrade to the defaults —
+      // same fallback discipline as every other appended pref).
+      scrollSpeed: numberInList(prefsRaw.scrollSpeed, 1, 100, b.scrollSpeed),
+      scrollMode: oneOf(prefsRaw.scrollMode, ["auto", "wheel", "trackpad"] as const, b.scrollMode),
+      scrollLines: numberInList(prefsRaw.scrollLines, 1, 10, b.scrollLines),
+      invertScroll: typeof prefsRaw.invertScroll === "boolean" ? prefsRaw.invertScroll : b.invertScroll,
+      keepTextSelection: oneOf(
+        prefsRaw.keepTextSelection,
+        ["flash", "hold", "word_select"] as const,
+        b.keepTextSelection,
+      ),
+      wordSeparators: typeof prefsRaw.wordSeparators === "string" && prefsRaw.wordSeparators !== ""
+        ? prefsRaw.wordSeparators
+        : b.wordSeparators,
+      mouseReportingToggle: typeof prefsRaw.mouseReportingToggle === "boolean"
+        ? prefsRaw.mouseReportingToggle
+        : b.mouseReportingToggle,
     },
   }
 }

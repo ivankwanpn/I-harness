@@ -75,12 +75,27 @@ describe("settings modal — 8 categories + real-knob honesty", () => {
     expect(nextTheme("system")).toBe("dark")
   })
 
-  it("Mouse is the honest skeleton; Editor/Privacy/Advanced say v2", () => {
+  it("Mouse is the REAL 7-knob category (M46b G1); Editor/Privacy/Advanced say v2", () => {
     const settings = fakeSettings()
     const base = settingsSnapshot(settings as SettingsStoreSurface, store(settings as SettingsStoreSurface))
     const mouse = settingsKnobRows("Mouse", base)
-    expect(mouse[0]!.label).toBe(SETTINGS_MOUSE_PLACEHOLDER)
-    expect(mouse[0]!.dimmed).toBe(true)
+    expect(mouse.map((r) => r.label)).toEqual([
+      "scroll_speed", "scroll_mode", "scroll_lines", "invert_scroll",
+      "keep_text_selection", "word_separators", "mouse_reporting_toggle",
+    ])
+    // M46b defaults: speed 50 (1.0x), auto mode, 3 lines/tick, invert off,
+    // flash selection, grok's separator set, toggle opt-in OFF.
+    expect(mouse[0]!.value).toBe("50 (1.0x)")
+    expect(mouse[1]!.value).toBe("auto")
+    expect(mouse[2]!.value).toBe("3")
+    expect(mouse[3]!.value).toBe("off")
+    expect(mouse[4]!.value).toBe("flash")
+    expect(mouse[5]!.value).toBe("!\"#$%&'()*+,-./:;<=>?@[\\…")
+    expect(mouse[6]!.value).toBe("off")
+    expect(mouse.every((r) => r.dimmed !== true)).toBe(true)
+    // The M46a placeholder constant stays exported (completeness inventory);
+    // the real category no longer renders it.
+    expect(SETTINGS_MOUSE_PLACEHOLDER).toBe("mouse options (coming in the mouse wheel)")
     for (const cat of ["Editor & Input", "Privacy", "Advanced"] as const) {
       const rows = settingsKnobRows(cat, base)
       expect(rows[0]!.label).toBe(SETTINGS_NOT_AVAILABLE)
@@ -203,13 +218,23 @@ describe("settings modal — binder nav + knob writes", () => {
     expect(openedPicker.n).toBe(1)
   })
 
-  it("placeholder rows are honest no-ops (never a fabricated write)", async () => {
+  it("placeholder rows are honest no-ops (never a fabricated write) — the v2 categories", async () => {
+    // Mouse (index 1) is REAL since M46b G1: Enter on scroll_speed persists.
     const h = modal()
     const { settings, seam } = h
     seam.act!("overlay-nav-next") // Mouse = index 1
     seam.act!("overlay-select")
-    seam.act!("overlay-select") // the placeholder row
+    seam.act!("overlay-select") // scroll_speed row — the +1 stepper writes
     await new Promise((r) => setTimeout(r, 10))
-    expect(settings.setCalls.length).toBe(0)
+    expect(settings.setCalls.length).toBe(1)
+    expect(settings.get().tui.prefs.scrollSpeed).toBe(51)
+    // Editor & Input (index 2) is still the v2 placeholder — Enter is a no-op.
+    const h3 = modal()
+    h3.seam.act!("overlay-nav-next")
+    h3.seam.act!("overlay-nav-next") // Editor & Input = index 2
+    h3.seam.act!("overlay-select")
+    h3.seam.act!("overlay-select") // the placeholder row
+    await new Promise((r) => setTimeout(r, 10))
+    expect(h3.settings.setCalls.length).toBe(0)
   })
 })

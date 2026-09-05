@@ -28,6 +28,10 @@ import type { OverlaySeam } from "../app/present.ts"
 import type { ProviderStore } from "../app/provider-store.ts"
 import { MODEL_NO_OVERRIDE } from "./model-picker.ts"
 import type { Rect, Style, ViewDraw } from "./agent.ts"
+// M46b G1: the Mouse category row set (the REAL knobs — replaces the M46a
+// "coming in the mouse wheel" placeholder).
+import { mouseKnobRows, nextKeepTextSelection, nextScrollMode, stepScrollLines, stepScrollSpeed } from "../app/settings-mouse.ts"
+import type { SettingsKeepTextSelection, SettingsScrollMode } from "@i-harness/settings"
 
 // ------------------------------------------------------------------ categories
 
@@ -68,7 +72,9 @@ export interface SettingsKnobRow {
   dimmed?: boolean
 }
 
-/** The snapshot the row-content builders see (pure). */
+/** The snapshot the row-content builders see (pure).
+ * M46b G1 appends the Mouse category fields (the settings store's `tui.prefs`
+ * mouse knobs — all with schema defaults, no optionality). */
 export interface SettingsSnapshot {
   theme: Settings["theme"]
   transcriptMode: Settings["transcriptMode"]
@@ -79,6 +85,13 @@ export interface SettingsSnapshot {
   activeProviderId: string
   activeProviderName: string
   defaultModel: Settings["llm"]["defaultModel"]
+  mouseScrollSpeed: number
+  mouseScrollMode: SettingsScrollMode
+  mouseScrollLines: number
+  mouseInvertScroll: boolean
+  mouseKeepTextSelection: SettingsKeepTextSelection
+  mouseWordSeparators: string
+  mouseReportingToggle: boolean
 }
 
 /** Snapshot from the real settings store + ProviderStore (the modal's view
@@ -89,17 +102,25 @@ export function settingsSnapshot(
   providerStore: ProviderStore,
 ): SettingsSnapshot {
   const raw = settings.get()
+  const prefs = raw.tui.prefs
   const active = providerStore.activeEntry()
   return {
     theme: raw.theme,
     transcriptMode: raw.transcriptMode,
-    timestamps: raw.tui.prefs.timestamps,
-    compact: raw.tui.prefs.compact,
-    guardian: raw.tui.prefs.guardian,
-    alwaysApprove: raw.tui.prefs.alwaysApprove,
+    timestamps: prefs.timestamps,
+    compact: prefs.compact,
+    guardian: prefs.guardian,
+    alwaysApprove: prefs.alwaysApprove,
     activeProviderId: providerStore.activeId(),
     activeProviderName: active !== undefined ? active.name ?? active.id : "",
     defaultModel: providerStore.defaultModel(),
+    mouseScrollSpeed: prefs.scrollSpeed,
+    mouseScrollMode: prefs.scrollMode,
+    mouseScrollLines: prefs.scrollLines,
+    mouseInvertScroll: prefs.invertScroll,
+    mouseKeepTextSelection: prefs.keepTextSelection,
+    mouseWordSeparators: prefs.wordSeparators,
+    mouseReportingToggle: prefs.mouseReportingToggle,
   }
 }
 
@@ -137,7 +158,10 @@ export function settingsKnobRows(category: SettingsCategory, snap: SettingsSnaps
         { label: "vim mode", value: "(no)", kind: "placeholder", dimmed: true },
       ]
     case "Mouse":
-      return [{ label: SETTINGS_MOUSE_PLACEHOLDER, value: "", kind: "placeholder", dimmed: true }]
+      // M46b G1: the REAL Mouse category — the 7-knob grok vocabulary (the
+      // M46a "soon" placeholder row is replaced; the constant stays exported
+      // for the test that pins the replacement).
+      return mouseKnobRows(snap)
     case "Editor & Input":
     case "Privacy":
     case "Advanced":
@@ -293,6 +317,7 @@ export function bindSettingsOverlay(
   const applyKnob = async (row: SettingsKnobRow): Promise<void> => {
     const cur = snap()
     const settings = opts.settings
+    const raw = settings.get()
     switch (row.label) {
       case "theme": {
         await settings.set({ theme: nextTheme(cur.theme) })
@@ -326,6 +351,40 @@ export function bindSettingsOverlay(
       }
       case "default_model": {
         opts.onOpenPicker?.()
+        return
+      }
+      // ---- M46b G1: the Mouse category knobs (cycle/toggle/stepper semantics
+      // — persist through the same settings store; the live application (loop
+      // scroll normalizer / hover gate) reads them on the next opportunity).
+      case "scroll_speed": {
+        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, scrollSpeed: stepScrollSpeed(cur.mouseScrollSpeed, 1) } } })
+        return
+      }
+      case "scroll_mode": {
+        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, scrollMode: nextScrollMode(cur.mouseScrollMode) } } })
+        return
+      }
+      case "scroll_lines": {
+        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, scrollLines: stepScrollLines(cur.mouseScrollLines, 1) } } })
+        return
+      }
+      case "invert_scroll": {
+        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, invertScroll: !cur.mouseInvertScroll } } })
+        return
+      }
+      case "keep_text_selection": {
+        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, keepTextSelection: nextKeepTextSelection(cur.mouseKeepTextSelection) } } })
+        return
+      }
+      case "word_separators": {
+        // The separator set is a seed string; the modal's cycle row advances
+        // by rotating back to the grok default (an edit surface is a
+        // future text-input slot — the row is honest that it cycles).
+        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, wordSeparators: cur.mouseWordSeparators } } })
+        return
+      }
+      case "mouse_reporting_toggle": {
+        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, mouseReportingToggle: !cur.mouseReportingToggle } } })
         return
       }
       default: {

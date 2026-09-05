@@ -58,6 +58,7 @@ export function renderSlashDropdown(
   }
 
   const selStyle: Style = { bg: hexToRgbLocal(palette.bgVisual) }
+  const hoverStyle: Style = { bg: hexToRgbLocal(palette.bgHover) }
 
   for (let i = 0; i < cap; i++) {
     const y = ctx.y + i
@@ -65,8 +66,13 @@ export function renderSlashDropdown(
     const entry = state.entries[i]
     if (entry === undefined) break
     const cursorRow = i === state.cursor
+    // M46b G1: non-cursor rows wear bg_hover when the pointer is over them.
+    const hitHover = !cursorRow && view.hit != null && view.hit(
+      { x: ctx.x, y, w: fullLimit - ctx.x, h: 1 }, `dd-row-${i}`, "dropdown-row",
+    )
 
     if (cursorRow) fillRow(ctx.x, y, fullLimit, selStyle, view)
+    else if (hitHover) fillRow(ctx.x, y, fullLimit, hoverStyle, view)
 
     // `❯ /command` — constant 2-col command column; arrow only on the cursor.
     const prefix = cursorRow ? glyphs.promptArrow : "  "

@@ -372,6 +372,13 @@ export class TuiApp {
     return this.app
   }
 
+  /** M46b G1: the input injection seam — feeds one InputEvent through the same
+   * path pumpInput uses (onInput). Tests drive mouse events deterministically
+   * without a TTY; hosts never need it (attachInput owns the queue). */
+  feedInput(ev: InputEvent): void {
+    this.onInput(ev)
+  }
+
   /** Launch the pumps; resolves when the input/backend iterators finish. */
   async start(): Promise<void> {
     this.stopped = false
