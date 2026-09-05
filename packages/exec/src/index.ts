@@ -75,6 +75,7 @@ interface ResolvedSpawn {
 // group (-pid) and fall back to a direct child SIGKILL.
 function killTree(child: ChildProcess): void {
   if (process.platform === "win32") {
+    try { child.kill() } catch { /* ignore */ }
     const k = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"])
     k.on("error", () => { /* ignore */ })
   } else {
