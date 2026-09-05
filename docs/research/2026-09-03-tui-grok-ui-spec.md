@@ -1,6 +1,8 @@
 # I-harness TUI：grok-build 界面 1:1 複刻規格（UI/UX 提取）
 
-日期：2026-09-03 · 方法：grok TUI 全源深讀（`xai-grok-pager` `app_view.rs` 10727 行 / `views/*` / `scrollback/*` / `render/theme` / `render/glyphs` / `xai-ratatui-*` / `xai-grok-pager-minimal`），逐 widget 提取視覺事實（file:line 佐證）。**用途**：讓「UI 1:1 複刻」有唯一規格源——照本再造，而非重讀 Rust。
+日期：2026-09-03 · **方法附註（2026-09-05）：新版 grok TUI（D:gent-complete\grok-build-main，xai-grok-pager 0.2.106+倉：xai-grok-pager/{src,bin,render,minimal,pty-harness}）已深讀並實跑驗證——本文為舊版基線；**新版為當前複刻真源**（鍵表 §4 已過時：Ctrl+S=stash、F3=sessions、Ctrl+G 模式拆分、Ctrl+B=送後台、Ctrl+R=mouse-reporting opt-in；slash 70 條見新註冊表；settings 8 分類；mouse 5 模式 + 點擊/拖拽/懸停全語義——詳見 docs/research/2026-09-05-grok-tui-*（delta + live-observation））。舊版差異以 delta 研究為準。
+
++ 方法：grok TUI 全源深讀（`xai-grok-pager` `app_view.rs` 10727 行 / `views/*` / `scrollback/*` / `render/theme` / `render/glyphs` / `xai-ratatui-*` / `xai-grok-pager-minimal`），逐 widget 提取視覺事實（file:line 佐證）。**用途**：讓「UI 1:1 複刻」有唯一規格源——照本再造，而非重讀 Rust。
 
 > 決策基調（用戶 2026-09-03）：界面**一比一複刻** grok build 的 TUI；後端沒有的功能**不複刻**（見 §10 映射表）；目的——讓我們後端（SessionService）有一個工程品質最高的前端界面。
 
