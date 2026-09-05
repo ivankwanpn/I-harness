@@ -54,7 +54,7 @@ import type { LightPanelState } from "../views/light-panel.ts"
 import { isSizeablePaste, pasteLabel } from "../views/prompt.ts"
 import type { WorkflowSurface } from "../contracts.ts"
 import { createDefaultWorkflowSurface } from "./slash/impl/workflow2.ts"
-import { doctorRows } from "../views/light-doctor.ts"
+import { doctorLiveBrand, doctorLiveDark, doctorRows } from "../views/light-doctor.ts"
 // M46b G2: mouse click semantics — the dispatch core + the injectable
 // clipboard (the only copy path). G1's hover engine lives on app.mouse.engine
 // (constructed below; present settles it per frame) and the wheel stream is
@@ -178,6 +178,17 @@ export interface InlineHost {
 
 const ANIM_MS = 33 // 30fps pump
 
+/** M47 G2: the live /doctor probe's paint-suspend window (≤800ms — settled
+ * earlier when the run's answers are complete; released on timeout, no
+ * deadlock; the query bytes arrive back through the input path's parser
+ * hooks and are accepted even after the window — no second suspend). */
+const PROBE_SUSPEND_MS = 800
+const PROBE_SUSPEND_REASON = "live /doctor probe"
+
+/** M47 G2: the line viewer's row window (the block view around the matched
+ * line — same window the /plan plan-text viewer uses). */
+const LINE_VIEWER_ROWS = 24
+
 /** M46a G1: the TUI provider protocol vocabulary (the /provider arg parse). */
 const TUI_PROTOCOLS = ["openai-responses", "openai-compatible", "anthropic", "gemini", "bedrock"] as const
 
@@ -230,6 +241,21 @@ export class TuiApp {
   private palette: Palette
   /** M46b G2: the clipboard injection layer (options ?? system clipboard). */
   private readonly clipboard: Clipboard
+  /** M47 G2: the ACTIVE capability context — the host's at start; the live
+   * /doctor probe's answers merge into it (present + the report rows read it;
+   * theme re-resolves use it too). */
+  private cap: TerminalCapabilityContext
+  /** M47 G2: paint-suspend (the live /doctor probe) — while set and unexpired
+   * frame() writes NOTHING (no present, no flush, no minimal repaint); the
+   * probe owns the tty. Cleared by the run's settle (answers or ≤800ms
+   * timeout) or by an expired window. */
+  probeSuspend: { until: number; reason: string } | undefined
+  /** M47 G2: the last/active live-probe run (collects the classified answers;
+   * stays after settle so LATE replies still refresh the report). */
+  private probeRun: { until: number; done: boolean; collect: { brand?: string; dark?: boolean; kitty?: boolean } } | undefined
+  private probeRunP: Promise<void> | undefined
+  private probeRunResolve: (() => void) | undefined
+  private probeTimer: ReturnType<typeof setTimeout> | undefined
   /** M46b G2: the mouse click-semantics router (geometry only read while a
    * mouse event arrives). */
   private mouse!: MouseRouter
@@ -264,6 +290,8 @@ export class TuiApp {
     this.uiMode = opts.mode ?? "fullscreen"
     this.palette = opts.palette
     this.clipboard = opts.clipboard ?? defaultClipboard()
+    this.cap = opts.capabilities
+    this.probeSuspend = undefined
     // M46b G1: the wheel stream (brand profile + knob defaults while the
     // settings snapshot wiring feeds real prefs — mousePrefs() above).
     this.scrollNormalizer = new ScrollStreamNormalizer(
@@ -388,14 +416,231 @@ export class TuiApp {
   }
 
   /** M46b G2: prompt file-ref double-click → the line viewer (the @-file-search
-   * seam plugs its viewer here); absent → honest toast. */
+   * seam plugs its viewer here). M47 G2: the seam is now REAL — the host's
+   * viewer when wired (openLineViewer option); otherwise the engine's block
+   * walk: the light-panel block viewer for the first block whose header/title
+   * contains the ref (read/execute block), cursor at the ref line, Enter jumps
+   * the scrollback viewport there. A ref in no block keeps the honest toast.
+   */
   private openLineViewer(file: string, line?: number): void {
     const open = this.opts.openLineViewer
     if (open !== undefined) {
       open(file, line)
       return
     }
-    this.toast(`line viewer (M46c): ${file}${line !== undefined ? `:${line}` : ""}`)
+    const eng = this.opts.engine
+    const total = eng.lineCount()
+    const suffix = line !== undefined ? `:${line}` : ""
+    if (total <= 0 || file.length === 0) {
+      this.toast(`line viewer: ${file}${suffix} — no block match`)
+      return
+    }
+    // Block walk: the first display line whose block header/title contains the
+    // ref (Read/Execute headers carry the tool's path — `Run {cmd}` /
+    // `Read {path}`; the same title surface /jump's walk uses).
+    let base = -1
+    let title = ""
+    const needle = file.toLowerCase()
+    for (let l = 0; l < total; l++) {
+      const b = eng.lineBlock(l)
+      if (b === undefined || b.title.length === 0) continue
+      if (b.title.toLowerCase().includes(needle)) {
+        base = l
+        title = b.title
+        break
+      }
+    }
+    if (base === -1) {
+      this.toast(`line viewer: ${file}${suffix} — not in any block`)
+      return
+    }
+    // Ensure the matched block is UNFOLDED before taking the rows (tool blocks
+    // render folded by default — their collapsed header alone would make the
+    // viewer a one-row box). The toggle may fold an already-expanded block —
+    // restore it (the delta on the total display lines measures the flip).
+    const beforeLines = eng.lineCount()
+    eng.toggleFoldAt(base)
+    if (eng.lineCount() < beforeLines) eng.toggleFoldAt(base) // was expanded — restore
+    // The block viewer: the block's display rows from the matched line (24-row
+    // window — same window the /plan plan-text viewer uses), cursor at the ref
+    // line; Enter jumps the scrollback viewport to that row.
+    const rows = eng.viewport(base, Math.min(LINE_VIEWER_ROWS, eng.lineCount() - base)).map((r) => ({
+      label: r.runs.map((x) => x.text).join(""),
+    }))
+    const cursor = Math.max(0, Math.min(rows.length - 1, (line ?? 1) - 1))
+    this.app.lightPanel = {
+      kind: "line-viewer",
+      title,
+      rows,
+      cursor,
+      onSelect: (i) => {
+        this.app.scroll = { offset: Math.max(0, base + i), follow: false }
+        this.requestFrame()
+      },
+    }
+    this.app.slash = undefined
+    this.app.completion = undefined
+    this.app.fileSearch = undefined
+    this.app.historyPanel = undefined
+    this.app.sessions = undefined
+    this.requestFrame()
+    this.toast(`line viewer (M47): ${file}${suffix} → ${title}`)
+  }
+
+  // ------------------------------------------------------------------ live /doctor probe (M47 G2)
+
+  /** M47 G2: the live /doctor probe — re-issues the capability queries through
+   * the app's OWN write sink (the ledger counts them), suspends the frame
+   * pump (≤800ms — released on the answers or the timeout, no deadlock, no
+   * failed-run hang), and merges the answers into this.cap when it settles.
+   * The answers arrive through the input path's parser hooks —
+   * feedProbeReply (OSC/DCS payloads) and the unknown-CSI route — never as
+   * key events. One run at a time; a repeated /doctor shares the in-flight
+   * run (no re-entrant suspend). */
+  private armLiveProbe(): Promise<void> {
+    if (this.probeRunP !== undefined && this.probeRun !== undefined && !this.probeRun.done) {
+      return this.probeRunP
+    }
+    const until = (this.opts.now?.() ?? Date.now()) + PROBE_SUSPEND_MS
+    this.probeSuspend = { until, reason: PROBE_SUSPEND_REASON }
+    this.probeRun = { until, done: false, collect: {} }
+    this.probeRunP = new Promise<void>((resolve) => {
+      this.probeRunResolve = resolve
+    })
+    // The queries go through the app's write sink (ledger-observable bytes) —
+    // byte-for-byte the tui-core probe's sweep (probe/index.ts probe()).
+    this.opts.write?.("\x1b[>0q")
+    this.opts.write?.("\x1b[c")
+    this.opts.write?.("\x1b[?27u")
+    this.opts.write?.("\x1b]11;?\x07")
+    // Hard cap: settles no later than 800ms whatever answers (the run's own
+    // all-replies check settles earlier — the fast path).
+    this.probeTimer = setTimeout(() => this.settleLiveProbe(), PROBE_SUSPEND_MS)
+    return this.probeRunP
+  }
+
+  /** M47 G2 — input path → the live probe. The parser's onOsc/onDcs hooks hand
+   * reply payloads here (they never become key events); the loop classifies
+   * them into the run's collector. A reply arriving AFTER the run settled
+   * still refreshes the report — no second suspend. */
+  feedProbeReply(data: string): void {
+    this.probeOnReply(data, false)
+  }
+
+  /** The live capability context (startup + the merged probe answers). */
+  liveCapabilities(): TerminalCapabilityContext {
+    return this.cap
+  }
+
+  /** Classify one reply — OSC/DCS hook payload (`isCsi` = false) or raw
+   * unknown-CSI bytes (`isCsi` = true, the DA/DECRPM replies) — into the run.
+   * The grammar mirrors tui-core's probe scan (probe/index.ts handleDcs/
+   * handleOsc/handleCsi) so the live run agrees with the startup probe. */
+  private probeOnReply(data: string, isCsi: boolean): void {
+    const run = this.probeRun
+    if (run === undefined) return
+    let changed = false
+    if (!isCsi) {
+      // OSC/DCS hook payloads: XTVERSION (`>|…`) / OSC 11 (`…;rgb:…`).
+      if (data.startsWith(">|")) {
+        const brand = doctorLiveBrand(data)
+        if (brand !== null && brand !== run.collect.brand) {
+          run.collect.brand = brand
+          changed = true
+        }
+      } else {
+        const dark = doctorLiveDark(data)
+        if (dark !== null && dark !== run.collect.dark) {
+          run.collect.dark = dark
+          changed = true
+        }
+      }
+    } else {
+      // Raw unknown-CSI bytes: kitty DECRPM / DA2 (DA2 = the strong WT brand;
+      // DA1 is the weak hint and never settles — same as the startup probe).
+      const decrpm = /^\x1b\[\?27;?(\d+)\$p$/.exec(data)
+      if (decrpm !== null) {
+        const kitty = parseInt(decrpm[1]!, 10) >= 1
+        if (kitty !== run.collect.kitty) {
+          run.collect.kitty = kitty
+          changed = true
+        }
+      } else if (/^\x1b\[\?27u$/.test(data)) {
+        if (run.collect.kitty !== true) {
+          run.collect.kitty = true
+          changed = true
+        }
+      } else if (data.startsWith("\x1b[>1;95")) {
+        if (run.collect.brand !== "WindowsTerminal") {
+          run.collect.brand = "WindowsTerminal"
+          changed = true
+        }
+      }
+    }
+    if (!changed) return
+    if (run.done) {
+      // A reply AFTER the window: accept + refresh the report (no second
+      // suspend — the panel updates without holding the tty).
+      this.cap = this.mergeLiveCap(run)
+      this.refreshDoctorPanel()
+      this.requestFrame()
+      return
+    }
+    if (run.collect.brand !== undefined && run.collect.dark !== undefined && run.collect.kitty !== undefined) {
+      this.settleLiveProbe()
+    }
+  }
+
+  private settleLiveProbe(): void {
+    const run = this.probeRun
+    if (run === undefined || run.done) return
+    run.done = true
+    if (this.probeTimer !== undefined) {
+      clearTimeout(this.probeTimer)
+      this.probeTimer = undefined
+    }
+    this.probeSuspend = undefined
+    this.cap = this.mergeLiveCap(run)
+    this.refreshDoctorPanel()
+    this.requestFrame()
+    const resolve = this.probeRunResolve
+    this.probeRunResolve = undefined
+    this.probeRunP = undefined
+    resolve?.()
+  }
+
+  /** Live answers → the capability context: env-derived fields re-read at
+   * probe time (the same math as tui-core's buildResult env branch) + the
+   * answered reply fields; UNANSWERED reply-fields keep the previous
+   * knowledge (a partial live run never regresses the report to defaults). */
+  private mergeLiveCap(run: { collect: { brand?: string; dark?: boolean; kitty?: boolean } }): TerminalCapabilityContext {
+    const env = process.env
+    const ct = (env.COLORTERM ?? "").toLowerCase()
+    const term = (env.TERM ?? "").toLowerCase()
+    const colorLevel =
+      ct.includes("truecolor") || ct.includes("24bit") ? "truecolor"
+      : term.includes("256color") ? "ansi256"
+      : "ansi16"
+    const modern = colorLevel === "truecolor" || colorLevel === "ansi256"
+    return {
+      ...this.cap,
+      colorLevel,
+      multiplexer: env.ZELLIJ !== undefined ? "zellij" : env.TMUX !== undefined ? "tmux" : "none",
+      mouse: modern,
+      bracketedPaste: modern,
+      focusEvents: modern,
+      synchronizedOutput: modern,
+      ...(run.collect.brand !== undefined ? { brand: run.collect.brand } : {}),
+      ...(run.collect.dark !== undefined ? { dark: run.collect.dark } : {}),
+      ...(run.collect.kitty !== undefined ? { kitty: run.collect.kitty } : {}),
+    }
+  }
+
+  /** The doctor panel rows = the LIVE context (while the panel is open). */
+  private refreshDoctorPanel(): void {
+    const lp = this.app.lightPanel
+    if (lp === undefined || lp.kind !== "doctor") return
+    lp.rows = doctorRows(this.cap)
   }
 
   /** Coordinator state (the loop mutates; tests/host read). */
@@ -475,6 +720,17 @@ export class TuiApp {
   frame(): void {
     if (this.stopped) return
     const t = this.opts.now?.() ?? Date.now()
+    // M47 G2: paint-suspend (the live /doctor probe) — while active, NO frame
+    // bytes are written (no present, no renderer.flush — not even the
+    // zero-byte idle ""; the anim pump's repaint path funnels here, so it is
+    // gated too). The probe owns the tty; its replies never become frames.
+    // An expired window releases the gate naturally (a scheduling miss); the
+    // run's settle also clears it (answers / ≤800ms timeout).
+    const suspend = this.probeSuspend
+    if (suspend !== undefined) {
+      if (t < suspend.until) return
+      this.probeSuspend = undefined
+    }
     this.app.toasts = this.app.toasts.filter((toast) => toast.until > t)
     if (this.app.turn !== undefined) {
       const turn = this.app.turn
@@ -491,7 +747,9 @@ export class TuiApp {
     }
     present(this.app, this.opts.renderer, this.palette, this.opts.glyphs, {
       compact: this.opts.compact,
-      cap: this.opts.capabilities,
+      // M47 G2: the LIVE capability context (the /doctor probe answers merge
+      // into this.cap — the renderer sees refreshed truth, not only startup's).
+      cap: this.cap,
       ...(this.fpsMeter !== undefined ? { hud: this.hudState() } : {}),
     })
     this.opts.renderer.flush((s) => this.opts.write?.(s))
@@ -722,6 +980,15 @@ export class TuiApp {
   }
 
   private onInput(ev: InputEvent): void {
+    // M47 G2: probe replies that the parser cannot classify — DA2/DA1 CSI
+    // (`\x1b[>…c`, `\x1b[?…c`) and kitty DECRPM (`\x1b[?27;1$p`) — arrive as
+    // `unknown` events (the parser has no CSI hook). They carry the probe's
+    // answers in their raw bytes; the LIVE run's grammar reads them HERE
+    // (they were dropped by the key path anyway — never key events).
+    if (ev.type === "unknown" && this.probeRun !== undefined && this.probeRun.collect !== undefined) {
+      this.probeOnReply(String.fromCharCode(...ev.bytes), true)
+      return
+    }
     if (ev.type === "paste") {
       // Bracketed paste AND Ctrl+V both arrive as `paste` events (the binding
       // in tui-core). The INSERT stays immediate (M37a behavior); M46c G2
@@ -1290,7 +1557,15 @@ export class TuiApp {
       editPromptInEditor: () => this.editPromptInEditor(),
       exportTranscript: () => this.exportTranscript(),
       openTranscriptPager: () => this.openTranscriptPager(),
-      probeReport: async () => doctorRows(this.opts.capabilities),
+      // M47 G2: /doctor is LIVE — the command opened the Probing… panel first;
+      // the microtask checkpoint lets that frame PAINT (the suspend must not
+      // swallow it), then the probe re-issues the queries behind the
+      // paint-suspend and the rows land when the run settles.
+      probeReport: async () => {
+        await new Promise<void>((resolve) => queueMicrotask(resolve))
+        await this.armLiveProbe()
+        return doctorRows(this.cap)
+      },
       g1Modal: (line) => this.tryG1SlashModal(line),
       effort: (level) => this.effort(level),
       mouseReportingToggle: this.mouseToggleFeature(),
@@ -1544,7 +1819,7 @@ export class TuiApp {
   /** /theme — re-resolve the palette (groknight/grokday/auto via tui-core). */
   private setTheme(kind: "groknight" | "grokday" | "auto"): void {
     this.app.theme = kind
-    this.palette = resolvePalette(this.opts.capabilities, kind === "auto" ? undefined : kind)
+    this.palette = resolvePalette(this.cap, kind === "auto" ? undefined : kind)
     this.requestFrame()
   }
 

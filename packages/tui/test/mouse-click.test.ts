@@ -423,6 +423,28 @@ describe("prompt — click / file-ref / paste chip / drag", () => {
     expect(r.toasts().some((t) => t.includes("paste chip"))).toBe(true)
   })
 
+  it("M47 G2: a single click on a paste chip row stays a chip click — no cursor move, no drag arm", () => {
+    const engine = seeded()
+    const r = timedRig(engine, {
+      prompt: {
+        text: "hello world", cursor: 6, multiLine: false, focused: true, model: "m", plan: false, title: "t",
+        pasteStash: [{ label: "5 lines", text: "src" }],
+      },
+    })
+    const p = r.layout().prompt
+    const chipRow = p.y + 1
+    // Single click on the chip row: the hint — the cursor stays put (chip
+    // areas are authoritative FIRST — the click never falls into the textarea
+    // cursor binding).
+    r.at(0)
+    click(r, p.x + 3, chipRow)
+    expect(r.app.prompt.cursor).toBe(6)
+    // And a drag STARTING from the chip row does not arm a text selection
+    // (no press — the chip row is not text; no copy on the release).
+    drag(r, p.x + 3, chipRow, p.x + 9, chipRow + 1)
+    expect(r.clipboard.copied.length).toBe(0)
+  })
+
   it("prompt drag = text selection + copy on up", () => {
     const engine = seeded()
     const text = "select me please"

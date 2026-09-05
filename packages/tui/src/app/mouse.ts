@@ -404,14 +404,22 @@ export class MouseRouter {
 
   private promptDown(ev: MouseCellEvent, ctx: Rect): void {
     const p = this.app.prompt
-    // Double-click (≤300ms, same cell) on a file-ref / paste chip row. ONE
-    // gesture probe per click (a ref+chip double-probe would consume the
-    // multi-click slot twice and HIDE the second click — count logic below
-    // keys on the resolved target kind).
-    // M46c G2: the paste chip is a REAL stash row now — double-click INSERTS
-    // the retained source at the cursor (the honest-toast path is superseded).
+    // M47 G2 chip-click clarity: the chip row is AUTHORITATIVE first — a click
+    // on it NEVER falls into the textarea cursor/drag binding (no cursor set,
+    // no press arm — the row is a hint, not text). ONE gesture probe per click
+    // (a ref+chip double-probe would consume the multi-click slot twice and
+    // HIDE the second click — count logic below keys on the target kind).
+    // M46c G2: the paste chip is a REAL stash row — double-click INSERTS the
+    // retained source at the cursor (the honest-toast path is superseded).
     const chipIdx = pasteChipRowAt(ctx, p, ev.y)
-    const line = chipIdx === undefined ? promptLineAtRow(ctx, p.text, ev.y, pasteChipRowCount(ctx, p)) : undefined
+    if (chipIdx !== undefined) {
+      if (this.nextClick(`prompt:chip:${ev.x}:${ev.y}`) === 2) {
+        this.hookOr(this.hooks.insertPasteStash, "paste chip expand: source not retained", chipIdx)
+      }
+      return // single click on a chip row = the hint itself (no cursor, no drag)
+    }
+    // Double-click (≤300ms, same cell) on a file-ref inside a text line.
+    const line = promptLineAtRow(ctx, p.text, ev.y, pasteChipRowCount(ctx, p))
     if (line !== undefined) {
       const colInLine = ev.x - (ctx.x + 1)
       const ref = fileRefAt(line.text, colInLine)
@@ -419,10 +427,6 @@ export class MouseRouter {
         this.hookOr(this.hooks.openLineViewer, "line viewer (M46c)", ref.file, ref.line)
         return
       }
-    } else if (chipIdx !== undefined && this.nextClick(`prompt:chip:${ev.x}:${ev.y}`) === 2) {
-      // The chip row is a hint; double-click RESTORES the full source.
-      this.hookOr(this.hooks.insertPasteStash, "paste chip expand: source not retained", chipIdx)
-      return
     }
     // Click → cursor at that cell (approximate column mapping; a chip hint row
     // keeps the current cursor).
