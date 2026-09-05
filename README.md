@@ -1,293 +1,186 @@
 # I-harness
 
-I-harness agent runtime — a TypeScript/ESM monorepo (pnpm workspace) that runs
-an agent end-to-end on Windows: real tools, persisted sessions, subagents and
-teams, sandboxed execution, MCP/LSP integration, skills, workflows, and a
-headless CLI. **Backend-complete (M1–M25) achieved, then extended by the M26–M34 wheel
-(runtime interaction/tiers, subagent messaging, SDK, ACP, JSONL-only persistence
-+ a reconcile-on-search index). Frontend phase opened via the TUI wheel: research
-(M35) → tui-core renderer layer (M36: cell grid/diff + zero-byte idle, terminal
-init/teardown, capability probe, GrokNight theme, PTY harness) → M37a app layer
-(grok 1:1 agent screen: scrollback engine + views + keymap + embedded
-SessionService bridge + `apps/tui`, PTY-proved live streaming). M37b covers
-interaction overlays + Inline/minimal modes.**
+<div align="center">
 
-## What it is
+**一款以「後端完整」為先、複刻 grok-build 工程細節的 Agent 開源框架** ——
+TypeScript/ESM 單倉（pnpm workspace），Windows 一等，從模型對接到終端界面全鏈自持。
 
-An agent harness (the "back end" of an agent product) that:
-
-- Drives an LLM agent loop over a real tool set (shell, fs, patch, search, todo…)
-- Persists sessions durably (JSONL — the sole authority), with cross-process ownership locks
-- Runs subagents and subagent teams (spawn/send/followup/interrupt/resume + mailbox/task board)
-- Executes tools under guard/approval/timeout/retry/parallel policies
-- Integrates MCP servers + LSP, with reconnect supervision
-- Loads skills (deferred SKILL.md retrieval) and runs static YAML workflows
-- Emits telemetry (independent host event stream — JSONL via `--telemetry`)
-- Is sandbox-safe on Windows (ACL isolation) and fail-closed elsewhere
-
-## Requirements
-
-- Node.js >= 22
-- pnpm >= 9
-
-## Getting started
-
-```bash
-pnpm install
-pnpm test            # unit/integration suites for every package
-pnpm typecheck       # tsc --noEmit for every package
-pnpm e2e             # end-to-end: real CLI + real tools (spawned process / runHeadless)
-```
-
-## Install once — launch like `grok` (M44)
-
-`i-harness` / `ih` — type the name in ANY folder's cmd/PowerShell to launch the
-TUI there (workspace = cwd), exactly like `grok` in a project folder:
-
-```bash
-# from the repo (one-time global link; both names go on PATH)
-cd apps/cli
-pnpm link -g            # or: npm i -g ./apps/cli
-
-# from ANY project folder
-i-harness               # TUI (fullscreen) in the current folder
-ih --minimal            # native-scrollback mode
-ih --prompt "hi"        # auto-kick a prompt
-ih --attach <session-id>  # remote SDK session
-ih help                 # full usage (run / web / sdk / acp / tui)
-```
-
-The bin shim resolves the tsx loader by ABSOLUTE path from its own install —
-no bundle, no dist: the repo stays source-run.
-
-### Distribution — NSIS self-contained installer (M45)
-
-```bash
-node scripts/build-installer.mjs    # → build/I-harness-Setup-0.1.0.exe
-```
-
-- **Self-contained**: bundles the Node v22.16.0 runtime + a single esbuild
-  bundle (`dist/ih.mjs`) + platform native modules (node-pty / koffi /
-  ripgrep via a flat hoisted deploy). ~50 MB of install media; no Node
-  requirement on the target. `I-harness-Setup-0.1.0.exe` (and the `-test.exe`
-  variant that installs user-level without PATH/registry writes).
-- **Installs** to `Program Files\I-harness`, appends PATH (HKLM, with
-  `WM_SETTINGCHANGE` broadcast), Start Menu shortcuts, and a full uninstaller
-  (registry + PATH cleanup). `i-harness` and `ih` both work in any cmd after
-  install.
-- **Verify**: `node scripts/verify-installer.mjs` — silent install → both
-  commands + `--version`/`tui --help` → clean uninstall (currently 17/17
-  de-verified on this machine).
-- Honest dist limits (documented): `--attach` SDK spawn, the Windows-ACL
-  sandbox runner, and minimal-mode `/minimal` relaunch still expect the
-  source + tsx (`I_HARNESS_HOME` is the dev-only override). Version is the
-  single constant `apps/cli/package.json` (0.1.0).
-
-## Scripts
-
-| Script           | Purpose                                              |
-|------------------|------------------------------------------------------|
-| `pnpm test`      | Every package's vitest suite (`pnpm -r test`)        |
-| `pnpm typecheck` | Type-check every package (`pnpm -r typecheck`)       |
-| `pnpm e2e`       | End-to-end tests (`vitest run e2e/ --config e2e/vitest.config.ts`) |
-| `pnpm verify:store` | pnpm store integrity check (`scripts/check-store.sh`) — run before e2e after installs |
-
-Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
-
-### Building a distribution (M45)
-
-```
-node scripts/build-dist.mjs    # esbuild bundle + native deploy → dist/ (gitignored)
-node scripts/verify-dist.mjs   # smoke gate: --version / tui --help / help must pass
-```
-
-`build-dist.mjs` bundles `apps/cli/src/index.ts` with esbuild (platform node,
-ESM, node22) into `dist/ih.mjs` and deploys the three NATIVE externals —
-`node-pty`, `koffi`, `@vscode/ripgrep` (+ their platform optionals) into
-`dist/node_modules` from the pinned manifest `installer/dist-package.json`
-(exact versions, build-time drift check). The dist layout is
-`dist/{ih.mjs, model-catalog.json, package.json, README-dist.txt, node_modules/}`
-and runs with plain `node` — no tsx needed. `verify-dist.mjs` is the gate
-(fails loud on any mismatch). The `Distribution` story (installing the produced
-dist) is owned by the packaging milestone.
-
-## Development status (M1 → M34)
-
-The full **backend-complete** milestone wheel (M1–M25) is done, and the
-M26–M29 extension wheel that followed — this is the "backend complete before
-frontend" gate:
-
-| Milestone | Topic | Status |
-|---|---|---|
-| M1  | Kernel (plugin/session/tools/loop) | ✅ |
-| M2–M1x | Guards, session-query, compaction, retry/retention, parallel calls, multimodal | ✅ |
-| M13–M15 | Parallel tool calls, multimodal, token meter/catalog | ✅ |
-| M16–M18 | Sandbox (Windows ACL), MCP client, LSP client | ✅ |
-| M19 | Subagent teams (roster/mailbox/task-board) | ✅ |
-| M20 | Model reliability (provider retry, budget, overflow) | ✅ |
-| M21 | Tools (apply_patch, todo, output spill) | ✅ |
-| M22 | Windows security complete (ACL isolation) | ✅ |
-| M23 | Session/interop leaks: cross-process ownership lock (Windows koffi + Linux flock), MCP reconnect, resume wakeup | ✅ |
-| M23-c | Linux flock + coordinator hardening | ✅ |
-| M24a | Subagent/team resume consistency + nested delegation | ✅ |
-| M24b | Skills (deferred SKILL.md) + workflows (YAML) | ✅ |
-| M25 | Engineering wrap-up: telemetry, e2e layer, docs closure, dir cleanup | ✅ |
-| M26 | Runtime exec + interaction wheel: input tiers (SessionExecutor), terminal PTY, MCP OAuth, tool naming, goal/feedback/jobs/credentials/workspace/plugin-registry/settings/schedule/hooks/instructions/session-title/plan-mode, engine-owned web-host | ✅ |
-| M27 | Stabilization + integration: cli web --port, external contracts, get_context_remaining, web-host routes + /api/health, crash-repair chain, skills shadow selector, settings layering, `@i-harness/sdk` | ✅ |
-| M28 | Cleanup: SDK wire contract v0 freeze, R-B13 close, MCP OAuth real-AS integration, fs-watch (chokidar), ACP (v0 automation subset) | ✅ |
-| M29 | SQLite persistence split: JSONL-only authority + reconcile-on-search file-backed index, remove `--session-backend` | ✅ |
-| M30 | First-class providers: gemini (native), bedrock (AWS Converse), double dispatch, model contexts | ✅ |
-| M31 | Models/web surface: unified context-window resolution (per-session), `probe-apply` discover→adopt, no hardcoded catalogs, websearch dsh-honest contract + trust notice | ✅ |
-| M32 | Model cards (`model-catalog.json`: `contextWindow`/`maxOutputTokens`) + 6-level reasoning effort × 4 protocol translation tables (generation-aware) | ✅ |
-| M33 | Compaction four-way absorption: anchored summary + 8-section prompt, model-free prune pass, overhead counting, 3-turn hysteresis + 3-strike breaker, `session-compact` command | ✅ |
-| M34 | Compaction policy: per-model `modelPolicies`, `compaction/attempt` analytics, summary degenerate floor, until-success breaker + sticky suppression | ✅ |
-| M35 | TUI research: four-way study + grok-build blueprint + UI 1:1 replication spec (skips: rewind/dashboard/plan-review/credits/voice) | ✅ |
-| M36 | @i-harness/tui-core: cell renderer (zero-byte idle), input parser, terminal init/teardown, capability probe, screen-mode policy, GrokNight theme, PTY harness first case | ✅ |
-| M37a | @i-harness/tui: grok 1:1 agent screen — scrollback engine (virtual_y / folding / selection / search), views (status/turn/prompt/shortcuts), keymap subset, embedded SessionService bridge (16ms batch + seq cursor), `apps/tui`, PTY live-streaming + resize cases (byte-budget zero-idle proof) | ✅ |
-| M37b | Interaction coverage: permission/question/cancel-turn overlays (approval seam, read-only backend), todo/tasks/queue//btw panes, slash/completion/history/file-search dropdowns, session picker + welcome, full keymap, PTY case-012 (real keys) + case-013 (permission flow) | ✅ |
-| M38a | Minimal mode: Inline insert_before engine (native-scrollback commit, print-once, LF-at-bottom scroll — CSI S proved lossy in xterm 6), live region + 500ms flush, self-relaunch /minimal /fullscreen, PTY case-015 (scrollback pins + 10-write budget + resize + relaunch) | ✅ |
-| M38b | Content wheel: markdown checkpoint rendering (marked lexer — paragraph/list/fence closure boundaries) + hljs polarity-safe highlighting, md_code_bg code blocks, info-line real values (model label; context shape), `--attach` remote backend (SDK stdio client), PTY case-016 (per-paragraph flush + fence-close highlight) | ✅ |
-| M39 | Quality wheel: 12-attribute replication checklist (1–10+12 verified; mermaid skip = spec'd), PTY case-017 interaction matrix (freeform reject real-key path, question, /btw, picker, history), FPS HUD (default-off), scrollback retain display-trunk trim, bench numbers | ✅ |
-| M40 | Inventory-driven gap harvest: todo_write/read_image mount, CLI plugin-registry+job-kill wiring, settings/changed emitter (+ dormant detector fix), guardian breaker all-verdicts, toasts, real context values, mouse wheel scroll (case-018), mermaid unicode art, plan-review adapt (case-019) | ✅ |
-| M41a | SDK wire v1: `session/history` + `session/list` + protocolVersion 2 handshake (additive-only, v0 frozen intact) — `--attach` replay/list gaps close (real subprocess e2e) | ✅ |
-| M42 | Rewind engine: `packages/rewind` (store/recorder/service — grok-style tool-report pre-images, RewindPoint jsonl, clean/conflict lazy compare, two-phase restore) + `rewind/point` event + deriveMessages cut projection (append-only conversation rewind; compaction interplay) | ✅ |
-| M43 | Rewind UI 1:1 (§3.9 phases/strings/keys via grok's rewind.rs) — Esc-Esc picker, mode-select, two-phase confirm with clean/conflict lists, engine hidement of rewound blocks, dim-from-anchor; PTY case-020 (real service restore: disk byte-exact v1 + journal truncate + marker line) | ✅ |
-| M41b | Wire v1.1 appendix: `session/cancel` (in-flight abort now reaches the engine — per-submit signal threading) + `session/rewind/*` (points/plan/execute via rewindFactory), capability-gated remote consumption, CLI list-row enrichment (updatedAt/turnCount), DA1 probe | ✅ |
-| M46b | Mouse full parity (new-truth): capture five-mode (1000/1002/1003/1015/1006, crossterm order) + Moved decode, HitArea hover (dirty-only repaint — row bg blend / ts `%H:%M:%S | %b %d` swap / md border / dropdown+permission rows), click semantics (single=select+focus; 300ms multi-click: double=fold, triple=fold+top; drag ≥1 cell = display-line selection + edge-band autoscroll + auto-copy (injected clipboard) + "Copied!" toast + flash; scrollbar latch+fraction jump; permission double-fire; prompt/pane/dropdown clicks), scroll streaming (grok engine port — 80ms gap / 16ms cadence / per-brand ept / 2.5x accel / taper / carry / speed knob), knobs (settings Mouse 7: speed/mode/lines/invert/keep_text_selection/word_separators/mouse_reporting_toggle + Ctrl+R opt-in gate), minimal no-capture; PTY case-023 mouse matrix (wheel/hover+ts-swap/click/fold/drag-autocopy/scrollbar/permission-double + minimal no-?1000h byte assert; 34-write budget) | ✅ |
-
-Each milestone was developed spec → plan → subagent-driven execution with
-per-task review. Design specs and plans live in `docs/superpowers/`.
-
-**Full capability inventory: `docs/CAPABILITIES.md`**（能力全景/邊界,以 m34 為準）。
-
-## Package structure (65 packages + apps/cli / apps/tui-app)
-
-```
-packages/
-├── core-plugin/          plugin kernel (events, waterfall, guard, scope, lifecycle)
-├── core-session/         session event log + deriveMessages + subscribe()
-├── core-tools/           tool registry, guarded exec pipeline, exposure (direct/deferred/hidden)
-├── core-agent/           event-driven agent loop (+ budget/overflow)
-├── llm-seam/             unified LLM interface (stream events, retry)
-├── llm-mock/             script-driven mock LLM
-├── llm-{openai,openai-compatible,anthropic,gemini,bedrock}/  provider protocols
-├── provider/             provider registry + retry policy
-│   ...
-├── exec/                 ExecService: run / background jobs (bash/pwsh)
-├── shell/                bash/pwsh tools (resolveShell, getArgv)
-├── fs/                   file read/write tools (resolvePath, writeFileAtomic)
-├── fs-search/            glob/grep search tools
-├── output-retention/     M21 A-tier output spill
-├── todo/                 todo list-write tool
-├── tool-search/          BM25 deferred-tool search
-├── skills/               SKILL.md registry + skill_search/skill_get (deferred retrieval)
-├── workflow/             static YAML workflows (single-job runner, workflow_run/list)
-├── subagent/             subagent tools + resilient resume (ensureResidentAgent)
-├── agent-team/           M19 teams: roster/mailbox/task-board/activity
-├── attachment/           (image/video) attachment store
-├── compaction/           M11 compaction engine
-├── token-meter/          M20 budget enforcement (context window)
-├── session-persistence/  coordinator + write-behind (ownership leases)
-├── session-persistence-jsonl/  the only persistence backend (JSONL is the sole authority)
-├── session-query/        search/lineage over the file-backed derived index (reconcile-on-search)
-├── mcp-client/           MCP client + reconnect supervisor + naming
-├── lsp/                  LSP client
-├── guard-{approval,timeout,retry,repeat-tool}/  guards
-├── interaction/          approval/question/command seams
-├── sandbox/              enforcement gate (refuse-to-run)
-├── sandbox-policy/       policy context
-├── sandbox-local/        local sandbox (spawn isolation)
-├── sandbox-windows-acl/  Windows ACL isolation (restricted token)
-├── fs-lock/              ownership lease (koffi LockFileEx / Linux flock)
-├── preset/               agent preset discovery/mount
-├── telemetry/            independent host event stream (JSONL sink)
-├── session-executor/     M26 A: SessionExecutor — input tiers (send/steer/followup), multi-session
-├── terminal/             M26 B: node-pty (ConPTY) terminal + process control tools
-├── runtime-context/      M26 A: dynamic system-context snapshot
-├── instructions/         M26 A: AGENTS.md instruction loading
-├── session-title/        M26 A: session title (LLM providers + fold)
-├── plan-mode/            M26 A: plan mode (log-only event + projection + exit tool)
-├── goal/                 M26 E: event-sourced goal + tools
-├── feedback/             M26 E: message feedback (doc sidecar + CAS)
-├── jobs/                 M26 D: durable job records + kill bridge
-├── credentials/          M26 E: credentials (env-first, refs-not-values)
-├── workspace/            M26 E: workspace document-library registry
-├── plugin-registry/      M26 E: plugin register/market/status (plugin code never executes)
-├── hooks/                M26 E: hooks (Claude / Codex contracts)
-├── schedule/             M26 E: persistent schedule
-├── settings/             M26 E: settings layering + hot reload + comment-preserving patch
-├── web-host/             M26 C: engine-owned web host (routes + WS mux, /api/health)
-├── web/                  M26 C: web app
-├── sdk/                  M27 C: stdio NDJSON JSON-RPC SDK (wire contract v0)
-├── acp/                  M28 C: ACP server (v0 automation subset)
-├── fs-watch/             M28 B: fs watch (chokidar)
-├── tui-core/             M36 TUI renderer layer (cell grid/diff, input, terminal, probe, theme; runtime deps: none)
-└── tui/                  M37a TUI app layer (scrollback engine + views + keymap + embedded bridge)
-apps/
-├── cli/                  headless CLI (run/resume/--telemetry/--sandbox / sdk / acp / web)
-└── tui-app/              M37a TUI app (embedded mock agent shell — `tui --prompt "hi"`)
-```
-
-## Running the CLI
-
-```bash
-# default mock model (no API key needed)
-node --import tsx apps/cli/src/index.ts run "hello"
-
-# real model
-node --import tsx apps/cli/src/index.ts run "solve it" --model openai:gpt-4o --api-key $KEY --yes
-
-# M30 first-class providers: gemini (x-goog-api-key) and bedrock (key-less —
-# AWS credential chain: AWS_ACCESS_KEY_ID/SECRET or ~/.aws/credentials + profile;
-# region = AWS_REGION, default us-east-1)
-node --import tsx apps/cli/src/index.ts run "solve it" --model gemini:gemini-2.5-pro --api-key $GEMINI_API_KEY --yes
-node --import tsx apps/cli/src/index.ts run "hello" --model bedrock:anthropic.claude-3-5-sonnet-20241022 --yes
-
-# resume a session
-node --import tsx apps/cli/src/index.ts run "continue" --resume sess-xxx --yes
-
-# telemetry (JSONL on stdout)
-node --import tsx apps/cli/src/index.ts run "hello" --telemetry
-```
-
-## Design docs
-
-- Specs: `docs/superpowers/specs/` (M1–M29, each milestone)
-- Plans: `docs/superpowers/plans/`
-- Research: `.superpowers/research/` (gitignored — absorb-not-port conclusions)
+</div>
 
 ---
 
-### Milestone history
+## 這是一套什麼
 
-- **M1–M14**: kernel backbone (plugin/session/tools/loop, guards, session-query,
-  compaction, retry/retention, parallel tool calls, multimodal image input).
-- **M15–M25**: backend-complete wheel (token meter, sandbox, MCP/LSP, teams,
-  model reliability, tools, Windows security, session/interop locking, resume,
-  skills/workflows, telemetry, e2e, doc closure).
-- **M26**: runtime-exec + interaction wheel (input tiers + SessionExecutor,
-  terminal PTY, MCP OAuth, model governance, engine-owned web-host) — planned
-  via `docs/roadmap/roadmap-{A..E}`.
-- **M27**: stabilization + integration (stdio SDK, `get_context_remaining`,
-  web-host routes + `/api/health`, crash-repair chain, settings layering,
-  skills shadow selector, external contracts).
-- **M28**: cleanup (SDK wire contract v0 freeze, fs-watch, ACP v0, MCP OAuth
-  real-AS integration, R-B13 closure).
-- **M29**: SQLite persistence split (JSONL becomes the sole authority; the FTS /
-  lineage search face moves to an independent file-backed reconcile-on-search
-  index; `--session-backend` removed).
+I-harness 是一個**完整的 Agent 產品後端 + 終端前端**：
 
-> **M29 note**: `--session-backend` is removed — JSONL is the only persistence
-> backend (the flag now fails loud). When `--session-dir` (storeRoot) is present,
-> the search tools (`session_search` / `lineage`) are mounted via the file-backed
-> index and are enabled on first search (reconcile-on-search), default-on.
+- **引擎**（M1–M25）：事件驅動 Agent 迴圈、真實工具面、守衛五層、壓縮五路、JSONL 唯一真相持久化、子代理/團隊、Windows ACL 沙箱、MCP/LSP、技能/工作流
+- **服務面**（M26–M34）：輸入分級、記憶體/會話管理、HTTP+WS 服務網關、NDJSON JSON-RPC **SDK（Wire v0–v1.1 凍結/加性體系）**、ACP、模型目錄與動態發現
+- **終端界面**（M35–M47）：複刻 **grok-build 的工程細節**——渲染層、minimal 原生滾動模式、markdown 檢查點、Rewind 全鏈、**提供商/模型管理**、**完整 Slash 註冊表**、**鼠標全語義**、遠程附著
+- **體驗**：`i-harness` / `ih` 全局命令（任意資料夾即啟動）+ **NSIS 自包含安裝器**
 
-The acceptance task runs end-to-end:
+> 設計立場：**不默認任何提供商**；**append-only 日誌**（JSONL 唯一真相，遮罩/回滾皆不改寫）；**後端零新面地接前端**（TUI 只是 SessionService 的另一個客戶端）；源碼直跑（tsx），dіst 只在發布期產出。
+
+---
+
+## 快速開始
 
 ```bash
-node --import tsx apps/cli/src/index.ts run "把 src/data.txt 第一行改成 hello"
+# 1. 安裝依賴
+pnpm install
+
+# 2. 開箱體驗（無需 API Key——內置 mock 模型）
+node --import tsx apps/tui/src/index.ts                        # 全屏 TUI
+node --import tsx apps/cli/src/index.ts run "say hi" --yes     # 無頭運行
+
+# 3. 全局命令（grok 式：任意文件夾敲名字）
+cd apps/cli && pnpm link -g
+i-harness           # 在當前文件夾啟動 TUI（workspace = cwd）
+ih --minimal        # 原生 scrollback 模式
+ih --prompt "hello"
+ih --attach <session-id>
+ih help             # 全部子命令（run / web / sdk / acp / tui）
 ```
 
-## Known infra quirks
+**Windows 安裝器**（自包含：捆入 Node v22.16.0 運行時 + esbuild 捆包 + 平台原生模塊，~50MB）：
 
-- **vitest worker flake (RESOLVED M31)**: the tinypool IPC teardown race (`ERR_IPC_CHANNEL_CLOSED`) that hit web-host (M27-M31) is fixed — `packages/web-host/vitest.config.ts` now uses `pool: "forks"` (child-process workers; two consecutive full-run verifications green). If any other package shows the same symptom, mirror that config.
+```bash
+node scripts/build-installer.mjs    # → build\I-harness-Setup-0.1.0.exe
+```
+
+---
+
+## 終端界面（TUI —— grok 1:1 複刻）
+
+| 面 | 亮點 |
+|---|---|
+| 渲染 | 雙緩衝 cell diff + **零字節 idle**（同幀 → 0 寫入；渲染/minimal/懸停/live-probe 全路徑復證）、DEC 2026、寬字符 vendor 表、GrokNight/GrokDay 量化（truecolor/256/16 + ANSI16 釘色 + Windows 對比提升） |
+| 模式 | Fullscreen（alt-screen）/ **Minimal**（終端原生滾動 + print-once——提交後永不重繪）/ self-relaunch 切換 |
+| 內容 | **markdown 檢查點**（段落/列表/圍欄閉合即刷）、hljs 極性安全高亮、mermaid Unicode 圖、`md_code_bg` |
+| 交互 | **鼠標全語義**（5 模式捕獲、懸停 dirty 重繪、單/雙/三擊、拖拽+邊緣自動滾動+自動複製、滾動流式、permission 雙擊即發、最小化模式無捕獲）、鍵表（Ctrl+S 存草稿 / F3 會話 / Ctrl+G 模式拆分…）、**完整 Slash 註冊表**（45 條可見 + 21 條誠實跳過——**只做後端真支持的功能**） |
+| 管理 | **/provider** 三步嚮導 + **/model** 選擇 + **8 分類設置面板**、會話選擇器、工作量面板、Rewind 六相位（檔案快照兩階段恢復） |
+| 遠程 | `--attach`（SDK stdio 客戶端；v1.1 全 wire：歷史/列表/取消/Rewind） |
+
+**PTY 屏幕級回歸**：`packages/tui/test/harness/` 下 13+ 個真實虛擬終端場景（`case-010…023`），以 **byte-budget**（主機側累計 ledger ≡ pty 實觀）定量證明零字節 idle 與渲染確定性——註：Windows ConPTY 傳送分塊間隙可達秒級，時間窗採樣被實際證明不可靠，這是我們定下的證據學。
+
+---
+
+## 命令一覽
+
+### 全局（`i-harness` / `ih`）
+
+| 命令 | 說明 |
+|---|---|
+| （裸） | 當前文件夾啟動 TUI（grok 式默認） |
+| `tui [--prompt …] [--minimal\|--fullscreen] [--attach <id>] [--resume <id>]` | TUI 子命令 |
+| `run <task> [--model p:m --api-key K --yes --session-dir D --resume ID --telemetry]` | 無頭運行 |
+| `web [--port N] [--launch-token T] [--hmac-secret S]` | Web 服務（HTTP+WS） |
+| `sdk [--session-dir D]` | NDJSON JSON-RPC stdio 伺服器 |
+| `acp [--session-dir D] [--no-auto-approve]` | ACP 伺服器 |
+| `help` / `--version` | 用法 / 版本（0.1.0） |
+
+### TUI 常用斜杠
+
+`/minimal` `/fullscreen` `/btw` `/theme` `/timestamps` `/multiline` `/compact-mode` `/find` `/jump` `/history` `/resume` `/new` `/delete` `/rename` `/session-info` `/context` `/usage` `/rewind` `/plan` `/view-plan` `/compact` `/queue` `/tasks` `/doctor` `/copy` `/export` `/transcript` `/help` `/quit` `/always-approve` `/auto` `/effort` `/model` `/provider` `/settings` `/skills` `/mcps` `/hooks` `/plugins` `/marketplace` `/personas` `/config-agents` `/workflow` `/tutorial` `/timeline` —— 完整清單見 `docs/CAPABILITIES-DETAIL.md` §TUI。
+
+---
+
+## 模型與提供商
+
+- **五協議一等**：openai-responses / openai-compatible（含 DeepSeek）/ anthropic / gemini（原生）/ bedrock（AWS Converse）+ mock
+- **設置在 TUI**：`/provider` 添加（ID/Base URL/API Key 遮罩，≥註冊只存 **refs**——明文永不入設置）→ `/model` 選擇 → 目錄動態發現（`/v1/models` 候選鏈 + probe-apply 落定），每次選擇持久化進 settings
+- **思考強度**：6 檔（off/low/medium/high/xhigh/max）× 四協議翻譯表（世代規則）
+- 每會話窗口/輸出上限解析鏈：settings `userModel` > modelContexts > profile > `model-catalog.json` > undefined
+
+---
+
+## 架構與包
+
+```
+packages/  (~70 個包)
+├── core-{plugin,session,agent,tools}   引擎核心（事件驅動/日誌唯一真相/工具註冊表）
+├── llm-{seam,openai,openai-compatible,anthropic,gemini,bedrock,mock} + provider
+├── exec / shell / fs / fs-search / tool-search / output-retention / todo
+├── guard-{approval,timeout,retry,repeat-tool} / sandbox{-local,-windows-acl} / sandbox-policy
+├── mcp-client / lsp / terminal / fs-lock / fs-watch
+├── subagent / agent-team / goal / feedback / jobs / schedule / skills / workflow
+├── compaction / token-meter / session-{persistence*,query,executor,title}
+├── session-persistence-jsonl           JSONL 唯一真相 + file-backed 索引（reconcile-on-search）
+├── interaction / instructions / plan-mode / runtime-context / preset
+├── credentials / settings / workspace / plugin-registry / hooks / telemetry
+├── rewind                              檔案快照/兩階段回滾引擎
+├── sdk / acp / web-host / web          服務面（wire 凍結/ACP/HTTP+WS）
+├── tui-core                            渲染層（cell diff/輸入解析/終端/探測/主題——運行時 0 依賴）
+└── tui                                 App 層（scrollback/views/slash/鼠標/後端橋）
+apps/
+├── cli                                 全局命令（run/web/sdk/acp/tui + bin shim）
+└── tui-app                             TUI 宿主
+```
+
+詳細能力全景：`docs/CAPABILITIES.md`（九節）+ `docs/CAPABILITIES-DETAIL.md`（工具 schema 級粒度 + 已知缺口表）。
+
+---
+
+## 開發
+
+| 命令 | 用途 |
+|---|---|
+| `pnpm test` | 全倉 vitest（~2400 測試，0 失敗線） |
+| `pnpm typecheck` | 全倉 `tsc --noEmit`（0 錯誤） |
+| `pnpm e2e` | 端到端（真實 CLI + 真實工具） |
+| `pnpm verify:store` | pnpm store 完整性（e2e 前建議） |
+| `node scripts/build-installer.mjs && node scripts/verify-installer.mjs` | 打包安裝器 + 17 項安裝驗證 |
+
+> 已知瑕疵：vitest worker flake（M31 修復——`web-host` 用 forks pool；新包遇到同症狀照搬該配置）。
+
+---
+
+## 里程碑與品質
+
+每一輪走完整審計鏈：**研究 → 取捨（與你逐項確認）→ spec → plan → 子代理 worktree 執行 → 調和審查 → 全量驗證 → 推送**。研究/規格/計劃全存 `docs/`：
+
+| 里程碑 | 主題 |
+|---|---|
+| M1–M25 | 後端完整（核心/守衛/壓縮/沙箱/MCP/LSP/團隊/可靠性/持久化/技能/工作流/端到端） |
+| M26 | 運行時交互輪：輸入分級、終端 PTY、MCP OAuth、目標/任務/憑證/設置/工作區…引擎網關 |
+| M27 | 穩定化 + 集成：外部契約、健康面、崩潰修復鏈、`@i-harness/sdk` |
+| M28 | 清理：SDK Wire v0 凍結、fs-watch、ACP、真 AS OAuth 集成 |
+| M29 | SQLite 拆分：JSONL 唯一真相 + 索引（移除 `--session-backend` fail-loud） |
+| M30 | 一等提供商：gemini（原生）/ bedrock（Converse）/ 雙分派 |
+| M31 | 模型/網絡面：統一窗口解析、probe-apply、零硬編碼目錄 |
+| M32 | 模型卡 + 6 檔思考強度 × 4 譯表 |
+| M33 | 壓縮四路吸收：錨定摘要 + 8 節提示、剪枝、計數完整、磁滯熔斷 |
+| M34 | 壓縮策略：per-model、attempt 統計、退化地板、until-success 斷路 |
+| M35 | TUI 研究：四路對比 + grok 藍本 + 界面 1:1 規格 |
+| M36 | `tui-core`：渲染層（零字節 idle 紅線證明） |
+| M37a/b | 全屏 1:1 + 交互面（真實鍵面/permission 矩陣） |
+| M38a/b | minimal print-once + markdown 檢查點 + `--attach` 遠程 |
+| M39 | 質量：12 屬性核對 + 交互矩陣 + HUD + retain + bench |
+| M40 | 盤點收割：`read_image`/todo 掛載/CLI 接線/斷路/主題旋鈕/mermaid/plan-review 適配 |
+| M41a/b | Wire v1/v1.1：history/list/cancel/Rewind 遠程 + 真 in-flight 中止 |
+| M42 | Rewind 引擎（快照/recorder/服務 + shadow 投影） |
+| M43 | Rewind UI 1:1（六相位 + 引擎隱藏 + 磁盤證明） |
+| M44 | 全局命令 `i-harness`/`ih`（裸命令默認 TUI——grok 式） |
+| M45 | 分發：esbuild 捆包 + NSIS 自包含安裝器 |
+| M46a/b/c | 提供商/模型管理 + Slash 註冊表 + 鍵表真理 + **鼠標全 parity** + 選區/時間線軌/粘貼源/workflow 面 |
+| M47 | 質量輪 2：鼠標/hover bench + live 探測 + line-viewer |
+
+---
+
+## 邊界與遠期
+
+- **明確不做**：PTC/run_code、plugin 代碼執行、默認提供商、dashboard/leader 多進程、grok 賬戶登錄面
+- **遠期隊列**：web/desktop 面（排在很後面）、mermaid PNG 評估、Rewind 冷啟動恢復、MCP OAuth 實線刷新、macOS 沙箱、R-B4 git undo、記憶（R-A10）
+- 每個「後端沒有」的功能在 TUI 一律**誠實降級**（toast + 記錄），不捏造
+
+---
+
+## 致謝與許可
+
+- 工程細節藍本：**grok-build（xai-grok-pager）**——界面 1:1 複刻與工程屬性（我們讀其源碼並實跑驗證；**配方/黑盒觀察均記錄於 `docs/research/`**）
+- 提供商/模型界面機制參考：**cc-custom**（其 `providers.json` v2 形狀 + 三步嚮導；我們改為 refs 存儲）
+- 體系參考：**deepseek-harness（dsh）**（事件驅動/審計鏈）/ **codex**（編譯架構）/ **opencode / cc-switch**（模型發現候選鏈）
+- 本項目 MIT 許可——詳見 `LICENSE`。
+
+---
+
+*English technical README: [`README.en.md`](README.en.md)（同一項目英文版——含原始開發狀態詳表與已知瑕疵實錄）。*
