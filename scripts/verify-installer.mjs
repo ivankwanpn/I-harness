@@ -43,6 +43,7 @@ const testExe = join(buildDir, `I-harness-Setup-${APP_VERSION}-test.exe`)
 const normalExe = join(buildDir, `I-harness-Setup-${APP_VERSION}.exe`)
 
 const installDir = join(tmpdir(), `i-harness-verify-${Date.now()}`)
+const commandProcessor = process.env.ComSpec ?? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe")
 
 const results = []
 function assert(name, cond, detail = "") {
@@ -91,7 +92,7 @@ function runLauncherCmd(relPath, args, timeoutMs = 60_000) {
   const abs = join(installDir, relPath)
   const cmdline = `"${abs}" ${args.join(" ")}`
   return new Promise((resolved) => {
-    const child = spawn("cmd.exe", ["/d", "/c", cmdline], {
+    const child = spawn(commandProcessor, ["/d", "/c", cmdline], {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
       windowsVerbatimArguments: true,
