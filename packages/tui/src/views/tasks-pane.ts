@@ -107,8 +107,27 @@ export function renderTasksPane(
     }
 
     if (row.right !== undefined && rightW > 0) {
-      const rs = row.rightStyle === "accent-user" ? view.color(palette.accentUser) : view.color(palette.gray)
-      view.text(limitX - rightW + 1, y, row.right, rs, limitX)
+      // M46b G1: the [✗]/[↗] action button — its own hit area; the hover
+      // paints a bgHover button cell + the accent glyph (G2's click router
+      // uses the same rect via hitAt).
+      const btnX = limitX - rightW + 1
+      const actHovered = view.hit != null && view.hit(
+        { x: btnX, y, w: rightW - 1, h: 1 },
+        `tasks-act-${offset + i}`,
+        "tasks-action",
+      )
+      if (actHovered) {
+        for (let bx = btnX; bx < limitX; bx++) {
+          view.cell(bx, y, { text: " ", style: { bg: hexToRgbLocal(palette.bgHover) }, width: 1, continuation: false })
+        }
+        const rs = row.rightStyle === "accent-user"
+          ? view.color(palette.accentUser)
+          : view.color(palette.grayBright)
+        view.text(btnX, y, row.right, { ...rs, bold: true }, limitX)
+      } else {
+        const rs = row.rightStyle === "accent-user" ? view.color(palette.accentUser) : view.color(palette.gray)
+        view.text(btnX, y, row.right, rs, limitX)
+      }
     }
     if (arrow !== undefined) view.text(limitX - 1, y, arrow, view.color(palette.grayDim), limitX)
   }
@@ -167,4 +186,14 @@ function clipToWidth(s: string, width: number): string {
     w += cw
   }
   return out
+}
+
+/** Palette hex → RGB (the M46b G1 action-button hover fill). */
+function hexToRgbLocal(hex: string): NonNullable<Style["bg"]> {
+  const v = hex.startsWith("#") ? hex.slice(1) : hex
+  return {
+    r: parseInt(v.slice(0, 2), 16),
+    g: parseInt(v.slice(2, 4), 16),
+    b: parseInt(v.slice(4, 6), 16),
+  }
 }

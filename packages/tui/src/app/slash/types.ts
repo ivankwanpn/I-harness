@@ -14,6 +14,9 @@ export type PanelKind =
   | "personas" | "config-agents" | "workflow"
   | "usage" | "session-info" | "goal" | "tutorial" | "jump" | "doctor"
   | "favorites" | "cheatsheet"
+  // M46b G2 (mouse click semantics): the plan status-chip click → the
+  // view-plan panel (same rows as /plan //view-plan).
+  | "plan"
 
 export interface SlashPanelRow {
   /** Primary text (the row body). */
@@ -111,6 +114,10 @@ export interface SlashContext {
   g1Modal?(input: string): boolean
   /** /effort — the settings reasoningEffort surface (G1 provider store). */
   effort?(level: string): void
+  /** M46b G1: the mouse-reporting-toggle feature gate (settings knob / env
+   * forced) — true exposes /toggle-mouse-reporting (visible + executable);
+   * false keeps it hidden and inert. */
+  mouseReportingToggle?: boolean
   // ---- tools
   copyBlock(): void
   editPromptInEditor(): void

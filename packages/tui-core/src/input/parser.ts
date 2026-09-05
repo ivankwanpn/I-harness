@@ -44,6 +44,14 @@ export type InputEvent =
       button: "left" | "middle" | "right" | "wheel-up" | "wheel-down"
       drag: boolean
       mods: { ctrl: boolean; shift: boolean; alt: boolean }
+      // M46b G2 (mouse click semantics): press vs release is otherwise
+      // INDISTINGUISHABLE on the wire (SGR press `<b;x;yM` and release
+      // `<b;x;ym` share the button/drag fields) — the app's click state
+      // machine (down/up) needs the bit. Additive: pre-M46b consumers
+      // ignore it.
+      released: boolean
+      /** No-button movement report (SGR b==3) — hover motions (M46b G1). */
+      motion: boolean
     }
   | { type: "focus"; gained: boolean }
   | { type: "unknown"; bytes: number[] }
@@ -527,8 +535,14 @@ export class InputParser {
       x: Number.isFinite(x) ? x : 0,
       y: Number.isFinite(y) ? y : 0,
       button,
-      drag: !released && (b & 32) !== 0,
+      drag: !released && (b & 32) !== 0 && (b & 3) !== 3,
       mods: { ctrl: (b & 16) !== 0, shift: (b & 4) !== 0, alt: (b & 8) !== 0 },
+      // M46b G2: the release bit is what separates press from release
+      // (identical button/drag fields otherwise). M46b G1: b==3 (no button)
+      // press reports are hover MOTION, not drags (button-holding drags carry
+      // a button field with the 32 motion bit).
+      released,
+      motion: !released && (b & 3) === 3,
     }
   }
 

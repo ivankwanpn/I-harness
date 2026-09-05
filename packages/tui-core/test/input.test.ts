@@ -161,28 +161,33 @@ describe("InputParser — paste / mouse / focus", () => {
   it("decodes SGR mouse press/release/wheel/drag", () => {
     const p = new InputParser()
     const a = p.push(bytes("\x1b[<0;10;5M"))
-    expect(a[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    expect(a[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: false, motion: false })
     const b = p.push(bytes("\x1b[<0;10;5m"))
-    expect(b[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    // release: same button/drag fields as the press — `released` is the divider.
+    expect(b[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: true, motion: false })
     const c = p.push(bytes("\x1b[<64;10;5M"))
-    expect(c[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "wheel-up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    expect(c[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "wheel-up", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: false, motion: false })
     const d = p.push(bytes("\x1b[<65;10;5M"))
-    expect(d[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "wheel-down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
-    const e = p.push(bytes("\x1b[<32;10;5M")) // motion
+    expect(d[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "wheel-down", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: false, motion: false })
+    const e = p.push(bytes("\x1b[<32;10;5M")) // motion (button held)
     expect((e[0] as { drag: boolean }).drag).toBe(true)
+    expect((e[0] as { released: boolean }).released).toBe(false)
+    // hover motion — no button (b==3, M46b G1 Moved decode).
+    const h = p.push(bytes("\x1b[<3;10;5M"))
+    expect(h[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: false, motion: true })
   })
 
   it("decodes 1015 (urxvt) mouse: b;x;y without `<`, button field +32 (M40 G2)", () => {
     const p = new InputParser()
     // left press = 0+32; wheel-up = 64+32=96; wheel-down = 65+32=97; motion = 32+32
     const press = p.push(bytes("\x1b[32;10;5M"))
-    expect(press[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    expect(press[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: false, motion: false })
     const rel = p.push(bytes("\x1b[32;10;5m"))
-    expect(rel[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    expect(rel[0]).toEqual({ type: "mouse", x: 10, y: 5, button: "left", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: true, motion: false })
     const wheelUp = p.push(bytes("\x1b[96;4;7M"))
-    expect(wheelUp[0]).toEqual({ type: "mouse", x: 4, y: 7, button: "wheel-up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    expect(wheelUp[0]).toEqual({ type: "mouse", x: 4, y: 7, button: "wheel-up", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: false, motion: false })
     const wheelDown = p.push(bytes("\x1b[97;4;7M"))
-    expect(wheelDown[0]).toEqual({ type: "mouse", x: 4, y: 7, button: "wheel-down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    expect(wheelDown[0]).toEqual({ type: "mouse", x: 4, y: 7, button: "wheel-down", drag: false, mods: { ctrl: false, shift: false, alt: false }, released: false, motion: false })
     const motion = p.push(bytes("\x1b[64;10;5M"))
     expect((motion[0] as { drag: boolean }).drag).toBe(true)
     // single-parameter CSI M (Delete Line) is NOT hijacked by the 1015 branch

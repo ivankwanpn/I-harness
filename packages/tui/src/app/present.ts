@@ -11,6 +11,9 @@ import { layoutAgent, SCROLLBACK_PAD_W, SCROLLBACK_RAIL_W } from "../views/agent
 import type { AgentViewState, PaneState, Rect, Style, ViewDraw } from "../views/agent.ts"
 import { renderStatus, strWidth } from "../views/status.ts"
 import type { StatusState } from "../views/status.ts"
+// M46b G1: the HitArea engine + the timestamp hover swap formatter.
+import { HoverEngine } from "./hover.ts"
+import { formatTimestampDetail } from "../scrollback/layout.ts"
 import { renderTurnStatus } from "../views/turn-status.ts"
 import type { TurnState } from "../views/turn-status.ts"
 import { renderPrompt } from "../views/prompt.ts"
@@ -97,6 +100,38 @@ export interface TuiAppState {
   /** Open light panel (skills/mcps/hooks/plugins/personas/usage/... — the
    * generic row-list box above the prompt). */
   lightPanel?: LightPanelState
+  // ---- M46b G1 (mouse hover machinery). Optional: absent/`enabled:false`
+  // every mouse visual is skipped (zero cost — the no-mouse host).
+  /** The hover state: engine + enabled gate + the settled hovered id set
+   * (the views' visuals hang off `app.mouse.hovered` / the engine's hit()).
+   * The loop constructs it; `enabled` gates the WHOLE mouse path (capture →
+   * hover engine + scroll stream). */
+  mouse?: {
+    enabled: boolean
+    /** Last Moved coordinate in APP space (loop tracks; present settles). */
+    last: { col: number; row: number }
+    /** The settled hovered hit-area ids (present mirrors the engine's set
+     * every frame — external consumers/tests read it without touching the
+     * engine). */
+    hovered: Set<string>
+    /** The HitArea engine (views register rects via beginFrame/addArea/hit). */
+    engine: HoverEngine
+  }
+  // ---- M46b G2 (mouse click semantics) — additive state the mouse router
+  // drives; no renderer reads these yet (the selection box/flash painting is
+  // a harmonization concern), the fields are the app-state contract the click
+  // tests assert against. G1's settings knob surface writes keepTextSelection.
+  /** Selection flash expiry (ms epoch): while `now < value` the last
+   * drag-selection is in its flash phase; the router clears it on the next
+   * frame. */
+  selectionFlashUntil?: number
+  /** keep_text_selection knob values (G1 settings): flash (default — flash
+   * 150ms then drop), hold (persists until a new click), word_select (1/2/3
+   * click semantics + immediate copy). */
+  keepTextSelection?: "flash" | "hold" | "word_select"
+  /** Prompt textarea drag selection (char offsets) — copy-on-up; undefined =
+   * no active range. */
+  promptSelect?: { a: number; b: number }
 }
 
 /** The active dropdown 1: kind + height (layoutAgent places the rect above
@@ -144,6 +179,20 @@ export interface OverlaySeam {
   act?(action: AppAction): void
   /** Freeform capture (permission reject row / question `z` row). */
   freeform?: OverlayFreeform
+  // M46b G2 (mouse click semantics): the interactive ROW y-coordinates for the
+  // prompt-slot rect (in content order) — the binder owns the renderer's own
+  // layout walk (it holds the surface/state the drawer replays), so the mouse
+  // router never re-implements modal packing. Absent → the modal is not
+  // clickable (rows unknown).
+  rowYs?(ctx: Rect): number[]
+  /** Question freeform tail row y (click → focus the freeform input). */
+  freeformY?(ctx: Rect): number | undefined
+  /** Move the interactive cursor to a row (mouse single-click — the binder
+   * owns the state; absent → the single-click cursor move is a no-op). */
+  setCursor?(index: number): void
+  /** Question marker (TRUE = checkbox [ ]/[x] multi-select — the mouse layer's
+   * single-click toggle vs single-select-cursor rule). */
+  multi?: boolean
 }
 
 // ------------------------------------------------------------------ palette → Style
@@ -301,11 +350,15 @@ export function rightAlign(
 
 // ------------------------------------------------------------------ ViewDraw
 
-/** The ViewDraw factory: palette quantization (`cap`) + the token→Style map. */
+/** The ViewDraw factory: palette quantization (`cap`) + the token→Style map.
+ * `engine` (M46b G1): when present, `hit()` registers the area (beginFrame/
+ * addArea are the loop's-frame slot) and returns the settled-hovered flag —
+ * the view's hover-visual switch. Absent → hit() is a no-op (false). */
 export function makeDraw(
   buf: Renderer["buffer"],
   palette: Palette,
   cap?: TerminalCapabilityContext,
+  engine?: HoverEngine,
 ): ViewDraw {
   const resolve = (style: TextStyle | Style): Style => {
     if (typeof style === "string") return styleFor(style, palette, cap)
@@ -329,6 +382,9 @@ export function makeDraw(
     },
     cell(x, y, cell) {
       buf.put(x, y, cell)
+    },
+    hit(rect, id, label) {
+      return engine !== undefined ? engine.hit(rect, id, label) : false
     },
   }
 }
@@ -394,6 +450,15 @@ function drawScrollback(
   const textStart = contentStart + 1
   const contentEnd = rect.x + rect.w - SCROLLBACK_PAD_W // exclusive
 
+  // M46b G1: the hover row visual — rows with a markdown/code background get a
+  // BORDER instead (painting over md_code_bg would destroy the code block's
+  // own background); everything else gets the bg blend + inset band.
+  const mouseOn = app.mouse?.enabled === true
+  const hoverBgRaw = hexToRgbLocal(palette.bgHover)
+  const hoverBg = cap !== undefined ? quantizeColor(hoverBgRaw, cap, true) : hoverBgRaw
+  const isMarkdownLine = (line: typeof lines[number]): boolean =>
+    line.runs.some((r) => r.codeBg === true || r.style.startsWith("md-"))
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
     const y = rect.y + i
@@ -403,6 +468,20 @@ function drawScrollback(
     // rows at/after the anchor line — rail, bullet, runs and timestamp alike
     // (a "row blend", not a text-only recolor).
     const dimmed = app.dimFrom !== undefined && off + i >= app.dimFrom
+    // M46b G1: register the row's hit area + settle the hover flag (stable id
+    // per DISPLAY line — keeps the in/out transitions across frames).
+    const rowHovered = mouseOn && view.hit!(
+      { x: contentStart, y, w: contentEnd - contentStart, h: 1 },
+      `row-${off + i}`,
+      "scrollback-row",
+    )
+    // Row-band fill BEFORE the text cells (the text overlays carry the same bg
+    // so the blend survives the put).
+    if (rowHovered && !isMarkdownLine(line)) {
+      for (let fx = contentStart; fx < contentEnd && fx < buf.width; fx++) {
+        view.cell(fx, y, { text: " ", style: { bg: hoverBg }, width: 1, continuation: false })
+      }
+    }
     const railStyle = view.color(railColorOf(line.runs, palette))
     if (inverted) railStyle.invert = true
     view.cell(rect.x, y, {
@@ -422,8 +501,18 @@ function drawScrollback(
       })
     }
 
+    // Timestamp: hover swaps `%H:%M:%S | %b %d` (the raw epoch rides the line).
     const ts = line.timestamp
-    const tsW = ts !== undefined ? strWidth(ts) : 0
+    const tsDetail = rowHovered && line.timestampTs !== undefined
+      ? formatTimestampDetail(line.timestampTs)
+      : undefined
+    const tsText = tsDetail ?? ts
+    // A thin ts hit area (the right-reserved column) — hovered = the swap.
+    const tsWBase = ts !== undefined ? strWidth(ts) : 0
+    if (tsWBase > 0 && mouseOn) {
+      view.hit!({ x: contentEnd - tsWBase, y, w: tsWBase, h: 1 }, `ts-${off + i}`, "timestamp")
+    }
+    const tsW = tsText !== undefined ? strWidth(tsText) : tsWBase
     const clip = contentEnd - tsW
     const yStyle = view.color(palette.grayDim)
     let rx = textStart
@@ -439,13 +528,29 @@ function drawScrollback(
           : dimmed
             ? styleFor(run.style, palette, cap, false)
             : run.style
-      const st = dimmed ? dimTowardBg(resolved, palette, cap) : resolved
+      const base = dimmed ? dimTowardBg(resolved, palette, cap) : resolved
+      // M46b G1 hover-blend: `base` may still be an unresolved TextStyle name
+      // (plain runs) — resolve before the spread (a string is not spreadable).
+      const baseObj: Style = typeof base === "string" ? styleFor(base, palette, cap) : base
+      const st = rowHovered && !isMarkdownLine(line)
+        ? { ...baseObj, bg: hoverBg }
+        : base
       rx = view.text(rx, y, run.text, st, Math.max(textStart, clip))
     }
-    if (tsW > 0 && ts !== undefined) {
+    // Markdown-hover border: the LEFT pad column wears a raised border cell
+    // (markdown rows are exempt from the bg blend — the border reads instead).
+    if (rowHovered && isMarkdownLine(line)) {
+      view.cell(contentStart - 1, y, {
+        text: "│",
+        style: { fg: hoverBg, bg: hoverBg, bold: true },
+        width: 1, continuation: false,
+      })
+    }
+    if (tsW > 0 && tsText !== undefined) {
       const tsStyle = { ...yStyle }
       if (inverted) tsStyle.invert = true
-      rightAlign(buf, contentEnd - 1, y, ts, dimmed ? dimTowardBg(tsStyle, palette, cap) : tsStyle)
+      if (rowHovered && tsDetail !== undefined && !isMarkdownLine(line)) tsStyle.bg = hoverBg
+      rightAlign(buf, contentEnd - 1, y, tsText, dimmed ? dimTowardBg(tsStyle, palette, cap) : tsStyle)
     }
   }
 }
@@ -522,7 +627,13 @@ export function present(
   }
 
   buf.clear()
-  const view = makeDraw(buf, palette, cap)
+  // M46b G1: the hover engine frame slot — views register rects while drawing
+  // (view.hit); the engine settles the hovered set at the END of this frame
+  // with the last pointer position (the loop tracks the last Moved). No
+  // per-frame pump: an unchanged hover set repaints zero bytes (the diff).
+  const mouseEngine = app.mouse?.enabled === true ? app.mouse.engine : undefined
+  if (mouseEngine !== undefined) mouseEngine.beginFrame()
+  const view = makeDraw(buf, palette, cap, mouseEngine)
   const area = { cols: buf.width, rows: buf.height }
 
   // Welcome screen (spec §2a) — the hero replaces the agent layout entirely.
@@ -530,6 +641,7 @@ export function present(
     if (app.welcome !== undefined && app.welcome.menus.length > 0) {
       renderWelcome({ x: 0, y: 0, w: area.cols, h: area.rows }, app.welcome, view, palette, glyphs)
     }
+    settleHover(app, mouseEngine)
     renderer.commit()
     return { dirty: !renderer.sameFrame() }
   }
@@ -599,6 +711,20 @@ export function present(
   }
   renderToasts(buf, app.toasts, { x: 0, y: 0, w: area.cols, h: area.rows }, view, palette)
 
+  // M46b G1: settle this frame's hovered set (present() calls update with the
+  // last mouse col/row — the loop only tracks the last Moved) + mirror it into
+  // app.mouse.hovered (the state surface the visuals/tests read).
+  settleHover(app, mouseEngine)
+
   renderer.commit()
   return { dirty: !renderer.sameFrame() }
+}
+
+/** M46b G1: the one-per-frame engine settle — updates the hovered set against
+ * the areas registered by this frame's draws and mirrors it into the state. */
+function settleHover(app: TuiAppState, engine: HoverEngine | undefined): void {
+  if (engine === undefined || app.mouse === undefined) return
+  const last = app.mouse.last
+  engine.update(last.col, last.row)
+  app.mouse.hovered = new Set(engine.hoveredSet())
 }

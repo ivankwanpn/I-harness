@@ -57,6 +57,12 @@ export interface ViewDraw {
   color(hex: string, extra?: { bold?: boolean; dim?: boolean }): Style
   /** Raw cell access (accent rails, bullets, search inversion). */
   cell(x: number, y: number, cell: Cell): void
+  /** M46b G1 (hover machinery): register a hit area for the rect the view is
+   * drawing and return whether the pointer is over it (the settled hovered
+   * flag — the view styles its visual from the return value). A view may call
+   * it anywhere while drawing; the engine batches rects per frame (the loop
+   * owns the engine; absent → false, zero cost). */
+  hit?(rect: Rect, id: string, label?: string): boolean
 }
 
 /** The slice of the app state inside layoutAgent's frame of reference. */
@@ -86,6 +92,10 @@ export interface PaneState {
   tasks?: TaskGroup[]
   queue?: QueueRow[]
   btw?: BtwState
+  /** M46b G2 (mouse click semantics): todo row clicked/selected (index into
+   * `todo`) — state-only for now (the pane's row-selection visual is a
+   * harmonization concern). */
+  todoSelect?: number
 }
 
 export interface AgentLayout {

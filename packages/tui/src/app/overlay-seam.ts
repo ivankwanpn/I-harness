@@ -44,6 +44,70 @@ import type { CancelTurnState } from "../views/cancel-turn.ts"
 import { CANCEL_OPTIONS, renderCancelTurn } from "../views/cancel-turn.ts"
 import type { RewindState } from "../views/rewind.ts"
 import { filesDisabled, renderRewind } from "../views/rewind.ts"
+import { wrapPrompt } from "../views/prompt.ts"
+
+// ---- M46b G2 (mouse click semantics): row-layout replay. The renderers pack
+// rows title → detail → gap → options → footer; the click layer needs the
+// exact y of each interactive row, so these mirrors the SAME arithmetic (they
+// live here next to the binders that own the surface/state the drawers replay
+// — the mouse router never re-implements modal packing). Kept in lockstep with
+// renderPermission/renderQuestion/renderCancelTurn.
+
+/** Permission option-row ys (content order, mirror of renderPermission). */
+function permissionRowYs(ctx: Rect, surf: PermissionSurface): number[] {
+  const y1 = ctx.y + ctx.h - 1
+  const rows = permissionRowCount(surf)
+  const footerH = surf.scopes.length > 1 ? 1 : 0
+  let y = ctx.y + 1
+  const detailMax = Math.max(0, y1 - y - rows - footerH - 1)
+  if (surf.detail !== undefined && surf.detail.length > 0 && detailMax > 0) {
+    const n = wrapPrompt(surf.detail, Math.max(1, ctx.w - 3)).length
+    y += Math.min(n, detailMax)
+  }
+  if (y < y1 - rows - footerH) y++
+  const out: number[] = []
+  for (let i = 0; i < rows; i++) {
+    if (y > y1 - footerH) break
+    out.push(y)
+    y++
+  }
+  return out
+}
+
+/** Question option-row ys (+ freeform tail) — mirror of renderQuestion. */
+function questionRowYs(ctx: Rect, q: QuestionQuestion): { ys: number[]; freeformY: number | undefined } {
+  const y0 = ctx.y
+  const y1 = ctx.y + ctx.h - 1
+  const footerH = 1
+  const freeformH = q.freeform ? 1 : 0
+  let y = y0 + 1
+  const descMax = Math.max(0, y1 - y - q.options.length - freeformH - footerH - 1)
+  if (q.description !== undefined && q.description.length > 0 && descMax > 0) {
+    const n = wrapPrompt(q.description, Math.max(1, ctx.w - 3)).length
+    y += Math.min(Math.min(5, n), descMax)
+  }
+  if (y < y1 - q.options.length - freeformH - footerH) y++
+  const ys: number[] = []
+  for (let i = 0; i < q.options.length; i++) {
+    if (y > y1 - freeformH - footerH) break
+    ys.push(y)
+    y++
+  }
+  return { ys, freeformY: q.freeform && y1 - footerH >= y0 ? y1 - footerH : undefined }
+}
+
+/** Cancel-turn option-row ys — mirror of renderCancelTurn. */
+function cancelTurnRowYs(ctx: Rect): number[] {
+  const y1 = ctx.y + ctx.h - 1
+  let y = ctx.y + 2
+  const out: number[] = []
+  for (let i = 0; i < CANCEL_OPTIONS.length; i++) {
+    if (y >= y1) break
+    out.push(y)
+    y++
+  }
+  return out
+}
 
 // ------------------------------------------------------------------ share
 
@@ -53,14 +117,31 @@ type SeamDraw = (ctx: Rect, view: ViewDraw, palette: Palette, glyphs: GlyphSet) 
 
 export type SeamKind = OverlaySeam["kind"]
 
-/** Baseline OverlaySeam composition helper (a binder's output shape). */
+/** Baseline OverlaySeam composition helper (a binder's output shape). The
+ * last (M46b G2) mouse extras are optional: the click-row layout replay the
+ * binders own (their surfaces are the only ones that know the row packing). */
 export function overlaySeam(
   kind: SeamKind,
   draw: SeamDraw,
   act?: (action: AppAction) => void,
   freeform?: OverlayFreeform,
+  mouse?: {
+    rowYs?: (ctx: Rect) => number[]
+    freeformY?: (ctx: Rect) => number | undefined
+    setCursor?: (index: number) => void
+    multi?: boolean
+  },
 ): OverlaySeam {
-  return { kind, draw, ...(act === undefined ? {} : { act }), ...(freeform === undefined ? {} : { freeform }) }
+  return {
+    kind,
+    draw,
+    ...(act === undefined ? {} : { act }),
+    ...(freeform === undefined ? {} : { freeform }),
+    ...(mouse?.rowYs === undefined ? {} : { rowYs: mouse.rowYs }),
+    ...(mouse?.freeformY === undefined ? {} : { freeformY: mouse.freeformY }),
+    ...(mouse?.setCursor === undefined ? {} : { setCursor: mouse.setCursor }),
+    ...(mouse?.multi === undefined ? {} : { multi: mouse.multi }),
+  }
 }
 
 // ------------------------------------------------------------------ permission
@@ -167,7 +248,11 @@ export function bindPermissionOverlay(
     backspace: () => { state.freeformText = state.freeformText.slice(0, -1) },
     submit: () => decide(freeformRow), // decide() carries feedback
     abort: () => close(),
-  } : undefined)
+  } : undefined, {
+    // M46b G2 (mouse click semantics): row layout replay (see the helper).
+    rowYs: (ctx) => permissionRowYs(ctx, surf),
+    setCursor: (i) => { state.cursor = Math.max(0, Math.min(permissionRowCount(surf) - 1, i)) },
+  })
 }
 
 // ------------------------------------------------------------------ question
@@ -263,7 +348,13 @@ export function bindQuestionOverlay(
     backspace: () => { state.freeformText = state.freeformText.slice(0, -1) },
     submit: () => answer("freeform", undefined, state.freeformText),
     abort: () => { state.freeformFocused = false },
-  } : undefined)
+  } : undefined, {
+    // M46b G2 (mouse click semantics): row layout replay (see the helper).
+    rowYs: (ctx) => questionRowYs(ctx, q).ys,
+    freeformY: (ctx) => questionRowYs(ctx, q).freeformY,
+    setCursor: (i) => { state.cursor = Math.max(0, Math.min(Math.max(0, q.options.length - 1), i)) },
+    multi: q.multi,
+  })
 }
 
 // ------------------------------------------------------------------ cancel-turn
@@ -308,6 +399,10 @@ export function bindCancelTurnOverlay(
       case "overlay-dismiss": close(); break // Esc — keep running (the host records)
       default: break
     }
+  }, undefined, {
+    // M46b G2 (mouse click semantics): row layout replay (see the helper).
+    rowYs: (ctx) => cancelTurnRowYs(ctx),
+    setCursor: (i) => { state.cursor = Math.max(0, Math.min(CANCEL_OPTIONS.length - 1, i)) },
   })
 }
 
