@@ -302,11 +302,15 @@ describe("embedded backend", () => {
     expect(rows).toHaveLength(1)
     const id = rows[0]!.id
     await first.open(id)
+    await first.submit("distinct history")
     await first.close()
     const second = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff", storeRoot: root, resumeSessionId: id })
     await second.open(id)
     const restored = await second.replay(-1)
+    const resumedRows = await second.listSessions()
+    expect(resumedRows[0]).toMatchObject({ id, turnCount: 2 })
     expect(restored.filter((e) => e.type === "user" && (e as { text: string }).text === "kickoff")).toHaveLength(1)
+    expect(restored.some((e) => e.type === "user" && (e as { text: string }).text === "distinct history")).toBe(true)
     await second.close()
   })
 
@@ -322,7 +326,19 @@ describe("embedded backend", () => {
     const first = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: id })
     const secondCoordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
     await expect(defaultEmbeddedFactory({ workspace: tmp(), prompt: "", coordinator: secondCoordinator, resumeSessionId: id })).rejects.toThrow()
+    await expect(first.submit("original owner remains usable")).resolves.toBeUndefined()
     await first.close(); await secondCoordinator.close()
+  })
+
+  it("durable close propagates flush failure and still closes an owned coordinator", async () => {
+    const root = tmp()
+    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, coordinator })
+    const originalFlush = coordinator.flush
+    coordinator.flush = async () => { throw new Error("flush failed") }
+    await expect(backend.close()).rejects.toThrow("flush failed")
+    coordinator.flush = originalFlush
+    await coordinator.close()
   })
 
 })
