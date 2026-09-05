@@ -78,6 +78,15 @@
 - 已知問題實錄：README quirks（vitest worker flake 已 M31 修復——web-host forks pool）
 - 多輪執行模式：worktree 隔離 + 雙組平行 + 調和審查 + 可追溯的執行者報告
 
+## 八&frac34;½、Provider/模型 TUI 管理 + Slash 註冊表（M46a 新增）
+
+- **Provider**：settings `tui.providers`（版本化、`apiKeyRef` only——明文絕不進 settings；mask 顯示）＋ `discoverModels`（`@i-harness/provider` 的 `probeCandidatePaths` 進程復用；記憶體 memo；CI 注入式）＋ 三步嚮導/菜單/刪除（cc-custom 字形面）。
+- **模型**：`/model` ArgPicker（目錄 + `(no override)`）+ `/effort`（settings.llm.defaultModel.reasoningEffort）+ factory 鏈 `--model` > settings > mock（三級缺 → mock 今日行為）。
+- **Settings modal**：新版 8 分類（Appearance/Mouse 骨架/Models/Agent&Approval/Session——真旋鈕 + 誠實佔位）。
+- **Slash**：CommandRegistry（grok 形狀，visible/門控）45 可見 + 21 跳過清單（後端支持優先原則）；輕量面板 14（skills/mcps(配置源)/hooks/plugins/personas→builtinRoles/config-agents/workflow/usage/session-info/goal/tutorial/jump/doctor(啟動探測報告)）。
+- **鍵表真理**（新版為準）：Ctrl+S stash + Alt+S、F3 sessions、Ctrl+G 模式拆分（全屏 tasks / minimal $EDITOR）、Ctrl+B 送後台（jobs 未接——toast 誠實 (M46b)）、Ctrl+R 槽位（m46b 門控）。
+- 誠實縫：compact/rename = BackendClient 可選成員（assembly/後臺裝配）；always-approve 運行時線縫 = m46b。
+
 ## 八&frac34;、Rewind（M42 新增——原「跳過」變「有後端」）
 
 - **後端**：`packages/rewind`——RewindStore（`rewind/<sid>/points.jsonl` + content-addressed blobs 原子寫）、RewindRecorder（take-once per turn、turn/end finalize + afterHash）、RewindService（points/plan/execute——clean/conflict 三型惰性比對、unTracked 誠實、兩階段恢復）。
