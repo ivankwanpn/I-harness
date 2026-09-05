@@ -7,29 +7,13 @@
 // stream at 16 ms, and serves replay from the in-memory log with the service's
 // seq numbering as the resume cursor.
 //
-// What it is NOT (M37a seams — the caller must know):
+// What it is NOT (current M48 boundaries — the caller must know):
 //
-// 1. PERSISTENCE / SESSION LIST CANNOT BE MIRRORED READ-ONLY. The canonical
-//    apps/cli wiring composes `createSessionCoordinator(createJsonlBackend(
-//    storeRoot))` + loadMeta/modelBuilder/contextWindowFor around
-//    createSessionService, but @i-harness/session-persistence and
-//    @i-harness/session-persistence-jsonl are NOT dependencies of
-//    packages/tui (and adding them would touch package.json/lockfile, which
-//    this milestone forbids). Consequence:
-//      - `defaultEmbeddedFactory` is MOCK-ONLY: no coordinator, in-memory
-//        session, `storeRoot` is accepted and ignored (M38). A fresh session
-//        survives only for the process lifetime. `--model`/settings/
-//        credential wiring: TODO M38 (the `modelBuilder` seam below is the
-//        landing point; wire settings+credentials in apps/tui like
-//        apps/cli/src/web.ts buildModelFor).
-//      - `listSessions()` falls back to a single current-session stub row
-//        (contract allows it) unless the host supplies the coordinator-backed
-//        listing via EmbeddedOptions.listSessions (read-only seam; the type
-//        is local so no persistence dep is needed here).
-//      - `replay()` walks the LIVE in-memory session (service.assemblyFor →
-//        core-session.log). The in-memory array is bounded; acceptable M37a.
-//        Replay-from-disk (session restore across restarts) needs the
-//        coordinator load + assembly `session: seed` seam → M38.
+// 1. MODEL / CREDENTIAL POLICY IS STILL A HOST CONCERN. Durable persistence
+//    and resume are enabled when storeRoot/resumeSessionId are provided;
+//    settings and credential discovery remain owned by the application host.
+//    Without a store, the factory intentionally uses an ephemeral session.
+//    Rewind is exposed only for durable sessions with a rewind root.
 //
 // 2. CHUNK PIPE IN THE ENGINE IS ABSENT. core-agent appends ONLY
 //    assistant/message to the log (verified: no producer appends
