@@ -167,7 +167,7 @@ warning 軌：標題 **`"Subagents are still running. Stop them?"`**、gray `{N}
 
 **Permission**：`1`-`9` 選項；`Enter`；`j/k`；`←/→` 調範圍；`Ctrl+F` 展開 args；`Ctrl+O` always-approve；`Ctrl+C` 取消。**Question**：`1-9/a-f`、`z` 自由、`y` 複製、`Ctrl+F` 全屏、`Ctrl+Y` 關、`Esc` 返回、`Shift+X`/`Ctrl+C` 提交、`Tab` 切窗、`]/[` 上/下一問。**Rewind**：見 §3.9。**Cancel**：`1`-`4`/`Enter`/`Esc`。
 
-**鼠標**：滾輪 3 行/tick（VS 嵌入 15、iTerm2/wezterm/tmux 1）；Ctrl/Cmd+點開鏈接；左鍵首次選 entry、二次（<300ms）選詞/URL、三次選表格單元；拖拽選區 + 自動滾動 + 自動複製；scrollbar 拖；懸停一切；prompt 點擊/雙擊（paste chip 展開、viewer）；permission 雙擊觸發選項。
+**鼠標**：滾輪 3 行/tick（VS 嵌入 15、iTerm2/wezterm/tmux 1）；Ctrl/Cmd+點開鏈接；左鍵首次選 entry、二次（<300ms）選詞/URL、三次選表格單元；拖拽選區 + 自動滾動 + 自動複製；scrollbar 拖；懸停一切；prompt 點擊/雙擊（paste chip 展開、viewer）；permission 雙擊觸發選項。**（2026-09-05 標記 superseded：M46b 已實現——五模式捕獲 + 滾動流式（每品牌 ept/加速/taper/knobs）+ 懸停雙擊/拖拽/scrollbar/多擊 300ms 全語義——見 research 2026-09-05 delta + docs/superpowers/specs/2026-09-05-m46b-mouse-design.md + case-023。本行快速項（滾輪 3 行）已被流式化取代。）**
 
 ## 5. 主題（GrokNight 默認——精確 RGB）
 

@@ -87,6 +87,15 @@
 - **鍵表真理**（新版為準）：Ctrl+S stash + Alt+S、F3 sessions、Ctrl+G 模式拆分（全屏 tasks / minimal $EDITOR）、Ctrl+B 送後台（jobs 未接——toast 誠實 (M46b)）、Ctrl+R 槽位（m46b 門控）。
 - 誠實縫：compact/rename = BackendClient 可選成員（assembly/後臺裝配）；always-approve 運行時線縫 = m46b。
 
+## 八¾2、鼠標五分面（M46b 新增——grok 鼠標全 parity）
+
+- **捕獲/解析**：init 五模 `?1000h ?1002h ?1003h ?1015h ?1006h`（crossterm 順序）+ teardown 五模 `l` 全復位；解析器 Moved（無按鈕 `<3;x;yM` → `motion`）+ `released` 位（點擊 down/up 分隔）；`<32;+` 拖動、`<64/65` 滾輪。minimal 模式捕獲完全關（無 terminal——byte 流無 `?1000h`）。
+- **懸停（HitArea + dirty）**：視圖繪製時登記 rect+語義（`hit()`）；present 每幀 settle 一次——懸停集變了才重繪（**不裝 30fps 懸停泵**——性能紅線）。視覺：scrollback 行 bg blend（markdown 行改左欄邊框 `│`）、時間戳懸停擴展 `%H:%M:%S | %b %d`、status cwd chip 下劃線、dropdown/permission/question 行 hover 穿 bgVisual、tasks/queue 行、completion 等。
+- **點擊語義（G2，時序常量全在 mouse-consts.ts——唯 300ms 多擊窗**）**：scrollback 單擊=選+聚焦；雙擊（≤300同格）=折疊（組頭=整組；execute=excerpt 顯影；edit=`❙ 頭 (+N/-M)`；subagent=viewer 縫（缺→誠實 toast））；三擊=折疊+置頂；word_select 模式 1/2/3=行/詞URL（即複製）/段落；拖拽 ≥1 cell = wrap 感知顯示行選+邊緣 2-row band 自動滾動（1/2/3/5 行/tick）+ 鬆手自動複製（注入剪貼板層——唯一複製路徑）+ "Copied!" toast + 150ms flash（flash/hold/word_select 三模式；失 Up 恢復路徑仍複製）；scrollbar 列=鎖存+fraction 跳；permission 單擊=光標/雙擊（≤300 同 idx）即發（binder decide 複用）；question 單擊 toggle/雙擊=選+答；cancel-turn 點擊即發；status chips（cwd 複製/tasks 面板切換/context 300ms debounce/goal/plan）；面板（tasks 組頭折疊 [✗]/[↗]、queue [cancel]/[Send now]、todo 行選、dropdown 行選+接受+右欄比例跳）；Ctrl+點 armed→同格 Up 開鏈接（縫缺→誠實 toast）。
+- **滾動流式（G1——grok 引擎移植）**：80ms gap / 16ms cadence / 每品牌 ept（WindowsTerminal=3、iTerm2/Wez=1……）＋ wheel promote（首批 ≤12ms）＋ 觸控板辨識（均值 <30ms）＋ 2.5×/1.6× accel ＋ taper ＋ per-flush cap max(vp/2,6) ＋ sub-line carry。**已承認偏離**：grok 的 scroll clock 換成 loop 輸入泵——`push()` 即時 flush（凍結時鐘下仍可滾——確定性），`onTick()` 保留 cadence 供 drain 路徑。
+- **knobs**：settings **Mouse 類真 7 行**——`scroll_speed`（1-100→0.1×-6×，50=1×）`scroll_mode`（auto|wheel|trackpad）`scroll_lines`（1-10 覆蓋品牌表）`invert_scroll` `keep_text_selection`（flash|hold|word_select）`word_separators`（值展示）`mouse_reporting_toggle`（opt-in 默認 off；on → scrollback Ctrl+R = 切換捕獲實況——綁定+ slash 槽 M46a 已佔）；env `GROK_MOUSE_REPORTING_TOGGLE` 強制 on。
+- **PTY case-023**（80x24 單確定跑）：SGR 喂入真解析鏈——滾輪±1（case-018 數學）、懸停 bg-blend + ts swap/還原、單擊選區（引擎觀測）、雙擊折疊（`❙ (+6/-6)`）+ 異格雙擊展開、拖拽 4 行自動複製（**裁剪板 JSON 逐字**）+ "Copied!" toast、滾動條鎖存+比例跳、permission 雙擊即發（decision.json），writes=34；minimal 場景無捕獲（byte 流無 `?1000h` + region 文本正控）。
+
 ## 八&frac34;、Rewind（M42 新增——原「跳過」變「有後端」）
 
 - **後端**：`packages/rewind`——RewindStore（`rewind/<sid>/points.jsonl` + content-addressed blobs 原子寫）、RewindRecorder（take-once per turn、turn/end finalize + afterHash）、RewindService（points/plan/execute——clean/conflict 三型惰性比對、unTracked 誠實、兩階段恢復）。

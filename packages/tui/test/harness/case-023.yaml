@@ -1,0 +1,279 @@
+# M46b G3 (final): case-023 — the MOUSE MATRIX at REAL-PTY level (spec delta
+# Area 1 mouse — five-mode capture + hover + click semantics + scroll
+# streaming + knobs; TODO the mouse row in the UI spec §4 marked superseded).
+#
+# The host (host-023.ts, scene "023") drives the REAL app pipeline + the real
+# tui-core InputParser: the test writes SGR 1006 mouse sequences to the pty
+# master and the PRODUCTION path decodes them (parser → loop.onInput → G1
+# hover engine + scroll stream → G2 router).
+#
+# Scene (80x24, one deterministic run, frozen clock 44444): a scripted
+# two-turn stream — turn 1: user "hello", assistant "two lines\nthird line",
+# tool done "Run read data.txt" (execute, excerpt), tool done "Read notes.md"
+# (collapsed), Edit block EXPANDED with a 12-row diff (+6/-6); turn 2: user
+# "again", assistant "tail" — 28 display lines, ts ON from the start
+# (local-constructed epochs → the hover swap "18:46:35 | Sep 05" is
+# TZ-honest). The scroll STEP artifacts:
+#   - the settle: follow view (display top = line 16 — the engine's own
+#     tail pin);
+#   - the wheel: ONE event = ONE offset line (the case-018 math — ept=3,
+#     WindowsTerminal brand): offset 6→4 (clamped by the loop's scrollBy
+#     24-row page: max = lineCount - rows + 1 = 5), THEN the display jumps to
+#     the new offset (the follow-pin released);
+#   - wheel ×4 → the app offset 1 (the row-pin target for the clicks below).
+# Witnesses (host-side): engine selection → <dir>/selection.json +
+# "selection-changed" (the selection box painting is a harmonization concern;
+# the ENGINE set is the assertable truth); RECORDER clipboard →
+# <dir>/clipboard.json + "copied" (the injected-copy hard rule);
+# permission decision.json (host-013 parity: the seam built by the host).
+#
+# The SGR 1006 code notes (parser): <0;x;yM = left press, <0;x;ym = release,
+# <3;x;yM = no-button MOTION (hover), <32;x;yM = held-button DRAG motion
+# (b&32), <64;x;yM = wheel-up. Coordinates are 1-based terminal cells
+# (the loop subtracts 1 → 0-based app coords).
+# Byte budget: writes 34 = init(1) + 11 event frames + 3 hover frames +
+# 4 wheel frames + 1 click-down frame + 2 fold frames + 1 expand frame +
+# 6 drag frames + 2 scrollbar frames + 2 permission frames + teardown(1)
+# (frozen clock → anim-pump repaints are zero-byte; identical frames flush "").
+name: case-023-mouse-matrix
+host: test/harness/host-023.ts
+size: [80, 24]
+steps:
+  # ── settle: the two-turn scene (frame-11 = the follow tail view).
+  - await-marker: { name: scene-ready }
+  - await-marker: { name: events-seeded }
+  - await-marker: { name: frame-11 }
+  - await-quiescent: { ms: 300 }
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃   +a4"
+        - "  ┃   +a5"
+        - "  ┃   +a6"
+        - "  ┃   -b1"
+        - "  ┃   -b2"
+        - "  ┃   -b3"
+        - "  ┃   -b4"
+        - "  ┃   -b5"
+        - "  ┃   -b6"
+        - "  ┃   ───"
+        - "  ┃   ❯ again                                                        6:46 PM"
+        - "  ┃   tail                                                           6:46 PM"
+        - ""
+      timeoutMs: 5000
+  # Baseline: the -b2 diff row (a tool-body row, non-markdown) carries NO hover
+  # bg; the again row shows the SHORT ts form.
+  - assert-cell-colors:
+      cells:
+        - { row: 6, col: 7, text: "b" }
+      timeoutMs: 3000
+  # ── STEP 1a: HOVER — no-button motion <3;20;8M → the row band blends the
+  # bgHover (#2c2c2c) on the tool body row (the un-hovered neighbor rows keep
+  # no bg — implied: only the hovered row's cells carry the blend).
+  - write-pty:
+      data: "\x1b[<3;20;7M"
+  - assert-cell-colors:
+      cells:
+        - { row: 6, col: 7, bg: "#2c2c2c" }
+        - { row: 6, col: 8, bg: "#2c2c2c" }
+      timeoutMs: 4000
+  # ── STEP 1b: TIMESTAMP SWAP — hover the user row → its right-aligned ts
+  # reads the %H:%M:%S | %b %d detail form.
+  - write-pty:
+      data: "\x1b[<3;20;13M"
+  - wait-screen:
+      region: { startRow: 11 }
+      rows:
+        - "  ┃   ───"
+        - "  ┃   ❯ again                                              18:46:35 | Sep 05"
+        - "  ┃   tail                                                           6:46 PM"
+        - ""
+      timeoutMs: 5000
+  # ── STEP 1c: motion to an empty area (the pad column — no hit area) → the
+  # ts returns to the short form.
+  - write-pty:
+      data: "\x1b[<3;5;13M"
+  - wait-screen:
+      region: { startRow: 11 }
+      rows:
+        - "  ┃   ───"
+        - "  ┃   ❯ again                                                        6:46 PM"
+        - "  ┃   tail                                                           6:46 PM"
+        - ""
+      timeoutMs: 5000
+  # ── STEP 2: WHEEL — ONE wheel-up event (<64;…M) → one offset line, the
+  # follow-pin releases (case-018 math) — the display top jumps to the new
+  # offset (line 4: the Run read tool header).
+  - write-pty:
+      data: "\x1b[<64;40;12M"
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃  ◆ Run read data.txt                                             6:45 PM"
+        - "  ┃   data-1"
+        - "  ┃   data-2"
+        - "  ┃    …"
+        - "  ┃   data-4"
+        - "  ┃   data-5"
+        - "  ┃   data-6"
+        - "  ┃  ◆ Read notes.md                                                 6:45 PM"
+        - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
+        - "  ┃   +a1"
+        - "  ┃   +a2"
+        - "  ┃   +a3"
+        - "  ┃   +a4"
+      timeoutMs: 5000
+  # wheel ×3 more → offset 1 (the row-pin target). The pointer sits on the
+  # wheel cell (40,12) — the Read notes row wears its ts DETAIL (the row-band
+  # hover + swap, a second hover proof on the same motion commute).
+  - write-pty:
+      data: "\x1b[<64;40;12M\x1b[<64;40;12M\x1b[<64;40;12M"
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃   ❯ hello                                                        6:45 PM"
+        - "  ┃   two lines                                                      6:45 PM"
+        - "  ┃   third line"
+        - "  ┃  ◆ Run read data.txt                                             6:45 PM"
+        - "  ┃   data-1"
+        - "  ┃   data-2"
+        - "  ┃    …"
+        - "  ┃   data-4"
+        - "  ┃   data-5"
+        - "  ┃   data-6"
+        - "  ┃  ◆ Read notes.md                                       18:45:35 | Sep 05"
+        - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
+        - "  ┃   +a1"
+      timeoutMs: 5000
+  # ── STEP 3: SINGLE-CLICK SELECT — down+up on the same cell → the engine
+  # selection is the entry at the click line (witnessed via the host watcher).
+  - write-pty:
+      data: "\x1b[<0;30;10M\x1b[<0;30;10m"
+  - await-marker: { name: selection-changed }
+  - assert-file: { name: "selection.json", contains: "\"a\":8" }
+  - assert-file: { name: "selection.json", contains: "\"b\":8" }
+  # ── STEP 4: DOUBLE-CLICK FOLD — two down/up pairs at the SAME cell (ONE
+  # pty write — the pair beats the 300ms multi-click window by construction)
+  # on the Edit block header → the 12 diff rows collapse to the header only
+  # with the ❙ bullet + the (+6/-6) delta suffix (row-growth pins: the
+  # collapsed row is 1 display line; the diff rows are GONE).
+  - write-pty:
+      data: "\x1b[<0;30;14M\x1b[<0;30;14m\x1b[<0;30;14M\x1b[<0;30;14m"
+  - wait-screen:
+      region: { startRow: 12 }
+      rows:
+        - "  ┃  ◆ Read notes.md                                                 6:45 PM"
+        - "  ┃  ❙ Edit patch.txt (+6/-6)                              18:45:36 | Sep 05"
+        - "  ┃   ───"
+      timeoutMs: 5000
+  # ── STEP 4b: double-click a DIFFERENT cell on the same header row (the
+  # multi-click counter is per-cell — a fresh pair = a fresh double) → expand
+  # (the diff rows return).
+  - write-pty:
+      data: "\x1b[<0;33;14M\x1b[<0;33;14m\x1b[<0;33;14M\x1b[<0;33;14m"
+  - wait-screen:
+      region: { startRow: 12 }
+      rows:
+        - "  ┃  ◆ Read notes.md                                                 6:45 PM"
+        - "  ┃  ◆ Edit patch.txt                                      18:45:36 | Sep 05"
+        - "  ┃   +a1"
+      timeoutMs: 5000
+  # ── STEP 5: DRAG + AUTO-COPY — press → held-button motion (b&32) along 4
+  # rows → release: the selection spans the drag rows, the RECORDER clipboard
+  # holds the selected lines (the injected-copy hard rule), the "Copied!"
+  # toast is up (the frozen clock keeps it live) and the selection flash holds
+  # (the frozen clock never expires the 150ms highlight).
+  - write-pty:
+      data: "\x1b[<0;30;7M\x1b[<32;30;8M\x1b[<32;30;9M\x1b[<32;30;10M\x1b[<32;30;11M\x1b[<0;30;11m"
+  - await-marker: { name: copied }
+  - assert-file: { name: "clipboard.json", contains: "data-1\ndata-2" }
+  - assert-file: { name: "clipboard.json", contains: "\n …\ndata-4" }
+  - assert-file: { name: "clipboard.json", contains: "data-4\ndata-5" }
+  - await-quiescent: { ms: 300 }
+  - assert-file: { name: "selection.json", contains: "\"a\":5" }
+  - assert-file: { name: "selection.json", contains: "\"b\":9" }
+  - assert-cell-colors:
+      cells:
+        - { row: 23, col: 72, text: "Copied!" }
+        - { row: 23, col: 72, bg: "#141414" }
+      timeoutMs: 3000
+  # ── STEP 6: SCROLLBAR DRAG — the LAST scrollback column (x=78 1-based =
+  # the app cell 77 = rect.x + rect.w - 1): down = latch + fraction jump
+  # (offset 0 at the top row), dragged motion to the middle = proportional
+  # jump (frac 5/12 × max 4 → offset 2), up ends the latch.
+  - write-pty:
+      data: "\x1b[<0;78;3M"
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃   ───"
+        - "  ┃   ❯ hello                                                        6:45 PM"
+        - "  ┃   two lines                                                      6:45 PM"
+        - "  ┃   third line"
+        - "  ┃  ◆ Run read data.txt                                             6:45 PM"
+        - "  ┃   data-1"
+        - "  ┃   data-2"
+        - "  ┃    …"
+        - "  ┃   data-4"
+        - "  ┃   data-5"
+        - "  ┃   data-6"
+        - "  ┃  ◆ Read notes.md                                                 6:45 PM"
+        - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
+      timeoutMs: 5000
+  - write-pty:
+      data: "\x1b[<32;78;8M\x1b[<0;78;8m"
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃    …"
+        - "  ┃   data-4"
+        - "  ┃   data-5"
+        - "  ┃   data-6"
+        - "  ┃  ◆ Read notes.md                                                 6:45 PM"
+        - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
+        - "  ┃   +a1"
+        - "  ┃   +a2"
+        - "  ┃   +a3"
+        - "  ┃   +a4"
+        - "  ┃   +a5"
+        - "  ┃   +a6"
+        - "  ┃   -b1"
+      timeoutMs: 5000
+  # ── STEP 7: PERMISSION DOUBLE-FIRE — the host builds the modal through the
+  # production seam (marker req-overlay → overlay-p1 frame); a double-click
+  # (two pairs sent in ONE write) on the option row fires the decision
+  # (Always allow → approved) + the overlay closes.
+  - request-marker: { name: req-overlay }
+  - await-marker: { name: overlay-p1 }
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - "  ┃ echo hi"
+        - "  ┃ 1 (●) Always allow: command"
+        - "  ┃ 2 (○) Never allow: command"
+        - "  ┃ 3 (○) Yes, proceed"
+        - "  ┃ 4 (○) No, I trust it"
+        - "  ┃ 5 (○) No, reject (type to add feedback)"
+      timeoutMs: 8000
+  - write-pty:
+      data: "\x1b[<0;20;17M\x1b[<0;20;17m\x1b[<0;20;17M\x1b[<0;20;17m"
+  - await-marker: { name: answered }
+  - assert-file: { name: "decision.json", contains: "\"verdict\":\"always\"" }
+  - assert-file: { name: "decision.json", contains: "\"approved\":true" }
+  - assert-file: { name: "decision.json", contains: "\"surfaceId\":\"p1\"" }
+  - wait-screen:
+      region: { startRow: 15 }
+      rows:
+        - " ┃╭─────────────────────────────────────────────────────────────────untitled─╮"
+        - " ┃│❯ Build anything                                                          │"
+        - " ┃│                                                                          │"
+        - " ┃│                                                                          │"
+        - " ┃│                                                                          │"
+        - " ┃╰ mock-model───────────────────────────────────────────────────────────────╯"
+      timeoutMs: 8000
+  # ── close: glyph integrity + the byte budget + exit 0.
+  - assert-glyph-integrity: {}
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote }
+  - assert-byte-budget: { writes: 34 }
+  - wait-exit: { code: 0 }
