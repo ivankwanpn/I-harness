@@ -7,6 +7,7 @@
 //
 // Usage: node --import tsx apps/tui/src/index.ts [--prompt <text>]
 //                [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>]
+//                [--session-dir <dir>]
 //
 // M37a seams (see packages/tui/src/backend/embedded.ts module header):
 //   - the session store is MOCK-ONLY (in-memory, per-process); --resume is
@@ -63,6 +64,7 @@ export interface TuiFlags {
   model?: string
   yes: boolean
   resume?: string
+  sessionDir?: string
   /** M38b G2: attach to a REMOTE session — spawns `i-harness sdk` (the CLI's
    * stdio JSON-RPC server) and drives the session over the wire (the SDK
    * backend). Absent → the embedded (mock-first) backend. */
@@ -81,6 +83,7 @@ export function parseFlags(argv: string[]): TuiFlags {
       case "--model": flags.model = argv[++i]; break
       case "--yes": flags.yes = true; break
       case "--resume": flags.resume = argv[++i]; break
+      case "--session-dir": flags.sessionDir = argv[++i]; break
       case "--attach": flags.attach = argv[++i]; break
       case "--minimal": flags.mode = "minimal"; break
       case "--fullscreen": flags.mode = "fullscreen"; break
@@ -225,7 +228,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
       })
     : await defaultEmbeddedFactory({
         workspace,
-        prompt: flags.prompt ?? "",
+        prompt: flags.resume === undefined ? flags.prompt ?? "" : "",
+        ...(flags.sessionDir !== undefined ? { storeRoot: flags.sessionDir, rewindStoreRoot: flags.sessionDir } : {}),
+        ...(flags.resume !== undefined ? { resumeSessionId: flags.resume } : {}),
         forceMock: false,
         modelBuilder: createTuiModelBuilder({ store: providerStore, flagModel: flags.model }),
         modelLabel: flags.model,
