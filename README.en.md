@@ -155,6 +155,8 @@ frontend" gate:
 | M41b | Wire v1.1 appendix: `session/cancel` (in-flight abort now reaches the engine — per-submit signal threading) + `session/rewind/*` (points/plan/execute via rewindFactory), capability-gated remote consumption, CLI list-row enrichment (updatedAt/turnCount), DA1 probe | ✅ |
 | M46b | Mouse full parity (new-truth): capture five-mode (1000/1002/1003/1015/1006, crossterm order) + Moved decode, HitArea hover (dirty-only repaint — row bg blend / ts `%H:%M:%S | %b %d` swap / md border / dropdown+permission rows), click semantics (single=select+focus; 300ms multi-click: double=fold, triple=fold+top; drag ≥1 cell = display-line selection + edge-band autoscroll + auto-copy (injected clipboard) + "Copied!" toast + flash; scrollbar latch+fraction jump; permission double-fire; prompt/pane/dropdown clicks), scroll streaming (grok engine port — 80ms gap / 16ms cadence / per-brand ept / 2.5x accel / taper / carry / speed knob), knobs (settings Mouse 7: speed/mode/lines/invert/keep_text_selection/word_separators/mouse_reporting_toggle + Ctrl+R opt-in gate), minimal no-capture; PTY case-023 mouse matrix (wheel/hover+ts-swap/click/fold/drag-autocopy/scrollbar/permission-double + minimal no-?1000h byte assert; 34-write budget) | ✅ |
 
+| M48 | Reliability and TUI delivery: G1 chain rejection advancement; durable TUI session-dir create/list/resume/close flush; capability-gated durable Rewind bridge for recorder-backed file changes; PTY case-010 Windows `chcp` command-resolution fix | ⚠️ delivered, full verification blocked by Windows ACL/installer runtime failures |
+
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
 

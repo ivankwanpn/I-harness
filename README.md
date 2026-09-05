@@ -203,12 +203,14 @@ apps/
 | M45 | 分發：esbuild 捆包 + NSIS 自包含安裝器 |
 | M46a/b/c | 提供商/模型管理 + Slash 註冊表 + 鍵表真理 + **鼠標全 parity** + 選區/時間線軌/粘貼源/workflow 面 |
 | M47 | 質量輪 2：鼠標/hover bench + live 探測 + line-viewer |
+| M48 | 可靠性與 TUI 交付：G1 chain rejection 推進；配置 session-dir 時 TUI session 建立/列表/resume/close flush；durable Rewind bridge（僅 recorder-backed 檔案變更）；PTY case-010 修復 Windows `chcp` codepage 命令解析；⚠️ 全量驗證受 Windows ACL／installer runtime 阻塞 |
 
 ---
 
 ## 邊界與遠期
 
 - **明確不做**：PTC/run_code、plugin 代碼執行、默認提供商、dashboard/leader 多進程、grok 賬戶登錄面
+- **明確限制**：未配置 store root 的 TUI 仍是 ephemeral fallback；Rewind 不涵蓋 shell/外部編輯器等未經 recorder 的變更；PTY 時間窗採樣仍不可靠。
 - **遠期隊列**：web/desktop 面（排在很後面）、mermaid PNG 評估、Rewind 冷啟動恢復、MCP OAuth 實線刷新、macOS 沙箱、R-B4 git undo、記憶（R-A10）
 - 每個「後端沒有」的功能在 TUI 一律**誠實降級**（toast + 記錄），不捏造
 
