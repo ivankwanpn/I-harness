@@ -32,9 +32,12 @@
 # <3;x;yM = no-button MOTION (hover), <32;x;yM = held-button DRAG motion
 # (b&32), <64;x;yM = wheel-up. Coordinates are 1-based terminal cells
 # (the loop subtracts 1 → 0-based app coords).
-# Byte budget: writes 34 = init(1) + 11 event frames + 3 hover frames +
+# Byte budget: writes 36 = init(1) + 11 event frames + 3 hover frames +
 # 4 wheel frames + 1 click-down frame + 2 fold frames + 1 expand frame +
-# 6 drag frames + 2 scrollbar frames + 2 permission frames + teardown(1)
+# 6 drag frames + 2 scrollbar frames + 2 permission frames + teardown(1) +
+# M46c G1: +2 (the ✗ click-clear frame + its hover-settle repaint — the click
+# moves the pointer → the settled hovered set flips), the selection box
+# frames reuse the existing change-driven repaints (no extra writes) —
 # (frozen clock → anim-pump repaints are zero-byte; identical frames flush "").
 name: case-023-mouse-matrix
 host: test/harness/host-023.ts
