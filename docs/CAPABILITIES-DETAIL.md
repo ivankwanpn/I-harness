@@ -693,13 +693,14 @@ HMAC cookie（`hmacSecret` ≥32 字符，違者 throw，:40）、launch token�
 **真實缺口（deferred/明確 wire-gap）**：
 - remote（--attach）：**replay/history 無 v0 RPC**（`replay()` 恆 []）；cancel 不可用（僅註入一次性系統提示）；listSessions 僅 active stub；context 成員缺席（`BackendContextUsage` 有型，但 tui 的 context() 恆 undefined——**需 token-meter 依賴**，屬下一輪一個函數體）。
 - ACP v0 drop-set（§4.3）。
-- rewind（回捲/undo）無後端；mermaid 渲染規格留檔未做；plan-review「face」跳過。
+- Rewind 已由 durable TUI factory 接線；沒有 store root/session id 時 capability absent，shell 或外部編輯器等未經 recorder 的變更不會被列入或恢復；mermaid 渲染規格留檔未做；plan-review「face」跳過。
 - MCP：streamable-http 需 SDK ≥1.16 型態（requestInit 由客戶構成）；resources/templates 讀取視 SD 支援（`resources/templates/list unsupported by this build's client` 拋錯）；工具清單 >100 頁 fail-loud。
 - settings：`settings/changed` telemetry 碼無生產 emitter（熱更為輪詢 500ms + onChange 對應物）；CLI host 未接 pluginRegistry/jobKillBridge（plugins/jobs-kill 路由 404）；schedule 僅 UTC 瞬間（IANA/直接注入未遷移）；attachment 預設儲存上限 10MB/影像、4 影像/訊息、20MB/訊息、16M 像素、8192px/維度（attachment/src/index.ts:47-54，v0 不解析影像維度）。
 - LSP：只掛 lsp 兩工具（六面路由蓋面）；`lsp_diagnostics` 游標行過濾 1-based→0-based；callHierarchy 結果 item 跨呼叫需回填（incoming/outgoing 需 `item` 參數整枚）。
 - exec：spill 前臺 only（背景 job 無 spill）；koffi 只在 win32/linux（其他平台 → SandboxUnavailableError）。
 - settings/sandbox/theme 變化對「活的」assembly 不熱更（sandbox 需新 session 生效，/sandbox 命令文案自證）；plugin executable 維度恆 unsupported（host 永不執行程式碼）。
-- TUI 後端 embedded 的 `context()` 永遠 undefined（見上）；`--resume` 被接受但忽略（M38 TODO 標記）；`--model` 僅 label（解析鏈 mock-first）。
+- TUI 後端 embedded 的 `context()` 永遠 undefined（見上）；`--model` 僅 label（解析鏈 mock-first）。
+- PTY case-010 的 Windows 根因是 host 命令解析時 `chcp` codepage 前置條件未被正確建立；修復保留 marker gate 與既有 timeout，ConPTY 分塊間隙的時間窗限制仍然存在。
 - 搜尋後端 `ensureFts` 需 `events_fts` 表格（「open the database through the coordinator first」）；file-backed 索引為 per-process 記憶體 (``:memory:``)。
 - webshell 深度（terminal PTY 無 tmux 會話吸附）、exec 的 `input` 僅寫後 end（不互動）。
 - telemetry `/api/telemetry` 路由 deferred（manifest 有、surface 無，host.ts:2347-2348）。
