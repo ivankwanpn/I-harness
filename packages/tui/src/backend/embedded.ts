@@ -604,13 +604,45 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
   const coordinator = opts.coordinator ?? (opts.storeRoot === undefined ? undefined : createSessionCoordinator(createJsonlBackend(opts.storeRoot), { lock: { enabled: true, lockRoot: opts.storeRoot } }))
   let sessionId = opts.resumeSessionId
   let session: Session | undefined
-  if (coordinator !== undefined) {
-    if (sessionId !== undefined) { session = (await coordinator.load(sessionId)).session; await coordinator.adoptOwnership(sessionId) }
-    else sessionId = (await coordinator.create()).id
+  try {
+    if (coordinator !== undefined) {
+      if (sessionId !== undefined) {
+        session = (await coordinator.load(sessionId)).session
+        await coordinator.adoptOwnership(sessionId)
+      } else {
+        sessionId = (await coordinator.create()).id
+      }
+    }
+    sessionId ??= `sess-${randomUUID().slice(0, 8)}`
+    const service: SessionService = createSessionService({
+      workspace: opts.workspace, sessionId,
+      ...(session !== undefined ? { session } : {}),
+      ...(coordinator !== undefined ? { coordinator } : {}),
+      approveAll: opts.approveAll ?? true, mockCycles: true,
+      ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}),
+      ...(opts.rewindStoreRoot !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}),
+    })
+    const listSessions = coordinator === undefined ? undefined : async (): Promise<SessionSummary[]> => {
+      const ids = await coordinator.list()
+      return Promise.all(ids.map(async (id) => {
+        const { meta } = await coordinator.profile(id)
+        const restored = await coordinator.load(id)
+        return { id, title: meta.title ?? "Session", updatedAt: Date.parse(meta.createdAt), turnCount: restored.session.events.filter((event) => event.type === "turn/start").length }
+      }))
+    }
+    const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(opts.rewindStoreRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
+    if (coordinator === undefined) return backend
+    const close = backend.close.bind(backend)
+    backend.close = async () => {
+      await close()
+      let failure: unknown
+      try { await coordinator.flush(sessionId!) } catch (error) { failure = error }
+      try { if (ownsCoordinator) await coordinator.close() } catch (error) { if (failure === undefined) failure = error }
+      if (failure !== undefined) throw failure
+    }
+    return backend
+  } catch (error) {
+    if (ownsCoordinator && coordinator !== undefined) await coordinator.close().catch(() => {})
+    throw error
   }
-  sessionId ??= `sess-${randomUUID().slice(0, 8)}`
-  const service = createSessionService({ workspace: opts.workspace, sessionId, ...(session !== undefined ? { session } : {}), ...(coordinator !== undefined ? { coordinator } : {}), approveAll: opts.approveAll ?? true, mockCycles: true, ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}), ...(opts.rewindStoreRoot !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}) })
-  const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(opts.rewindStoreRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
-  if (ownsCoordinator && coordinator !== undefined) { const close = backend.close.bind(backend); backend.close = async () => { await close(); await coordinator.flush(sessionId!).catch(() => {}); await coordinator.close() } }
-  return backend
 }
