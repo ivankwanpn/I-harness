@@ -88,14 +88,38 @@ describe("dispatchKey — prompt focus: Enter & friends", () => {
     expect(dispatchKey(esc, promptState({ armedQuit: true }))).toBe("quit")
   })
 
-  it("Ctrl-M toggles multiline, Ctrl-Q quits, Ctrl-T/B/S/P dispatch panes/sessions/palette", () => {
+  it("Ctrl-M toggles multiline, Ctrl-Q quits, Ctrl-T/P dispatch panes/palette", () => {
     const c = (key: string): Kbd => kbd({ code: "char", key, ctrl: true })
     expect(dispatchKey(c("m"), promptState())).toBe("toggle-multiline")
     expect(dispatchKey(c("q"), promptState())).toBe("quit")
     expect(dispatchKey(c("t"), promptState())).toBe("toggle-todo-pane")
-    expect(dispatchKey(c("b"), promptState())).toBe("toggle-tasks-pane")
-    expect(dispatchKey(c("s"), promptState())).toBe("sessions")
     expect(dispatchKey(c("p"), promptState())).toBe("open-command-palette")
+  })
+
+  it("M46a keys truth: Ctrl+S = stash/pop draft (NOT sessions), Alt+S same", () => {
+    const c = (key: string): Kbd => kbd({ code: "char", key, ctrl: true })
+    const altS = kbd({ code: "char", key: "s", alt: true })
+    expect(dispatchKey(c("s"), promptState({ promptText: "draft" }))).toBe("stash-draft")
+    expect(dispatchKey(altS, promptState({ promptText: "draft" }))).toBe("stash-draft")
+    // the OLD Ctrl+S sessions binding is gone
+    expect(dispatchKey(c("s"), promptState())).not.toBe("sessions")
+  })
+
+  it("M46a keys truth: F3 = session picker (prompt + scrollback focus)", () => {
+    const f3 = kbd({ code: "F3", key: "F3" })
+    expect(dispatchKey(f3, promptState())).toBe("sessions")
+    expect(dispatchKey(f3, scrollState())).toBe("sessions")
+  })
+
+  it("M46a keys truth: Ctrl+G tasks pane (agent screen), Ctrl+B send-background, Ctrl+R slot", () => {
+    const c = (key: string): Kbd => kbd({ code: "char", key, ctrl: true })
+    expect(dispatchKey(c("g"), promptState())).toBe("toggle-tasks-pane")
+    expect(dispatchKey(c("g"), scrollState())).toBe("toggle-tasks-pane")
+    expect(dispatchKey(c("b"), promptState())).toBe("send-background")
+    expect(dispatchKey(c("b"), scrollState())).toBe("send-background")
+    // mouse-reporting opt-in slot: registered 'none' (inert until M46b)
+    expect(dispatchKey(c("r"), promptState())).toBe("none")
+    expect(dispatchKey(c("r"), scrollState())).toBe("none")
   })
 
   it("Shift-Tab cycles mode in all three encodings (ShiftTab / Tab+shift / Tab+key Z)", () => {
@@ -113,7 +137,8 @@ describe("dispatchKey — prompt focus: Enter & friends", () => {
 
   it("typing chars and unbound keys → none (M37b completes the table)", () => {
     expect(dispatchKey(letter("a"), promptState())).toBe("none")
-    expect(dispatchKey(kbd({ code: "F2", key: "F2" }), promptState())).toBe("none")
+    // M46a G1: F2 = the settings modal (grok parity) — no longer unbound.
+    expect(dispatchKey(kbd({ code: "F2", key: "F2" }), promptState())).toBe("open-settings")
   })
 })
 
@@ -198,12 +223,12 @@ describe("dispatchKey — welcome menu (spec §2a)", () => {
 })
 
 describe("dispatchKey — pane/global additions (spec §4)", () => {
-  it("Ctrl-; queue pane, Ctrl+N new session; Ctrl-T/B unchanged", () => {
+  it("Ctrl-; queue pane, Ctrl+N new session; Ctrl-T unchanged; Ctrl-B send-background", () => {
     const c = (key: string): Kbd => kbd({ code: "char", key, ctrl: true })
     expect(dispatchKey(c(";"), promptState())).toBe("toggle-queue-pane")
     expect(dispatchKey(c("n"), promptState())).toBe("sessions-new")
     expect(dispatchKey(c("t"), promptState())).toBe("toggle-todo-pane")
-    expect(dispatchKey(c("b"), promptState())).toBe("toggle-tasks-pane")
+    expect(dispatchKey(c("b"), promptState())).toBe("send-background")
   })
 
   it("`?` on an empty prompt opens the palette (only when no text)", () => {

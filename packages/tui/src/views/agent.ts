@@ -75,7 +75,7 @@ export interface AgentViewState {
   /** Pane content — present/todos/tasks/queue/btw; undefined = no data. */
   paneData?: PaneState
   /** Open dropdown/picker overlay above the prompt; rows = panel height. */
-  dropdown?: { kind: "slash" | "completion" | "file-search" | "history" | "sessions"; rows: number }
+  dropdown?: { kind: "slash" | "completion" | "file-search" | "history" | "sessions" | "light"; rows: number }
 }
 
 /** Pane/overlay state shared by layoutAgent + present (spec §2.1 rows 3-8/7).

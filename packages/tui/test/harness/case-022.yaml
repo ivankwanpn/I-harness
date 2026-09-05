@@ -1,0 +1,142 @@
+# M46a G2 (case-022): the SLASH REGISTRY + KEYS TRUTH at REAL-PTY level.
+# The host (host-022.ts) drives the REAL app pipeline + real stdin:
+#   A: the scripted turn settles (user "hi there" / assistant "ok" rows) —
+#      the /find "hi" target lives there.
+#   B: KEYS TRUTH — type "s1 draft", Ctrl+S (stash → prompt clears + toast),
+#      type "greeting", Ctrl+S (restore → "s1 draft" back), Ctrl+S again
+#      (swap back → "greeting"), Enter (submit → history ["greeting"]).
+#   C: /history → the prompt-history panel (row "greeting") → Esc.
+#   D: /timestamps → rows gain the right-aligned timestamp column
+#      (assert-cell-colors on the ts slot vs the run WITHOUT ts).
+#   E: /theme ×2 (auto → groknight → grokday) — the palette REALLY re-resolves
+#      (prompt border cell assert: #c8c8c8 grokday).
+#   F: /find → the search bar (prompt box content = the query); type "hi",
+#      Enter (engine.search → matches) then Esc closes.
+#   G: /skills → REAL registry rows (temp workspace SKILL.md: hello/workspace).
+#   H: /usage → token meter (context used 42 — the backend.context stub).
+# ENTER CONVENTION: the M37b slash dropdown consumes the FIRST Enter (accept →
+# "/cmd "); the SECOND Enter submits (case-021 parity) — every slash command
+# below is typed then followed by \r \r.
+# Pin convention: boxed rows are pinned via assert-cell-colors text anchors
+# (full-width rows end on the box border — the referee's trimEnd cannot trim
+# those); unboxed scrollback rows use wait-screen (trimEnd-safe).
+name: case-022-slash-registry-keys-truth
+host: test/harness/host-022.ts
+size: [80, 24]
+steps:
+  # ── phase A: the turn settles.
+  - await-marker: { name: scene-ready }
+  - await-marker: { name: events-seeded }
+  - await-quiescent: { ms: 300 }
+  - wait-screen:
+      region: { startRow: 3 }
+      rows:
+        - "  ┃   ❯ hi there"
+        - "  ┃   ok"
+      timeoutMs: 5000
+  # ── phase B: Ctrl+S stash/pop round-trip (keys truth).
+  - write-pty: { data: "s1 draft" }
+  - write-pty: { data: "\x13" }
+  - assert-cell-colors:
+      cells:
+        - { row: 16, col: 3, text: "❯ Build anything" }
+      timeoutMs: 3000
+  - write-pty: { data: "greeting" }
+  - write-pty: { data: "\x13" }
+  - assert-cell-colors:
+      cells:
+        - { row: 16, col: 3, text: "❯ s1 draft" }
+      timeoutMs: 3000
+  - write-pty: { data: "\x13" }
+  - assert-cell-colors:
+      cells:
+        - { row: 16, col: 3, text: "❯ greeting" }
+      timeoutMs: 3000
+  - write-pty: { data: "\r" }
+  - await-quiescent: { ms: 200 }
+  # ── phase C: /history panel (dropdown-accept Enter then submit Enter).
+  - write-pty: { data: "/history" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - assert-cell-colors:
+      cells:
+        - { row: 11, col: 1, text: "╭ history" }
+        - { row: 12, col: 1, text: "│❯ greeting" }
+      timeoutMs: 3000
+  - write-pty: { data: "\x1b" }
+  - await-quiescent: { ms: 200 }
+  # ── phase D: /timestamps — ts slots BEFORE the toggle (no ts) then after.
+  - assert-cell-colors:
+      cells:
+        - { row: 3, col: 74, text: "" }
+        - { row: 4, col: 74, text: "" }
+      timeoutMs: 3000
+  - write-pty: { data: "/timestamps" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - await-quiescent: { ms: 200 }
+  - assert-cell-colors:
+      cells:
+        - { row: 3, col: 74, fg: "#585858" }
+        - { row: 4, col: 74, fg: "#585858" }
+      timeoutMs: 3000
+  # ── phase E: /theme ×2 → grokday prompt border.
+  - write-pty: { data: "/theme" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - await-quiescent: { ms: 200 }
+  - write-pty: { data: "/theme" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - await-quiescent: { ms: 200 }
+  - assert-cell-colors:
+      cells:
+        - { row: 15, col: 10, fg: "#767676" }
+        - { row: 15, col: 10, text: "─" }
+      timeoutMs: 3000
+  # ── phase F: /find — the search bar.
+  - write-pty: { data: "/find" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - assert-cell-colors:
+      cells:
+        - { row: 16, col: 3, text: "❯ Build anything" }
+      timeoutMs: 3000
+  - write-pty: { data: "hi" }
+  - assert-cell-colors:
+      cells:
+        - { row: 16, col: 3, text: "❯ hi" }
+      timeoutMs: 3000
+  - write-pty: { data: "\r" }
+  - await-quiescent: { ms: 200 }
+  - write-pty: { data: "\x1b" }
+  - await-quiescent: { ms: 200 }
+  # ── phase G: /skills — REAL registry rows. (Tab first: the /find search
+  # closed on the SCROLLBACK focus — the prompt needs the focus to type.)
+  - write-pty: { data: "\t" }
+  - write-pty: { data: "/skills" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - assert-cell-colors:
+      cells:
+        - { row: 12, col: 2, text: "╭ Skills" }
+        - { row: 13, col: 2, text: "│❯ hello" }
+      timeoutMs: 3000
+  - write-pty: { data: "\x1b" }
+  - await-quiescent: { ms: 200 }
+  # ── phase H: /usage. (No Tab: the skills panel Esc kept the prompt focus.)
+  - write-pty: { data: "/usage" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - assert-cell-colors:
+      cells:
+        - { row: 9, col: 2, text: "╭ Usage" }
+        - { row: 10, col: 2, text: "│❯ context used" }
+      timeoutMs: 3000
+  - write-pty: { data: "\x1b" }
+  - await-quiescent: { ms: 200 }
+  # ── close
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote }
+  - assert-byte-budget: { writes: 99 }
+  - wait-exit: { code: 0 }

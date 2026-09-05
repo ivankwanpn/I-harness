@@ -233,6 +233,21 @@ export class SegmentIndex {
     this.opts = { showTimestamps: opts.showTimestamps ?? false, glyphs: opts.glyphs ?? GLYPHS }
   }
 
+  /* ------------------------------------------- M46a: runtime ts toggle */
+
+  /** `/timestamps` — the flag is consulted per layout query (tsReserve +
+   * timestamp emission below), so a flip redecorates on the next viewport
+   * render. Invalidates every cached row (the ts column changes line
+   * geometry — wrap width) + marks dirty so the recount repaints. */
+  setShowTimestamps(on: boolean): void {
+    if (this.opts.showTimestamps === on) return
+    this.opts.showTimestamps = on
+    for (let i = 0; i < this.blocks.length; i++) {
+      this.linesCache[i] = null
+      this.markDirty(i)
+    }
+  }
+
   /* ----------------------------------------------------- mutation (tail) */
 
   pushBlock(b: Block): void {
