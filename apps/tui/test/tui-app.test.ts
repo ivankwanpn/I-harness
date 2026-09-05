@@ -3,7 +3,7 @@
 // pipeline live in packages/tui/test/harness — cases 011/014).
 
 import { describe, expect, it } from "vitest"
-import { buildEmbeddedSessionOptions, buildSdkArgs, parseFlags } from "../src/index.ts"
+import { buildEmbeddedSessionOptions, buildSdkArgs, createTuiShutdownController, parseFlags } from "../src/index.ts"
 
 describe("tui flag parser", () => {
   it("parses value flags in any order plus the boolean --yes", () => {
@@ -26,6 +26,21 @@ describe("tui flag parser", () => {
   it("passes the durable root to the attached SDK and preserves ephemeral attach args", () => {
     expect(buildSdkArgs({ sessionDir: "C:\\sessions" })).toEqual(["sdk", "--session-dir", "C:\\sessions"])
     expect(buildSdkArgs({ sessionDir: undefined })).toEqual(["sdk"])
+  })
+
+  it("awaits backend close before teardown and shares concurrent shutdowns", async () => {
+    const events: string[] = []
+    let release!: () => void
+    const close = () => new Promise<void>(resolve => { events.push("close-start"); release = () => { events.push("close-end"); resolve() } })
+    const controller = createTuiShutdownController({ close, stop: () => events.push("stop"), teardown: () => events.push("teardown") })
+    const first = controller.shutdown()
+    const second = controller.shutdown()
+    expect(first).toBe(second)
+    await Promise.resolve()
+    expect(events).toEqual(["stop", "close-start"])
+    release()
+    await first
+    expect(events).toEqual(["stop", "close-start", "close-end", "teardown"])
   })
 
   it("treats every flag as optional and unknown flags as no-ops", () => {
