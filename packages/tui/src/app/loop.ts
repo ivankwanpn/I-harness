@@ -28,6 +28,10 @@ import { bindSettingsOverlay, type SettingsModalState } from "../views/settings.
 import type { FetchedModel, ProviderEntry, ProviderStore } from "./provider-store.ts"
 import { FpsMeter } from "./hud.ts"
 import type { HudState } from "./hud.ts"
+// M46b G1: the HitArea hover engine + the grok scroll-stream normalizer.
+import { HoverEngine } from "./hover.ts"
+import { ScrollStreamNormalizer } from "./scroll-stream.ts"
+import type { MouseStreamPrefs } from "./scroll-stream.ts"
 import type { RegionLine } from "../minimal/contracts.ts"
 import { MinimalCommits, commitDelta, displayToRegion } from "../minimal/commit.ts"
 import { composeRegion } from "../minimal/live-region.ts"
@@ -46,6 +50,15 @@ import type { SlashCommand, SlashContext, SlashPanelRequest } from "./slash/type
 import { bindTextInput } from "./slash/impl/text-input.ts"
 import type { LightPanelState } from "../views/light-panel.ts"
 import { doctorRows } from "../views/light-doctor.ts"
+// M46b G2: mouse click semantics — the dispatch core + the injectable
+// clipboard (the only copy path). G1's hover engine lives on app.mouse.engine
+// (constructed below; present settles it per frame) and the wheel stream is
+// G1's ScrollStreamNormalizer (push on events, onTick drain on the anim pump).
+import { MouseRouter } from "./mouse.ts"
+import { defaultClipboard } from "./clipboard.ts"
+import type { Clipboard } from "./clipboard.ts"
+import { goalRows } from "../views/light-goal.ts"
+import { usageRows } from "../views/light-usage.ts"
 
 export interface InputSource {
   next(): AsyncIterable<InputEvent>
@@ -112,6 +125,23 @@ export interface TuiAppOptions {
   /** M46a G2: the session id when the host knows it (e.g. --attach; embedded
    * sessions are in-process and the app cannot introspect their id). */
   sessionId?: string
+  /** M46b G2: clipboard injection seam — tests assert the copied payloads
+   * (drag auto-copy, cwd chip copy, prompt-selection copy, copy-block) on an
+   * injected recorder; absent → the system clipboard (never in tests). */
+  clipboard?: Clipboard
+  /** M46b G2: prompt file-ref double-click → the line-viewer seam (the
+   * @-file-search adapter plugs in here). Absent → honest toast. */
+  openLineViewer?: (file: string, line?: number) => void
+  /** M46b G1: the mouse scroll-stream prefs (the settings modal's Mouse
+   * category — the HOST reads the durable settings store and passes them in;
+   * absent → grok defaults: speed 50 (1.0×), auto mode, brand profile
+   * lines/tick, no invert). */
+  mousePrefs?: MouseStreamPrefs
+  /** M46b G1: the mouse-reporting-toggle FEATURE flag — the host resolves
+   * `[ui] mouse_reporting_toggle` (GROK_MOUSE_REPORTING_TOGGLE forces it ON).
+   * OFF (default): Ctrl+R stays 'none' + /toggle-mouse-reporting stays
+   * hidden+inert. ON: both toggle `app.mouse.enabled` (capture/hover). */
+  mouseToggleFeature?: boolean
 }
 
 /** Minimal live-region host (M38a G2) — what the loop drives in minimal
@@ -182,11 +212,49 @@ export class TuiApp {
   /** M46a G2: the ACTIVE palette — the host's at start; /theme re-resolves
    * (resolvePalette groknight/grokday/auto) and every frame draws with it. */
   private palette: Palette
+  /** M46b G2: the clipboard injection layer (options ?? system clipboard). */
+  private readonly clipboard: Clipboard
+  /** M46b G2: the mouse click-semantics router (geometry only read while a
+   * mouse event arrives). */
+  private mouse!: MouseRouter
+  /** M46b G1: the scroll STREAM (grok wheel/trackpad normalization) — push on
+   * wheel events, onTick drain on the anim pump; the M40 ±3 wheel path is
+   * REPLACED by this (the ±3 fallback comment lives in onInput for the
+   * pre-M46b note). */
+  private readonly scrollNormalizer: ScrollStreamNormalizer
+  /** M46b G1: the scroll-stream prefs — the host's settings wiring when
+   * passed (TuiAppOptions.mousePrefs), else the grok defaults (speed 50 →
+   * 1.0×, auto mode, brand-profile lines/tick, no invert — the settings
+   * modal persists the same shape). */
+  private mousePrefs(): MouseStreamPrefs {
+    const p = this.opts.mousePrefs
+    if (p === undefined) return { speed: 50, mode: "auto", invert: false }
+    return {
+      speed: Math.max(1, Math.min(100, p.speed)),
+      mode: p.mode,
+      ...(p.lines !== undefined ? { lines: Math.max(1, Math.min(10, p.lines)) } : {}),
+      invert: p.invert,
+    }
+  }
+
+  /** M46b G1: the mouse-reporting-toggle feature gate (host-resolved; OFF by
+   * default — the Ctrl+R binding + /toggle-mouse-reporting are inert). */
+  private mouseToggleFeature(): boolean {
+    return this.opts.mouseToggleFeature === true
+  }
 
   constructor(opts: TuiAppOptions) {
     this.opts = opts
     this.uiMode = opts.mode ?? "fullscreen"
     this.palette = opts.palette
+    this.clipboard = opts.clipboard ?? defaultClipboard()
+    // M46b G1: the wheel stream (brand profile + knob defaults while the
+    // settings snapshot wiring feeds real prefs — mousePrefs() above).
+    this.scrollNormalizer = new ScrollStreamNormalizer(
+      { brand: opts.capabilities.brand, multiplexer: opts.capabilities.multiplexer === "none" ? "" : opts.capabilities.multiplexer },
+      this.mousePrefs(),
+      { viewportRows: opts.renderer.buffer.height, now: opts.now },
+    )
     if (opts.hud === true) {
       this.fpsMeter = new FpsMeter()
       this.fpsMeter.start()
@@ -241,7 +309,62 @@ export class TuiApp {
       autoApprove: false,
       draft: undefined,
       lightPanel: undefined,
+      // M46b G1+G2: the hover state — the loop constructs the engine (the
+      // views register their HitArea rects during present; present settles
+      // the last-Moved coordinate every frame). `enabled` gates the whole
+      // mouse path (G1's mouse-reporting toggle flips it).
+      mouse: { enabled: true, last: { col: 0, row: 0 }, hovered: new Set(), engine: new HoverEngine() },
     }
+    this.initMouse()
+  }
+
+  /** M46b G2: the mouse router — bounds the loop's widget semantics to the
+   * router's hooks (loop-owned behaviors) + the injected clipboard. */
+  private initMouse(): void {
+    this.mouse = new MouseRouter({
+      app: this.app,
+      engine: this.opts.engine,
+      size: () => ({ cols: this.opts.renderer.buffer.width, rows: this.opts.renderer.buffer.height }),
+      now: () => this.opts.now?.() ?? Date.now(),
+      clipboard: this.clipboard,
+      glyphs: this.opts.glyphs,
+      compact: this.opts.compact,
+      hooks: {
+        focus: (target) => this.focus(target),
+        overlaySelectRow: () => this.overlaySelect(),
+        openLineViewer: (file, line) => this.openLineViewer(file, line),
+        openGoalDetail: () => this.openLightPanel({
+          kind: "goal",
+          title: "Goal",
+          rows: goalRows(this.app.status.goal),
+        }),
+        openUsagePanel: () => this.openLightPanel({
+          kind: "usage",
+          title: "Usage",
+          rows: usageRows({
+            used: this.app.status.contextUsed ?? 0,
+            ...(this.app.status.contextTotal !== undefined ? { total: this.app.status.contextTotal } : {}),
+          }),
+        }),
+        openPlanView: () => this.openLightPanel({
+          kind: "plan",
+          title: "Plan",
+          rows: this.lastAssistantRows().map((r) => ({ label: r.label })),
+        }),
+        onChanged: () => this.requestFrame(),
+      },
+    })
+  }
+
+  /** M46b G2: prompt file-ref double-click → the line viewer (the @-file-search
+   * seam plugs its viewer here); absent → honest toast. */
+  private openLineViewer(file: string, line?: number): void {
+    const open = this.opts.openLineViewer
+    if (open !== undefined) {
+      open(file, line)
+      return
+    }
+    this.toast(`line viewer (M46c): ${file}${line !== undefined ? `:${line}` : ""}`)
   }
 
   /** Coordinator state (the loop mutates; tests/host read). */
@@ -369,7 +492,19 @@ export class TuiApp {
         break
       }
       case "toggle-expand-all": this.opts.engine.toggleExpandAll(); break
-      case "copy-block": this.toast("Copied!"); break // clipboard: M38
+      case "copy-block": {
+        // M46b G2: the `y` copy now goes through the injected clipboard layer
+        // (the selection text when one is active — the block-body copy M38
+        // deferred). "Copied!" toast unchanged.
+        const sel = this.opts.engine.selection()
+        if (sel !== undefined) {
+          const total = this.opts.engine.lineCount()
+          const lines = this.opts.engine.viewport(0, total).slice(Math.max(0, sel.a), Math.min(total, sel.b + 1))
+          this.clipboard.copy(lines.map((l) => l.runs.map((r) => r.text).join("")).join("\n"))
+        }
+        this.toast("Copied!")
+        break
+      }
       case "focus-scrollback": this.focus("scrollback"); break
       case "focus-prompt": this.focus("prompt"); break
       case "submit": this.submitPrompt(); break
@@ -481,6 +616,12 @@ export class TuiApp {
       // Ctrl+M on the agent screen → the model picker).
       case "open-settings": this.openSettings(); break
       case "open-model-picker": this.openModelPicker(); break
+      // M46b G1: Ctrl+R / /toggle-mouse-reporting (feature-gated) — flips
+      // `app.mouse.enabled` (the whole mouse path: capture gate → hover
+      // machinery + scroll stream): OFF hands the mouse back to the terminal
+      // (native select), ON restores in-app hover/scroll. State-only (the host
+      // owns the terminal bytes; the toggle does not re-emit the 5-mode set).
+      case "toggle-mouse-reporting": this.toggleMouseReporting(); break
       case "quit": void this.quitNow(); break
       case "quit-arm1":
         // First press (Esc-empty / unarmed) arms; a later press quits.
@@ -524,6 +665,11 @@ export class TuiApp {
     if (this.inlineActive() && this.minimalCommits().idleFlushDue(t)) {
       this.commitMinimalDelta()
     }
+    // M46b G2: the mouse tick — drag autoscroll (band rows per tick) + the
+    // selection flash expiry. Cheap no-op when nothing is in-flight.
+    if (!this.inlineActive()) this.mouse.frame(t)
+    // M46b G1: the wheel stream drain (coast/gap finalize while active).
+    if (!this.inlineActive()) this.scrollDrain(t)
     if (this.needsAnim(t)) this.requestFrame()
   }
 
@@ -546,15 +692,35 @@ export class TuiApp {
       return
     }
     if (ev.type === "mouse") {
-      // Wheel → the existing scroll actions (M40 G2 / C11): ±3, follow-aware
-      // (scrollBy resolves the follow pin before offsetting — one notch leaves
-      // the tail, no jump to the top). 1006/1015/1016 wheel reports decode in
-      // tui-core; the coordinates are unused (no hit-testing in this wheel).
-      // Minimal mode has no fullscreen scrollback surface → no-op there.
-      if (!this.inlineActive()) {
-        if (ev.button === "wheel-up") { this.dispatch("scroll-up"); return }
-        if (ev.button === "wheel-down") { this.dispatch("scroll-down"); return }
+      // Minimal mode has no fullscreen surface → no mouse semantics there
+      // (capture is OFF in minimal — G1's teardown covers the ordering).
+      if (this.inlineActive()) return
+      // Parser coords are 1-based; the router/streams operate on 0-based cells.
+      const col = ev.x - 1
+      const row = ev.y - 1
+      if (col < 0 || row < 0) return
+      const mouse = this.app.mouse
+      // M46b G1: `mouse.enabled` gates the WHOLE mouse path (capture → hover
+      // machinery + scroll stream + the click router). When off, the terminal
+      // owns the mouse (native select) — nothing routes here.
+      if (mouse === undefined || !mouse.enabled) return
+      // G1: the settled pointer — present() settles the hovered set every
+      // frame (dirty-repaint only: engine.update returns the change flag).
+      mouse.last = { col, row }
+      if (mouse.engine.update(col, row)) this.requestFrame()
+      if (ev.button === "wheel-up" || ev.button === "wheel-down") {
+        // M46b G1: the scroll STREAM replaces the M40 ±3 wheel actions —
+        // grok cadence/ept/taper/carry semantics (the stream's signed lines
+        // are the whole delta; the follow-aware base is scrollBy's).
+        const out = this.scrollNormalizer.push(ev.button === "wheel-up" ? "up" : "down")
+        const applied = this.applyScrollLines(out.lines)
+        if (applied !== 0 || out.active) this.requestFrame()
+        return
       }
+      // M46b G2: click/dispatch — the parser's `released` bit is the press/
+      // release divider; drag/motion bits route to the drag state machine.
+      const kind = ev.released ? "up" : ev.drag || ev.motion ? "motion" : "down"
+      this.mouse.handle({ x: col, y: row, button: ev.button, kind, drag: ev.drag, mods: ev.mods })
       return
     }
     if (ev.type !== "key") return
@@ -628,6 +794,9 @@ export class TuiApp {
       minimal: this.inlineActive(),
       rewindAvailable: this.rewindEligible(),
       rewindArmed: this.armedRewind,
+      // M46b G1: the Ctrl+R scrollback binding exists ONLY when the
+      // mouse-reporting-toggle feature is on (settings knob / env forced).
+      mouseToggle: this.mouseToggleFeature(),
     }
   }
 
@@ -768,6 +937,40 @@ export class TuiApp {
     const cur = this.app.scroll.follow ? max : this.app.scroll.offset
     this.app.scroll.follow = false
     this.app.scroll.offset = Math.max(0, Math.min(max, cur + dy))
+  }
+
+  /** M46b G1: the scroll-stream wire — `lines` (signed: negative = up) →
+   * scrollBy. Returns the applied delta (the input path/flush gate use it). */
+  private applyScrollLines(lines: number): number {
+    if (lines === 0) return 0
+    this.scrollBy(lines)
+    return lines
+  }
+
+  /** M46b G1: the stream's drain tick (coast taper + 80ms gap finalize) rides
+   * the anim pump while a stream is active. */
+  private scrollDrain(t: number): void {
+    if (!this.scrollNormalizer.hasActiveStream()) return
+    const out = this.scrollNormalizer.onTick(t)
+    if (out.lines !== 0) this.applyScrollLines(out.lines)
+    if (!out.active) this.requestFrame()
+  }
+
+  /** M46b G1: the mouse-reporting toggle (Ctrl+R / /toggle-mouse-reporting).
+   * Flips the whole mouse path gate + clears the hover state (the settled set
+   * and stream carry are stale once the path disables). */
+  private toggleMouseReporting(): void {
+    const mouse = this.app.mouse
+    if (mouse === undefined) {
+      this.toast("mouse capture: no mouse path")
+      return
+    }
+    mouse.enabled = !mouse.enabled
+    mouse.engine.clear()
+    mouse.hovered.clear()
+    this.scrollNormalizer.reset()
+    this.toast(mouse.enabled ? "Mouse reporting on" : "Mouse reporting off")
+    this.requestFrame()
   }
 
   private pageStep(): number {
@@ -1003,6 +1206,7 @@ export class TuiApp {
       probeReport: async () => doctorRows(this.opts.capabilities),
       g1Modal: (line) => this.tryG1SlashModal(line),
       effort: (level) => this.effort(level),
+      mouseReportingToggle: this.mouseToggleFeature(),
     }
   }
 

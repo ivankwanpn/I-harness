@@ -64,6 +64,91 @@ export function wrapPrompt(text: string, width: number): string[] {
   return out
 }
 
+// ---- M46b G2 (mouse click semantics): cell→cursor mapping. The renderer's
+// wrapPrompt output loses the char offsets (paragraph boundaries eat "\n"), so
+// the mouse layer needs the with-offsets variant — step-for-step identical
+// wrapping, plus each row's start offset in the original string.
+
+export interface WrappedLine { text: string; start: number }
+
+/** wrapPrompt + per-row start offsets (JS string index — the loop's cursor
+ * discipline, `p.cursor` slices the string). */
+export function wrapLinesWithOffsets(text: string, width: number): WrappedLine[] {
+  if (width < 1) width = 1
+  const out: WrappedLine[] = []
+  let base = 0
+  for (const para of text.split("\n")) {
+    if (para.length === 0) {
+      out.push({ text: "", start: base })
+      base += 1
+      continue
+    }
+    let line = ""
+    let w = 0
+    let lineStart = base
+    for (const ch of para) {
+      const cw = clusterWidth(ch)
+      if (cw > width) {
+        if (w > 0) {
+          out.push({ text: line, start: lineStart })
+          lineStart += line.length
+          line = ""
+          w = 0
+        }
+        out.push({ text: ch, start: lineStart })
+        lineStart += ch.length
+        continue
+      }
+      if (w + cw > width) {
+        out.push({ text: line, start: lineStart })
+        lineStart += line.length
+        line = ch
+        w = cw
+      } else {
+        line += ch
+        w += cw
+      }
+    }
+    out.push({ text: line, start: lineStart })
+    base += para.length + 1
+  }
+  return out
+}
+
+/** The wrapped line rendered at `row` (null = the row is a border / no click
+ * target). `text` = the prompt text (NOT the placeholder). */
+export function promptLineAtRow(ctx: Rect, text: string, row: number): WrappedLine | undefined {
+  const y0 = ctx.y
+  const y1 = ctx.y + ctx.h - 1
+  if (row < y0 + 1 || row > y1 - 1 || text.length === 0) return undefined
+  const contentW = Math.max(1, ctx.w - 4)
+  const lines = wrapLinesWithOffsets(text, contentW)
+  const innerRows = Math.max(1, ctx.h - 3)
+  const firstShown = Math.max(0, lines.length - innerRows)
+  const shownIdx = row - (y0 + 1)
+  return lines[Math.min(firstShown + shownIdx, lines.length - 1)]
+}
+
+/** Click (col,row) → prompt cursor char offset (approximate column mapping per
+ * the renderer's `❯ ` prefix / 2-space indent rule). Returns the CURRENT
+ * cursor when the cell is chrome (borders/rail) or the prompt is empty. */
+export function promptCursorAtCell(ctx: Rect, state: PromptState, col: number, row: number): number {
+  if (state.text.length === 0) return 0
+  const y0 = ctx.y
+  const y1 = ctx.y + ctx.h - 1
+  if (row < y0 + 1 || row > y1 - 1) return state.cursor
+  if (col < ctx.x + 1 || col > ctx.x + ctx.w - 2) return state.cursor
+  const contentW = Math.max(1, ctx.w - 4)
+  const lines = wrapLinesWithOffsets(state.text, contentW)
+  const innerRows = Math.max(1, ctx.h - 3)
+  const firstShown = Math.max(0, lines.length - innerRows)
+  const shownIdx = row - (y0 + 1)
+  const line = lines[Math.min(firstShown + shownIdx, lines.length - 1)]!
+  const textStart = ctx.x + 1 + (shownIdx === 0 ? PROMPT_PREFIX_W : 2)
+  const offset = Math.max(0, Math.min(line.text.length, col - textStart))
+  return Math.min(state.text.length, line.start + offset)
+}
+
 /** Keep the RIGHT part of `s` to the given column width (right-aligned titles). */
 function clipRight(s: string, width: number): string {
   if (width <= 0) return ""

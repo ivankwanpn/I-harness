@@ -183,6 +183,13 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     return this.selectionState.get()
   }
 
+  /** M46b G2 (mouse click semantics): the flash/hold selection model drops the
+   * selection when the highlight expires — SelectionState already owns a
+   * clear(); the contract accessor was the gap. */
+  clearSelection(): void {
+    this.selectionState.clear()
+  }
+
   search(pattern: string): number {
     const lines = this.allLineTexts()
     const n = this.searchState.set(pattern, lines)

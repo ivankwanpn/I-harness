@@ -153,6 +153,11 @@ export interface DisplayLine {
   sticky?: boolean
   /** Right-aligned timestamp text (already formatted, e.g. "  6:35 PM"). */
   timestamp?: string
+  /** M46b G1 (timestamp hover swap): the RAW millisecond epoch of the line's
+   * timestamp event (undefined when the engine cannot provide it — the hover
+   * swap then stays off for the line). The presenter re-formats
+   * `%H:%M:%S | %b %d` on hover from this field. */
+  timestampTs?: number
   /** True when this line renders a collapsed summary (e.g. verb-group header). */
   collapsed?: boolean
   /** Anchor for folding interactions (callId of a tool, etc.). */
@@ -178,6 +183,10 @@ export interface ScrollbackEngine {
   toggleExpandAll(): void
   setSelection(a: number, b: number): void
   selection(): { a: number; b: number } | undefined
+  /** M46b G2 (mouse click semantics): clear the active selection. OPTIONAL —
+   * engines without the member keep selections sticky (the app then only
+   * replaces them; the flash/hold modes degrade honestly). */
+  clearSelection?(): void
   /** Regex search; highlights set; returns match count (-1 = bad pattern). */
   search(pattern: string): number
   clearSearch(): void
