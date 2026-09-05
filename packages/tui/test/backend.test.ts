@@ -330,7 +330,7 @@ describe("embedded backend", () => {
     await first.close(); await secondCoordinator.close()
   })
 
-  it("injected resumed coordinator is closed so its lease can be reacquired", async () => {
+  it("injected resumed coordinator remains caller-owned", async () => {
     const root = tmp()
     const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
     const id = (await seed.create()).id
@@ -339,6 +339,8 @@ describe("embedded backend", () => {
     const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", coordinator: injected, resumeSessionId: id })
     await backend.close()
     const fresh = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    await expect(fresh.adoptOwnership(id)).rejects.toThrow()
+    await injected.close()
     await expect(fresh.adoptOwnership(id)).resolves.toBeUndefined()
     await fresh.close()
   })
@@ -361,7 +363,7 @@ describe("embedded backend", () => {
     expect(first).toBe(second)
     await Promise.all([first, second, backend.close()])
     expect(flushes).toBe(1)
-    expect(closes).toBe(1)
+    expect(closes).toBe(0)
   })
 
   it("durable close propagates flush failure and still closes an owned coordinator", async () => {

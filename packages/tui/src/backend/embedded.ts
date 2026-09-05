@@ -551,7 +551,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       queue.wake?.()
       // Best-effort: the caller handed us the service; we own its shutdown
       // (shared coordinator/telemetry are the CALLER's — never closed here).
-      await service.close().catch(() => {})
+      await service.close()
     },
   }
 }
@@ -602,7 +602,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
   const forceMock = opts.forceMock ?? true
   // A resumed injected coordinator is transferred to this factory instance because
   // adoptOwnership() holds its lease until coordinator.close().
-  const ownsCoordinator = (opts.coordinator === undefined && opts.storeRoot !== undefined) || (opts.coordinator !== undefined && opts.resumeSessionId !== undefined)
+  const ownsCoordinator = opts.coordinator === undefined && opts.storeRoot !== undefined
   const coordinator = opts.coordinator ?? (opts.storeRoot === undefined ? undefined : createSessionCoordinator(createJsonlBackend(opts.storeRoot), { lock: { enabled: true, lockRoot: opts.storeRoot } }))
   let sessionId = opts.resumeSessionId
   let session: Session | undefined
@@ -620,27 +620,27 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
       workspace: opts.workspace, sessionId,
       ...(session !== undefined ? { session } : {}),
       ...(coordinator !== undefined ? { coordinator } : {}),
+      ...(coordinator !== undefined ? { beforeDispose: async () => coordinator.flush(sessionId!) } : {}),
       approveAll: opts.approveAll ?? true, mockCycles: true,
       ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}),
-      ...(opts.rewindStoreRoot !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}),
+      ...(opts.rewindStoreRoot !== undefined && coordinator !== undefined && session !== undefined ? { rewindStoreRoot: opts.rewindStoreRoot } : {}),
     })
     const listSessions = coordinator === undefined ? undefined : async (): Promise<SessionSummary[]> => {
       const ids = await coordinator.list()
       return Promise.all(ids.map(async (id) => {
-        const { meta } = await coordinator.profile(id)
+        const { meta, updatedAt } = await coordinator.profile(id)
         const restored = await coordinator.load(id)
-        return { id, title: meta.title ?? "Session", updatedAt: Date.parse(meta.createdAt), turnCount: restored.session.events.filter((event) => event.type === "turn/start").length }
+        return { id, title: meta.title ?? "Session", updatedAt: updatedAt ?? Date.parse(meta.createdAt), turnCount: restored.session.events.filter((event) => event.type === "turn/start").length }
       }))
     }
-    const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(opts.rewindStoreRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
+    const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(opts.rewindStoreRoot !== undefined && coordinator !== undefined && session !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
     if (coordinator === undefined) return backend
     const close = backend.close.bind(backend)
     let closePromise: Promise<void> | undefined
     backend.close = () => {
       closePromise ??= (async () => {
-        await close()
         let failure: unknown
-        try { await coordinator.flush(sessionId!) } catch (error) { failure = error }
+        try { await close() } catch (error) { failure = error }
         try { if (ownsCoordinator) await coordinator.close() } catch (error) { if (failure === undefined) failure = error }
         if (failure !== undefined) throw failure
       })()

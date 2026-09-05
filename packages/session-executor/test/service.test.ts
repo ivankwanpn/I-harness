@@ -99,6 +99,17 @@ describe("createSessionService", () => {
     } finally { process.off("unhandledRejection", onUnhandled); await service.close() }
   }, 60_000)
 
+
+  it("flushes before assembly disposal and propagates the flush error once", async () => {
+    const order: string[] = []
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, beforeDispose: async () => { order.push("flush"); throw new Error("flush failed") } })
+    const assembly = await service.assemblyFor("s-order")
+    const originalDispose = assembly.dispose
+    assembly.dispose = async () => { order.push("dispose"); await originalDispose() }
+    await expect(service.close()).rejects.toThrow("flush failed")
+    expect(order).toEqual(["flush", "dispose"])
+    await expect(service.close()).resolves.toBeUndefined()
+  })
   it("queueState reports running/queued from the per-session lane", async () => {
     const service: SessionService = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
     expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
