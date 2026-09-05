@@ -129,6 +129,21 @@ describe("slash commands — state-changing units (fake ctx)", () => {
     expect(ctx3.calls).toContain("setCompactMode:true")
   })
 
+  it("/timeline toggles the rail state + toasts (real app state)", async () => {
+    const app = fakeApp()
+    const ctx = fakeCtx(app)
+    await run("/timeline", ctx)
+    expect((app as unknown as { showTimeline?: boolean }).showTimeline).toBe(true)
+    expect(ctx.calls).toContain("toast:timeline on")
+    // second toggle flips it OFF (undefined → false).
+    const app2 = fakeApp()
+    const ctx2 = fakeCtx(app2)
+    await run("/timeline", ctx2)
+    await run("/timeline", ctx2)
+    expect((app2 as unknown as { showTimeline?: boolean }).showTimeline).toBe(false)
+    expect(ctx2.calls).toContain("toast:timeline off")
+  })
+
   it("/always-approve + /auto set the approval default", async () => {
     const ctx = fakeCtx(fakeApp())
     await run("/always-approve", ctx)

@@ -322,6 +322,30 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     return this.seg.sumBefore(this.rewindMarkerBlock) + shifted
   }
 
+  /** M46c G1 (timeline rail / /jump machinery reuse): the turn anchors — one
+   * entry per User block, O(turns): the block's first display line (folding
+   * + retain-marker resolved) + the stripped prompt-first-line preview. This
+   * is the ENGINE-LEVEL form of the loop's lineBlock walk (parity: same
+   * "User"-title set, same preview strip); /jump + the timeline rail both use
+   * it, and the loop falls back to the walk for engines without the member. */
+  turnAnchors(): Array<{ lineIndex: number; preview: string }> {
+    const q = this.foldQuery()
+    this.seg.flush(q)
+    const shifted = this.seg.truncatedBlocks() > 0 ? 1 : 0
+    const out: Array<{ lineIndex: number; preview: string }> = []
+    for (let i = 0; i < this.blocks.length; i++) {
+      const b = this.blocks[i]
+      if (b.kind !== "user") continue
+      // A trimmed (retain-marker-zone) block is display-absent — skip it.
+      if (i < this.seg.truncatedBlocks()) continue
+      const rows = blockRows(b, this.glyphs)
+      const first = rows.length > 0 ? rows[0] : [{ text: "", style: "text" as const }]
+      const preview = rowText(first).replace(/^[❯\s]+/, "").slice(0, 40)
+      out.push({ lineIndex: this.seg.sumBefore(i) + shifted, preview })
+    }
+    return out
+  }
+
   /* ------------------------------------------------------ event handling */
 
   private appendUser(ev: Extract<TuiEvent, { type: "user" } | { type: "user/edit" }>): void {
