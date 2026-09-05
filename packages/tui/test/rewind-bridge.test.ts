@@ -11,8 +11,11 @@ import { readFile, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { createSession } from "@i-harness/core-session"
 import { RewindStore } from "@i-harness/rewind"
+import { createMockClient } from "@i-harness/llm-mock"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { RewindMode, RewindPlan, RewindPointSummary, RewindResult } from "@i-harness/rewind"
-import type { SessionService } from "@i-harness/session-executor"
+import { createSessionAssembly, type SessionService } from "@i-harness/session-executor"
 import { bindRewindOverlay, isRewindOverlay } from "../src/app/overlay-seam.ts"
 import type { RewindState } from "../src/views/rewind.ts"
 import { dispatchKey } from "../src/app/keys.ts"
@@ -406,32 +409,60 @@ describe("createEmbeddedBackend — the conditional rewind member", () => {
     await expect(handleLess.rewind!.points()).rejects.toThrow("rewind not enabled on this session")
   })
 
-  it("defaultEmbeddedFactory: mock (no store root) → no member; with root → member, [] points", async () => {
-    const mock = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "hi" })
-    expect(mock.rewind).toBeUndefined()
-    const withStore = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "hi", rewindStoreRoot: tmp() })
-    expect(withStore.rewind).toBeDefined()
-    expect(await withStore.rewind!.points()).toEqual([])
+  it("defaultEmbeddedFactory: ephemeral and missing-session matrix has no rewind capability", async () => {
+    const ephemeral = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "" })
+    expect(ephemeral.rewind).toBeUndefined()
+    await ephemeral.close()
+    const noSession = await createSessionAssembly({ workspace: tmp(), rewindStoreRoot: tmp() })
+    expect(noSession.rewind).toBeUndefined()
+    await noSession.dispose()
   })
 
-  it("durable factory rewind bridge uses per-session store", async () => {
-    const root = tmp()
+  it("durable factory records, resumes, isolates, and executes rewind points", async () => {
+    const storeRoot = tmp()
     const workspace = tmp()
-    const backend = await defaultEmbeddedFactory({ workspace, prompt: "", rewindStoreRoot: root })
-    const [{ id }] = await backend.listSessions()
-    const store = new RewindStore({ root, sessionId: id })
-    const blobId = await store.writeBlob(utf8("before"))
-    await store.appendPoint({ turnIndex: 0, anchorSeq: 0, promptPreview: "write file", files: [{ path: "a.txt", status: "modified", preBlob: blobId, isNewFile: false, afterHash: H("after") }] })
-    expect(backend.rewind).toBeDefined()
-    expect(await backend.rewind!.points()).toEqual([{ turnIndex: 0, preview: "write file", files: 1 }])
-    await backend.open("session-b")
-    expect(await backend.rewind!.points()).toEqual([])
-    await backend.open(id)
-    await writeFile(join(workspace, "a.txt"), "after")
-    await backend.rewind!.execute(0, "all")
+    await writeFile(join(workspace, "a.txt"), "before")
+    const script = () => createMockClient([
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: "a.txt", text: "after" } }] },
+      { role: "assistant", text: "done" },
+    ])
+    const first = await defaultEmbeddedFactory({ workspace, prompt: "", storeRoot, rewindStoreRoot: storeRoot, forceMock: false, modelBuilder: async () => script() })
+    const [a] = await first.listSessions()
+    const sessionA = a!.id
+    await first.submit("rewrite a")
+    const storeA = new RewindStore({ root: storeRoot, sessionId: sessionA })
+    for (let i = 0; i < 250 && (await storeA.readPoints()).length === 0; i++) await new Promise((r) => setTimeout(r, 20))
+    expect(await storeA.readPoints()).toHaveLength(1)
+    expect(await first.rewind!.points()).toEqual([{ turnIndex: 0, preview: "rewrite a", files: 1 }])
+    const plan = await first.rewind!.plan(0, "all")
+    expect(plan.clean).toEqual([{ path: "a.txt", kind: "restore-blob", blobId: expect.any(String) }])
+    expect(plan.conflicts).toEqual([])
+    expect(plan.ops).toEqual(plan.clean)
+    await first.close()
+
+    const resumed = await defaultEmbeddedFactory({ workspace, prompt: "", storeRoot, rewindStoreRoot: storeRoot, resumeSessionId: sessionA })
+    expect(await resumed.rewind!.points()).toEqual([{ turnIndex: 0, preview: "rewrite a", files: 1 }])
+    const result = await resumed.rewind!.execute(0, "all")
+    expect(result).toMatchObject({ target: 0, mode: "all", revertedFiles: 1, truncated: true, eventAppended: true, errors: [] })
     expect(await readFile(join(workspace, "a.txt"), "utf-8")).toBe("before")
-    expect(await store.readPoints()).toEqual([])
-    expect((await backend.replay(-1)).some((event) => event.type === "rewind" && event.targetTurn === 0)).toBe(true)
-    await backend.close()
+    expect(await storeA.readPoints()).toEqual([])
+    const events = await resumed.replay(-1)
+    expect(events.filter((e) => e.type === "rewind")).toEqual([expect.objectContaining({ targetTurn: 0, mode: "all", anchorSeq: expect.any(Number), seq: expect.any(Number) })])
+    await resumed.close()
+
+    const seed = createSessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: true, lockRoot: storeRoot } })
+    const sessionB = (await seed.create()).id
+    await seed.close()
+    const b = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot, rewindStoreRoot: storeRoot, resumeSessionId: sessionB })
+    try {
+      expect(sessionB).not.toBe(sessionA)
+      expect(await b.rewind!.points()).toEqual([])
+    } finally {
+      await b.close()
+    }
+    const fresh = createSessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: true, lockRoot: storeRoot } })
+    await expect(fresh.adoptOwnership(sessionA)).resolves.toBeUndefined()
+    await fresh.close()
   })
+
 })
