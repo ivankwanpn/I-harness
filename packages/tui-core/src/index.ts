@@ -41,6 +41,11 @@ export interface TerminalHandles {
 export interface CreateTerminalOptions {
   stream: { write(s: string): boolean }
   cap?: TerminalCapabilityContext
+  /** M46b G1: enable the five-mode mouse capture in init (default = cap.mouse).
+   * Minimal-mode hosts pass false — the red line is that minimal NEVER
+   * initializes the 5-mode capture (spec §7): the terminal keeps native
+   * selection; alternative-screening etc. still run. */
+  mouseReporting?: boolean
 }
 
 export function createTerminal(opts: CreateTerminalOptions): TerminalHandles {
@@ -51,7 +56,10 @@ export function createTerminal(opts: CreateTerminalOptions): TerminalHandles {
   ) {
     throw new TypeError("createTerminal: stream.write(s) is required")
   }
-  const cap = opts.cap ?? createUnknownCapabilities()
+  const cap0 = opts.cap ?? createUnknownCapabilities()
+  const cap: TerminalCapabilityContext = opts.mouseReporting === false
+    ? { ...cap0, mouse: false }
+    : cap0
   const guard = new TeardownGuard(teardownSequence(cap))
   return {
     init(): string {

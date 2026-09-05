@@ -212,12 +212,20 @@ export function renderPermission(
   if (y < y1 - rows.length - footerH) y++
 
   // Option rows (skip rows that cannot fit; the host sizes the rect).
+  // M46b G1: the hovered option paints bg_visual (spec §2 — "permission/
+  // question 项悬停"; the cursor row keeps its own bg_visual — hover on the
+  // cursor row is a visual no-op). The hit area is the full row band.
   for (const row of rows) {
     if (y > y1 - footerH) break
     const isCursor = Number(row.key) - 1 === state.cursor
     const marker = isCursor ? glyphs.filledDot : "○"
-    const rowStyle = withBg(draw.color(palette.textPrimary), isCursor)
-    const keyStyle = withBg(draw.color(palette.accentUser, { bold: true }), isCursor)
+    const rowHover = !isCursor && draw.hit != null && draw.hit(
+      { x: x0 + 1, y, w: Math.max(1, ctx.w - 2), h: 1 },
+      `${surf.id}-opt-${row.key}`,
+      "permission-option",
+    )
+    const rowStyle = withBg(draw.color(palette.textPrimary), isCursor || rowHover)
+    const keyStyle = withBg(draw.color(palette.accentUser, { bold: true }), isCursor || rowHover)
     let rx = contentX
     rx = draw.text(rx, y, `${row.key} (${marker}) `, keyStyle, limitX)
     draw.text(rx, y, row.label, rowStyle, limitX)

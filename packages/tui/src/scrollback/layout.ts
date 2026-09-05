@@ -96,6 +96,8 @@ export function rowsToLines(
     collapsed?: boolean
     sticky?: boolean
     ts?: string
+    /** M46b G1: the raw epoch behind `ts` (the timestamp hover swap). */
+    tsTs?: number
     tsReserve?: boolean
     glyph?: string
   } = {},
@@ -117,9 +119,22 @@ export function rowsToLines(
     }
   }
   if (op.ts !== undefined && out.length > 0) {
-    out[0] = { ...out[0], timestamp: op.ts }
+    out[0] = { ...out[0], timestamp: op.ts, ...(op.tsTs !== undefined ? { timestampTs: op.tsTs } : {}) }
   }
   return out
+}
+
+/** The timestamp hover swap (M46b G1): `%H:%M:%S | %b %d` — 24h clock, the
+ * grok datetime-detail vocabulary (e.g. "18:45:32 | Sep 05"). Returns the
+ * string WITHOUT the leading space; the presenter right-aligns it. */
+export function formatTimestampDetail(ts: number): string {
+  const d = new Date(ts)
+  const hh = String(d.getHours()).padStart(2, "0")
+  const mm = String(d.getMinutes()).padStart(2, "0")
+  const ss = String(d.getSeconds()).padStart(2, "0")
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${hh}:${mm}:${ss} | ${MONTHS[d.getMonth()]} ${day}`
 }
 
 /* ------------------------------------------------------------------ Fenwick */
@@ -395,6 +410,7 @@ export class SegmentIndex {
     const lines = rowsToLines(rows, this.width, {
       anchor: blockIdOf(b),
       ts,
+      tsTs: ts !== undefined ? b.ts : undefined,
       tsReserve: ts !== undefined,
       glyph: rowGlyphFor(b, q.stateOf(index), this.opts.glyphs),
     })
@@ -432,6 +448,7 @@ export class SegmentIndex {
       anchor: blockIdOf(user),
       sticky: true,
       ts,
+      tsTs: ts !== undefined ? user.ts : undefined,
       tsReserve: ts !== undefined,
     })
   }

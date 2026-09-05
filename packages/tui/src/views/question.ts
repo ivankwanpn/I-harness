@@ -186,16 +186,22 @@ export function renderQuestion(
   // Gap row where space allows.
   if (y < y1 - q.options.length - freeformH - footerH) y++
 
-  // Option rows: `{key} {marker} {label}`.
+  // Option rows: `{key} {marker} {label}`. M46b G1: the hovered option paints
+  // bg_visual (cursor row keeps its own; hover-on-cursor is a no-op).
   for (let i = 0; i < q.options.length; i++) {
     if (y > y1 - freeformH - footerH) break
     const opt = q.options[i]!
     const isCursor = !state.freeformFocused && i === state.cursor
+    const rowHover = !isCursor && draw.hit != null && draw.hit(
+      { x: x0 + 1, y, w: Math.max(1, ctx.w - 2), h: 1 },
+      `${q.id}-opt-${opt.key}`,
+      "question-option",
+    )
     const marker = q.multi
       ? state.selected.includes(opt.key) ? "[x]" : "[ ]"
       : isCursor ? `(${glyphs.filledDot})` : "(○)"
-    const rowStyle = withBg(draw.color(palette.textPrimary), isCursor)
-    const keyStyle = withBg(draw.color(palette.accentUser, { bold: true }), isCursor)
+    const rowStyle = withBg(draw.color(palette.textPrimary), isCursor || rowHover)
+    const keyStyle = withBg(draw.color(palette.accentUser, { bold: true }), isCursor || rowHover)
     let rx = contentX
     rx = draw.text(rx, y, `${opt.key} ${marker} `, keyStyle, limitX)
     draw.text(rx, y, opt.label, rowStyle, limitX)

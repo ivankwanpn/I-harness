@@ -127,7 +127,20 @@ describe("ProviderStore — settings section shape", () => {
     // The persisted document is the normalize-verified shape (no drift).
     expect(JSON.parse(JSON.stringify(settings.get().tui))).toEqual({
       providers: { version: 1, activeProviderId: "deepseek", providers: { deepseek: DEEPSEEK } },
-      prefs: { timestamps: false, compact: false, guardian: false, alwaysApprove: true },
+      // M46b G1: the Mouse knobs joined the prefs (normalize defaults).
+      prefs: {
+        timestamps: false,
+        compact: false,
+        guardian: false,
+        alwaysApprove: true,
+        scrollSpeed: 50,
+        scrollMode: "auto",
+        scrollLines: 3,
+        invertScroll: false,
+        keepTextSelection: "flash",
+        wordSeparators: "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~",
+        mouseReportingToggle: false,
+      },
     })
   })
 

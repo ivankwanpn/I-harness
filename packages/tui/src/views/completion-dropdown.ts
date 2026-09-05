@@ -57,7 +57,11 @@ export function renderCompletionDropdown(
     if (entry === undefined) break
 
     const isCursor = i === state.cursor
-    const isHover = state.hover === i
+    // M46b G1: the hover engine drives the row visual (state.hover is G2's
+    // click-layer mirror — both feed bgHover; the engine's hit() is THE
+    // pointer truth, so a row is hovered when either says so).
+    const hitHover = view.hit != null && view.hit({ x: ctx.x, y, w: limitX - ctx.x, h: 1 }, `dd-row-${i}`, "dropdown-row")
+    const isHover = state.hover === i || hitHover
     fillRow(ctx.x, y, limitX, isCursor ? bgVisual : isHover ? bgHover : bgLight, view)
 
     let x = ctx.x

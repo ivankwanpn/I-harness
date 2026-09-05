@@ -26,6 +26,9 @@ export type AppAction =
   | "history-prev" | "history-next"
   | "stash-draft" | "send-background" | "edit-prompt-editor"
   | "open-command-palette"
+  // M46b G1: mouse-reporting opt-in — Ctrl+R (scrollback only) toggles mouse
+  // capture/hover. Registered ONLY when the feature knob is on (default off).
+  | "toggle-mouse-reporting"
   | "none"
   // overlay / modal / dropdown / picker (spec §4 modal & dropdown keys)
   | "overlay-select"                 // Enter / Tab accept
@@ -99,6 +102,10 @@ export interface KeymapState {
   rewindAvailable?: boolean
   /** M43: the previous empty-Esc armed the rewind (toast) — the next opens. */
   rewindArmed?: boolean
+  /** M46b G1: the mouse-reporting-toggle feature is ON (settings
+   * `[ui] mouse_reporting_toggle` / env GROK_MOUSE_REPORTING_TOGGLE) — the
+   * Ctrl+R scrollback binding now toggles capture (off → the default "none"). */
+  mouseToggle?: boolean
 }
 
 const isShiftTab = (ev: Kbd): boolean =>
@@ -139,11 +146,11 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
         case "m": return "open-model-picker"
         case ",": return "open-settings"
         // M46a G2 (keys truth): Ctrl+G tasks pane, Ctrl+B send-to-background
-        // slot, Ctrl+R mouse-reporting opt-in (registered 'none' — inert
-        // until M46b); sessions moved to F3.
+        // slot, Ctrl+R mouse-reporting opt-in (M46b G1: bound ONLY when the
+        // feature knob is on — else the default 'none'); sessions moved to F3.
         case "g": return "toggle-tasks-pane"
         case "b": return "send-background"
-        case "r": return "none" // M46b: mouse-reporting opt-in slot
+        case "r": return state.mouseToggle === true ? "toggle-mouse-reporting" : "none"
       }
     }
     if (ev.code === "char" && !ev.ctrl && !ev.alt) {
@@ -201,11 +208,11 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
       case "q": return "quit"
       case "t": return "toggle-todo-pane"
       // M46a keys truth: Ctrl+G tasks pane (agent screen), Ctrl+B the
-      // send-to-background slot, Ctrl+R the mouse-reporting opt-in slot
-      // (registered 'none' — inert until M46b), Ctrl+S the DRAFT STASH.
+      // send-to-background slot, Ctrl+R mouse-reporting (M46b G1: the binding
+      // is SCROLLBACK-only per grok — prompt Ctrl+R stays the history-reverse
+      // slot, i.e. 'none' here), Ctrl+S the DRAFT STASH.
       case "g": return "toggle-tasks-pane"
       case "b": return "send-background"
-      case "r": return "none" // M46b: mouse-reporting opt-in slot
       case ";": return "toggle-queue-pane" // spec §4: Ctrl+; queue pane
       case "s": return "stash-draft" // keys truth: Ctrl+S = stash/pop the draft
       case "n": return "sessions-new" // spec §4: Ctrl+N new session

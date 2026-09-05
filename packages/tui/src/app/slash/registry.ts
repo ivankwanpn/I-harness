@@ -10,6 +10,7 @@ import type { SlashCommand, SlashContext } from "./types.ts"
 import { approvalCommands } from "./impl/approval.ts"
 import { ecoCommands } from "./impl/eco.ts"
 import { g1Commands } from "./impl/g1.ts"
+import { mouseCommands } from "./impl/mouse.ts"
 import { navigationCommands } from "./impl/navigation.ts"
 import { runCommands } from "./impl/run.ts"
 import { sessionCommands } from "./impl/sessions.ts"
@@ -39,6 +40,9 @@ export function builtinCommands(): SlashCommand[] {
     ...ecoCommands,
     // new surfaces
     ...surfaceCommands,
+    // M46b G1: mouse surfaces — /toggle-mouse-reporting (feature-gated:
+    // visible + executable ONLY when [ui] mouse_reporting_toggle is on).
+    ...mouseCommands(),
     // hidden skip-list (visible: false — completeness inventory only)
     ...skippedCommands,
   ]
