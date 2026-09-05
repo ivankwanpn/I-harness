@@ -33,6 +33,8 @@ import { renderSessionPicker, flattenSessions } from "../views/session-picker.ts
 import type { SessionPickerState } from "../views/session-picker.ts"
 import { renderWelcome } from "../views/welcome.ts"
 import type { WelcomeState } from "../views/welcome.ts"
+import { renderLightPanel } from "../views/light-panel.ts"
+import type { LightPanelState } from "../views/light-panel.ts"
 import type { AppAction } from "./keys.ts"
 import { HUD_PANEL_W, renderHud } from "./hud.ts"
 import type { HudState } from "./hud.ts"
@@ -79,6 +81,22 @@ export interface TuiAppState {
    * rewind UI is open / the anchor is active. Undefined = no dim (zero
    * overhead — no per-row math on the scrollback draw path). */
   dimFrom?: number
+  // M46a (G2): slash registry / keys-truth app state — the REAL toggle knobs
+  // the commands flip (theme palette kind, engine timestamps, compact layout,
+  // approval defaults, draft stash slot, the open light panel).
+  /** Theme kind ("auto" = the capability guess; /theme cycles). */
+  theme?: "groknight" | "grokday" | "auto"
+  /** Engine timestamps toggle (/timestamps). */
+  timestamps?: boolean
+  /** Compact layout toggle (/compact-mode). */
+  compactMode?: boolean
+  /** Approval defaults toggle (/always-approve, /auto — M46b wire seam note). */
+  autoApprove?: boolean
+  /** The draft stash slot (Ctrl+S / Alt+S — swap semantics). */
+  draft?: string
+  /** Open light panel (skills/mcps/hooks/plugins/personas/usage/... — the
+   * generic row-list box above the prompt). */
+  lightPanel?: LightPanelState
 }
 
 /** The active dropdown 1: kind + height (layoutAgent places the rect above
@@ -90,6 +108,9 @@ function dropdownDescOf(app: TuiAppState): AgentViewState["dropdown"] {
   }
   if (app.historyPanel !== undefined) {
     return { kind: "history", rows: 2 + Math.min(app.historyPanel.entries.length, 10) }
+  }
+  if (app.lightPanel !== undefined) {
+    return { kind: "light", rows: 2 + Math.min(app.lightPanel.rows.length, 10) }
   }
   if (app.fileSearch !== undefined) {
     return { kind: "file-search", rows: 2 + Math.min(app.fileSearch.files.length, 10) }
@@ -537,7 +558,13 @@ export function present(
   if (app.overlay !== undefined) {
     app.overlay.draw(layout.prompt, view, palette, glyphs)
   } else {
-    renderPrompt(layout.prompt, app.prompt, view, palette, glyphs)
+    // M46a: /find search mode — the prompt box becomes the search bar (the
+    // query text + the `find` title; Enter applies, Esc exits — the loop owns
+    // both). The base prompt state is untouched.
+    const search = app.search?.active === true ? app.search : undefined
+    renderPrompt(layout.prompt, search !== undefined
+      ? { ...app.prompt, text: search.text, plan: false, multiLine: false, cursor: search.text.length, title: "find     Enter applies · Esc exits" }
+      : app.prompt, view, palette, glyphs)
   }
 
   // Dropdowns/pickers (spec §3.6) — drawn above the prompt, mutually exclusive.
@@ -548,6 +575,8 @@ export function present(
       renderSessionPicker(dd, st, view, palette, glyphs)
     } else if (app.historyPanel !== undefined) {
       renderHistoryPanel(dd, app.historyPanel, view, palette, glyphs)
+    } else if (app.lightPanel !== undefined) {
+      renderLightPanel(dd, app.lightPanel, view, palette, glyphs)
     } else if (app.fileSearch !== undefined) {
       renderFileSearch(dd, app.fileSearch, view, palette, glyphs)
     } else if (app.completion !== undefined) {

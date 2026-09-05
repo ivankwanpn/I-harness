@@ -336,10 +336,34 @@ async function main(): Promise<void> {
     },
     input: input.source,
     now: () => TUI_FROZEN_NOW,
-    slashCommands: [], // no slash registry — "/" never opens the dropdown
+    slashCommands: [], // no M37b dropdown registry — the visible set is the M46a builtin registry
     listSessions: backend.listSessions, // the picker's loader seam
   })
   appRef = app
+  // M46a: /btw is the REGISTRY command now (not a backend submit) — the app
+  // sets paneData.btw (asking) + steers; the HOST observes the pane and drives
+  // the answering → done → close lifecycle exactly like the pre-M46a submit
+  // path did (the pane visual contract is unchanged).
+  const btwObserver = setInterval(() => {
+    const btw = app.state().paneData?.btw
+    if (btw === undefined || btw.state !== "asking") return
+    clearInterval(btwObserver)
+    writeFileSync(`${MARKER_DIR}/record-submit.json`, JSON.stringify({ text: `/btw ${btw.question}` }))
+    marker("btw-submitted")
+    const set = (s: BtwState | undefined): void => {
+      const p = app.state().paneData
+      app.state().paneData = s === undefined ? { ...(p ?? {}), btw: undefined } : { ...(p ?? {}), btw: s }
+      app.dispatch("none")
+    }
+    set({ question: btw.question, state: "answering", nowMs: 0 })
+    setTimeout(() => {
+      set({ question: btw.question, state: "done", text: "the files are already committed" })
+      marker("btw-done")
+    }, 400)
+    setTimeout(() => {
+      set(undefined) // host-side close (production: backend btw event)
+    }, 900)
+  }, 25)
   // Seeded 2-entry history: interaction 3's submit appends "/btw why".
   app.state().history = ["build a game"]
   app.state().historyIndex = 1

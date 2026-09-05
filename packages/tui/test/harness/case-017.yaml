@@ -118,9 +118,9 @@ steps:
         - ""
   - assert-file: { name: "record-submit.json", contains: '"/btw why"' }
   # ---- interaction 4: session picker ---------------------------------------
-  # NOTE: app keys.ts binds Ctrl-S → sessions = 0x13 (the milestone brief's
-  # "\x15" is ASCII Ctrl-U/NAK — an UNBOUND key; \x13 is the real trigger).
-  - write-pty: { data: "\x13" }
+  # M46a keys truth: F3 = the session picker (Ctrl+S is the DRAFT STASH now) —
+  # F3 is xterm SS3 'R' → \x1bOR through the pty.
+  - write-pty: { data: "\x1bOR" }
   - wait-screen:
       timeoutMs: 8000
       region: { startRow: 8 }
@@ -177,13 +177,14 @@ steps:
   - request-marker: { name: request-exit }
   - await-marker: { name: teardown-wrote }
   - assert-glyph-integrity: {}
-  # 23 writes = init + 21 non-empty frames + teardown:
+  # 24 writes = init + 22 non-empty frames + teardown:
   #   f1 permission modal · f2 freeform preview (the "dont trust" burst
   #   coalesces — the freeform gutter does not yield between captured chars,
   #   host-side; one frame shows the full preview) · f3 modal gone
   #   · f4 question modal · f5 modal gone · f6-f13 "/btw why" (8 chars)
-  #   · f14 btw answering · f15 btw done · f16 btw closed · f17 picker open
-  #   · f18 k-nav cursor · f19 picker closed+opened record · f20 history panel
-  #   · f21 history dismissed
-  - assert-byte-budget: { writes: 23 }
+  #   · f14 btw asking (the M46a registry /btw command's dispatch frame)
+  #   · f15 btw answering · f16 btw done · f17 btw closed · f18 picker open
+  #   · f19 k-nav cursor · f20 picker closed+opened record · f21 history panel
+  #   · f22 history dismissed
+  - assert-byte-budget: { writes: 24 }
   - wait-exit: { code: 0 }

@@ -57,6 +57,7 @@
 import { randomUUID } from "node:crypto"
 import { append, subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
 import { RewindService } from "@i-harness/rewind"
+import { applyTitle, normalizeTitle } from "@i-harness/session-title"
 import { createSessionService, type SessionAssembly, type SessionService, type SessionServiceOptions } from "@i-harness/session-executor"
 import { activeTokens } from "@i-harness/token-meter"
 import { toolKindOf, type BackendClient, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
@@ -517,6 +518,24 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     ...(opts.rewindWorkspace !== undefined
       ? { rewind: buildRewindMember(opts.rewindWorkspace, ensureAssembly) }
       : {}),
+
+    // M46a G2: session rename — the session-title backend: applyTitle appends
+    // a `session/title` event into the live log (the bridge maps it to the TUI
+    // title event → the app title follows through the event stream). The
+    // normalized title is the canonical-store rule (R-A6, title-invalid guard).
+    async rename(title: string): Promise<void> {
+      const s = await ensureSession()
+      applyTitle(s, normalizeTitle(title), "user")
+    },
+
+    // M46a G2: session compact — the M33 session-compact command surface
+    // (session-executor assembly.compactNow — shadow + summary; the CLI's
+    // registerCommand handler is assembly-backed; this is the same call).
+    async compact(instructions?: string): Promise<{ compacted: boolean }> {
+      const assembly = await ensureAssembly()
+      const r = await assembly.compactNow(instructions)
+      return { compacted: r.compacted }
+    },
 
     async close(): Promise<void> {
       if (closed) return
