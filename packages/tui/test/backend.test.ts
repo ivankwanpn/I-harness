@@ -343,6 +343,27 @@ describe("embedded backend", () => {
     await fresh.close()
   })
 
+  it("durable close is shared and idempotent across concurrent callers", async () => {
+    const root = tmp()
+    const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    const id = (await seed.create()).id
+    await seed.close()
+    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", coordinator, resumeSessionId: id })
+    let flushes = 0
+    let closes = 0
+    const flush = coordinator.flush.bind(coordinator)
+    const close = coordinator.close.bind(coordinator)
+    coordinator.flush = async (sessionId) => { flushes++; await sleep(20); return flush(sessionId) }
+    coordinator.close = async () => { closes++; return close() }
+    const first = backend.close()
+    const second = backend.close()
+    expect(first).toBe(second)
+    await Promise.all([first, second, backend.close()])
+    expect(flushes).toBe(1)
+    expect(closes).toBe(1)
+  })
+
   it("durable close propagates flush failure and still closes an owned coordinator", async () => {
     const root = tmp()
     const coordinator = createSessionCoordinator(createJsonlBackend(root))

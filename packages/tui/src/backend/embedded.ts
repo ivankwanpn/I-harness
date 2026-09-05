@@ -635,12 +635,16 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
     const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(opts.rewindStoreRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
     if (coordinator === undefined) return backend
     const close = backend.close.bind(backend)
-    backend.close = async () => {
-      await close()
-      let failure: unknown
-      try { await coordinator.flush(sessionId!) } catch (error) { failure = error }
-      try { if (ownsCoordinator) await coordinator.close() } catch (error) { if (failure === undefined) failure = error }
-      if (failure !== undefined) throw failure
+    let closePromise: Promise<void> | undefined
+    backend.close = () => {
+      closePromise ??= (async () => {
+        await close()
+        let failure: unknown
+        try { await coordinator.flush(sessionId!) } catch (error) { failure = error }
+        try { if (ownsCoordinator) await coordinator.close() } catch (error) { if (failure === undefined) failure = error }
+        if (failure !== undefined) throw failure
+      })()
+      return closePromise
     }
     return backend
   } catch (error) {
