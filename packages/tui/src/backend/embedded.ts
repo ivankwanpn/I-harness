@@ -600,7 +600,9 @@ function buildRewindMember(
  * in-memory; callers wanting durability must M38 the factory. */
 export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Promise<BackendClient> {
   const forceMock = opts.forceMock ?? true
-  const ownsCoordinator = opts.coordinator === undefined && opts.storeRoot !== undefined
+  // A resumed injected coordinator is transferred to this factory instance because
+  // adoptOwnership() holds its lease until coordinator.close().
+  const ownsCoordinator = (opts.coordinator === undefined && opts.storeRoot !== undefined) || (opts.coordinator !== undefined && opts.resumeSessionId !== undefined)
   const coordinator = opts.coordinator ?? (opts.storeRoot === undefined ? undefined : createSessionCoordinator(createJsonlBackend(opts.storeRoot), { lock: { enabled: true, lockRoot: opts.storeRoot } }))
   let sessionId = opts.resumeSessionId
   let session: Session | undefined
