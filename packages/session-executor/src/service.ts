@@ -151,7 +151,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (hasQueued) {
       telemetry?.emit({ type: "session/queued", ts: Date.now(), data: { sessionId } })
     }
-    void prev.then(() => {
+    const startTurn = (): void => {
       if (closed || signal.aborted) {
         settle() // the queued turn never starts; the chain keeps moving
         return
@@ -201,7 +201,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         })
         settleError(error)
       })
-    })
+    }
+    void prev.then(startTurn, startTurn)
     return turn
   }
 
