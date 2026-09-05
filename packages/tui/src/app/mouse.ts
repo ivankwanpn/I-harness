@@ -518,6 +518,11 @@ export class MouseRouter {
    * would UNDO it, so the fold re-fires only for the subagent class (which d2
    * left unfolded) and the scroll-top always runs. */
   private doubleClickBlock(line: number, title: string, third: boolean): void {
+    // M46c G1: a fold REPLACES the layout — the selection spans stale lines
+    // — drop it (the selection state + the rendered box) on the fold.
+    this.engine.clearSelection?.()
+    this.app.selectionFlashUntil = undefined
+    this.app.selectionDragLine = undefined
     const subagentClass = title.startsWith("Started ") || title.startsWith("Completed ") || title.startsWith("Failed ")
     if (third) {
       if (subagentClass) this.engine.toggleFoldAt(line)

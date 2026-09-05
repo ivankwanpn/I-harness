@@ -28,6 +28,8 @@ const EXPECTED_VISIBLE = new Set([
   "rewind", "compact", "plan", "view-plan", "queue", "tasks", "btw",
   // visual
   "theme", "timestamps", "multiline", "compact-mode", "minimal", "fullscreen",
+  // M46c G1: /timeline — the turn rail toggle (the skip entry superseded).
+  "timeline",
   // approval
   "always-approve", "auto",
   // tools
@@ -45,7 +47,7 @@ const EXPECTED_HIDDEN = new Set([
   "share", "login", "logout", "import-claude", "remember", "recap",
   "loop", "voice", "imagine", "imagine-video", "gboom", "cd", "fork",
   "dashboard", "context", "edit-prompt", "expand",
-  "toggle-mouse-reporting", "timeline", "debug", "scroll-debug",
+  "toggle-mouse-reporting", "debug", "scroll-debug",
 ])
 
 describe("CommandRegistry — builtin inventory", () => {

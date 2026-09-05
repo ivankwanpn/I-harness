@@ -38,6 +38,9 @@ import { renderWelcome } from "../views/welcome.ts"
 import type { WelcomeState } from "../views/welcome.ts"
 import { renderLightPanel } from "../views/light-panel.ts"
 import type { LightPanelState } from "../views/light-panel.ts"
+// M46c G1: the turn timeline rail (spec §3.12) — the overlay drawer +
+// the shared gate (`timelineActive` — present + the mouse router use it).
+import { renderTimelineRail, TIMELINE_W, timelineActive } from "../views/timeline.ts"
 import type { AppAction } from "./keys.ts"
 import { HUD_PANEL_W, renderHud } from "./hud.ts"
 import type { HudState } from "./hud.ts"
@@ -132,6 +135,16 @@ export interface TuiAppState {
   /** Prompt textarea drag selection (char offsets) — copy-on-up; undefined =
    * no active range. */
   promptSelect?: { a: number; b: number }
+  // ---- M46c G1 (selection borders + timeline rail — renderable now).
+  /** The turn timeline rail toggle (host option — default OFF; /timeline
+   * flips it). The rail only draws while the gate holds (see
+   * views/timeline.timelineActive: width>=60 + turns>=2 + !subagent view —
+   * this app has no subagent fullscreen surface). */
+  showTimeline?: boolean
+  /** The pointer display-line during an ACTIVE scrollback drag (the mouse
+   * router sets/clears it) — the selection `▏` tape draws at this line's row
+   * while the drag is open; undefined = no tape. */
+  selectionDragLine?: number
 }
 
 /** The active dropdown 1: kind + height (layoutAgent places the rect above
@@ -425,6 +438,98 @@ function isNeutralStyle(s: TextStyle): boolean {
  * DisplayLine.glyph — the drawer renders it verbatim. Text runs carry no
  * glyph duplicates (single-glyph rule; fixes the ◆◆ double-draw artifact). */
 
+// ------------------------------------------------------------------ M46c G1: selection border geometry
+
+/** M46c G1: the selection box geometry (pure — the overlay draw pass and the
+ * mouse router's ✗ click-clear hit-test share it; no drift). The box wraps
+ * the selected display-line span FULL-WIDTH: left border = the inner-pad
+ * column right after the accent rail (1 col into the pad), right border = the
+ * first column past the content's ts (with the timeline rail on, 1 column
+ * left of the rail — the ticks stay clean). The horizontal borders sit on the
+ * exact selected top/bottom rows; when the span crosses the viewport edge the
+ * corners are dropped and the SIDES read dashed `┆` (spec: clipped = dashed).
+ * Returns undefined when nothing of the span is visible. */
+export function selectionBoxOf(
+  sb: Rect,
+  off: number,
+  sel: { a: number; b: number },
+  timelineOn: boolean,
+): { left: number; right: number; rows: [number, number]; clipTop: boolean; clipBottom: boolean } | undefined {
+  const a = Math.max(0, Math.trunc(sel.a))
+  const b = Math.max(a, Math.trunc(sel.b))
+  if (b < off || a >= off + sb.h) return undefined // no visible part
+  const rows: [number, number] = [Math.max(a, off), Math.min(b, off + sb.h - 1)]
+  return {
+    left: sb.x + SCROLLBACK_RAIL_W + SCROLLBACK_PAD_W - 1,
+    right: sb.x + sb.w - SCROLLBACK_PAD_W - (timelineOn ? TIMELINE_W : 0),
+    rows,
+    clipTop: a < off,
+    clipBottom: b >= off + sb.h,
+  }
+}
+
+/** M46c G1: the selection overlay — the FINAL pass of drawScrollback (after
+ * every row's runs; selection_border `┌┐└┘│` box, `┆` on clipped sides, `✗`
+ * replacing the top-right `┐`, the `▏` tape at the pointer row during an
+ * active drag). Pure overlay: only pad/corner cells are written + the
+ * horizontal border rows overlay the selected rows' content — NO re-layout
+ * (the rows below/inside keep their exact runs). The ✗ registers a hover hit
+ * area (id sel-clear) — the mouse router clears the selection on its cell. */
+function drawSelectionOverlay(
+  buf: Renderer["buffer"],
+  rect: Rect,
+  off: number,
+  app: TuiAppState,
+  view: ViewDraw,
+  palette: Palette,
+): void {
+  const sel = app.engine.selection?.()
+  if (sel === undefined) return
+  // Keep the gate cheap: timelineActive is the rail's gate too (the box steps
+  // 1 column left of the rail only while the rail is live).
+  const timelineOn = timelineActive(app, rect, app.engine)
+  const box = selectionBoxOf(rect, off, sel, timelineOn)
+  if (box === undefined) return
+
+  const border = view.color(palette.selectionBorder)
+  const borderBold: ReturnType<ViewDraw["color"]> = { ...border, bold: true }
+  const [topLine, bottomLine] = box.rows
+  const { left, right, clipTop, clipBottom } = box
+  const singleRow = topLine === bottomLine
+  const borderW = Math.max(0, right - left - 1)
+  const wide = "─".repeat(borderW)
+  const topRow = rect.y + (topLine - off)
+
+  // The ✗ hit slot FIRST (registered while drawing — the hovered flag settles
+  // at the frame's end; the click router hits the geometry itself).
+  const xHovered = app.mouse?.enabled === true && view.hit!(
+    { x: right, y: topRow, w: 1, h: 1 },
+    "sel-clear",
+    "selection-clear",
+  )
+
+  for (let line = topLine; line <= bottomLine; line++) {
+    const y = rect.y + (line - off)
+    const isTop = line === topLine
+    const isBottom = line === bottomLine
+    const leftGlyph = isTop ? (clipTop ? "┆" : "┌") : isBottom ? (clipBottom ? "┆" : "└") : "│"
+    const rightGlyph = isTop
+      ? (clipTop ? "┆" : "✗")
+      : isBottom ? (clipBottom ? "┆" : "┘") : "│"
+    // The live drag tape: `▏` replaces the left border at the pointer row.
+    const tape = app.selectionDragLine !== undefined && line === app.selectionDragLine
+    view.cell(left, y, { text: tape ? "▏" : leftGlyph, style: tape ? borderBold : border, width: 1, continuation: false })
+    view.cell(right, y, { text: rightGlyph, style: isTop && !clipTop && xHovered ? borderBold : border, width: 1, continuation: false })
+    if (!singleRow && (isTop || isBottom) && y < buf.height) {
+      // Horizontal borders on the exact top/bottom rows (overlay — the runs
+      // underneath are PAINTED OVER, never re-laid-out). limitX = right
+      // (exclusive): the corner cells stay owned by the loop above. A SINGLE
+      // row skips the dashes (the top+bottom would collide) — corners only.
+      if (borderW > 0) view.text(left + 1, y, wide, border, right)
+    }
+  }
+}
+
 function drawScrollback(
   buf: Renderer["buffer"],
   rect: Rect,
@@ -553,6 +658,11 @@ function drawScrollback(
       rightAlign(buf, contentEnd - 1, y, tsText, dimmed ? dimTowardBg(tsStyle, palette, cap) : tsStyle)
     }
   }
+
+  // M46c G1: the selection overlay — the FINAL pass (after every row's runs +
+  // ts; the box/tape/✗ write the pad columns + border rows only, the content
+  // runs stay untouched — no re-layout).
+  drawSelectionOverlay(buf, rect, off, app, view, palette)
 }
 
 // ------------------------------------------------------------------ toasts (M40 G2)
@@ -656,6 +766,10 @@ export function present(
     renderTodoPane(layout.todo, app.paneData.todo, view, palette, glyphs)
   }
   drawScrollback(buf, layout.scrollback, app, view, palette, glyphs, cap)
+  // M46c G1: the timeline rail — drawn AFTER the scrollback rows (the rail's
+  // right-2 columns are blank in every scrollback row — pure overlay), BEFORE
+  // the panes/turn row (the rail belongs to the scrollback column).
+  renderTimelineRail(layout.scrollback, app, view, palette)
   if (layout.btw !== undefined && app.paneData?.btw !== undefined) {
     renderBtwOverlay(layout.btw, app.paneData.btw, view, palette, glyphs)
   }

@@ -82,6 +82,119 @@ test(
 )
 
 test(
+  "case-023: timeline rail — ticks/chevrons/hover-popup render + /timeline toggle + chevron jump",
+  async () => {
+    // Scene "023t" (host opt-in showTimeline:true): the SAME two-turn scene
+    // settles (follow view — the active tick = the newest turn) with the rail
+    // live: ▴ at the rail's top end, `━━` at the active turn's anchor row, ▾
+    // at the bottom end. The step flow: cell asserts → hover the active tick
+    // (── + the 1-line popup card, preview "again") → /timeline off (rail
+    // gone) → /timeline on (rail back) → the ▴ chevron click jumps the
+    // viewport to turn 1 (the /jump goTo seam).
+    const scene: Scene = {
+      name: "case-023-timeline-rail",
+      host: "test/harness/host-023.ts",
+      size: [80, 24],
+      steps: [
+        { "await-marker": { name: "scene-ready" } },
+        { "await-marker": { name: "events-seeded" } },
+        { "await-marker": { name: "frame-11" } },
+        { "await-quiescent": { ms: 300 } },
+        // ── the rail at the settle: ▴ top, active `━━` at the again row, ▾ bottom.
+        { "assert-cell-colors": {
+            cells: [
+              { row: 2, col: 76, text: "▴" },
+              { row: 12, col: 76, text: "━" },
+              { row: 12, col: 77, text: "━" },
+              { row: 14, col: 76, text: "▾" },
+            ],
+            timeoutMs: 4000,
+          } },
+        // ── hover the active tick → ── + the popup card (preview "again"
+        // right-aligned in the 21-col card flush to the rail).
+        { "write-pty": { data: "\x1b[<3;77;13M" } },
+        { "assert-cell-colors": {
+            cells: [
+              { row: 12, col: 76, text: "─" },
+              { row: 12, col: 75, text: "n" },
+              { row: 12, col: 71, text: "a" },
+            ],
+            timeoutMs: 4000,
+          } },
+        // ── /timeline OFF → the rail is gone (the tick cell clean).
+        { "write-pty": { data: "/timeline" } },
+        { "write-pty": { data: "\r" } },
+        { "write-pty": { data: "\r" } },
+        { "await-quiescent": { ms: 200 } },
+        { "assert-cell-colors": { cells: [{ row: 12, col: 76, text: " " }], timeoutMs: 4000 } },
+        // ── /timeline ON → the rail back (the pointer moved away first —
+        // the hover would otherwise hold the tick at `──`).
+        { "write-pty": { data: "/timeline" } },
+        { "write-pty": { data: "\r" } },
+        { "write-pty": { data: "\r" } },
+        { "await-quiescent": { ms: 200 } },
+        { "write-pty": { data: "\x1b[<3;75;20M" } },
+        { "assert-cell-colors": { cells: [{ row: 12, col: 76, text: "━" }], timeoutMs: 4000 } },
+        // ── the ▴ chevron (1-based col 77, row 3) → jump to the previous
+        // turn anchor (line 0 — the "hello" viewport at the top). Anchored
+        // cells (the rows carry ts + the rail — full-string pins would need
+        // the exact rail column).
+        { "write-pty": { data: "\x1b[<0;77;3M\x1b[<0;77;3m" } },
+        { "assert-cell-colors": {
+            cells: [
+              { row: 2, col: 6, text: "❯ hello" },
+              { row: 3, col: 6, text: "two lines" },
+              { row: 4, col: 6, text: "third line" },
+            ],
+            timeoutMs: 5000,
+          } },
+        { "assert-glyph-integrity": {} },
+        { "request-marker": { name: "request-exit" } },
+        { "await-marker": { name: "teardown-wrote" } },
+        // Calibrated: init(1) + 37 frames (settle + hover/toggle/jump
+        // repaints, each deliberate) + teardown(1) = 39.
+        { "assert-byte-budget": { writes: 39 } },
+        { "wait-exit": { code: 0 } },
+      ],
+    }
+
+    const markerDir = mkdtempSync(join(tmpdir(), "tui-case-023t-"))
+    let runner: HostPty | undefined
+    let off: (() => void) | undefined
+    try {
+      runner = spawnHost({
+        hostFile: HOST_FILE,
+        markerDir,
+        cols: scene.size[0],
+        rows: scene.size[1],
+        extraArgv: ["023t", `${scene.size[0]}x${scene.size[1]}`],
+      })
+      const virtual = new VirtualTerminal(scene.size[0], scene.size[1])
+      off = runner.onData((d) => virtual.write(d))
+      const result = await runScenario(scene, { runner, virtual, markerDir })
+      if (!result.ok) {
+        const dump: string[] = []
+        for (let y = 0; y < 30; y++) dump.push(`${y}: ${JSON.stringify(virtual.rowText(y))}`)
+        writeFileSync(join(markerDir, "screen-dump.txt"), dump.join("\n"))
+      }
+      expect(result.ok, result.ok ? "ok" : `scenario failed: ${result.error}`).toBe(true)
+    } finally {
+      off?.()
+      if (runner !== undefined) {
+        try {
+          runner.pty.kill()
+        } catch {
+          /* already dead */
+        }
+      }
+      if ((process.env.TUI_KEEP_DIR ?? "") !== "") console.log(`[keep] markerDir=${markerDir}`)
+      else rmSync(markerDir, { recursive: true, force: true })
+    }
+  },
+  150_000,
+)
+
+test(
   "case-023: minimal no-capture — the byte stream contains NO mouse-mode enable sequence",
   async () => {
     // The minimal scene (host-023 "023m"): mode "minimal" over the REAL inline

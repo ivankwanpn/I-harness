@@ -9,9 +9,11 @@
 //  - /voice /imagine*: no audio/image pipeline.
 //  - /gboom /cd /fork: no dashboard identity / no session cwd change / no
 //    fork surface (attachments M46b+).
-//  - /edit-prompt /expand /timeline /debug /scroll-debug: M46b (M46b G1
+//  - /edit-prompt /expand /debug /scroll-debug: M46b (M46b G1
 //    /toggle-mouse-reporting is now a REAL feature-gated command in
 //    impl/mouse.ts — this skip entry replaced by it).
+//  - /timeline: M46c G1 RENDERED — the visible /timeline command in
+//    impl/timeline.ts replaced the M46b skip entry (removed here).
 //  - /dashboard /context /settings: M46a G1 owns the settings modal +
 //    dashboard surfaces (registered here to stay grep-able).
 
@@ -46,7 +48,6 @@ export const skippedCommands: SlashCommand[] = [
   hidden("context", "context surface rides the settings modal (M46a G1 — the visible /settings command owns the name)"),
   hidden("edit-prompt", "$EDITOR prompt editing lands M46b (minimal Ctrl+G slot exists)"),
   hidden("expand", "expand/minimal full-view lands M46b"),
-  hidden("timeline", "timeline view lands M46b (rewind anchor data rides the M42 store)"),
   hidden("debug", "debug HUD is F3-free (the HUD flag; scroll-debug M46b)"),
   hidden("scroll-debug", "scroll debug lands M46b (debug HUD flag exists)"),
 ]

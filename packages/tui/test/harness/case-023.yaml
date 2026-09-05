@@ -22,10 +22,11 @@
 #     the new offset (the follow-pin released);
 #   - wheel ×4 → the app offset 1 (the row-pin target for the clicks below).
 # Witnesses (host-side): engine selection → <dir>/selection.json +
-# "selection-changed" (the selection box painting is a harmonization concern;
-# the ENGINE set is the assertable truth); RECORDER clipboard →
-# <dir>/clipboard.json + "copied" (the injected-copy hard rule);
-# permission decision.json (host-013 parity: the seam built by the host).
+# "selection-changed" (M46c G1: the BOX painting now renders — STEP 5b asserts
+# the real border cells + the ✗ click-clear; the ENGINE set stays the
+# backup witness); RECORDER clipboard → <dir>/clipboard.json + "copied" (the
+# injected-copy hard rule); permission decision.json (host-013 parity: the
+# seam built by the host).
 #
 # The SGR 1006 code notes (parser): <0;x;yM = left press, <0;x;ym = release,
 # <3;x;yM = no-button MOTION (hover), <32;x;yM = held-button DRAG motion
@@ -197,6 +198,34 @@ steps:
         - { row: 23, col: 72, text: "Copied!" }
         - { row: 23, col: 72, bg: "#141414" }
       timeoutMs: 3000
+  # ── STEP 5b (M46c G1): the SELECTION BOX is now RENDERED — the real-PTY
+  # render assertion (upgraded from the watcher-only witness): the frozen
+  # clock keeps the flash live, the view sits at offset 1 → the span lines
+  # 5..9 occupies rows 6..10 with the box (left col 4, right col 76 0-based):
+  # ┌✗ top (dashes), │ sides, └┘ bottom. Then the ✗ click-to-clear (the
+  # top-right corner cell, 1-based col 77 row 7) drops the selection so the
+  # following steps' rows stay exact.
+  - assert-cell-colors:
+      cells:
+        - { row: 6, col: 4, text: "┌" }
+        - { row: 6, col: 76, text: "✗" }
+        - { row: 6, col: 10, text: "─" }
+        - { row: 7, col: 4, text: "│" }
+        - { row: 7, col: 76, text: "│" }
+        - { row: 10, col: 4, text: "└" }
+        - { row: 10, col: 76, text: "┘" }
+      timeoutMs: 3000
+  - write-pty:
+      data: "\x1b[<0;77;7M\x1b[<0;77;7m"
+  - await-quiescent: { ms: 200 }
+  # the box is GONE: row 6 (line 5, "data-1") reads content-only (the border
+  # cells would sit at cols 4/76 — a wait-screen row pins both cleanly).
+  - wait-screen:
+      region: { startRow: 6 }
+      rows:
+        - "  ┃   data-1"
+        - "  ┃   data-2"
+      timeoutMs: 5000
   # ── STEP 6: SCROLLBAR DRAG — the LAST scrollback column (x=78 1-based =
   # the app cell 77 = rect.x + rect.w - 1): down = latch + fraction jump
   # (offset 0 at the top row), dragged motion to the middle = proportional
@@ -275,5 +304,8 @@ steps:
   - assert-glyph-integrity: {}
   - request-marker: { name: request-exit }
   - await-marker: { name: teardown-wrote }
-  - assert-byte-budget: { writes: 34 }
+  # Hover-settle math: the ✗ click is a pointer move too — the settled
+  # hovered set flips (drag-row → ✗ row) → ONE extra repaint frame; the
+  # budget is 34 (M46b) + 2 (✗ clear frame + the hover flip frame).
+  - assert-byte-budget: { writes: 36 }
   - wait-exit: { code: 0 }

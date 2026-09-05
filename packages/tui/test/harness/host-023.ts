@@ -234,6 +234,9 @@ async function main023(): Promise<void> {
     palette: resolvePalette(cap, "groknight"),
     glyphs: makeGlyphs(true),
     clipboard,
+    // M46c G1: scene "023t" opts the timeline rail on (the mini-case asserts
+    // the rail ticks/chevrons + /timeline toggle at this exact geometry).
+    showTimeline: SCENE === "023t",
     write: (s: string) => {
       out(s)
       const n = ++frameN
@@ -263,7 +266,10 @@ async function main023(): Promise<void> {
   terminal.init()
   void app.start()
 
-  // === late permission overlay (host-013 parity, the seam's direct path) ===
+  // === late permission overlay (host-013 parity, the seam's direct path).
+  // Scene "023t" (the timeline mini-case) skips it — no modal on the rail
+  // frames; the other scenes keep the exact host-013 flow.
+  if (SCENE !== "023t") {
   await pollMarker("req-overlay")
   const surf: PermissionSurface = {
     id: "p1",
@@ -286,6 +292,7 @@ async function main023(): Promise<void> {
   })
   marker("overlay-p1")
   app.dispatch("none")
+  }
 
   await pollMarker("request-exit")
   clearInterval(selWatch)
