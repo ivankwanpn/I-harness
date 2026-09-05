@@ -59,7 +59,7 @@
 5. **System proxy support incl. Windows WinINET registry parsing** (`src/utils/systemProxy.ts` + `proxy.ts`).
 6. **Repeated use of `feature('FLAG')` from `bun:bundle`** (DCE at build) and `process.env.USER_TYPE === 'ant'` for internal-only tools (REPLTool, ConfigTool, etc.) — much internal Anthropic machinery (swarm, coordinator mode, proactive, buddy duck, moreright stubs) remains in-tree but gated.
 7. **Visible-reasoning/live-streaming** feature implemented OpenCode-style (mouse-expand thinking timeline).
-8. **Dev environment state is committed:** repo `.claude/providers.json` contains a **real-looking API key** (`sk-fb085104fc9046dbad0c07c64bbdf071`) — accidental secret in the workspace.
+8. **Dev environment state is committed:** repo `.claude/providers.json` contains a **real-looking API key** (`sk-<REDACTED>`) — accidental secret in the workspace.
 
 ## 6. Concept Verdict
 The project embodies the concept: **"A restorable, third-party-provider-only fork of Anthropic's Claude Code CLI — decompiled to readable TypeScript, runs under Bun, with a rewritten state-machine agent loop, multi-provider/OAuth/proxy support, and a Windows installer that downloads its own dependencies."** Despite the question's hint about "opencode-style," cc-custom shares only the visible-reasoning UI pattern with opencode; its lineage, namespace, and semantics are pure Claude Code.
