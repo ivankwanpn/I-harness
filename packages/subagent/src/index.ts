@@ -233,7 +233,7 @@ async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable)
   for (const entry of table.entries().values()) {
     if (!entry.sessionId || !deps.childSessions) continue
     try {
-      const loaded = await deps.childSessions.coordinator.load(entry.sessionId)
+      const loaded = await deps.childSessions.coordinator.loadOwned(entry.sessionId)
       const resumed = createSession((ev) => {
         deps.childSessions!.coordinator.enqueue(entry.sessionId!, [ev])
         if (ev.type === "turn/end") void deps.childSessions!.coordinator.flush(entry.sessionId!).catch(() => {})

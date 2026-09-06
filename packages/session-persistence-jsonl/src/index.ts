@@ -86,6 +86,16 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       return { version: header.formatVersion, events: [...events, ...closers], meta: header }
     },
 
+    async replaceEvents(sessionId, events) {
+      const path = filePath(sessionId)
+      const text = await readFile(path, "utf-8")
+      const header = parseHeader(text.split("\n")[0]!)
+      const tmp = `${path}.${randomUUID()}.tmp`
+      const body = [serializeHeader(header), ...events.map((event) => JSON.stringify(event)), ""].join("\n")
+      await writeFile(tmp, body, { encoding: "utf-8" })
+      await rename(tmp, path)
+    },
+
     async profile(sessionId) {
       const path = filePath(sessionId)
       const updatedAt = (await stat(path)).mtimeMs

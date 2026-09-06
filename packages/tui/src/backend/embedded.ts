@@ -649,8 +649,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
   try {
     if (coordinator !== undefined) {
       if (sessionId !== undefined) {
-        const restored = (await coordinator.load(sessionId)).session
-        await coordinator.adoptOwnership(sessionId)
+        const restored = (await coordinator.loadOwned(sessionId)).session
         sessions.set(sessionId, mirroredSession(sessionId, restored))
       } else {
         sessionId = (await coordinator.create()).id
@@ -661,8 +660,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
         if (cached !== undefined) return cached
         const ids = await coordinator.list()
         if (ids.includes(id)) {
-          const restored = (await coordinator.load(id)).session
-          await coordinator.adoptOwnership(id)
+          const restored = (await coordinator.loadOwned(id)).session
           const live = mirroredSession(id, restored)
           sessions.set(id, live)
           openedSessionIds.add(id)

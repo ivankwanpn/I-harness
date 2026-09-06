@@ -1134,7 +1134,11 @@ export class TuiApp {
   }
 
   private onBackend(ev: TuiEvent): void {
-    this.opts.engine.append(ev)
+    if (ev.type === "session/open" && this.opts.engine.reset !== undefined) {
+      this.opts.engine.reset()
+    } else {
+      this.opts.engine.append(ev)
+    }
     // Minimal commit pipeline (M38a): boundary events commit the engine
     // delta print-once; the region repaint rides the frame below.
     if (this.inlineActive()) this.minimalOnEvent(ev)

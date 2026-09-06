@@ -7,7 +7,7 @@
 // file, so the durable rewind fixture is written by THIS test via
 // @i-harness/rewind's RewindStore — the same store root the CLI wires).
 import { describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -169,6 +169,53 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
           "second prompt",
         ])
         expect(history.events.map((event) => event.seq)).toEqual(history.events.map((_, index) => index))
+      } finally {
+        await second.close().catch(() => {})
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(sessionDir, { recursive: true, force: true })
+      }
+    },
+    120_000,
+  )
+
+  it(
+    "persists crash-tail recovery before SDK continuation and a second restart",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-crash-ws-"))
+      const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-crash-sess-"))
+      const sessionId = "sdk-crash-recovery"
+      const sessionPath = join(sessionDir, `${sessionId}.jsonl`)
+      writeFileSync(sessionPath, [
+        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ type: "turn/start", seq: 0 }),
+        JSON.stringify({ type: "step/start", seq: 1 }),
+        JSON.stringify({ type: "tool/call", callId: "lost", name: "bash", args: { cmd: "echo hi" }, seq: 2 }),
+        "",
+      ].join("\n"), "utf8")
+      const args = ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir]
+
+      const first = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      try {
+        await first.request("initialize", {})
+        await first.run({ sessionId, prompt: "continue after crash" })
+      } finally {
+        await first.close().catch(() => {})
+      }
+
+      const rawAfterFirst = readFileSync(sessionPath, "utf8").trim().split("\n").slice(1)
+        .map((line) => JSON.parse(line) as { type: string; seq?: number; output?: { code?: string } })
+      expect(rawAfterFirst.map((event) => event.seq)).toEqual(rawAfterFirst.map((_, index) => index))
+      expect(rawAfterFirst.some((event) => event.type === "tool/result" && event.output?.code === "TOOL_ABORTED_BEFORE_DISPATCH")).toBe(true)
+
+      const second = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      try {
+        await second.request("initialize", {})
+        await second.run({ sessionId, prompt: "second restart" })
+        const history = await second.history(sessionId)
+        expect(history.events.some((event) =>
+          event.type === "tool/result"
+          && (event.output as { code?: string }).code === "TOOL_ABORTED_BEFORE_DISPATCH",
+        )).toBe(true)
       } finally {
         await second.close().catch(() => {})
         rmSync(workspace, { recursive: true, force: true })
