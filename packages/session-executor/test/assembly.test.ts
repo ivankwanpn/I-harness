@@ -4,9 +4,33 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { createSessionAssembly, estimateAssemblyOverhead } from "../src/assembly.ts"
+import {
+  createSessionAssembly,
+  estimateAssemblyOverhead,
+  ModelUnavailableError,
+} from "../src/assembly.ts"
 
 describe("createSessionAssembly", () => {
+  it("required model policy refuses an assembly without a client", async () => {
+    await expect(createSessionAssembly({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+    })).rejects.toThrow(ModelUnavailableError)
+  })
+
+  it("test-mock policy is an explicit test-only opt in", async () => {
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      modelPolicy: "test-mock",
+      mockCycles: true,
+    })
+    try {
+      await expect(assembly.agent.run("hello")).resolves.toMatchObject({ finalText: "ok" })
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
   it("composes an agent and a session and disposes cleanly", async () => {
     const assembly = await createSessionAssembly({ workspace: process.cwd(), sessionId: "s1" })
     expect(assembly.session.events).toEqual([])

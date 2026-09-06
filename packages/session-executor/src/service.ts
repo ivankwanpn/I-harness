@@ -25,7 +25,31 @@ import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type Re
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
-import { createSessionAssembly, type AssemblyOptions, type SessionAssembly } from "./assembly.ts"
+import {
+  createSessionAssembly,
+  ModelUnavailableError,
+  type AssemblyOptions,
+  type SessionAssembly,
+} from "./assembly.ts"
+
+export type SessionModelBindingResult =
+  | { status: "unconfigured"; reason: string }
+  | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
+  | {
+      status: "ready"
+      binding: {
+        model: ModelClient
+        providerId: string
+        modelId: string
+        label: string
+        reasoningEffort?: ReasoningEffort
+        contextWindow?: number
+      }
+    }
+
+type SessionModelState =
+  | Exclude<SessionModelBindingResult, { status: "ready" }>
+  | { status: "ready"; providerId: string; modelId: string; label: string }
 
 export interface SessionServiceOptions extends AssemblyOptions {
   beforeDispose?: () => Promise<void>
@@ -38,6 +62,13 @@ export interface SessionServiceOptions extends AssemblyOptions {
    * (apps/cli/src/web.ts resolveModelSpec). Absent → the assembly's mock
    * default. */
   modelBuilder?: (sessionId: string, meta: SessionMeta | undefined) => Promise<ModelClient | undefined>
+  /** Atomic per-session model resolution. The local structural type keeps
+   * session-executor independent of provider-runtime; app composition adapts
+   * the provider result at this boundary. */
+  modelBindingFor?: (
+    sessionId: string,
+    meta: SessionMeta | undefined,
+  ) => Promise<SessionModelBindingResult>
   /** Resolve a host-seeded session per id. When defined, it takes precedence
    * over the static `session` option for every assembly build. */
   sessionFor?: (sessionId: string) => Promise<Session | undefined>
@@ -61,6 +92,8 @@ export interface SessionService {
    * error frame). */
   submit(sessionId: string, prompt: string, signal: AbortSignal): Promise<void>
   assemblyFor(sessionId: string): Promise<SessionAssembly>
+  /** Resolve serializable model state without constructing an assembly. */
+  modelState(sessionId: string): Promise<SessionModelState>
   liveSession(sessionId: string): Session | undefined
   hasAssembly(sessionId: string): boolean
   /** Per-session lane observation for the jobs/queue surface:
@@ -70,8 +103,9 @@ export interface SessionService {
   /** Fires once per created assembly — the bridge attach point
    * (approval/question bridges). */
   onAssembly(hook: (assembly: SessionAssembly) => void): () => void
-  /** Wait for this session's pending work/build, remove its lane/assembly,
-   * and dispose only that assembly. A later request may build it again. */
+  /** Wait for this session's pending work/build/model resolution, remove its
+   * cached state and assembly, and dispose only that assembly. A later
+   * request resolves and builds it again. */
   closeSession(sessionId: string): Promise<void>
   /** Wait for active turns, then dispose every assembly best-effort. NEVER
    * closes a caller-owned telemetry stream or coordinator. */
@@ -82,6 +116,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const assemblies = new Map<string, SessionAssembly>()
   const lanes = new Map<string, SessionTurnLane>()
   const creating = new Map<string, Promise<SessionAssembly>>()
+  const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
   const hooks = new Set<(assembly: SessionAssembly) => void>()
   const chains = new Map<string, Promise<void>>()
   const active = new Set<Promise<void>>()
@@ -91,6 +126,36 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const registered = new Map<string, number>()
   const telemetry = opts.telemetry
   let closed = false
+
+  function bindingFor(sessionId: string): Promise<SessionModelBindingResult> {
+    let pending = modelBindings.get(sessionId)
+    if (pending === undefined) {
+      const resolveBinding = opts.modelBindingFor
+      pending = resolveBinding === undefined
+        ? Promise.resolve({ status: "unconfigured", reason: "No model configured" })
+        : (async () => {
+            const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
+            return resolveBinding(sessionId, meta)
+          })()
+      modelBindings.set(sessionId, pending)
+    }
+    return pending
+  }
+
+  async function modelState(sessionId: string): Promise<SessionModelState> {
+    if (closed) throw new Error("session service closed")
+    const pendingClose = closing.get(sessionId)
+    if (pendingClose !== undefined) await pendingClose
+    if (closed) throw new Error("session service closed")
+    const result = await bindingFor(sessionId)
+    if (result.status !== "ready") return result
+    return {
+      status: "ready",
+      providerId: result.binding.providerId,
+      modelId: result.binding.modelId,
+      label: result.binding.label,
+    }
+  }
 
   async function getOrCreate(sessionId: string): Promise<SessionAssembly> {
     if (closed) throw new Error("session service closed")
@@ -102,29 +167,48 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     let pending = creating.get(sessionId)
     if (pending === undefined) {
       pending = (async () => {
-        const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
-        const model = opts.modelBuilder === undefined ? undefined : await opts.modelBuilder(sessionId, meta)
-        const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
-        // M31 T3: per-session window (meta-aware) — a defined contextWindowFor
-        // decides even when it resolves to undefined (fail-closed).
-        const contextWindow = opts.contextWindowFor === undefined
-          ? opts.contextWindow
-          : opts.contextWindowFor(sessionId, meta)
-        // M32 T3: per-session effort (same meta-driven pattern as the window).
-        // A DEFINED resolver always wins — even when it resolves to undefined
-        // (the explicit spread below overrides the `...opts` static value; the
-        // assembly treats undefined as "never set").
-        const reasoningEffort = opts.reasoningEffortFor === undefined
-          ? opts.reasoningEffort
-          : opts.reasoningEffortFor(sessionId, meta)
-        const assembly = await createSessionAssembly({
-          ...opts,
-          sessionId,
-          session: resolvedSession,
-          ...(model !== undefined ? { model } : {}),
-          ...(opts.contextWindowFor !== undefined ? { contextWindow } : {}),
-          ...(opts.reasoningEffortFor !== undefined ? { reasoningEffort } : {}),
-        })
+        let assembly: SessionAssembly
+        if (opts.modelBindingFor !== undefined) {
+          const result = await bindingFor(sessionId)
+          if (result.status !== "ready") throw new ModelUnavailableError(result.reason)
+          const binding = result.binding
+          const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
+          assembly = await createSessionAssembly({
+            ...opts,
+            sessionId,
+            session: resolvedSession,
+            model: binding.model,
+            modelLabel: binding.label,
+            contextWindow: binding.contextWindow,
+            reasoningEffort: binding.reasoningEffort,
+          })
+        } else {
+          // Transitional legacy path. Task 4 migrates production callers to
+          // modelBindingFor, then changes omitted modelPolicy to required.
+          const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
+          const model = opts.modelBuilder === undefined ? undefined : await opts.modelBuilder(sessionId, meta)
+          const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
+          // M31 T3: per-session window (meta-aware) — a defined contextWindowFor
+          // decides even when it resolves to undefined (fail-closed).
+          const contextWindow = opts.contextWindowFor === undefined
+            ? opts.contextWindow
+            : opts.contextWindowFor(sessionId, meta)
+          // M32 T3: per-session effort (same meta-driven pattern as the window).
+          // A DEFINED resolver always wins — even when it resolves to undefined
+          // (the explicit spread below overrides the `...opts` static value; the
+          // assembly treats undefined as "never set").
+          const reasoningEffort = opts.reasoningEffortFor === undefined
+            ? opts.reasoningEffort
+            : opts.reasoningEffortFor(sessionId, meta)
+          assembly = await createSessionAssembly({
+            ...opts,
+            sessionId,
+            session: resolvedSession,
+            ...(model !== undefined ? { model } : {}),
+            ...(opts.contextWindowFor !== undefined ? { contextWindow } : {}),
+            ...(opts.reasoningEffortFor !== undefined ? { reasoningEffort } : {}),
+          })
+        }
         assemblies.set(sessionId, assembly)
         // The A-region serial lane over this assembly (tiers; send on submit).
         lanes.set(sessionId, createSessionExecutor({
@@ -225,12 +309,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   async function close(): Promise<void> {
     if (closed) return
     closed = true
-    await Promise.allSettled([...active, ...creating.values(), ...closing.values()])
+    await Promise.allSettled([
+      ...active,
+      ...creating.values(),
+      ...modelBindings.values(),
+      ...closing.values(),
+    ])
     let failure: unknown
     try { await opts.beforeDispose?.() } catch (error) { failure = error }
     const handles = [...assemblies.values()]
     assemblies.clear()
     lanes.clear()
+    modelBindings.clear()
     chains.clear()
     registered.clear()
     for (const handle of handles) await handle.dispose().catch(() => {})
@@ -246,9 +336,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (turn !== undefined) await Promise.allSettled([turn])
       const build = creating.get(sessionId)
       if (build !== undefined) await build.catch(() => undefined)
+      const binding = modelBindings.get(sessionId)
+      if (binding !== undefined) await Promise.allSettled([binding])
       const handle = assemblies.get(sessionId)
       assemblies.delete(sessionId)
       lanes.delete(sessionId)
+      modelBindings.delete(sessionId)
       chains.delete(sessionId)
       registered.delete(sessionId)
       await handle?.dispose().catch(() => {})
@@ -262,6 +355,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   return {
     submit,
     assemblyFor: getOrCreate,
+    modelState,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState: (sessionId) => {

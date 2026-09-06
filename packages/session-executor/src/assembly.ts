@@ -57,6 +57,15 @@ import { createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-pol
 import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
 import { parsePreset } from "@i-harness/preset"
 
+export type ModelPolicy = "required" | "test-mock"
+
+export class ModelUnavailableError extends Error {
+  constructor(message = "No model configured") {
+    super(message)
+    this.name = "ModelUnavailableError"
+  }
+}
+
 // The m26 mock client is destructive (one script step per turn, exhausted →
 // error). For the web path (repeated turns on ONE assembly with the default
 // mock) wrap it so every stream() call serves a fresh copy of the cycle.
@@ -73,7 +82,12 @@ export interface AssemblyOptions {
    * run may have none. */
   sessionId?: string
   workspace: string
-  model?: ModelClient // absent → mock client (mockScript or a single "ok" reply)
+  /** Explicit clients always win. Under `required`, absence rejects instead
+   * of constructing a mock. Omitted policy temporarily preserves the legacy
+   * mock fallback until production callers are migrated. */
+  modelPolicy?: ModelPolicy
+  model?: ModelClient
+  modelLabel?: string
   mockScript?: MockStep[]
   /** Only the MOCK default honors this: repeat:true cycles the single "ok"
    * step so repeated turns on one assembly (web) survive — CLI one-shot keeps
@@ -144,6 +158,7 @@ export interface SessionAssembly {
   session: Session // the live session — the source of truth
   sessionId?: string
   model: ModelClient // the resolved client (owner uses it for e.g. auto-title)
+  modelLabel?: string
   inbox: Inbox // the per-session serial lane's inbox (owner builds the A executor over it)
   telemetry?: Telemetry
   /** Request cancellation of one background job through the subagent job
@@ -177,6 +192,15 @@ export function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown)
 }
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
+  // Resolve before mounting resources so a required-but-missing model cannot
+  // leave a partially initialized assembly behind. Omitted policy is the
+  // Task-3 compatibility bridge; Task 4 changes that default to required.
+  const model: ModelClient = opts.model ?? (() => {
+    if (opts.modelPolicy === "required") throw new ModelUnavailableError()
+    return opts.mockScript === undefined && opts.mockCycles === true
+      ? cyclicMockClient([{ role: "assistant", text: "ok" }])
+      : createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
+  })()
   const ctx: PluginContext = createContext()
   const tools = createToolRegistry(ctx)
 
@@ -261,15 +285,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   if (opts.sessionQuery) {
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
   }
-
-  // Model: explicit client wins; otherwise the mock default. mockCycles wraps
-  // the destructive scriptless mock with a fresh copy per turn (the web path's
-  // repeated sends); CLI one-shot keeps the plain one-shot mock semantics.
-  const model: ModelClient = opts.model ?? (
-    opts.mockScript === undefined && opts.mockCycles === true
-      ? cyclicMockClient([{ role: "assistant", text: "ok" }])
-      : createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
-  )
 
   // ── session: live source of truth + coordinator mirror (write-behind) ──────
   const session = opts.session ?? createSession((ev) => {
@@ -488,6 +503,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       session,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       model,
+      ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
