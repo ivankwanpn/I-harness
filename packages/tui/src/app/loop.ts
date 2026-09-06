@@ -2564,7 +2564,6 @@ export class TuiApp {
       this.toast("no provider selected — /provider add first")
       return
     }
-    void controller.selectProvider(selectedId).catch(() => {})
     const state: ModelPickerState = {
       entries: modelPickerEntries(controller.modelsOf(selectedId)),
       cursor: 0,
@@ -2585,14 +2584,23 @@ export class TuiApp {
       },
       onClose: () => this.closeModal(),
     })
-    void controller.discoverModels(selectedId).then(
-      (count) => {
+    // ONE discovery run per picker open: selectProvider sets the selection
+    // synchronously (a concurrent Enter never races it) and runs discovery
+    // exactly once (the runtime memo skips the probe when the catalog is
+    // already loaded). The continuation refreshes the picker rows from the
+    // merged result; a failure keeps the stored catalog + toasts the summary.
+    void controller.selectProvider(selectedId).then(
+      () => {
         // The picker may have closed (Esc) before discovery resolved — guard.
         if (this.app.overlay === undefined) return
         const cur = this.app.overlay
         if ((cur as { kind?: string }).kind !== "model-picker") return
         state.entries = modelPickerEntries(controller.modelsOf(selectedId))
-        state.loading = count === 0
+        const discovery = controller.state().discovery
+        state.loading = discovery.status === "loading"
+        if (discovery.status === "failed" || discovery.status === "manual-only") {
+          this.toast(discovery.message ?? "discovery failed")
+        }
         this.requestFrame()
       },
       (error: unknown) => {

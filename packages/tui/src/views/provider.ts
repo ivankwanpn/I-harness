@@ -512,6 +512,11 @@ export function bindProviderOverlay(
         ...(existingConfig?.modelsURL !== undefined ? { modelsURL: existingConfig.modelsURL } : {}),
         ...(d.apiKey !== "" ? { apiKey: d.apiKey } : {}),
       })
+      // Binding: the raw key exists only while the secret editor is current —
+      // a successful COMMIT clears the draft (the stored ref keeps the key;
+      // an empty key field kept the current one — the draft is dead either way).
+      state.draft = undefined
+      state.field = 0
       opts.onSaved({ kind: state.editingId === undefined ? "add" : "update", id })
       await enterModels(id)
     } catch (error) {
