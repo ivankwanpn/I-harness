@@ -28,6 +28,7 @@ import type {
 export interface TodoItem { id: string; text: string; status: "pending" | "in_progress" | "completed" | "cancelled" }
 
 export type TuiEvent =
+  | { type: "session/open"; sessionId: string; seq: -1; ts: number }
   | { type: "user"; text: string; seq: number; ts: number }
   | { type: "user/edit"; text: string; seq: number; ts: number }
   | { type: "assistant"; text: string; seq: number; ts: number }   // chunk — appends to the open assistant block
@@ -71,7 +72,8 @@ export interface SessionSummary {
   id: string
   title: string
   updatedAt: number
-  turnCount: number
+  /** Absent when the listing source cannot inspect the event log honestly. */
+  turnCount?: number
   contextUsed?: number
   contextTotal?: number
 }
@@ -181,6 +183,9 @@ export interface ScrollbackSearchResult { matchLine: number; matchCol: number }
 export interface ScrollbackEngine {
   /** Append a mapped event; folded state for the event's block is preserved. */
   append(ev: TuiEvent): void
+  /** Clear every session-derived block/index/cursor while preserving display
+   * configuration such as width, glyphs, and the timestamps preference. */
+  reset?(): void
   /** Total display lines (after folding). */
   lineCount(): number
   /** O(rendered) — display lines for `height` visible lines at `offset`. */

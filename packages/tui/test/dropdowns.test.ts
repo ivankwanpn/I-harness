@@ -253,6 +253,17 @@ describe("session picker (spec §3.12)", () => {
     expect(rowText(r, 1)).toContain("Searching session content")
   })
 
+  it("omits the Turns field when the host cannot observe turnCount", () => {
+    const r = make(70, 6)
+    draw(r, (view) => renderSessionPicker({ x: 0, y: 0, w: 70, h: 6 }, {
+      groups: [{ repo: "x", sessions: [{ id: "unknown", title: "Unknown", updatedAt: now }] }],
+      cursor: 0,
+      now,
+    }, view, palette, GLYPHS))
+    expect(rowText(r, 4)).not.toContain("Turns")
+    expect(rowText(r, 4)).not.toContain("undefined")
+  })
+
   it("relative time formatting", () => {
     const r = make(44, 4)
     draw(r, (view) => renderSessionPicker({ x: 0, y: 0, w: 24, h: 4 }, {

@@ -74,8 +74,7 @@ export interface SlashContext {
   toast(text: string): void
   /** Workspace root the host runs in (skills/hooks/plugins/workflow scans). */
   workspace?: string
-  /** Current session id when the host knows it (host option; embedded
-   * sessions have an in-process id the app cannot introspect — honest absent). */
+  /** Current session id when the host or backend session/open event knows it. */
   sessionId?: string
   /** Turn count — the engine's User-block walk (turn anchors). */
   turns(): number

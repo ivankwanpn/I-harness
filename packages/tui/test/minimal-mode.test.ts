@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
 import type { TerminalCapabilityContext } from "@i-harness/tui-core"
 import { TuiApp } from "../src/app/loop.ts"
+import { createScrollbackEngine } from "../src/scrollback/engine.ts"
 import type { InlineHost } from "../src/app/loop.ts"
 import { composeRegion } from "../src/minimal/live-region.ts"
 import type { LiveRegionState } from "../src/minimal/live-region.ts"
@@ -23,6 +24,12 @@ import type { RegionLine } from "../src/minimal/contracts.ts"
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap)
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 afterEach(() => {
   vi.useRealTimers()
@@ -384,6 +391,145 @@ describe("TuiApp minimal path (fake InlineLiveRegion + fake engine)", () => {
     expect(writes.join("")).toContain("[region]")
     await backend.close()
     await run
+  })
+
+  it("session/open resets session-derived fullscreen state before low-seq history", async () => {
+    const backend = new QueueBackend()
+    const engine = createScrollbackEngine({ width: 80 })
+    const app = new TuiApp({
+      renderer: createRenderer({ cols: 80, rows: 24, cap }),
+      backend,
+      engine,
+      capabilities: cap,
+      palette,
+      glyphs: GLYPHS,
+      write: () => {},
+      sessionId: "initial",
+    })
+    const run = app.start()
+    try {
+      backend.push(
+        { type: "user", text: "old history", seq: 100, ts: 0 },
+        { type: "title", title: "old title", seq: 101, ts: 0 },
+        { type: "plan", phase: "on", seq: 102, ts: 0 },
+        { type: "todo", items: [{ id: "old", text: "old todo", status: "pending" }], seq: 103, ts: 0 },
+        { type: "goal", label: "old goal", state: "active", seq: 104, ts: 0 },
+        { type: "turn", phase: "start", seq: 105, ts: 0 },
+      )
+      await sleep(40)
+      const state = app.state()
+      state.prompt.text = "old draft"
+      state.prompt.cursor = state.prompt.text.length
+      state.history = ["old prompt"]
+      state.historyIndex = 1
+      state.status.contextUsed = 42
+      state.status.contextTotal = 100
+      state.status.tasks = { running: 1, labels: ["old task"] }
+      state.status.queue = 2
+      state.panes.add("todo")
+      state.scroll = { offset: 7, follow: false, selectionAnchor: 3 }
+      state.search = { active: true, text: "old", matches: [0], current: 1 }
+      state.dimFrom = 4
+
+      backend.push(
+        { type: "session/open", sessionId: "next", seq: -1, ts: 1 } as TuiEvent,
+        { type: "user", text: "new history", seq: 0, ts: 2 },
+      )
+      await sleep(40)
+
+      expect(engine.viewport(0, 10).map((line) => line.runs.map((run) => run.text).join(""))).toEqual(["❯ new history"])
+      expect(state.prompt.text).toBe("")
+      expect(state.history).toEqual([])
+      expect(state.title).toBe("untitled")
+      expect(state.mode).toBe("normal")
+      expect(state.status.plan).toBe(false)
+      expect(state.status.todo).toEqual({ done: 0, total: 0 })
+      expect(state.status.goal).toBeUndefined()
+      expect(state.status.tasks).toEqual({ running: 0, labels: [] })
+      expect(state.status.contextUsed).toBeUndefined()
+      expect(state.status.contextTotal).toBeUndefined()
+      expect(state.status.queue).toBe(0)
+      expect(state.paneData).toBeUndefined()
+      expect(state.panes.size).toBe(0)
+      expect(state.turn).toBeUndefined()
+      expect(state.search).toBeUndefined()
+      expect(state.scroll).toEqual({ offset: 0, follow: true })
+      expect(state.dimFrom).toBeUndefined()
+      state.prompt.text = "/session-info"
+      state.prompt.cursor = state.prompt.text.length
+      app.dispatch("submit")
+      await sleep(20)
+      expect(state.lightPanel?.rows.find((row) => row.label === "id")?.detail).toBe("next")
+    } finally {
+      await backend.close()
+      await run
+    }
+  })
+
+  it("session/open ignores an old context probe and refreshes the new session", async () => {
+    const oldContext = deferred<{ used: number; total: number }>()
+    const newContext = deferred<{ used: number; total: number }>()
+    const backend = new QueueBackend() as QueueBackend & Pick<BackendClient, "context">
+    let probes = 0
+    backend.context = async () => (++probes === 1 ? oldContext.promise : newContext.promise)
+    const app = new TuiApp({
+      renderer: createRenderer({ cols: 80, rows: 24, cap }),
+      backend,
+      engine: createScrollbackEngine({ width: 80 }),
+      capabilities: cap,
+      palette,
+      glyphs: GLYPHS,
+      write: () => {},
+    })
+    const run = app.start()
+    try {
+      await sleep(10)
+      expect(probes).toBe(1)
+      backend.push({ type: "session/open", sessionId: "next", seq: -1, ts: 1 } as TuiEvent)
+      await sleep(10)
+      oldContext.resolve({ used: 99, total: 100 })
+      await sleep(20)
+      expect(app.state().status.contextUsed).toBeUndefined()
+      expect(probes).toBe(2)
+      newContext.resolve({ used: 2, total: 100 })
+      await sleep(20)
+      expect(app.state().status.contextUsed).toBe(2)
+    } finally {
+      newContext.resolve({ used: 2, total: 100 })
+      await backend.close()
+      await run
+    }
+  })
+
+  it("keeps the session picker open and owns a failed backend open", async () => {
+    const backend = new QueueBackend()
+    backend.open = async () => { throw new Error("session locked") }
+    const app = new TuiApp({
+      renderer: createRenderer({ cols: 80, rows: 24, cap }),
+      backend,
+      engine: createScrollbackEngine({ width: 80 }),
+      capabilities: cap,
+      palette,
+      glyphs: GLYPHS,
+      write: () => {},
+      listSessions: async () => [{ id: "locked", title: "Locked", updatedAt: 1, turnCount: 2 }],
+    })
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      app.dispatch("sessions")
+      await sleep(10)
+      expect(app.state().sessions?.loading).toBe(false)
+      app.dispatch("overlay-select")
+      await sleep(20)
+      expect(unhandled).toEqual([])
+      expect(app.state().sessions?.loading).toBe(false)
+      expect(app.state().sessions).toBeDefined()
+      expect(app.state().toasts.some((toast) => toast.text.includes("session locked"))).toBe(true)
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+    }
   })
 
   it("submitting `/minimal` relays to the mode switch (relaunch handled, loop quits)", async () => {

@@ -918,10 +918,19 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
 
     async open(id: string): Promise<void> {
       if (closed) throw new Error("remote backend closed")
+      if (queue.timer !== undefined) {
+        clearTimeout(queue.timer)
+        queue.timer = undefined
+      }
+      queue.items.length = 0
       sessionId = id
       cursor = -1
+      turnCount = 0
+      cancelNoted = false
+      lastStatus = { running: false, queued: 0 }
       liveState.lastSeq = -1
       liveState.chunksSinceAssistant = false
+      pushEvent({ type: "session/open", sessionId: id, seq: -1, ts: Date.now() })
     },
 
     submit,

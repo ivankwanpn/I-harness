@@ -306,9 +306,11 @@ export interface EmbeddedFactoryOptions {
 export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
   const service = opts.service
   const batchMs = opts.batchMs ?? 16
-  let rebindLiveSession: ((session: Session) => void) | undefined
+  let rebindLiveSession: ((session: Session, openedSessionId: string) => void) | undefined
+  let pendingOpenedSessionId: string | undefined
 
   let sessionId = opts.sessionId
+  let openGeneration = 0
   let closed = false
   let currentSubmit: AbortController | undefined
   // -1 = nothing applied yet. replay() is EXCLUSIVE (seqs > afterSeq), so the
@@ -356,30 +358,44 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
   let assemblyForId: string | undefined
 
   async function ensureAssembly(): Promise<SessionAssembly> {
-    if (closed) throw new Error("embedded backend closed")
-    if (cachedAssembly !== undefined && assemblyForId === sessionId) return cachedAssembly
-    const a = await service.assemblyFor(sessionId)
-    cachedAssembly = a
-    assemblyForId = sessionId
-    return a
+    for (;;) {
+      if (closed) throw new Error("embedded backend closed")
+      const targetId = sessionId
+      if (cachedAssembly !== undefined && assemblyForId === targetId) return cachedAssembly
+      const assembly = await service.assemblyFor(targetId)
+      if (targetId !== sessionId) continue
+      cachedAssembly = assembly
+      assemblyForId = targetId
+      return assembly
+    }
   }
 
   return {
     async listSessions(): Promise<SessionSummary[]> {
       if (opts.listSessions !== undefined) return opts.listSessions()
       const live = await ensureSession().catch(() => undefined)
-      const turnCount = live === undefined ? 0 : live.events.filter((e) => e.type === "turn/start").length
-      return [{ id: sessionId, title: "Session", updatedAt: Date.now(), turnCount }]
+      const turnCount = live?.events.filter((e) => e.type === "turn/start").length
+      return [{
+        id: sessionId,
+        title: "Session",
+        updatedAt: Date.now(),
+        ...(turnCount !== undefined ? { turnCount } : {}),
+      }]
     },
 
     async open(id: string): Promise<void> {
       if (closed) throw new Error("embedded backend closed")
+      const generation = ++openGeneration
+      const assembly = await service.assemblyFor(id)
+      if (closed) throw new Error("embedded backend closed")
+      if (generation !== openGeneration) return
       sessionId = id
-      cachedAssembly = undefined // re-resolve per session id
-      assemblyForId = undefined
+      cachedAssembly = assembly
+      assemblyForId = id
       cursor = -1
-      const s = await ensureSession()
-      rebindLiveSession?.(s)
+      const s = assembly.session
+      if (rebindLiveSession !== undefined) rebindLiveSession(s, id)
+      else pendingOpenedSessionId = id
       if (opts.prompt !== undefined && opts.prompt !== "" && s.events.length === 0 && !promptSubmittedFor.has(id)) {
         promptSubmittedFor.add(id)
         // initial kickoff for the fresh session — errors surface on the stream
@@ -424,7 +440,12 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     async *events(): AsyncIterable<TuiEvent> {
       let s: Session
       try {
-        s = await ensureSession()
+        for (;;) {
+          const assembly = await ensureAssembly()
+          if (assembly !== cachedAssembly || assemblyForId !== sessionId) continue
+          s = assembly.session
+          break
+        }
       } catch (error) {
         pushError(`session open failed: ${errText(error)}`)
         return
@@ -435,7 +456,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
         return mapped === undefined ? [] : [mapped]
       }
       let unsubscribe: (() => void) | undefined
-      const bind = (next: Session): void => {
+      const bind = (next: Session, openedSessionId?: string): void => {
         unsubscribe?.()
         if (queue.timer !== undefined) {
           clearTimeout(queue.timer)
@@ -443,6 +464,9 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
         }
         queue.items.length = 0
         mapState = createEventMapState()
+        if (openedSessionId !== undefined) {
+          pushEvent({ type: "session/open", sessionId: openedSessionId, seq: -1, ts: Date.now() })
+        }
         unsubscribe = subscribe(next, (ev) => {
           for (const mapped of walkMap(ev)) pushEvent(mapped)
         })
@@ -451,8 +475,10 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
         }
         queue.wake?.()
       }
-      rebindLiveSession = bind
-      bind(s)
+      rebindLiveSession = (next, openedSessionId) => bind(next, openedSessionId)
+      const openedSessionId = pendingOpenedSessionId
+      pendingOpenedSessionId = undefined
+      bind(s, openedSessionId)
       try {
         for (;;) {
           // drain the elapsed batch in one burst, then yield one item per pull
@@ -473,7 +499,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
           queue.timer = undefined
         }
         queue.wake = undefined
-        if (rebindLiveSession === bind) rebindLiveSession = undefined
+        rebindLiveSession = undefined
         unsubscribe?.()
       }
     },
@@ -666,9 +692,17 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
             const [{ meta, updatedAt }, raw] = await Promise.all([jsonlBackend.profile(id), jsonlBackend.read(id)])
             return { id, title: meta.title ?? "Session", updatedAt: updatedAt ?? Date.parse(meta.createdAt), turnCount: raw.events.filter((event) => event.type === "turn/start").length }
           }
-          const { meta, updatedAt } = await coordinator.profile(id)
+          const { meta, updatedAt, blank } = await coordinator.profile(id)
           const live = service.liveSession(id)
-          return { id, title: meta.title ?? "Session", updatedAt: updatedAt ?? Date.parse(meta.createdAt), turnCount: live?.events.filter((event) => event.type === "turn/start").length ?? 0 }
+          const turnCount = live === undefined
+            ? blank ? 0 : undefined
+            : live.events.filter((event) => event.type === "turn/start").length
+          return {
+            id,
+            title: meta.title ?? "Session",
+            updatedAt: updatedAt ?? Date.parse(meta.createdAt),
+            ...(turnCount !== undefined ? { turnCount } : {}),
+          }
         } catch {
           return undefined
         }
