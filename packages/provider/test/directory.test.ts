@@ -69,6 +69,26 @@ describe("provider directory view", () => {
 })
 
 describe("probeModels", () => {
+  it("fetches an explicit modelsURL exactly without appending candidate paths", async () => {
+    const exactFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: "exact-model" }] }), { status: 200 }),
+    )
+    vi.stubGlobal("fetch", exactFetch)
+    const reg = createProviderRegistry()
+    reg.register({ name: "custom", displayName: "Custom", protocol: "openai-compatible" })
+
+    await expect(reg.probeModels("custom", {
+      modelsURL: "https://models.example/v1/models",
+      apiKey: "k",
+      protocol: "openai-completions",
+    })).resolves.toEqual([{ id: "exact-model" }])
+    expect(exactFetch).toHaveBeenCalledTimes(1)
+    expect(exactFetch).toHaveBeenCalledWith("https://models.example/v1/models", {
+      headers: { Authorization: "Bearer k" },
+      signal: expect.any(AbortSignal),
+    })
+  })
+
   it("falls back to the profile's static catalog when no probe is registered (deepseek), without any fetch", async () => {
     vi.stubGlobal("fetch", fetchMock)
     const reg = createProviderRegistry()
