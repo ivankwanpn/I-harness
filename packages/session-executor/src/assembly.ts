@@ -522,10 +522,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // M49 Task 12: the projection owns NO registry object — rows only. The
       // workflow group comes from THIS workflow executor's real store rows
       // (mounted unconditionally above — the non-null claim is the mount
-      // ordering).
+      // ordering) FILTERED to the runs THIS session started (the workflow_run
+      // tool attributes each run to its calling session id; runs started
+      // outside a session — the run-level /workflow panel — are attributed to
+      // no session and belong to that panel's surface, so a session's
+      // projection never shows another session's workflow jobs).
       tasks: () => [
         ...subagent.projectTasks(),
-        ...projectWorkflowRows(workflowMount!.executor.listJobs()),
+        ...projectWorkflowRows(workflowMount!.executor.listJobs(), opts.sessionId),
       ],
       // Cancellation routes by owner: agent path → the live entry's abort
       // channel + its job kill (interrupt_agent/job_kill parity — the two

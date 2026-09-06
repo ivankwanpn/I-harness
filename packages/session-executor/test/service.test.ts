@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -773,6 +776,54 @@ describe("createSessionService — real task projection (Task 12)", () => {
       expect(service.tasks("never-assembled")).toEqual([])
     } finally {
       await service.close()
+    }
+  }, 60_000)
+
+  it("workflow rows are attributed to the session that started them — session B never sees session A's run (review finding 1)", async () => {
+    // A REAL workflow definition in the assembly's workspace — the run starts
+    // through the model-facing workflow_run tool (exec.sessionId = the
+    // calling session), the job lands in the run-level shared store, and the
+    // per-session projection must show it ONLY to its own session.
+    const ws = mkdtempSync(join(tmpdir(), "ih-t12-wf-"))
+    mkdirSync(join(ws, "workflow"), { recursive: true })
+    writeFileSync(join(ws, "workflow/echo.yml"), "name: echo\ndescription: one echo step\nsteps:\n  - name: say\n    command: echo hi\n")
+    let started = false
+    const model: ModelClient = {
+      async *stream(_request: LLMRequest) {
+        if (!started) {
+          started = true
+          yield { type: "tool_call", call: { name: "workflow_run", args: { name: "echo" } } }
+          yield { type: "end" }
+          return
+        }
+        yield { type: "text/chunk", text: "ok" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: ws,
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    })
+    try {
+      await service.submit("a", "start the workflow", new AbortController().signal)
+      await waitFor(() => service.tasks("a").some((row) => row.group === "workflow"))
+      expect(service.tasks("a")).toContainEqual(expect.objectContaining({ group: "workflow" }))
+
+      // session B (same process, same run-level store) never sees A's row.
+      const b = await service.assemblyFor("b")
+      expect(b.tasks().filter((row) => row.group === "workflow")).toEqual([])
+      expect(service.tasks("b").filter((row) => row.group === "workflow")).toEqual([])
+
+      // the run's stored row remains (the store keeps terminal rows too).
+      expect(service.tasks("a").some((row) => row.group === "workflow")).toBe(true)
+    } finally {
+      await service.close()
+      rmSync(ws, { recursive: true, force: true })
     }
   }, 60_000)
 })

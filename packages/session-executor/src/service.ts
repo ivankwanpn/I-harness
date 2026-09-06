@@ -124,8 +124,12 @@ export interface SessionService {
    * session/cancel, not row cancel). */
   cancelQueued(sessionId: string, id: string): { cancelled: boolean }
   /** M49 Task 12 (spec §8.2): the per-session task projection (assembly tasks
-   * rows — subagent/job/workflow). Never fabricated: a session with no live
-   * assembly answers an honest empty list. */
+   * rows — subagent/job/workflow). Workflow rows are attributed to the session
+   * that started the run (the run-level store is shared — another session's
+   * workflow jobs never leak into this projection; runs started outside a
+   * session surface belong to the run-level /workflow panel and appear in no
+   * session's list). Never fabricated: a session with no live assembly answers
+   * an honest empty list. */
   tasks(sessionId: string): AgentTaskView[]
   /** M49 Task 12: cancel ONE task through the owning assembly (its registries
    * hold the authority). An id with no owner (unknown session/unknown id)

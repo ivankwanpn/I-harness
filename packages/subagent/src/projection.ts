@@ -193,18 +193,27 @@ export function projectAgentTaskDetail(state: SubagentTaskSource, row: AgentTask
 }
 
 /** Workflow rows: the assembly hands the RAW row snapshots of its real
- * workflow executor (id/status/stdout/stderr) — never the executor. Rows
- * appear ONLY when the executor's store owns them. */
+ * workflow executor (id/status/stdout/stderr/owner) — never the executor.
+ * Rows appear ONLY when the executor's store owns them AND (with `forOwner`)
+ * ONLY for the session that started the run — a session's projection never
+ * bleeds another session's workflow jobs (the store is run-level shared;
+ * rows started by a non-session surface carry no owner and are attributed to
+ * no session — the run-level /workflow panel is their surface). */
 export interface WorkflowTaskRow {
   id: string
   status: JobStatus
   stdout: string
   stderr: string
   exitCode?: number
+  /** The session that started the run (undefined = non-session starter). */
+  owner?: string
 }
 
-export function projectWorkflowRows(rows: ReadonlyArray<WorkflowTaskRow>): AgentTaskView[] {
-  return rows.map((job) => ({
+export function projectWorkflowRows(rows: ReadonlyArray<WorkflowTaskRow>, forOwner?: string): AgentTaskView[] {
+  const owned = forOwner === undefined
+    ? rows.filter((job) => job.owner === undefined)
+    : rows.filter((job) => job.owner === forOwner)
+  return owned.map((job) => ({
     id: job.id,
     group: "workflow",
     label: job.id,

@@ -17,6 +17,7 @@ import {
   type AgentTaskStatus,
   type SubagentTaskSource,
   type TaskSourceStatus,
+  type WorkflowTaskRow,
 } from "../src/projection.ts"
 
 // ------------------------------------------------------------------ fixture
@@ -242,5 +243,18 @@ describe("projectWorkflowRows", () => {
       expect.objectContaining({ id: "workflow-1", group: "workflow", status: "running", canCancel: true }),
       expect.objectContaining({ id: "workflow-2", group: "workflow", status: "completed", canCancel: false }),
     ])
+  })
+
+  it("attributes workflow rows to the session that started them — no cross-session bleed (review finding 1)", () => {
+    const rows: WorkflowTaskRow[] = [
+      { id: "workflow-1", status: "running", stdout: "", stderr: "", owner: "s1" },
+      { id: "workflow-2", status: "running", stdout: "", stderr: "", owner: "s2" },
+      { id: "workflow-3", status: "completed", stdout: "", stderr: "" }, // non-session starter (run-level panel)
+    ]
+    // session A's projection shows ONLY A's run; session B never sees A's.
+    expect(projectWorkflowRows(rows, "s1").map((r) => r.id)).toEqual(["workflow-1"])
+    expect(projectWorkflowRows(rows, "s2").map((r) => r.id)).toEqual(["workflow-2"])
+    // a session-less assembly (CLI one-shot) sees only unattributed rows.
+    expect(projectWorkflowRows(rows).map((r) => r.id)).toEqual(["workflow-3"])
   })
 })

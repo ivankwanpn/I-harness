@@ -86,7 +86,9 @@ export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; execut
         const available = deps.registry.list().map((d) => d.name).join(", ")
         throw new Error(`unknown workflow: ${args.name}${available.length > 0 ? ` (available: ${available})` : " (no workflows registered)"}`)
       }
-      const { runId, jobId } = deps.executor.runWorkflow(def, args.params ?? {})
+      // M49 Task 12 review: attribute the run to the CALLING session so the
+      // per-session task projection shows only a session's own workflow jobs.
+      const { runId, jobId } = deps.executor.runWorkflow(def, args.params ?? {}, exec?.sessionId)
       if (args.wait !== true) {
         return { run_id: runId, job_id: jobId, status: "running" }
       }

@@ -46,6 +46,10 @@ export interface WorkflowJobEntry {
   exitCode?: number
   // Run-level cancellation: aborting kills the CURRENT step's process tree.
   controller: AbortController
+  // M49 Task 12 review: the session owner that started this job (threaded
+  // from the model-facing workflow_run tool's exec context). Undefined =
+  // started outside a session (the run-level /workflow panel / standalone).
+  owner?: string
 }
 
 // One run-level store of workflow background jobs. Job ids are `workflow-${n}`
@@ -53,7 +57,7 @@ export interface WorkflowJobEntry {
 // unknown ids throw `unknown job: <id>` (the subagent job_* fallback chain
 // tests /unknown job/i to decide whether to fall through).
 export interface WorkflowJobStore {
-  createJob(): WorkflowJobEntry
+  createJob(owner?: string): WorkflowJobEntry
   get(jobId: string): WorkflowJobEntry | undefined
   // Copy of the public BackgroundJobView shape (never the internal entry).
   view(jobId: string): BackgroundJobView
@@ -72,13 +76,14 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       stdout: job.stdout,
       stderr: job.stderr,
       ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
+      ...(job.owner !== undefined ? { owner: job.owner } : {}),
     }
   }
 
   return {
-    createJob(): WorkflowJobEntry {
+    createJob(owner?: string): WorkflowJobEntry {
       counter += 1
-      const job: WorkflowJobEntry = { id: `workflow-${counter}`, status: "running", stdout: "", stderr: "", controller: new AbortController() }
+      const job: WorkflowJobEntry = { id: `workflow-${counter}`, status: "running", stdout: "", stderr: "", controller: new AbortController(), ...(owner !== undefined ? { owner } : {}) }
       jobs.set(job.id, job)
       return job
     },
@@ -162,9 +167,18 @@ function stepCommand(step: WorkflowStep, values: Record<string, string>): ExecCo
 // Core run loop. Registers the run's job in `store` synchronously and returns
 // immediately; the async loop then walks the steps. All status writes are
 // guarded so a job killed mid-step is never overwritten (killJob set it).
-export function runWorkflowIn(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService, store: WorkflowJobStore): WorkflowRunHandle {
+export function runWorkflowIn(
+  def: WorkflowDefinition,
+  params: Record<string, string>,
+  exec: ExecService,
+  store: WorkflowJobStore,
+  // M49 Task 12 review: the session that started this run (the model-facing
+  // tool's exec context) — the per-session task projection attributes rows by
+  // it. Undefined = non-session starter (panel/standalone).
+  owner?: string,
+): WorkflowRunHandle {
   const values = resolveParams(def, params)
-  const job = store.createJob()
+  const job = store.createJob(owner)
   const { controller } = job
   const steps = def.steps
   const total = steps.length
@@ -244,16 +258,17 @@ export function runWorkflowIn(def: WorkflowDefinition, params: Record<string, st
 
 // Standalone entry (spec §3.2 signature): runs against the process-shared
 // store, so jobs started this way are queryable via any executor's
-// getOutput/listJobs/killJob.
-export function runWorkflow(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService): WorkflowRunHandle {
-  return runWorkflowIn(def, params ?? {}, exec, sharedJobs)
+// getOutput/listJobs/killJob. `owner` attributes the run (the per-session
+// projection filters on it).
+export function runWorkflow(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService, owner?: string): WorkflowRunHandle {
+  return runWorkflowIn(def, params ?? {}, exec, sharedJobs, owner)
 }
 
 // Executor facade — the object Task 3's subagent job_* third layer consumes
 // (deps.workflow: { getOutput, listJobs, killJob, runWorkflow }). Same method
 // contract as ExecService's job surface, restricted to workflow- ids.
 export interface WorkflowExecutor {
-  runWorkflow(def: WorkflowDefinition, params?: Record<string, string>): WorkflowRunHandle
+  runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowRunHandle
   getOutput(jobId: string): BackgroundJobView
   listJobs(): BackgroundJobView[]
   killJob(jobId: string): "cancellation-requested" | "already-finished"
@@ -268,8 +283,8 @@ export interface WorkflowExecutorDeps {
 export function createWorkflowExecutor(deps: WorkflowExecutorDeps): WorkflowExecutor {
   const jobs = deps.jobs ?? sharedJobs
   return {
-    runWorkflow(def: WorkflowDefinition, params?: Record<string, string>): WorkflowRunHandle {
-      return runWorkflowIn(def, params ?? {}, deps.exec, jobs)
+    runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowRunHandle {
+      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner)
     },
     getOutput(jobId: string): BackgroundJobView {
       return jobs.view(jobId)

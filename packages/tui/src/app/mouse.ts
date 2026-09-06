@@ -97,6 +97,11 @@ export interface MouseHooks {
   /** M49 Task 12: open the detail viewer for ONE task row by its STABLE id
    * (the loop's openTaskViewer action — Enter/double-click share it). */
   openTaskViewer?(id: string): void
+  /** M49 Task 12: the status-chip tasks toggle — routs through the LOOP's
+   * togglePane so opening refreshes the real rows from backend truth (the
+   * chip duplicates the pane Set otherwise, leaving a blank pane after a
+   * session switch); absent → the router's direct Set toggle (dry-run tests). */
+  tasksPaneToggle?(): void
   /** M46c G2: paste-chip double-click — INSERT the retained paste-source at
    * the cursor (the prompt state's pasteStash[`index`]; absent hook → honest
    * toast — the old "source not retained" path is replaced by this seam).
@@ -577,15 +582,18 @@ export class MouseRouter {
     if (kind === undefined) return
     switch (kind) {
       case "tasks": {
-        // tasks chip → pane toggle (the app's own Set — the loop's toggle).
-        if (this.app.panes.has("tasks")) {
-          this.app.panes.delete("tasks")
-          // M49 Task 12: closing the pane clears the stale row selection (the
-          // Enter-seam gate is the pane-open check; this keeps state clean).
-          this.app.paneData = { ...(this.app.paneData ?? {}), tasksSelectId: undefined }
-        } else {
-          this.app.panes.add("tasks")
+        // M49 Task 12 (review finding): the chip must go through the LOOP's
+        // togglePane — opening refreshes the real groups from backend truth
+        // and closing clears the selection (the router's own Set toggle alone
+        // left a BLANK pane after a session switch). The direct Set toggle
+        // stays as the dry-run-test fallback (no loop).
+        if (this.hooks.tasksPaneToggle !== undefined) {
+          this.hooks.tasksPaneToggle()
+          this.changed()
+          break
         }
+        if (this.app.panes.has("tasks")) this.app.panes.delete("tasks")
+        else this.app.panes.add("tasks")
         this.changed()
         break
       }
@@ -637,13 +645,21 @@ export class MouseRouter {
     // M49 Task 12: body click SELECTS the row by its stable id (the
     // selection lives across backend refreshes) and hands focus to the
     // scrollback so Enter opens the viewer; a double click opens it directly.
+    // A SINGLE click on the ALREADY-selected row CLEARS the selection (the
+    // explicit deselect — the selection is otherwise sticky).
     if (row.id !== undefined) {
-      this.app.paneData = { ...(this.app.paneData ?? {}), tasksSelectId: row.id }
-      this.focus("scrollback")
-      this.changed()
-      if (this.nextClick(`tasks-${row.id}`) >= 2) {
+      const wasSelected = this.app.paneData?.tasksSelectId === row.id
+      const count = this.nextClick(`tasks-${row.id}`)
+      if (count >= 2) {
         this.hookOr(this.hooks.openTaskViewer, "task viewer (M49)", row.id)
+      } else {
+        this.app.paneData = {
+          ...(this.app.paneData ?? {}),
+          tasksSelectId: wasSelected ? undefined : row.id,
+        }
+        this.focus("scrollback")
       }
+      this.changed()
     }
   }
 

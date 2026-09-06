@@ -49,6 +49,11 @@ export interface BackgroundJobView {
   stdout: string
   stderr: string
   exitCode?: number
+  // M49 Task 12 review: run-level attribution — the session id (or owner key)
+  // that STARTED this job through a session's tool surface. Additive/optional:
+  // non-session starters (panels, CLI one-shots without a session) leave it
+  // undefined, and the per-session task projection attributes rows by it.
+  owner?: string
 }
 
 interface SpawnHandle {
