@@ -240,6 +240,24 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   // awaits the SAME promise, so a shared conflict propagates to all of them
   // (fail-closed) and a shared success sets heldLocks exactly once.
   const inflightAcquires = new Map<string, Promise<SessionLock>>()
+  // Every backend mutation for one session is linearized through this chain.
+  // The gate promises never reject, so a failed operation cannot poison its
+  // successor. enqueue() stays synchronous; its write-behind callback joins
+  // this chain when it actually writes.
+  const sessionOperations = new Map<string, Promise<void>>()
+
+  async function withSessionOperation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = sessionOperations.get(sessionId) ?? Promise.resolve()
+    const gate = Promise.withResolvers<void>()
+    sessionOperations.set(sessionId, gate.promise)
+    await previous
+    try {
+      return await operation()
+    } finally {
+      gate.resolve()
+      if (sessionOperations.get(sessionId) === gate.promise) sessionOperations.delete(sessionId)
+    }
+  }
 
   async function ensureOwnership(sessionId: string): Promise<void> {
     if (!lockEnabled || heldLocks.has(sessionId)) return
@@ -273,7 +291,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     return true
   }
 
-  async function releaseOwnership(sessionId: string): Promise<void> {
+  async function releaseOwnershipUnlocked(sessionId: string): Promise<void> {
     const pending = inflightAcquires.get(sessionId)
     if (pending !== undefined) {
       try {
@@ -298,8 +316,10 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
         // retains the batch for the next enqueue/flush attempt; a held lease
         // survives background write failures for the same reason.
         write: async (events) => {
-          await ensureOwnership(sessionId)
-          await backend.append(sessionId, events)
+          await withSessionOperation(sessionId, async () => {
+            await ensureOwnership(sessionId)
+            await backend.append(sessionId, events)
+          })
         },
         reportBackgroundFailure: report,
       })
@@ -384,99 +404,91 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   return {
     async create(meta) {
       const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-      // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
-      // conflicting writer can never clobber the session; the typed Conflict/
-      // Unsupported error propagates fail-closed.
-      // M2 precision: remember whether THIS call takes the lease, so a failed
-      // backend.create releases only a lease it acquired — a pre-existing
-      // lease (duplicate create on an already-owned session) must survive.
-      const acquired = lockEnabled && !heldLocks.has(id)
-      await ensureOwnership(id)
-      const fullMeta: SessionMeta = {
-        formatVersion: CURRENT_FORMAT_VERSION,
-        sessionId: id,
-        createdAt: new Date().toISOString(),
-        ...meta,
-      }
-      try {
-        await backend.create(id, fullMeta)
-      } catch (err) {
-        // M2: the session was never created — don't strand the lease. A
-        // failed release must not mask the original backend error.
-        if (acquired) {
-          try { await releaseOwnership(id) } catch { /* keep the original error */ }
+      return withSessionOperation(id, async () => {
+        // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
+        // conflicting writer can never clobber the session; the typed Conflict/
+        // Unsupported error propagates fail-closed.
+        const acquired = lockEnabled && !heldLocks.has(id)
+        await ensureOwnership(id)
+        const fullMeta: SessionMeta = {
+          formatVersion: CURRENT_FORMAT_VERSION,
+          sessionId: id,
+          createdAt: new Date().toISOString(),
+          ...meta,
         }
-        throw err
-      }
-      return { id }
+        try {
+          await backend.create(id, fullMeta)
+        } catch (err) {
+          if (acquired) {
+            try { await releaseOwnershipUnlocked(id) } catch { /* keep the original error */ }
+          }
+          throw err
+        }
+        return { id }
+      })
     },
     async append(sessionId, events) {
-      await ensureOwnership(sessionId) // acquire-at-first-use (M23)
-      await backend.append(sessionId, events)
+      await withSessionOperation(sessionId, async () => {
+        await ensureOwnership(sessionId) // acquire-at-first-use (M23)
+        await backend.append(sessionId, events)
+      })
     },
     enqueue(sessionId, events) {
       const wb = writeBehindFor(sessionId)
       for (const ev of events) wb.enqueue(ev)
     },
     async load(sessionId) {
-      // Version gate BEFORE any backend mutation: a future-format session must
-      // be refused on a non-destructive read alone — repair may rewrite the
-      // file, and it must never touch bytes the current build cannot decode.
-      const peeked = await backend.read(sessionId)
-      assertVersionSupported(peeked.version)
-      // M23 repair guard: repair is mutating, so it runs under a borrowed
-      // lease (codex maintenance-lock concept). A live session's own lease is
-      // reused and never released here; a borrowed lease is released right
-      // after repair — load never holds long-term (the CLI resume path adopts
-      // ownership explicitly via adoptOwnership).
-      const borrowed = await borrowOwnership(sessionId)
-      let repaired: { version: number; events: SessionEvent[]; meta?: SessionMeta }
-      try {
-        repaired = await backend.repair(sessionId)
-      } finally {
-        if (borrowed) await releaseOwnership(sessionId)
-      }
-      const { version, events, meta } = repaired
-      const guarded = guardIgnorable(events)
-      const migrated = await migrate(version, guarded)
-      // M27 R-A3: log-SEMANTIC repair — append synthetic closers (step/end,
-      // turn/end, tool/result for calls whose results were lost to the crash)
-      // AFTER the backend structural repair (truncate + closers) and AFTER the
-      // version/guard gates, BEFORE the projection. Pure: operates on a copy,
-      // the durable log is never modified.
-      const repairedTail = repairTurnTail(migrated)
-      return { session: buildSession(meta, repairedTail) }
-    },
-    async loadOwned(sessionId) {
-      // Reuse borrowOwnership's precise single-flight accounting, but keep a
-      // newly acquired lease on success. If another operation seeded the
-      // acquire, acquired=false prevents us from releasing its lease on error.
-      const acquired = await borrowOwnership(sessionId)
-      try {
-        const pendingWrites = writeBehinds.get(sessionId)
-        if (pendingWrites !== undefined) await pendingWrites.flush()
+      return withSessionOperation(sessionId, async () => {
         const peeked = await backend.read(sessionId)
         assertVersionSupported(peeked.version)
-        const repaired = await backend.repair(sessionId)
-        const guarded = guardIgnorable(repaired.events, true)
-        const migrated = await migrate(repaired.version, guarded)
-        const semantic = repairTurnTail(migrated)
-        const canonical = semantic.map((event, index): SessionEvent => ({ ...event, seq: index }))
-        const needsRewrite = canonical.length !== repaired.events.length
-          || canonical.some((event, index) => JSON.stringify(event) !== JSON.stringify(repaired.events[index]))
-        if (needsRewrite) {
-          if (backend.replaceEvents === undefined) {
-            throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
+        const borrowed = await borrowOwnership(sessionId)
+        let repaired: { version: number; events: SessionEvent[]; meta?: SessionMeta }
+        try {
+          repaired = await backend.repair(sessionId)
+        } finally {
+          if (borrowed) await releaseOwnershipUnlocked(sessionId)
+        }
+        const { version, events, meta } = repaired
+        const guarded = guardIgnorable(events)
+        const migrated = await migrate(version, guarded)
+        const repairedTail = repairTurnTail(migrated)
+        return { session: buildSession(meta, repairedTail) }
+      })
+    },
+    async loadOwned(sessionId) {
+      const pendingWrites = writeBehinds.get(sessionId)
+      if (pendingWrites !== undefined) await pendingWrites.flush()
+      return withSessionOperation(sessionId, async () => {
+        const acquired = await borrowOwnership(sessionId)
+        try {
+          const peeked = await backend.read(sessionId)
+          assertVersionSupported(peeked.version)
+          const repaired = await backend.repair(sessionId)
+          const guarded = guardIgnorable(repaired.events, true)
+          const migrated = await migrate(repaired.version, guarded)
+          const semantic = repairTurnTail(migrated)
+          const canonical = semantic.map((event, index): SessionEvent => {
+            if (event.seq !== undefined && event.seq !== index) {
+              throw new Error(`session sequence invariant failed for ${sessionId}: event ${index} has seq ${event.seq}`)
+            }
+            return event.seq === index ? event : { ...event, seq: index }
+          })
+          const needsRewrite = canonical.length !== repaired.events.length
+            || canonical.some((event, index) => JSON.stringify(event) !== JSON.stringify(repaired.events[index]))
+          if (needsRewrite) {
+            if (backend.replaceEvents === undefined) {
+              throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
+            }
+            await backend.replaceEvents(sessionId, canonical)
           }
-          await backend.replaceEvents(sessionId, canonical)
+          return { session: buildSession(repaired.meta, canonical) }
+        } catch (error) {
+          if (acquired) {
+            try { await releaseOwnershipUnlocked(sessionId) } catch { /* preserve load error */ }
+          }
+          throw error
         }
-        return { session: buildSession(repaired.meta, canonical) }
-      } catch (error) {
-        if (acquired) {
-          try { await releaseOwnership(sessionId) } catch { /* preserve load error */ }
-        }
-        throw error
-      }
+      })
     },
     async list() {
       return backend.list()
@@ -487,8 +499,10 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     async updateMeta(sessionId, patch) {
       // Mutating path (M23 discipline, same as append): the rewrite must be
       // serialized with appends/write-behind flushes on the same session.
-      await ensureOwnership(sessionId)
-      return backend.updateMeta(sessionId, patch)
+      return withSessionOperation(sessionId, async () => {
+        await ensureOwnership(sessionId)
+        return backend.updateMeta(sessionId, patch)
+      })
     },
     async flush(sessionId) {
       const wb = writeBehinds.get(sessionId)
@@ -498,6 +512,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       await Promise.allSettled([...writeBehinds.values()].map((wb) => wb.flush()))
       for (const wb of writeBehinds.values()) wb.cancelAutomaticWait()
       await docChain
+      await Promise.allSettled([...sessionOperations.values()])
       // M23: the live cycle ends after the drain — release every held lease
       // (best-effort so one failed release cannot strand the others). M1:
       // fs-lock's release() is sync-throwing, so a bare `lock.release()` in
@@ -522,8 +537,10 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     async adoptOwnership(sessionId) {
       // CLI resume path: after a successful load(), hold the lease until
       // close(). Conflict → SessionLockConflictError (fail-closed).
-      await ensureOwnership(sessionId)
+      await withSessionOperation(sessionId, () => ensureOwnership(sessionId))
     },
-    releaseOwnership,
+    async releaseOwnership(sessionId) {
+      await withSessionOperation(sessionId, () => releaseOwnershipUnlocked(sessionId))
+    },
   }
 }

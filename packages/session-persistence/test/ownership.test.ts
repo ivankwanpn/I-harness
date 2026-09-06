@@ -39,6 +39,11 @@ function fakeBackend(): PersistenceBackend {
       if (!f) throw new Error(`unknown session: ${sessionId}`)
       return { version: f.meta.formatVersion, events: f.events, meta: f.meta }
     },
+    async replaceEvents(sessionId, events) {
+      const f = files.get(sessionId)
+      if (!f) throw new Error(`unknown session: ${sessionId}`)
+      f.events = [...events]
+    },
     async putDocument(key, data) { documents.set(key, data) },
     async getDocument(key) { return documents.get(key) },
     async profile(sessionId) {
@@ -83,6 +88,30 @@ describe("session ownership lease", () => {
     const second = await b.create({ sessionId: "sess-off" })
     expect(second.id).toBe(id)
     expect(b.ownerOf(id)).toBe(false)
+  })
+
+  it("serializes owned recovery with a same-coordinator append", async () => {
+    const backend = fakeBackend()
+    const coordinator = tracked(backend)
+    const id = (await coordinator.create({ sessionId: "sess-recovery-append" })).id
+    await coordinator.append(id, [
+      { type: "turn/start", seq: 0 },
+      { type: "step/start", seq: 1 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 2 },
+    ])
+    const replace = backend.replaceEvents!.bind(backend)
+    let concurrentAppend: Promise<void> | undefined
+    backend.replaceEvents = async (sessionId, events) => {
+      concurrentAppend = coordinator.append(sessionId, [{ type: "user/message", text: "concurrent", seq: 6 }])
+      await Promise.resolve()
+      await replace(sessionId, events)
+    }
+
+    await coordinator.loadOwned(id)
+    await concurrentAppend
+    const raw = await backend.read(id)
+    expect(raw.events.at(-1)).toMatchObject({ type: "user/message", text: "concurrent", seq: 6 })
+    expect(raw.events.map((event) => event.seq)).toEqual(raw.events.map((_, index) => index))
   })
 
   describe.skipIf(process.platform !== "win32")("opt-in lease (win32 real locks)", () => {
@@ -217,6 +246,51 @@ describe("session ownership lease", () => {
       expect(owner.ownerOf(id)).toBe(false)
       const next = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
       await expect(next.adoptOwnership(id)).resolves.toBeUndefined()
+    })
+
+    it("a failed concurrent loadOwned cannot release a sibling load's ownership", async () => {
+      const shared = fakeBackend()
+      const seed = tracked(shared)
+      const id = (await seed.create({ sessionId: "sess-load-owned-siblings" })).id
+      const firstStarted = Promise.withResolvers<void>()
+      const failFirst = Promise.withResolvers<void>()
+      const secondStarted = Promise.withResolvers<void>()
+      const finishSecond = Promise.withResolvers<void>()
+      let reads = 0
+      const observed: PersistenceBackend = {
+        ...shared,
+        async read(sessionId) {
+          reads += 1
+          if (reads === 1) {
+            firstStarted.resolve()
+            await failFirst.promise
+            throw new Error("first load failed")
+          }
+          secondStarted.resolve()
+          await finishSecond.promise
+          return shared.read(sessionId)
+        },
+      }
+      const owner = tracked(observed, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      const first = owner.loadOwned(id)
+      await firstStarted.promise
+      const second = owner.loadOwned(id)
+      failFirst.resolve()
+      await expect(first).rejects.toThrow("first load failed")
+      await secondStarted.promise
+
+      const contender = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      let contenderAcquired = false
+      try {
+        await contender.adoptOwnership(id)
+        contenderAcquired = true
+      } catch (error) {
+        expect(error).toBeInstanceOf(SessionLockConflictError)
+      }
+      finishSecond.resolve()
+      await second
+      expect(contenderAcquired).toBe(false)
+      expect(owner.ownerOf(id)).toBe(true)
     })
 
     // I1: concurrent mutating calls for the SAME session on ONE coordinator
