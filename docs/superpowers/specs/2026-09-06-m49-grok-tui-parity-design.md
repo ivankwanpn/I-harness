@@ -358,6 +358,8 @@ export interface PromptEditor {
   move(direction: "left" | "right" | "word-left" | "word-right" | "home" | "end", extend?: boolean): void
   undo(): boolean
   redo(): boolean
+  insertPaste(paste: { display: string; source: string }): void
+  expandPasteAtCursor(): boolean
   replaceAll(text: string): void
   clear(): void
 }
