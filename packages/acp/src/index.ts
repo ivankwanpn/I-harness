@@ -9,7 +9,7 @@
 //   session/close           → abort + dispose + flush + lease release
 //   session/prompt          → await service.submit (turn drains), stopReason
 //                             "end_turn"; "cancelled" on abort
-//   session/cancel (notif)  → aborts the in-flight submit of that session (no-op idle)
+//   session/cancel (notif)  → aborts all in-flight submits of that session (no-op idle)
 //
 // v0 permission face (decided):
 //   autoApprove (default true) = "allow-once" — prompts are admitted without a
@@ -55,12 +55,14 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
   /** sessionId → cwd, sessions created through session/new (v0 keeps cwd for
    * list; the service itself always runs on the CLI workspace). */
   const known = new Map<string, string>()
-  /** sessionId → in-flight session/prompt abort controller. */
-  const inflight = new Map<string, AbortController>()
+  /** sessionId → all in-flight session/prompt abort controllers. */
+  const inflight = new Map<string, Set<AbortController>>()
   /** Existing-session ownership preparation, shared by concurrent requests. */
   const preparingOwnership = new Map<string, Promise<void>>()
-  /** Per-session close single-flight; presence also blocks prompt admission. */
-  const closingSessions = new Map<string, Promise<void>>()
+  /** Sessions whose close lifecycle has begun; retained after failure to block reopening. */
+  const closingSessions = new Set<string>()
+  /** Current per-session close attempt, shared by concurrent requests. */
+  const closeFlights = new Map<string, Promise<void>>()
 
   async function sessionExists(sessionId: string): Promise<boolean> {
     if (known.has(sessionId)) return true
@@ -87,6 +89,12 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
     } finally {
       if (preparingOwnership.get(sessionId) === preparation) preparingOwnership.delete(sessionId)
     }
+  }
+
+  function abortInflight(sessionId: string): void {
+    const controllers = inflight.get(sessionId)
+    if (controllers === undefined) return
+    for (const controller of [...controllers]) controller.abort()
   }
 
   const app = agent({ name: ACP_SERVER_NAME })
@@ -140,43 +148,32 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
 
   app.onRequest("session/close", async (ctx) => {
     const { sessionId } = ctx.params
-    const existing = closingSessions.get(sessionId)
+    const existing = closeFlights.get(sessionId)
     if (existing !== undefined) {
       await existing
       return {}
     }
-    if (!(await sessionExists(sessionId))) {
-      throw new Error(`unknown session: ${sessionId}`)
-    }
+    closingSessions.add(sessionId)
     let closing!: Promise<void>
     closing = (async () => {
-      inflight.get(sessionId)?.abort()
+      if (!(await sessionExists(sessionId))) {
+        closingSessions.delete(sessionId)
+        throw new Error(`unknown session: ${sessionId}`)
+      }
+      abortInflight(sessionId)
       const preparing = preparingOwnership.get(sessionId)
       if (preparing !== undefined) await preparing
-      let failure: unknown
-      try {
-        await opts.service.closeSession(sessionId)
-      } catch (error) {
-        failure = error
-      }
+      await opts.service.closeSession(sessionId)
       if (opts.coordinator !== undefined) {
-        try {
-          await opts.coordinator.flush(sessionId)
-        } catch (error) {
-          if (failure === undefined) failure = error
-        }
-        try {
-          await opts.coordinator.releaseOwnership(sessionId)
-        } catch (error) {
-          if (failure === undefined) failure = error
-        }
+        await opts.coordinator.flush(sessionId)
+        await opts.coordinator.releaseOwnership(sessionId)
       }
       known.delete(sessionId)
-      if (failure !== undefined) throw failure
+      closingSessions.delete(sessionId)
     })().finally(() => {
-      if (closingSessions.get(sessionId) === closing) closingSessions.delete(sessionId)
+      if (closeFlights.get(sessionId) === closing) closeFlights.delete(sessionId)
     })
-    closingSessions.set(sessionId, closing)
+    closeFlights.set(sessionId, closing)
     await closing
     return {}
   })
@@ -188,10 +185,9 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
         "ACP v0 permission face: autoApprove is false — prompt refused before admission (no request_permission round-trip in v0)",
       )
     }
-    if (!(await sessionExists(sessionId))) {
+    if (!known.has(sessionId)) {
       throw new Error(`unknown session: ${sessionId}`)
     }
-    await ensureOwnership(sessionId)
     if (closingSessions.has(sessionId)) throw new Error(`session closing: ${sessionId}`)
     const text = extractPromptText(prompt)
     if (text === "") {
@@ -200,7 +196,12 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
     const controller = new AbortController()
     const onRequestAbort = (): void => controller.abort()
     ctx.signal.addEventListener("abort", onRequestAbort)
-    inflight.set(sessionId, controller)
+    let controllers = inflight.get(sessionId)
+    if (controllers === undefined) {
+      controllers = new Set<AbortController>()
+      inflight.set(sessionId, controllers)
+    }
+    controllers.add(controller)
     try {
       await opts.service.submit(sessionId, text, controller.signal)
       return { stopReason: "end_turn" as const }
@@ -211,15 +212,16 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
       }
       throw error
     } finally {
-      inflight.delete(sessionId)
+      const activeControllers = inflight.get(sessionId)
+      activeControllers?.delete(controller)
+      if (activeControllers?.size === 0) inflight.delete(sessionId)
       ctx.signal.removeEventListener("abort", onRequestAbort)
     }
   })
 
   app.onNotification("session/cancel", (ctx) => {
-    // v0: cancel is a no-op when idle; when a submit is in flight it is
-    // aborted (the prompt handler then answers stopReason "cancelled").
-    inflight.get(ctx.params.sessionId)?.abort()
+    // v0: cancel is a no-op when idle; active submits answer "cancelled".
+    abortInflight(ctx.params.sessionId)
   })
 
   return app
