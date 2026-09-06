@@ -209,13 +209,25 @@ modelPolicy?: "required" | "test-mock"
 `SessionServiceOptions` 以單一 binding resolver取代 host內分散的 builder/window/effort判定：
 
 ```ts
+export type SessionModelBindingResult =
+  | { status: "unconfigured"; reason: string }
+  | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
+  | { status: "ready"; binding: {
+      model: ModelClient
+      providerId: string
+      modelId: string
+      label: string
+      reasoningEffort?: ReasoningEffort
+      contextWindow?: number
+    } }
+
 modelBindingFor?: (
   sessionId: string,
   meta: SessionMeta | undefined,
-) => Promise<ModelResolutionState>
+) => Promise<SessionModelBindingResult>
 ```
 
-ready binding一次供應 client、label、context window與reasoning effort；invalid/unconfigured阻止 assembly build。舊 `modelBuilder/contextWindowFor/reasoningEffortFor`暫保相容，`modelBindingFor`存在時優先。
+`SessionModelBindingResult` 由 `session-executor` 定義，避免 engine package依賴 `provider-runtime` composition package；apps中的 adapter將結構相容的 `ModelResolutionState` 映射進來。ready binding一次供應 client、label、context window與reasoning effort；invalid/unconfigured阻止 assembly build。舊 `modelBuilder/contextWindowFor/reasoningEffortFor`暫保相容，`modelBindingFor`存在時優先。
 
 Backend需提供 `modelState()`，讓 Welcome/prompt在建立 assembly前知道 `ready|unconfigured|invalid`。`/model`/`/effort`更新 current session metadata；只在 session idle且queue empty時 `closeSession()` 使下一個 turn用新 binding。Busy時拒絕並顯示 `Wait for the current turn and queue to finish before changing the model.`，不在半個 turn中熱換 client。
 
