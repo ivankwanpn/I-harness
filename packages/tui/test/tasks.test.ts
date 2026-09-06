@@ -201,6 +201,63 @@ describe("tasks pane over the real app (Task 12)", () => {
     expect(screenText()).toContain("No active tasks.")
     await app.stop()
   })
+
+  it("Ctrl+F with a selected task row opens find, NEVER the task viewer; Enter still opens it (review finding 2)", async () => {
+    const backend = tasksBackend([
+      { id: "root/helper", parentId: "root", group: "subagent", label: "helper", status: "running", canCancel: true },
+    ])
+    const app = new TuiApp(testOptions({ backend }))
+    await app.openTasks()
+    // select the row (the mouse path writes tasksSelectId into paneData)
+    app.state().paneData = { ...(app.state().paneData ?? {}), tasksSelectId: "root/helper" }
+    app.state().focused = "scrollback"
+    app.frame()
+    // Ctrl+F routes around the selection: the find/block path (no tool block
+    // here → the honest toast), NEVER the task viewer.
+    app.feedInput({ type: "key", code: "char", key: "f", ctrl: true, alt: false, shift: false })
+    app.frame()
+    expect(app.state().modal?.kind).toBeUndefined()
+    // Enter still opens the task viewer for the selected row.
+    app.feedInput({ type: "key", code: "Enter", key: "Enter", ctrl: false, alt: false, shift: false })
+    app.frame()
+    const modal = app.state().modal
+    expect(modal?.kind).toBe("block-viewer")
+    if (modal?.kind === "block-viewer") {
+      expect(modal.viewer.rows().map((r) => r.text)).toContain("id: root/helper")
+    }
+    await app.stop()
+  })
+
+  it("the status chip opens the tasks pane to REAL rows — never a blank pane (review finding 3)", async () => {
+    const backend = tasksBackend([
+      { id: "root/helper", parentId: "root", group: "subagent", label: "helper", status: "running", canCancel: true },
+    ])
+    const app = new TuiApp(testOptions({ backend }))
+    // the tasks status chip renders only while running > 0 (the status chip
+    // stream's truthful gate — same fixture as mouse-click.test.ts), and the
+    // app's legacy status bits are what feed it.
+    app.state().status.tasks = { running: 2, labels: [] }
+    // the tasks status chip (the app's own status row geometry).
+    const status = layoutAgent({ cols: CANVAS.cols, rows: CANVAS.rows }, app.state(), { compact: false }).status
+    const down = (released: boolean): void => {
+      app.feedInput({
+        type: "mouse", x: status.x + status.w - 1, y: status.y + 1, button: "left",
+        drag: false, released, motion: false, mods: { ctrl: false, shift: false, alt: false },
+      })
+    }
+    down(false)
+    down(true)
+    app.frame()
+    expect(app.state().panes.has("tasks")).toBe(true)
+    // the refresh ran — real backend rows, never a blank pane (the pane only
+    // repaints on a frame; poll with frames).
+    for (let i = 0; i < 50 && !screenText().includes("helper"); i++) {
+      app.frame()
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    expect(screenText()).toContain("helper")
+    await app.stop()
+  })
 })
 
 // ------------------------------------------------------------------ mouse rows
@@ -304,5 +361,39 @@ describe("tasks pane mouse rows (Task 12)", () => {
     const rect = tasksRect()!
     router.handle({ x: rect.x + 3, y: rect.y + 1, button: "left", kind: "down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
     expect(app.paneData!.tasksSelectId).toBe("task-1")
+  })
+
+  it("a single click outside the multi-click window on the ALREADY-selected row clears the selection (explicit deselect, review finding 2)", () => {
+    const engine = createScrollbackEngine({ width: CANVAS.cols })
+    const app = appState(engine, {
+      paneData: {
+        tasks: [{
+          label: "Subagents",
+          entries: [{ id: "root/helper", status: "running", label: "helper" }],
+        }],
+      },
+    })
+    let now = 1000
+    const router = new MouseRouter({
+      app,
+      engine,
+      size: () => ({ cols: CANVAS.cols, rows: CANVAS.rows }),
+      now: () => now,
+      clipboard: { copy: () => {} },
+      glyphs: GLYPHS,
+      compact: false,
+      hooks: {},
+    })
+    const rect = layoutAgent({ cols: CANVAS.cols, rows: CANVAS.rows }, app, { compact: false }).tasks
+    const click = (): void => {
+      router.handle({ x: rect!.x + 3, y: rect!.y + 1, button: "left", kind: "down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+      router.handle({ x: rect!.x + 3, y: rect!.y + 1, button: "left", kind: "up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    }
+    click()
+    expect(app.paneData!.tasksSelectId).toBe("root/helper")
+    // outside the 300ms multi-click window → count 1 + wasSelected → clear.
+    now = 2000
+    click()
+    expect(app.paneData!.tasksSelectId).toBeUndefined()
   })
 })

@@ -177,6 +177,14 @@
  *         workflow rows. Rows are plain serializable summaries — NEVER a
  *         registry object/client. A non-empty sessionId is validated; an
  *         unknown-but-valid session answers an honest empty list.
+ *       WORKFLOW ATTRIBUTION: the workflow job store is run-level shared (a
+ *         workflow started by session A is findable by any executor in the
+ *         process). The projection attributes each workflow row to the session
+ *         that started it through ITS model-facing workflow_run tool — a
+ *         session's list NEVER contains another session's workflow jobs.
+ *         Workflow runs initiated outside a session surface (the run-level
+ *         /workflow panel, standalone runs) carry no owner and appear in NO
+ *         session's projection — /workflow's own panel is their surface.
  *     session/tasks/cancel { sessionId, id } → { status }
  *       — cancel ONE task through the owning registry. `status` is
  *         "cancellation-requested" | "already-finished" (a terminal id keeps

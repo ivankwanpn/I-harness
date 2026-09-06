@@ -562,9 +562,12 @@ export class TuiApp {
         // app-level cancelQueueItem (cancel + refresh from backend truth).
         queueCancel: (id) => { void this.cancelQueueItem(id) },
         // M49 Task 12: the tasks-pane row actions fire the SAME app actions as
-        // the keyboard path (cancel + refresh from backend truth / viewer).
+        // the keyboard path (cancel + refresh from backend truth / viewer);
+        // the status-chip toggle routes through togglePane so opening
+        // refreshes the real rows (never a blank pane).
         taskCancel: (id) => { void this.cancelTaskId(id) },
         openTaskViewer: (id) => { void this.openTaskViewer(id) },
+        tasksPaneToggle: () => this.togglePane("tasks"),
         // M49 Task 7: the click moves the PromptEditor cursor (atom-safe) —
         // never a direct string write.
         movePromptCursor: (index) => {
@@ -712,12 +715,17 @@ export class TuiApp {
     // the Task viewer — before the tool-block fallback (the selection is the
     // pane's open target; it survives refreshes by stable id). The pane must
     // be OPEN — a stale selection after the status-chip close must not hijack
-    // Enter.
-    const taskId = this.app.panes.has("tasks") ? this.app.paneData?.tasksSelectId : undefined
-    if (taskId !== undefined) {
-      void this.openTaskViewer(taskId)
-      this.requestFrame()
-      return true
+    // Enter. Ctrl+F NEVER routes through the selection (review finding): it
+    // always opens the block viewer's find/search at the anchor — the
+    // selection is Enter's own target and can be cleared by re-clicking the
+    // selected row.
+    if (enter) {
+      const taskId = this.app.panes.has("tasks") ? this.app.paneData?.tasksSelectId : undefined
+      if (taskId !== undefined) {
+        void this.openTaskViewer(taskId)
+        this.requestFrame()
+        return true
+      }
     }
     this.openBlockViewerAt(this.anchorDisplayLine())
     this.requestFrame()
