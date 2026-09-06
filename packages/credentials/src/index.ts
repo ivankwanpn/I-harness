@@ -41,6 +41,39 @@ export interface CredentialInfo {
   writable: boolean
 }
 
+export interface CredentialStore {
+  describe(refs: string[]): Record<string, CredentialInfo>
+  set(ref: string, value: string): Promise<void>
+  unset(ref: string): Promise<void>
+  resolve(ref: string): string | undefined
+}
+
+export type ProviderAuthRef =
+  | { kind: "api-key-ref"; ref: string }
+  | { kind: "ambient" }
+  | { kind: "oauth-account-ref"; accountId: string }
+
+export type ResolvedProviderAuth =
+  | { kind: "api-key"; value: string }
+  | { kind: "bearer"; accessToken: string; expiresAt?: number }
+  | { kind: "ambient" }
+
+export interface ProviderAuthResolver {
+  describe(ref: ProviderAuthRef): Promise<{
+    configured: boolean
+    source: "env" | "file" | "ambient" | "oauth"
+    writable: boolean
+  }>
+  resolve(
+    ref: ProviderAuthRef,
+    context: {
+      providerId: string
+      purpose: "discovery" | "inference"
+      signal?: AbortSignal
+    },
+  ): Promise<ResolvedProviderAuth | undefined>
+}
+
 /** The write-time document shape: a single `refs` map. */
 export interface CredentialDocument {
   refs: Record<string, string>
@@ -85,13 +118,7 @@ const REF_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/
  *
  * @param documentPath - where the refs map lives (e.g. `~/.i-harness/credentials.json`).
  */
-export function createCredentialStore(documentPath: string): {
-  describe(refs: string[]): Record<string, CredentialInfo>
-  set(ref: string, value: string): Promise<void>
-  unset(ref: string): Promise<void>
-  /** Non-echoing read chain: env (non-empty) > file; undefined when absent. */
-  resolve(ref: string): string | undefined
-} {
+export function createCredentialStore(documentPath: string): CredentialStore {
   return {
     describe(refs) {
       for (const ref of refs) validateRef(ref)
@@ -124,6 +151,22 @@ export function createCredentialStore(documentPath: string): {
       validateRef(ref)
       if (envProvides(ref)) return process.env[ref]
       return loadRefsSync(documentPath)[ref]
+    },
+  }
+}
+
+export function createProviderAuthResolver(store: CredentialStore): ProviderAuthResolver {
+  return {
+    async describe(ref) {
+      if (ref.kind === "ambient") return { configured: true, source: "ambient", writable: false }
+      if (ref.kind === "oauth-account-ref") return { configured: false, source: "oauth", writable: false }
+      return store.describe([ref.ref])[ref.ref]!
+    },
+    async resolve(ref) {
+      if (ref.kind === "ambient") return { kind: "ambient" }
+      if (ref.kind === "oauth-account-ref") return undefined
+      const value = store.resolve(ref.ref)
+      return value === undefined ? undefined : { kind: "api-key", value }
     },
   }
 }

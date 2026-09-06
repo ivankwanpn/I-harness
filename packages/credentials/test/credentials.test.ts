@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  createProviderAuthResolver,
   createCredentialStore,
   CredentialRefError,
   CredentialShadowedError,
@@ -27,6 +28,31 @@ afterEach(async () => {
 function docPath(): string {
   return join(dir, "credentials.json")
 }
+
+describe("createProviderAuthResolver", () => {
+  it("resolves API-key refs without exposing values through describe", async () => {
+    const store = createCredentialStore(join(dir, "credentials.json"))
+    await store.set("DEEPSEEK_API_KEY", "secret-value")
+    const auth = createProviderAuthResolver(store)
+
+    await expect(auth.describe({ kind: "api-key-ref", ref: "DEEPSEEK_API_KEY" }))
+      .resolves.toEqual({ configured: true, source: "file", writable: true })
+    await expect(auth.resolve(
+      { kind: "api-key-ref", ref: "DEEPSEEK_API_KEY" },
+      { providerId: "deepseek", purpose: "inference" },
+    )).resolves.toEqual({ kind: "api-key", value: "secret-value" })
+  })
+
+  it("represents ambient auth and leaves OAuth unimplemented", async () => {
+    const auth = createProviderAuthResolver(createCredentialStore(join(dir, "credentials.json")))
+    await expect(auth.resolve(
+      { kind: "ambient" },
+      { providerId: "bedrock", purpose: "inference" },
+    )).resolves.toEqual({ kind: "ambient" })
+    await expect(auth.describe({ kind: "oauth-account-ref", accountId: "future" }))
+      .resolves.toEqual({ configured: false, source: "oauth", writable: false })
+  })
+})
 
 describe("createCredentialStore", () => {
   it("describe: unset ref → configured false, writable true, source file", async () => {
