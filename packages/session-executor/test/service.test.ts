@@ -73,6 +73,79 @@ describe("createSessionService", () => {
     }
   }, 60_000)
 
+  it("normalizes compaction off when a ready binding has no contextWindow", async () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "initial work" })
+    const model = createMockClient([{
+      role: "assistant",
+      text: "## Primary Request and Intent\n- " + "work ".repeat(120),
+    }])
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      compact: { contextWindow: 1 },
+      sessionFor: async () => session,
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: {
+          model,
+          providerId: "fixture",
+          modelId: "no-window",
+          label: "fixture:no-window",
+        },
+      }),
+    })
+
+    try {
+      const assembly = await service.assemblyFor("s1")
+      await expect(assembly.compactNow()).resolves.toEqual({
+        compacted: false,
+        shadowedSeqs: [],
+      })
+      expect(session.events.some((event) => event.type.startsWith("compaction/"))).toBe(false)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it("normalizes compaction to the ready binding contextWindow", async () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "x".repeat(600) })
+    const requests: LLMRequest[] = []
+    const model: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "ok" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      compact: { contextWindow: 1, minSummaryChars: 1 },
+      sessionFor: async () => session,
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: {
+          model,
+          providerId: "fixture",
+          modelId: "large-window",
+          label: "fixture:large-window",
+          contextWindow: 128_000,
+        },
+      }),
+    })
+
+    try {
+      const assembly = await service.assemblyFor("s1")
+      await expect(assembly.agent.run("continue")).resolves.toMatchObject({ finalText: "ok" })
+      expect(requests).toHaveLength(1)
+      expect(session.events.some((event) => event.type.startsWith("compaction/"))).toBe(false)
+    } finally {
+      await service.close()
+    }
+  }, 30_000)
+
   it("does not construct an assembly for an unconfigured binding", async () => {
     let calls = 0
     const service = createSessionService({
