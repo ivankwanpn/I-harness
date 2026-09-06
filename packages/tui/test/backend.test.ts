@@ -220,6 +220,87 @@ describe("embedded backend", () => {
     })
   })
 
+  it("inherits durable workspace metadata when forking an embedded session", async () => {
+    const root = tmp()
+    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    await coordinator.create({ sessionId: "source", workspaceId: "ws-source" })
+    await coordinator.append("source", [
+      { type: "turn/start" },
+      { type: "user/message", text: "fork me" },
+      { type: "turn/end" },
+    ])
+    const backend = await defaultEmbeddedFactory({
+      workspace: tmp(),
+      prompt: "",
+      coordinator,
+      resumeSessionId: "source",
+      modelPolicy: "test-mock",
+    })
+    try {
+      const childId = await backend.forkSession()
+      expect((await coordinator.profile(childId)).meta).toMatchObject({
+        parentSession: "source",
+        workspaceId: "ws-source",
+      })
+    } finally {
+      await backend.close()
+      await coordinator.close()
+    }
+  })
+
+  it("keeps setSessionModel bound to its original session across a concurrent open", async () => {
+    const persistStarted = deferred<void>()
+    const releasePersist = deferred<void>()
+    const closeCalls: string[] = []
+    const persisted: Array<{ sessionId: string; provider: string; model: string }> = []
+    const sessions = new Map([
+      ["a", createSession()],
+      ["b", createSession()],
+    ])
+    const service = {
+      assemblyFor: async (sessionId: string) => ({ session: sessions.get(sessionId)! }),
+      modelState: async (sessionId: string) => ({
+        status: "ready" as const,
+        providerId: "fixture",
+        modelId: sessionId,
+        label: `fixture:${sessionId}`,
+      }),
+      queueState: () => ({ running: false, queued: 0 }),
+      closeSession: async (sessionId: string) => { closeCalls.push(sessionId) },
+      submit: async () => {},
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      onAssembly: () => () => {},
+      close: async () => {},
+    } as unknown as SessionService
+    const backend = createEmbeddedBackend({
+      service,
+      sessionId: "a",
+      prompt: "",
+      setSessionModel: async (sessionId, selection) => {
+        persisted.push({ sessionId, provider: selection.provider, model: selection.model })
+        persistStarted.resolve(undefined)
+        await releasePersist.promise
+      },
+    })
+
+    const setting = backend.setSessionModel({ provider: "provider-a", model: "model-a" })
+    await persistStarted.promise
+    await backend.open("b")
+    releasePersist.resolve(undefined)
+
+    await expect(setting).resolves.toEqual({
+      status: "ready",
+      providerId: "fixture",
+      modelId: "a",
+      label: "fixture:a",
+    })
+    expect(persisted).toEqual([{ sessionId: "a", provider: "provider-a", model: "model-a" }])
+    expect(closeCalls).toEqual(["a"])
+    await expect(backend.modelState()).resolves.toMatchObject({ modelId: "b", label: "fixture:b" })
+    await backend.close()
+  })
+
   it("16ms batching: a burst is delivered in one window, in order, with increasing seq", async () => {
     const sessionId = "s1"
     const service = makeService({ sessionId })

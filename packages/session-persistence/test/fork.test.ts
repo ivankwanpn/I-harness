@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -28,10 +28,34 @@ async function fixture(): Promise<{
 }
 
 describe("forkSession", () => {
+  it("cannot read or copy an outside JSONL artifact through a traversal id", async () => {
+    const outer = await mkdtemp(join(tmpdir(), "ih-session-fork-boundary-"))
+    const root = join(outer, "store")
+    await mkdir(root)
+    const outsidePath = join(outer, "secret.jsonl")
+    const outside = [
+      JSON.stringify({ formatVersion: 1, sessionId: "secret", createdAt: "x" }),
+      JSON.stringify({ type: "turn/start", seq: 0 }),
+      JSON.stringify({ type: "user/message", text: "outside secret", seq: 1 }),
+      JSON.stringify({ type: "turn/end", seq: 2 }),
+      "",
+    ].join("\n")
+    await writeFile(outsidePath, outside, "utf8")
+    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    try {
+      await expect(forkSession(coordinator, "../secret")).rejects.toThrow(/outside the JSONL store root/)
+      expect(await coordinator.list()).toEqual([])
+      expect(await readFile(outsidePath, "utf8")).toBe(outside)
+    } finally {
+      await coordinator.close()
+      await rm(outer, { recursive: true, force: true })
+    }
+  })
+
   it("creates a child from the latest completed-turn prefix and preserves lineage/title", async () => {
     const { coordinator, cleanup } = await fixture()
     try {
-      await coordinator.create({ sessionId: "source", title: "Source title" })
+      await coordinator.create({ sessionId: "source", title: "Source title", workspaceId: "ws-source" })
       await coordinator.append("source", [
         { type: "turn/start", seq: 0 },
         { type: "user/message", text: "one", seq: 1 },
@@ -51,6 +75,7 @@ describe("forkSession", () => {
         parentSession: "source",
         seedLength: 8,
         title: "Source title",
+        workspaceId: "ws-source",
       })
     } finally {
       await cleanup()
@@ -60,7 +85,7 @@ describe("forkSession", () => {
   it("uses the first completed turn whose end reaches atSeq", async () => {
     const { coordinator, cleanup } = await fixture()
     try {
-      await coordinator.create({ sessionId: "source" })
+      await coordinator.create({ sessionId: "source", workspaceId: "ws-source" })
       await coordinator.append("source", [
         { type: "turn/start", seq: 0 },
         { type: "user/message", text: "one", seq: 1 },
@@ -70,9 +95,14 @@ describe("forkSession", () => {
         { type: "turn/end", seq: 5 },
       ])
 
-      const result = await forkSession(coordinator, "source", { atSeq: 1, title: "Fork title" })
+      const result = await forkSession(coordinator, "source", {
+        atSeq: 1,
+        title: "Fork title",
+        workspaceId: "ws-override",
+      })
       expect(result).toMatchObject({ seedLength: 4, title: "Fork title" })
       expect((await coordinator.load(result.sessionId)).session.events).toHaveLength(4)
+      expect((await coordinator.profile(result.sessionId)).meta.workspaceId).toBe("ws-override")
     } finally {
       await cleanup()
     }

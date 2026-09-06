@@ -283,7 +283,12 @@ describe("ProviderStore — discovery (injected fetch)", () => {
     expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
     await store.setDefaultModel("")
     expect(settings.surface.getSectionMutationBase?.("llm")).toEqual({
-      providers: {},
+      providers: {
+        deepseek: {
+          baseURL: "https://api.deepseek.com",
+          protocol: "openai-completions",
+        },
+      },
       defaultModel: { provider: "", model: "" },
     })
     // The read view still projects the legacy active provider during the

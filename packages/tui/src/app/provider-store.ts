@@ -19,6 +19,9 @@
 import { probeCandidatePaths } from "@i-harness/provider"
 import type {
   Settings,
+  SettingsLlm,
+  SettingsProviderConfig,
+  SettingsProviderProtocol,
   SettingsStoreSurface,
   SettingsTuiProviderEntry,
   SettingsTuiProviderProtocol,
@@ -197,7 +200,18 @@ export class ProviderStore {
       throw new Error("provider id and base URL are required")
     }
     const s = this.section()
-    await this.commit({ ...s, providers: { ...s.providers, [entry.id]: { ...entry } } })
+    const nextSection = { ...s, providers: { ...s.providers, [entry.id]: { ...entry } } }
+    const llm = canonicalLlm(this.opts.settings)
+    await this.opts.settings.set({
+      tui: { ...this.opts.settings.get().tui, providers: nextSection },
+      llm: {
+        ...llm,
+        providers: {
+          ...llm.providers,
+          [entry.id]: canonicalProvider(entry, llm.providers[entry.id]),
+        },
+      },
+    })
   }
 
   /** Remove one provider. Removing the active one clears the pin (no provider
@@ -207,10 +221,24 @@ export class ProviderStore {
     if (!(id in s.providers)) return
     const providers = { ...s.providers }
     delete providers[id]
-    await this.commit({
-      ...s,
-      activeProviderId: s.activeProviderId === id ? "" : s.activeProviderId,
-      providers,
+    const llm = canonicalLlm(this.opts.settings)
+    const canonicalProviders = { ...llm.providers }
+    delete canonicalProviders[id]
+    await this.opts.settings.set({
+      tui: {
+        ...this.opts.settings.get().tui,
+        providers: {
+          ...s,
+          activeProviderId: s.activeProviderId === id ? "" : s.activeProviderId,
+          providers,
+        },
+      },
+      llm: {
+        providers: canonicalProviders,
+        defaultModel: llm.defaultModel.provider === id
+          ? { provider: "", model: "" }
+          : { ...llm.defaultModel },
+      },
     })
   }
 
@@ -268,9 +296,18 @@ export class ProviderStore {
     if (entry === undefined) throw new Error(`provider "${id}" is not configured`)
     // An explicit `apiKeyRef: undefined` removes the ref from the entry (the
     // JSON serialization drops undefined leaves).
-    await this.commit({
-      ...s,
-      providers: { ...s.providers, [id]: { ...entry, ...patch } },
+    const nextEntry = { ...entry, ...patch }
+    const nextSection = { ...s, providers: { ...s.providers, [id]: nextEntry } }
+    const llm = canonicalLlm(this.opts.settings)
+    await this.opts.settings.set({
+      tui: { ...this.opts.settings.get().tui, providers: nextSection },
+      llm: {
+        ...llm,
+        providers: {
+          ...llm.providers,
+          [id]: canonicalProvider(nextEntry, llm.providers[id]),
+        },
+      },
     })
   }
 
@@ -346,6 +383,7 @@ export class ProviderStore {
         failures.push(`GET ${url} returned an unsupported shape (expected {data:[{id,…}]})`)
         continue
       }
+      await this.persistDiscoveredModels(entry, models)
       this.memo.set(id, models)
       await this.adoptDefault(id, models)
       return [...models]
@@ -366,6 +404,25 @@ export class ProviderStore {
     if (!unset && !needsModel) return
     await settings_setDefault(this.opts.settings, { provider: id, model: models[0]!.id })
   }
+
+  private async persistDiscoveredModels(entry: ProviderEntry, discovered: FetchedModel[]): Promise<void> {
+    const llm = canonicalLlm(this.opts.settings)
+    const provider = canonicalProvider(entry, llm.providers[entry.id])
+    const models = new Map((provider.models ?? []).map((model) => [model.id, { ...model }]))
+    for (const model of discovered) {
+      const current = models.get(model.id)
+      models.set(model.id, current === undefined ? { ...model } : { ...model, ...current })
+    }
+    await this.opts.settings.set({
+      llm: {
+        ...llm,
+        providers: {
+          ...llm.providers,
+          [entry.id]: { ...provider, models: [...models.values()] },
+        },
+      },
+    })
+  }
 }
 
 /** The llm.defaultModel write (provider+model; reasoningEffort preserved). */
@@ -373,9 +430,7 @@ async function settings_setDefault(
   settings: SettingsStoreSurface,
   value: { provider: string; model: string },
 ): Promise<void> {
-  const effective = settings.get().llm
-  const mutationBase = settings.getSectionMutationBase?.("llm")
-  const canonical = isSettingsLlm(mutationBase) ? mutationBase : effective
+  const canonical = canonicalLlm(settings)
   await settings.set({
     llm: {
       ...canonical,
@@ -388,6 +443,46 @@ async function settings_setDefault(
       },
     },
   })
+}
+
+function canonicalLlm(settings: SettingsStoreSurface): SettingsLlm {
+  const mutationBase = settings.getSectionMutationBase?.("llm")
+  const llm = isSettingsLlm(mutationBase) ? mutationBase : settings.get().llm
+  return {
+    providers: Object.fromEntries(
+      Object.entries(llm.providers).map(([id, config]) => [id, cloneProviderConfig(config)]),
+    ),
+    defaultModel: { ...llm.defaultModel },
+  }
+}
+
+function canonicalProvider(
+  entry: ProviderEntry,
+  current: SettingsProviderConfig | undefined,
+): SettingsProviderConfig {
+  const protocol = canonicalProtocol(entry.protocol)
+  return {
+    baseURL: entry.baseUrl.replace(/(?:^|\/)v1\/?$/, ""),
+    ...(entry.name !== undefined && entry.name !== "" ? { displayName: entry.name } : {}),
+    ...(entry.modelsUrl !== undefined && entry.modelsUrl !== "" ? { modelsURL: entry.modelsUrl } : {}),
+    ...(entry.apiKeyRef !== undefined && entry.apiKeyRef !== "" ? { apiKeyEnv: entry.apiKeyRef } : {}),
+    ...(protocol !== undefined ? { protocol } : {}),
+    ...(current?.models !== undefined ? { models: current.models.map((model) => ({ ...model })) } : {}),
+  }
+}
+
+function canonicalProtocol(protocol: ProviderProtocol | undefined): SettingsProviderProtocol | undefined {
+  if (protocol === "openai-compatible") return "openai-completions"
+  if (protocol === "anthropic") return "anthropic-messages"
+  if (protocol === "openai-responses" || protocol === "gemini" || protocol === "bedrock") return protocol
+  return undefined
+}
+
+function cloneProviderConfig(config: SettingsProviderConfig): SettingsProviderConfig {
+  return {
+    ...config,
+    ...(config.models !== undefined ? { models: config.models.map((model) => ({ ...model })) } : {}),
+  }
 }
 
 function isSettingsLlm(value: unknown): value is Settings["llm"] {

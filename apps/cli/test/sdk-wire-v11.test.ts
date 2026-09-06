@@ -104,6 +104,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         formatVersion: 1,
         sessionId: "s1",
         createdAt: "2026-09-06T00:00:00.000Z",
+        workspaceId: "ws-source",
       })}\n`, "utf8")
 
       const client = createHarnessClient({
@@ -147,6 +148,10 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         })
         const forked = await client.forkSession("s1")
         expect(forked.sessionId).not.toBe("s1")
+        const forkHeader = JSON.parse(
+          readFileSync(join(sessionDir, `${forked.sessionId}.jsonl`), "utf8").split("\n")[0]!,
+        ) as { workspaceId?: string }
+        expect(forkHeader.workspaceId).toBe("ws-source")
         const forkHistory = await client.history(forked.sessionId)
         expect(forkHistory.events.some((event) => event.type === "user/message" && event.text === "fork source")).toBe(true)
         expect(forkHistory.events.at(-1)?.type).toBe("turn/end")

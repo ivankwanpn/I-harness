@@ -100,6 +100,9 @@ export function parsePort(raw: string | undefined, fallback = DEFAULT_WEB_PORT):
 export interface WebServerOptions {
   port: number
   workspace: string
+  /** Explicit caller-owned coordinator. Absent creates an owned JSONL
+   * coordinator that close() drains after executor shutdown. */
+  coordinator?: SessionCoordinator
   /** Explicit model client. Absent uses the canonical provider runtime. */
   model?: ModelClient
   /** Explicit test-only mock script. */
@@ -131,6 +134,7 @@ export interface WebServer {
   host: WebHost
   port: number
   executor: SessionService
+  coordinator: SessionCoordinator
   close(): Promise<void>
 }
 
@@ -366,7 +370,8 @@ export function defaultContextWindow(opts: WebServerOptions): number | undefined
 
 export async function createWebServer(opts: WebServerOptions): Promise<WebServer> {
   const listenPort = Number.isFinite(opts.port) && opts.port >= 0 ? Math.floor(opts.port) : DEFAULT_WEB_PORT
-  const coordinator: SessionCoordinator = createSessionCoordinator(createJsonlBackend(opts.workspace))
+  const ownsCoordinator = opts.coordinator === undefined
+  const coordinator = opts.coordinator ?? createSessionCoordinator(createJsonlBackend(opts.workspace))
   // E-region seams for the host (optional pieces — the routes 404 per absent
   // piece, so an API-only embedder stays unchanged).
   const providerRegistry = opts.providerRegistry ?? createProviderRegistry()
@@ -511,14 +516,21 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
   if (auth !== undefined && opts.printLoginUrl) {
     console.log(`I-harness web login: http://127.0.0.1:${listeningPort}/api/auth/login?token=${auth.launchToken()}`)
   }
+  let closePromise: Promise<void> | undefined
   return {
     host,
     port: listeningPort,
     executor,
-    close: async () => {
-      await host.close()
-      await executor.close()
-    },
+    coordinator,
+    close: () => closePromise ??= (async () => {
+      let failure: unknown
+      try { await host.close() } catch (error) { failure = error }
+      try { await executor.close() } catch (error) { if (failure === undefined) failure = error }
+      if (ownsCoordinator) {
+        try { await coordinator.close() } catch (error) { if (failure === undefined) failure = error }
+      }
+      if (failure !== undefined) throw failure
+    })(),
   }
 }
 

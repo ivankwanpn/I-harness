@@ -111,6 +111,77 @@ describe("web composition (R-C1)", () => {
     }
   }, 60_000)
 
+  it("drains and closes its owned coordinator after executor shutdown", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-owned-coordinator-"))
+    const server = await createWebServer(options(workspace, {
+      mockScript: [{ role: "assistant", text: "fixture" }],
+    })) as Awaited<ReturnType<typeof createWebServer>> & {
+      coordinator: ReturnType<typeof createSessionCoordinator>
+    }
+    const order: string[] = []
+    const executorClose = server.executor.close.bind(server.executor)
+    const coordinatorClose = server.coordinator.close.bind(server.coordinator)
+    vi.spyOn(server.executor, "close").mockImplementation(async () => {
+      order.push("executor")
+      await executorClose()
+    })
+    const closeCoordinator = vi.spyOn(server.coordinator, "close").mockImplementation(async () => {
+      order.push("coordinator")
+      await coordinatorClose()
+    })
+    try {
+      const created = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
+        method: "POST",
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      })
+      const { id } = await created.json() as { id: string }
+      server.coordinator.enqueue(id, [{ type: "user/message", text: "pending durable write" }])
+
+      await server.close()
+
+      expect(order).toEqual(["executor", "coordinator"])
+      expect(closeCoordinator).toHaveBeenCalledTimes(1)
+      await expect(createJsonlBackend(workspace).read(id)).resolves.toMatchObject({
+        events: [{ type: "user/message", text: "pending durable write" }],
+      })
+    } finally {
+      await server.close().catch(() => {})
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it("uses but does not close a caller-owned coordinator", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-caller-coordinator-"))
+    const coordinator = createSessionCoordinator(createJsonlBackend(workspace))
+    const closeCoordinator = vi.spyOn(coordinator, "close")
+    const server = await createWebServer({
+      ...options(workspace, { mockScript: [{ role: "assistant", text: "fixture" }] }),
+      coordinator,
+    } as WebServerOptions & { coordinator: typeof coordinator }) as Awaited<ReturnType<typeof createWebServer>> & {
+      coordinator: typeof coordinator
+    }
+    try {
+      expect(server.coordinator).toBe(coordinator)
+      const created = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
+        method: "POST",
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      })
+      const { id: serverCreatedId } = await created.json() as { id: string }
+      expect(await coordinator.list()).toContain(serverCreatedId)
+      await server.close()
+      expect(closeCoordinator).not.toHaveBeenCalled()
+
+      const { id } = await coordinator.create()
+      await coordinator.append(id, [{ type: "turn/start" }])
+      await expect(coordinator.load(id)).resolves.toBeDefined()
+    } finally {
+      await coordinator.close()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  })
+
   it("resolves the model tier chain: session selection > default > legacy > unconfigured", async () => {
     const opts = options(process.cwd())
     expect(resolveModelSpec(opts).source).toBe("unconfigured")
