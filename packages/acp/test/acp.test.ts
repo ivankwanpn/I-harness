@@ -428,6 +428,55 @@ describe("createAcpServer", () => {
 
     expect(closeSession).toHaveBeenCalledTimes(1)
   })
+
+  it("a resume that loses to session/close cannot reactivate the session", async () => {
+    const firstProfile = Promise.withResolvers<void>()
+    const firstProfileStarted = Promise.withResolvers<void>()
+    let profileCalls = 0
+    const service = {
+      submit: vi.fn(async () => {}),
+      assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      closeSession: vi.fn(async () => {}),
+      close: async () => {},
+    } as SessionService
+    const coordinator = {
+      profile: vi.fn(async (_sessionId: string) => {
+        profileCalls += 1
+        if (profileCalls === 1) {
+          firstProfileStarted.resolve()
+          await firstProfile.promise
+        }
+        return {
+          meta: { formatVersion: 1, sessionId: "existing", createdAt: new Date().toISOString() },
+          blank: false,
+        }
+      }),
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+      flush: vi.fn(async (_sessionId: string) => {}),
+      releaseOwnership: vi.fn(async (_sessionId: string) => {}),
+    } as unknown as SessionCoordinator
+    const server = createAcpServer({ service, coordinator })
+    const app = client({ name: "vitest-client" })
+
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      const resume = ctx.request("session/resume", { sessionId: "existing", cwd: join(tmpdir(), "ih-acp-cwd") })
+      await firstProfileStarted.promise
+      await expect(ctx.request("session/close", { sessionId: "existing" })).resolves.toEqual({})
+      firstProfile.resolve()
+      await expect(resume).rejects.toThrow()
+      await expect(ctx.request("session/prompt", {
+        sessionId: "existing",
+        prompt: [{ type: "text", text: "must stay closed" }],
+      })).rejects.toThrow()
+    })
+
+    expect(service.submit).not.toHaveBeenCalled()
+  })
 })
 
 /** NDJSON stdio driver for the spawned CLI subprocess. */
