@@ -149,7 +149,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // message), not an unhandled rejection before the try/catch below.
   if (opts.resumeSessionId && opts.coordinator) {
     try {
-      const { session: restored } = await opts.coordinator.load(opts.resumeSessionId)
+      const { session: restored } = await opts.coordinator.loadOwned(opts.resumeSessionId)
       session.events.push(...restored.events)
       session.formatVersion = restored.formatVersion
       // M24a (G7): restore the lineage header too — it is the authoritative
@@ -157,14 +157,8 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // max_depth guard reads header.delegationDepth), and without it a
       // resumed session would always present as root-depth.
       session.header = restored.header
-      // M23: after a successful load the resumed CLI IS this session's active
-      // writer (it keeps appending below), so it adopts the ownership lease
-      // long-term — held until the run's coordinator.close(). Conflict (another
-      // live writer still owns the session) or an unsupported platform fails
-      // closed here and surfaces through the same clean exitCode-1 shape as a
-      // failed load. When the coordinator's lock is disabled (tests/hosts that
-      // create their own), adoptOwnership is a no-op.
-      await opts.coordinator.adoptOwnership(opts.resumeSessionId)
+      // loadOwned acquired the long-term writer lease before reading and made
+      // any crash-tail recovery canonical before this live mirror continues.
     } catch (err) {
       emitSessionEnd(1)
       telemetry?.close()

@@ -76,6 +76,7 @@ class FakeEngine {
 
 /** Full ScrollbackEngine the TuiApp requires. */
 class FakeScrollback extends FakeEngine implements ScrollbackEngine {
+  resetCalls = 0
   append(ev: TuiEvent): void {
     if (ev.type === "user") this.appendLine(ev.text)
     else if (ev.type === "assistant") this.appendLine(ev.text)
@@ -92,6 +93,7 @@ class FakeScrollback extends FakeEngine implements ScrollbackEngine {
   nextMatch(): number { return 0 }
   prevMatch(): number { return 0 }
   setWidth(): void {}
+  reset(): void { this.resetCalls++; this.rows = [] }
 }
 
 /** Recording InlineHost — captures commits/region rows/draws; writes through
@@ -460,6 +462,34 @@ describe("TuiApp minimal path (fake InlineLiveRegion + fake engine)", () => {
       app.dispatch("submit")
       await sleep(20)
       expect(state.lightPanel?.rows.find((row) => row.label === "id")?.detail).toBe("next")
+    } finally {
+      await backend.close()
+      await run
+    }
+  })
+
+  it("session/open invokes an engine reset capability before replacement history", async () => {
+    const backend = new QueueBackend()
+    const engine = new FakeScrollback()
+    const app = new TuiApp({
+      renderer: createRenderer({ cols: 80, rows: 24, cap }),
+      backend,
+      engine,
+      capabilities: cap,
+      palette,
+      glyphs: GLYPHS,
+      write: () => {},
+    })
+    const run = app.start()
+    try {
+      backend.push(
+        { type: "user", text: "old", seq: 100, ts: 0 },
+        { type: "session/open", sessionId: "next", seq: -1, ts: 1 },
+        { type: "user", text: "new", seq: 0, ts: 2 },
+      )
+      await sleep(40)
+      expect(engine.resetCalls).toBe(1)
+      expect(engine.viewport(0, 10).map((line) => line.runs[0]?.text)).toEqual(["new"])
     } finally {
       await backend.close()
       await run

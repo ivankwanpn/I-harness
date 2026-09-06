@@ -496,6 +496,49 @@ describe("embedded backend", () => {
     await first.close(); await secondCoordinator.close()
   })
 
+  it("acquires durable ownership before loading the resume snapshot", async () => {
+    const root = tmp()
+    const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    await seed.create({ sessionId: "owned-load" })
+    await seed.append("owned-load", [
+      { type: "turn/start", seq: 0 },
+      { type: "turn/end", seq: 1 },
+    ])
+    await seed.close()
+
+    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    const originalLoad = coordinator.load.bind(coordinator)
+    let interposed = false
+    coordinator.load = async (sessionId) => {
+      const stale = await originalLoad(sessionId)
+      const external = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+      await external.adoptOwnership(sessionId)
+      await external.append(sessionId, [
+        { type: "turn/start", seq: 2 },
+        { type: "turn/end", seq: 3 },
+      ])
+      await external.close()
+      interposed = true
+      return stale
+    }
+
+    const backend = await defaultEmbeddedFactory({
+      workspace: tmp(),
+      prompt: "",
+      coordinator,
+      resumeSessionId: "owned-load",
+    })
+    try {
+      await backend.submit("continued")
+      await backend.close()
+      const raw = await createJsonlBackend(root).read("owned-load")
+      expect(raw.events.map((event) => event.seq)).toEqual(raw.events.map((_, index) => index))
+      expect(interposed).toBe(false)
+    } finally {
+      await coordinator.close()
+    }
+  })
+
   it("injected resumed coordinator remains caller-owned", async () => {
     const root = tmp()
     const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })

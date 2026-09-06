@@ -47,6 +47,10 @@ export interface PersistenceBackend {
   read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
   list(): Promise<string[]>
   repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }>
+  /** Atomically replace the event body while preserving session metadata.
+   * Optional because read-only/custom backends may not support writable crash
+   * recovery; loadOwned fails closed when a rewrite is required. */
+  replaceEvents?(sessionId: string, events: SessionEvent[]): Promise<void>
   capabilities: { seekableRead: boolean; rawArtifacts: boolean }
   // Generic non-session document store (M6): arbitrary keyed state such as
   // the subagent registry snapshot. Session-event semantics unchanged.
@@ -91,6 +95,9 @@ export interface SessionCoordinator {
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
+  /** Acquire long-term ownership before reading, durably canonicalize crash
+   * recovery, and return a writable snapshot whose length equals its next seq. */
+  loadOwned(sessionId: string): Promise<{ session: Session }>
   list(): Promise<string[]>
   /** C5: cheap per-session meta profile (header read only; no event decode).
    * Read-only — never acquires the ownership lease. */
@@ -347,14 +354,31 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     }
   }
 
-  function guardIgnorable(events: SessionEvent[]): SessionEvent[] {
+  function guardIgnorable(events: SessionEvent[], retainIgnorable = false): SessionEvent[] {
     const kept: SessionEvent[] = []
     for (const ev of events) {
       if (isKnownEventType(ev.type)) { kept.push(ev); continue }
-      if ((ev as { ignorable?: true }).ignorable === true) continue // safely dropped
+      if ((ev as { ignorable?: true }).ignorable === true) {
+        if (retainIgnorable) kept.push(ev)
+        continue
+      }
       throw new SessionFormatUnsupportedError(`unknown event type '${ev.type}' without ignorable marker`)
     }
     return kept
+  }
+
+  function buildSession(meta: SessionMeta | undefined, events: SessionEvent[]): Session {
+    const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events }
+    if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined
+      || meta.delegationDepth !== undefined || meta.origin !== undefined)) {
+      session.header = {
+        ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
+        ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
+        ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
+        ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
+      }
+    }
+    return session
   }
 
   return {
@@ -421,17 +445,38 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       // version/guard gates, BEFORE the projection. Pure: operates on a copy,
       // the durable log is never modified.
       const repairedTail = repairTurnTail(migrated)
-      const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: repairedTail }
-      if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined
-        || meta.delegationDepth !== undefined || meta.origin !== undefined)) {
-        session.header = {
-          ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
-          ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
-          ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
-          ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
+      return { session: buildSession(meta, repairedTail) }
+    },
+    async loadOwned(sessionId) {
+      // Reuse borrowOwnership's precise single-flight accounting, but keep a
+      // newly acquired lease on success. If another operation seeded the
+      // acquire, acquired=false prevents us from releasing its lease on error.
+      const acquired = await borrowOwnership(sessionId)
+      try {
+        const pendingWrites = writeBehinds.get(sessionId)
+        if (pendingWrites !== undefined) await pendingWrites.flush()
+        const peeked = await backend.read(sessionId)
+        assertVersionSupported(peeked.version)
+        const repaired = await backend.repair(sessionId)
+        const guarded = guardIgnorable(repaired.events, true)
+        const migrated = await migrate(repaired.version, guarded)
+        const semantic = repairTurnTail(migrated)
+        const canonical = semantic.map((event, index): SessionEvent => ({ ...event, seq: index }))
+        const needsRewrite = canonical.length !== repaired.events.length
+          || canonical.some((event, index) => JSON.stringify(event) !== JSON.stringify(repaired.events[index]))
+        if (needsRewrite) {
+          if (backend.replaceEvents === undefined) {
+            throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
+          }
+          await backend.replaceEvents(sessionId, canonical)
         }
+        return { session: buildSession(repaired.meta, canonical) }
+      } catch (error) {
+        if (acquired) {
+          try { await releaseOwnership(sessionId) } catch { /* preserve load error */ }
+        }
+        throw error
       }
-      return { session }
     },
     async list() {
       return backend.list()

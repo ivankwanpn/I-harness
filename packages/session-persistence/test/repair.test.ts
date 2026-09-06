@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { deriveMessages } from "@i-harness/core-session"
 import type { SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
@@ -145,6 +145,49 @@ describe("repairTurnTail through coordinator.load()", () => {
       const toolMessages = messages.filter((m) => m.role === "tool")
       expect(toolMessages).toHaveLength(1)
       expect(JSON.stringify(toolMessages[0]?.content)).toContain("TOOL_ABORTED_BEFORE_DISPATCH")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("loadOwned durably canonicalizes crash recovery before continuation", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-owned-"))
+    const sessionId = "sess-owned-repair"
+    try {
+      const header = `{"formatVersion":1,"sessionId":"${sessionId}","createdAt":"2026-09-06T00:00:00.000Z"}`
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        header,
+        JSON.stringify({ type: "turn/start", seq: 0 }),
+        JSON.stringify({ type: "step/start", seq: 1 }),
+        JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: { cmd: "echo hi" }, seq: 2 }),
+        "",
+      ].join("\n"), "utf8")
+
+      const first = createSessionCoordinator(createJsonlBackend(dir))
+      const loaded = await first.loadOwned(sessionId)
+      expect(loaded.session.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5])
+      expect(loaded.session.events.map((event) => event.type)).toEqual([
+        "turn/start", "step/start", "tool/call", "tool/result", "step/end", "turn/end",
+      ])
+      await first.append(sessionId, [
+        { type: "turn/start", seq: 6 },
+        { type: "user/message", text: "continue", seq: 7 },
+        { type: "turn/end", seq: 8 },
+      ])
+      await first.releaseOwnership(sessionId)
+
+      const second = createSessionCoordinator(createJsonlBackend(dir))
+      const reloaded = await second.loadOwned(sessionId)
+      expect(reloaded.session.events.map((event) => event.seq)).toEqual(reloaded.session.events.map((_, index) => index))
+      expect(reloaded.session.events.some((event) =>
+        event.type === "tool/result"
+        && (event.output as { code?: string }).code === "TOOL_ABORTED_BEFORE_DISPATCH",
+      )).toBe(true)
+      await second.close()
+
+      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
+        .map((line) => JSON.parse(line) as SessionEvent)
+      expect(raw.map((event) => event.seq)).toEqual(raw.map((_, index) => index))
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

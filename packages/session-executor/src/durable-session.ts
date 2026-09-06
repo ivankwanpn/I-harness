@@ -8,7 +8,7 @@ export function createDurableSessionLoader(
   coordinator: SessionCoordinator,
 ): (sessionId: string) => Promise<Session> {
   return async (sessionId: string): Promise<Session> => {
-    const restored = (await coordinator.load(sessionId)).session
+    const restored = (await coordinator.loadOwned(sessionId)).session
     const live = createSession((event) => {
       coordinator.enqueue(sessionId, [event])
       if (event.type === "turn/end") void coordinator.flush(sessionId).catch(() => {})

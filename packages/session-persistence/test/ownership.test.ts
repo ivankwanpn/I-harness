@@ -184,6 +184,41 @@ describe("session ownership lease", () => {
       await expect(b.adoptOwnership("sess-release-b")).rejects.toThrow(SessionLockConflictError)
     })
 
+    it("loadOwned holds the long-term lease before the first backend read", async () => {
+      const shared = fakeBackend()
+      const seed = tracked(shared)
+      const id = (await seed.create({ sessionId: "sess-load-owned" })).id
+      const contender = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      let owner!: SessionCoordinator
+      const observed: PersistenceBackend = {
+        ...shared,
+        async read(sessionId) {
+          expect(owner.ownerOf(sessionId)).toBe(true)
+          await expect(contender.adoptOwnership(sessionId)).rejects.toThrow(SessionLockConflictError)
+          return shared.read(sessionId)
+        },
+      }
+      owner = tracked(observed, { lock: { enabled: true, lockRoot: root }, ...FAST })
+
+      await owner.loadOwned(id)
+      expect(owner.ownerOf(id)).toBe(true)
+    })
+
+    it("loadOwned releases a lease acquired by the failed load", async () => {
+      const shared = fakeBackend()
+      const seed = tracked(shared)
+      const id = (await seed.create({ sessionId: "sess-load-owned-fail" })).id
+      const failing: PersistenceBackend = {
+        ...shared,
+        async read() { throw new Error("read failed") },
+      }
+      const owner = tracked(failing, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await expect(owner.loadOwned(id)).rejects.toThrow("read failed")
+      expect(owner.ownerOf(id)).toBe(false)
+      const next = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await expect(next.adoptOwnership(id)).resolves.toBeUndefined()
+    })
+
     // I1: concurrent mutating calls for the SAME session on ONE coordinator
     // must share a single acquireLease flight. Before single-flight, the two
     // concurrent acquires raced each other at the OS level (process-level

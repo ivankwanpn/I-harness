@@ -188,15 +188,18 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     }
   }
 
-  function mockCoordinator(over?: Partial<Record<"load" | "enqueue" | "flush", unknown>>) {
+  function mockCoordinator(over?: Partial<Record<"load" | "loadOwned" | "enqueue" | "flush", unknown>>) {
     return {
       load: vi.fn(async () => {
+        throw new Error("missing log")
+      }),
+      loadOwned: vi.fn(async () => {
         throw new Error("missing log")
       }),
       enqueue: vi.fn(),
       flush: vi.fn(async () => {}),
       ...over,
-    } as unknown as SessionCoordinator & Record<"load" | "enqueue" | "flush", ReturnType<typeof vi.fn>>
+    } as unknown as SessionCoordinator & Record<"load" | "loadOwned" | "enqueue" | "flush", ReturnType<typeof vi.fn>>
   }
 
   function registerWith(coordinator: SessionCoordinator, restoredState: SubagentStateSnapshot) {
@@ -220,11 +223,11 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     }
     let releaseLoad: (value: { session: typeof loadedSession }) => void = () => {}
     const coordinator = mockCoordinator({
-      load: vi.fn(() => new Promise<{ session: typeof loadedSession }>((resolve) => { releaseLoad = resolve })),
+      loadOwned: vi.fn(() => new Promise<{ session: typeof loadedSession }>((resolve) => { releaseLoad = resolve })),
     })
     const subagent = registerWith(coordinator, restoreFixture())
-    // The async mirror rebuild is IN FLIGHT: load was called, `ready` pending.
-    expect(coordinator.load).toHaveBeenCalledWith("child-abc")
+    // The async mirror rebuild is IN FLIGHT: owned load was called, `ready` pending.
+    expect(coordinator.loadOwned).toHaveBeenCalledWith("child-abc")
     let readyResolved = false
     void subagent.ready.then(() => { readyResolved = true })
     expect(readyResolved).toBe(false) // ready does NOT resolve before the mirror loads
@@ -247,7 +250,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
   }, 10_000)
 
   it("fails visible when a child log is unavailable after resume (G1a)", async () => {
-    const coordinator = mockCoordinator() // load rejects by default
+    const coordinator = mockCoordinator() // owned load rejects by default
     const subagent = registerWith(coordinator, restoreFixture())
     await subagent.ready
     const entry = subagent.table.get("root/helper")!

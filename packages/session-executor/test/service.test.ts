@@ -24,6 +24,7 @@ describe("createSessionService", () => {
     const flush = vi.fn(async () => {})
     const coordinator = {
       load: vi.fn(async () => ({ session: restored })),
+      loadOwned: vi.fn(async () => ({ session: restored })),
       enqueue,
       flush,
     } as unknown as SessionCoordinator

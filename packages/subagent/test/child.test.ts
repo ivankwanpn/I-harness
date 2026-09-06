@@ -77,6 +77,7 @@ function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enque
     async append() {},
     enqueue(id, events) { enqueued.push({ id, events: [...events] }) },
     async load() { return { session: { formatVersion: 1, events: [] } } },
+    async loadOwned() { return { session: { formatVersion: 1, events: [] } } },
     async list() { return [] },
     async flush() {},
     async close() {},
