@@ -405,6 +405,36 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     }
   })
 
+  it("session/history releases a newly adopted lease when cold assembly fails", async () => {
+    const service = makeStubService()
+    vi.mocked(service.assemblyFor).mockRejectedValue(new Error("assembly failed"))
+    const releaseOwnership = vi.fn(async (_sessionId: string) => {})
+    const coordinator = {
+      list: vi.fn(async () => ["persisted"]),
+      create: vi.fn(async ({ sessionId }: { sessionId?: string } = {}) => ({ id: sessionId ?? "new" })),
+      ownerOf: vi.fn(() => false),
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+      releaseOwnership,
+    } as unknown as SessionCoordinator
+    const server = createSdkServer(service, { coordinator })
+
+    try {
+      const reply = await server.handleLine(
+        encodeFrame(makeRequest(107, "session/history", { sessionId: "persisted" })),
+      )
+      const msg = decodeFrame(reply!) as RpcFailure
+      expect(msg.error.code).toBe(INTERNAL_ERROR)
+      expect(String(msg.error.message)).toContain("assembly failed")
+      expect(releaseOwnership).toHaveBeenCalledWith("persisted")
+
+      await server.handleLine(encodeFrame(makeRequest(108, "session/history", { sessionId: "persisted" })))
+      expect(coordinator.list).toHaveBeenCalledTimes(2)
+      expect(coordinator.adoptOwnership).toHaveBeenCalledTimes(2)
+    } finally {
+      await server.close()
+    }
+  })
+
   it("session/history unknown sessionId → -32602 with an explicit 'session not found' message", async () => {
     const { service, cleanup } = await makeService()
     try {

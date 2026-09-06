@@ -31,7 +31,7 @@
 //   session/event  { sessionId, event }   — every appended session event
 //   session/status { sessionId, status, error? } — lifecycle transitions
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602.
-import { append, subscribe, type SessionEvent } from "@i-harness/core-session"
+import { append, subscribe, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import {
@@ -134,6 +134,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const notifiers = new Set<(message: RpcNotification) => void>()
   const knownSessions = new Set<string>()
   const preparingSessions = new Map<string, Promise<boolean>>()
+  const preparingHistorySessions = new Map<string, Promise<Session | undefined>>()
   const inflight = new Map<string, Inflight>()
   let closed = false
 
@@ -214,6 +215,35 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     await prepareSession(sessionId, true)
   }
 
+  async function sessionForHistory(sessionId: string): Promise<Session | undefined> {
+    const live = service.liveSession(sessionId)
+    if (live !== undefined) return live
+    const existing = preparingHistorySessions.get(sessionId)
+    if (existing !== undefined) return existing
+
+    const knownBefore = knownSessions.has(sessionId)
+    const ownedBefore = opts.coordinator?.ownerOf?.(sessionId) ?? false
+    let preparation!: Promise<Session | undefined>
+    preparation = (async () => {
+      try {
+        if (!(await prepareSession(sessionId, false))) return undefined
+        return (await service.assemblyFor(sessionId)).session
+      } catch (error) {
+        if (!knownBefore) {
+          knownSessions.delete(sessionId)
+          if (!ownedBefore && opts.coordinator !== undefined) {
+            await opts.coordinator.releaseOwnership(sessionId).catch(() => {})
+          }
+        }
+        throw error
+      }
+    })().finally(() => {
+      if (preparingHistorySessions.get(sessionId) === preparation) preparingHistorySessions.delete(sessionId)
+    })
+    preparingHistorySessions.set(sessionId, preparation)
+    return preparation
+  }
+
   async function handleRequest(method: string, params: unknown, id: number | string): Promise<RpcMessage> {
     switch (method) {
       case "initialize": {
@@ -283,17 +313,15 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/history limit must be a positive integer")
         }
         const limit = Math.min(rawLimit, HISTORY_LIMIT_CAP)
-        let session = service.liveSession(p.sessionId)
+        let session: Session | undefined
+        try {
+          session = await sessionForHistory(p.sessionId)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return makeFailure(id, INTERNAL_ERROR, `session/history: failed to prepare session: ${message}`)
+        }
         if (session === undefined) {
-          try {
-            if (!(await prepareSession(p.sessionId, false))) {
-              return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
-            }
-            session = (await service.assemblyFor(p.sessionId)).session
-          } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            return makeFailure(id, INTERNAL_ERROR, `session/history: failed to prepare session: ${message}`)
-          }
+          return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
         }
         // The live log seqs are the 0-based positions in events (assigned at
         // append), so the walk is a slice: [afterSeq exclusive, nextSeq).

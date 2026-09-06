@@ -312,12 +312,39 @@ describe("createRemoteBackend (wire v1: protocolVersion ≥ 2 handshake)", () =>
     await backend.close()
   })
 
+  it("open follows advancing nextSeq across valid short history pages", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method, params) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: {} }
+      if (method === "session/history") {
+        const afterSeq = (params as { afterSeq: number }).afterSeq
+        if (afterSeq === 0) return { events: [{ type: "user/message", text: "page one", seq: 0 }], nextSeq: 1 }
+        if (afterSeq === 1) return { events: [{ type: "assistant/message", text: "page two", seq: 1 }], nextSeq: 2 }
+        return { events: [], nextSeq: 2 }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "initial", batchMs: 1 })
+    const seen = startConsumer(backend)
+
+    await backend.open("target")
+    await waitFor(() => seen.some((event) => event.type === "assistant" && event.text === "page two"), 1000)
+    expect(client.requests.filter((request) => request.method === "session/history")).toHaveLength(3)
+    expect(seen.filter((event) => event.type === "user" || event.type === "assistant").map((event) => event.seq)).toEqual([0, 1])
+
+    await backend.close()
+  })
+
   it("open buffers target notifications and appends only the deduplicated live tail", async () => {
     const pendingHistory = deferred<unknown>()
     const client = fakeWireClient()
-    client.setHandler((method) => {
+    client.setHandler((method, params) => {
       if (method === "initialize") return { protocolVersion: 2, capabilities: {} }
-      if (method === "session/history") return pendingHistory.promise
+      if (method === "session/history") {
+        return (params as { afterSeq: number }).afterSeq === 0
+          ? pendingHistory.promise
+          : { events: [], nextSeq: (params as { afterSeq: number }).afterSeq }
+      }
       return { ok: true }
     })
     const backend = createRemoteBackend({ client, sessionId: "initial", batchMs: 1 })
@@ -352,6 +379,9 @@ describe("createRemoteBackend (wire v1: protocolVersion ≥ 2 handshake)", () =>
     client.setHandler((method, params) => {
       if (method === "initialize") return { protocolVersion: 2, capabilities: {} }
       if (method === "session/history") {
+        if ((params as { afterSeq: number }).afterSeq > 0) {
+          return { events: [], nextSeq: (params as { afterSeq: number }).afterSeq }
+        }
         const id = (params as { sessionId: string }).sessionId
         if (id === "session-a") return pendingA.promise
         if (id === "session-b") return pendingB.promise
