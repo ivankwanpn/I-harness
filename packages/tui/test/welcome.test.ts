@@ -1,12 +1,21 @@
 // M37b G2: welcome hero (spec §2a) — two-column ≥90 cols vs stacked below;
 // menu rows `{key} {label}`, version right on the border, error line above.
 
-import { describe, expect, it } from "vitest"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { afterEach, describe, expect, it } from "vitest"
 import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
-import type { Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
+import type { InputEvent, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
+import { createCredentialStore } from "@i-harness/credentials"
+import { SettingsStore } from "@i-harness/settings"
+import { TuiApp } from "../src/app/loop.ts"
 import { makeDraw } from "../src/app/present.ts"
-import { renderWelcome, WELCOME_WIDE_MIN } from "../src/views/welcome.ts"
+import { ProviderStore } from "../src/app/provider-store.ts"
+import { createScrollbackEngine } from "../src/scrollback/engine.ts"
+import { layoutWelcome, renderWelcome, WELCOME_WIDE_MIN } from "../src/views/welcome.ts"
 import type { WelcomeState } from "../src/views/welcome.ts"
+import type { BackendClient, BackendModelState, TuiEvent } from "../src/contracts.ts"
 
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap, "groknight")
@@ -38,54 +47,233 @@ const draw = (r: Renderer, fn: (view: ReturnType<typeof makeDraw>) => void): voi
 const state: WelcomeState = {
   version: "0.1.0",
   menus: [
-    { key: "ctrl+s", label: "Resume session" },
-    { key: "ctrl+n", label: "New session" },
-    { key: "ctrl+q", label: "Quit" },
+    { action: "new", key: "ctrl+n", label: "New session" },
+    { action: "resume", key: "ctrl+s", label: "Resume session" },
+    { action: "settings", key: "F2", label: "Settings" },
+    { action: "quit", key: "ctrl+q", label: "Quit" },
   ],
   cursor: 0,
+  modelState: { status: "loading" },
+}
+
+const prompt = {
+  text: "",
+  cursor: 0,
+  multiLine: false,
+  focused: true,
+  model: "unconfigured",
+  plan: false,
+  title: "New session",
+}
+
+const roots: string[] = []
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
+
+async function providerStore(): Promise<ProviderStore> {
+  const root = mkdtempSync(join(tmpdir(), "ih-welcome-"))
+  roots.push(root)
+  const settings = new SettingsStore({ path: join(root, "settings.json") })
+  await settings.load()
+  return new ProviderStore({ settings, credentials: createCredentialStore(join(root, "credentials.json")) })
+}
+
+function recordingBackend(modelState: BackendModelState): BackendClient & { calls: string[]; submissions: string[] } {
+  const calls: string[] = []
+  const submissions: string[] = []
+  return {
+    calls,
+    submissions,
+    listSessions: async () => {
+      calls.push("listSessions")
+      return [{ id: "resume-1", title: "Resume me", updatedAt: 1 }]
+    },
+    open: async (id) => { calls.push(`open:${id}`) },
+    createSession: async () => {
+      calls.push("createSession")
+      calls.push("open:created-1")
+      return "created-1"
+    },
+    forkSession: async () => "forked-1",
+    modelState: async () => {
+      calls.push("modelState")
+      return modelState
+    },
+    setSessionModel: async () => modelState,
+    submit: async (text) => {
+      calls.push(`submit:${text}`)
+      submissions.push(text)
+    },
+    steer: async () => {},
+    cancel: async () => {},
+    events: async function* (): AsyncIterable<TuiEvent> {},
+    seqCursor: () => -1,
+    replay: async () => [],
+    status: () => ({ running: false, queued: 0 }),
+    close: async () => {},
+  }
+}
+
+function testApp(backend: BackendClient, store: ProviderStore): { app: TuiApp; renderer: Renderer } {
+  const renderer = make(80, 24)
+  return {
+    renderer,
+    app: new TuiApp({
+      renderer,
+      backend,
+      engine: createScrollbackEngine({ width: 80 }),
+      capabilities: cap,
+      palette,
+      glyphs: GLYPHS,
+      providerStore: store,
+      listSessions: () => backend.listSessions(),
+      write: () => {},
+    }),
+  }
+}
+
+const enterKey = (): InputEvent => ({
+  type: "key",
+  code: "Enter",
+  key: "Enter",
+  ctrl: false,
+  alt: false,
+  shift: false,
+})
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition did not settle")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
+function frontText(r: Renderer): string {
+  const inner = r as unknown as { db: { front: { cells: Array<{ text: string }>; width: number } } }
+  const { cells, width } = inner.db.front
+  const rows: string[] = []
+  for (let y = 0; y < cells.length / width; y++) {
+    let line = ""
+    for (let x = 0; x < width; x++) line += cells[y * width + x]!.text
+    rows.push(line)
+  }
+  return rows.join("\n")
 }
 
 describe("welcome hero (spec §2a)", () => {
   it(`wide layout (>= ${WELCOME_WIDE_MIN} cols): logo left + version right, menu column right`, () => {
     const r = make(100, 30)
-    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 100, h: 30 }, state, view, palette, GLYPHS))
-    const top = rowText(r, 0)
+    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 100, h: 30 }, state, prompt, view, palette, GLYPHS))
+    const top = rowText(r, 1)
     expect(top.slice(2, 4)).toBe("╭─") // boxX = 2 (centered 96-col hero)
     expect(top).toContain("v0.1.0")
-    expect(rowText(r, 1)).toContain("I-harness")
-    expect(rowText(r, 1)).toContain("ctrl+s Resume session")
-    expect(rowText(r, 2)).toContain("Thanks for trying I-harness, give feedback")
+    expect(rowText(r, 2)).toContain("I-harness")
     expect(rowText(r, 2)).toContain("ctrl+n New session")
-    expect(rowText(r, 3)).toContain("ctrl+q Quit")
+    expect(rowText(r, 3)).toContain("Thanks for trying I-harness, give feedback")
+    expect(rowText(r, 3)).toContain("ctrl+s Resume session")
+    expect(rowText(r, 4)).toContain("F2 Settings")
+    expect(rowText(r, 5)).toContain("ctrl+q Quit")
     // cursor row fills bg_visual in the menu column (past the text runs).
-    expect(cellAt(r, 80, 1).style).toMatchObject({ bg: rgb(palette.bgVisual) })
-    expect(cellAt(r, 80, 3).style).not.toMatchObject({ bg: rgb(palette.bgVisual) })
+    expect(cellAt(r, 80, 2).style).toMatchObject({ bg: rgb(palette.bgVisual) })
+    expect(cellAt(r, 80, 5).style).not.toMatchObject({ bg: rgb(palette.bgVisual) })
   })
 
   it("stacked below 90 cols: logo/subtitle then the menu rows, one column", () => {
     const r = make(60, 30)
-    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 60, h: 30 }, state, view, palette, GLYPHS))
-    expect(rowText(r, 0)).toContain("╭")
-    expect(rowText(r, 1)).toContain("I-harness")
-    expect(rowText(r, 2)).toContain("Thanks for trying I-harness, give feedback with")
-    expect(rowText(r, 3)).toContain("ctrl+s Resume session")
+    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 60, h: 30 }, state, prompt, view, palette, GLYPHS))
+    expect(rowText(r, 1)).toContain("╭")
+    expect(rowText(r, 2)).toContain("I-harness")
+    expect(rowText(r, 3)).toContain("Thanks for trying I-harness, give feedback with")
     expect(rowText(r, 4)).toContain("ctrl+n New session")
-    expect(rowText(r, 5)).toContain("ctrl+q Quit")
-    expect(rowText(r, 0)).toContain("v0.1.0")
+    expect(rowText(r, 5)).toContain("ctrl+s Resume session")
+    expect(rowText(r, 6)).toContain("F2 Settings")
+    expect(rowText(r, 7)).toContain("ctrl+q Quit")
+    expect(rowText(r, 1)).toContain("v0.1.0")
   })
 
   it("error line above the box, red", () => {
     const r = make(100, 30)
-    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 100, h: 30 }, { ...state, error: "trust issue" }, view, palette, GLYPHS))
-    expect(rowText(r, 0)).toContain("trust issue")
-    expect(cellAt(r, 0, 0).style).toMatchObject(fg(palette.accentError))
-    expect(rowText(r, 1).slice(2, 4)).toBe("╭─") // hero shifts one row down
+    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 100, h: 30 }, { ...state, startupError: "trust issue" }, prompt, view, palette, GLYPHS))
+    expect(rowText(r, 1)).toContain("trust issue")
+    expect(cellAt(r, 2, 1).style).toMatchObject(fg(palette.accentError))
+    expect(rowText(r, 3).slice(2, 4)).toBe("╭─") // hero shifts below error + gap
   })
 
   it("menu key hints bold accent_user", () => {
     const r = make(100, 30)
-    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 100, h: 30 }, state, view, palette, GLYPHS))
+    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 100, h: 30 }, state, prompt, view, palette, GLYPHS))
     // menu at right column x=50: 'c' of ctrl+s at 50.
-    expect(cellAt(r, 50, 1).style).toMatchObject(fg(palette.accentUser))
+    expect(cellAt(r, 50, 2).style).toMatchObject(fg(palette.accentUser))
+  })
+
+  it("keeps the prompt, model status, and a following content row visible at 80x24 and 120x32", () => {
+    for (const [cols, rows] of [[80, 24], [120, 32]] as const) {
+      const layout = layoutWelcome({ x: 0, y: 0, w: cols, h: rows }, state, prompt)
+      expect(layout.hero.w).toBeLessThanOrEqual(120)
+      expect(layout.prompt.h).toBeGreaterThanOrEqual(3)
+      expect(layout.modelStatus.y).toBe(layout.prompt.y + layout.prompt.h)
+      expect(layout.nextContent.y).toBeLessThan(rows)
+    }
+  })
+
+  it("shows a disabled prompt CTA when no model is configured", () => {
+    const r = make(80, 24)
+    const unconfigured: WelcomeState = {
+      ...state,
+      modelState: { status: "unconfigured", reason: "No model configured" },
+    }
+    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 80, h: 24 }, unconfigured, prompt, view, palette, GLYPHS))
+    const text = Array.from({ length: 24 }, (_, y) => rowText(r, y)).join("\n")
+    expect(text).toContain("No model configured")
+    expect(text).toContain("Settings > Models & Providers")
+    expect(text).not.toContain("mock-model")
+  })
+})
+
+describe("TuiApp Welcome model gate", () => {
+  it("starts on Welcome and disables prompt when no model is configured", async () => {
+    const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
+    const { app, renderer } = testApp(backend, await providerStore())
+
+    expect(app.state().view).toEqual({ kind: "welcome" })
+    await app.initialize({ renderWelcomeBeforeModel: true })
+    app.frame()
+
+    const text = frontText(renderer)
+    expect(text).toContain("No model configured")
+    expect(text).toContain("Settings > Models & Providers")
+  })
+
+  it("Enter on a disabled Welcome prompt opens Models & Providers without submitting", async () => {
+    const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
+    const { app, renderer } = testApp(backend, await providerStore())
+    await app.initialize({ renderWelcomeBeforeModel: true })
+    app.state().prompt.text = "hello"
+    app.state().prompt.cursor = 5
+
+    app.feedInput(enterKey())
+    await waitFor(() => (app.state().overlay as { kind?: string } | undefined)?.kind === "settings")
+    app.frame()
+
+    expect(backend.submissions).toEqual([])
+    expect(app.state().prompt.text).toBe("hello")
+    expect(frontText(renderer)).toContain("Models & Providers")
+  })
+
+  it("a ready Welcome prompt creates and opens a session before submitting", async () => {
+    const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "model", label: "fixture:model" })
+    const { app } = testApp(backend, await providerStore())
+    await app.initialize({ renderWelcomeBeforeModel: true })
+    app.state().prompt.text = "ship it"
+    app.state().prompt.cursor = 7
+
+    app.feedInput(enterKey())
+    await waitFor(() => app.state().view?.kind === "agent")
+
+    expect(app.state().view).toEqual({ kind: "agent", sessionId: "created-1" })
+    expect(backend.calls.slice(-4)).toEqual(["modelState", "createSession", "open:created-1", "submit:ship it"])
+    expect(app.state().prompt.text).toBe("")
   })
 })

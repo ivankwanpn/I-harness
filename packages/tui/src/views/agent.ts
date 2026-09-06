@@ -168,8 +168,10 @@ export function layoutAgent(
   opts: { compact?: boolean } = {},
 ): AgentLayout {
   const compact = opts.compact === true
+  const constrained = area.rows <= 16
+  const denseVertical = compact || constrained
   let colsPad = compact ? 1 : DEFAULT_COLS_PAD
-  let rowsPad = compact ? 0 : DEFAULT_ROWS_PAD
+  let rowsPad = denseVertical ? 0 : DEFAULT_ROWS_PAD
   // Degenerate size: collapse the chrome (spec §2.1 row 16: rows<=16 collapse).
   if (area.cols < 2 * colsPad + 6 || area.rows < 2 * rowsPad + 4) {
     colsPad = 1
@@ -182,30 +184,31 @@ export function layoutAgent(
   const innerBot = area.rows - rowsPad // exclusive
 
   const status: Rect = { x: innerX, y: innerTop, w: innerW, h: 1 }
-  const shortcuts: Rect = { x: innerX, y: innerBot - 1, w: innerW, h: 1 }
+  const shortcutsH = constrained ? 0 : 1
+  const shortcuts: Rect = { x: innerX, y: innerBot - shortcutsH, w: innerW, h: shortcutsH }
 
   // Prompt area — chrome box: top border + wrapped text lines + info row +
   // bottom border, plus a symmetric vpad; never more than rows/2.
   const contentW = Math.max(1, innerW - 4) // borders (2) + prefix/indent (2)
   const promptLines = Math.max(1, wrapPrompt(state.prompt.text, contentW).length)
-  const promptH = promptHeightOf(promptLines, compact, area.rows)
-  const promptGap = compact ? 0 : 1
+  const promptH = promptHeightOf(promptLines, denseVertical, area.rows)
+  const promptGap = denseVertical ? 0 : 1
   const promptY = shortcuts.y - promptGap - promptH
   const prompt: Rect = { x: innerX, y: promptY, w: innerW, h: promptH }
 
   // Turn status row — spec §2.1 item 9: [gap 1] + Length(1), conditional.
   const turnH = state.turn !== undefined ? 1 : 0
-  const turnGap = turnH > 0 && !compact ? 1 : 0
+  const turnGap = turnH > 0 && !denseVertical ? 1 : 0
   const turnY = prompt.y - turnGap - turnH
   const turn: Rect = { x: innerX, y: turnY, w: innerW, h: turnH }
 
   // Panes below the scrollback: /btw (item 7), queue (item 8) — above the turn
   // row. btw shows whenever data is present (it's an overlay, not a toggle).
   const pd = state.paneData
-  const gap = compact ? 0 : 1
+  const gap = denseVertical ? 0 : 1
   let cursorBottom = turnH > 0 ? turn.y : prompt.y
 
-  const btwH = pd?.btw !== undefined ? btwHeightOf(area.rows) : 0
+  const btwH = pd?.btw !== undefined ? (constrained ? 1 : btwHeightOf(area.rows)) : 0
   let btw: Rect | undefined
   if (btwH > 0) {
     const y = cursorBottom - gap - btwH
@@ -214,7 +217,7 @@ export function layoutAgent(
   }
 
   const showQueue = state.panes.has("queue") && pd?.queue !== undefined
-  const queueH = showQueue ? queueHeightOf(pd.queue!) : 0
+  const queueH = showQueue ? (constrained ? 1 : queueHeightOf(pd.queue!)) : 0
   let queue: Rect | undefined
   if (queueH > 0) {
     const y = cursorBottom - gap - queueH
@@ -224,9 +227,9 @@ export function layoutAgent(
 
   // Panes above the scrollback: tasks (item 3), todo (item 5).
   const showTasks = state.panes.has("tasks") && pd?.tasks !== undefined
-  const tasksH = showTasks ? tasksHeightOf(pd.tasks!) : 0
+  const tasksH = showTasks ? (constrained ? 1 : tasksHeightOf(pd.tasks!)) : 0
   const showTodo = state.panes.has("todo") && pd?.todo !== undefined
-  const todoH = showTodo ? todoHeightOf(pd.todo!) : 0
+  const todoH = showTodo ? (constrained ? 1 : todoHeightOf(pd.todo!)) : 0
   let y = status.y + 1
   let tasks: Rect | undefined
   if (tasksH > 0) {
@@ -246,7 +249,7 @@ export function layoutAgent(
     x: innerX,
     y: scrollTop,
     w: innerW,
-    h: Math.max(5, scrollBottom - scrollTop),
+    h: Math.max(0, scrollBottom - scrollTop),
   }
 
   // Dropdown/picker overlay: directly above the prompt box (overlapping).

@@ -34,6 +34,8 @@ export interface SessionPickerState {
   groups: SessionGroup[]
   cursor: number
   loading?: boolean
+  /** Surface label. Welcome uses "Resume session"; Agent keeps "sessions". */
+  title?: string
   /** Clock (ms) driving the relative-time right labels. */
   now: number
 }
@@ -72,7 +74,7 @@ export function renderSessionPicker(
 
   // Top border: `╭ sessions ` label (spec-style) + empty dashes.
   view.text(x0, y0, `╭${"─".repeat(Math.max(0, ctx.w - 2))}╮`, border)
-  let tx = view.text(x0 + 1, y0, ` sessions `, view.color(palette.textPrimary, { bold: true }), x1)
+  let tx = view.text(x0 + 1, y0, ` ${state.title ?? "sessions"} `, view.color(palette.textPrimary, { bold: true }), x1)
   view.text(tx, y0, "─".repeat(Math.max(0, x1 - tx)), border, x1 + 1)
 
   for (let y = y0 + 1; y < y1; y++) {
