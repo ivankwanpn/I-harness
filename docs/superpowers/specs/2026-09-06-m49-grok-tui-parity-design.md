@@ -200,7 +200,7 @@ modelPolicy?: "required" | "test-mock"
 ```
 
 - 缺省為 `required`；沒有 `model` 時拋 typed `ModelUnavailableError`。
-- `test-mock` 只在 caller明確傳 `mockScript` 時有效；不再因 model缺失自動產生 `"ok"` client。
+- `test-mock` 只能由unit/PTY harness明確opt in；可使用caller提供的 `mockScript`，未提供時使用單一 `"ok"` test fixture。Production composition不得傳此值。
 - `apps/tui`、TUI spawned SDK、production SDK/ACP/web composition使用 `required`。
 - unit/PTY tests必須明確注入 fake/model或 `mockScript`；測試名稱與 fixture不得暗示 production fallback。
 
