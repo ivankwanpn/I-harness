@@ -1,58 +1,53 @@
-// @i-harness/tui — M46a G1: the settings modal (grok's 8-category structure).
+// @i-harness/tui — M49 Task 6: the settings modal (typed registry, spec §9.1).
 //
-// Structure per the new-new truth: a category list first (Enter browses, Esc
-// back, Esc again closes), then the category's knob rows (Enter cycles/
-// toggles/opens, Esc back). REAL knobs only:
+// The modal is a DECLARATIVE row list over the settings registry: the eight
+// spec categories, filtered by VISIBILITY (a category with zero visible rows
+// is omitted — hand-coded placeholders are gone), and each browsed category
+// renders the registry's rows through read() + a value-kind formatter. Writes
+// go through the settings controller (preview → commit → rollback-on-failure
+// per definition — preview immediate, commit through settings/provider/
+// backend, rollback restores the live value when persistence fails).
 //
-//   Appearance    theme (groknight/grokday/auto cycle), timestamps (toggle),
-//                 vim mode (honest (no) row — no vim in this build)
-//   Mouse         skeleton — `mouse options (coming in the mouse wheel)`
-//   Editor & Input  not available in this build (v2)
-//   Agent & Approval  guardian (toggle), always-approve default (toggle)
-//   Privacy       not available in this build (v2)
-//   Models        provider (status row + …/name), default_model (picker —
-//                 the DynamicEnum `(no override)` over the DISCOVERED catalog)
-//   Session       compact-mode (transcriptMode)
-//   Advanced      not available in this build (v2)
+// Rows the running app does not apply live are labeled exactly
+// `Applies to new sessions` (spec §9.2 — never a silent write-only row).
 //
-// The binder writes DURABLY through the settings store (theme/transcriptMode
-// top-level; timestamps/compact/guardian/alwaysApprove → the appended tui
-// prefs), flips the live engine timestamps via onTimestamps (host-wired), and
-// routes the Models default_model row to the model picker (onOpenPicker —
-// the same picker Ctrl+M and /model use).
+// The Models & Providers category holds the launch rows for the dedicated
+// master/detail flow (provider roster) and the default-model picker.
 
 import type { GlyphSet, Palette } from "@i-harness/tui-core"
 import type { Settings, SettingsStoreSurface } from "@i-harness/settings"
 import type { AppAction } from "../app/keys.ts"
 import type { OverlaySeam } from "../app/present.ts"
-import type { ProviderStore } from "../app/provider-store.ts"
+import type { SettingsContext, SettingDefinition, SettingValueKind } from "../settings/registry.ts"
+import type { SettingsController } from "../settings/controller.ts"
+import { createSettingsRegistry, type SettingsCategory, type SettingsRegistry } from "../settings/registry.ts"
 import { MODEL_NO_OVERRIDE } from "./model-picker.ts"
 import type { Rect, Style, ViewDraw } from "./agent.ts"
-// M46b G1: the Mouse category row set (the REAL knobs — replaces the M46a
-// "coming in the mouse wheel" placeholder).
-import { mouseKnobRows, nextKeepTextSelection, nextScrollMode, stepScrollLines, stepScrollSpeed } from "../app/settings-mouse.ts"
+// M46b G1: the Mouse category row set (the REAL knobs) — the display/cycle
+// helpers are reused by the typed rows.
+import {
+  KEEP_TEXT_SELECTION_MODES,
+  SCROLL_MODES,
+  nextKeepTextSelection,
+  nextScrollMode,
+  speedDisplay,
+  stepScrollLines,
+  stepScrollSpeed,
+} from "../app/settings-mouse.ts"
 import type { SettingsKeepTextSelection, SettingsScrollMode } from "@i-harness/settings"
 
-// ------------------------------------------------------------------ categories
-
-export const SETTINGS_CATEGORIES = [
-  "Appearance",
-  "Mouse",
-  "Editor & Input",
-  "Agent & Approval",
-  "Privacy",
-  "Models",
-  "Session",
-  "Advanced",
-] as const
-export type SettingsCategory = (typeof SETTINGS_CATEGORIES)[number]
+// ------------------------------------------------------------------ constants
 
 export const SETTINGS_TITLE = "Settings"
 export const SETTINGS_FOOTER_CATEGORIES = "↑/↓ to choose · Enter to browse · Esc to close"
 export const SETTINGS_FOOTER_KB = "↑/↓ to choose · Enter to change · Esc to go back"
-export const SETTINGS_NOT_AVAILABLE = "not available in this build (v2)"
-export const SETTINGS_MOUSE_PLACEHOLDER = "mouse options (coming in the mouse wheel)"
 export const SETTINGS_CATEGORY_WINDOW = 5
+
+/** The exact label non-live rows carry (spec §9.2 — never a silent write). */
+export const NEW_SESSIONS_LABEL = "Applies to new sessions"
+
+const ON = "on"
+const OFF = "off"
 
 // ------------------------------------------------------------------ state
 
@@ -94,16 +89,16 @@ export interface SettingsSnapshot {
   mouseReportingToggle: boolean
 }
 
-/** Snapshot from the real settings store + ProviderStore (the modal's view
- * of truth — never credential VALUES; the provider id/name are the only
- * provider bits on this surface). */
+/** Snapshot from the real settings store (the modal's view of truth — never
+ * credential VALUES; the default provider id/name are the only provider bits
+ * on this surface). Provider data comes from llm.defaultModel + the runtime
+ * directory (the controller supplies the summary). */
 export function settingsSnapshot(
   settings: SettingsStoreSurface,
-  providerStore: ProviderStore,
+  providers: { defaultModel: Settings["llm"]["defaultModel"]; defaultProviderName: string },
 ): SettingsSnapshot {
   const raw = settings.get()
   const prefs = raw.tui.prefs
-  const active = providerStore.activeEntry()
   return {
     theme: raw.theme,
     transcriptMode: raw.transcriptMode,
@@ -111,9 +106,9 @@ export function settingsSnapshot(
     compact: prefs.compact,
     guardian: prefs.guardian,
     alwaysApprove: prefs.alwaysApprove,
-    activeProviderId: providerStore.activeId(),
-    activeProviderName: active !== undefined ? active.name ?? active.id : "",
-    defaultModel: providerStore.defaultModel(),
+    activeProviderId: providers.defaultModel.provider,
+    activeProviderName: providers.defaultProviderName,
+    defaultModel: { ...providers.defaultModel },
     mouseScrollSpeed: prefs.scrollSpeed,
     mouseScrollMode: prefs.scrollMode,
     mouseScrollLines: prefs.scrollLines,
@@ -144,10 +139,8 @@ export function nextTheme(theme: SettingsSnapshot["theme"]): Settings["theme"] {
   }
 }
 
-const ON = "on"
-const OFF = "off"
-
-/** The knob rows of one category (pure — the binder refreshes after writes). */
+/** The knob rows of one category (pure — the binder refreshes after writes).
+ * Non-live rows carry the exact `Applies to new sessions` label. */
 export function settingsKnobRows(category: SettingsCategory, snap: SettingsSnapshot): SettingsKnobRow[] {
   switch (category) {
     case "Appearance":
@@ -155,31 +148,27 @@ export function settingsKnobRows(category: SettingsCategory, snap: SettingsSnaps
         { label: "theme", value: themeDisplayName(snap.theme), kind: "cycle" },
         { label: "compact", value: snap.compact ? ON : OFF, kind: "toggle" },
         { label: "timestamps", value: snap.timestamps ? ON : OFF, kind: "toggle" },
-        { label: "vim mode", value: "(no)", kind: "placeholder", dimmed: true },
       ]
-    case "Mouse":
-      // M46b G1: the REAL Mouse category — the 7-knob grok vocabulary (the
-      // M46a "soon" placeholder row is replaced; the constant stays exported
-      // for the test that pins the replacement).
-      return mouseKnobRows(snap)
-    case "Editor & Input":
-    case "Privacy":
-    case "Advanced":
-      return [{ label: SETTINGS_NOT_AVAILABLE, value: "", kind: "placeholder", dimmed: true }]
-    case "Agent & Approval":
+    case "Scrollback & Mouse":
       return [
-        { label: "guardian", value: snap.guardian ? ON : OFF, kind: "toggle" },
+        { label: "scroll_speed", value: `${snap.mouseScrollSpeed} (${speedDisplay(snap.mouseScrollSpeed)}) · ${NEW_SESSIONS_LABEL}`, kind: "cycle" },
+        { label: "scroll_mode", value: `${snap.mouseScrollMode} · ${NEW_SESSIONS_LABEL}`, kind: "cycle" },
+        { label: "scroll_lines", value: `${snap.mouseScrollLines} · ${NEW_SESSIONS_LABEL}`, kind: "cycle" },
+        { label: "invert_scroll", value: `${snap.mouseInvertScroll ? ON : OFF} · ${NEW_SESSIONS_LABEL}`, kind: "toggle" },
+        { label: "keep_text_selection", value: `${snap.mouseKeepTextSelection} · ${NEW_SESSIONS_LABEL}`, kind: "cycle" },
+        { label: "word_separators", value: `${separatorDisplay(snap.mouseWordSeparators)} · ${NEW_SESSIONS_LABEL}`, kind: "cycle" },
+        { label: "mouse_reporting_toggle", value: `${snap.mouseReportingToggle ? ON : OFF} · ${NEW_SESSIONS_LABEL}`, kind: "toggle" },
+      ]
+    case "Safety":
+      return [
+        { label: "guardian", value: `${snap.guardian ? ON : OFF} · ${NEW_SESSIONS_LABEL}`, kind: "toggle" },
         { label: "always-approve default", value: snap.alwaysApprove ? ON : OFF, kind: "toggle" },
       ]
-    case "Models":
+    case "Models & Providers":
       return [
         {
           label: "provider",
-          value: snap.activeProviderId === ""
-            ? "(none configured)"
-            : snap.activeProviderName !== "" && snap.activeProviderName !== snap.activeProviderId
-              ? `${snap.activeProviderId} (${snap.activeProviderName})`
-              : snap.activeProviderId,
+          value: snap.activeProviderId === "" ? "(none configured)" : snap.activeProviderId,
           kind: "info",
         },
         {
@@ -190,9 +179,19 @@ export function settingsKnobRows(category: SettingsCategory, snap: SettingsSnaps
           kind: "picker",
         },
       ]
-    case "Session":
-      return [{ label: "compact-mode", value: snap.transcriptMode === "compact" ? ON : OFF, kind: "toggle" }]
+    case "Sessions":
+      return [{ label: "compact-mode", value: `${snap.transcriptMode === "compact" ? ON : OFF} · ${NEW_SESSIONS_LABEL}`, kind: "toggle" }]
+    case "Editor & Input":
+    case "Integrations":
+    case "Advanced":
+      // No available rows in this build — the registry filters these
+      // categories out of the modal (no unavailable-only placeholders).
+      return []
   }
+}
+
+function separatorDisplay(separators: string): string {
+  return separators.length > 24 ? `${separators.slice(0, 24)}…` : separators
 }
 
 // ------------------------------------------------------------------ render
@@ -226,10 +225,10 @@ function beginBand(
 
 /** Categories window (the panel is short — a cursor-anchored window like the
  * model picker's, honest about the scroll). */
-export function settingsCategoryWindow(cursor: number): { start: number; visible: SettingsCategory[] } {
-  const len = SETTINGS_CATEGORIES.length
+export function settingsCategoryWindow(cursor: number, categories: readonly SettingsCategory[]): { start: number; visible: SettingsCategory[] } {
+  const len = categories.length
   const start = Math.max(0, Math.min(cursor - (SETTINGS_CATEGORY_WINDOW - 1), len - SETTINGS_CATEGORY_WINDOW))
-  return { start, visible: SETTINGS_CATEGORIES.slice(start, start + SETTINGS_CATEGORY_WINDOW) }
+  return { start, visible: categories.slice(start, start + SETTINGS_CATEGORY_WINDOW) }
 }
 
 /** Draw the settings modal (panel in the prompt slot — modals own the box). */
@@ -240,6 +239,7 @@ export function renderSettingsModal(
   draw: ViewDraw,
   palette: Palette,
   glyphs: GlyphSet,
+  categories: readonly SettingsCategory[] = [],
 ): void {
   const { x0, x1, y0, y1, withBg } = beginBand(ctx, draw, palette, glyphs)
   const limitX = x1
@@ -256,7 +256,7 @@ export function renderSettingsModal(
 
   titleRow(SETTINGS_TITLE)
   if (state.phase === "categories") {
-    const { start, visible } = settingsCategoryWindow(state.cursor)
+    const { start, visible } = settingsCategoryWindow(state.cursor, categories)
     for (let i = 0; i < visible.length && y <= y1; i++, y++) {
       const idx = start + i
       const isCursor = idx === state.cursor
@@ -282,18 +282,280 @@ export function isSettingsOverlay(ov: OverlaySeam): boolean {
   return (ov as { kind: string }).kind === "settings"
 }
 
+// ------------------------------------------------------------------ typed definitions
+
+/** The host callbacks the typed rows commit through (live apply + the
+ * modal-launched surfaces). */
+export interface TuiSettingsHost {
+  settings: SettingsStoreSurface
+  /** Live application closures (loop-wired). */
+  applyTheme?(theme: Settings["theme"]): void
+  applyTimestamps?(on: boolean): void
+  applyCompact?(on: boolean): void
+  applyAutoApprove?(on: boolean): void
+  /** The dedicated Models & Providers master/detail flow. */
+  onOpenProviders?(): void
+  /** The model picker (Ctrl+M//model share the same picker). */
+  onOpenPicker?(): void
+}
+
+/** settings.ts's own definition extension: the row-level display/label flags
+ * the generic registry does not model. */
+export interface TuiSettingDefinition extends SettingDefinition {
+  /** When the running app does not apply the row, the modal labels it
+   * exactly `Applies to new sessions`. */
+  appliesToNewSessions?: boolean
+  /** Row display override (defaults to the value-kind formatter). */
+  display?(ctx: SettingsContext): string
+  /** Post-commit live application closure. */
+  liveApply?(value: unknown): void
+}
+
+function maybeNewSessions(value: string, applies: boolean): string {
+  if (!applies) return value
+  return value === "" ? NEW_SESSIONS_LABEL : `${value} · ${NEW_SESSIONS_LABEL}`
+}
+
+/** The row display for a value: value-kind formatter (secret strings never
+ * re-render; enums verbatim; booleans on/off). */
+export function displayValue(kind: SettingValueKind, value: unknown): string {
+  switch (kind.kind) {
+    case "boolean": return value === true ? ON : value === false ? OFF : ""
+    case "enum": return typeof value === "string" ? value : ""
+    case "integer": return typeof value === "number" ? String(value) : ""
+    case "string": return kind.secret === true ? "" : typeof value === "string" ? value : ""
+    case "action":
+    case "dynamic-list": return ""
+  }
+}
+
+/** The typed row definitions of this modal (the registry's inventory). */
+export function tuiSettingsDefinitions(host: TuiSettingsHost): TuiSettingDefinition[] {
+  const prefs = (ctx: SettingsContext): Settings["tui"]["prefs"] => ctx.settings.get().tui.prefs
+  const withPrefs = (ctx: SettingsContext, prefs: Settings["tui"]["prefs"]): Settings => ({
+    ...ctx.settings.get(),
+    tui: { ...ctx.settings.get().tui, prefs },
+  })
+  return [
+    // ---- Models & Providers (the master/detail launcher rows)
+    {
+      key: "provider",
+      category: "Models & Providers",
+      label: "provider",
+      description: "Manage providers, discovery and models (master/detail)",
+      valueKind: { kind: "action" },
+      visible: () => true,
+      read: (ctx) => ctx.settings.get().llm.defaultModel.provider,
+      display: (ctx) => {
+        const provider = ctx.settings.get().llm.defaultModel.provider
+        return provider === "" ? "(none configured)" : provider
+      },
+      commit: async () => { host.onOpenProviders?.() },
+      appliesToNewSessions: false,
+    },
+    {
+      key: "default_model",
+      category: "Models & Providers",
+      label: "default_model",
+      description: "The settings default model (the same picker Ctrl+M//model use)",
+      valueKind: { kind: "dynamic-list" },
+      visible: () => true,
+      read: (ctx) => ctx.settings.get().llm.defaultModel.model,
+      display: (ctx) => {
+        const dm = ctx.settings.get().llm.defaultModel
+        return dm.provider !== "" && dm.model !== "" ? dm.model : MODEL_NO_OVERRIDE
+      },
+      commit: async () => { host.onOpenPicker?.() },
+      appliesToNewSessions: false,
+    },
+    // ---- Appearance
+    {
+      key: "theme",
+      category: "Appearance",
+      label: "theme",
+      description: "Color scheme (groknight/grokday/auto)",
+      valueKind: { kind: "enum", values: ["dark", "light", "system"] },
+      visible: () => true,
+      read: (ctx) => ctx.settings.get().theme,
+      display: (ctx) => themeDisplayName(ctx.settings.get().theme),
+      commit: async (ctx, value) => { await ctx.settings.set({ theme: value as Settings["theme"] }) },
+      liveApply: (value) => host.applyTheme?.(value as Settings["theme"]),
+    },
+    {
+      key: "compact",
+      category: "Appearance",
+      label: "compact",
+      description: "UI density compaction",
+      valueKind: { kind: "boolean" },
+      visible: () => true,
+      read: (ctx) => prefs(ctx).compact,
+      commit: async (ctx, value) => { await ctx.settings.set(withPrefs(ctx, { ...prefs(ctx), compact: value as boolean })) },
+      liveApply: (value) => host.applyCompact?.(value as boolean),
+    },
+    {
+      key: "timestamps",
+      category: "Appearance",
+      label: "timestamps",
+      description: "Scrollback timestamps (live engine flip)",
+      valueKind: { kind: "boolean" },
+      visible: () => true,
+      read: (ctx) => prefs(ctx).timestamps,
+      commit: async (ctx, value) => { await ctx.settings.set(withPrefs(ctx, { ...prefs(ctx), timestamps: value as boolean })) },
+      liveApply: (value) => host.applyTimestamps?.(value as boolean),
+    },
+    // ---- Scrollback & Mouse (the M46b G1 7-knob vocabulary; the loop reads
+    // the prefs at construction — the rows carry the non-live label)
+    ...mouseDefinitions(),
+    // ---- Sessions
+    {
+      key: "compact-mode",
+      category: "Sessions",
+      label: "compact-mode",
+      description: "Completed-turn transcript presentation",
+      valueKind: { kind: "boolean" },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => ctx.settings.get().transcriptMode === "compact",
+      commit: async (ctx, value) => {
+        await ctx.settings.set({ transcriptMode: value === true ? "compact" : "normal" })
+      },
+    },
+    // ---- Safety
+    {
+      key: "guardian",
+      category: "Safety",
+      label: "guardian",
+      description: "Approval guardian (durable new-session assembly policy)",
+      valueKind: { kind: "boolean" },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).guardian,
+      commit: async (ctx, value) => { await ctx.settings.set(withPrefs(ctx, { ...prefs(ctx), guardian: value as boolean })) },
+    },
+    {
+      key: "always-approve default",
+      category: "Safety",
+      label: "always-approve default",
+      description: "Always-approve default for permission asks",
+      valueKind: { kind: "boolean" },
+      visible: () => true,
+      read: (ctx) => prefs(ctx).alwaysApprove,
+      commit: async (ctx, value) => { await ctx.settings.set(withPrefs(ctx, { ...prefs(ctx), alwaysApprove: value as boolean })) },
+      liveApply: (value) => host.applyAutoApprove?.(value as boolean),
+    },
+  ]
+}
+
+function mouseDefinitions(): TuiSettingDefinition[] {
+  const prefs = (ctx: SettingsContext): Settings["tui"]["prefs"] => ctx.settings.get().tui.prefs
+  const persist = async (ctx: SettingsContext, patch: Partial<Settings["tui"]["prefs"]>): Promise<void> => {
+    await ctx.settings.set({
+      ...ctx.settings.get(),
+      tui: { ...ctx.settings.get().tui, prefs: { ...prefs(ctx), ...patch } },
+    })
+  }
+  return [
+    {
+      key: "scroll_speed",
+      category: "Scrollback & Mouse",
+      label: "scroll_speed",
+      description: "Scroll speed multiplier (1-100; 1→0.1x, 50→1.0x)",
+      valueKind: { kind: "integer", min: 1, max: 100, step: 1 },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).scrollSpeed,
+      display: (ctx) => `${prefs(ctx).scrollSpeed} (${speedDisplay(prefs(ctx).scrollSpeed)})`,
+      commit: async (ctx) => { await persist(ctx, { scrollSpeed: Math.min(100, stepScrollSpeed(prefs(ctx).scrollSpeed, 1)) }) },
+    },
+    {
+      key: "scroll_mode",
+      category: "Scrollback & Mouse",
+      label: "scroll_mode",
+      description: "Scroll input classification (auto/wheel/trackpad)",
+      valueKind: { kind: "enum", values: SCROLL_MODES },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).scrollMode,
+      display: (ctx) => prefs(ctx).scrollMode,
+      commit: async (ctx) => { await persist(ctx, { scrollMode: nextScrollMode(prefs(ctx).scrollMode) }) },
+    },
+    {
+      key: "scroll_lines",
+      category: "Scrollback & Mouse",
+      label: "scroll_lines",
+      description: "Lines per scroll tick (1-10)",
+      valueKind: { kind: "integer", min: 1, max: 10, step: 1 },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).scrollLines,
+      display: (ctx) => String(prefs(ctx).scrollLines),
+      commit: async (ctx) => { await persist(ctx, { scrollLines: Math.min(10, stepScrollLines(prefs(ctx).scrollLines, 1)) }) },
+    },
+    {
+      key: "invert_scroll",
+      category: "Scrollback & Mouse",
+      label: "invert_scroll",
+      description: "Reverse vertical scroll direction",
+      valueKind: { kind: "boolean" },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).invertScroll,
+      display: (ctx) => prefs(ctx).invertScroll ? ON : OFF,
+      commit: async (ctx, value) => { await persist(ctx, { invertScroll: value as boolean }) },
+    },
+    {
+      key: "keep_text_selection",
+      category: "Scrollback & Mouse",
+      label: "keep_text_selection",
+      description: "In-app selection (flash/hold/word_select)",
+      valueKind: { kind: "enum", values: KEEP_TEXT_SELECTION_MODES },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).keepTextSelection,
+      display: (ctx) => prefs(ctx).keepTextSelection,
+      commit: async (ctx) => { await persist(ctx, { keepTextSelection: nextKeepTextSelection(prefs(ctx).keepTextSelection) }) },
+    },
+    {
+      key: "word_separators",
+      category: "Scrollback & Mouse",
+      label: "word_separators",
+      description: "Double-click word-separator set",
+      valueKind: { kind: "string" },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).wordSeparators,
+      display: (ctx) => separatorDisplay(prefs(ctx).wordSeparators),
+      commit: async () => { /* display row — an edit surface is a future text-input slot */ },
+    },
+    {
+      key: "mouse_reporting_toggle",
+      category: "Scrollback & Mouse",
+      label: "mouse_reporting_toggle",
+      description: "Opt-in mouse-reporting toggle (Ctrl+R + /toggle-mouse-reporting)",
+      valueKind: { kind: "boolean" },
+      visible: () => true,
+      appliesToNewSessions: true,
+      read: (ctx) => prefs(ctx).mouseReportingToggle,
+      display: (ctx) => prefs(ctx).mouseReportingToggle ? ON : OFF,
+      commit: async (ctx, value) => { await persist(ctx, { mouseReportingToggle: value as boolean }) },
+    },
+  ]
+}
+
+/** The modal's registry: the typed definitions + visibility filtering. */
+export function createTuiSettingsRegistry(host: TuiSettingsHost): SettingsRegistry {
+  return createSettingsRegistry(tuiSettingsDefinitions(host))
+}
+
 // ------------------------------------------------------------------ binder
 
 export interface SettingsBindOptions {
-  /** The settings store (write path — knobs persist durably). */
-  settings: SettingsStoreSurface
-  /** The provider store (Models category status + default_model routing). */
-  providerStore: ProviderStore
-  /** Live engine flip for the timestamps knob (host-wired; absent → the
-   * value still persists and applies on the next launch — honest). */
-  onTimestamps?: (on: boolean) => void
-  /** Models catalog: the host swaps the overlay to the model picker. */
-  onOpenPicker?: () => void
+  /** The typed registry (categories + row inventory — visibility-filtered). */
+  registry: SettingsRegistry
+  /** The write path (preview/commit/rollback per definition). */
+  controller: SettingsController
+  /** The execution context (settings + providers + backend). */
+  ctx: SettingsContext
   /** The host clears the surface. */
   onClose: () => void
 }
@@ -301,108 +563,43 @@ export interface SettingsBindOptions {
 /**
  * The settings modal binder. Categories phase: ↑↓/j/k browse, Enter opens,
  * Esc closes (from the top) or backs (from a category). Category phase: ↑↓
- * browse rows, Enter applies (cycle/toggle → persist + refresh; picker →
- * onOpenPicker; placeholder → no-op), Esc back to the categories.
+ * browse rows, Enter applies through the settings controller (the row's
+ * definition computes the next value: boolean toggle / enum cycle / integer
+ * step / string keep / action or dynamic-list launch), Esc back to the
+ * categories.
  */
 export function bindSettingsOverlay(
   state: SettingsModalState,
   opts: SettingsBindOptions,
 ): OverlaySeam {
-  const snap = (): SettingsSnapshot => settingsSnapshot(opts.settings, opts.providerStore)
+  const categories = (): SettingsCategory[] => opts.registry.categories(opts.ctx)
+  const defsOf = (): SettingDefinition[] =>
+    state.phase === "category" && state.category !== undefined
+      ? opts.registry.rows(state.category, opts.ctx)
+      : []
+  const rowsOf = (): SettingsKnobRow[] =>
+    defsOf().map((def) => {
+      const tuiDef = def as TuiSettingDefinition
+      const shown = tuiDef.display !== undefined
+        ? tuiDef.display(opts.ctx)
+        : displayValue(def.valueKind, def.read(opts.ctx))
+      return {
+        label: def.label,
+        value: maybeNewSessions(shown, tuiDef.appliesToNewSessions === true),
+        kind: kindOf(def.valueKind),
+      }
+    })
   const close = (): void => opts.onClose()
   const setError = (error: unknown): void => {
     state.error = error instanceof Error ? error.message : String(error)
   }
 
-  const applyKnob = async (row: SettingsKnobRow): Promise<void> => {
-    const cur = snap()
-    const settings = opts.settings
-    const raw = settings.get()
-    switch (row.label) {
-      case "theme": {
-        await settings.set({ theme: nextTheme(cur.theme) })
-        return
-      }
-      case "compact": {
-        const raw = settings.get()
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, compact: !cur.compact } } })
-        return
-      }
-      case "compact-mode": {
-        await settings.set({ transcriptMode: cur.transcriptMode === "compact" ? "normal" : "compact" })
-        return
-      }
-      case "timestamps": {
-        const next = !cur.timestamps
-        const raw = settings.get()
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, timestamps: next } } })
-        opts.onTimestamps?.(next)
-        return
-      }
-      case "guardian": {
-        const raw = settings.get()
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, guardian: !cur.guardian } } })
-        return
-      }
-      case "always-approve default": {
-        const raw = settings.get()
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, alwaysApprove: !cur.alwaysApprove } } })
-        return
-      }
-      case "default_model": {
-        opts.onOpenPicker?.()
-        return
-      }
-      // ---- M46b G1: the Mouse category knobs (cycle/toggle/stepper semantics
-      // — persist through the same settings store; the live application (loop
-      // scroll normalizer / hover gate) reads them on the next opportunity).
-      case "scroll_speed": {
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, scrollSpeed: stepScrollSpeed(cur.mouseScrollSpeed, 1) } } })
-        return
-      }
-      case "scroll_mode": {
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, scrollMode: nextScrollMode(cur.mouseScrollMode) } } })
-        return
-      }
-      case "scroll_lines": {
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, scrollLines: stepScrollLines(cur.mouseScrollLines, 1) } } })
-        return
-      }
-      case "invert_scroll": {
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, invertScroll: !cur.mouseInvertScroll } } })
-        return
-      }
-      case "keep_text_selection": {
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, keepTextSelection: nextKeepTextSelection(cur.mouseKeepTextSelection) } } })
-        return
-      }
-      case "word_separators": {
-        // The separator set is a seed string; the modal's cycle row advances
-        // by rotating back to the grok default (an edit surface is a
-        // future text-input slot — the row is honest that it cycles).
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, wordSeparators: cur.mouseWordSeparators } } })
-        return
-      }
-      case "mouse_reporting_toggle": {
-        await settings.set({ tui: { ...raw.tui, prefs: { ...raw.tui.prefs, mouseReportingToggle: !cur.mouseReportingToggle } } })
-        return
-      }
-      default: {
-        // placeholder/info rows: honest no-op — never a fabricated change.
-        return
-      }
-    }
-  }
-
-  const rowsOf = (): SettingsKnobRow[] =>
-    state.phase === "category" && state.category !== undefined
-      ? settingsKnobRows(state.category, snap())
-      : []
-  const rowCountOf = (): number => {
-    const n = state.phase === "categories"
-      ? SETTINGS_CATEGORIES.length
-      : rowsOf().length
-    return Math.max(1, n)
+  const applyKnob = async (def: SettingDefinition): Promise<void> => {
+    const current = def.read(opts.ctx)
+    const next = nextValueOf(def.valueKind, current)
+    await opts.controller.commit(def.key, next)
+    const live = (def as TuiSettingDefinition).liveApply
+    if (live !== undefined) live(next)
   }
 
   return {
@@ -410,38 +607,77 @@ export function bindSettingsOverlay(
     // rewind's cast precedent (isSettingsOverlay probe).
     kind: "settings" as unknown as OverlaySeam["kind"],
     draw: (ctx, view, palette, glyphs) => {
-      renderSettingsModal(ctx, state, rowsOf(), view, palette, glyphs)
+      renderSettingsModal(ctx, state, rowsOf(), view, palette, glyphs, categories())
     },
     act: (action: AppAction) => {
-    if (typeof action !== "string") return
-    switch (action) {
-      case "overlay-select": {
-        if (state.phase === "categories") {
-          state.category = SETTINGS_CATEGORIES[state.cursor]
-          state.phase = "category"
-          state.cursor = 0
-        } else {
-          const row = rowsOf()[state.cursor]
-          if (row !== undefined) {
-            void applyKnob(row).catch(setError)
+      if (typeof action !== "string") return
+      switch (action) {
+        case "overlay-select": {
+          if (state.phase === "categories") {
+            const list = categories()
+            const category = list[state.cursor]
+            if (category !== undefined) {
+              state.category = category
+              state.phase = "category"
+              state.cursor = 0
+            }
+          } else {
+            const def = defsOf()[state.cursor]
+            if (def !== undefined) {
+              void applyKnob(def).catch(setError)
+            }
           }
+          break
         }
-        break
-      }
-      case "overlay-nav-prev": state.cursor = Math.max(0, state.cursor - 1); break
-      case "overlay-nav-next": state.cursor = Math.min(rowCountOf() - 1, state.cursor + 1); break
-      case "overlay-dismiss": {
-        if (state.phase === "category") {
-          state.phase = "categories"
-          state.category = undefined
-          state.cursor = 0
-        } else {
-          close()
+        case "overlay-nav-prev": state.cursor = Math.max(0, state.cursor - 1); break
+        case "overlay-nav-next": {
+          const n = state.phase === "categories" ? categories().length : defsOf().length
+          state.cursor = Math.min(Math.max(1, n) - 1, state.cursor + 1)
+          break
         }
-        break
+        case "overlay-dismiss": {
+          if (state.phase === "category") {
+            state.phase = "categories"
+            state.category = undefined
+            state.cursor = 0
+          } else {
+            close()
+          }
+          break
+        }
+        default: break
       }
-      default: break
-    }
     },
+  }
+}
+
+/** The next value a row's Enter applies: boolean toggle, enum cycle,
+ * integer step, string keep, action/dynamic-list launch (undefined). */
+export function nextValueOf(kind: SettingValueKind, current: unknown): unknown {
+  switch (kind.kind) {
+    case "boolean": return current !== true
+    case "enum": {
+      const values = kind.values
+      const idx = values.indexOf(String(current))
+      return values[(idx + 1) % values.length]!
+    }
+    case "integer": {
+      const value = typeof current === "number" ? current : kind.min
+      return Math.min(kind.max, value + kind.step)
+    }
+    case "string": return current
+    case "action":
+    case "dynamic-list": return undefined
+  }
+}
+
+function kindOf(kind: SettingValueKind): SettingsKnobRow["kind"] {
+  switch (kind.kind) {
+    case "boolean": return "toggle"
+    case "enum":
+    case "integer": return "cycle"
+    case "string": return kind.secret === true ? "picker" : "cycle"
+    case "action": return "info"
+    case "dynamic-list": return "picker"
   }
 }

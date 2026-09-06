@@ -1,250 +1,354 @@
-// M46a G1: the /provider view — the wizard state machine + the binder's
-// nav/save/delete semantics. The binder is driven through its OverlaySeam
-// contract: act() with AppActions + the FREEform slot (chars/Enter/Esc) —
-// exactly the loop's dispatch path (freeform pre-keymap, then the keymap's
-// overlay actions for nav).
+// M49 Task 6: the /provider master/detail — the editor state machine + the
+// binder's list → edit → discovery → models → default/session selection and
+// delete semantics. Driven through the OverlaySeam contract (act() with
+// AppActions + the freeform slot) — exactly the loop's dispatch path.
 
 import { describe, expect, it } from "vitest"
-import { normalizeSettings, type Settings, type SettingsStoreSurface } from "@i-harness/settings"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { SettingsStore } from "@i-harness/settings"
+import { createCredentialStore } from "@i-harness/credentials"
+import { createProviderRegistry } from "@i-harness/provider"
+import { createProviderRuntime } from "@i-harness/provider-runtime"
+import { ProviderController } from "../src/app/provider-controller.ts"
 import {
   bindProviderOverlay,
-  makeWizard,
-  menuRows,
-  wizardAdvance,
-  wizardAppend,
-  wizardBackspace,
-  wizardEntryOf,
-  wizardSwitchField,
-  type ProviderViewState,
+  editorAdvance,
+  editorAppend,
+  editorBackspace,
+  editorSwitchField,
+  makeDraft,
+  manualModelOf,
+  providerRows,
+  type ProviderEditorState,
 } from "../src/views/provider.ts"
-import { ProviderStore, type FetchedModel, type ProviderEntry } from "../src/app/provider-store.ts"
 
-const ENTRY: ProviderEntry = { id: "deepseek", baseUrl: "https://api.deepseek.com", protocol: "openai-compatible" }
+async function fixture(options: {
+  providers?: Record<string, unknown>
+  defaultModel?: { provider: string; model: string }
+  credentials?: Record<string, string>
+  probe?: (registry: ReturnType<typeof createProviderRegistry>) => void
+} = {}): Promise<{ controller: ProviderController; settings: SettingsStore; root: string }> {
+  const root = mkdtempSync(join(tmpdir(), "tui-provider-view-"))
+  const settings = new SettingsStore({ path: join(root, "settings.json") })
+  await settings.load()
+  if (options.providers !== undefined) {
+    await settings.set({
+      llm: {
+        providers: options.providers as never,
+        defaultModel: options.defaultModel ?? { provider: "", model: "" },
+      },
+    })
+  }
+  const credentials = createCredentialStore(join(root, "credentials.json"))
+  for (const [ref, value] of Object.entries(options.credentials ?? {})) {
+    await credentials.set(ref, value)
+  }
+  const registry = createProviderRegistry()
+  options.probe?.(registry)
+  const runtime = createProviderRuntime({
+    settings,
+    credentials,
+    registry,
+    buildClient: () => ({ async *stream() {} }),
+  })
+  const controller = new ProviderController({ runtime, settings })
+  return { controller, settings, root }
+}
 
-function fakeSettings(initial: Partial<Settings> = {}): SettingsStoreSurface {
-  let current = normalizeSettings(initial)
+const DEEPSEEK = {
+  baseURL: "https://api.deepseek.com",
+  protocol: "openai-completions",
+  apiKeyEnv: "DEEPSEEK_API_KEY",
+}
+
+async function seededList(): Promise<{ controller: ProviderController; settings: SettingsStore; root: string }> {
+  return fixture({
+    providers: { deepseek: { ...DEEPSEEK } },
+    credentials: { DEEPSEEK_API_KEY: "sk-key" },
+    probe: (registry) => registry.registerProbe("deepseek", async () => [
+      { id: "deepseek-chat", name: "DeepSeek Chat" },
+      { id: "deepseek-reasoner", name: "Reasoner" },
+    ]),
+  })
+}
+
+function blankState(): ProviderEditorState {
   return {
-    get: () => current,
-    isLoaded: () => true,
-    load: async () => current,
-    set: async (patch) => {
-      current = normalizeSettings({ ...current, ...patch })
-      return current
-    },
-    reset: async () => {
-      current = normalizeSettings(undefined)
-      return current
-    },
-    getSectionRevision: () => 0,
+    mode: "list",
+    cursor: 0,
+    rows: [],
+    draft: undefined,
+    field: 0,
+    editingId: undefined,
+    hasExistingKey: false,
+    models: [],
+    manual: undefined,
+    providerId: "",
+    pendingId: undefined,
+    error: undefined,
   }
 }
 
-function harness(initial: Partial<Settings> = {}, fetched: FetchedModel[] = []): {
-  store: ProviderStore
-  settings: SettingsStoreSurface
-  saved: Array<{ kind: "add" | "update" | "delete"; id: string }>
-  closed: () => boolean
-} {
-  const settings = fakeSettings(initial)
-  const values = new Map<string, string>()
-  const store = new ProviderStore({
-    settings,
-    credentials: {
-      describe: (refs) => Object.fromEntries(refs.map((r) => [r, { configured: values.has(r), source: "file" as const, writable: true }])),
-      set: async (ref, v) => { values.set(ref, v) },
-      unset: async (ref) => { values.delete(ref) },
-      resolve: (ref) => values.get(ref),
-    },
-    fetchFn: (async () => new Response(JSON.stringify({ data: fetched }), { status: 200 })) as unknown as typeof fetch,
-  })
-  const saved: Array<{ kind: "add" | "update" | "delete"; id: string }> = []
-  let closed = false
-  const ctx = { store, settings, saved, closed: () => closed } as { store: ProviderStore; settings: SettingsStoreSurface; saved: Array<{ kind: "add" | "update" | "delete"; id: string }>; closed: () => boolean }
-  return { ...ctx, closed: () => closed, store, settings, saved }
+async function seededState(f: { controller: ProviderController }): Promise<ProviderEditorState> {
+  const state = blankState()
+  state.rows = providerRows(await f.controller.directory())
+  return state
 }
 
-// ------------------------------------------------------------------ pure wizard
-
-describe("provider view — wizard state machine (pure)", () => {
+describe("provider master/detail — pure editor helpers", () => {
   it("append/backspace target the ACTIVE field only; ↑↓ switches fields", () => {
-    const w = makeWizard()
-    wizardAppend(w, "deep")
-    wizardSwitchField(w, 1)
-    wizardAppend(w, "https://api.deepseek.com")
-    wizardSwitchField(w, 1)
-    wizardAppend(w, "sk-123456")
-    expect(w.buffers).toEqual(["deep", "https://api.deepseek.com", "sk-123456"])
-    expect(w.field).toBe(2)
-    wizardSwitchField(w, -1)
-    expect(w.field).toBe(1)
-    expect(wizardAdvance(w)).toBe("next")
-    wizardBackspace(w)
-    expect(w.buffers[1]).toBe("https://api.deepseek.co")
+    const state: ProviderEditorState = { ...blankState(), mode: "edit", draft: makeDraft() }
+    editorAppend(state, "deep")
+    editorSwitchField(state, 1)
+    editorAppend(state, "https://api.deepseek.com")
+    editorSwitchField(state, 1)
+    editorAppend(state, "sk-123456")
+    expect(state.draft).toEqual({ id: "deep", baseURL: "https://api.deepseek.com", apiKey: "sk-123456" })
+    expect(state.field).toBe(2)
+    editorSwitchField(state, -1)
+    expect(state.field).toBe(1)
+    expect(editorAdvance(state)).toBe("next")
+    editorBackspace(state)
+    expect(state.draft?.baseURL).toBe("https://api.deepseek.co")
   })
 
-  it("wizardAdvance: empty id/url → error; step 2 → save", () => {
-    const w = makeWizard()
-    expect(wizardAdvance(w)).toBe("error")
-    wizardAppend(w, "deepseek")
-    expect(wizardAdvance(w)).toBe("next")
-    w.field = 1
-    expect(wizardAdvance(w)).toBe("error")
-    wizardAppend(w, "https://x")
-    expect(wizardAdvance(w)).toBe("next")
-    w.field = 2
-    expect(wizardAdvance(w)).toBe("save")
-    expect(wizardEntryOf(w)).toEqual({ id: "deepseek", baseUrl: "https://x", protocol: "openai-compatible" })
+  it("editorAdvance: empty id/url → error; step 2 → save", () => {
+    const state: ProviderEditorState = { ...blankState(), mode: "edit", draft: makeDraft() }
+    expect(editorAdvance(state)).toBe("error")
+    editorAppend(state, "deepseek")
+    expect(editorAdvance(state)).toBe("next")
+    state.field = 1
+    expect(editorAdvance(state)).toBe("error")
+    editorAppend(state, "https://x")
+    expect(editorAdvance(state)).toBe("next")
+    state.field = 2
+    expect(editorAdvance(state)).toBe("save")
   })
 
-  it("menuRows: providers then `+ Add provider` then `Delete provider...`", () => {
-    expect(menuRows([ENTRY])).toEqual([
-      { kind: "provider", id: "deepseek" },
-      { kind: "add" },
-      { kind: "delete" },
-    ])
+  it("manualModelOf validates a non-empty id + positive optional capacities", () => {
+    expect(manualModelOf({ field: 2, buffers: ["m1", "", ""] })).toEqual({ model: { id: "m1" } })
+    expect(manualModelOf({ field: 2, buffers: ["m1", "128000", "4096"] })).toEqual({
+      model: { id: "m1", contextWindow: 128000, maxTokens: 4096 },
+    })
+    expect(manualModelOf({ field: 2, buffers: ["", "", ""] })).toEqual({ error: "model id is required" })
+    expect(manualModelOf({ field: 2, buffers: ["m1", "-1", ""] })).toEqual({ error: "contextWindow must be a positive integer" })
+    expect(manualModelOf({ field: 2, buffers: ["m1", "0", ""] })).toEqual({ error: "contextWindow must be a positive integer" })
+  })
+
+  it("providerRows maps the runtime directory rows (configured flag + key state)", async () => {
+    const f = await seededList()
+    try {
+      const rows = providerRows(await f.controller.directory())
+      expect(rows).toEqual([{
+        id: "deepseek",
+        displayName: "deepseek",
+        configured: true,
+        hasKey: true,
+      }])
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
   })
 })
 
-// ------------------------------------------------------------------ binder
-
-describe("provider view — binder flow (store + discovery + active)", () => {
-  it("menu → `+ Add provider` → wizard → 3 Enter-saves → upsert + key-ref + setActive + discovery + onSaved(add)", async () => {
-    const h = harness({}, [{ id: "deepseek-chat" }, { id: "deepseek-reasoner", name: "Reasoner" }])
-    const state: ProviderViewState = {
-      phase: "menu", cursor: 0, providers: h.store.list(), wizard: undefined, pendingId: undefined, error: undefined,
-    }
-    const seam = bindProviderOverlay(state, {
-      store: h.store,
-      activeId: "",
-      onSaved: (o) => h.saved.push(o),
-      onClose: () => {},
-      onToast: () => {},
-    })
-    // an EMPTY store's menu rows are [add, delete] — row 0 = `+ Add provider`
-    seam.act!("overlay-select")
-    expect(state.phase).toBe("wizard")
-    expect(state.wizard?.field).toBe(0)
-    const ff = seam.freeform!
-    // field 0: id
-    ff.append("deepseek")
-    ff.submit()
-    expect(state.wizard?.field).toBe(1)
-    // field 1: url
-    ff.append("https://api.deepseek.com")
-    ff.submit()
-    expect(state.wizard?.field).toBe(2)
-    // ↑↓ switches fields (the keymap fall-through)
-    seam.act!("overlay-nav-prev")
-    expect(state.wizard?.field).toBe(1)
-    seam.act!("overlay-nav-next")
-    expect(state.wizard?.field).toBe(2)
-    // field 2: key (masked at render — buffers keep the raw for the store write)
-    ff.append("sk-dummy-key-1234")
-    ff.submit()
-    await new Promise((r) => setTimeout(r, 20)) // the save's async writes resolve
-    const doc = h.store.get("deepseek")
-    expect(doc).toMatchObject({ baseUrl: "https://api.deepseek.com", protocol: "openai-compatible", apiKeyRef: "DEEPSEEK_API_KEY" })
-    expect(h.store.resolveKey("deepseek")).toBe("sk-dummy-key-1234")
-    expect(h.store.activeId()).toBe("deepseek")
-    expect(h.saved).toEqual([{ kind: "add", id: "deepseek" }])
-    // discovery memoized (the injectable fetch returned the two fake models)
-    await h.store.discoverModels("deepseek")
-    expect(h.store.cachedModels("deepseek")?.map((m) => m.id)).toEqual(["deepseek-chat", "deepseek-reasoner"])
-  })
-
-  it("editing keeps the existing key when the key field is left empty (keep-current-key)", async () => {
-    const h = harness()
-    await h.store.upsert(ENTRY)
-    await h.store.setApiKey("deepseek", "sk-original")
-    const state: ProviderViewState = {
-      phase: "menu", cursor: 0, providers: h.store.list(), wizard: undefined, pendingId: undefined, error: undefined,
-    }
-    const seam = bindProviderOverlay(state, {
-      store: h.store,
-      activeId: "deepseek",
-      onSaved: (o) => h.saved.push(o),
-      onClose: () => {},
-      onToast: () => {},
-    })
-    const ff = seam.freeform!
-    // simulate reopening the wizard editing (the binder's own open path):
-    state.phase = "wizard"
-    state.wizard = makeWizard(ENTRY, true)
-    ff.submit() // field 0 → 1
-    ff.submit() // field 1 → 2
-    ff.submit() // field 2 -> save (empty key → ref kept)
-    await new Promise((r) => setTimeout(r, 20))
-    expect(h.store.resolveKey("deepseek")).toBe("sk-original")
-    expect(h.store.get("deepseek")?.apiKeyRef).toBe("DEEPSEEK_API_KEY")
-  })
-
-  it("menu Enter on a provider row = use (setActive) + onSaved(update) + close", async () => {
-    const h = harness()
-    await h.store.upsert(ENTRY)
-    await h.store.setApiKey("deepseek", "sk-k")
-    const state: ProviderViewState = {
-      phase: "menu", cursor: 0, providers: h.store.list(), wizard: undefined, pendingId: undefined, error: undefined,
-    }
+describe("provider master/detail — binder flow", () => {
+  function harness(controller: ProviderController, state: ProviderEditorState) {
+    const saved: Array<{ kind: "add" | "update" | "delete"; id: string }> = []
+    const toasts: string[] = []
     let closed = false
     const seam = bindProviderOverlay(state, {
-      store: h.store,
-      activeId: "",
-      onSaved: (o) => h.saved.push(o),
+      controller,
+      onSaved: (o) => saved.push(o),
       onClose: () => { closed = true },
-      onToast: () => {},
+      onToast: (text) => toasts.push(text),
     })
-    seam.act!("overlay-select")
-    await new Promise((r) => setTimeout(r, 10))
-    expect(h.store.activeId()).toBe("deepseek")
-    expect(h.saved).toEqual([{ kind: "update", id: "deepseek" }])
-    expect(closed).toBe(true)
+    return { seam, saved, toasts, closed: () => closed }
+  }
+
+  it("list → Enter on a configured row → editor → save (empty key keeps the current) → discovery → models → Enter selects + closes", async () => {
+    const f = await seededList()
+    try {
+      const state = await seededState(f)
+      const h = harness(f.controller, state)
+      seamOpenConfigured(h.seam, state)
+      // editor prefilled (id/baseURL from the stored config; key field empty)
+      expect(state.draft).toEqual({ id: "deepseek", baseURL: "https://api.deepseek.com", apiKey: "" })
+      expect(state.hasExistingKey).toBe(true)
+      const ff = h.seam.freeform!
+      ff.submit() // field 0 → 1 (id prefilled — no typing needed)
+      expect(state.field).toBe(1)
+      ff.submit() // field 1 → 2 (url prefilled — skipped)
+      expect(state.field).toBe(2)
+      ff.submit() // empty key → KEEPS the current key (no setApiKey)
+      await new Promise((r) => setTimeout(r, 80)) // save → selectProvider (discovery) → models
+      expect(state.mode).toBe("models")
+      expect(state.providerId).toBe("deepseek")
+      expect(state.models.map((m) => m.id)).toEqual(["deepseek-chat", "deepseek-reasoner"])
+      expect(f.settings.get().llm.providers.deepseek?.apiKeyEnv).toBe("DEEPSEEK_API_KEY")
+      expect(h.toasts.some((t) => t.includes("2 model(s)"))).toBe(true)
+      // Enter on the first model → the durable default is set + the flow closes.
+      h.seam.act!("overlay-select")
+      await new Promise((r) => setTimeout(r, 20))
+      expect(f.settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
+      expect(h.closed()).toBe(true)
+      expect(h.saved).toEqual([{ kind: "update", id: "deepseek" }])
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
   })
 
-  it("delete flow: menu → `Delete provider...` → list → Enter → confirm → y row → remove + onSaved(delete)", async () => {
-    const h = harness()
-    await h.store.upsert(ENTRY)
-    const state: ProviderViewState = {
-      phase: "menu", cursor: 0, providers: h.store.list(), wizard: undefined, pendingId: undefined, error: undefined,
-    }
-    const seam = bindProviderOverlay(state, {
-      store: h.store,
-      activeId: "",
-      onSaved: (o) => h.saved.push(o),
-      onClose: () => {},
-      onToast: () => {},
+  it("a failed discovery preserves stored models and shows the attempt summary in the models mode", async () => {
+    const f = await fixture({
+      providers: { deepseek: { ...DEEPSEEK, models: [{ id: "manual-model" }] } },
+      credentials: { DEEPSEEK_API_KEY: "sk-key" },
+      probe: (registry) => registry.registerProbe("deepseek", async () => { throw new Error("GET https://api.deepseek.com → 500; GET https://api.deepseek.com → 500") }),
     })
-    const rows = menuRows(state.providers) // 1 provider + add + delete
-    state.cursor = rows.length - 1
-    seam.act!("overlay-select") // → delete phase
-    expect(state.phase).toBe("delete")
-    seam.act!("overlay-select") // → confirm (cursor on the row)
-    expect(state.phase).toBe("confirm-delete")
-    expect(state.pendingId).toBe("deepseek")
-    seam.act!("overlay-select") // y row → remove
-    await new Promise((r) => setTimeout(r, 10))
-    expect(h.store.has("deepseek")).toBe(false)
-    expect(h.saved).toEqual([{ kind: "delete", id: "deepseek" }])
+    try {
+      const state = await seededState(f)
+      const h = harness(f.controller, state)
+      seamOpenConfigured(h.seam, state)
+      h.seam.freeform!.submit()
+      h.seam.freeform!.submit()
+      h.seam.freeform!.submit()
+      await new Promise((r) => setTimeout(r, 60))
+      expect(state.mode).toBe("models")
+      expect(state.models.map((m) => m.id)).toEqual(["manual-model"]) // preserved
+      expect(state.error).toMatch(/→ 500/)
+      expect(h.toasts.some((t) => t.includes("stored models preserved"))).toBe(true)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
   })
 
-  it("Esc semantics: wizard → menu (freeform abort), menu → close", async () => {
-    const h = harness()
-    const state: ProviderViewState = {
-      phase: "menu", cursor: 0, providers: [], wizard: undefined, pendingId: undefined, error: undefined,
-    }
-    let closed = false
-    const seam = bindProviderOverlay(state, {
-      store: h.store,
-      activeId: "",
-      onSaved: () => {},
-      onClose: () => { closed = true },
-      onToast: () => {},
+  it("manual model add validates + merges into the stored catalog (custom capacities kept)", async () => {
+    const f = await fixture({
+      providers: { deepseek: { ...DEEPSEEK } },
+      credentials: { DEEPSEEK_API_KEY: "sk-key" },
+      probe: (registry) => registry.registerProbe("deepseek", async () => [{ id: "deepseek-chat" }]),
     })
-    // open the wizard through the add row (0 providers → index 0 = add)
-    seam.act!("overlay-select")
-    expect(state.phase).toBe("wizard")
-    seam.freeform!.abort() // the loop's Esc → freeform abort
-    expect(state.phase).toBe("menu")
-    seam.act!("overlay-dismiss") // menu Esc → close
-    expect(closed).toBe(true)
+    try {
+      const state = await seededState(f)
+      state.mode = "models"
+      state.providerId = "deepseek"
+      state.models = await f.controller.modelsOf("deepseek")
+      const h = harness(f.controller, state)
+      // Enter on `+ Add model (manual)` (row after the catalog tail).
+      state.cursor = state.models.length
+      h.seam.act!("overlay-select")
+      expect(state.manual).toBeDefined()
+      h.seam.freeform!.append("manual-model")
+      h.seam.freeform!.submit() // → contextWindow field
+      h.seam.freeform!.append("64000")
+      h.seam.freeform!.submit() // → maxTokens field
+      h.seam.freeform!.append("0")
+      h.seam.freeform!.submit() // invalid: capacity must be positive
+      await new Promise((r) => setTimeout(r, 10))
+      expect(state.error).toBe("maxTokens must be a positive integer")
+      h.seam.freeform!.backspace() // "0" → ""
+      h.seam.freeform!.submit()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(state.manual).toBeUndefined()
+      expect(state.models.some((m) => m.id === "manual-model" && m.contextWindow === 64000)).toBe(true)
+      expect(f.settings.get().llm.providers.deepseek?.models?.some((m) => m.id === "manual-model")).toBe(true)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  it("delete flow: list → `Delete provider...` → confirm → y row → remove + close", async () => {
+    const f = await seededList()
+    try {
+      const state = await seededState(f)
+      const h = harness(f.controller, state)
+      const rows = state.rows.length
+      state.cursor = rows + 1 // the Delete provider... row
+      h.seam.act!("overlay-select")
+      expect(state.mode).toBe("confirm-delete")
+      expect(state.pendingId).toBe("deepseek")
+      h.seam.act!("overlay-select") // y row → remove
+      await new Promise((r) => setTimeout(r, 20))
+      expect(f.settings.get().llm.providers.deepseek).toBeUndefined()
+      expect(h.saved).toEqual([{ kind: "delete", id: "deepseek" }])
+      expect(h.closed()).toBe(true)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  it("add flow: `+ Add provider` → editor → id/url/key → save + discovery + add-side toast", async () => {
+    const f = await fixture({
+      probe: (registry) => registry.registerProbe("custom", async () => [{ id: "custom-model" }]),
+    })
+    try {
+      const state = await seededState(f)
+      const h = harness(f.controller, state)
+      // empty list → row 0 = `+ Add provider`
+      h.seam.act!("overlay-select")
+      expect(state.mode).toBe("edit")
+      expect(state.editingId).toBeUndefined()
+      const ff = h.seam.freeform!
+      ff.append("custom")
+      ff.submit()
+      ff.append("https://api.custom.example")
+      ff.submit()
+      ff.append("sk-custom-key")
+      ff.submit() // key bound through the credential store
+      await new Promise((r) => setTimeout(r, 80))
+      expect(state.mode).toBe("models")
+      expect(state.models.map((m) => m.id)).toEqual(["custom-model"])
+      expect(f.settings.get().llm.providers.custom).toMatchObject({
+        baseURL: "https://api.custom.example",
+        protocol: "openai-completions",
+        apiKeyEnv: "CUSTOM_API_KEY",
+      })
+      expect(h.saved).toEqual([{ kind: "add", id: "custom" }])
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  it("a duplicate id on add fails loud (never overwrites an unknown provider)", async () => {
+    const f = await seededList()
+    try {
+      const state = await seededState(f)
+      const h = harness(f.controller, state)
+      state.cursor = state.rows.length // the `+ Add provider` row
+      h.seam.act!("overlay-select")
+      h.seam.freeform!.append("deepseek")
+      h.seam.freeform!.submit()
+      h.seam.freeform!.append("https://x")
+      h.seam.freeform!.submit()
+      h.seam.freeform!.submit()
+      await new Promise((r) => setTimeout(r, 10))
+      expect(state.error).toBe('provider "deepseek" already exists')
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
+  })
+
+  it("Esc semantics: editor → list (freeform abort), list → close", async () => {
+    const f = await seededList()
+    try {
+      const state = await seededState(f)
+      const h = harness(f.controller, state)
+      h.seam.act!("overlay-select") // open editor on deepseek (row 0)
+      expect(state.mode).toBe("edit")
+      h.seam.freeform!.abort()
+      expect(state.mode).toBe("list")
+      h.seam.act!("overlay-dismiss")
+      expect(h.closed()).toBe(true)
+    } finally {
+      rmSync(f.root, { recursive: true, force: true })
+    }
   })
 })
+
+/** Drive: list → Enter on the configured provider row (the state is seeded
+ * over the roster). */
+function seamOpenConfigured(seam: ReturnType<typeof bindProviderOverlay>, state: ProviderEditorState): void {
+  state.cursor = 0
+  seam.act!("overlay-select")
+  expect(state.mode).toBe("edit")
+}

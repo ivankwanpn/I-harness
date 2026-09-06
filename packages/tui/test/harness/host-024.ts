@@ -12,7 +12,9 @@ import {
 import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
 import { createCredentialStore } from "@i-harness/credentials"
 import { SettingsStore } from "@i-harness/settings"
-import { ProviderStore, TuiApp, createScrollbackEngine } from "../../src/index.ts"
+import { createProviderRegistry } from "@i-harness/provider"
+import { createProviderRuntime } from "@i-harness/provider-runtime"
+import { ProviderController, TuiApp, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, InputSource, TuiEvent } from "../../src/index.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -146,10 +148,12 @@ async function main(): Promise<void> {
   const backend = unconfiguredBackend()
   const settings = new SettingsStore({ path: join(MARKER_DIR, "settings.json") })
   await settings.load()
-  const providerStore = new ProviderStore({
+  const runtime = createProviderRuntime({
     settings,
     credentials: createCredentialStore(join(MARKER_DIR, "credentials.json")),
+    registry: createProviderRegistry(),
   })
+  const providerController = new ProviderController({ runtime, settings })
   const app = new TuiApp({
     renderer,
     backend,
@@ -158,7 +162,7 @@ async function main(): Promise<void> {
     palette: resolvePalette(cap),
     glyphs: makeGlyphs(true),
     input: input.source,
-    providerStore,
+    providerController,
     listSessions: () => backend.listSessions(),
     write: out,
     now: () => 44_444,

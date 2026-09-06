@@ -68,7 +68,7 @@ describe("normalizeSettings", () => {
     expect(normalizeSettings(undefined).searchBackend).toBe("jsonl")
   })
 
-  it("soft-migrates legacy TUI providers into canonical llm providers", () => {
+  it("soft-migrates legacy TUI providers into canonical llm providers (read-only)", () => {
     const out = normalizeSettings({
       llm: { providers: {}, defaultModel: { provider: "", model: "" } },
       tui: {
@@ -97,6 +97,9 @@ describe("normalizeSettings", () => {
       modelsURL: "https://api.deepseek.com/v1/models",
     })
     expect(out.llm.defaultModel).toEqual({ provider: "deepseek", model: "" })
+    // the normalized TUI section no longer carries the legacy plane (prefs only).
+    expect("providers" in out.tui).toBe(false)
+    expect(out.tui.prefs.timestamps).toBe(false)
   })
 
   it("canonical provider fields win over a legacy migration row", () => {
@@ -115,6 +118,27 @@ describe("normalizeSettings", () => {
     })
     expect(out.llm.providers.deepseek.baseURL).toBe("https://gateway.example")
     expect(out.llm.defaultModel.model).toBe("deepseek-chat")
+  })
+
+  it("DISTINCT provider ids: a legacy row and a canonical row coexist (no clobber across planes)", () => {
+    const out = normalizeSettings({
+      llm: {
+        providers: { custom: { baseURL: "https://gateway.example" } },
+        defaultModel: { provider: "custom", model: "m" },
+      },
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "deepseek",
+          providers: { deepseek: { id: "deepseek", baseUrl: "https://legacy.example" } },
+        },
+      },
+    })
+    expect(out.llm.providers.deepseek.baseURL).toBe("https://legacy.example")
+    expect(out.llm.providers.custom.baseURL).toBe("https://gateway.example")
+    // the canonical default wins over the legacy active pin (both planes
+    // kept their own rows — the merge is per-id, never a whole-plane override).
+    expect(out.llm.defaultModel.provider).toBe("custom")
   })
 })
 
@@ -138,27 +162,39 @@ describe("resolveSettingsPath", () => {
 })
 
 describe("SettingsStore", () => {
-  it("does not promote legacy providers during a default-model-only section mutation", async () => {
-    const root = await tmpRoot()
-    const file = join(root, "settings.json")
-    await writeFile(file, JSON.stringify({
-      tui: {
+  /** A legacy-only document (tui.providers, no llm section) — the load-path
+   * migration fixture. */
+  const LEGACY_FILE = {
+    theme: "dark",
+    tui: {
+      providers: {
+        version: 1,
+        activeProviderId: "custom",
         providers: {
-          version: 1,
-          activeProviderId: "custom",
-          providers: {
-            custom: {
-              id: "custom",
-              name: "Provider A",
-              baseUrl: "https://a.example/v1/",
-              protocol: "openai-compatible",
-              apiKeyRef: "PROVIDER_A_API_KEY",
-              modelsUrl: "https://a.example/v1/models",
-            },
+          custom: {
+            id: "custom",
+            name: "Provider A",
+            baseUrl: "https://a.example/v1/",
+            protocol: "openai-compatible",
+            apiKeyRef: "PROVIDER_A_API_KEY",
+            modelsUrl: "https://a.example/v1/models",
           },
         },
       },
-    }))
+    },
+  }
+  const EXPECTED_LEGACY_ROW = {
+    displayName: "Provider A",
+    baseURL: "https://a.example",
+    protocol: "openai-completions",
+    apiKeyEnv: "PROVIDER_A_API_KEY",
+    modelsURL: "https://a.example/v1/models",
+  }
+
+  it("does not promote legacy providers during a default-model-only section mutation", async () => {
+    const root = await tmpRoot()
+    const file = join(root, "settings.json")
+    await writeFile(file, JSON.stringify(LEGACY_FILE))
     const store = new SettingsStore({ path: file })
     await store.load()
     const mutated = await mutateSection("llm", [{
@@ -167,108 +203,47 @@ describe("SettingsStore", () => {
       value: "manual-model",
     }], store)
     expect(mutated.revision).toBe(1)
-
-    const immediate = await store.set({
-      tui: {
-        ...store.get().tui,
-        providers: {
-          version: 1,
-          activeProviderId: "custom",
-          providers: {
-            custom: {
-              id: "custom",
-              name: "Provider B",
-              baseUrl: "https://b.example/v1/",
-              protocol: "anthropic",
-              apiKeyRef: "PROVIDER_B_API_KEY",
-              modelsUrl: "https://b.example/v1/models",
-            },
-          },
-        },
-      },
-    })
-    const expectedProvider = {
-      displayName: "Provider B",
-      baseURL: "https://b.example",
-      protocol: "anthropic-messages",
-      apiKeyEnv: "PROVIDER_B_API_KEY",
-      modelsURL: "https://b.example/v1/models",
-    }
-    expect(immediate.llm.providers.custom).toEqual(expectedProvider)
-    expect(immediate.llm.defaultModel.model).toBe("manual-model")
+    // no promotion on write: the CANONICAL payload persisted for llm stays
+    // legacy-free (the persisted-llm assertion below)…
+    // …while the READ view keeps projecting the legacy row (still loadable).
+    expect(store.get().llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
     expect(store.getSectionRevision("llm")).toBe(1)
-    expect(store.getSectionRevision("tui")).toBe(1)
 
     const persisted = JSON.parse(await readFile(file, "utf8"))
     expect(persisted.llm).toEqual({
       providers: {},
       defaultModel: { provider: "", model: "manual-model" },
     })
+    // the legacy section survives the write verbatim (read-only provenance).
+    expect(persisted.tui.providers.providers.custom).toEqual(LEGACY_FILE.tui.providers.providers.custom)
 
     const reloaded = new SettingsStore({ path: file })
     await reloaded.load()
-    expect(reloaded.get().llm.providers.custom).toEqual(expectedProvider)
+    expect(reloaded.get().llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
     expect(reloaded.get().llm.defaultModel.model).toBe("manual-model")
-    expect(reloaded.getSectionRevision("llm")).toBe(1)
-    expect(reloaded.getSectionRevision("tui")).toBe(1)
     await rm(root, { recursive: true, force: true })
   })
 
-  it("keeps a legacy-only provider edit current after write and reload", async () => {
+  it("a write after loading a legacy document keeps the legacy rows readable and the file's section intact", async () => {
     const root = await tmpRoot()
     const file = join(root, "settings.json")
-    await writeFile(file, JSON.stringify({
-      tui: {
-        providers: {
-          version: 1,
-          activeProviderId: "custom",
-          providers: {
-            custom: {
-              id: "custom",
-              name: "Provider A",
-              baseUrl: "https://a.example/v1/",
-              protocol: "openai-compatible",
-              apiKeyRef: "PROVIDER_A_API_KEY",
-              modelsUrl: "https://a.example/v1/models",
-            },
-          },
-        },
-      },
-    }))
+    await writeFile(file, JSON.stringify(LEGACY_FILE))
     const store = new SettingsStore({ path: file })
     await store.load()
 
-    const immediate = await store.set({
-      tui: {
-        ...store.get().tui,
-        providers: {
-          version: 1,
-          activeProviderId: "custom",
-          providers: {
-            custom: {
-              id: "custom",
-              name: "Provider B",
-              baseUrl: "https://b.example/v1/",
-              protocol: "anthropic",
-              apiKeyRef: "PROVIDER_B_API_KEY",
-              modelsUrl: "https://b.example/v1/models",
-            },
-          },
-        },
-      },
-    })
-    const expected = {
-      displayName: "Provider B",
-      baseURL: "https://b.example",
-      protocol: "anthropic-messages",
-      apiKeyEnv: "PROVIDER_B_API_KEY",
-      modelsURL: "https://b.example/v1/models",
-    }
-    expect(immediate.llm.providers.custom).toEqual(expected)
+    const immediate = await store.set({ theme: "light" })
+    expect(immediate.theme).toBe("light")
+    expect(immediate.llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
+    // the normalized section still never exposes the legacy plane.
+    expect("providers" in immediate.tui).toBe(false)
+
+    const persisted = JSON.parse(await readFile(file, "utf8"))
+    expect(persisted.theme).toBe("light")
+    expect(persisted.tui.providers.providers.custom).toEqual(LEGACY_FILE.tui.providers.providers.custom)
 
     const reloaded = new SettingsStore({ path: file })
     await reloaded.load()
-    expect(reloaded.get().llm.providers.custom).toEqual(expected)
+    expect(reloaded.get().llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
     await rm(root, { recursive: true, force: true })
   })
 

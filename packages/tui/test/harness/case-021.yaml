@@ -1,116 +1,90 @@
-# M46a G1 (case-021): the provider/model TUI management flow at REAL-PTY
-# level. The host (host-021.ts) wires a REAL SettingsStore + credential store
-# (temp dir) and a ProviderStore with the DISCOVERY FETCH INJECTED (two fake
-# DeepSeek models — never CI network):
-#   /provider → menu → `+ Add provider` → wizard (deepseek /
-#   https://api.deepseek.com / DUMMY key masked) → save & active (the
-#   credential REF lands in settings — never the raw key) → discovery runs →
-#   /model → picker (fake catalog: deepseek-chat + deepseek-reasoner) →
-#   Enter (deepseek-chat) → llm.defaultModel patched (the durable adoption) →
-#   /settings → Settings modal → Models category → `provider  deepseek` +
-#   `default_model  deepseek-chat`.
+# M49 Task 6 (case-021): the Models & Providers flow at REAL-PTY level over
+# the CANONICAL plane. The host (host-021.ts) wires a REAL SettingsStore +
+# credential store (temp dir), the seed document is canonical
+# (llm.providers + llm.defaultModel), the DISCOVERY PROBE is injected (two
+# fake DeepSeek models — never CI network) and the buildClient is injected
+# (records the request, streams the literal `fixture response`):
+#   /settings → Models & Providers (index 0 = visibility-filtered first) →
+#   provider master/detail (Manage providers → deepseek editor: prefilled
+#   id/url, key typed → masked) → save → discovery → models catalog →
+#   Enter on the DISCOVERED deepseek-reasoner → default model selected
+#   (llm.defaultModel = deepseek:deepseek-reasoner) → close Settings → submit
+#   `hello` → the injected client's literal `fixture response` lands.
 name: case-021-provider-model-flow
 host: test/harness/host-021.ts
 size: [80, 24]
 steps:
-  # ── phase A: the agent screen settles; /provider opens the menu.
-  # The M37b slash dropdown consumes the FIRST Enter (dropdown accept → the
-  # token gets the trailing space); the SECOND Enter submits → my slash
-  # modal intercept opens the provider menu.
+  # ── phase A: the ready welcome settles; F2 = Settings (directly the
+  # Models & Providers category — the launcher rows).
   - await-marker: { name: scene-ready }
   - await-quiescent: { ms: 300 }
-  - write-pty: { data: "/provider" }
-  - await-quiescent: { ms: 200 }
-  - write-pty: { data: "\r" }
-  - await-quiescent: { ms: 250 }
+  - write-pty: { data: "\x1b[12~" }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ┃ Models & Providers"
+        - "  ┃ ● provider  deepseek"
+        - "  ┃ ○ default_model  deepseek-chat"
+      timeoutMs: 5000
+  # ── phase B: Enter on the provider row → the master/detail list.
   - write-pty: { data: "\r" }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 1 }
       rows:
         - "  ┃ Manage providers"
+        - "  ┃ deepseek"
         - "  ┃ + Add provider"
         - "  ┃ Delete provider..."
         - "  ┃ ↑/↓ to choose · Enter to … · Esc to cancel"
       timeoutMs: 5000
-  # ── phase B: the 3-step wizard (↑/↓ switch fields — Enter to continue).
+  # ── phase C: the editor (prefilled id/url; the key field typed → masked;
+  # the keep-current hint line is present while the field is empty).
   - write-pty: { data: "\r" }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 1 }
       rows:
         - "  ┃ Manage providers"
-        - "  ┃ ● Provider ID"
-        - "  ┃ ○ Base URL"
+        - "  ┃ ● Provider ID deepseek"
+        - "  ┃ ○ Base URL https://api.deepseek.com"
         - "  ┃ ○ API key"
       timeoutMs: 5000
-  - write-pty: { data: "deepseek" }
-  - await-quiescent: { ms: 150 }
   - write-pty: { data: "\r" }
-  - write-pty: { data: "https://api.deepseek.com" }
-  - await-quiescent: { ms: 150 }
   - write-pty: { data: "\r" }
   - write-pty: { data: "sk-dummykey-123456" }
   - await-quiescent: { ms: 150 }
   - write-pty: { data: "\r" }
-  - await-marker: { name: provider-saved, timeoutMs: 20000 }
-  # ── phase C: /model picker over the INJECTED catalog (Enter #1 = the slash
-  # dropdown accept, Enter #2 = submit → the picker).
+  # save → discovery (injected) → the models catalog (manual + discovered).
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ┃ Models — deepseek"
+        - "  ┃ deepseek-chat DeepSeek Chat"
+        - "  ┃ deepseek-reasoner DeepSeek R1"
+        - "  ┃ + Add model (manual)"
+      timeoutMs: 20000
+  # ── phase D: ↓ to the DISCOVERED model → Enter → the durable default is
+  # deepseek:deepseek-reasoner (the host snapshot fires) + the flow closes.
+  - write-pty: { data: "\x1b[B" }
+  - write-pty: { data: "\r" }
+  - await-marker: { name: provider-saved, timeoutMs: 15000 }
   - await-quiescent: { ms: 250 }
-  - write-pty: { data: "/model" }
+  # ── phase E: submit `hello` → the injected client's literal fixture
+  # response (the session's user row + the assistant block).
+  - write-pty: { data: "hello" }
   - await-quiescent: { ms: 200 }
   - write-pty: { data: "\r" }
-  - await-quiescent: { ms: 250 }
-  - write-pty: { data: "\r" }
+  - await-marker: { name: client-request, timeoutMs: 15000 }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 3 }
       rows:
-        - "  ╭ Select a model ──────────────────────────────────────────────────────────╮"
-        - "  │ ❯  (no override)                                                         │"
-        - "  │   deepseek-chat  DeepSeek Chat                                           │"
-        - "  │   deepseek-reasoner  DeepSeek R1                                         │"
-        - "  │provider: deepseek                                                        │"
-      timeoutMs: 5000
-  # ↓ to deepseek-chat (row 1) → Enter → the settings default is patched.
-  - write-pty: { data: "\x1b[B" }
-  - write-pty: { data: "\r" }
-  - await-marker: { name: default-model-set, timeoutMs: 15000 }
-  # ── phase D: /settings — the 8-category modal → Models category rows.
-  - await-quiescent: { ms: 250 }
-  - write-pty: { data: "/settings" }
-  - await-quiescent: { ms: 200 }
-  - write-pty: { data: "\r" }
-  - await-quiescent: { ms: 250 }
-  - write-pty: { data: "\r" }
-  - wait-screen:
-      region: { startRow: 15 }
-      rows:
-        - "  ┃ Settings"
-        - "  ┃ ● Appearance"
-        - "  ┃ ○ Mouse"
-        - "  ┃ ○ Editor & Input"
-        - "  ┃ ○ Agent & Approval"
-        - "  ┃ ○ Privacy"
-      timeoutMs: 5000
-  # Navigate to Models (index 5) → Enter → the Models category knobs.
-  - write-pty: { data: "\x1b[B" }
-  - write-pty: { data: "\x1b[B" }
-  - write-pty: { data: "\x1b[B" }
-  - write-pty: { data: "\x1b[B" }
-  - write-pty: { data: "\x1b[B" }
-  - write-pty: { data: "\r" }
-  - wait-screen:
-      region: { startRow: 15 }
-      rows:
-        - "  ┃ Settings"
-        - "  ┃ ● provider  deepseek"
-        - "  ┃ ○ default_model  deepseek-chat"
-      timeoutMs: 5000
-  # Esc → categories → Esc → close; agent screen back.
-  - write-pty: { data: "\x1b" }
-  - write-pty: { data: "\x1b" }
-  - await-quiescent: { ms: 250 }
+        - "  ┃   ❯ hello"
+        - "  ┃   ❯ Current runtime context: none. Earlier runtime-context snapshots no"
+        - "  ┃   er apply."
+        - "  ┃   fixture response"
+      timeoutMs: 10000
+  # ── close
   - assert-glyph-integrity: {}
   - request-marker: { name: request-exit }
   - await-marker: { name: teardown-wrote }
-  # byte budget: init 1 + frames + teardown 1 (pinned by the determinism run).
-  - assert-byte-budget: { writes: 97 }
+  - assert-byte-budget: { writes: 45 }
   - wait-exit: { code: 0 }

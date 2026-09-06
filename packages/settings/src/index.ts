@@ -110,40 +110,6 @@ export interface SettingsLlm {
   defaultModel: SettingsDefaultModel
 }
 
-// ── M46a G1: legacy `tui` section ────────────────────────────────────────────
-// The TUI provider registry remains readable during the M49 transition. Its
-// provider rows soft-migrate into canonical `llm.providers` in memory; the
-// legacy shape and its UI preferences are still normalized here until Task 6.
-
-/** The TUI provider-entry wire protocol vocabulary (cc-custom v2 shape — the
- * entry values are TUI-facing; the factory maps "anthropic" →
- * "anthropic-messages" when assembling the provider profile). */
-export type SettingsTuiProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic" | "gemini" | "bedrock"
-
-/** One configured TUI provider (cc-custom v2 shape, refs-not-values stance:
- * the raw key NEVER touches this document — `apiKeyRef` names a credential). */
-export interface SettingsTuiProviderEntry {
-  id: string
-  name?: string
-  /** Host ROOT (no trailing slash, no /v1 segment — the adapters assemble /v1). */
-  baseUrl: string
-  /** Wire protocol; absent = the universal default ("openai-compatible") the
-   * wizard/factory apply at their boundary (never a normalize-written value). */
-  protocol?: SettingsTuiProviderProtocol
-  /** Credential-ref name (packages/credentials grammar); absent = no key yet. */
-  apiKeyRef?: string
-  /** Models-endpoint override; absent → the built-in candidate strategy
-   * ({base}/v1/models, {base}/models, compat-stripped roots). */
-  modelsUrl?: string
-}
-
-/** The section payload (`settings.tui.providers`). */
-export interface SettingsTuiProviders {
-  version: 1
-  activeProviderId: string
-  providers: Record<string, SettingsTuiProviderEntry>
-}
-
 /** M46b G1: keep_text_selection modes (grok `ui.keep_text_selection`). */
 export type SettingsKeepTextSelection = "flash" | "hold" | "word_select"
 
@@ -188,9 +154,10 @@ export interface SettingsTuiPrefs {
   mouseReportingToggle: boolean
 }
 
-/** The appended TUI section. */
+/** The appended TUI section (M49 Task 6: presentation preferences only — the
+ * provider plane is the canonical `llm.providers`; legacy `tui.providers`
+ * documents are still READ as the deterministic in-memory migration). */
 export interface SettingsTui {
-  providers: SettingsTuiProviders
   prefs: SettingsTuiPrefs
 }
 
@@ -217,7 +184,8 @@ export interface Settings {
   /** Appended in this plan: previously-absent top-level key, additive-only. */
   llm: SettingsLlm
   onboarding: SettingsOnboarding
-  /** Appended M46a G1: TUI provider registry + UI preference knobs. */
+  /** Appended M46a G1: TUI UI-preference knobs (M49 Task 6 — the provider
+   * registry is the canonical llm.providers plane; presentation only here). */
   tui: SettingsTui
 }
 
@@ -249,12 +217,11 @@ export const SETTINGS_DEFAULTS: Settings = {
   // welcomeNoticeVersion !== "2026-08-30.1" (Task 9) — the empty default keeps
   // the first-run notice visible, while a plain old document stays unset.
   onboarding: { welcomeNoticeVersion: "" },
-  // M46a G1 appended section: empty registry, no active provider, current
-  // behavior-preserving prefs (timestamps off — the engine default; compact
-  // off — the fullscreen default; guardian off — the embedded factory's
-  // approveAll:true default; always-approve on — the "no asks" stance).
+  // M46a G1 appended section (M49 Task 6: presentation prefs only — the
+  // provider plane is llm.providers): timestamps off (the engine default),
+  // compact off (the fullscreen default), guardian off (the embedded
+  // factory's approveAll:true default; always-approve on — "no asks" stance).
   tui: {
-    providers: { version: 1, activeProviderId: "", providers: {} },
     // M46b G1 mouse defaults: speed 50 (1.0×), auto mode, scroll_lines 3 (the
     // registry default — per-terminal profile in charge), invert off, flash
     // selection, grok's word separators, mouse-reporting-toggle opt-in OFF
@@ -451,58 +418,14 @@ function normalizeOnboarding(raw: unknown, base: SettingsOnboarding): SettingsOn
   }
 }
 
-/** One TUI provider entry (validation at the TUI-boundary — the entry's own
- * fields are loose strings here; the normalize never invents defaults). */
-const TUI_PROTOCOLS: readonly SettingsTuiProviderProtocol[] =
-  ["openai-responses", "openai-compatible", "anthropic", "gemini", "bedrock"]
-
-function normalizeTuiProviderEntry(raw: unknown): SettingsTuiProviderEntry | null {
-  if (!isRecord(raw)) return null
-  if (typeof raw.id !== "string" || raw.id === "") return null
-  if (typeof raw.baseUrl !== "string" || raw.baseUrl === "") return null
-  const entry: SettingsTuiProviderEntry = { id: raw.id, baseUrl: raw.baseUrl }
-  if (typeof raw.name === "string" && raw.name !== "") entry.name = raw.name
-  if (typeof raw.protocol === "string" && (TUI_PROTOCOLS as readonly string[]).includes(raw.protocol)) {
-    entry.protocol = raw.protocol as SettingsTuiProviderProtocol
-  }
-  if (typeof raw.apiKeyRef === "string" && raw.apiKeyRef !== "") entry.apiKeyRef = raw.apiKeyRef
-  if (typeof raw.modelsUrl === "string" && raw.modelsUrl !== "") entry.modelsUrl = raw.modelsUrl
-  return entry
-}
-
-/** Appended TUI section: corrupt input degrades per field; a provider entry
- * without a usable id/baseUrl drops; activeProviderId must resolve to a
- * stored id (else "" — no active provider, the honest unset). The section
- * payload is `tui.providers = { version, activeProviderId, providers:
- * Record<id, entry> }` — the ENTRIES live at `.providers.providers`. */
+/** Appended TUI section (M49 Task 6): the presentation prefs only — the
+ * legacy `providers` payload is no longer normalized (the canonical plane is
+ * `llm.providers`; the store still passes the raw legacy section to the
+ * read migration). Corrupt input degrades per pref. */
 function normalizeTui(raw: unknown, base: SettingsTui): SettingsTui {
-  if (!isRecord(raw)) {
-    return {
-      providers: { version: 1, activeProviderId: "", providers: {} },
-      prefs: { ...base.prefs },
-    }
-  }
-  const p = isRecord(raw.providers) ? raw.providers : {}
-  const entryMap = isRecord(p.providers) ? p.providers : {}
-  const providers: Record<string, SettingsTuiProviderEntry> = {}
-  for (const [id, value] of Object.entries(entryMap)) {
-    const entry = normalizeTuiProviderEntry(value)
-    // The id must be the entry's own addressable id (folder-keyed storage —
-    // a mismatch between map key and entry.id is a corrupt document).
-    if (entry !== null && entry.id === id) providers[id] = entry
-  }
-  const activeProviderId =
-    typeof p.activeProviderId === "string" && p.activeProviderId !== "" && p.activeProviderId in providers
-      ? p.activeProviderId
-      : ""
-  const prefsRaw = isRecord(raw.prefs) ? raw.prefs : {}
+  const prefsRaw = isRecord(raw) && isRecord(raw.prefs) ? raw.prefs : {}
   const b = base.prefs
   return {
-    providers: {
-      version: 1,
-      activeProviderId,
-      providers,
-    },
     prefs: {
       timestamps: typeof prefsRaw.timestamps === "boolean" ? prefsRaw.timestamps : b.timestamps,
       compact: typeof prefsRaw.compact === "boolean" ? prefsRaw.compact : b.compact,
@@ -610,6 +533,12 @@ export class SettingsStore {
   private settings: Settings
   /** Explicit canonical llm content, excluding the effective legacy projection. */
   private canonicalLlm: SettingsLlm | undefined
+  /** M49 Task 6: the RAW legacy `tui.providers` section of the loaded
+   * document (read-only provenance — the read migration projects it into
+   * llm.providers on every normalize; the normalized output never exposes it
+   * and the file section is preserved verbatim on writes until it is
+   * re-saved through the canonical plane). undefined = no legacy section. */
+  private legacyProviders: Record<string, unknown> | undefined
   private loaded = false
   private saving: Promise<void> | null = null
   /** Per-section mutation counters (see loadRevisionMeta). */
@@ -619,6 +548,7 @@ export class SettingsStore {
     this.filename = resolveSettingsPath(options)
     this.settings = normalizeSettings(undefined)
     this.canonicalLlm = undefined
+    this.legacyProviders = undefined
   }
 
   /** The current in-memory snapshot (defaults until load()). */
@@ -649,12 +579,15 @@ export class SettingsStore {
       this.canonicalLlm = isRecord(parsed) && Object.hasOwn(parsed, "llm")
         ? normalizeLlm(parsed.llm, SETTINGS_DEFAULTS.llm)
         : undefined
+      const tuiRaw = isRecord(parsed) && isRecord(parsed.tui) ? parsed.tui : undefined
+      this.legacyProviders = isRecord(tuiRaw?.providers) ? tuiRaw.providers : undefined
       this.settings = normalizeSettings(parsed)
       this.revision = loadRevisionMeta(parsed)
     } catch {
       // ENOENT (first run) or a corrupt document: keep the defaults in memory.
       this.settings = normalizeSettings(undefined)
       this.canonicalLlm = undefined
+      this.legacyProviders = undefined
       this.revision = {}
     }
     this.loaded = true
@@ -679,6 +612,12 @@ export class SettingsStore {
     const source: Record<string, unknown> = { ...this.settings, ...patch }
     if (this.canonicalLlm === undefined) delete source.llm
     else source.llm = this.canonicalLlm
+    // Re-inject the pinned legacy section into the raw merge so the read
+    // migration keeps projecting the legacy rows after this write (the
+    // normalized OUTPUT never carries them; the file keeps its own copy).
+    if (this.legacyProviders !== undefined) {
+      source.tui = { ...(isRecord(source.tui) ? source.tui : {}), providers: this.legacyProviders }
+    }
     this.settings = normalizeSettings(source)
     // Section content written through the store advances that section's
     // counter: a concurrent mutant holding an older revision then fails its
@@ -694,6 +633,7 @@ export class SettingsStore {
   async reset(): Promise<Settings> {
     this.settings = normalizeSettings(undefined)
     this.canonicalLlm = normalizeLlm(undefined, SETTINGS_DEFAULTS.llm)
+    this.legacyProviders = undefined
     // reset() rewrites every section to defaults — advance counters so a
     // client holding a pre-reset revision refetches instead of stale-mutating.
     this.revision.llm = (this.revision.llm ?? 0) + 1
@@ -722,6 +662,11 @@ export class SettingsStore {
       const doc: Record<string, unknown> = { ...this.settings }
       if (this.canonicalLlm === undefined) delete doc.llm
       else doc.llm = this.canonicalLlm
+      // The pinned legacy section survives writes verbatim (read-only —
+      // the provider flow never writes through it).
+      if (this.legacyProviders !== undefined) {
+        doc.tui = { ...(isRecord(doc.tui) ? doc.tui : {}), providers: this.legacyProviders }
+      }
       if (Object.keys(this.revision).length > 0) doc._revision = { ...this.revision }
       await writeFile(tmp, JSON.stringify(doc, null, 2), "utf8")
       await rename(tmp, this.filename)

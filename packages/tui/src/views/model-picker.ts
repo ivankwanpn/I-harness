@@ -1,16 +1,17 @@
 // @i-harness/tui — M46a G1: the model picker (ArgPicker-style modal list).
-// The picker lists the ACTIVE provider's DISCOVERED catalog (memoized by the
-// ProviderStore) with the `(no override)` clear-row FIRST (grok's DynamicEnum
-// clear), capped at 10 visible rows + `and N more…` (the ArgPicker overflow
-// string). Enter selects → onSelect(value) — value undefined = (no override)
-// (the settings default is cleared); Esc closes.
+// The picker lists the SELECTED provider's catalog (the M49 provider runtime
+// is the truth; the controller feeds the rows) with the `(no override)`
+// clear-row FIRST (grok's DynamicEnum clear), capped at 10 visible rows +
+// `and N more…` (the ArgPicker overflow string). Enter selects →
+// onSelect(value) — value undefined = (no override) (the settings default is
+// cleared); Esc closes.
 //
 // Reused by Ctrl+M (agent screen), the /model drop-in and the settings
-// Models category's default_model row — one picker, one vocabulary.
+// Models & Providers default_model row — one picker, one vocabulary.
 
 import type { GlyphSet, Palette } from "@i-harness/tui-core"
+import type { ModelDescriptor } from "@i-harness/provider"
 import type { AppAction } from "../app/keys.ts"
-import type { FetchedModel } from "../app/provider-store.ts"
 import type { OverlaySeam } from "../app/present.ts"
 import type { Rect, Style, ViewDraw } from "./agent.ts"
 
@@ -37,7 +38,7 @@ export interface ModelPickerState {
 }
 
 /** The picker rows: (no override) first, then the catalog rows. */
-export function modelPickerEntries(models: FetchedModel[]): ModelPickerEntry[] {
+export function modelPickerEntries(models: ModelDescriptor[]): ModelPickerEntry[] {
   const entries: ModelPickerEntry[] = [{ label: MODEL_NO_OVERRIDE }]
   for (const m of models) {
     entries.push({ label: m.name !== undefined && m.name !== "" ? `${m.id}  ${m.name}` : m.id, value: m.id })

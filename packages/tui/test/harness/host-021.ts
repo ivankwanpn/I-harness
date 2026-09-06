@@ -1,16 +1,19 @@
-// M46a G1: PTY host for case-021 — the FULL /provider flow at real-pty level.
-// The host drives the REAL app loop + the REAL stdin path: the settings store
-// is REAL (temp dir), the credential store is REAL (temp), the ProviderStore
-// is REAL with the DISCOVERY FETCH INJECTED (a fake returning two DeepSeek
-// models — NO real network in CI).
+// M49 Task 6: PTY host for case-021 — the Models & Providers flow at real-pty
+// level over the CANONICAL plane. The host drives the REAL app loop + the
+// REAL stdin path: the settings store is REAL (temp dir), the credential
+// store is REAL (temp), the provider runtime is REAL with the DISCOVERY
+// PROBE INJECTED (a fake returning two DeepSeek models — NO real network in
+// CI) and an INJECTED buildClient that RECORDS the request and streams the
+// literal `fixture response`.
 //
-// Flow: /provider → menu → `+ Add provider` → wizard (id=deepseek,
-// base=https://api.deepseek.com, key=sk-…DUMMY masked) → save & active →
-// discovery (fake) → /model → picker (2 fake models) → select deepseek-chat →
-// settings llm.defaultModel patched → /settings → Settings modal → Models
-// category → `provider  deepseek` + `default_model  deepseek-chat` rows.
-// Host-side markers: the REAL settings document snapshots (section shape —
-// refs NOT values) + the default-model adoption record.
+// Flow: /settings → Models & Providers → provider main/detail (deepseek
+// editor: prefilled id/url, key typed → masked; empty keep-current is NOT
+// exercised here) → save → discovery (injected) → models catalog (manual
+// deepseek-chat + discovered deepseek-reasoner) → select deepseek-reasoner
+// (the DISCOVERED model) → close Settings → submit `hello` → the injected
+// client's literal `fixture response` lands on screen. Host-side witnesses:
+// the REAL settings document snapshot (canonical llm.providers + defaultModel
+// — refs NOT values, NO tui.providers) + the request the client received.
 //
 // Errors: any throw → best-effort marker "host-failed" + message → exit 3.
 
@@ -21,9 +24,11 @@ import { createRenderer, createTerminal, createUnknownCapabilities, makeGlyphs, 
 import type { TerminalCapabilityContext, InputEvent } from "@i-harness/tui-core"
 import { SettingsStore } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
-import { TuiApp, ProviderStore, createScrollbackEngine } from "../../src/index.ts"
-import type { BackendClient, InputSource, TuiEvent } from "../../src/index.ts"
-import { unsupportedSessionManagement } from "../backend-stub.ts"
+import { createProviderRegistry } from "@i-harness/provider"
+import { createProviderRuntime } from "@i-harness/provider-runtime"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
+import { ProviderController, TuiApp, createScrollbackEngine, defaultEmbeddedFactory } from "../../src/index.ts"
+import type { BackendClient, InputSource } from "../../src/index.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -123,26 +128,6 @@ function wireInput(): { source: InputSource; endInput: () => void } {
   return { source, endInput }
 }
 
-/** The quiet backend — no turns in case-021; the events fork never ends
- * (host-020 parity). */
-function quietBackend(): BackendClient {
-  return {
-    ...unsupportedSessionManagement,
-    async *events(): AsyncIterable<TuiEvent> {
-      for (;;) await new Promise((res) => setTimeout(res, 1000))
-    },
-    listSessions: async () => [],
-    open: async () => {},
-    submit: async () => {},
-    steer: async () => {},
-    cancel: async () => {},
-    seqCursor: () => -1,
-    replay: async () => [],
-    status: () => ({ running: false, queued: 0 }),
-    close: async () => {},
-  }
-}
-
 // ------------------------------------------------------------------ main
 
 async function main(): Promise<void> {
@@ -153,22 +138,58 @@ async function main(): Promise<void> {
   const engine = createScrollbackEngine({ width: size.cols })
   const input = wireInput()
 
-  // REAL settings + credentials + ProviderStore over a temp dir; the fetch is
-  // the INJECTED boundary (two fake DeepSeek models — no CI network).
+  // REAL settings + credentials over a temp dir. The bootstrap document is
+  // written upfront: the canonical plane (llm.providers + llm.defaultModel)
+  // — the file starts canonical (the controller flow below only ever writes
+  // the canonical plane).
   const settingsPath = join(MARKER_DIR, "settings.json")
   const credsPath = join(MARKER_DIR, "credentials.json")
+  writeFileSync(settingsPath, JSON.stringify({
+    tui: { prefs: {} },
+    llm: {
+      providers: {
+        deepseek: {
+          baseURL: "https://api.deepseek.com",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [{ id: "deepseek-chat", name: "DeepSeek Chat" }],
+        },
+      },
+      defaultModel: { provider: "deepseek", model: "deepseek-chat" },
+    },
+  }))
   const settings = new SettingsStore({ path: settingsPath })
   await settings.load()
   const credentials = createCredentialStore(credsPath)
-  const providerStore = new ProviderStore({
+  await credentials.set("DEEPSEEK_API_KEY", "sk-dummykey-123456")
+
+  // The injected client: records the request (the literal user text) and
+  // streams the literal `fixture response`. NO real model, no network.
+  const requests: LLMRequest[] = []
+  const fixtureClient = {
+    async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      requests.push(request)
+      writeFileSync(join(MARKER_DIR, "client-request.json"), JSON.stringify({
+        prompt: (request.messages.find((msg) => msg.role === "user")?.content as string) ?? "",
+      }))
+      marker("client-request")
+      yield { type: "text/chunk", text: "fixture response" }
+      yield { type: "end" }
+    },
+  }
+
+  // The discovery probe is the INJECTED boundary (no CI network).
+  const registry = createProviderRegistry()
+  registry.registerProbe("deepseek", async () => [
+    { id: "deepseek-chat", name: "DeepSeek Chat", owned_by: "deepseek" },
+    { id: "deepseek-reasoner", name: "DeepSeek R1", owned_by: "deepseek" },
+  ])
+
+  const providerRuntime = createProviderRuntime({
     settings,
     credentials,
-    fetchFn: (async () => new Response(JSON.stringify({
-      data: [
-        { id: "deepseek-chat", name: "DeepSeek Chat", owned_by: "deepseek" },
-        { id: "deepseek-reasoner", name: "DeepSeek R1", owned_by: "deepseek" },
-      ],
-    }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch,
+    registry,
+    buildClient: () => fixtureClient,
   })
 
   writeFileSync(`${MARKER_DIR}/settings-path`, settingsPath)
@@ -176,24 +197,21 @@ async function main(): Promise<void> {
   marker("scene-ready")
 
   // Host-side state witnesses: poll the DURABLE store (the UI's writes land
-  // here) and write the snapshots the yaml/test assert byte-exact.
-  let watchedDefault = ""
+  // here) and write the snapshot the yaml/test asserts byte-exact (canonical
+  // plane only — the legacy section must NEVER reappear).
+  let snapshotWritten = false
   const watcher = setInterval(() => {
     const doc = settings.get()
+    // The seed's default is deepseek-chat; the flow's model selection picks
+    // the DISCOVERED deepseek-reasoner — that is the snapshot moment (the
+    // flow wrote the canonical plane: provider rows, discovery merge, the
+    // selected default — and never the legacy section).
     const dm = doc.llm.defaultModel
-    if (dm.provider !== "" && dm.model !== "" && watchedDefault === "") {
-      watchedDefault = `${dm.provider}:${dm.model}`
-      writeFileSync(`${MARKER_DIR}/default-model.json`, JSON.stringify(doc.llm.defaultModel, null, 2))
-      marker("default-model-set")
-    }
-    const tui = doc.tui
-    const deepseek = tui.providers.providers.deepseek
-    if (deepseek !== undefined && tui.providers.activeProviderId === "deepseek") {
-      if (!existsSync(`${MARKER_DIR}/provider-saved`)) {
-        writeFileSync(`${MARKER_DIR}/tui-section-snapshot.json`, JSON.stringify(tui, null, 2))
-        writeFileSync(`${MARKER_DIR}/settings-doc-snapshot.json`, JSON.stringify(doc, null, 2))
-        marker("provider-saved")
-      }
+    if (dm.provider === "deepseek" && dm.model === "deepseek-reasoner" && !snapshotWritten) {
+      writeFileSync(`${MARKER_DIR}/settings-doc-snapshot.json`, JSON.stringify(doc, null, 2))
+      writeFileSync(`${MARKER_DIR}/llm-section-snapshot.json`, JSON.stringify(doc.llm, null, 2))
+      snapshotWritten = true
+      marker("provider-saved")
     }
   }, 50)
 
@@ -214,9 +232,34 @@ async function main(): Promise<void> {
     writeFileSync(join(dumpDir, `frame-${n}.txt`), rows.join("\n"))
   }
 
+  // The embedded backend (the REAL session service) with the runtime-backed
+  // model binding — the app submits through it and the injected client
+  // answers with the literal fixture response.
+  const backend: BackendClient = await defaultEmbeddedFactory({
+    workspace: MARKER_DIR,
+    prompt: "",
+    modelPolicy: "required",
+    modelBindingFor: async (_sessionId, meta) => {
+      const state = await providerRuntime.resolveModel({
+        ...(meta?.modelSelection !== undefined
+          ? { sessionSelection: meta.modelSelection }
+          : {}),
+      })
+      if (state.status !== "ready") return state
+      const { client, ...binding } = state.binding
+      return { status: "ready", binding: { model: client, ...binding } }
+    },
+    approveAll: true,
+  })
+  const providerController = new ProviderController({
+    runtime: providerRuntime,
+    settings,
+    backend,
+  })
+
   const app = new TuiApp({
     renderer,
-    backend: quietBackend(),
+    backend,
     engine,
     capabilities: cap,
     palette: resolvePalette(cap),
@@ -229,7 +272,7 @@ async function main(): Promise<void> {
     },
     now: () => TUI_FROZEN_NOW,
     input: input.source,
-    providerStore,
+    providerController,
   })
 
   terminal.init()
@@ -238,6 +281,11 @@ async function main(): Promise<void> {
   clearInterval(watcher)
   input.endInput()
   await sleep(300) // consume any final frame
+  if (requests.length > 0) {
+    writeFileSync(join(MARKER_DIR, "client-request-final.json"), JSON.stringify({
+      prompt: (requests[requests.length - 1]!.messages.find((msg) => msg.role === "user")?.content as string) ?? "",
+    }))
+  }
   terminal.teardown()
   marker("teardown-wrote")
   process.exit(0)

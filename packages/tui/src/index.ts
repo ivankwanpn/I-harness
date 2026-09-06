@@ -94,45 +94,43 @@ export { MinimalCommits, commitDelta, displayToRegion } from "./minimal/commit.t
 export type { CommitEngine, CommitOptions, CommitWriter } from "./minimal/commit.ts"
 export { ModeSwitch, defaultRelaunchSpawn, parseModeArg, relaunchArgs } from "./minimal/mode.ts"
 export type { ModeSwitchOptions, RelaunchSpawn } from "./minimal/mode.ts"
-// M46a G1: provider/model TUI management — the store, the factory chain and
-// the three modal surfaces (provider menu/wizard, settings 8-category modal,
-// model picker) + their binders/views.
-export {
-  ProviderStore,
-  DISCOVERY_TIMEOUT_MS,
-  PROVIDER_STORE_VERSION,
-  discoveryCandidates,
-  maskKey,
-  parseModelsBody,
-  providerApiKeyRef,
-} from "./app/provider-store.ts"
+// M49 Task 6: provider/model TUI management — the UI-only provider controller
+// (over provider-runtime + settings + credentials + the live backend), the
+// typed settings registry/controller and the three modal surfaces (provider
+// master/detail, typed settings modal, model picker) + their binders/views.
+export { ProviderController, maskKey } from "./app/provider-controller.ts"
 export type {
-  CredentialFace,
-  FetchedModel,
-  ProviderEntry,
-  ProviderProtocol,
-  ProviderStoreOptions,
-} from "./app/provider-store.ts"
-export { createTuiModelBuilder, mapTuiProtocol, providerProfileFromEntry, resolveTuiModel } from "./app/model-factory.ts"
-export type { TuiModelResolution } from "./app/model-factory.ts"
+  ProviderControllerBackend,
+  ProviderControllerOptions,
+  ProviderControllerState,
+  ProviderDiscoveryState,
+  ProviderDraftInput,
+} from "./app/provider-controller.ts"
+export type { SettingsCategory, SettingDefinition, SettingsContext, SettingsCapabilityContext, SettingValueKind, SettingsRegistry } from "./settings/registry.ts"
+export { createSettingsRegistry, SETTINGS_CATEGORY_ORDER } from "./settings/registry.ts"
+export { createSettingsController } from "./settings/controller.ts"
+export type { SettingsController } from "./settings/controller.ts"
 export {
   bindProviderOverlay,
+  editorAdvance,
+  editorAppend,
+  editorBackspace,
+  editorSwitchField,
   isProviderOverlay,
-  makeWizard,
-  menuRows,
+  makeDraft,
+  manualModelOf,
+  providerRowCount,
+  providerRows,
   renderProviderOverlay,
-  wizardAdvance,
-  wizardAppend,
-  wizardBackspace,
-  wizardEntryOf,
-  wizardSwitchField,
 } from "./views/provider.ts"
 export type {
-  MenuRow,
+  ManualModelDraft,
   ProviderBindOptions,
-  ProviderViewPhase,
-  ProviderViewState,
-  ProviderWizardState,
+  ProviderDraft,
+  ProviderEditorMode,
+  ProviderEditorState,
+  ProviderField,
+  ProviderRow,
 } from "./views/provider.ts"
 export {
   MODEL_MORE,
@@ -147,24 +145,29 @@ export {
 } from "./views/model-picker.ts"
 export type { ModelPickerBindOptions, ModelPickerEntry, ModelPickerState } from "./views/model-picker.ts"
 export {
-  SETTINGS_CATEGORIES,
-  SETTINGS_NOT_AVAILABLE,
+  NEW_SESSIONS_LABEL,
+  SETTINGS_CATEGORY_WINDOW,
   SETTINGS_TITLE,
   bindSettingsOverlay,
+  createTuiSettingsRegistry,
+  displayValue,
   isSettingsOverlay,
   nextTheme,
+  nextValueOf,
   renderSettingsModal,
   settingsCategoryWindow,
   settingsKnobRows,
   settingsSnapshot,
   themeDisplayName,
+  tuiSettingsDefinitions,
 } from "./views/settings.ts"
 export type {
   SettingsBindOptions,
-  SettingsCategory,
   SettingsKnobRow,
   SettingsModalState,
   SettingsSnapshot,
+  TuiSettingsHost,
+  TuiSettingDefinition,
 } from "./views/settings.ts"
 // M46a G2: the slash command registry (backend-supported builtin map + the
 // visibility-gated skip-list inventory) + the light-panel row model/renderer
