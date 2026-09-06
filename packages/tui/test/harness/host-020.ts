@@ -108,7 +108,7 @@ interface SceneState {
   workspace: string
   dataTxt: string
   /** Post-scene rewind events (pushed by execute's appendEvent). */
-  rewindQueue: TuiEvent[]
+  rewindQueue: Array<Extract<TuiEvent, { type: "rewind" }>>
   wakeEv: (() => void) | undefined
 }
 

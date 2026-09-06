@@ -127,8 +127,8 @@ export interface TuiAppOptions {
   /** M46a G2: workspace root — the skills/hooks/plugins/workflow scans
    * (eco panels) land under it. Absent → process.cwd() at run time. */
   workspace?: string
-  /** M46a G2: the session id when the host knows it (e.g. --attach; embedded
-   * sessions are in-process and the app cannot introspect their id). */
+  /** Initial session id when the host knows it. Later backend session/open
+   * events replace it for session-aware slash commands. */
   sessionId?: string
   /** M46b G2: clipboard injection seam — tests assert the copied payloads
    * (drag auto-copy, cwd chip copy, prompt-selection copy, copy-block) on an
@@ -229,6 +229,9 @@ export class TuiApp {
   /** In-flight backend.context() probe (M38b G2) — never two concurrent
    * refreshes; the promise itself is the guard. */
   private contextProbe: Promise<void> | undefined
+  /** Invalidates async session-derived probes when session/open commits. */
+  private sessionGeneration = 0
+  private currentSessionId: string | undefined
   /** M46c G2: the /workflow surface (host option else the default real host) —
    * cached per app so the executor's process-shared job store is one instance. */
   private workflowHost: WorkflowSurface | undefined
@@ -287,6 +290,7 @@ export class TuiApp {
 
   constructor(opts: TuiAppOptions) {
     this.opts = opts
+    this.currentSessionId = opts.sessionId
     this.uiMode = opts.mode ?? "fullscreen"
     this.palette = opts.palette
     this.clipboard = opts.clipboard ?? defaultClipboard()
@@ -1136,6 +1140,9 @@ export class TuiApp {
     if (this.inlineActive()) this.minimalOnEvent(ev)
     const now = this.opts.now?.() ?? Date.now()
     switch (ev.type) {
+      case "session/open":
+        this.resetSessionView(ev.sessionId)
+        break
       case "turn":
         if (ev.phase === "start") this.beginTurn("thinking", now)
         else this.app.turn = undefined // finish() → row hides (spec §7)
@@ -1509,7 +1516,7 @@ export class TuiApp {
       input,
       arg,
       workspace: this.opts.workspace,
-      sessionId: this.opts.sessionId,
+      sessionId: this.currentSessionId,
       toast: (text) => this.toast(text),
       turns: () => this.turnAnchors().length,
       jumpAnchors: () => this.turnAnchors(),
@@ -1863,6 +1870,58 @@ export class TuiApp {
     this.refreshDropdowns()
     this.toast("new session (in-process reset — persistence lands M38)")
     this.requestFrame()
+  }
+
+  /** Backend-committed session switch. The control event is ordered before
+   * replacement history, so low sequence numbers and all derived UI state
+   * start from one atomic boundary. Global appearance/provider state stays. */
+  private resetSessionView(sessionId: string): void {
+    this.sessionGeneration++
+    this.currentSessionId = sessionId
+    this.app.history = []
+    this.app.historyIndex = 0
+    this.app.prompt.text = ""
+    this.app.prompt.cursor = 0
+    this.app.prompt.multiLine = false
+    this.app.prompt.focused = true
+    this.app.prompt.title = "untitled"
+    this.app.prompt.plan = false
+    this.app.prompt.pasteStash = []
+    this.app.promptCursor = 0
+    this.app.title = "untitled"
+    this.app.mode = "normal"
+    this.app.status.plan = false
+    this.app.status.goal = undefined
+    this.app.status.contextUsed = undefined
+    this.app.status.contextTotal = undefined
+    this.app.status.todo = { done: 0, total: 0 }
+    this.app.status.tasks = { running: 0, labels: [] }
+    this.app.status.queue = 0
+    this.app.paneData = undefined
+    this.app.panes.clear()
+    this.app.turn = undefined
+    this.app.scroll = { offset: 0, follow: true }
+    this.app.focused = "prompt"
+    this.app.search = undefined
+    this.app.overlay = undefined
+    this.app.lightPanel = undefined
+    this.app.sessions = undefined
+    this.app.historyPanel = undefined
+    this.app.slash = undefined
+    this.app.completion = undefined
+    this.app.fileSearch = undefined
+    this.app.dimFrom = undefined
+    this.app.draft = undefined
+    this.app.selectionFlashUntil = undefined
+    this.app.promptSelect = undefined
+    this.app.selectionDragLine = undefined
+    this.armedQuit = false
+    this.armedRewind = false
+    this.commits = undefined
+    this.refreshShortcuts()
+    this.refreshDropdowns()
+    this.refreshContext()
+    this.refreshQueue()
   }
 
   /** /rename — app title + the backend rename bridge (the session-title
@@ -2314,7 +2373,7 @@ export class TuiApp {
           id: s.id,
           title: s.title,
           updatedAt: s.updatedAt,
-          turnCount: s.turnCount,
+          ...(s.turnCount !== undefined ? { turnCount: s.turnCount } : {}),
           contextUsed: s.contextUsed,
           contextTotal: s.contextTotal,
         })) }],
@@ -2391,9 +2450,22 @@ export class TuiApp {
     }
     const ss = this.app.sessions
     if (ss !== undefined) {
+      if (ss.loading === true) return
       const sel = flattenSessions(ss)[ss.cursor]
-      this.app.sessions = undefined
-      if (sel !== undefined) void this.opts.backend.open(sel.session.id)
+      if (sel === undefined) return
+      ss.loading = true
+      this.requestFrame()
+      void this.opts.backend.open(sel.session.id).then(
+        () => {
+          if (this.app.sessions === ss) this.app.sessions = undefined
+          this.requestFrame()
+        },
+        (error: unknown) => {
+          if (this.app.sessions === ss) ss.loading = false
+          this.toast(`session open failed: ${error instanceof Error ? error.message : String(error)}`)
+          this.requestFrame()
+        },
+      )
       return
     }
     // M46a G2 light panels: Enter fires the panel's onSelect (e.g. /jump
@@ -2634,17 +2706,22 @@ export class TuiApp {
   private refreshContext(): void {
     const probe = this.opts.backend.context
     if (probe === undefined || this.contextProbe !== undefined) return
-    this.contextProbe = probe()
+    const generation = this.sessionGeneration
+    let pending!: Promise<void>
+    pending = probe()
       .then((usage) => {
-        this.contextProbe = undefined
-        if (usage === undefined) return
+        if (generation !== this.sessionGeneration || usage === undefined) return
         this.app.status.contextUsed = usage.used
         if (usage.total !== undefined) this.app.status.contextTotal = usage.total
         this.requestFrame()
       })
-      .catch(() => {
+      .catch(() => {})
+      .finally(() => {
+        if (this.contextProbe !== pending) return
         this.contextProbe = undefined
+        if (generation !== this.sessionGeneration) this.refreshContext()
       })
+    this.contextProbe = pending
   }
 
   /** Sync status bits (queue surface) → app.status.queue — refreshed at the

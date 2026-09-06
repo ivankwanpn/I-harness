@@ -69,6 +69,10 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
   }
 
   append(ev: TuiEvent): void {
+    if (ev.type === "session/open") {
+      this.reset()
+      return
+    }
     // Stream is seq-ordered; ignore a re-delivered seq (replay seams).
     if (ev.seq >= 0 && ev.seq <= this.lastSeq) {
       this.debugNote(`engine: seq ${ev.seq} already applied — ignored`)
@@ -98,6 +102,24 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
       default:
         this.debugNote(`engine: unknown event type ignored (${(ev as { type: string }).type})`)
     }
+  }
+
+  reset(): void {
+    this.blocks = []
+    this.toolById.clear()
+    this.groups = []
+    this.folds.clear()
+    this.groupStates.clear()
+    this.latestUser = -1
+    this.seg.clear()
+    this.selectionState.clear()
+    this.searchState.clear()
+    this.searchLines = []
+    this.searchNeedsUpdate = false
+    this.lastSeq = -1
+    this.sessionTitle = ""
+    this.planMode = false
+    this.rewindMarkerBlock = -1
   }
 
   lineCount(): number {

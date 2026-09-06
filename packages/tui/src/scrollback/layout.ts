@@ -311,6 +311,19 @@ export class SegmentIndex {
     for (let i = 0; i < blocks.length; i++) this.markDirty(i)
   }
 
+  /** Full session reset. Display configuration stays intact; every indexed
+   * block, cached row, prefix sum, and retain marker is discarded. */
+  clear(): void {
+    this.blocks = []
+    this.linesCache = []
+    this.groupCache.clear()
+    this.fw = new Fenwick(16)
+    this.dirty = []
+    this.dirtySet.clear()
+    this.truncated = 0
+    this.trimmedLineTotal = 0
+  }
+
   setWidth(cols: number): void {
     this.width = innerWidth(cols)
     this.invalidateAll()

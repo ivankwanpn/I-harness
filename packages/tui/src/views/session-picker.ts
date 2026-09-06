@@ -15,7 +15,7 @@ export interface SessionRow {
   id: string
   title: string
   updatedAt: number
-  turnCount: number
+  turnCount?: number
   contextUsed?: number
   contextTotal?: number
   /** Optional metadata extensions (field row). */
@@ -145,7 +145,7 @@ export function renderSessionPicker(
     if (s.createdAt !== undefined) put("Created", fmtRel(state.now, s.createdAt))
     put("Updated", fmtRel(state.now, s.updatedAt))
     if (s.messages !== undefined) put("Messages", String(s.messages))
-    put("Turns", String(s.turnCount))
+    if (s.turnCount !== undefined) put("Turns", String(s.turnCount))
   }
 }
 

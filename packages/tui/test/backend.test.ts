@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
-import { append } from "@i-harness/core-session"
+import { append, createSession } from "@i-harness/core-session"
 import type { MockStep } from "@i-harness/llm-mock"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
@@ -23,6 +23,21 @@ import type { TuiEvent } from "../src/contracts.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 const tmp = (): string => mkdtempSync(join(tmpdir(), "ih-tui-backend-"))
+
+async function waitFor(cond: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (cond()) return
+    await sleep(10)
+  }
+  throw new Error("waitFor: condition not met within budget")
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 function makeService(opts: { sessionId?: string; mockScript?: MockStep[] }): SessionService {
   return createSessionService({
@@ -353,6 +368,46 @@ describe("embedded backend", () => {
     }
   })
 
+  it("keeps the newest session selected when concurrent opens finish out of order", async () => {
+    const initial = createSession()
+    const sessionA = createSession()
+    const sessionB = createSession()
+    append(sessionA, { type: "user/message", text: "A history" })
+    append(sessionB, { type: "user/message", text: "B history" })
+    const pendingA = deferred<{ session: typeof sessionA }>()
+    const pendingB = deferred<{ session: typeof sessionB }>()
+    const submitted: string[] = []
+    const service = {
+      submit: async (sessionId: string) => { submitted.push(sessionId) },
+      assemblyFor: async (sessionId: string) => {
+        if (sessionId === "initial") return { session: initial }
+        if (sessionId === "session-a") return pendingA.promise
+        if (sessionId === "session-b") return pendingB.promise
+        throw new Error(`unexpected session: ${sessionId}`)
+      },
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      close: async () => {},
+    } as unknown as SessionService
+    const backend = createEmbeddedBackend({ service, sessionId: "initial", prompt: "" })
+
+    const openA = backend.open("session-a")
+    const openB = backend.open("session-b")
+    pendingB.resolve({ session: sessionB })
+    await openB
+    pendingA.resolve({ session: sessionA })
+    await openA
+
+    const replayed = await backend.replay(-1)
+    expect(replayed.some((event) => event.type === "user" && event.text === "B history")).toBe(true)
+    expect(replayed.some((event) => event.type === "user" && event.text === "A history")).toBe(false)
+    await backend.submit("newest")
+    expect(submitted).toEqual(["session-b"])
+    await backend.close()
+  })
+
   it("lists durable sessions without locking or poisoning the picker", async () => {
     const root = tmp()
     const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
@@ -403,6 +458,32 @@ describe("embedded backend", () => {
     }
   })
 
+  it("emits session/open before the replacement session history", async () => {
+    const initial = createSession()
+    const next = createSession()
+    append(next, { type: "user/message", text: "replacement history" })
+    const service = createSessionService({
+      workspace: tmp(),
+      approveAll: true,
+      sessionFor: async (sessionId) => sessionId === "initial" ? initial : next,
+    })
+    const backend = createEmbeddedBackend({ service, sessionId: "initial", prompt: "", batchMs: 0 })
+    const seen: TuiEvent[] = []
+    const consume = (async () => {
+      for await (const event of backend.events()) seen.push(event)
+    })()
+    try {
+      await backend.open("next")
+      await waitFor(() => seen.length >= 1)
+      expect(seen[0]).toMatchObject({ type: "session/open", sessionId: "next", seq: -1 })
+      await waitFor(() => seen.length >= 2)
+      expect(seen[1]).toMatchObject({ type: "user", text: "replacement history", seq: 0 })
+    } finally {
+      await backend.close()
+      await consume
+    }
+  })
+
   it("durable session ownership rejects a second adopter", async () => {
     const root = tmp()
     const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
@@ -428,6 +509,30 @@ describe("embedded backend", () => {
     await injected.close()
     await expect(fresh.adoptOwnership(id)).resolves.toBeUndefined()
     await fresh.close()
+  })
+
+  it("does not fabricate turnCount for an unopened non-blank session on an injected coordinator", async () => {
+    const root = tmp()
+    const seed = createSessionCoordinator(createJsonlBackend(root))
+    await seed.create({ sessionId: "current" })
+    await seed.create({ sessionId: "unopened" })
+    await seed.append("unopened", [{ type: "turn/start" }, { type: "turn/end" }])
+    await seed.close()
+    const injected = createSessionCoordinator(createJsonlBackend(root))
+    const backend = await defaultEmbeddedFactory({
+      workspace: tmp(),
+      prompt: "",
+      coordinator: injected,
+      resumeSessionId: "current",
+    })
+    try {
+      const rows = await backend.listSessions()
+      expect(rows.find((row) => row.id === "current")?.turnCount).toBe(0)
+      expect(rows.find((row) => row.id === "unopened")?.turnCount).toBeUndefined()
+    } finally {
+      await backend.close()
+      await injected.close()
+    }
   })
 
   it("durable close is shared and idempotent across concurrent callers", async () => {

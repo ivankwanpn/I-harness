@@ -66,6 +66,17 @@ function lineWidth(l: DisplayLine): number {
 /* ------------------------------------------------------------------ tests */
 
 describe("basic sequence", () => {
+  it("session/open clears the old log and accepts the new log from seq zero", () => {
+    const e = eng({ width: 80 })
+    e.append(usr("old session", 100))
+    e.setSelection(0, 0)
+    e.append({ type: "session/open", sessionId: "next", seq: -1, ts: 1 } as TuiEvent)
+    e.append(usr("new session", 0))
+
+    expect(texts(e.viewport(0, 10))).toEqual(["❯ new session"])
+    expect(e.selection()).toBeUndefined()
+  })
+
   it("renders user/thinking/assistant/tool in order with folded defaults", () => {
     const e = eng()
     e.append(usr("hi there", 1, 1000))
