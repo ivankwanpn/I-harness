@@ -92,6 +92,14 @@ export type BackendModelState =
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
   | { status: "ready"; providerId: string; modelId: string; label: string }
 
+/** Top-level application view. Render mode (fullscreen/minimal) is separate:
+ * a minimal host can still own an Agent session without inventing a fourth
+ * navigation state. */
+export type ActiveView =
+  | { kind: "welcome" }
+  | { kind: "agent"; sessionId: string }
+  | { kind: "dashboard" }
+
 /** The single UI consumption surface implemented by embedded and remote SDK
  * backends. */
 export interface BackendClient {

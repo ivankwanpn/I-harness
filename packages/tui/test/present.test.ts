@@ -9,6 +9,7 @@ import type { Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
 import { present } from "../src/app/present.ts"
 import type { TuiAppState } from "../src/app/present.ts"
 import type { DisplayLine, ScrollbackEngine, TuiEvent } from "../src/contracts.ts"
+import { layoutAgent } from "../src/views/agent.ts"
 
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap, "groknight")
@@ -91,6 +92,41 @@ describe("present — zero-byte idle (M36 contract)", () => {
     const second = drawAndFlush(state, r, writes)
     expect(second).toBe("")
     expect(writes.length).toBe(1) // zero-byte idle: no extra write
+  })
+})
+
+describe("present — ActiveView and constrained layout", () => {
+  it("renders Welcome from the ActiveView contract with the gated prompt status", () => {
+    const r = make(80, 24)
+    const state = baseState(new StubEngine(), {
+      view: { kind: "welcome" },
+      screen: undefined,
+      welcome: {
+        version: "0.1.0",
+        menus: [
+          { action: "new", key: "ctrl+n", label: "New session" },
+          { action: "resume", key: "ctrl+s", label: "Resume session" },
+          { action: "settings", key: "F2", label: "Settings" },
+          { action: "quit", key: "ctrl+q", label: "Quit" },
+        ],
+        cursor: 0,
+        modelState: { status: "unconfigured", reason: "No model configured" },
+      },
+    })
+    present(state, r, palette, GLYPHS, {})
+    r.flush(() => {})
+    const text = Array.from({ length: 24 }, (_, y) => rowText(r, y)).join("\n")
+    expect(text).toContain("I-harness")
+    expect(text).toContain("No model configured")
+    expect(text).toContain("Settings > Models & Providers")
+  })
+
+  it("drops shortcuts before allowing scrollback below five rows", () => {
+    const state = baseState(new StubEngine())
+    const layout = layoutAgent({ cols: 80, rows: 12 }, { ...state, dropdown: undefined })
+    expect(layout.shortcuts.h).toBe(0)
+    expect(layout.scrollback.h).toBeGreaterThanOrEqual(5)
+    expect(layout.scrollback.y + layout.scrollback.h).toBeLessThanOrEqual(layout.prompt.y)
   })
 })
 

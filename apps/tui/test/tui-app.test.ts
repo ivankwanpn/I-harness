@@ -10,16 +10,151 @@ import { createCredentialStore } from "@i-harness/credentials"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRuntime } from "@i-harness/provider-runtime"
 import { SettingsStore } from "@i-harness/settings"
-import { ProviderStore } from "@i-harness/tui"
+import { createRenderer, createUnknownCapabilities, makeGlyphs, resolvePalette } from "@i-harness/tui-core"
+import { createScrollbackEngine, ProviderStore } from "@i-harness/tui"
+import type { BackendClient, InputSource, TuiEvent } from "@i-harness/tui"
 import {
   buildEmbeddedSessionOptions,
   buildSdkArgs,
+  createExecutableApp,
   createTuiModelBindingFor,
   createTuiShutdownController,
   parseFlags,
 } from "../src/index.ts"
 
+const cap = { ...createUnknownCapabilities(), colorLevel: "truecolor" as const, dark: true }
+type BackendModelState = Awaited<ReturnType<BackendClient["modelState"]>>
+
+function recordingBackend(modelState: BackendModelState): BackendClient & { calls: string[]; submissions: string[] } {
+  const calls: string[] = []
+  const submissions: string[] = []
+  return {
+    calls,
+    submissions,
+    listSessions: async () => {
+      calls.push("listSessions")
+      return [{ id: "s-list", title: "Listed", updatedAt: 1 }]
+    },
+    open: async (id) => { calls.push(`open:${id}`) },
+    createSession: async () => {
+      calls.push("createSession")
+      calls.push("open:s-created")
+      return "s-created"
+    },
+    forkSession: async () => "s-forked",
+    modelState: async () => {
+      calls.push("modelState")
+      return modelState
+    },
+    setSessionModel: async () => modelState,
+    submit: async (prompt) => {
+      calls.push(`submit:${prompt}`)
+      submissions.push(prompt)
+    },
+    steer: async () => {},
+    cancel: async () => {},
+    events: async function* (): AsyncIterable<TuiEvent> {},
+    seqCursor: () => -1,
+    replay: async () => [],
+    status: () => ({ running: false, queued: 0 }),
+    close: async () => {},
+  }
+}
+
+async function executableFixture(
+  flags: Parameters<typeof createExecutableApp>[0]["flags"],
+  backend: BackendClient,
+  input?: InputSource,
+) {
+  const root = mkdtempSync(join(tmpdir(), "ih-tui-executable-"))
+  const settings = new SettingsStore({ path: join(root, "settings.json") })
+  await settings.load()
+  const providerStore = new ProviderStore({ settings, credentials: createCredentialStore(join(root, "credentials.json")) })
+  const renderer = createRenderer({ cols: 80, rows: 24, cap })
+  const created = await createExecutableApp({
+    flags,
+    backend,
+    renderer,
+    engine: createScrollbackEngine({ width: 80 }),
+    capabilities: cap,
+    palette: resolvePalette(cap),
+    glyphs: makeGlyphs(true),
+    providerStore,
+    ...(input !== undefined ? { input } : {}),
+    write: () => {},
+  })
+  return { ...created, root }
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1_000
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition did not settle")
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
+
 describe("tui flag parser", () => {
+  it.each([
+    { name: "resume", flags: { yes: false, resume: "s1" } },
+    { name: "attach", flags: { yes: false, attach: "s1" } },
+  ])("opens an explicit $name session after model resolution and before Agent", async ({ flags }) => {
+    const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "m", label: "fixture:m" })
+    const fixture = await executableFixture(flags, backend)
+    try {
+      expect(backend.calls.slice(0, 2)).toEqual(["modelState", "open:s1"])
+      expect(fixture.app.state().view).toEqual({ kind: "agent", sessionId: "s1" })
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("preserves --prompt on Welcome when model resolution is invalid", async () => {
+    const backend = recordingBackend({ status: "invalid", reason: "Missing credential", providerId: "fixture", modelId: "m" })
+    const fixture = await executableFixture({ yes: false, prompt: "keep me" }, backend)
+    try {
+      expect(fixture.app.state().view).toEqual({ kind: "welcome" })
+      expect(fixture.app.state().prompt.text).toBe("keep me")
+      expect(backend.submissions).toEqual([])
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("submits a ready --prompt only after creating and opening its session", async () => {
+    const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "m", label: "fixture:m" })
+    const fixture = await executableFixture({ yes: false, prompt: "start now" }, backend)
+    try {
+      await waitFor(() => backend.submissions.length === 1)
+      expect(backend.calls.slice(0, 4)).toEqual([
+        "modelState",
+        "createSession",
+        "open:s-created",
+        "submit:start now",
+      ])
+      expect(fixture.app.state().view).toEqual({ kind: "agent", sessionId: "s-created" })
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it.each([false, true])("passes provider settings and backend session listing when input attached=%s", async (attached) => {
+    const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
+    const input: InputSource | undefined = attached
+      ? { async *next() {} }
+      : undefined
+    const fixture = await executableFixture({ yes: false }, backend, input)
+    try {
+      fixture.app.dispatch("sessions")
+      await waitFor(() => fixture.app.state().sessions?.loading === false)
+      expect(fixture.app.state().sessions?.groups[0]?.sessions[0]?.id).toBe("s-list")
+      fixture.app.dispatch("open-settings")
+      expect((fixture.app.state().overlay as { kind?: string } | undefined)?.kind).toBe("settings")
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
   it("legacy provider add/key/discover/adopt composes a ready canonical runtime", async () => {
     const root = mkdtempSync(join(tmpdir(), "ih-tui-provider-runtime-"))
     const settings = new SettingsStore({ path: join(root, "settings.json") })

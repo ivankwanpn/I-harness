@@ -6,7 +6,7 @@
 
 import { clusterWidth, quantizeColor } from "@i-harness/tui-core"
 import type { GlyphSet, Palette, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
-import type { ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
+import type { ActiveView, ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
 import { layoutAgent, SCROLLBACK_PAD_W, SCROLLBACK_RAIL_W } from "../views/agent.ts"
 import type { AgentViewState, PaneState, Rect, Style, ViewDraw } from "../views/agent.ts"
 import { renderStatus, strWidth } from "../views/status.ts"
@@ -63,6 +63,9 @@ export interface TuiAppState {
   toasts: ToastEntry[]
   panes: Set<string>
   shortcuts: ShortcutBarState
+  /** Authoritative navigation state. Optional only for older static test
+   * fixtures; TuiApp always supplies it. */
+  view?: ActiveView
   /** Screen: "agent" (default), the welcome hero (spec §2a), or "minimal"
    * (M38a spec §0/§1.1 — the loop drives the live-region writer through the
    * InlineHost; present() never draws cells on that screen). */
@@ -746,11 +749,53 @@ export function present(
   const view = makeDraw(buf, palette, cap, mouseEngine)
   const area = { cols: buf.width, rows: buf.height }
 
-  // Welcome screen (spec §2a) — the hero replaces the agent layout entirely.
-  if (app.screen === "welcome") {
+  // Welcome screen — ActiveView is authoritative; the legacy screen field is
+  // retained for old hosts while render mode migration remains incremental.
+  if (app.screen === "welcome" || (app.screen === undefined && app.view?.kind === "welcome")) {
+    let welcomeLayout: ReturnType<typeof renderWelcome> | undefined
     if (app.welcome !== undefined && app.welcome.menus.length > 0) {
-      renderWelcome({ x: 0, y: 0, w: area.cols, h: area.rows }, app.welcome, view, palette, glyphs)
+      welcomeLayout = renderWelcome(
+        { x: 0, y: 0, w: area.cols, h: area.rows },
+        app.welcome,
+        app.prompt,
+        view,
+        palette,
+        glyphs,
+      )
     }
+    if (welcomeLayout !== undefined) {
+      const overlayTop = welcomeLayout.hero.y
+      const overlayRect = {
+        x: welcomeLayout.prompt.x,
+        y: overlayTop,
+        w: welcomeLayout.prompt.w,
+        h: welcomeLayout.prompt.y + welcomeLayout.prompt.h - overlayTop,
+      }
+      if (app.overlay !== undefined || app.sessions !== undefined) {
+        // Welcome drew the normal prompt first. A modal/picker replaces that
+        // slot, so clear its one-column accent rail before drawing the new
+        // surface; otherwise the replacement carries a visible double rail.
+        if (overlayRect.x > 0) {
+          for (let y = overlayRect.y; y < overlayRect.y + overlayRect.h; y++) {
+            view.cell(overlayRect.x - 1, y, { text: " ", style: {}, width: 1, continuation: false })
+          }
+        }
+      }
+      if (app.overlay !== undefined) {
+        app.overlay.draw(overlayRect, view, palette, glyphs)
+      } else if (app.sessions !== undefined) {
+        renderSessionPicker(overlayRect, app.sessions, view, palette, glyphs)
+      }
+    }
+    if (opts.hud !== undefined && area.cols >= 12) {
+      renderHud(buf, opts.hud, {
+        x: area.cols - Math.min(HUD_PANEL_W, area.cols),
+        y: 0,
+        w: Math.min(HUD_PANEL_W, area.cols),
+        h: 2,
+      }, view, palette)
+    }
+    renderToasts(buf, app.toasts, { x: 0, y: 0, w: area.cols, h: area.rows }, view, palette)
     settleHover(app, mouseEngine)
     renderer.commit()
     return { dirty: !renderer.sameFrame() }
@@ -811,7 +856,7 @@ export function present(
       renderSlashDropdown(dd, app.slash, view, palette, glyphs)
     }
   }
-  renderShortcuts(layout.shortcuts, app.shortcuts, view, palette)
+  if (layout.shortcuts.h > 0) renderShortcuts(layout.shortcuts, app.shortcuts, view, palette)
 
   // Debug HUD (M39) — top-right band; toasts draw AFTER it (M40 G2: the toast
   // card is above everything — bottom-right, newest-only, fit-to-width).

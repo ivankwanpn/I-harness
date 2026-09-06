@@ -49,7 +49,7 @@ import {
   spawnSdkSubprocess,
   TuiApp,
 } from "@i-harness/tui"
-import type { BackendClient, InlineHost, InputSource } from "@i-harness/tui"
+import type { BackendClient, InlineHost, InputSource, TuiAppOptions } from "@i-harness/tui"
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
@@ -111,6 +111,39 @@ export function createTuiModelBindingFor(
     const { client, ...binding } = state.binding
     return { status: "ready", binding: { model: client, ...binding } }
   }
+}
+
+export type CreateExecutableAppOptions = Omit<
+  TuiAppOptions,
+  "backend" | "providerStore" | "listSessions" | "sessionId"
+> & {
+  flags: TuiFlags
+  backend: BackendClient
+  providerStore: ProviderStore
+}
+
+/** Build and initialize the real app without entering its unbounded pumps.
+ * Tests and runTui share this ordering: model state, explicit open, then Agent;
+ * a bare launch remains on Welcome and a ready startup prompt creates/opens
+ * before submission. */
+export async function createExecutableApp(
+  options: CreateExecutableAppOptions,
+): Promise<{ app: TuiApp; backend: BackendClient }> {
+  const { flags, backend, providerStore, ...appOptions } = options
+  const explicitSessionId = flags.attach ?? flags.resume
+  const app = new TuiApp({
+    ...appOptions,
+    backend,
+    providerStore,
+    listSessions: () => backend.listSessions(),
+    ...(explicitSessionId !== undefined ? { sessionId: explicitSessionId } : {}),
+  })
+  await app.initialize({
+    ...(explicitSessionId !== undefined ? { sessionId: explicitSessionId } : {}),
+    ...(flags.prompt !== undefined ? { prompt: flags.prompt } : {}),
+    renderWelcomeBeforeModel: true,
+  })
+  return { app, backend }
 }
 
 export function parseFlags(argv: string[]): TuiFlags {
@@ -259,14 +292,15 @@ export async function runTui(flags: TuiFlags): Promise<number> {
         }),
         sessionId: flags.attach,
         title: flags.attach,
-        modelLabel: flags.model,
       })
     : await defaultEmbeddedFactory({
         workspace,
         ...buildEmbeddedSessionOptions(flags),
+        // Task 5 owns startup prompt gating in TuiApp. The backend's legacy
+        // auto-submit seam remains available to direct consumers/tests only.
+        prompt: "",
         modelPolicy: "required",
         modelBindingFor: createTuiModelBindingFor(providerRuntime, flags.model),
-        modelLabel: flags.model,
         // M46a: the durable TUI prefs drive the assembly's approval stance —
         // guardian ON means tool asks reach the approval bridge (approval
         // without a bridge fails closed — the bridge is G1's createApprovalBridge;
@@ -274,11 +308,6 @@ export async function runTui(flags: TuiFlags): Promise<number> {
         // durable knob + the honest "asks" semantics at the ask surface).
         approveAll: !tuiPrefs.guardian || tuiPrefs.alwaysApprove,
       })
-  const initialModelState = flags.model === undefined
-    ? await base.modelState().catch(() => undefined)
-    : undefined
-  const initialModelLabel = flags.model
-    ?? (initialModelState?.status === "ready" ? initialModelState.label : undefined)
 
   const cols = process.stdout.columns ?? 80
   const rows = process.stdout.rows ?? 24
@@ -349,7 +378,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // for fullscreen; the TOGGLE is what lets the user hand it back).
   const mouseToggleFeature = process.env.GROK_MOUSE_REPORTING_TOGGLE === "1"
     || tuiPrefs.mouseReportingToggle
-  const app = new TuiApp({
+  terminal.init()
+  const { app } = await createExecutableApp({
+    flags,
     renderer,
     backend,
     engine,
@@ -357,17 +388,13 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     palette: resolvePalette(cap),
     glyphs: makeGlyphs(true),
     write: out,
-    // M38b G2: real info-line model label (the --model spec, e.g.
-    // "openai:gpt-4o"); absent → the honest unconfigured label.
-    modelLabel: initialModelLabel,
     // M46a G1: the provider/model modal surfaces + the durable prefs' layout
     // density (compact); the providerStore drives /provider /model /settings.
-    ...(attach === undefined ? { providerStore } : {}),
+    providerStore,
     compact: tuiPrefs.compact,
     // M46a G2: the slash registry's workspace root (skills/hooks/plugins/
-    // workflow scans) + the session id when the host knows it (--attach).
+    // workflow scans). createExecutableApp owns the explicit session id.
     workspace,
-    ...(attach !== undefined ? { sessionId: flags.attach } : {}),
     ...(attach !== undefined ? { input } : {}),
     ...(minimal ? { mode: "minimal" as const, inlineFactory: () => loadInlineHost(cols, rows) } : {}),
     // M46b G1: the durable mouse knobs (settings modal Mouse category) → the
@@ -384,8 +411,6 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     // same session with the flipped --mode (ModeSwitch spawns; the loop quits).
     modeSwitch: (cmd) => new ModeSwitch({ argv: process.argv.slice(2) }).onSlash(cmd),
   })
-
-  terminal.init()
 
   // Resize relay: stdout 'resize' → renderer re-grid + engine re-wrap + the
   // minimal inline host geometry; the next frame is a full paint (renderer

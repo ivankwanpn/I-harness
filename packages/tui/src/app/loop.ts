@@ -14,7 +14,7 @@ import type {
   TerminalCapabilityContext,
 } from "@i-harness/tui-core"
 import { resolvePalette } from "@i-harness/tui-core"
-import type { BackendClient, ScrollbackEngine, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { BackendClient, BackendModelState, ScrollbackEngine, SessionSummary, TuiEvent } from "../contracts.ts"
 import { dispatchKey, shortcutsFor } from "./keys.ts"
 import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
 import { present } from "./present.ts"
@@ -157,6 +157,16 @@ export interface TuiAppOptions {
   showTimeline?: boolean
 }
 
+/** One-time executable startup inputs. `renderWelcomeBeforeModel` lets the
+ * real terminal paint the shell before a potentially slow provider probe;
+ * legacy tests that call start() directly use the compatibility path. */
+export interface TuiStartupOptions {
+  sessionId?: string
+  prompt?: string
+  renderWelcomeBeforeModel?: boolean
+  legacyUnsupportedToAgent?: boolean
+}
+
 /** Minimal live-region host (M38a G2) — what the loop drives in minimal
  * mode. A host wraps G1's InlineLiveRegion (contracts.ts): commit pushes
  * print-once content into the native scrollback; drawRegion repaints the
@@ -214,6 +224,8 @@ export class TuiApp {
   private frameQueued = false
   private animTimer: ReturnType<typeof setInterval> | null = null
   private runP: Promise<unknown> = Promise.resolve()
+  private startupP: Promise<void> | undefined
+  private welcomeActionP: Promise<void> | undefined
   private armedQuit = false
   /** M43: the empty-Esc rewind arming arm (spec §4: Esc 空+≥1 turn → rewind
    * picker on the second press; distinct from armedQuit — Ctrl+Q/Ctrl+C own
@@ -339,15 +351,21 @@ export class TuiApp {
       toasts: [],
       panes: new Set<string>(),
       shortcuts: { items: shortcutsFor({ focused: "prompt", multiLine: false, turnRunning: false, mode: "normal" }) },
+      view: { kind: "welcome" },
+      // Keep the pre-M49 static-test surface on Agent until initialize() owns
+      // startup. Production calls initialize before start; older PTY hosts
+      // call start directly and take the explicit legacy fallback below.
       screen: opts.initialScreen ?? (this.uiMode === "minimal" ? "minimal" : "agent"),
       welcome: {
         version: "0.1.0",
         menus: [
-          { key: "ctrl+s", label: "Resume session" },
-          { key: "ctrl+n", label: "New session" },
-          { key: "ctrl+q", label: "Quit" },
+          { action: "new", key: "ctrl+n", label: "New session" },
+          { action: "resume", key: "ctrl+s", label: "Resume session" },
+          { action: "settings", key: "F2", label: "Settings" },
+          { action: "quit", key: "ctrl+q", label: "Quit" },
         ],
         cursor: 0,
+        modelState: { status: "loading" },
       },
       paneData: opts.initialPanes,
       // M46a G2: the real toggle knobs (theme auto = the capability guess).
@@ -659,6 +677,84 @@ export class TuiApp {
     this.onInput(ev)
   }
 
+  /** Resolve the startup model gate and any explicit session before the event
+   * pumps begin. Idempotent so executable composition may initialize first
+   * and start() can retain a defensive fallback for older hosts. */
+  initialize(options: TuiStartupOptions = {}): Promise<void> {
+    this.startupP ??= this.initializeOnce(options)
+    return this.startupP
+  }
+
+  private async initializeOnce(options: TuiStartupOptions): Promise<void> {
+    if (options.prompt !== undefined) {
+      this.app.prompt.text = options.prompt
+      this.app.prompt.cursor = options.prompt.length
+    }
+    if (options.renderWelcomeBeforeModel === true && this.uiMode === "fullscreen") {
+      this.activateWelcome()
+      this.frame()
+    }
+
+    let modelState: BackendModelState
+    try {
+      modelState = await this.opts.backend.modelState()
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      if (options.legacyUnsupportedToAgent === true && /session-model unavailable/i.test(reason)) {
+        // Old unit/PTY hosts intentionally expose no Task 4 model capability.
+        // Preserve their pre-M49 Agent rendering without weakening production,
+        // whose executable path never opts into this compatibility branch.
+        this.app.view = undefined
+        return
+      }
+      modelState = { status: "invalid", reason }
+    }
+    this.applyModelState(modelState)
+
+    const explicitSessionId = options.sessionId?.trim()
+    if (explicitSessionId !== undefined && explicitSessionId !== "") {
+      try {
+        await this.opts.backend.open(explicitSessionId)
+        this.activateAgent(explicitSessionId)
+      } catch (error) {
+        this.setStartupError(`session open failed: ${error instanceof Error ? error.message : String(error)}`)
+        this.activateWelcome()
+        this.requestFrame()
+        return
+      }
+      if (options.prompt !== undefined && options.prompt.trim() !== "" && modelState.status === "ready") {
+        this.acceptPrompt(options.prompt)
+      }
+      this.requestFrame()
+      return
+    }
+
+    if (options.prompt !== undefined && options.prompt.trim() !== "") {
+      if (modelState.status === "ready") {
+        await this.createSessionAndSubmit(options.prompt)
+      } else {
+        this.activateWelcome()
+      }
+      this.requestFrame()
+      return
+    }
+
+    if (this.uiMode === "minimal") {
+      try {
+        const first = (await this.opts.backend.listSessions())[0]
+        if (first !== undefined) {
+          await this.opts.backend.open(first.id)
+          this.activateAgent(first.id)
+        }
+      } catch (error) {
+        this.setStartupError(`session open failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    } else {
+      this.activateWelcome()
+    }
+    this.requestFrame()
+  }
+
   /** Launch the pumps; resolves when the input/backend iterators finish. */
   async start(): Promise<void> {
     this.stopped = false
@@ -667,6 +763,11 @@ export class TuiApp {
     // undefined) falls back to the fullscreen agent view.
     if (this.uiMode === "minimal" && this.inlineHost === undefined) {
       this.app.screen = "agent"
+    }
+    if (this.startupP === undefined) {
+      await this.initialize({ legacyUnsupportedToAgent: true })
+    } else {
+      await this.startupP
     }
     this.app.engine.setWidth(this.opts.renderer.buffer.width)
     this.animTimer = setInterval(() => this.animPump(), ANIM_MS)
@@ -1332,13 +1433,67 @@ export class TuiApp {
       this.requestQuit()
       return
     }
-    this.app.history.push(this.app.prompt.text)
+    this.acceptPrompt(this.app.prompt.text)
+  }
+
+  private applyModelState(state: BackendModelState): void {
+    if (this.app.welcome !== undefined) this.app.welcome.modelState = state
+    const label = state.status === "ready" ? state.label : state.status
+    this.app.prompt.model = label
+    this.app.status.model = label
+  }
+
+  private setStartupError(message: string): void {
+    if (this.app.welcome !== undefined) this.app.welcome.startupError = message
+  }
+
+  private activateWelcome(): void {
+    this.app.view = { kind: "welcome" }
+    if (this.uiMode === "fullscreen") this.app.screen = "welcome"
+    this.app.focused = "prompt"
+    this.app.prompt.focused = true
+  }
+
+  private activateAgent(sessionId: string): void {
+    this.currentSessionId = sessionId
+    this.app.view = { kind: "agent", sessionId }
+    this.app.screen = this.uiMode === "minimal" ? "minimal" : "agent"
+    this.app.prompt.title = this.app.title
+  }
+
+  private async refreshWelcomeModelState(): Promise<BackendModelState> {
+    if (this.app.welcome !== undefined) this.app.welcome.modelState = { status: "loading" }
+    this.requestFrame()
+    let state: BackendModelState
+    try {
+      state = await this.opts.backend.modelState()
+    } catch (error) {
+      state = { status: "invalid", reason: error instanceof Error ? error.message : String(error) }
+    }
+    this.applyModelState(state)
+    this.requestFrame()
+    return state
+  }
+
+  private async createSessionAndSubmit(raw: string): Promise<void> {
+    try {
+      const sessionId = await this.opts.backend.createSession()
+      this.activateAgent(sessionId)
+      this.acceptPrompt(raw)
+    } catch (error) {
+      this.setStartupError(`session create failed: ${error instanceof Error ? error.message : String(error)}`)
+      this.activateWelcome()
+    }
+  }
+
+  /** Record and clear only after the model/session gate accepted the prompt.
+   * Invalid and unconfigured paths never call this, so their draft survives. */
+  private acceptPrompt(raw: string): void {
+    const text = raw.trim()
+    if (text === "") return
+    this.app.history.push(raw)
     this.app.historyIndex = this.app.history.length
     this.clearPrompt()
-    // Catch: a SUBMIT failure surfaces as a toast instead of an unhandled
-    // rejection (the remote bridge rethrows server -32603 + connection
-    // errors; the embedded path has the same rejection profile). The turn's
-    // events — success or failure — flow through events() regardless.
     void this.opts.backend.submit(text).catch((error: unknown) => {
       this.toast(`submit failed: ${error instanceof Error ? error.message : String(error)}`)
     })
@@ -1540,9 +1695,18 @@ export class TuiApp {
       openBtwInput: () => this.openBtwInput(),
       togglePane: (kind) => this.togglePane(kind),
       setScreen: (screen) => {
-        app.screen = screen
         if (screen === "welcome") {
-          app.welcome = { version: "0.1.0", menus: app.welcome?.menus ?? [], cursor: 0 }
+          this.activateWelcome()
+          app.welcome = {
+            version: "0.1.0",
+            menus: app.welcome?.menus ?? [],
+            cursor: 0,
+            modelState: app.welcome?.modelState ?? { status: "loading" },
+          }
+        } else if (this.currentSessionId !== undefined) {
+          this.activateAgent(this.currentSessionId)
+        } else {
+          app.screen = "agent"
         }
         this.requestFrame()
       },
@@ -1881,7 +2045,7 @@ export class TuiApp {
    * start from one atomic boundary. Global appearance/provider state stays. */
   private resetSessionView(sessionId: string): void {
     this.sessionGeneration++
-    this.currentSessionId = sessionId
+    this.activateAgent(sessionId)
     this.app.history = []
     this.app.historyIndex = 0
     this.app.prompt.text = ""
@@ -1953,7 +2117,7 @@ export class TuiApp {
    * limits: an in-process session has no durable store to delete). */
   private deleteSession(): void {
     this.resetSession()
-    this.app.screen = "welcome"
+    this.activateWelcome()
     this.toast("session deleted (embedded store is in-process — persistence M38)")
     this.requestFrame()
   }
@@ -2264,14 +2428,16 @@ export class TuiApp {
 
   /** The settings modal (F2/Ctrl+,//settings) — keys per the new-new truth
    * (sidebar categories; Enter browses; Esc backs). */
-  private openSettings(): void {
+  private openSettings(modelsAndProviders = false): void {
     const store = this.opts.providerStore
     if (store === undefined || store === null) {
       this.toast("settings modal: host provider store not wired")
       return
     }
-    const state: SettingsModalState = { phase: "categories", cursor: 0, category: undefined, error: undefined }
-    this.app.overlay = bindSettingsOverlay(state, {
+    const state: SettingsModalState = modelsAndProviders
+      ? { phase: "category", cursor: 0, category: "Models", error: undefined }
+      : { phase: "categories", cursor: 0, category: undefined, error: undefined }
+    const overlay = bindSettingsOverlay(state, {
       settings: store.settingsSurface(),
       providerStore: store,
       onTimestamps: (on) => {
@@ -2286,6 +2452,15 @@ export class TuiApp {
       },
       onClose: () => this.closeModal(),
     })
+    this.app.overlay = modelsAndProviders
+      ? {
+          ...overlay,
+          draw: (ctx, view, palette, glyphs) => {
+            overlay.draw(ctx, view, palette, glyphs)
+            view.text(ctx.x + 2, ctx.y, "Models & Providers", view.color(palette.textPrimary, { bold: true }), ctx.x + ctx.w - 1)
+          },
+        }
+      : overlay
     this.requestFrame()
   }
 
@@ -2362,14 +2537,10 @@ export class TuiApp {
       this.requestFrame()
       return
     }
-    const loader = this.opts.listSessions
+    const loader = this.opts.listSessions ?? (() => this.opts.backend.listSessions())
     const now = this.opts.now?.() ?? Date.now()
-    if (loader === undefined) {
-      this.app.sessions = { groups: [], cursor: 0, now }
-      this.toast("session picker: host listSessions option not wired")
-      return
-    }
-    this.app.sessions = { groups: [], cursor: 0, loading: true, now }
+    const title = this.app.view?.kind === "welcome" ? "Resume session" : "sessions"
+    this.app.sessions = { groups: [], cursor: 0, loading: true, now, title }
     void loader().then((list) => {
       if (this.app.sessions === undefined) return
       this.app.sessions = {
@@ -2384,8 +2555,13 @@ export class TuiApp {
         cursor: 0,
         loading: false,
         now,
+        title,
       }
       this.requestFrame()
+    }, (error: unknown) => {
+      if (this.app.sessions === undefined) return
+      this.app.sessions.loading = false
+      this.toast(`session list failed: ${error instanceof Error ? error.message : String(error)}`)
     })
   }
 
@@ -2462,6 +2638,7 @@ export class TuiApp {
       void this.opts.backend.open(sel.session.id).then(
         () => {
           if (this.app.sessions === ss) this.app.sessions = undefined
+          this.activateAgent(sel.session.id)
           this.requestFrame()
         },
         (error: unknown) => {
@@ -2580,14 +2757,52 @@ export class TuiApp {
 
   private welcomeActivate(): void {
     const w = this.app.welcome
-    if (w === undefined) return
-    const m = w.menus[w.cursor]
-    if (m?.key.endsWith("q")) { this.requestQuit(); return }
-    if (m?.key.includes("Resume session")) { this.toast("resume session: M38"); return }
-    // agent screen; the host wires real session creation at G4/harmonization.
-    this.app.screen = "agent"
-    this.toast(`welcome: '${m?.label ?? "activate"}' → agent (host wiring M38)`)
-    this.requestFrame()
+    if (w === undefined || this.welcomeActionP !== undefined) return
+    const raw = this.app.prompt.text
+    if (raw.trim() !== "") {
+      this.runWelcomeAction(async () => {
+        const modelState = await this.refreshWelcomeModelState()
+        if (modelState.status !== "ready") {
+          this.openSettings(true)
+          return
+        }
+        await this.createSessionAndSubmit(raw)
+      })
+      return
+    }
+
+    const menu = w.menus[w.cursor]
+    switch (menu?.action) {
+      case "quit": this.requestQuit(); return
+      case "resume": this.toggleSessions(); return
+      case "settings": this.openSettings(true); return
+      case "new":
+        this.runWelcomeAction(async () => {
+          const modelState = await this.refreshWelcomeModelState()
+          if (modelState.status !== "ready") {
+            this.openSettings(true)
+            return
+          }
+          const sessionId = await this.opts.backend.createSession()
+          this.activateAgent(sessionId)
+        })
+        return
+      default: return
+    }
+  }
+
+  private runWelcomeAction(action: () => Promise<void>): void {
+    let pending!: Promise<void>
+    pending = action()
+      .catch((error: unknown) => {
+        this.setStartupError(error instanceof Error ? error.message : String(error))
+        this.activateWelcome()
+      })
+      .finally(() => {
+        if (this.welcomeActionP === pending) this.welcomeActionP = undefined
+        this.requestFrame()
+      })
+    this.welcomeActionP = pending
   }
 
   // ------------------------------------------------------------------ slash / @ token plumbing (M37b)
