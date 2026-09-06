@@ -1016,6 +1016,9 @@ export class TuiApp {
       case "menu-top": this.welcomeNav(-Number.MAX_SAFE_INTEGER); break
       case "menu-bottom": this.welcomeNav(Number.MAX_SAFE_INTEGER); break
       case "menu-activate": this.welcomeActivate(); break
+      case "welcome-new": this.welcomeActivate("new"); break
+      case "welcome-resume": this.welcomeActivate("resume"); break
+      case "welcome-settings": this.welcomeActivate("settings"); break
       // M46a G1: the provider/model modal surfaces (F2/Ctrl+, → settings;
       // Ctrl+M on the agent screen → the model picker).
       case "open-settings": this.openSettings(); break
@@ -2755,11 +2758,11 @@ export class TuiApp {
     this.requestFrame()
   }
 
-  private welcomeActivate(): void {
+  private welcomeActivate(action?: "new" | "resume" | "settings" | "quit"): void {
     const w = this.app.welcome
     if (w === undefined || this.welcomeActionP !== undefined) return
     const raw = this.app.prompt.text
-    if (raw.trim() !== "") {
+    if (action === undefined && raw.trim() !== "") {
       this.runWelcomeAction(async () => {
         const modelState = await this.refreshWelcomeModelState()
         if (modelState.status !== "ready") {
@@ -2771,8 +2774,8 @@ export class TuiApp {
       return
     }
 
-    const menu = w.menus[w.cursor]
-    switch (menu?.action) {
+    const selectedAction = action ?? w.menus[w.cursor]?.action
+    switch (selectedAction) {
       case "quit": this.requestQuit(); return
       case "resume": this.toggleSessions(); return
       case "settings": this.openSettings(true); return

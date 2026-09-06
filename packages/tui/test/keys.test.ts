@@ -220,6 +220,14 @@ describe("dispatchKey — welcome menu (spec §2a)", () => {
     expect(dispatchKey(letter("q"), w)).toBe("quit")
     expect(dispatchKey(letter("x"), w)).toBe("none")
   })
+
+  it("routes displayed Welcome shortcuts to their named actions", () => {
+    const w = promptState({ welcome: true })
+    expect(dispatchKey(kbd({ code: "char", key: "n", ctrl: true }), w)).toBe("welcome-new")
+    expect(dispatchKey(kbd({ code: "char", key: "s", ctrl: true }), w)).toBe("welcome-resume")
+    expect(dispatchKey(kbd({ code: "F2", key: "F2" }), w)).toBe("welcome-settings")
+    expect(dispatchKey(kbd({ code: "char", key: "q", ctrl: true }), w)).toBe("quit")
+  })
 })
 
 describe("dispatchKey — pane/global additions (spec §4)", () => {

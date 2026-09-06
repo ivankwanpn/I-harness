@@ -1,8 +1,8 @@
 // @i-harness/tui — G2: keymap dispatch (UI spec §4, M37a subset + M37b full).
 // Pure table — no mutation; the loop turns AppActions into behavior. Routing
-// priority (spec §4 modal/picker/dropdown): welcome screen > overlay/panel
+// priority (spec §4 modal/picker/dropdown): overlay/panel
 // (permission/question/cancel-turn/history/sessions/dropdown — `overlayKeys`)
-// > scrollback focus > prompt focus. ACTION-NAME CONVENTION with G1: the
+// > welcome screen > scrollback focus > prompt focus. ACTION-NAME CONVENTION with G1: the
 // overlay actions here are the string names G1's own key fns must reuse
 // (overlay-dismiss/select/nav-*/accept — per the harmonization contract).
 
@@ -54,7 +54,7 @@ export type AppAction =
   | "rewind-arm1" | "rewind-open"
   // welcome (spec §2a)
   | "menu-up" | "menu-down" | "menu-top" | "menu-bottom"
-  | "menu-activate"
+  | "menu-activate" | "welcome-new" | "welcome-resume" | "welcome-settings"
   // M46a G1 (provider/model): F2/Ctrl+, = the settings modal (grok parity);
   // Ctrl+M on the SCROLLBACK screen (agent screen non-prompt) = the model
   // picker — the prompt-focused Ctrl+M keeps multiline (grok's collision
@@ -114,11 +114,11 @@ const isShiftTab = (ev: Kbd): boolean =>
   (ev.code === "Tab" && ev.key === "Z") // xterm shifted-tab fallback
 
 export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
-  // Welcome screen routes everything through its own table (spec §2a).
-  if (state.welcome === true) return welcomeKey(ev)
   // Overlay/panel/dropdown preempts the base keymap (spec §4) — an open
-  // slash dropdown still gets its accept/nav keys in minimal mode.
+  // Welcome modal/picker and slash dropdown both retain input ownership.
   if (state.overlay !== undefined) return overlayKeys(ev, state.overlay)
+  // Unobscured Welcome routes through its own navigation/prompt table (§2a).
+  if (state.welcome === true) return welcomeKey(ev)
   // Minimal mode (M38a): quick-prompt table — Enter submits, Esc is a
   // no-op guard (no scrollback surface, no quit-arming on the quick prompt;
   // `/minimal`/`/fullscreen` relay lives in the loop's submit path).
@@ -332,9 +332,15 @@ export function welcomeKey(ev: Kbd): AppAction {
   if (ev.code === "Enter" || ev.code === "Tab") return "menu-activate"
   if (ev.code === "Up") return "menu-up"
   if (ev.code === "Down") return "menu-down"
+  if (ev.code === "F2") return "welcome-settings"
   if (ev.code === "char") {
     if (ev.ctrl) {
-      return "menu-activate" // ctrl+s/N/q/key → the loop activates the cursor row
+      switch (ev.key.toLowerCase()) {
+        case "n": return "welcome-new"
+        case "s": return "welcome-resume"
+        case "q": return "quit"
+        default: return "none"
+      }
     }
     if (ev.alt) return "none"
     switch (ev.key) {
