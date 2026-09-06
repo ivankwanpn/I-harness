@@ -63,6 +63,10 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
   const closingSessions = new Set<string>()
   /** Current per-session close attempt, shared by concurrent requests. */
   const closeFlights = new Map<string, Promise<void>>()
+  /** Monotonic lifecycle generation; close invalidates suspended resumes. */
+  const lifecycleGeneration = new Map<string, number>()
+
+  const generationOf = (sessionId: string): number => lifecycleGeneration.get(sessionId) ?? 0
 
   async function sessionExists(sessionId: string): Promise<boolean> {
     if (known.has(sessionId)) return true
@@ -137,11 +141,22 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
 
   app.onRequest("session/resume", async (ctx) => {
     const { sessionId, cwd } = ctx.params
+    const generation = generationOf(sessionId)
     if (closingSessions.has(sessionId)) throw new Error(`session closing: ${sessionId}`)
     if (!(await sessionExists(sessionId))) {
       throw new Error(`unknown session: ${sessionId}`)
     }
+    if (closingSessions.has(sessionId) || generationOf(sessionId) !== generation) {
+      throw new Error(`session close superseded resume: ${sessionId}`)
+    }
+    const ownedBefore = opts.coordinator?.ownerOf?.(sessionId) ?? false
     await ensureOwnership(sessionId)
+    if (closingSessions.has(sessionId) || generationOf(sessionId) !== generation) {
+      if (!ownedBefore && opts.coordinator?.ownerOf?.(sessionId) === true) {
+        await opts.coordinator.releaseOwnership(sessionId).catch(() => {})
+      }
+      throw new Error(`session close superseded resume: ${sessionId}`)
+    }
     known.set(sessionId, cwd)
     return {}
   })
@@ -153,6 +168,7 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
       await existing
       return {}
     }
+    lifecycleGeneration.set(sessionId, generationOf(sessionId) + 1)
     closingSessions.add(sessionId)
     let closing!: Promise<void>
     closing = (async () => {
