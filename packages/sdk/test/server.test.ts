@@ -5,8 +5,8 @@ import { describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { SessionEvent } from "@i-harness/core-session"
-import { createSessionService, type SessionService } from "@i-harness/session-executor"
+import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import { createSessionService, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 import {
@@ -344,6 +344,64 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     } finally {
       await service.close()
       await cleanup()
+    }
+  })
+
+  it("session/history cold-opens a persisted session and returns its prior events", async () => {
+    const persisted = createSession()
+    append(persisted, { type: "user/message", text: "before restart" })
+    append(persisted, { type: "assistant/message", text: "durable answer" })
+    const service = makeStubService()
+    vi.mocked(service.assemblyFor).mockResolvedValue({
+      sessionId: "persisted",
+      session: persisted,
+    } as unknown as SessionAssembly)
+    const coordinator = {
+      list: vi.fn(async () => ["persisted"]),
+      create: vi.fn(async ({ sessionId }: { sessionId?: string } = {}) => ({ id: sessionId ?? "new" })),
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+    } as unknown as SessionCoordinator
+    const server = createSdkServer(service, { coordinator })
+
+    try {
+      const reply = await server.handleLine(
+        encodeFrame(makeRequest(105, "session/history", { sessionId: "persisted" })),
+      )
+      expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({
+        events: persisted.events,
+        nextSeq: persisted.events.length,
+      })
+      expect(coordinator.list).toHaveBeenCalledTimes(1)
+      expect(coordinator.adoptOwnership).toHaveBeenCalledWith("persisted")
+      expect(coordinator.create).not.toHaveBeenCalled()
+      expect(service.assemblyFor).toHaveBeenCalledWith("persisted")
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("session/history verifies an unknown durable id without creating or assembling it", async () => {
+    const service = makeStubService()
+    const coordinator = {
+      list: vi.fn(async () => []),
+      create: vi.fn(async ({ sessionId }: { sessionId?: string } = {}) => ({ id: sessionId ?? "new" })),
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+    } as unknown as SessionCoordinator
+    const server = createSdkServer(service, { coordinator })
+
+    try {
+      const reply = await server.handleLine(
+        encodeFrame(makeRequest(106, "session/history", { sessionId: "missing" })),
+      )
+      const msg = decodeFrame(reply!) as RpcFailure
+      expect(msg.error.code).toBe(INVALID_PARAMS)
+      expect(String(msg.error.message)).toContain("session not found")
+      expect(coordinator.list).toHaveBeenCalledTimes(1)
+      expect(coordinator.create).not.toHaveBeenCalled()
+      expect(coordinator.adoptOwnership).not.toHaveBeenCalled()
+      expect(service.assemblyFor).not.toHaveBeenCalled()
+    } finally {
+      await server.close()
     }
   })
 

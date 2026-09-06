@@ -182,6 +182,7 @@ export interface SdkClientLike {
 }
 
 const REQUEST_TIMEOUT_MS = 60_000
+const HISTORY_PAGE_LIMIT = 1000
 /** session/prompt resolves only when the turn DRAINED (server semantics) — a
  * long model turn is NOT a timeout; this is a hang guard (30 min), not a turn
  * budget. Live events stream meanwhile regardless. */
@@ -649,6 +650,7 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
   const batchMs = opts.batchMs ?? 16
   const liveState: EventMapState = createEventMapState()
   let sessionId = opts.sessionId
+  let openGeneration = 0
   let cursor = -1
   let turnCount = 0
   let cancelNoted = false
@@ -665,6 +667,12 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     timer: undefined,
     wake: undefined,
   }
+  let pendingOpen: {
+    generation: number
+    sessionId: string
+    events: SessionEvent[]
+    status?: string
+  } | undefined
 
   function pushEvent(ev: TuiEvent): void {
     queue.items.push(ev)
@@ -681,6 +689,54 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
   function pushError(text: string): void {
     // Stream-only (never on the wire): synthetic seq = cursor+1.
     pushEvent({ type: "system", text, seq: cursor + 1, ts: Date.now() })
+  }
+
+  function applyStatus(status: string): void {
+    lastStatus = status === "queued"
+      ? { ...lastStatus, running: true }
+      : { ...lastStatus, running: false }
+  }
+
+  function pushMappedEvent(event: SessionEvent): void {
+    const mapped = mapSessionEvent(event, liveState)
+    if (mapped === undefined) return
+    if (mapped.type === "turn" && mapped.phase === "start") turnCount++
+    pushEvent(mapped)
+  }
+
+  function commitOpen(
+    id: string,
+    history: SessionEvent[],
+    bufferedEvents: SessionEvent[],
+    bufferedStatus?: string,
+  ): void {
+    if (queue.timer !== undefined) {
+      clearTimeout(queue.timer)
+      queue.timer = undefined
+    }
+    queue.items.length = 0
+    sessionId = id
+    cursor = -1
+    turnCount = 0
+    cancelNoted = false
+    lastStatus = { running: false, queued: 0 }
+    liveState.lastSeq = -1
+    liveState.chunksSinceAssistant = false
+
+    pushEvent({ type: "session/open", sessionId: id, seq: -1, ts: Date.now() })
+    const seenSeqs = new Set<number>()
+    for (const event of history) {
+      if (typeof event.seq === "number") seenSeqs.add(event.seq)
+      pushMappedEvent(event)
+    }
+    for (const event of bufferedEvents) {
+      if (typeof event.seq === "number") {
+        if (seenSeqs.has(event.seq)) continue
+        seenSeqs.add(event.seq)
+      }
+      pushMappedEvent(event)
+    }
+    if (bufferedStatus !== undefined) applyStatus(bufferedStatus)
   }
 
   async function refreshStatus(): Promise<void> {
@@ -744,13 +800,30 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
   /** Wire v1 history — the raw wire method (the seam contract = the wire
    * names; a host's real client — typed helpers of any shape or none — always
    * speaks the same names through request()). */
-  async function wireHistory(afterSeq: number, limit?: number): Promise<HistoryResult> {
+  async function wireHistory(targetSessionId: string, afterSeq: number, limit?: number): Promise<HistoryResult> {
     const result = await opts.client.request(
       "session/history",
-      { sessionId, afterSeq, ...(limit !== undefined ? { limit } : {}) },
+      { sessionId: targetSessionId, afterSeq, ...(limit !== undefined ? { limit } : {}) },
       REQUEST_TIMEOUT_MS,
     )
     return parseHistoryResult(result)
+  }
+
+  /** Fetch a complete history snapshot for open(). Full pages advance through
+   * nextSeq; a short page is the end of the log. The target id is immutable
+   * for the whole walk even while another open changes the active session. */
+  async function wireFullHistory(targetSessionId: string): Promise<SessionEvent[]> {
+    const events: SessionEvent[] = []
+    let afterSeq = 0
+    for (;;) {
+      const page = await wireHistory(targetSessionId, afterSeq, HISTORY_PAGE_LIMIT)
+      events.push(...page.events)
+      if (page.events.length < HISTORY_PAGE_LIMIT) return events
+      if (!Number.isInteger(page.nextSeq) || page.nextSeq <= afterSeq) {
+        throw new SdkWireError(-32603, "malformed session/history response: paging cursor did not advance")
+      }
+      afterSeq = page.nextSeq
+    }
   }
 
   /** Wire v1 list — the raw wire method (same seam reasoning). */
@@ -875,19 +948,19 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
   const off = opts.client.onNotification((n) => {
     if (n.method === "session/event" && n.params !== undefined) {
       const params = n.params as { sessionId?: unknown; event?: unknown } | undefined
-      if (params?.sessionId !== sessionId || params.event === undefined) return
-      const mapped = mapSessionEvent(params.event as SessionEvent, liveState)
-      if (mapped === undefined) return
-      if (mapped.type === "turn" && mapped.phase === "start") turnCount++
-      pushEvent(mapped)
+      if (typeof params?.sessionId !== "string" || params.event === undefined) return
+      const event = params.event as SessionEvent
+      if (pendingOpen?.sessionId === params.sessionId) pendingOpen.events.push(event)
+      if (params.sessionId !== sessionId) return
+      pushMappedEvent(event)
       return
     }
     if (n.method === "session/status" && n.params !== undefined) {
       const params = n.params as { sessionId?: unknown; status?: unknown } | undefined
-      if (params?.sessionId !== sessionId || typeof params.status !== "string") return
-      lastStatus = params.status === "queued"
-        ? { ...lastStatus, running: true }
-        : { ...lastStatus, running: false }
+      if (typeof params?.sessionId !== "string" || typeof params.status !== "string") return
+      if (pendingOpen?.sessionId === params.sessionId) pendingOpen.status = params.status
+      if (params.sessionId !== sessionId) return
+      applyStatus(params.status)
     }
   })
 
@@ -918,19 +991,26 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
 
     async open(id: string): Promise<void> {
       if (closed) throw new Error("remote backend closed")
-      if (queue.timer !== undefined) {
-        clearTimeout(queue.timer)
-        queue.timer = undefined
+      const generation = ++openGeneration
+      const protocolVersion = await probeVersion()
+      if (closed) throw new Error("remote backend closed")
+      if (generation !== openGeneration) return
+
+      if (protocolVersion < 2) {
+        commitOpen(id, [], [])
+        return
       }
-      queue.items.length = 0
-      sessionId = id
-      cursor = -1
-      turnCount = 0
-      cancelNoted = false
-      lastStatus = { running: false, queued: 0 }
-      liveState.lastSeq = -1
-      liveState.chunksSinceAssistant = false
-      pushEvent({ type: "session/open", sessionId: id, seq: -1, ts: Date.now() })
+
+      const opening: NonNullable<typeof pendingOpen> = { generation, sessionId: id, events: [] }
+      pendingOpen = opening
+      try {
+        const history = await wireFullHistory(id)
+        if (closed) throw new Error("remote backend closed")
+        if (generation !== openGeneration) return
+        commitOpen(id, history, opening.events, opening.status)
+      } finally {
+        if (pendingOpen === opening) pendingOpen = undefined
+      }
     },
 
     submit,
@@ -951,7 +1031,8 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
       // assistant-chunk dedupe sees every step.
       if ((await probeVersion()) >= 2) {
         try {
-          const { events } = await wireHistory(afterSeq)
+          const replaySessionId = sessionId
+          const { events } = await wireHistory(replaySessionId, afterSeq)
           const state = createEventMapState()
           const out: TuiEvent[] = []
           for (const ev of events) {
@@ -986,6 +1067,8 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     async close(): Promise<void> {
       if (closed) return
       closed = true
+      openGeneration++
+      pendingOpen = undefined
       if (queue.timer !== undefined) {
         clearTimeout(queue.timer)
         queue.timer = undefined

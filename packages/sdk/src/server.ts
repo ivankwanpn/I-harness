@@ -133,7 +133,7 @@ interface Inflight {
 export function createSdkServer(service: SessionService, opts: SdkServerOptions = {}): SdkServer {
   const notifiers = new Set<(message: RpcNotification) => void>()
   const knownSessions = new Set<string>()
-  const preparingSessions = new Map<string, Promise<void>>()
+  const preparingSessions = new Map<string, Promise<boolean>>()
   const inflight = new Map<string, Inflight>()
   let closed = false
 
@@ -167,31 +167,51 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const rewindSurfaceFor = (sessionId: string): RewindServiceSurface | null =>
     opts.rewindFactory === undefined ? null : opts.rewindFactory(sessionId) ?? null
 
-  /** Make sure the session exists and is owned in the coordinator. */
-  async function ensureSession(sessionId: string): Promise<void> {
-    if (opts.coordinator === undefined) return
-    if (knownSessions.has(sessionId)) return
-    const pending = preparingSessions.get(sessionId)
-    if (pending !== undefined) return pending
+  /** Verify/adopt a durable session, optionally creating it for write paths.
+   * The per-id promise is shared by prompt and history racers. If a read-only
+   * check finds no session, a concurrent prompt retries in create mode after
+   * that check settles; history itself never crosses the creation boundary. */
+  async function prepareSession(sessionId: string, createIfMissing: boolean): Promise<boolean> {
+    if (opts.coordinator === undefined) return createIfMissing
+    if (knownSessions.has(sessionId)) return true
 
-    const preparation = (async () => {
-      const known = (await opts.coordinator!.list()).includes(sessionId)
-      if (known) {
-        // Existing durable sessions are resumed by this server, so keep the
-        // ownership lease for the lifetime of the coordinator.
-        await opts.coordinator!.adoptOwnership(sessionId)
-      } else {
-        // create() acquires ownership for a newly opened durable session.
-        await opts.coordinator!.create({ sessionId })
+    for (;;) {
+      const pending = preparingSessions.get(sessionId)
+      if (pending !== undefined) {
+        const prepared = await pending
+        if (prepared || !createIfMissing) return prepared
+        if (preparingSessions.get(sessionId) === pending) preparingSessions.delete(sessionId)
+        continue
       }
-      knownSessions.add(sessionId)
-    })()
-    preparingSessions.set(sessionId, preparation)
-    try {
-      await preparation
-    } finally {
-      if (preparingSessions.get(sessionId) === preparation) preparingSessions.delete(sessionId)
+
+      const preparation = (async () => {
+        const known = (await opts.coordinator!.list()).includes(sessionId)
+        if (known) {
+          // Existing durable sessions are resumed by this server, so keep the
+          // ownership lease for the lifetime of the coordinator.
+          await opts.coordinator!.adoptOwnership(sessionId)
+        } else if (createIfMissing) {
+          // create() acquires ownership for a newly opened durable session.
+          await opts.coordinator!.create({ sessionId })
+        } else {
+          return false
+        }
+        knownSessions.add(sessionId)
+        return true
+      })()
+      preparingSessions.set(sessionId, preparation)
+      try {
+        const prepared = await preparation
+        if (prepared || !createIfMissing) return prepared
+      } finally {
+        if (preparingSessions.get(sessionId) === preparation) preparingSessions.delete(sessionId)
+      }
     }
+  }
+
+  /** Make sure a prompt target exists and is owned in the coordinator. */
+  async function ensureSession(sessionId: string): Promise<void> {
+    await prepareSession(sessionId, true)
   }
 
   async function handleRequest(method: string, params: unknown, id: number | string): Promise<RpcMessage> {
@@ -247,10 +267,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           : makeSuccess(id, { cancelled: false, reason: "not-found" })
       }
       case "session/history": {
-        // M41a v1: event-log walk over the LIVE in-process session (the
-        // assembly's log is the session source — same identity as
-        // session/prompt's submit target). Fail-closed: an unknown session is
-        // NEVER auto-created by a read; it fails with an explicit message.
+        // M41a v1: event-log walk over the in-process assembly. A cold durable
+        // session is verified/adopted through the coordinator and assembled
+        // on demand; an unknown id is NEVER auto-created by this read.
         const p = params as { sessionId?: unknown; afterSeq?: unknown; limit?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/history requires a non-empty sessionId")
@@ -264,9 +283,17 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INVALID_PARAMS, "session/history limit must be a positive integer")
         }
         const limit = Math.min(rawLimit, HISTORY_LIMIT_CAP)
-        const session = service.liveSession(p.sessionId)
+        let session = service.liveSession(p.sessionId)
         if (session === undefined) {
-          return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
+          try {
+            if (!(await prepareSession(p.sessionId, false))) {
+              return makeFailure(id, INVALID_PARAMS, `session/history: session not found: ${p.sessionId}`)
+            }
+            session = (await service.assemblyFor(p.sessionId)).session
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return makeFailure(id, INTERNAL_ERROR, `session/history: failed to prepare session: ${message}`)
+          }
         }
         // The live log seqs are the 0-based positions in events (assigned at
         // append), so the walk is a slice: [afterSeq exclusive, nextSeq).

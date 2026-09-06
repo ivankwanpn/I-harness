@@ -43,6 +43,12 @@ import {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
 async function waitFor(cond: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -262,6 +268,142 @@ describe("createRemoteBackend (wire v1: protocolVersion ≥ 2 handshake)", () =>
     })
     // cursor advanced to the last mapped seq (embedded-bridge parity)
     expect(backend.seqCursor()).toBe(104)
+
+    await backend.close()
+  })
+
+  it("open requests complete target history and emits the boundary before replacement events", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method, params) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: {} }
+      if (method === "session/history") {
+        const p = params as { sessionId: string; afterSeq: number; limit?: number }
+        const limit = p.limit ?? 500
+        if (p.afterSeq === 0) {
+          return {
+            events: Array.from({ length: limit }, (_, seq) => ({ type: "step/start", seq })),
+            nextSeq: limit,
+          }
+        }
+        if (p.afterSeq === limit) {
+          return {
+            events: [{ type: "user/message", text: `${p.sessionId} history`, seq: limit }],
+            nextSeq: limit + 1,
+          }
+        }
+        return { events: [], nextSeq: p.afterSeq }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "initial", batchMs: 1 })
+    const seen = startConsumer(backend)
+
+    await backend.open("target")
+
+    const historyRequests = client.requests.filter((request) => request.method === "session/history")
+    expect(historyRequests[0]).toMatchObject({ params: { sessionId: "target", afterSeq: 0 } })
+    expect(historyRequests[1]).toMatchObject({ params: { sessionId: "target", afterSeq: expect.any(Number) } })
+    await waitFor(() => seen.some((event) => event.type === "user" && event.text === "target history"), 1000)
+    const openedAt = seen.findIndex((event) => event.type === "session/open" && event.sessionId === "target")
+    const historyAt = seen.findIndex((event) => event.type === "user" && event.text === "target history")
+    expect(openedAt).toBeGreaterThanOrEqual(0)
+    expect(historyAt).toBeGreaterThan(openedAt)
+
+    await backend.close()
+  })
+
+  it("open buffers target notifications and appends only the deduplicated live tail", async () => {
+    const pendingHistory = deferred<unknown>()
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: {} }
+      if (method === "session/history") return pendingHistory.promise
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "initial", batchMs: 1 })
+    const seen = startConsumer(backend)
+
+    const opening = backend.open("target")
+    await waitFor(() => client.requests.some((request) => request.method === "session/history"), 1000)
+    sendEvent(client, "target", { type: "user/message", text: "overlap", seq: 1 })
+    sendEvent(client, "target", { type: "assistant/message", text: "live tail", seq: 2 })
+    pendingHistory.resolve({
+      events: [
+        { type: "user/message", text: "history", seq: 0 },
+        { type: "user/message", text: "overlap", seq: 1 },
+      ],
+      nextSeq: 2,
+    })
+    await opening
+
+    await waitFor(() => seen.some((event) => event.type === "assistant" && event.text === "live tail"), 1000)
+    const visible = seen.filter((event) => event.type === "user" || event.type === "assistant")
+    expect(visible.map((event) => event.seq)).toEqual([0, 1, 2])
+    expect(visible.filter((event) => event.seq === 1)).toHaveLength(1)
+    expect(visible.map((event) => "text" in event ? event.text : "")).toEqual(["history", "overlap", "live tail"])
+
+    await backend.close()
+  })
+
+  it("overlapping opens that resolve out of order keep the newest target", async () => {
+    const pendingA = deferred<unknown>()
+    const pendingB = deferred<unknown>()
+    const client = fakeWireClient()
+    client.setHandler((method, params) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: {} }
+      if (method === "session/history") {
+        const id = (params as { sessionId: string }).sessionId
+        if (id === "session-a") return pendingA.promise
+        if (id === "session-b") return pendingB.promise
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "initial", batchMs: 1 })
+    const seen = startConsumer(backend)
+
+    const openA = backend.open("session-a")
+    await waitFor(() => client.requests.some((request) =>
+      request.method === "session/history" && (request.params as { sessionId: string }).sessionId === "session-a"), 1000)
+    const openB = backend.open("session-b")
+    await waitFor(() => client.requests.some((request) =>
+      request.method === "session/history" && (request.params as { sessionId: string }).sessionId === "session-b"), 1000)
+    pendingB.resolve({ events: [{ type: "user/message", text: "B history", seq: 0 }], nextSeq: 1 })
+    await openB
+    pendingA.resolve({ events: [{ type: "user/message", text: "A history", seq: 0 }], nextSeq: 1 })
+    await openA
+
+    await waitFor(() => seen.some((event) => event.type === "user" && event.text === "B history"), 1000)
+    expect(seen.some((event) => event.type === "user" && event.text === "A history")).toBe(false)
+    expect(seen.filter((event) => event.type === "session/open").map((event) =>
+      event.type === "session/open" ? event.sessionId : "")).toEqual(["session-b"])
+    await backend.submit("newest")
+    expect(client.requests.findLast((request) => request.method === "session/prompt")).toMatchObject({
+      params: { sessionId: "session-b", prompt: "newest" },
+    })
+
+    await backend.close()
+  })
+
+  it("a failed history request leaves the previous session selected", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: {} }
+      if (method === "session/history") throw new Error("history unavailable")
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "initial", batchMs: 1 })
+    const seen = startConsumer(backend)
+
+    await expect(backend.open("target")).rejects.toThrow("history unavailable")
+    sendEvent(client, "target", { type: "user/message", text: "wrong session", seq: 0 })
+    sendEvent(client, "initial", { type: "user/message", text: "still current", seq: 0 })
+    await waitFor(() => seen.some((event) => event.type === "user" && event.text === "still current"), 1000)
+    expect(seen.some((event) => event.type === "user" && event.text === "wrong session")).toBe(false)
+    expect(seen.some((event) => event.type === "session/open")).toBe(false)
+    await backend.submit("after failure")
+    expect(client.requests.findLast((request) => request.method === "session/prompt")).toMatchObject({
+      params: { sessionId: "initial", prompt: "after failure" },
+    })
 
     await backend.close()
   })
