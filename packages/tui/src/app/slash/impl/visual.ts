@@ -1,44 +1,60 @@
 // @i-harness/tui — G2 (M46a): visual slash commands — /theme /timestamps
 // /multiline /compact-mode /minimal /fullscreen.
-// Real knobs on app state: theme = the palette kind (groknight → grokday →
-// auto, the tui-core resolvePalette cycle — colors actually change),
-// timestamps = the engine's runtime showTimestamps (rows gain/lose ts on the
-// next viewport draw), multiline = the prompt's multiLine flag,
-// compact-mode = the layout compact option (vpad 0 / hpad 1), minimal +
-// fullscreen = the host relaunch (ModeSwitch — same session, flipped mode).
+// Real knobs on app state: theme = the palette id (M49 Task 8 — the six-id
+// SettingsTheme vocabulary: system / grok-night / grok-day / tokyo-night /
+// rose-pine-moon / oscura-midnight — the loop's setTheme is the shared
+// preview/commit/rollback path WITH persistence, /theme and the Settings row
+// are the same route), timestamps = the engine's runtime showTimestamps
+// (rows gain/lose ts on the next viewport draw), multiline = the prompt's
+// multiLine flag, compact-mode = the layout compact option (vpad 0 / hpad 1),
+// minimal + fullscreen = the host relaunch (ModeSwitch — same session,
+// flipped mode, persisted screenMode).
 
+import type { SettingsTheme } from "@i-harness/settings"
 import type { SlashCommand } from "../types.ts"
 
-export type ThemeKind = "groknight" | "grokday" | "auto"
-export const THEME_ORDER: ThemeKind[] = ["groknight", "grokday", "auto"]
+/** The slash theme vocabulary = the persisted settings vocabulary (M49 Task 8). */
+export type ThemeKind = SettingsTheme
+export const THEME_ORDER: ThemeKind[] = [
+  "system",
+  "grok-night",
+  "grok-day",
+  "tokyo-night",
+  "rose-pine-moon",
+  "oscura-midnight",
+]
 
-/** Cycle order (bare /theme): groknight → grokday → auto → groknight. */
+/** Cycle order (bare /theme): system → grok-night → grok-day → tokyo-night →
+ * rose-pine-moon → oscura-midnight → system. */
 export function nextTheme(current: ThemeKind): ThemeKind {
   const i = THEME_ORDER.indexOf(current)
   return THEME_ORDER[(i + 1) % THEME_ORDER.length]!
 }
 
 function cycleTheme(ctx: Parameters<SlashCommand["run"]>[0]): void {
-  const current = (ctx.app.theme ?? "auto") as ThemeKind
+  const current: ThemeKind = ctx.app.theme === undefined || ctx.app.theme === "auto"
+    ? "system"
+    : ctx.app.theme
   const next = nextTheme(current)
   ctx.setTheme(next)
-  ctx.toast(`theme: ${next}`)
+  ctx.toast(`theme: ${next === "system" ? "auto" : next}`)
 }
 
 export const visualCommands: SlashCommand[] = [
   {
     name: "theme",
-    description: "Cycle theme (groknight → grokday → auto)",
+    description: "Cycle theme (auto → grok-night → grok-day → tokyo-night → …)",
     argumentHint: "[name]",
     run(ctx) {
       const arg = ctx.arg.trim().toLowerCase()
       if (arg === "") { cycleTheme(ctx); return }
-      if (arg === "groknight" || arg === "grokday" || arg === "auto") {
-        ctx.setTheme(arg)
-        ctx.toast(`theme: ${arg}`)
+      const canonical = arg === "auto" ? "system" : arg
+      if ((THEME_ORDER as string[]).includes(canonical)) {
+        ctx.setTheme(canonical as ThemeKind)
+        ctx.toast(`theme: ${arg === "auto" ? "auto" : canonical}`)
         return
       }
-      ctx.toast(`theme: unknown '${arg}' (groknight | grokday | auto)`)
+      ctx.toast(`theme: unknown '${arg}' (system | grok-night | grok-day | tokyo-night | rose-pine-moon | oscura-midnight)`)
     },
   },
   {

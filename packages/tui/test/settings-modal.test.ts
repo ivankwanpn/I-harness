@@ -17,6 +17,7 @@ import {
   settingsKnobRows,
   settingsSnapshot,
   themeDisplayName,
+  themeValuesFor,
   type SettingsModalState,
 } from "../src/views/settings.ts"
 import { createSettingsController } from "../src/settings/controller.ts"
@@ -103,10 +104,15 @@ describe("settings modal — typed registry categories + row content", () => {
     expect(rows[0]!.value).toBe("auto") // default system → auto
     expect(rows[1]!.value).toBe("off")
     expect(rows.every((r) => r.dimmed !== true)).toBe(true)
-    expect(themeDisplayName("dark")).toBe("groknight")
+    // M49 Task 8 — the six-id vocabulary; low-color hosts expose three.
     expect(themeDisplayName("system")).toBe("auto")
-    expect(nextTheme("dark")).toBe("light")
-    expect(nextTheme("system")).toBe("dark")
+    expect(themeDisplayName("grok-night")).toBe("grok-night")
+    expect(nextTheme("system")).toBe("grok-night")
+    expect(nextTheme("grok-day")).toBe("system") // restricted set wraps
+    expect(themeValuesFor(undefined)).toEqual(["system", "grok-night", "grok-day"])
+    expect(themeValuesFor("truecolor")).toEqual([
+      "system", "grok-night", "grok-day", "tokyo-night", "rose-pine-moon", "oscura-midnight",
+    ])
   })
 
   it("Scrollback & Mouse: the 7-knob set, EVERY row labeled `Applies to new sessions`", () => {
@@ -174,8 +180,10 @@ describe("settings modal — binder nav + registry-driven writes", () => {
     expect(state.category).toBe("Appearance")
     seam.act!("overlay-select") // theme row (cursor 0)
     await new Promise((r) => setTimeout(r, 10))
-    expect(settings.get().theme).toBe("dark") // system → dark (cycle order)
-    expect(live).toEqual(["dark"])
+    // system → grok-night (the low-color cycle the modal host exposes);
+    // preview applied BEFORE the durable write (live === the written value).
+    expect(settings.get().theme).toBe("grok-night")
+    expect(live).toEqual(["grok-night"])
   })
 
   it("timestamps toggle writes tui.prefs + flips the live engine hook", async () => {

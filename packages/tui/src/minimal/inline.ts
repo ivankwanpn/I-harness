@@ -58,7 +58,8 @@
 
 import type { InlineLiveRegion, InlineMetrics, RegionLine } from "./contracts.ts"
 import type { StyledRun, TextStyle } from "../contracts.ts"
-import { wcwidth } from "@i-harness/tui-core"
+import { hexToRgb, quantizeColor, wcwidth } from "@i-harness/tui-core"
+import type { Palette, TerminalCapabilityContext } from "@i-harness/tui-core"
 
 /** Compact style map: semantic TextStyle → inline SGR. tui-core's ansi style
  * machine (ansi/style.ts) is NOT part of the exported surface, so a minimal
@@ -97,6 +98,65 @@ const SGR: Record<TextStyle, string> = {
   "md-strong": "\x1b[1m",
   "md-task-checked": "\x1b[32m",
   "md-task-unchecked": "",
+}
+
+// ----------------------------------------------------------------- M49 Task 8
+
+/** One RGB → SGR foreground sequence at the terminal's color depth (the
+ * quantizer's RgbOrIndex output). */
+function sgrForColor(rgb: { r: number; g: number; b: number }, cap: TerminalCapabilityContext): string {
+  const q = quantizeColor(rgb, cap)
+  if ("idx" in q) {
+    // ansi16 pinning (0-15) vs the nearest 240-color entry (16-255).
+    if (q.idx < 16) return `\x1b[${q.idx < 8 ? 30 + q.idx : 90 + (q.idx - 8)}m`
+    return `\x1b[38;5;${q.idx}m`
+  }
+  return `\x1b[38;2;${q.r};${q.g};${q.b}m`
+}
+
+/**
+ * M49 Task 8 (design §9.3): build the minimal region's style map from the
+ * ACTIVE semantic palette — the region no longer has a permanently fixed
+ * color table; its ANSI colors are the active palette's slots quantized to
+ * the terminal's color depth. A monochrome terminal keeps the terminal-native
+ * named table (it has no colors to bear). The DEFAULT map stays the named-16
+ * table (G1's goldens pin it) — hosts pass the override via
+ * `createInlineLiveRegion(cols, rows, { sgr })`.
+ */
+export function sgrFromPalette(palette: Palette, cap: TerminalCapabilityContext): Record<TextStyle, string> {
+  if (cap.colorLevel === "monochrome") return { ...SGR }
+  const fg = (hex: string): string => sgrForColor(hexToRgb(hex), cap)
+  return {
+    "text": "",
+    "muted": "\x1b[2m",
+    "dim": "\x1b[2m",
+    "bold": "\x1b[1m",
+    "accent-user": fg(palette.accentUser),
+    "accent-assistant": fg(palette.accentAssistant),
+    "accent-system": fg(palette.accentSystem),
+    "accent-error": fg(palette.accentError),
+    "accent-success": fg(palette.accentSuccess),
+    "accent-plan": fg(palette.accentPlan),
+    "accent-model": fg(palette.accentModel),
+    "warning": fg(palette.warning),
+    "md-code": fg(palette.mdCode),
+    "md-heading": "\x1b[1m",
+    "md-muted": "\x1b[2m",
+    "diff-add": fg(palette.diffInsertFg),
+    "diff-del": fg(palette.diffDeleteFg),
+    "link": `\x1b[4m${fg(palette.linkFg)}`,
+    "md-h1": "\x1b[1m",
+    "md-h2": "\x1b[1m",
+    "md-h3": "\x1b[1m",
+    "md-h4": "\x1b[1m",
+    "md-h5": "\x1b[1m",
+    "md-h6": "\x1b[1m",
+    "md-code-text": fg(palette.mdCode),
+    "md-em": "\x1b[3m",
+    "md-strong": "\x1b[1m",
+    "md-task-checked": fg(palette.mdTaskChecked),
+    "md-task-unchecked": "",
+  }
 }
 
 /** Region height policy: default min(10, max(3, rows-2)); degenerate rows<5 → 2. */
@@ -164,7 +224,7 @@ function mergeRuns(runs: StyledRun[]): StyledRun[] {
  * change) + EL (`\x1b[K`) end-of-line pad. Deterministic bytes — goldens.
  * The leading reset makes every row robust against ANY ambient SGR state;
  * a non-default final run style is reset by the next row's leading reset. */
-function paintRow(y1: number, line: RegionLine | undefined, cols: number): string {
+function paintRow(y1: number, line: RegionLine | undefined, cols: number, sgr: Record<TextStyle, string>): string {
   let parts = ""
   let prevSgr = ""
   // The line's pinned glyph (e.g. prompt arrow `❯`) is the FIRST cell —
@@ -174,15 +234,22 @@ function paintRow(y1: number, line: RegionLine | undefined, cols: number): strin
     parts += g
   }
   for (const r of mergeRuns(line?.runs ?? [])) {
-    const sgr = SGR[r.style]
-    if (sgr !== prevSgr) {
+    const sgr2 = sgr[r.style]
+    if (sgr2 !== prevSgr) {
       if (prevSgr !== "") parts += "\x1b[0m"
-      if (sgr !== "") parts += sgr
-      prevSgr = sgr
+      if (sgr2 !== "") parts += sgr2
+      prevSgr = sgr2
     }
     parts += fitGraphemes(r.text, cols)
   }
   return `\x1b[${y1};1H\x1b[0m${parts}\x1b[K`
+}
+
+/** Optional engine construction overrides (M49 Task 8). */
+export interface InlineEngineOptions {
+  /** The style map the region paints with (defaults to the named-16 table;
+   * hosts pass sgrFromPalette(activePalette, cap) for palette-derived ANSI). */
+  sgr?: Partial<Record<TextStyle, string>>
 }
 
 // ------------------------------------------------------------------ engine
@@ -191,11 +258,13 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
   private cols: number
   private rows: number
   private grid: RegionLine[]
+  private readonly sgr: Record<TextStyle, string>
 
-  constructor(cols: number, rows: number) {
+  constructor(cols: number, rows: number, options: InlineEngineOptions = {}) {
     this.cols = cols
     this.rows = rows > 0 ? rows : 1
     this.grid = this.padTo([], this.regionRowsForNow()) // fresh region: empty rows
+    this.sgr = { ...SGR, ...options.sgr }
   }
 
   /** Region top (0-based screen row). */
@@ -238,7 +307,7 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
     const top = this.regionTop()
     let out = ""
     for (let i = 0; i < lines.length; i++) {
-      out += paintRow(top + i + 1, lines[i], this.cols)
+      out += paintRow(top + i + 1, lines[i], this.cols, this.sgr)
     }
     // Whole-screen scroll-up by k, native-scrollback preserving:
     // cursor to the bottom-left, then k line feeds.
@@ -276,7 +345,7 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
     const top = this.regionTop()
     let out = ""
     for (let i = 0; i < this.grid.length; i++) {
-      out += paintRow(top + i + 1, this.grid[i], this.cols)
+      out += paintRow(top + i + 1, this.grid[i], this.cols, this.sgr)
     }
     return out
   }
@@ -308,6 +377,6 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
   }
 }
 
-export function createInlineLiveRegion(cols: number, rows: number): InlineLiveRegion {
-  return new InlineLiveRegionImpl(cols, rows)
+export function createInlineLiveRegion(cols: number, rows: number, options?: InlineEngineOptions): InlineLiveRegion {
+  return new InlineLiveRegionImpl(cols, rows, options)
 }

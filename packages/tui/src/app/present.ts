@@ -5,8 +5,13 @@
 // identical state commits an empty diff → flush "": zero-byte idle (M36).
 
 import { clusterWidth, quantizeColor } from "@i-harness/tui-core"
-import type { CursorTarget, GlyphSet, Palette, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
+import type { CursorTarget, GlyphSet, Palette, Renderer, TerminalCapabilityContext, ThemeKind } from "@i-harness/tui-core"
 import type { ActiveView, ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
+import type { RegionLine } from "../minimal/contracts.ts"
+
+/** The app's active-theme state (M49 Task 8): concrete palette ids, or "auto"
+ * = following the system appearance (the persisted "system"). */
+export type AppThemeKind = "auto" | ThemeKind
 import { layoutAgent, SCROLLBACK_PAD_W, SCROLLBACK_RAIL_W } from "../views/agent.ts"
 import type { AgentViewState, PaneState, Rect, Style, ViewDraw } from "../views/agent.ts"
 import { renderStatus, strWidth } from "../views/status.ts"
@@ -93,8 +98,8 @@ export interface TuiAppState {
   // M46a (G2): slash registry / keys-truth app state — the REAL toggle knobs
   // the commands flip (theme palette kind, engine timestamps, compact layout,
   // approval defaults, draft stash slot, the open light panel).
-  /** Theme kind ("auto" = the capability guess; /theme cycles). */
-  theme?: "groknight" | "grokday" | "auto"
+  /** Theme kind ("auto" = the system-following guess; /theme cycles). */
+  theme?: AppThemeKind
   /** Engine timestamps toggle (/timestamps). */
   timestamps?: boolean
   /** Compact layout toggle (/compact-mode). */
@@ -213,6 +218,11 @@ export interface OverlaySeam {
    * real input — the terminal caret follows them instead of the hidden prompt
    * caret). Absent → the modal hides the caret (spec §6.3). */
   caret?(ctx: Rect): CursorTarget | undefined
+  /** M49 Task 8: the minimal-mode EMBEDDED chrome — the modal's row model as
+   * plain borderless region rows (minimal has no cell surface, so the modal
+   * content embeds in the live region above the prompt; the row text includes
+   * the cursor marker). Absent → the modal stays state-only in minimal. */
+  minimalRows?(): RegionLine[]
 }
 
 // ------------------------------------------------------------------ palette → Style

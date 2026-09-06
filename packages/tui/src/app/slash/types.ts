@@ -3,6 +3,7 @@
 // Pure types — impls import this module only; the loop wires the context.
 
 import type { BackendClient, ScrollbackEngine, WorkflowSurface } from "../../contracts.ts"
+import type { SettingsTheme } from "@i-harness/settings"
 import type { TuiAppState } from "../present.ts"
 
 // ------------------------------------------------------------------ panels
@@ -97,7 +98,10 @@ export interface SlashContext {
   // ---- ui / toggles
   togglePane(kind: "todo" | "tasks" | "queue"): void
   setScreen(screen: "agent" | "welcome"): void
-  setTheme(kind: "groknight" | "grokday" | "auto"): void
+  /** M49 Task 8 — the shared preview/commit/rollback theme path (the loop
+   * resolves preview live, persists to the settings surface and rolls back on
+   * a failed write; `/theme` and the Settings row use the SAME route). */
+  setTheme(kind: SettingsTheme): void
   setTimestamps(on: boolean): void
   setMultiline(on: boolean): void
   setCompactMode(on: boolean): void

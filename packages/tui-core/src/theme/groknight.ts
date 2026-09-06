@@ -3,6 +3,7 @@
 import type { Palette } from "./index.ts"
 
 export const GROKNIGHT: Palette = Object.freeze<Palette>({
+  name: "grok-night",
   bgTerminal: "#0a0a0a",
   bgDark: "#1c1c1c",
   bgBase: "#141414",

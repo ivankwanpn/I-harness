@@ -106,9 +106,9 @@ describe("settings controller — preview, commit, rollback", () => {
       commit: async (c, value) => { await c.settings.set({ theme: value as Settings["theme"] }) },
     })
     const controller = createSettingsController([row], ctx(settings))
-    await controller.commit("theme", "dark")
-    expect(live).toEqual(["live:dark"])
-    expect(settings.get().theme).toBe("dark")
+    await controller.commit("theme", "grok-night")
+    expect(live).toEqual(["live:grok-night"])
+    expect(settings.get().theme).toBe("grok-night")
     // the context is the SAME controller context (the row previews + persists
     // through it).
     expect(controller.context().settings).toBe(settings)

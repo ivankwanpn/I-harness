@@ -39,7 +39,7 @@ import {
   probeCapabilities,
   resolvePalette,
 } from "@i-harness/tui-core"
-import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
+import type { GlyphSet, InputEvent, Palette, Renderer, TerminalCapabilityContext, TerminalHandles } from "@i-harness/tui-core"
 import {
   createRemoteBackend,
   createScrollbackEngine,
@@ -47,11 +47,13 @@ import {
   loadMinimalHost,
   ModeSwitch,
   ProviderController,
+  sgrFromPalette,
   spawnSdkSubprocess,
   TuiApp,
 } from "@i-harness/tui"
-import type { BackendClient, InlineHost, InputSource, TuiAppOptions } from "@i-harness/tui"
+import type { BackendClient, InlineHost, InputSource, ScrollbackEngine, TuiAppOptions } from "@i-harness/tui"
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
+import type { SettingsStoreSurface } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { createProviderRuntime } from "@i-harness/provider-runtime"
@@ -219,20 +221,169 @@ function out(s: string): void {
  * through the write sink (ledger). M38a harmonization seam: the composed
  * region rows (todos/status/prompt) land in G1's region grid at G1↔G2
  * wiring — the G1 contract (contracts.ts) exposes no region-content setter.
+ * M49 Task 8: `sgr` is the palette-derived style override — minimal's ANSI
+ * colors come from the ACTIVE semantic palette (design §9.3), quantized to
+ * the terminal's color depth. The failure WARNING is the startup split's job
+ * (createExecutableTui — exactly one warning, never rewritten persistence).
  */
-async function loadInlineHost(cols: number, rows: number): Promise<InlineHost | undefined> {
+async function loadInlineHost(cols: number, rows: number, sgr?: Record<string, string>): Promise<InlineHost | undefined> {
   const factory = await loadMinimalHost()
-  if (factory === undefined) {
-    console.warn("minimal mode requested but the inline engine is unavailable — falling back to fullscreen")
-    return undefined
-  }
-  const region = factory({ cols, rows })
+  if (factory === undefined) return undefined
+  const region = factory({ cols, rows, ...(sgr !== undefined ? { sgr } : {}) })
   return {
     commit: (lines, write) => region.commit(lines, write),
     drawRegion: (write) => region.drawRegion(write),
     regionRows: () => region.regionRows(),
     resize: (c, r) => region.resize(c, r),
   }
+}
+
+// ------------------------------------------------------------------ startup split (M49 Task 8)
+
+/** Production UI surface modes (design §9.2 `tui.prefs.screenMode`). */
+export type ExecutableScreenMode = "fullscreen" | "minimal"
+
+/**
+ * Resolve the executable screen mode — the singleton precedence (spec §7.2):
+ * explicit `--mode` flag > persisted `tui.prefs.screenMode` > fullscreen
+ * default. Only exact values win; anything unknown falls through to the next
+ * tier (a corrupt persisted value never sends production anywhere weird).
+ */
+export function resolveExecutableScreenMode(options: {
+  flag?: string
+  persisted?: string
+}): ExecutableScreenMode {
+  if (options.flag === "minimal") return "minimal"
+  if (options.flag === "fullscreen") return "fullscreen"
+  if (options.persisted === "minimal") return "minimal"
+  if (options.persisted === "fullscreen") return "fullscreen"
+  return "fullscreen"
+}
+
+export interface CreateExecutableTuiOptions {
+  flags: TuiFlags
+  /** The resolved screen mode (resolveExecutableScreenMode output). */
+  screenMode: ExecutableScreenMode
+  /** The fullscreen terminal-handles factory — invoked AT MOST ONCE and only
+   * when the terminal path actually runs (fullscreen, or the minimal →
+   * fullscreen fallback). Minimal-with-inline NEVER calls it, so the
+   * alt-screen/mouse bytes are structurally impossible: they only exist in
+   * initSequence (the test substitutes a recording double). */
+  terminalFactory: () => TerminalHandles
+  cols: number
+  rows: number
+  renderer: Renderer
+  backend: BackendClient
+  engine: ScrollbackEngine
+  capabilities: TerminalCapabilityContext
+  palette: Palette
+  glyphs: GlyphSet
+  write: (s: string) => void
+  /** The loaded settings store (normalized surface — the effective values). */
+  settings: SettingsStoreSurface
+  /** The provider controller behind /provider //model //settings. */
+  providerController: ProviderController
+  workspace: string
+  input?: InputSource
+  /** Eager inline-host loader — createExecutableTui's startup split loads the
+   * host BEFORE the app starts (the executable's loadInlineHost default;
+   * tests inject a fake to prove the byte discipline). */
+  loadInline?: (cols: number, rows: number) => Promise<InlineHost | undefined>
+  /** M49 Task 8: the palette-derived minimal style override (the ACTIVE
+   * semantic palette, quantized — sgrFromPalette(palette, cap)). */
+  minimalSgr?: Record<string, string>
+}
+
+/**
+ * The executable's production startup split (spec §7.2/§9.3): fullscreen
+ * initializes the terminal (alt screen + five-mode mouse), minimal loads the
+ * inline host and touches NOTHING terminal-side — no alt screen, no mouse
+ * capture, no init sequence at all (the structural guarantee). An inline-
+ * engine failure with a minimal request writes ONE warning, starts
+ * fullscreen, and NEVER rewrites the persisted choice (the caller's
+ * resolution stands — the user's mode is a hint for the NEXT start).
+ */
+export async function createExecutableTui(
+  options: CreateExecutableTuiOptions,
+): Promise<{
+  app: TuiApp
+  backend: BackendClient
+  screenMode: ExecutableScreenMode
+  terminal: TerminalHandles | undefined
+}> {
+  const {
+    flags,
+    screenMode,
+    terminalFactory,
+    cols,
+    rows,
+    settings,
+    providerController,
+    loadInline,
+    minimalSgr,
+    ...appInputs
+  } = options
+  const tuiPrefs = settings.get().tui.prefs
+  const mouseToggleFeature = process.env.GROK_MOUSE_REPORTING_TOGGLE === "1"
+    || tuiPrefs.mouseReportingToggle
+  let inline: InlineHost | undefined
+  let effective: ExecutableScreenMode = screenMode
+  let terminal: TerminalHandles | undefined
+  if (screenMode === "minimal") {
+    const loader = loadInline ?? ((c: number, r: number) => loadInlineHost(c, r, minimalSgr))
+    inline = await loader(cols, rows)
+    if (inline === undefined) {
+      // Inline-engine failure: ONE warning, fullscreen fallback, and the
+      // persisted tui.prefs.screenMode is deliberately NOT rewritten (this
+      // is the resolver's choice; the NEXT start retries minimal).
+      console.warn("minimal mode requested but the inline engine is unavailable — falling back to fullscreen")
+      terminal = terminalFactory()
+      terminal.init()
+      effective = "fullscreen"
+    }
+  } else {
+    terminal = terminalFactory()
+    terminal.init()
+  }
+  const { app, backend } = await createExecutableApp({
+    flags,
+    renderer: appInputs.renderer,
+    backend: appInputs.backend,
+    engine: appInputs.engine,
+    capabilities: appInputs.capabilities,
+    palette: appInputs.palette,
+    glyphs: appInputs.glyphs,
+    write: appInputs.write,
+    providerController,
+    compact: tuiPrefs.compact,
+    workspace: appInputs.workspace,
+    ...(appInputs.input !== undefined ? { input: appInputs.input } : {}),
+    ...(inline !== undefined ? { mode: "minimal" as const, inline } : {}),
+    mousePrefs: {
+      speed: tuiPrefs.scrollSpeed,
+      mode: tuiPrefs.scrollMode,
+      lines: tuiPrefs.scrollLines,
+      invert: tuiPrefs.invertScroll,
+    },
+    mouseToggleFeature,
+    busyEnter: settings.get().busyEnter === "interrupt" ? "steer" : "queue",
+    modeSwitch: (cmd) => new ModeSwitch({
+      argv: process.argv.slice(2),
+      persist: (mode) => {
+        persistScreenMode(settings, mode)
+      },
+    }).onSlash(cmd),
+  })
+  return { app, backend, screenMode: effective, terminal }
+}
+
+/** Durable screenMode write (the mode-switch persistence — best-effort: a
+ * failed write never blocks the relaunch). */
+function persistScreenMode(settings: SettingsStoreSurface, mode: "minimal" | "fullscreen"): void {
+  const current = settings.get().tui.prefs
+  void settings.set({ tui: { prefs: { ...current, screenMode: mode } } }).catch(() => {
+    // the relaunch already spawned; a persist failure only loses the hint
+  })
 }
 
 // ------------------------------------------------------------------ main
@@ -311,16 +462,13 @@ export async function runTui(flags: TuiFlags): Promise<number> {
 
   const cols = process.stdout.columns ?? 80
   const rows = process.stdout.rows ?? 24
-  // M46b G1: minimal mode NEVER initializes the 5-mode mouse capture (spec §7
-  // red line — the terminal keeps native selection; hover/scroll/hit areas are
-  // fullscreen-only). The flag ALSO gates the wheel/click paths app-side (the
-  // loop drops every mouse event while inlineActive).
-  const minimalMode = flags.mode === "minimal"
-  const terminal = createTerminal({
-    stream: { write: (s: string): boolean => { out(s); return true } },
-    cap,
-    mouseReporting: minimalMode ? false : undefined,
-  })
+  // M49 Task 8 (spec §7.2): startup mode = explicit `--mode` flag >
+  // persisted tui.prefs.screenMode (the /minimal //fullscreen switches write
+  // it) > fullscreen default. The STARTUP SPLIT (createExecutableTui) then
+  // initializes the terminal ONLY in fullscreen — minimal never enters the
+  // alt screen and never captures the mouse (the structural red line: the
+  // sequences exist only in initSequence, which minimal never calls).
+  const screenMode = resolveExecutableScreenMode({ flag: flags.mode, persisted: tuiPrefs.screenMode })
   const renderer = createRenderer({ cols, rows, cap })
   const engine = createScrollbackEngine({ width: cols, showTimestamps: tuiPrefs.timestamps })
 
@@ -371,14 +519,6 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     // not a tty → no keyboard; the input pump is simply never wired
   }
 
-  const minimal = flags.mode === "minimal"
-  // M46b G1: the mouse-reporting feature gate — GROK_MOUSE_REPORTING_TOGGLE=1
-  // OR the settings knob turns the Ctrl+R binding + /toggle-mouse-reporting
-  // on (default OFF per grok). It does NOT turn capture off (capture is on
-  // for fullscreen; the TOGGLE is what lets the user hand it back).
-  const mouseToggleFeature = process.env.GROK_MOUSE_REPORTING_TOGGLE === "1"
-    || tuiPrefs.mouseReportingToggle
-  terminal.init()
   // M49 Task 6: the provider controller — the UI adapter over the runtime +
   // the live backend (active-session model selections ride setSessionModel;
   // no session → durable llm.defaultModel).
@@ -388,41 +528,37 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     backend,
     sessionId: flags.attach ?? flags.resume,
   })
-  const { app } = await createExecutableApp({
+  // M49 Task 8: startup honors the PERSISTED THEME (design §9.3) — the
+  // palette given to the app is the resolved active theme; the minimal
+  // region's ANSI comes from the same active palette (sgrFromPalette).
+  const activeTheme = settings.get().theme
+  const palette = resolvePalette(cap, activeTheme === "system" ? undefined : activeTheme)
+  const { app, terminal } = await createExecutableTui({
     flags,
+    screenMode,
+    // The factory runs ONLY on the fullscreen path — minimal never creates or
+    // initializes the terminal handle (alternate screen + mouse capture are
+    // structurally absent from the minimal byte stream).
+    terminalFactory: () => createTerminal({
+      stream: { write: (s: string): boolean => { out(s); return true } },
+      cap,
+    }),
+    cols,
+    rows,
     renderer,
     backend,
     engine,
     capabilities: cap,
-    palette: resolvePalette(cap),
+    palette,
     glyphs: makeGlyphs(true),
     write: out,
-    // M46a G1: the provider/model modal surfaces + the durable prefs' layout
-    // density (compact); the providerController drives /provider /model
-    // /settings through provider-runtime.
+    settings,
     providerController,
-    compact: tuiPrefs.compact,
-    // M46a G2: the slash registry's workspace root (skills/hooks/plugins/
-    // workflow scans). createExecutableApp owns the explicit session id.
     workspace,
     ...(attach !== undefined ? { input } : {}),
-    ...(minimal ? { mode: "minimal" as const, inlineFactory: () => loadInlineHost(cols, rows) } : {}),
-    // M46b G1: the durable mouse knobs (settings modal Mouse category) → the
-    // scroll stream's brand profile math + the toggle feature gate. The host
-    // is the ONLY loader of the settings store — the loop reads what it gets.
-    mousePrefs: {
-      speed: tuiPrefs.scrollSpeed,
-      mode: tuiPrefs.scrollMode,
-      lines: tuiPrefs.scrollLines,
-      invert: tuiPrefs.invertScroll,
-    },
-    mouseToggleFeature,
-    // M49 Task 7: the persisted `busyEnter` knob (spec §6.2 — Enter while a
-    // turn runs: "interrupt" steers the busy turn, "wait" queues behind it).
-    busyEnter: settings.get().busyEnter === "interrupt" ? "steer" : "queue",
-    // Spec §1: the prompt text `/minimal`/`/fullscreen` self-relaunches the
-    // same session with the flipped --mode (ModeSwitch spawns; the loop quits).
-    modeSwitch: (cmd) => new ModeSwitch({ argv: process.argv.slice(2) }).onSlash(cmd),
+    // M49 Task 8: "Minimal uses the active semantic palette for ANSI output" —
+    // the inline host paints with the palette-derived SGR (quantized).
+    minimalSgr: screenMode === "minimal" ? sgrFromPalette(palette, cap) : undefined,
   })
 
   // Resize relay: stdout 'resize' → renderer re-grid + engine re-wrap + the
@@ -442,7 +578,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // Lifecycle: the app quit path (Ctrl-Q / armed Ctrl-C) → backend.close →
   // input ended → start() resolves → graceful teardown. SIGINT/SIGTERM are
   // the first-graceful paths (raw mode means Ctrl-C never becomes SIGINT).
-  const shutdownController = createTuiShutdownController({ close: () => backend.close(), stop: () => attach?.stop(), teardown: () => terminal.teardown() })
+  // M49 Task 8: minimal has NO terminal — teardown is a no-op there (the
+  // terminal was never initialized; no leave-alt-screen bytes either).
+  const shutdownController = createTuiShutdownController({ close: () => backend.close(), stop: () => attach?.stop(), teardown: () => terminal?.teardown() })
   const shutdown = (): Promise<void> => shutdownController.shutdown()
   const onSignal = (code: number): void => {
     process.removeListener("SIGINT", onSigint)

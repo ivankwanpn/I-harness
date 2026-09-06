@@ -163,4 +163,74 @@ describe("resolvePalette", () => {
     expect(resolvePalette(caps({ dark: false }), "groknight")).toBe(GROKNIGHT)
     expect(resolvePalette(caps({ dark: true }), "grokday")).toBe(GROKDAY)
   })
+
+  it("legacy groknight/grokday aliases resolve to the canonical palettes", () => {
+    expect(resolvePalette(caps(), "groknight")).toBe(GROKNIGHT)
+    expect(resolvePalette(caps(), "grokday")).toBe(GROKDAY)
+  })
+})
+
+describe("five-theme palette set (M49 Task 8)", () => {
+  const cap256 = (): TerminalCapabilityContext => caps({ colorLevel: "ansi256", dark: true })
+
+  it.each(["tokyo-night", "rose-pine-moon", "oscura-midnight"] as const)(
+    "resolves and quantizes %s",
+    (theme) => {
+      const palette = resolvePalette(cap256(), theme)
+      expect(palette.name).toBe(theme)
+      // foreground clearly distinct from the base background (contrast).
+      expect(palette.textPrimary).not.toEqual(palette.bgBase)
+      // diff add/del backgrounds are never the same color.
+      expect(palette.diffInsertBg).not.toEqual(palette.diffDeleteBg)
+    },
+  )
+
+  it.each(["tokyo-night", "rose-pine-moon", "oscura-midnight"] as const)(
+    "%s keeps the GrokNite field shape (same slot names)",
+    (theme) => {
+      const p = resolvePalette(cap256(), theme)
+      const keys = Object.keys(p).sort()
+      expect(Object.keys(GROKNIGHT).sort()).toEqual(keys)
+    },
+  )
+
+  it("palette slots survive 256/16/mono quantization (diff families distinct; contrast where palettes are offered)", () => {
+    for (const theme of ["tokyo-night", "rose-pine-moon", "oscura-midnight"] as const) {
+      const p = resolvePalette(cap256(), theme)
+      // truecolor: byte-faithful passthrough; diff tones stay distinct.
+      const tc = caps({ colorLevel: "truecolor", dark: true })
+      expect(quantizeColor(hexToRgb(p.diffInsertBg), tc)).not.toEqual(
+        quantizeColor(hexToRgb(p.diffDeleteBg), tc),
+      )
+      expect(quantizeColor(hexToRgb(p.textPrimary), tc)).not.toEqual(
+        quantizeColor(hexToRgb(p.bgBase), tc),
+      )
+      // ansi16: the diff tones ride different hue families (red vs green).
+      const t16 = caps({ colorLevel: "ansi16", dark: true })
+      expect(quantizeColor(hexToRgb(p.diffInsertBg), t16)).not.toEqual(
+        quantizeColor(hexToRgb(p.diffDeleteBg), t16),
+      )
+      // text/base contrast where the themes are actually offered (truecolor +
+      // ansi256; on ansi16 the hue-family pinning intentionally collapses
+      // tinted chrome — tokyo's pale-blue text AND blue-gray base both pin to
+      // blue 12 on dark, which is exactly why Grok truecolor-gates these
+      // themes and why the pickers expose only system/grok-night/grok-day).
+      for (const level of ["truecolor", "ansi256"] as const) {
+        const capp = caps({ colorLevel: level, dark: true })
+        expect(quantizeColor(hexToRgb(p.textPrimary), capp)).not.toEqual(
+          quantizeColor(hexToRgb(p.bgBase), capp),
+        )
+      }
+      // monochrome collapses to luminance 7/15 — text/base still differ.
+      const mono = caps({ colorLevel: "monochrome", dark: true })
+      expect(quantizeColor(hexToRgb(p.textPrimary), mono)).not.toEqual(
+        quantizeColor(hexToRgb(p.bgBase), mono),
+      )
+    }
+  })
+
+  it("groknight/grokday tokens are unchanged by the union extension", () => {
+    expect(GROKNIGHT.name).toBe("grok-night")
+    expect(GROKDAY.name).toBe("grok-day")
+  })
 })

@@ -32,7 +32,7 @@ import {
 import { bindModelPickerOverlay, modelPickerEntries, type ModelPickerState } from "../views/model-picker.ts"
 import { bindSettingsOverlay, createTuiSettingsRegistry, type SettingsModalState } from "../views/settings.ts"
 import { createSettingsController } from "../settings/controller.ts"
-import type { SettingsProviderProtocol } from "@i-harness/settings"
+import type { SettingsProviderProtocol, SettingsTheme } from "@i-harness/settings"
 import { ProviderController } from "./provider-controller.ts"
 import { FpsMeter } from "./hud.ts"
 import type { HudState } from "./hud.ts"
@@ -1827,7 +1827,11 @@ export class TuiApp {
         }
         this.requestFrame()
       },
-      setTheme: (kind) => this.setTheme(kind),
+      setTheme: (kind) => {
+        void this.themeCommit(kind).catch((error: unknown) => {
+          this.toast(`theme: not persisted — ${error instanceof Error ? error.message : String(error)}`)
+        })
+      },
       setTimestamps: (on) => this.setTimestamps(on),
       setMultiline: (on) => {
         app.prompt.multiLine = on
@@ -2110,11 +2114,36 @@ export class TuiApp {
     this.requestFrame()
   }
 
-  /** /theme — re-resolve the palette (groknight/grokday/auto via tui-core). */
-  private setTheme(kind: "groknight" | "grokday" | "auto"): void {
-    this.app.theme = kind
-    this.palette = resolvePalette(this.cap, kind === "auto" ? undefined : kind)
+  /** M49 Task 8 — the SHARED theme path (design §9.3): preview (live palette
+   * re-resolve) → commit (durable settings write) → rollback (re-apply the
+   * previous when the persist fails). `/theme`'s ctx.setTheme and the Settings
+   * row's host.applyTheme use the SAME two closures: themePreview (live) is the
+   * Settings definition's preview/rollback, themeCommit is /theme's route. */
+  private themePreview(theme: SettingsTheme): void {
+    this.app.theme = theme === "system" ? "auto" : theme
+    this.palette = resolvePalette(this.cap, theme === "system" ? undefined : theme)
     this.requestFrame()
+  }
+
+  /** /theme's route: preview, persist through the settings surface, and roll
+   * the live preview back when the write fails. Hosts without a wired settings
+   * surface (legacy unit hosts) keep the live-only behavior — never a silent
+   * degrade in production, whose executable always wires the store. */
+  private themeCommit(theme: SettingsTheme): Promise<void> {
+    const surface = this.providerController()?.settingsSurface()
+    const current: SettingsTheme = this.app.theme === "auto"
+      ? "system"
+      : (this.app.theme ?? "system")
+    const previous = surface?.get().theme ?? current
+    this.themePreview(theme)
+    if (surface === undefined) return Promise.resolve()
+    return surface.set({ theme }).then(
+      () => undefined,
+      (error: unknown) => {
+        this.themePreview(previous)
+        throw error
+      },
+    )
   }
 
   /** /timestamps — the engine's runtime toggle (rows gain ts on the next
@@ -2592,7 +2621,10 @@ export class TuiApp {
     }
     const registry = createTuiSettingsRegistry({
       settings: controller.settingsSurface(),
-      applyTheme: (theme) => this.setTheme(theme === "dark" ? "groknight" : theme === "light" ? "grokday" : "auto"),
+      // M49 Task 8: the SAME live path /theme uses (preview — the controller
+      // owns the preview/commit/rollback ordering per row).
+      colorLevel: this.cap.colorLevel,
+      applyTheme: (theme) => this.themePreview(theme),
       applyTimestamps: (on) => {
         // Live engine flip (the knob renders what the engine does).
         this.opts.engine.setShowTimestamps?.(on)
@@ -3206,11 +3238,18 @@ export class TuiApp {
   private composeMinimalRegion(): RegionLine[] {
     const host = this.inlineHost!
     const budget = Math.max(2, host.regionRows())
+    // M49 Task 8: an open modal/viewer/dropdown embeds its chrome in the
+    // region — BORDERLESS region rows (minimal has no cell surface, so the
+    // content replaces the tail window while it is open; the region stays
+    // prompt-anchored). The overlay's optional minimalRows() seam owns the
+    // row model for the draw-based modal binders; state surfaces (light panel,
+    // sessions/history/dropdowns) project theirs from the app state.
+    const chrome = this.minimalChromeRows()
     const total = this.opts.engine.lineCount()
     // Over-fetch by the todo height +1 so todo rows don't starve the tail
     // window; composeRegion truncates the tail (keeps the LAST lines).
     const window = Math.min(total, budget + 1)
-    const tail = this.opts.engine.viewport(Math.max(0, total - window), window).map(displayToRegion)
+    const tail = chrome ?? this.opts.engine.viewport(Math.max(0, total - window), window).map(displayToRegion)
     return composeRegion(
       {
         tail,
@@ -3222,6 +3261,56 @@ export class TuiApp {
       budget,
       {},
     )
+  }
+
+  /** The minimal embedded chrome rows for the open surface (undefined = no
+   * surface — the normal tail window). Borderless: plain text, no box. */
+  private minimalChromeRows(): RegionLine[] | undefined {
+    const ov = this.app.overlay
+    if (ov !== undefined && typeof ov.minimalRows === "function") {
+      return ov.minimalRows()
+    }
+    const lp = this.app.lightPanel
+    if (lp !== undefined) {
+      const rows: RegionLine[] = []
+      for (const r of lp.rows) {
+        rows.push({ runs: [{ text: `${r.label}${r.detail !== undefined ? `  ${r.detail}` : ""}`, style: "text" }] })
+      }
+      return rows
+    }
+    if (this.app.historyPanel !== undefined) {
+      const h = this.app.historyPanel
+      const rows: RegionLine[] = []
+      h.entries.forEach((e, i) => {
+        rows.push({ runs: [{ text: `${i === h.cursor ? "● " : "○ "}${e.text}`, style: "text" }] })
+      })
+      return rows
+    }
+    if (this.app.slash !== undefined) {
+      return this.app.slash.entries.map((e) => ({
+        runs: [{ text: `/${e.command}${e.description !== undefined ? `  ${e.description}` : ""}`, style: "text" }],
+      }))
+    }
+    if (this.app.completion !== undefined) {
+      return this.app.completion.entries.map((e) => ({
+        runs: [{ text: `${e.label}${e.desc !== undefined ? `  ${e.desc}` : ""}`, style: "text" }],
+      }))
+    }
+    if (this.app.fileSearch !== undefined) {
+      return this.app.fileSearch.files.map((f) => ({
+        runs: [{ text: `${f.path}${f.preview !== undefined ? `  ${f.preview}` : ""}`, style: "text" }],
+      }))
+    }
+    if (this.app.sessions !== undefined) {
+      const rows: RegionLine[] = []
+      for (const g of this.app.sessions.groups) {
+        for (const s of g.sessions) {
+          rows.push({ runs: [{ text: `${s.id}  ${s.title}${g.repo !== "" ? `  ${g.repo}` : ""}`, style: "text" }] })
+        }
+      }
+      return rows
+    }
+    return undefined
   }
 
   /** Status row (spec §5.5): `model · flag · context · queued`. */

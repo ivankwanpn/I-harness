@@ -43,7 +43,7 @@ describe("new keys default without migration (old file loads fine)", () => {
     )
     const store = new SettingsStore({ path: file })
     await store.load()
-    expect(store.get().theme).toBe("dark")
+    expect(store.get().theme).toBe("grok-night") // legacy "dark" soft-normalizes
     expect(store.get().sandboxMode).toBe("read-only")
     expect(store.get().fontSize).toBe(15)
     expect(store.get().plugins.bash).toBe(false)
@@ -184,7 +184,7 @@ describe("mutateSection", () => {
 
   it("set path ops persist and bump the section revision (monotonic across reload)", async () => {
     const { store, file, root } = await newStore()
-    await store.set({ theme: "dark" }) // unrelated top-level write must not disturb sections
+    await store.set({ theme: "grok-night" }) // unrelated top-level write must not disturb sections
     const v1 = await mutateSection("llm", [{ op: "set", path: ["defaultModel", "provider"], value: "custom" }], store, 0)
     expect(v1.revision).toBe(1)
     expect((v1.value as AnyRecord).defaultModel.provider).toBe("custom")
@@ -194,7 +194,8 @@ describe("mutateSection", () => {
     // persisted: doc on disk is the merged view, old top-level key intact
     const raw = JSON.parse(await readFile(file, "utf8"))
     expect(raw.llm.defaultModel).toEqual({ provider: "custom", model: "m1" })
-    expect(raw.theme).toBe("dark")
+    // set() re-normalizes before persisting — legacy "dark" lands as grok-night.
+    expect(raw.theme).toBe("grok-night")
     expect(raw._revision).toEqual({ llm: 2 })
     // revision survives a fresh instance pointing at the same file
     const again = new SettingsStore({ path: file })

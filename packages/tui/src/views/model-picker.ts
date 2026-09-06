@@ -153,6 +153,12 @@ export function bindModelPickerOverlay(
     draw: (ctx, view, palette, glyphs) => {
       renderModelPicker(ctx, state, view, palette, glyphs)
     },
+    // M49 Task 8: minimal-mode embedded chrome — the entry list as borderless
+    // region rows (the cursor marker rides the row text).
+    minimalRows: () =>
+      state.entries.map((e, i) => ({
+        runs: [{ text: `${i === state.cursor ? "● " : "○ "}${e.label}`, style: "text" }],
+      })),
     act: (action: AppAction) => {
       if (typeof action !== "string") return
       const len = state.entries.length

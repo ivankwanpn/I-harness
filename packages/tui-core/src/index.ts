@@ -18,7 +18,7 @@ import { WriterPump } from "./output/index.ts"
 import type { WriterLike, WriterStats } from "./output/index.ts"
 import { resolveScreenMode } from "./screen-mode/index.ts"
 import type { ScreenMode, ScreenModeResolution } from "./screen-mode/index.ts"
-import { resolvePalette, quantizeColor } from "./theme/index.ts"
+import { hexToRgb, resolvePalette, quantizeColor } from "./theme/index.ts"
 import type { Palette, Rgb, ThemeKind } from "./theme/index.ts"
 import { makeGlyphs, GLYPHS } from "./glyphs/index.ts"
 import type { GlyphSet } from "./glyphs/index.ts"
@@ -158,7 +158,7 @@ export { WriterPump }
 export type { WriterLike, WriterStats }
 export { resolveScreenMode }
 export type { ScreenMode, ScreenModeResolution }
-export { resolvePalette, quantizeColor }
+export { hexToRgb, resolvePalette, quantizeColor }
 export type { Palette, Rgb, ThemeKind }
 export { makeGlyphs, GLYPHS }
 export type { GlyphSet }

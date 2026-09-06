@@ -71,10 +71,14 @@ describe("TuiApp — M46a slash registry run + keys truth", () => {
     const app = makeApp()
     app.state().prompt.text = "/theme"
     app.dispatch("submit")
-    expect(app.state().theme).toBe("groknight")
+    expect(app.state().theme).toBe("grok-night")
     app.state().prompt.text = "/theme"
     app.dispatch("submit")
-    expect(app.state().theme).toBe("grokday")
+    expect(app.state().theme).toBe("grok-day")
+    app.state().prompt.text = "/theme tokyo-night"
+    app.dispatch("submit")
+    expect(app.state().theme).toBe("tokyo-night")
+    expect(app.state().theme).not.toBe("auto")
   })
 
   it("submit('/timestamps') toggles the engine (existing rows gain a timestamp)", () => {

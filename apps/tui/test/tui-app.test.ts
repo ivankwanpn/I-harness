@@ -2,10 +2,10 @@
 // so the CLI surface cannot drift silently (the PTY proofs of the render
 // pipeline live in packages/tui/test/harness — cases 011/014).
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createCredentialStore } from "@i-harness/credentials"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRegistry } from "@i-harness/provider"
@@ -18,10 +18,14 @@ import {
   buildEmbeddedSessionOptions,
   buildSdkArgs,
   createExecutableApp,
+  createExecutableTui,
   createTuiModelBindingFor,
   createTuiShutdownController,
   parseFlags,
+  resolveExecutableScreenMode,
 } from "../src/index.ts"
+import type { InlineHost, RegionLine } from "@i-harness/tui"
+import type { TerminalHandles } from "@i-harness/tui-core"
 
 const cap = { ...createUnknownCapabilities(), colorLevel: "truecolor" as const, dark: true }
 type BackendModelState = Awaited<ReturnType<BackendClient["modelState"]>>
@@ -359,5 +363,123 @@ describe("tui flag parser", () => {
   it("treats every flag as optional and unknown flags as no-ops", () => {
     expect(parseFlags([])).toEqual({ yes: false })
     expect(parseFlags(["--unknown"])).toEqual({ yes: false })
+  })
+})
+
+describe("tui production startup split (M49 Task 8)", () => {
+  /** The REAL initSequence preamble with the full five-mode mouse set — its
+   * PRESENCE in minimal proves the terminal was initialized (the red line). */
+  function recordingTerminal(): TerminalHandles & { bytes: string } {
+    const rec = { bytes: "" }
+    return {
+      get bytes(): string { return rec.bytes },
+      init(): string {
+        const seq = "\x1b[?1049h\x1b[H\x1b[2J\x1b[?25l\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h"
+        rec.bytes += seq
+        return seq
+      },
+      teardown(): string { return "" },
+    }
+  }
+
+  const fakeInline = (): InlineHost => ({
+    commit: (_lines: RegionLine[], write: (s: string) => void) => write(""),
+    drawRegion: (write: (s: string) => void) => write(""),
+    regionRows: () => 8,
+    resize: () => {},
+  })
+
+  async function tuiFixture(options: {
+    screenMode: "fullscreen" | "minimal"
+    settingsSeed?: Record<string, unknown>
+    loadInline?: (cols: number, rows: number) => Promise<InlineHost | undefined>
+  }) {
+    const root = mkdtempSync(join(tmpdir(), "ih-tui-exec-split-"))
+    const settingsPath = join(root, "settings.json")
+    if (options.settingsSeed !== undefined) {
+      writeFileSync(settingsPath, JSON.stringify(options.settingsSeed))
+    }
+    const settings = new SettingsStore({ path: settingsPath })
+    await settings.load()
+    const credentials = createCredentialStore(join(root, "credentials.json"))
+    const runtime = createProviderRuntime({ settings, credentials, registry: createProviderRegistry() })
+    const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "m", label: "fixture:m" })
+    const providerController = new ProviderController({ runtime, settings, backend })
+    const terminal = recordingTerminal()
+    const created = await createExecutableTui({
+      flags: { yes: false },
+      screenMode: options.screenMode,
+      terminalFactory: () => terminal,
+      cols: 80,
+      rows: 24,
+      renderer: createRenderer({ cols: 80, rows: 24, cap }),
+      backend,
+      engine: createScrollbackEngine({ width: 80 }),
+      capabilities: cap,
+      palette: resolvePalette(cap),
+      glyphs: makeGlyphs(true),
+      write: () => {},
+      settings,
+      providerController,
+      workspace: root,
+      ...(options.loadInline !== undefined ? { loadInline: options.loadInline } : {}),
+    })
+    return { ...created, terminal, root, settingsPath }
+  }
+
+  it("uses explicit flag then persisted screen mode", () => {
+    expect(resolveExecutableScreenMode({ flag: "fullscreen", persisted: "minimal" })).toBe("fullscreen")
+    expect(resolveExecutableScreenMode({ persisted: "minimal" })).toBe("minimal")
+    expect(resolveExecutableScreenMode({ flag: "minimal", persisted: "fullscreen" })).toBe("minimal")
+    expect(resolveExecutableScreenMode({})).toBe("fullscreen")
+    expect(resolveExecutableScreenMode({ persisted: "unknown" })).toBe("fullscreen")
+  })
+
+  it("does not initialize the alternate screen in minimal mode", async () => {
+    const fixture = await tuiFixture({ screenMode: "minimal", loadInline: async () => fakeInline() })
+    try {
+      expect(fixture.terminal.bytes).toBe("")
+      expect(fixture.terminal.bytes).not.toContain("\x1b[?1049h")
+      expect(fixture.terminal.bytes).not.toMatch(/\x1b\[\?100[0-6]h/)
+      expect(fixture.screenMode).toBe("minimal")
+      expect(fixture.app.state().screen).toBe("minimal")
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("fullscreen mode initializes the terminal (alt screen + five-mode mouse)", async () => {
+    const fixture = await tuiFixture({ screenMode: "fullscreen" })
+    try {
+      expect(fixture.terminal.bytes).toContain("\x1b[?1049h")
+      expect(fixture.terminal.bytes).toMatch(/\x1b\[\?100[0-6]h/)
+      expect(fixture.screenMode).toBe("fullscreen")
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("inline-engine failure: ONE warning, fullscreen fallback, persisted screen mode untouched", async () => {
+    const warns: string[] = []
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => { warns.push(args.join(" ")) })
+    const fixture = await tuiFixture({
+      screenMode: "minimal",
+      settingsSeed: { tui: { prefs: { screenMode: "minimal" } } },
+      loadInline: async () => undefined,
+    })
+    spy.mockRestore()
+    try {
+      expect(warns).toHaveLength(1)
+      expect(warns[0]).toMatch(/inline engine is unavailable/i)
+      // fall back to fullscreen — the terminal was initialized.
+      expect(fixture.terminal.bytes).toContain("\x1b[?1049h")
+      expect(fixture.screenMode).toBe("fullscreen")
+      // the fallback is a REAL fullscreen start (the welcome screen).
+      expect(fixture.app.state().screen).toBe("welcome")
+      // the persisted choice is NOT rewritten.
+      expect(JSON.parse(readFileSync(fixture.settingsPath, "utf8")).tui.prefs.screenMode).toBe("minimal")
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 })
