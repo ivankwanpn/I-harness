@@ -374,6 +374,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/text-diff':
+        specifier: workspace:*
+        version: link:../text-diff
 
   packages/fs-lock:
     dependencies:
@@ -991,6 +994,12 @@ importers:
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
+
+  packages/text-diff:
+    dependencies:
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
 
   packages/todo:
     dependencies:
@@ -1926,6 +1935,10 @@ packages:
   depd@2.0.0:
     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
     engines: {node: '>= 0.8'}
+
+  diff@9.0.0:
+    resolution: {integrity: sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==}
+    engines: {node: '>=0.3.1'}
 
   dunder-proto@1.0.1:
     resolution: {integrity: sha512-KIN/nDJBQRcXw0MLVhZE9iQHmG68qAVIBg9CqmUYjmQIhgij9U5MFvrqkUL5FbtyyzZuOeOt0zdeRe4UY7ct+A==}
@@ -3098,6 +3111,8 @@ snapshots:
   deep-eql@5.0.2: {}
 
   depd@2.0.0: {}
+
+  diff@9.0.0: {}
 
   dunder-proto@1.0.1:
     dependencies:
