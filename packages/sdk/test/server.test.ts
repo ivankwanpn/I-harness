@@ -1,12 +1,13 @@
 // M27 R-C4b: SessionService-backed SDK server (in-process): initialize,
 // session/prompt → service.submit with session/event + session/status
 // notifications, error codes, shutdown lifecycle.
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionEvent } from "@i-harness/core-session"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 import {
   decodeFrame,
@@ -54,6 +55,18 @@ function drive(server: SdkServer): {
         }
         poll()
       }),
+  }
+}
+
+function makeStubService(): SessionService {
+  return {
+    submit: vi.fn(async () => {}),
+    assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
+    liveSession: () => undefined,
+    hasAssembly: () => false,
+    queueState: () => ({ running: false, queued: 0 }),
+    onAssembly: () => () => {},
+    close: async () => {},
   }
 }
 
@@ -224,6 +237,54 @@ describe("createSdkServer", () => {
     } finally {
       await service.close()
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("createSdkServer session ownership", () => {
+  it("adopts an existing session exactly once when concurrent prompts open it", async () => {
+    const service = makeStubService()
+    const coordinator = {
+      list: vi.fn(async () => ["existing"]),
+      create: vi.fn(async ({ sessionId }: { sessionId?: string } = {}) => ({ id: sessionId ?? "new" })),
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+    } as unknown as SessionCoordinator
+    const server = createSdkServer(service, { coordinator })
+
+    try {
+      const replies = await Promise.all([
+        server.handleLine(encodeFrame(makeRequest(20, "session/prompt", { sessionId: "existing", prompt: "one" }))),
+        server.handleLine(encodeFrame(makeRequest(21, "session/prompt", { sessionId: "existing", prompt: "two" }))),
+        server.handleLine(encodeFrame(makeRequest(22, "session/prompt", { sessionId: "existing", prompt: "three" }))),
+      ])
+
+      expect(replies.map((reply) => (decodeFrame(reply!) as RpcSuccess).result)).toEqual([
+        { sessionId: "existing", ok: true },
+        { sessionId: "existing", ok: true },
+        { sessionId: "existing", ok: true },
+      ])
+      expect(coordinator.list).toHaveBeenCalledTimes(1)
+      expect(coordinator.create).not.toHaveBeenCalled()
+      expect(coordinator.adoptOwnership).toHaveBeenCalledTimes(1)
+      expect(coordinator.adoptOwnership).toHaveBeenCalledWith("existing")
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("keeps a no-store server in memory without attempting ownership adoption", async () => {
+    const service = makeStubService()
+    const server = createSdkServer(service)
+
+    try {
+      const reply = await server.handleLine(encodeFrame(makeRequest(23, "session/prompt", {
+        sessionId: "memory-only",
+        prompt: "hello",
+      })))
+      expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({ sessionId: "memory-only", ok: true })
+      expect(service.submit).toHaveBeenCalledWith("memory-only", "hello", expect.any(AbortSignal))
+    } finally {
+      await server.close()
     }
   })
 })

@@ -104,4 +104,39 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
     },
     120_000,
   )
+
+  it(
+    "holds ownership for a newly opened session and rejects a second process resuming it",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-owner-ws-"))
+      const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-owner-sess-"))
+      const first = createHarnessClient({
+        command: process.execPath,
+        args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
+        cwd: workspace,
+      })
+      const second = createHarnessClient({
+        command: process.execPath,
+        args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
+        cwd: workspace,
+      })
+      try {
+        await first.request("initialize", {})
+        await second.request("initialize", {})
+        await expect(first.run({ sessionId: "sdk-owner", prompt: "open" })).resolves.toMatchObject({
+          sessionId: "sdk-owner",
+        })
+
+        await expect(second.run({ sessionId: "sdk-owner", prompt: "resume" })).rejects.toMatchObject({
+          code: -32603,
+        })
+      } finally {
+        await second.close().catch(() => {})
+        await first.close().catch(() => {})
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(sessionDir, { recursive: true, force: true })
+      }
+    },
+    120_000,
+  )
 })

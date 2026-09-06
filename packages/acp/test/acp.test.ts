@@ -4,8 +4,9 @@
 // session/new|prompt|list|resume|close, cancel notification no-op, and the
 // v0 permission face (autoApprove). One end-to-end test spawns the real CLI
 // (`i-harness acp`) over stdio NDJSON.
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { client } from "@agentclientprotocol/sdk"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -132,6 +133,27 @@ describe("createAcpServer", () => {
         ).rejects.toThrow()
       },
     )
+      await service.close()
+  })
+
+  it("adopts an existing durable session before ACP resume", async () => {
+    const { service } = await makeService()
+    const adoptOwnership = vi.fn(async (_sessionId: string) => {})
+    const coordinator = {
+      profile: vi.fn(async (_sessionId: string) => ({
+        meta: { formatVersion: 1, sessionId: "existing", createdAt: new Date().toISOString() },
+        blank: false,
+      })),
+      adoptOwnership,
+    } as unknown as SessionCoordinator
+    const server = createAcpServer({ service, coordinator })
+    const app = client({ name: "vitest-client" })
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      await ctx.request("session/resume", { sessionId: "existing", cwd: join(tmpdir(), "ih-acp-cwd") })
+    })
+    expect(adoptOwnership).toHaveBeenCalledTimes(1)
+    expect(adoptOwnership).toHaveBeenCalledWith("existing")
     await service.close()
   })
 })
