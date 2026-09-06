@@ -66,6 +66,55 @@ describe("normalizeSettings", () => {
     expect(normalizeSettings({ searchBackend: "sqlite" }).searchBackend).toBe("sqlite")
     expect(normalizeSettings(undefined).searchBackend).toBe("jsonl")
   })
+
+  it("soft-migrates legacy TUI providers into canonical llm providers", () => {
+    const out = normalizeSettings({
+      llm: { providers: {}, defaultModel: { provider: "", model: "" } },
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "deepseek",
+          providers: {
+            deepseek: {
+              id: "deepseek",
+              name: "DeepSeek",
+              baseUrl: "https://api.deepseek.com/v1/",
+              protocol: "openai-compatible",
+              apiKeyRef: "DEEPSEEK_API_KEY",
+              modelsUrl: "https://api.deepseek.com/v1/models",
+            },
+          },
+        },
+      },
+    })
+
+    expect(out.llm.providers.deepseek).toEqual({
+      displayName: "DeepSeek",
+      baseURL: "https://api.deepseek.com",
+      protocol: "openai-completions",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
+      modelsURL: "https://api.deepseek.com/v1/models",
+    })
+    expect(out.llm.defaultModel).toEqual({ provider: "deepseek", model: "" })
+  })
+
+  it("canonical provider fields win over a legacy migration row", () => {
+    const out = normalizeSettings({
+      llm: {
+        providers: { deepseek: { baseURL: "https://gateway.example", protocol: "openai-responses" } },
+        defaultModel: { provider: "deepseek", model: "deepseek-chat" },
+      },
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "deepseek",
+          providers: { deepseek: { id: "deepseek", baseUrl: "https://legacy.example" } },
+        },
+      },
+    })
+    expect(out.llm.providers.deepseek.baseURL).toBe("https://gateway.example")
+    expect(out.llm.defaultModel.model).toBe("deepseek-chat")
+  })
 })
 
 describe("resolveSettingsPath", () => {

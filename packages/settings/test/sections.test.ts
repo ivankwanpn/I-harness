@@ -169,6 +169,19 @@ describe("describeSection", () => {
 })
 
 describe("mutateSection", () => {
+  it("mutates a provider modelsURL through the canonical llm section", async () => {
+    const { store, root } = await newStore()
+    const view = await mutateSection("llm", [{
+      op: "set",
+      path: ["providers", "custom", "modelsURL"],
+      value: "https://models.example/v1/models",
+    }], store)
+    expect((view.user as AnyRecord).providers.custom).toMatchObject({
+      modelsURL: "https://models.example/v1/models",
+    })
+    await rm(root, { recursive: true, force: true })
+  })
+
   it("set path ops persist and bump the section revision (monotonic across reload)", async () => {
     const { store, file, root } = await newStore()
     await store.set({ theme: "dark" }) // unrelated top-level write must not disturb sections

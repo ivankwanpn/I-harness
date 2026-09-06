@@ -134,6 +134,7 @@ const MODEL_FIELDS: Record<string, FieldSpec> = {
 const providerConfigFields: Record<string, FieldSpec> = {
   apiKeyEnv: { type: "string", role: "credential-ref" },
   baseURL: { type: "string" },
+  modelsURL: { type: "string" },
   displayName: { type: "string" },
   protocol: { type: "enum", enum: [...PROVIDER_PROTOCOLS] },
   models: { type: "array", items: { type: "object", fields: MODEL_FIELDS, required: ["id"] } },

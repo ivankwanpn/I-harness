@@ -77,6 +77,8 @@ export interface SettingsProviderConfig {
   /** Host ROOT after normalize (a trailing /v1 is stripped — the adapters
    * assemble /v1/... themselves); see stripBaseURLSuffix. */
   baseURL?: string
+  /** Models-endpoint override for provider discovery. */
+  modelsURL?: string
   /** Display label overriding the route name for the UI row. */
   displayName?: string
   /** Wire protocol (D2). normalizeSettings keeps VALID values only: absent
@@ -102,18 +104,16 @@ export interface SettingsDefaultModel {
   reasoningEffort?: string
 }
 
-/** Appended section (no migration): per-provider overrides + the default model. */
+/** Canonical provider overrides + the default model. */
 export interface SettingsLlm {
   providers: Record<string, SettingsProviderConfig>
   defaultModel: SettingsDefaultModel
 }
 
-// ── M46a G1: appended `tui` section (no migration) ───────────────────────────
-// The TUI's provider registry + UI preferences — a SEPARATE section from `llm`
-// (the web/CLI route store): the TUI ProviderEntry owns a richer shape (its own
-// protocol vocabulary incl. "anthropic" name, `modelsUrl` discovery override)
-// keyed by id, with the ACTIVE provider pin. Additive-only: an old document
-// loads with the defaults below; nothing here is ever migrated.
+// ── M46a G1: legacy `tui` section ────────────────────────────────────────────
+// The TUI provider registry remains readable during the M49 transition. Its
+// provider rows soft-migrate into canonical `llm.providers` in memory; the
+// legacy shape and its UI preferences are still normalized here until Task 6.
 
 /** The TUI provider-entry wire protocol vocabulary (cc-custom v2 shape — the
  * entry values are TUI-facing; the factory maps "anthropic" →
@@ -316,6 +316,36 @@ function stripBaseURLSuffix(baseURL: string): string {
   return baseURL.replace(/(?:^|\/)v1\/?$/, "")
 }
 
+function migrateLegacyProtocol(value: unknown): SettingsProviderProtocol | undefined {
+  if (value === "openai-compatible") return "openai-completions"
+  if (value === "anthropic") return "anthropic-messages"
+  if (value === "openai-responses" || value === "gemini" || value === "bedrock") return value
+  return undefined
+}
+
+function migrateLegacyTuiProviders(raw: unknown): {
+  providers: Record<string, SettingsProviderConfig>
+  activeProviderId: string
+} {
+  if (!isRecord(raw) || !isRecord(raw.providers)) return { providers: {}, activeProviderId: "" }
+  const out: Record<string, SettingsProviderConfig> = {}
+  for (const [id, value] of Object.entries(raw.providers)) {
+    if (!isRecord(value) || typeof value.baseUrl !== "string" || value.baseUrl === "") continue
+    const protocol = migrateLegacyProtocol(value.protocol)
+    out[id] = {
+      baseURL: stripBaseURLSuffix(value.baseUrl),
+      ...(typeof value.name === "string" && value.name !== "" ? { displayName: value.name } : {}),
+      ...(typeof value.apiKeyRef === "string" && value.apiKeyRef !== "" ? { apiKeyEnv: value.apiKeyRef } : {}),
+      ...(typeof value.modelsUrl === "string" && value.modelsUrl !== "" ? { modelsURL: value.modelsUrl } : {}),
+      ...(protocol !== undefined ? { protocol } : {}),
+    }
+  }
+  return {
+    providers: out,
+    activeProviderId: typeof raw.activeProviderId === "string" ? raw.activeProviderId : "",
+  }
+}
+
 /** Model rows: old-format strings soft-upgrade to `{id}` (D5, no migration
  * path); object entries keep their addressable `id` plus the optional validated
  * caps; entries without a non-empty string id are dropped. */
@@ -358,6 +388,7 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
     const baseURL = stripBaseURLSuffix(raw.baseURL)
     if (baseURL !== "") out.baseURL = baseURL
   }
+  if (isNonEmptyString(raw.modelsURL)) out.modelsURL = raw.modelsURL
   if (isNonEmptyString(raw.displayName)) out.displayName = raw.displayName
   const models = normalizeModels(raw.models)
   if (models !== undefined) out.models = models
@@ -388,6 +419,24 @@ function normalizeLlm(raw: unknown, base: SettingsLlm): SettingsLlm {
       ...(typeof dm.reasoningEffort === "string"
         ? { reasoningEffort: dm.reasoningEffort === "none" ? "off" : dm.reasoningEffort }
         : {}),
+    },
+  }
+}
+
+function normalizeLlmWithLegacy(raw: unknown, legacyRaw: unknown, base: SettingsLlm): SettingsLlm {
+  const canonical = normalizeLlm(raw, base)
+  const legacy = migrateLegacyTuiProviders(legacyRaw)
+  const providers: Record<string, SettingsProviderConfig> = { ...legacy.providers }
+  for (const [id, config] of Object.entries(canonical.providers)) {
+    providers[id] = { ...providers[id], ...config }
+  }
+  return {
+    providers,
+    defaultModel: {
+      ...canonical.defaultModel,
+      provider: canonical.defaultModel.provider !== ""
+        ? canonical.defaultModel.provider
+        : legacy.activeProviderId,
     },
   }
 }
@@ -498,6 +547,7 @@ export function normalizeSettings(raw: unknown): Settings {
     }
   }
   const pluginsRaw = isRecord(raw.plugins) ? raw.plugins : {}
+  const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,
@@ -513,9 +563,9 @@ export function normalizeSettings(raw: unknown): Settings {
       webSearch: booleanOf(pluginsRaw.webSearch, base.plugins.webSearch),
       subagentModel: booleanOf(pluginsRaw.subagentModel, base.plugins.subagentModel),
     },
-    // Appended sections (D5, no migration): absent keys get the defaults above
-    // and the original top-level keys are never rewritten.
-    llm: normalizeLlm(raw.llm, base.llm),
+    // Transition read migration: legacy TUI providers fill missing canonical
+    // fields in memory only; explicit llm values win and no file is rewritten.
+    llm: normalizeLlmWithLegacy(raw.llm, tuiRaw.providers, base.llm),
     onboarding: normalizeOnboarding(raw.onboarding, base.onboarding),
     tui: normalizeTui(raw.tui, base.tui),
   }
