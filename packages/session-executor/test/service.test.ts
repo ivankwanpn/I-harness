@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { createDurableSessionLoader } from "../src/index.ts"
+import { createDurableSessionLoader, ModelUnavailableError } from "../src/index.ts"
 import { createSessionService, type SessionService } from "../src/service.ts"
 import { createTelemetry, type TelemetrySink } from "@i-harness/telemetry"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -14,6 +14,163 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it("uses one pending ready binding for state and assembly construction", async () => {
+    let calls = 0
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const requests: LLMRequest[] = []
+    const model: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "real" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      contextWindow: 1,
+      reasoningEffort: "low",
+      modelBindingFor: async () => {
+        calls += 1
+        await gate
+        return {
+          status: "ready",
+          binding: {
+            model,
+            providerId: "deepseek",
+            modelId: "deepseek-chat",
+            label: "deepseek:deepseek-chat",
+            reasoningEffort: "high",
+            contextWindow: 128_000,
+          },
+        }
+      },
+    })
+
+    try {
+      const statePromise = service.modelState("s1")
+      const assemblyPromise = service.assemblyFor("s1")
+      await vi.waitFor(() => { expect(calls).toBe(1) })
+      release()
+
+      await expect(statePromise).resolves.toEqual({
+        status: "ready",
+        providerId: "deepseek",
+        modelId: "deepseek-chat",
+        label: "deepseek:deepseek-chat",
+      })
+      const assembly = await assemblyPromise
+      expect(assembly.model).toBe(model)
+      expect(assembly.modelLabel).toBe("deepseek:deepseek-chat")
+      await expect(assembly.agent.run("hello")).resolves.toMatchObject({ finalText: "real" })
+      expect(requests[0]?.reasoningEffort).toBe("high")
+      expect(requests[0]?.tools.map((tool) => tool.name)).toContain("get_context_remaining")
+      expect(calls).toBe(1)
+    } finally {
+      release()
+      await service.close()
+    }
+  }, 60_000)
+
+  it("does not construct an assembly for an unconfigured binding", async () => {
+    let calls = 0
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      modelBindingFor: async () => {
+        calls += 1
+        return { status: "unconfigured", reason: "No model configured" }
+      },
+    })
+
+    try {
+      await expect(service.modelState("s1")).resolves.toEqual({
+        status: "unconfigured",
+        reason: "No model configured",
+      })
+      const assembly = service.assemblyFor("s1")
+      await expect(assembly).rejects.toBeInstanceOf(ModelUnavailableError)
+      await expect(assembly).rejects.toThrow("No model configured")
+      expect(calls).toBe(1)
+      expect(service.hasAssembly("s1")).toBe(false)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it("preserves invalid binding details without constructing an assembly", async () => {
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "invalid",
+        reason: "Unknown model",
+        providerId: "deepseek",
+        modelId: "missing",
+      }),
+    })
+
+    try {
+      await expect(service.modelState("s1")).resolves.toEqual({
+        status: "invalid",
+        reason: "Unknown model",
+        providerId: "deepseek",
+        modelId: "missing",
+      })
+      await expect(service.assemblyFor("s1")).rejects.toThrow("Unknown model")
+      expect(service.hasAssembly("s1")).toBe(false)
+    } finally {
+      await service.close()
+    }
+  })
+
+  it("closeSession invalidates an idle model binding resolution", async () => {
+    let calls = 0
+    const models = [
+      createMockClient([{ role: "assistant", text: "first" }]),
+      createMockClient([{ role: "assistant", text: "second" }]),
+    ]
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      modelBindingFor: async () => {
+        const index = calls++
+        const modelId = index === 0 ? "first" : "second"
+        return {
+          status: "ready",
+          binding: {
+            model: models[index]!,
+            providerId: "fixture",
+            modelId,
+            label: `fixture:${modelId}`,
+          },
+        }
+      },
+    })
+
+    try {
+      await expect(service.modelState("s1")).resolves.toMatchObject({
+        status: "ready",
+        label: "fixture:first",
+      })
+      expect(service.hasAssembly("s1")).toBe(false)
+
+      await service.closeSession("s1")
+
+      const assembly = await service.assemblyFor("s1")
+      expect(assembly.model).toBe(models[1])
+      expect(assembly.modelLabel).toBe("fixture:second")
+      await expect(service.modelState("s1")).resolves.toMatchObject({
+        status: "ready",
+        label: "fixture:second",
+      })
+      expect(calls).toBe(2)
+    } finally {
+      await service.close()
+    }
+  })
+
   it("restores durable history into the model and mirrors continuation with increasing seqs", async () => {
     const restored = createSession()
     append(restored, { type: "turn/start" })
