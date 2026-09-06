@@ -213,6 +213,43 @@ describe("PromptEditor — paste atoms", () => {
     }
     expect(seen).toEqual([0, 0, 0, 0]) // end-then-left = 0; no interior ever
   })
+
+  it("right steps across a chip junction: start→end (the atom), end→next char", () => {
+    const editor = createPromptEditor("ab", 2)
+    editor.insertPaste({ display: "[Pasted: 1 line]", source: "CHIP" }) // atom 2..6
+    editor.insert("c", 0) // "ab" + atom + "c", cursor 7
+    editor.move("left")
+    editor.move("left") // 2 — the atom start
+    expect(editor.cursor()).toBe(2)
+    editor.move("right") // the junction: one atom step → 6
+    expect(editor.cursor()).toBe(6)
+    editor.move("right") // the following text: one grapheme → 7
+    expect(editor.cursor()).toBe(7)
+    editor.move("right") // at the end: stays
+    expect(editor.cursor()).toBe(7)
+  })
+
+  it("deleteForward at the chip start removes the WHOLE chip; after it removes the next char", () => {
+    const editor = createPromptEditor("ab", 2)
+    editor.insertPaste({ display: "[Pasted: 1 line]", source: "CHIP" })
+    editor.insert("c", 0)
+    editor.move("left")
+    editor.move("left") // 2 — the chip start
+    editor.deleteForward() // the junction: the chip is ONE unit
+    expect(editor.value()).toBe("abc")
+    expect(editor.cursor()).toBe(2)
+    editor.deleteForward() // now plain text: the "c"
+    expect(editor.value()).toBe("ab")
+  })
+
+  it("right from the atom end enters the following text without freezing (junction symmetry)", () => {
+    const editor = createPromptEditor()
+    editor.insertPaste({ display: "[Pasted: 1 line]", source: "XY" }, 0) // atom 0..2
+    editor.insert("Z", 0) // "XY" + "Z", cursor 3
+    editor.move("left") // 2 (atom end)
+    editor.move("right") // one grapheme → 3 (the "Z")
+    expect(editor.cursor()).toBe(3)
+  })
 })
 
 describe("PromptEditor — replaceAll transactions", () => {
