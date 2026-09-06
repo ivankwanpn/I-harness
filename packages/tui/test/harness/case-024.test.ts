@@ -30,6 +30,7 @@ async function runCase(cols: 80 | 120, rows: 24 | 32): Promise<{ captured: strin
   const markerDir = mkdtempSync(join(tmpdir(), `tui-case-024-${cols}-`))
   let runner: HostPty | undefined
   let off: (() => void) | undefined
+  let exited = false
   let captured = ""
   const virtual = new VirtualTerminal(cols, rows)
   try {
@@ -40,6 +41,7 @@ async function runCase(cols: 80 | 120, rows: 24 | 32): Promise<{ captured: strin
       rows,
       extraArgv: [`${cols}x${rows}`],
     })
+    runner.pty.onExit(() => { exited = true })
     off = runner.onData((data) => {
       captured += data
       virtual.write(data)
@@ -58,7 +60,7 @@ async function runCase(cols: 80 | 120, rows: 24 | 32): Promise<{ captured: strin
     return { captured, virtual }
   } finally {
     off?.()
-    if (runner !== undefined) {
+    if (runner !== undefined && !exited) {
       try { runner.pty.kill() } catch {}
     }
     if ((process.env.TUI_KEEP_DIR ?? "") !== "") console.log(`[keep] markerDir=${markerDir}`)

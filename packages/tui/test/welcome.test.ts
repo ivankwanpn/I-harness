@@ -79,7 +79,10 @@ async function providerStore(): Promise<ProviderStore> {
   return new ProviderStore({ settings, credentials: createCredentialStore(join(root, "credentials.json")) })
 }
 
-function recordingBackend(modelState: BackendModelState): BackendClient & { calls: string[]; submissions: string[] } {
+function recordingBackend(
+  modelState: BackendModelState,
+  sessions = [{ id: "resume-1", title: "Resume me", updatedAt: 1 }],
+): BackendClient & { calls: string[]; submissions: string[] } {
   const calls: string[] = []
   const submissions: string[] = []
   return {
@@ -87,7 +90,7 @@ function recordingBackend(modelState: BackendModelState): BackendClient & { call
     submissions,
     listSessions: async () => {
       calls.push("listSessions")
-      return [{ id: "resume-1", title: "Resume me", updatedAt: 1 }]
+      return sessions
     },
     open: async (id) => { calls.push(`open:${id}`) },
     createSession: async () => {
@@ -142,6 +145,42 @@ const enterKey = (): InputEvent => ({
   shift: false,
 })
 
+const escapeKey = (): InputEvent => ({
+  type: "key",
+  code: "Esc",
+  key: "Esc",
+  ctrl: false,
+  alt: false,
+  shift: false,
+})
+
+const downKey = (): InputEvent => ({
+  type: "key",
+  code: "Down",
+  key: "ArrowDown",
+  ctrl: false,
+  alt: false,
+  shift: false,
+})
+
+const ctrlKey = (key: "n" | "s"): InputEvent => ({
+  type: "key",
+  code: "char",
+  key,
+  ctrl: true,
+  alt: false,
+  shift: false,
+})
+
+const f2Key = (): InputEvent => ({
+  type: "key",
+  code: "F2",
+  key: "F2",
+  ctrl: false,
+  alt: false,
+  shift: false,
+})
+
 async function waitFor(predicate: () => boolean): Promise<void> {
   const deadline = Date.now() + 1_000
   while (!predicate()) {
@@ -178,6 +217,18 @@ describe("welcome hero (spec §2a)", () => {
     // cursor row fills bg_visual in the menu column (past the text runs).
     expect(cellAt(r, 80, 2).style).toMatchObject({ bg: rgb(palette.bgVisual) })
     expect(cellAt(r, 80, 5).style).not.toMatchObject({ bg: rgb(palette.bgVisual) })
+  })
+
+  it("keeps all wide-layout actions visible at exactly 90 columns", () => {
+    const r = make(90, 24)
+    draw(r, (view) => renderWelcome({ x: 0, y: 0, w: 90, h: 24 }, state, prompt, view, palette, GLYPHS))
+    const text = Array.from({ length: 24 }, (_, y) => rowText(r, y)).join("\n")
+
+    expect(rowText(r, 2)).toContain("I-harness")
+    expect(rowText(r, 2)).toContain("ctrl+n New session")
+    expect(text).toContain("ctrl+s Resume session")
+    expect(text).toContain("F2 Settings")
+    expect(text).toContain("ctrl+q Quit")
   })
 
   it("stacked below 90 cols: logo/subtitle then the menu rows, one column", () => {
@@ -259,6 +310,93 @@ describe("TuiApp Welcome model gate", () => {
 
     expect(backend.submissions).toEqual([])
     expect(app.state().prompt.text).toBe("hello")
+    expect(frontText(renderer)).toContain("Models & Providers")
+  })
+
+  it("routes Esc to the Settings overlay before the underlying Welcome menu", async () => {
+    const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
+    const { app } = testApp(backend, await providerStore())
+    await app.initialize({ renderWelcomeBeforeModel: true })
+    app.state().prompt.text = "hello"
+    app.state().prompt.cursor = 5
+
+    app.feedInput(enterKey())
+    await waitFor(() => (app.state().overlay as { kind?: string } | undefined)?.kind === "settings")
+
+    app.feedInput(escapeKey())
+    expect((app.state().overlay as { kind?: string } | undefined)?.kind).toBe("settings")
+    app.feedInput(escapeKey())
+
+    expect(app.state().overlay).toBeUndefined()
+    expect(app.state().prompt.text).toBe("hello")
+  })
+
+  it("routes Welcome Resume picker navigation and selection to the session surface", async () => {
+    const backend = recordingBackend(
+      { status: "ready", providerId: "fixture", modelId: "model", label: "fixture:model" },
+      [
+        { id: "resume-1", title: "First", updatedAt: 1 },
+        { id: "resume-2", title: "Second", updatedAt: 2 },
+      ],
+    )
+    const { app } = testApp(backend, await providerStore())
+    await app.initialize({ renderWelcomeBeforeModel: true })
+    app.dispatch("sessions")
+    await waitFor(() => app.state().sessions?.loading === false)
+
+    app.feedInput(downKey())
+    expect(app.state().sessions?.cursor).toBe(1)
+    app.feedInput(enterKey())
+    await waitFor(() => app.state().view?.kind === "agent")
+
+    expect(app.state().view).toEqual({ kind: "agent", sessionId: "resume-2" })
+    expect(backend.calls).toContain("open:resume-2")
+  })
+
+  it("runs Ctrl+N independently of the Welcome menu cursor", async () => {
+    const modelState: BackendModelState = {
+      status: "ready",
+      providerId: "fixture",
+      modelId: "model",
+      label: "fixture:model",
+    }
+    const newBackend = recordingBackend(modelState)
+    const { app: newApp } = testApp(newBackend, await providerStore())
+    await newApp.initialize({ renderWelcomeBeforeModel: true })
+    newApp.state().welcome!.cursor = 3
+
+    newApp.feedInput(ctrlKey("n"))
+    await waitFor(() => newApp.state().view?.kind === "agent")
+    expect(newApp.state().view).toEqual({ kind: "agent", sessionId: "created-1" })
+  })
+
+  it("runs Ctrl+S independently of the Welcome menu cursor", async () => {
+    const modelState: BackendModelState = {
+      status: "ready",
+      providerId: "fixture",
+      modelId: "model",
+      label: "fixture:model",
+    }
+    const resumeBackend = recordingBackend(modelState)
+    const { app: resumeApp } = testApp(resumeBackend, await providerStore())
+    await resumeApp.initialize({ renderWelcomeBeforeModel: true })
+    resumeApp.state().welcome!.cursor = 0
+
+    resumeApp.feedInput(ctrlKey("s"))
+    await waitFor(() => resumeApp.state().sessions?.loading === false)
+    expect(resumeApp.state().sessions?.title).toBe("Resume session")
+  })
+
+  it("opens Welcome Settings with F2 independently of the menu cursor", async () => {
+    const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
+    const { app, renderer } = testApp(backend, await providerStore())
+    await app.initialize({ renderWelcomeBeforeModel: true })
+    app.state().welcome!.cursor = 3
+
+    app.feedInput(f2Key())
+    app.frame()
+
+    expect((app.state().overlay as { kind?: string } | undefined)?.kind).toBe("settings")
     expect(frontText(renderer)).toContain("Models & Providers")
   })
 

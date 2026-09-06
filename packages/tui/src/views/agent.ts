@@ -207,8 +207,17 @@ export function layoutAgent(
   const pd = state.paneData
   const gap = denseVertical ? 0 : 1
   let cursorBottom = turnH > 0 ? turn.y : prompt.y
+  let constrainedPaneRows = constrained
+    ? Math.max(0, cursorBottom - (status.y + status.h) - 5)
+    : undefined
+  const fitPaneRows = (desired: number): number => {
+    if (constrainedPaneRows === undefined) return desired
+    const fitted = Math.min(desired, constrainedPaneRows)
+    constrainedPaneRows -= fitted
+    return fitted
+  }
 
-  const btwH = pd?.btw !== undefined ? (constrained ? 1 : btwHeightOf(area.rows)) : 0
+  const btwH = fitPaneRows(pd?.btw !== undefined ? (constrained ? 1 : btwHeightOf(area.rows)) : 0)
   let btw: Rect | undefined
   if (btwH > 0) {
     const y = cursorBottom - gap - btwH
@@ -217,7 +226,7 @@ export function layoutAgent(
   }
 
   const showQueue = state.panes.has("queue") && pd?.queue !== undefined
-  const queueH = showQueue ? (constrained ? 1 : queueHeightOf(pd.queue!)) : 0
+  const queueH = fitPaneRows(showQueue ? (constrained ? 1 : queueHeightOf(pd.queue!)) : 0)
   let queue: Rect | undefined
   if (queueH > 0) {
     const y = cursorBottom - gap - queueH
@@ -227,9 +236,9 @@ export function layoutAgent(
 
   // Panes above the scrollback: tasks (item 3), todo (item 5).
   const showTasks = state.panes.has("tasks") && pd?.tasks !== undefined
-  const tasksH = showTasks ? (constrained ? 1 : tasksHeightOf(pd.tasks!)) : 0
+  const tasksH = fitPaneRows(showTasks ? (constrained ? 1 : tasksHeightOf(pd.tasks!)) : 0)
   const showTodo = state.panes.has("todo") && pd?.todo !== undefined
-  const todoH = showTodo ? (constrained ? 1 : todoHeightOf(pd.todo!)) : 0
+  const todoH = fitPaneRows(showTodo ? (constrained ? 1 : todoHeightOf(pd.todo!)) : 0)
   let y = status.y + 1
   let tasks: Rect | undefined
   if (tasksH > 0) {

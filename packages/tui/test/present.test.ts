@@ -128,6 +128,32 @@ describe("present — ActiveView and constrained layout", () => {
     expect(layout.scrollback.h).toBeGreaterThanOrEqual(5)
     expect(layout.scrollback.y + layout.scrollback.h).toBeLessThanOrEqual(layout.prompt.y)
   })
+
+  it("drops optional pane rows before reducing constrained scrollback below five rows", () => {
+    const state = baseState(new StubEngine(), {
+      panes: new Set(["tasks", "todo", "queue"]),
+      paneData: {
+        tasks: [{ label: "Subagents", entries: [{ status: "running", label: "worker" }] }],
+        todo: [{ id: "todo-1", text: "Ship it", status: "in_progress" }],
+        queue: [{ n: 1, kind: "prompt", text: "Queued prompt" }],
+        btw: { question: "Why?", state: "answering" },
+      },
+      turn: {
+        phase: "thinking",
+        attempts: 0,
+        phaseMs: 0,
+        turnMs: 0,
+        tokens: 0,
+        nowMs: 0,
+        canStop: true,
+      },
+    })
+    const layout = layoutAgent({ cols: 80, rows: 12 }, { ...state, dropdown: undefined })
+
+    expect(layout.shortcuts.h).toBe(0)
+    expect(layout.scrollback.h).toBeGreaterThanOrEqual(5)
+    expect(layout.scrollback.y + layout.scrollback.h).toBeLessThanOrEqual(layout.turn.y)
+  })
 })
 
 describe("present — prompt chrome (spec §3.2)", () => {

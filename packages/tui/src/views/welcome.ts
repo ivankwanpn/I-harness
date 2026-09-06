@@ -70,7 +70,7 @@ export function renderWelcome(
     view.text(layout.error.x, layout.error.y, error, view.color(palette.accentError), layout.error.x + layout.error.w)
   }
 
-  renderHero(layout.hero, state, view, palette)
+  renderHero(layout.hero, state, ctx.w >= WELCOME_WIDE_MIN, view, palette)
 
   const ready = state.modelState.status === "ready"
   const promptState: PromptState = {
@@ -116,8 +116,7 @@ function modelStatusText(state: WelcomeModelState): string {
   return `${reason}. Open Settings > Models & Providers.`
 }
 
-function renderHero(ctx: Rect, state: WelcomeState, view: ViewDraw, palette: Palette): void {
-  const wide = ctx.w >= WELCOME_WIDE_MIN
+function renderHero(ctx: Rect, state: WelcomeState, wide: boolean, view: ViewDraw, palette: Palette): void {
   const x0 = ctx.x
   const x1 = ctx.x + ctx.w - 1
   const y0 = ctx.y
