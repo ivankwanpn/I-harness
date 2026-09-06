@@ -242,7 +242,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
       const models = await registry.probeModels(id, {
         ...(view.modelsURL !== undefined
-          ? { baseURL: view.modelsURL }
+          ? { modelsURL: view.modelsURL }
           : view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
         apiKey,
         protocol: view.protocol,
@@ -328,7 +328,26 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         }
       }
 
-      const profile = runtimeProfile(view, resolvedAuth)
+      let apiKey: string | undefined
+      if (resolvedAuth.kind === "ambient") {
+        if (view.protocol !== "bedrock" || ref.kind !== "ambient") {
+          return invalidState(
+            `Ambient authentication is only supported for Bedrock provider "${providerId}"`,
+            providerId,
+            modelId,
+          )
+        }
+      } else {
+        apiKey = authValue(resolvedAuth)
+        if (apiKey === undefined) {
+          return {
+            status: "unconfigured",
+            reason: `No usable credential configured for provider "${providerId}"`,
+          }
+        }
+      }
+
+      const profile = runtimeProfile(view, apiKey)
       const userModel = view.user?.models?.find((model) => model.id === modelId)
       const contextWindow = resolveEffectiveModelContext({
         profile,
@@ -389,11 +408,11 @@ function providerView(
   }
 }
 
-function runtimeProfile(view: ProviderView, resolvedAuth: ResolvedProviderAuth): ProviderProfile {
-  const template = view.template
-  const apiKey = authValue(resolvedAuth)
+function runtimeProfile(view: ProviderView, apiKey: string | undefined): ProviderProfile {
+  const template = { ...(view.template ?? {}) }
+  delete template.apiKey
   return {
-    ...(template ?? {}),
+    ...template,
     name: view.id,
     displayName: view.displayName,
     protocol: adapterProtocol(view.protocol),
@@ -411,8 +430,8 @@ function authRef(view: ProviderView): ProviderAuthRef | undefined {
 }
 
 function authValue(auth: ResolvedProviderAuth | undefined): string | undefined {
-  if (auth?.kind === "api-key") return auth.value === "" ? undefined : auth.value
-  if (auth?.kind === "bearer") return auth.accessToken === "" ? undefined : auth.accessToken
+  if (auth?.kind === "api-key") return auth.value.trim() === "" ? undefined : auth.value
+  if (auth?.kind === "bearer") return auth.accessToken.trim() === "" ? undefined : auth.accessToken
   return undefined
 }
 

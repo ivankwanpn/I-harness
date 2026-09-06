@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createCredentialStore,
   createProviderAuthResolver,
@@ -25,6 +25,10 @@ import {
   type SettingsProviderConfig,
 } from "@i-harness/settings"
 import { createProviderRuntime, type ProviderRuntime } from "../src/index.ts"
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 interface BuildCall {
   profile: ProviderProfile
@@ -369,7 +373,7 @@ describe("auth and discovery", () => {
     expect(authCalls).toEqual(["discovery", "inference"])
     expect(probe).toHaveBeenCalledTimes(1)
     expect(probeCalls).toEqual([{
-      baseURL: "https://models.example/v1/models",
+      modelsURL: "https://models.example/v1/models",
       apiKey: "k",
       protocol: "openai-completions",
     }])
@@ -379,6 +383,40 @@ describe("auth and discovery", () => {
       { id: "discovered-model", name: "Discovered" },
     ])
     expect(builds[0]?.profile.apiKey).toBe("k")
+  })
+
+  it("fetches the configured modelsURL exactly through the built-in provider probe", async () => {
+    const exactFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: "exact-model" }] }), { status: 200 }),
+    )
+    vi.stubGlobal("fetch", exactFetch)
+    const { runtime } = await fixture({
+      providers: {
+        custom: {
+          baseURL: "https://gateway.example",
+          modelsURL: "https://models.example/v1/models",
+          protocol: "openai-completions",
+          apiKeyEnv: "CUSTOM_API_KEY",
+        },
+      },
+      credentials: { CUSTOM_API_KEY: "k" },
+      registry(registry) {
+        registry.register({
+          name: "custom",
+          displayName: "Custom",
+          protocol: "openai-compatible",
+        })
+      },
+    })
+
+    await expect(runtime.discoverModels("custom", { force: true })).resolves.toEqual([
+      { id: "exact-model" },
+    ])
+    expect(exactFetch).toHaveBeenCalledTimes(1)
+    expect(exactFetch).toHaveBeenCalledWith("https://models.example/v1/models", {
+      headers: { Authorization: "Bearer k" },
+      signal: expect.any(AbortSignal),
+    })
   })
 
   it("allows Bedrock ambient auth and reports manual-only discovery", async () => {
@@ -397,6 +435,7 @@ describe("auth and discovery", () => {
           name: "bedrock",
           displayName: "Amazon Bedrock",
           protocol: "bedrock",
+          apiKey: "template-secret",
         })
         registry.registerProbe("bedrock", probe)
       },
@@ -410,6 +449,65 @@ describe("auth and discovery", () => {
     expect(probe).not.toHaveBeenCalled()
     expect(builds[0]?.profile).toMatchObject({ protocol: "bedrock" })
     expect(builds[0]?.profile).not.toHaveProperty("apiKey")
+  })
+
+  it.each([
+    ["empty API key", { kind: "api-key", value: "" } as const],
+    ["empty bearer token", { kind: "bearer", accessToken: "" } as const],
+  ])("does not build a client for an %s", async (_label, resolvedAuth) => {
+    const { runtime, builds } = await fixture({
+      providers: {
+        custom: {
+          protocol: "openai-completions",
+          apiKeyEnv: "CUSTOM_API_KEY",
+          models: [{ id: "m1" }],
+        },
+      },
+      defaultModel: { provider: "custom", model: "m1" },
+      auth: fakeAuthResolver({ onResolve: () => resolvedAuth }),
+      registry(registry) {
+        registry.register({
+          name: "custom",
+          displayName: "Custom",
+          protocol: "openai-compatible",
+        })
+      },
+    })
+
+    await expect(runtime.resolveModel({})).resolves.toMatchObject({
+      status: "unconfigured",
+      reason: expect.stringMatching(/API key|credential/i),
+    })
+    expect(builds).toEqual([])
+  })
+
+  it("rejects ambient auth outside the Bedrock ambient path", async () => {
+    const { runtime, builds } = await fixture({
+      providers: {
+        custom: {
+          protocol: "openai-completions",
+          apiKeyEnv: "CUSTOM_API_KEY",
+          models: [{ id: "m1" }],
+        },
+      },
+      defaultModel: { provider: "custom", model: "m1" },
+      auth: fakeAuthResolver({ onResolve: () => ({ kind: "ambient" }) }),
+      registry(registry) {
+        registry.register({
+          name: "custom",
+          displayName: "Custom",
+          protocol: "openai-compatible",
+        })
+      },
+    })
+
+    await expect(runtime.resolveModel({})).resolves.toMatchObject({
+      status: "invalid",
+      reason: expect.stringMatching(/ambient/i),
+      providerId: "custom",
+      modelId: "m1",
+    })
+    expect(builds).toEqual([])
   })
 
   it("keeps settings unchanged when discovery fails", async () => {

@@ -184,16 +184,19 @@ export interface DirectoryEntry {
   models?: ModelDescriptor[]
 }
 
-/** A probe request carries an UNSAVED draft (baseURL/apiKey the user just
+/** A probe request carries an UNSAVED draft (URL/auth fields the user just
  * typed — nothing is stored by probing); omitted fields fall back to the
- * registered profile's own values. `protocol` is the route's RESOLVED wire
+ * registered profile's own values. An explicit `modelsURL` is a full endpoint
+ * and is fetched exactly once. An explicit `baseURL` is a host root and keeps
+ * the ordered candidate strategy. `protocol` is the route's RESOLVED wire
  * protocol — the caller runs settings' resolveProviderProtocol chain (user >
  * SEEDED_PROTOCOLS > DEFAULT) and passes it here; this module only applies
- * the generic terminal fallback (openai-completions = Bearer). AN EXPLICIT
- * draft baseURL makes the generic builtin probe run for ANY route (task 7 —
- * D4: the route-gate applies to the route-based preview flow only). */
+ * the generic terminal fallback (openai-completions = Bearer). Either explicit
+ * URL makes the generic builtin probe run for ANY route (task 7 — D4: the
+ * route-gate applies to the route-based preview flow only). */
 export interface ProbeRequest {
   baseURL?: string
+  modelsURL?: string
   apiKey?: string
   protocol?: string
 }
@@ -474,32 +477,44 @@ async function probeCandidate(url: string, headers: Record<string, string>): Pro
   return { kind: "ok", models }
 }
 
-/** Resolve + validate the probe base URL (an unsaved draft wins over the
- * registered profile). Only http(s) is a probeable endpoint, and a trailing
- * slash is normalized so `${base}/v1/models` never builds `//v1/models`. */
-function probeBaseURL(req: ProbeRequest, profile: ProviderProfile | undefined): string | undefined {
-  const base = req.baseURL ?? profile?.baseUrl
-  if (base === undefined || base === "") return undefined
+function validateProbeURL(value: string, label: "baseURL" | "modelsURL"): string {
   let parsed: URL
   try {
-    parsed = new URL(base)
+    parsed = new URL(value)
   } catch {
-    throw new ModelProbeFailedError(`model probe failed: invalid baseURL "${base}"`)
+    throw new ModelProbeFailedError(`model probe failed: invalid ${label} "${value}"`)
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new ModelProbeFailedError(
-      `model probe failed: invalid baseURL "${base}" (only http/https supported)`,
+      `model probe failed: invalid ${label} "${value}" (only http/https supported)`,
     )
   }
-  return base.replace(/\/+$/, "")
+  return value
+}
+
+/** Resolve + validate the probe base URL (an unsaved draft wins over the
+ * registered profile). A trailing slash is normalized so
+ * `${base}/v1/models` never builds `//v1/models`. */
+function probeBaseURL(req: ProbeRequest, profile: ProviderProfile | undefined): string | undefined {
+  const base = req.baseURL ?? profile?.baseUrl
+  if (base === undefined || base === "") return undefined
+  return validateProbeURL(base, "baseURL").replace(/\/+$/, "")
+}
+
+/** Validate an explicit full models endpoint without rewriting it. */
+function probeModelsURL(req: ProbeRequest): string | undefined {
+  const modelsURL = req.modelsURL
+  if (modelsURL === undefined || modelsURL === "") return undefined
+  return validateProbeURL(modelsURL, "modelsURL")
 }
 
 /**
  * The built-in discovery probe (Task 2 — the openai-compatible route's own
  * probe, D5: custom providers share that route): protocol-aware auth headers
  * (Bearer for the OpenAI family, x-api-key + anthropic-version for
- * anthropic-messages), DUAL candidates ({base}/v1/models then {base}/models),
- * and richer response normalization. The protocol resolution chain (settings'
+ * anthropic-messages), an exact explicit modelsURL OR the baseURL DUAL
+ * candidates ({base}/v1/models then {base}/models), and richer response
+ * normalization. The protocol resolution chain (settings'
  * resolveProviderProtocol) runs at the CALLER — here only the generic terminal
  * fallback is applied. The caller may pass an UNSAVED draft — the registered
  * profile's baseUrl/apiKey are only the fallback when the request omits them.
@@ -511,17 +526,19 @@ function probeBaseURL(req: ProbeRequest, profile: ProviderProfile | undefined): 
 function createBuiltinProbe(resolveProfile: () => ProviderProfile | undefined): Probe {
   return async (req: ProbeRequest): Promise<ModelDescriptor[]> => {
     const profile = resolveProfile()
-    const baseURL = probeBaseURL(req, profile)
-    if (baseURL === undefined) {
+    const modelsURL = probeModelsURL(req)
+    const baseURL = modelsURL === undefined ? probeBaseURL(req, profile) : undefined
+    if (modelsURL === undefined && baseURL === undefined) {
       throw new ModelProbeFailedError(
-        'model probe failed: baseURL is required (or configure the route "baseURL")',
+        'model probe failed: modelsURL or baseURL is required (or configure the route "baseURL")',
       )
     }
     const protocol = req.protocol ?? "openai-completions"
     const apiKey = req.apiKey ?? profile?.apiKey
     const headers = probeAuthHeaders(protocol, apiKey)
     const failures: string[] = []
-    for (const url of probeCandidatePaths(baseURL)) {
+    const candidates = modelsURL !== undefined ? [modelsURL] : probeCandidatePaths(baseURL!)
+    for (const url of candidates) {
       const result = await probeCandidate(url, headers)
       if (result.kind === "ok") return result.models
       failures.push(result.text)
@@ -562,14 +579,15 @@ export function createProviderRegistry(): ProviderRegistry {
       if (explicit !== undefined) return explicit(req)
       const profile = profiles.get(route)
       const baseURL = req.baseURL ?? profile?.baseUrl
-      // Task 7 (D4 gap): a request carrying an EXPLICIT baseURL probes an
-      // UNSAVED DRAFT — the route gate cannot apply (a custom route the
-      // registry never seeded has no route probe and no static catalog). Run
-      // the generic builtin probe for ANY route: dual candidates, protocol-aware
-      // headers (req.protocol), both response shapes — with the route's OWN
-      // registered profile (when it exists) as the omitted-field fallback,
-      // never the openai-compatible route's profile.
-      if (req.baseURL !== undefined && req.baseURL !== "") {
+      // Task 7 (D4 gap): a request carrying an EXPLICIT URL probes an UNSAVED
+      // DRAFT — the route gate cannot apply (a custom route the registry never
+      // seeded has no route probe and no static catalog). Run the generic
+      // builtin probe for ANY route: exact modelsURL or baseURL candidates,
+      // protocol-aware headers (req.protocol), both response shapes — with the
+      // route's OWN registered profile (when it exists) as the omitted-field
+      // fallback, never the openai-compatible route's profile.
+      if ((req.modelsURL !== undefined && req.modelsURL !== "")
+        || (req.baseURL !== undefined && req.baseURL !== "")) {
         return createBuiltinProbe(() => profile)(req)
       }
       // Route-based flow (previews — the request omitted the draft fields and
