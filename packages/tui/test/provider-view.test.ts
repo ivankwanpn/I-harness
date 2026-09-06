@@ -188,6 +188,14 @@ describe("provider master/detail — binder flow", () => {
       expect(state.models.map((m) => m.id)).toEqual(["deepseek-chat", "deepseek-reasoner"])
       expect(f.settings.get().llm.providers.deepseek?.apiKeyEnv).toBe("DEEPSEEK_API_KEY")
       expect(h.toasts.some((t) => t.includes("2 model(s)"))).toBe(true)
+      // THE BINDING: commit clears the raw key — the draft is gone after the
+      // save (the stored ref kept the current key; the raw value never
+      // survives the editor).
+      expect(state.draft).toBeUndefined()
+      // the kept-current-key semantics are real: the credential still holds
+      // the original value (the controller's directory reads it configured).
+      expect((await f.controller.directory()).find((p) => p.id === "deepseek")?.auth)
+        .toEqual(expect.objectContaining({ configured: true }))
       // Enter on the first model → the durable default is set + the flow closes.
       h.seam.act!("overlay-select")
       await new Promise((r) => setTimeout(r, 20))

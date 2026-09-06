@@ -4,7 +4,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
 import type { InputEvent, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
 import { createCredentialStore } from "@i-harness/credentials"
@@ -420,5 +420,51 @@ describe("TuiApp Welcome model gate", () => {
     expect(app.state().view).toEqual({ kind: "agent", sessionId: "created-1" })
     expect(backend.calls.slice(-4)).toEqual(["modelState", "createSession", "open:created-1", "submit:ship it"])
     expect(app.state().prompt.text).toBe("")
+  })
+})
+
+describe("TuiApp model picker — discovery wiring", () => {
+  it("openModelPicker runs EXACTLY ONE discovery run per open (no double probe)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ih-welcome-"))
+    roots.push(root)
+    const settings = new SettingsStore({ path: join(root, "settings.json") })
+    await settings.load()
+    const credentials = createCredentialStore(join(root, "credentials.json"))
+    await credentials.set("DEEPSEEK_API_KEY", "sk-picker")
+    await settings.set({
+      llm: {
+        providers: {
+          deepseek: {
+            baseURL: "https://api.deepseek.com",
+            protocol: "openai-completions",
+            apiKeyEnv: "DEEPSEEK_API_KEY",
+          },
+        },
+        defaultModel: { provider: "deepseek", model: "deepseek-chat" },
+      },
+    })
+    const registry = createProviderRegistry()
+    registry.registerProbe("deepseek", async () => [{ id: "deepseek-chat", name: "DeepSeek Chat" }])
+    const runtime = createProviderRuntime({
+      settings,
+      credentials,
+      registry,
+      buildClient: () => ({ async *stream() {} }),
+    })
+    const discover = vi.spyOn(runtime, "discoverModels")
+    const controller = new ProviderController({ runtime, settings })
+    const backend = recordingBackend({ status: "ready", providerId: "deepseek", modelId: "deepseek-chat", label: "deepseek:deepseek-chat" })
+    const { app } = testApp(backend, controller)
+
+    app.dispatch("open-model-picker")
+    await waitFor(() => (app.state().overlay as { kind?: string } | undefined)?.kind === "model-picker")
+    await waitFor(() => discover.mock.calls.length === 1)
+    expect(discover).toHaveBeenCalledTimes(1)
+
+    // a second open re-reads the memoized catalog (no NEW probe — the runtime
+    // memo serves it; the controller still runs its single selectProvider).
+    app.dispatch("open-model-picker")
+    await waitFor(() => discover.mock.calls.length === 2)
+    expect(discover).toHaveBeenCalledTimes(2)
   })
 })
