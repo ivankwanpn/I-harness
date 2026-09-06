@@ -139,4 +139,42 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
     },
     120_000,
   )
+
+  it(
+    "restores one durable session across SDK process restarts without duplicate seqs",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-resume-ws-"))
+      const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-resume-sess-"))
+      const args = ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir]
+      const first = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      try {
+        await first.request("initialize", {})
+        await first.run({ sessionId: "sdk-resume", prompt: "first prompt" })
+      } finally {
+        await first.close().catch(() => {})
+      }
+
+      const second = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      try {
+        await second.request("initialize", {})
+        await second.run({ sessionId: "sdk-resume", prompt: "second prompt" })
+        const history = await second.history("sdk-resume")
+        const prompts = history.events.flatMap((event) =>
+          event.type === "user/message" && (event.text === "first prompt" || event.text === "second prompt")
+            ? [event.text]
+            : [],
+        )
+        expect(prompts).toEqual([
+          "first prompt",
+          "second prompt",
+        ])
+        expect(history.events.map((event) => event.seq)).toEqual(history.events.map((_, index) => index))
+      } finally {
+        await second.close().catch(() => {})
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(sessionDir, { recursive: true, force: true })
+      }
+    },
+    120_000,
+  )
 })

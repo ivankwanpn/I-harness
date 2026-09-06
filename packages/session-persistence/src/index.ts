@@ -118,6 +118,9 @@ export interface SessionCoordinator {
    * (fail-closed); throws SessionLockUnsupportedError off-Windows in M23.
    */
   adoptOwnership(sessionId: string): Promise<void>
+  /** Release one held ownership lease without closing the coordinator. Any
+   * in-flight acquire for the same session settles before release. */
+  releaseOwnership(sessionId: string): Promise<void>
 }
 
 // F01-7: refusal before structural decode — "upgrade the harness", never a
@@ -264,6 +267,14 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   }
 
   async function releaseOwnership(sessionId: string): Promise<void> {
+    const pending = inflightAcquires.get(sessionId)
+    if (pending !== undefined) {
+      try {
+        await pending
+      } catch {
+        return
+      }
+    }
     const lock = heldLocks.get(sessionId)
     if (!lock) return
     heldLocks.delete(sessionId)
@@ -468,5 +479,6 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       // close(). Conflict → SessionLockConflictError (fail-closed).
       await ensureOwnership(sessionId)
     },
+    releaseOwnership,
   }
 }

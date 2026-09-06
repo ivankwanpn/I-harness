@@ -6,7 +6,7 @@
 //   session/new             → fresh session id (coordinator-backed when given, else in-memory)
 //   session/list            → sessions (coordinator's list ∪ session/new-created)
 //   session/resume          → {} (unknown ids fail closed)
-//   session/close           → {} (v0 no-op; documented v1 hook: flush/lease release)
+//   session/close           → abort + dispose + flush + lease release
 //   session/prompt          → await service.submit (turn drains), stopReason
 //                             "end_turn"; "cancelled" on abort
 //   session/cancel (notif)  → aborts the in-flight submit of that session (no-op idle)
@@ -59,6 +59,8 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
   const inflight = new Map<string, AbortController>()
   /** Existing-session ownership preparation, shared by concurrent requests. */
   const preparingOwnership = new Map<string, Promise<void>>()
+  /** Per-session close single-flight; presence also blocks prompt admission. */
+  const closingSessions = new Map<string, Promise<void>>()
 
   async function sessionExists(sessionId: string): Promise<boolean> {
     if (known.has(sessionId)) return true
@@ -127,6 +129,7 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
 
   app.onRequest("session/resume", async (ctx) => {
     const { sessionId, cwd } = ctx.params
+    if (closingSessions.has(sessionId)) throw new Error(`session closing: ${sessionId}`)
     if (!(await sessionExists(sessionId))) {
       throw new Error(`unknown session: ${sessionId}`)
     }
@@ -137,11 +140,44 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
 
   app.onRequest("session/close", async (ctx) => {
     const { sessionId } = ctx.params
+    const existing = closingSessions.get(sessionId)
+    if (existing !== undefined) {
+      await existing
+      return {}
+    }
     if (!(await sessionExists(sessionId))) {
       throw new Error(`unknown session: ${sessionId}`)
     }
-    // v0: no-op success — no host-side resource to release per session beyond
-    // the service assembly (which idles). v1 hook: flush + lease release.
+    let closing!: Promise<void>
+    closing = (async () => {
+      inflight.get(sessionId)?.abort()
+      const preparing = preparingOwnership.get(sessionId)
+      if (preparing !== undefined) await preparing
+      let failure: unknown
+      try {
+        await opts.service.closeSession(sessionId)
+      } catch (error) {
+        failure = error
+      }
+      if (opts.coordinator !== undefined) {
+        try {
+          await opts.coordinator.flush(sessionId)
+        } catch (error) {
+          if (failure === undefined) failure = error
+        }
+        try {
+          await opts.coordinator.releaseOwnership(sessionId)
+        } catch (error) {
+          if (failure === undefined) failure = error
+        }
+      }
+      known.delete(sessionId)
+      if (failure !== undefined) throw failure
+    })().finally(() => {
+      if (closingSessions.get(sessionId) === closing) closingSessions.delete(sessionId)
+    })
+    closingSessions.set(sessionId, closing)
+    await closing
     return {}
   })
 
@@ -156,6 +192,7 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
       throw new Error(`unknown session: ${sessionId}`)
     }
     await ensureOwnership(sessionId)
+    if (closingSessions.has(sessionId)) throw new Error(`session closing: ${sessionId}`)
     const text = extractPromptText(prompt)
     if (text === "") {
       throw new Error("session/prompt requires at least one text content block (v0)")

@@ -169,6 +169,21 @@ describe("session ownership lease", () => {
       expect(b.ownerOf(id)).toBe(false)
     })
 
+    it("releaseOwnership transfers one session lease without closing the coordinator", async () => {
+      const shared = fakeBackend()
+      const a = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      const b = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
+      await a.create({ sessionId: "sess-release-a" })
+      await a.create({ sessionId: "sess-release-b" })
+      await expect(b.adoptOwnership("sess-release-a")).rejects.toThrow(SessionLockConflictError)
+
+      await a.releaseOwnership("sess-release-a")
+      expect(a.ownerOf("sess-release-a")).toBe(false)
+      expect(a.ownerOf("sess-release-b")).toBe(true)
+      await expect(b.adoptOwnership("sess-release-a")).resolves.toBeUndefined()
+      await expect(b.adoptOwnership("sess-release-b")).rejects.toThrow(SessionLockConflictError)
+    })
+
     // I1: concurrent mutating calls for the SAME session on ONE coordinator
     // must share a single acquireLease flight. Before single-flight, the two
     // concurrent acquires raced each other at the OS level (process-level
