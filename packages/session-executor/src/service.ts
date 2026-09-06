@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto"
 import type { Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
+import type { AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import {
@@ -122,6 +123,14 @@ export interface SessionService {
    * unknown/already-finished row or a RUNNING one (whole-turn cancel is
    * session/cancel, not row cancel). */
   cancelQueued(sessionId: string, id: string): { cancelled: boolean }
+  /** M49 Task 12 (spec §8.2): the per-session task projection (assembly tasks
+   * rows — subagent/job/workflow). Never fabricated: a session with no live
+   * assembly answers an honest empty list. */
+  tasks(sessionId: string): AgentTaskView[]
+  /** M49 Task 12: cancel ONE task through the owning assembly (its registries
+   * hold the authority). An id with no owner (unknown session/unknown id)
+   * throws the registry's not-found error — never a silent success. */
+  cancelTask(sessionId: string, id: string): "cancellation-requested" | "already-finished"
   /** Fires once per created assembly — the bridge attach point
    * (approval/question bridges). */
   onAssembly(hook: (assembly: SessionAssembly) => void): () => void
@@ -574,6 +583,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     },
     queue: (sessionId) => queue(sessionId),
     cancelQueued: (sessionId, id) => cancelQueued(sessionId, id),
+    // M49 Task 12: the sessions' task rows — the assembly owns the truth; a
+    // session whose assembly does not exist (or was closed) has NO tasks
+    // (honest empty, never a fabricated row).
+    tasks: (sessionId) => assemblies.get(sessionId)?.tasks() ?? [],
+    cancelTask: (sessionId, id) => {
+      const assembly = assemblies.get(sessionId)
+      if (assembly === undefined) throw new Error(`unknown task: ${id}`)
+      return assembly.cancelTask(id)
+    },
     onAssembly: (hook) => {
       hooks.add(hook)
       return () => { hooks.delete(hook) }

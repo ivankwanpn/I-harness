@@ -86,9 +86,10 @@ import { usageRows } from "../views/light-usage.ts"
 // typed tool surface (presentTool over the engine's ToolViewInfo); the line
 // viewer reads the REAL file.
 import { ModalOwner, createFileViewer, modalHitTargets } from "../views/modal.ts"
-import { createBlockViewer } from "../views/block-viewer.ts"
+import { createBlockViewer, createTaskPresentation } from "../views/block-viewer.ts"
 import { presentTool } from "../tool-presentation/index.ts"
-import type { ToolViewInfo } from "../contracts.ts"
+import type { AgentTaskView, ToolViewInfo } from "../contracts.ts"
+import type { TaskEntry, TaskGroup } from "../views/tasks-pane.ts"
 
 export interface InputSource {
   next(): AsyncIterable<InputEvent>
@@ -255,6 +256,51 @@ function canonicalProtocolOf(value: string): SettingsProviderProtocol | undefine
   if (value === "anthropic") return "anthropic-messages"
   if (value === "openai-responses" || value === "gemini" || value === "bedrock") return value
   return undefined
+}
+
+/** M49 Task 12: the real task-view groups (spec §8.2) — a group appears ONLY
+ * when it has rows (its truth is the backend projection); the collapse state
+ * survives refreshes by group label. `[✗]` rides a row only when the backend
+ * carries the cancel capability AND the registry says canCancel. */
+function groupTaskViews(
+  items: AgentTaskView[],
+  backendCanCancel: boolean,
+  now: number,
+  prev: TaskGroup[] | undefined,
+): TaskGroup[] {
+  const labels: Record<AgentTaskView["group"], TaskGroup["label"]> = {
+    subagent: "Subagents",
+    job: "Background",
+    workflow: "Workflows",
+    schedule: "Schedule",
+  }
+  const order: Array<AgentTaskView["group"]> = ["subagent", "job", "workflow", "schedule"]
+  const prevCollapsed = new Map((prev ?? []).map((g) => [g.label, g.collapsed === true]))
+  const out: TaskGroup[] = []
+  for (const group of order) {
+    const rows = items.filter((row) => row.group === group)
+    if (rows.length === 0) continue
+    out.push({
+      label: labels[group],
+      entries: rows.map((row): TaskEntry => ({
+        id: row.id,
+        status: row.status,
+        label: row.label,
+        ...(row.startedAt !== undefined ? { elapsed: elapsedText(now - row.startedAt) } : {}),
+        action: row.canCancel && backendCanCancel ? "cancel" : "expand",
+      })),
+      ...(prevCollapsed.get(labels[group]) === true ? { collapsed: true } : {}),
+    })
+  }
+  return out
+}
+
+/** Elapsed text, e.g. "2m10s" / "3s" (the pane's duration surface). */
+function elapsedText(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  return `${m}m${sec % 60}s`
 }
 
 /** Case-insensitive subsequence hit indices (fuzzy-hit letters, spec §3.6). */
@@ -515,6 +561,10 @@ export class TuiApp {
         // M49 Task 11: the queue [cancel] chip fires the SAME action as the
         // app-level cancelQueueItem (cancel + refresh from backend truth).
         queueCancel: (id) => { void this.cancelQueueItem(id) },
+        // M49 Task 12: the tasks-pane row actions fire the SAME app actions as
+        // the keyboard path (cancel + refresh from backend truth / viewer).
+        taskCancel: (id) => { void this.cancelTaskId(id) },
+        openTaskViewer: (id) => { void this.openTaskViewer(id) },
         // M49 Task 7: the click moves the PromptEditor cursor (atom-safe) —
         // never a direct string write.
         movePromptCursor: (index) => {
@@ -658,6 +708,17 @@ export class TuiApp {
     const enter = kbd.code === "Enter" && !kbd.ctrl && !kbd.alt && !kbd.shift
     const ctrlF = kbd.code === "char" && kbd.ctrl && !kbd.alt && !kbd.shift && kbd.key.toLowerCase() === "f"
     if (!enter && !ctrlF) return false
+    // M49 Task 12: a SELECTED tasks-pane row (clicked by id) makes Enter open
+    // the Task viewer — before the tool-block fallback (the selection is the
+    // pane's open target; it survives refreshes by stable id). The pane must
+    // be OPEN — a stale selection after the status-chip close must not hijack
+    // Enter.
+    const taskId = this.app.panes.has("tasks") ? this.app.paneData?.tasksSelectId : undefined
+    if (taskId !== undefined) {
+      void this.openTaskViewer(taskId)
+      this.requestFrame()
+      return true
+    }
     this.openBlockViewerAt(this.anchorDisplayLine())
     this.requestFrame()
     return true
@@ -2432,6 +2493,8 @@ export class TuiApp {
     this.app.status.tasks = { running: 0, labels: [] }
     this.app.status.queue = 0
     this.app.paneData = undefined
+    // M49 Task 12: the task-view cache belongs to the closed session.
+    this.tasksViewCache = undefined
     this.app.panes.clear()
     this.app.turn = undefined
     this.app.scroll = { offset: 0, follow: true }
@@ -2970,12 +3033,20 @@ export class TuiApp {
   // ------------------------------------------------------------------ panes / pickers / dropdowns (M37b)
 
   private togglePane(kind: "todo" | "tasks" | "queue"): void {
-    if (this.app.panes.has(kind)) this.app.panes.delete(kind)
-    else {
+    if (this.app.panes.has(kind)) {
+      this.app.panes.delete(kind)
+      // M49 Task 12: closing the tasks pane clears the stale row selection
+      // (the pane's data itself stays backend-refreshable).
+      if (kind === "tasks") {
+        this.app.paneData = { ...(this.app.paneData ?? {}), tasksSelectId: undefined }
+      }
+    } else {
       this.app.panes.add(kind)
       // M49 Task 11: opening the queue pane fetches backend truth at OPEN time
       // (not a stale fixture projection).
       if (kind === "queue") this.refreshQueuePane()
+      // M49 Task 12: same for the tasks pane.
+      if (kind === "tasks") this.refreshTasksPane()
     }
     this.requestFrame()
   }
@@ -3413,6 +3484,7 @@ export class TuiApp {
       this.requestFrame()
     }
     this.refreshQueuePane()
+    this.refreshTasksPane()
   }
 
   // ------------------------------------------------------------------ real queue pane (M49 Task 11)
@@ -3495,6 +3567,149 @@ export class TuiApp {
     this.refreshQueue()
     await this.queuePaneProbe
     this.requestFrame()
+  }
+
+  // ------------------------------------------------------------------ real tasks pane (M49 Task 12)
+
+  /** M49 Task 12: the server-side task snapshot cache (the summary rows the
+   * pane derived from — the detail viewer reads them; always refreshed from
+   * backend truth). */
+  private tasksViewCache: Map<string, AgentTaskView> | undefined
+
+  /** In-flight pane-row probe (never two concurrent refreshes — the same
+   * promise guard pattern as refreshQueuePane). */
+  private tasksPaneProbe: Promise<void> | undefined
+
+  /** M49 Task 12: the tasks PANE rows — backend truth only. A backend without
+   * the tasks capability flips the pane to the honest unavailable state
+   * (never "No active tasks." as a stand-in); a failed probe keeps the
+   * previous rows (stale truth stays truthful). */
+  private refreshTasksPane(): void {
+    const probe = this.opts.backend.tasks
+    const paneOpen = this.app.panes.has("tasks")
+    if (probe === undefined) {
+      if (paneOpen) {
+        this.app.paneData = { ...(this.app.paneData ?? {}), tasks: [], tasksUnavailable: true }
+      }
+      return
+    }
+    if (this.tasksPaneProbe !== undefined) return
+    const generation = this.sessionGeneration
+    let pending!: Promise<void>
+    pending = probe()
+      .then((items: AgentTaskView[]) => {
+        if (generation !== this.sessionGeneration) return
+        if (!this.app.panes.has("tasks")) return
+        this.tasksViewCache = new Map(items.map((row) => [row.id, row]))
+        const canCancel = this.opts.backend.cancelTask !== undefined
+        this.app.paneData = {
+          ...(this.app.paneData ?? {}),
+          tasks: groupTaskViews(items, canCancel, this.opts.now?.() ?? Date.now(), this.app.paneData?.tasks),
+          tasksUnavailable: false,
+        }
+        this.requestFrame()
+      })
+      .catch(() => { /* backend truth failed — previous rows stay */ })
+      .finally(() => {
+        if (this.tasksPaneProbe !== pending) return
+        this.tasksPaneProbe = undefined
+        if (generation !== this.sessionGeneration) this.refreshTasksPane()
+      })
+    this.tasksPaneProbe = pending
+  }
+
+  /** M49 Task 12 (public test seam + behavior): open the tasks pane and
+   * refresh its rows from backend truth. */
+  async openTasks(): Promise<void> {
+    if (!this.app.panes.has("tasks")) this.app.panes.add("tasks")
+    this.refreshTasksPane()
+    await this.tasksPaneProbe
+    this.requestFrame()
+  }
+
+  /** M49 Task 12: cancel ONE task — the single action both call paths (mouse
+   * [✗], the app-level seam) share; the pane then refreshes from backend
+   * truth (a refusal leaves the row exactly as the backend lists it). */
+  async cancelTaskId(id: string): Promise<void> {
+    const cancel = this.opts.backend.cancelTask
+    if (cancel === undefined) {
+      this.toast("task cancel: backend capability absent")
+      return
+    }
+    try {
+      const status = await cancel(id)
+      this.toast(status === "already-finished" ? `task ${id}: already finished` : `task ${id}: cancellation requested`)
+    } catch (error) {
+      this.toast(`task cancel failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    this.refreshTasksPane()
+    await this.tasksPaneProbe
+    this.requestFrame()
+  }
+
+  /** M49 Task 12: open the Task detail viewer for the row with the STABLE id —
+   * the same action the Enter-seam, the mouse double-click and the app-level
+   * seam share. The viewer extends the block viewer: the row's summary data +
+   * the honest transcript evidence lines (parent-log evidence when
+   * reconstructible, an unavailable explanation otherwise). */
+  async openTaskViewer(id: string): Promise<void> {
+    if (this.inlineActive()) return
+    const view = this.tasksViewCache?.get(id)
+    if (view === undefined) {
+      this.toast(`task viewer: unknown task ${id}`)
+      return
+    }
+    const presentation = createTaskPresentation(view, this.taskTranscriptLines(view))
+    const viewer = createBlockViewer(presentation, {
+      copy: async (text) => {
+        const r = await checkedCopy(this.clipboard, text)
+        if (!r.ok) throw new Error(r.error)
+      },
+    })
+    this.modalOwner.open({ kind: "block-viewer", viewer })
+    this.app.modal = { kind: "block-viewer", viewer }
+    this.app.slash = undefined
+    this.app.completion = undefined
+    this.app.fileSearch = undefined
+    this.app.historyPanel = undefined
+    this.app.sessions = undefined
+    this.app.lightPanel = undefined
+    this.requestFrame()
+  }
+
+  /** M49 Task 12: the TRANSCRIPT evidence lines for one task — parents can
+   * only reconstruct the subagent lifecycle from the PARENT log (memory/disk
+   * via the engine): the spawn tool block's parent prompt/role + the
+   * subagent started/ended system rows. When the block is absent the viewer
+   * explains the unavailable state honestly (the child's own conversation
+   * lives in a separate child session — not in the parent log). */
+  private taskTranscriptLines(view: AgentTaskView): Array<{ text: string }> {
+    const taskName = view.label
+    const eng = this.opts.engine
+    const total = eng.lineCount()
+    const spawnTitle = `spawn_agent: ${taskName}`
+    const lines: Array<{ text: string }> = []
+    let spawnFound = false
+    for (let l = 0; l < total; l++) {
+      if (!spawnFound) {
+        const info = eng.toolAt?.(l)
+        if (info !== undefined && info.kind === "subagent") {
+          const args = info.args as { task_name?: unknown; message?: unknown } | undefined
+          if (args?.task_name === taskName) {
+            spawnFound = true
+            lines.push({ text: `${spawnTitle} (parent prompt: ${typeof args.message === "string" ? args.message : "?"})` })
+            if (info.status === "done") lines.push({ text: `spawn result: ${info.output ?? ""}` })
+            else if (info.error !== undefined) lines.push({ text: `spawn error: ${info.error}` })
+          }
+        }
+      }
+      const block = eng.lineBlock(l)
+      if (block !== undefined && block.title.length > 0
+        && (block.title.includes(`subagent started: ${taskName}`) || block.title.includes(`subagent ended: ${taskName}`))) {
+        lines.push({ text: block.title })
+      }
+    }
+    return lines
   }
 
   // ------------------------------------------------------------------ minimal mode (M38a G2)

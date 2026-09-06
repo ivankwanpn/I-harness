@@ -16,7 +16,7 @@
 // slots WITH an action — no dead hit areas.
 import type { TextDiff, } from "@i-harness/text-diff"
 import type { TextStyle } from "../contracts.ts"
-import type { ToolPresentation } from "../tool-presentation/index.ts"
+import type { ToolBodyEntry, ToolPresentation } from "../tool-presentation/index.ts"
 import { redactToolPayload } from "../tool-presentation/index.ts"
 import type { Kbd } from "../app/keys.ts"
 
@@ -78,6 +78,47 @@ export interface BlockViewerState {
   setSelection(a?: number, b?: number): void
   copy(): Promise<void>
   slot(id: "copy" | "close"): { id: string; action?: () => void } | undefined
+}
+
+/* --------------------------------------------------- task viewer (M49 Task 12) */
+
+/** M49 Task 12: the task-detail VIEWER extends the block viewer — one
+ * presentation synthesized from the task's summary row + the TRANSCRIPT
+ * evidence lines (parent-log subagent lifecycle, honest unavailable
+ * explanations when not reconstructible). The block viewer machinery
+ * (rendered/raw/search/copy/scroll) renders it unchanged. */
+export function createTaskPresentation(info: {
+  id: string
+  group: string
+  label: string
+  status: string
+  parentId?: string
+  summary?: string
+  startedAt?: number
+  updatedAt?: number
+  canCancel: boolean
+}, transcript: ReadonlyArray<{ text: string }>): ToolPresentation {
+  const body: ToolBodyEntry[] = [
+    { kind: "text", value: `id: ${info.id}` },
+  ]
+  if (info.parentId !== undefined) body.push({ kind: "text", value: `parent: ${info.parentId}` })
+  body.push({ kind: "text", value: `group: ${info.group}` })
+  body.push({ kind: "text", value: `label: ${info.label}` })
+  body.push({ kind: "text", value: `status: ${info.status}` })
+  body.push({ kind: "text", value: `canCancel: ${info.canCancel}` })
+  if (info.startedAt !== undefined) body.push({ kind: "text", value: `startedAt: ${new Date(info.startedAt).toISOString()}` })
+  if (info.updatedAt !== undefined) body.push({ kind: "text", value: `updatedAt: ${new Date(info.updatedAt).toISOString()}` })
+  if (info.summary !== undefined) body.push({ kind: "text", value: `summary: ${info.summary}` })
+  body.push({ kind: "text", value: "transcript:" })
+  const lines = transcript.length === 0
+    ? ["unavailable — no parent-log evidence for this task"]
+    : transcript.map((line) => line.text)
+  for (const line of lines) body.push({ kind: "text", value: `  ${line}` })
+  return {
+    title: `Task ${info.label}`,
+    body,
+    raw: { ...info },
+  }
 }
 
 /* ------------------------------------------------------------- row surface */

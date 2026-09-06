@@ -64,7 +64,7 @@ import {
   type SessionModelSelection,
 } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { toolKindOf, type BackendClient, type SessionQueueItem, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
+import { toolKindOf, type AgentTaskView, type BackendClient, type SessionQueueItem, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ mapping
 
@@ -663,6 +663,15 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     },
     async cancelQueued(id: string): Promise<{ cancelled: boolean }> {
       return service.cancelQueued(sessionId, id)
+    },
+    // M49 Task 12: the REAL task projection + cancellation — the service's
+    // per-assembly registries own both (the embedded backend is always wired:
+    // no capability gate, exactly like queue).
+    async tasks(): Promise<AgentTaskView[]> {
+      return service.tasks(sessionId)
+    },
+    async cancelTask(id: string): Promise<"cancellation-requested" | "already-finished"> {
+      return service.cancelTask(sessionId, id)
     },
 
     modelLabel: opts.modelLabel,

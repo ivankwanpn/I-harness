@@ -42,6 +42,10 @@ import {
   type SdkNotification,
 } from "../src/backend/remote.ts"
 
+/** -32602 INVALID_PARAMS (the wire contract's error code — the sdk package is
+ * deliberately NOT a tui dependency; the number is protocol-frozen). */
+const INVALID_PARAMS = -32602
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 async function startFixtureModel(): Promise<{ baseURL: string; close(): Promise<void> }> {
@@ -1133,4 +1137,75 @@ describe("real i-harness sdk subprocess (wire-level end-to-end)", () => {
     },
     60_000,
   )
+})
+
+describe("createRemoteBackend session-tasks (Task 12)", () => {
+  it("gates tasks/cancelTask on the session-tasks row: absent on a server without it", async () => {
+    const client = fakeWireClient((method) => method === "initialize"
+      ? { protocolVersion: 2, capabilities: { "session-list": ["1"] } }
+      : { ok: true })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await new Promise((r) => setTimeout(r, 20)) // let the eager handshake fill (or not)
+    // the members fill ONLY when the server advertised the row — absence is
+    // the truthful "this backend does not wire tasks".
+    expect(backend.tasks).toBeUndefined()
+    expect(backend.cancelTask).toBeUndefined()
+    expect(client.requests.some((r) => r.method === "session/tasks")).toBe(false)
+    await backend.close()
+  })
+
+  it("with the row: tasks lists items (malformed entries skipped), cancelTask cancels by exact params", async () => {
+    const client = fakeWireClient((method, params) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-tasks": ["1"] } }
+      if (method === "session/tasks") {
+        return {
+          items: [
+            { id: "root/helper", parentId: "root", group: "subagent", label: "helper", status: "running", canCancel: true },
+            { id: "job-1", group: "job", label: "compile", status: "completed", canCancel: false },
+            { id: 42 },
+            { id: "", status: "running" },
+          ],
+        }
+      }
+      if (method === "session/tasks/cancel") {
+        expect((params as { id?: unknown }).id).toBe("root/helper")
+        return { status: "cancellation-requested" }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.tasks !== undefined, 1000)
+    const items = await backend.tasks!()
+    expect(items).toEqual([
+      expect.objectContaining({ id: "root/helper", group: "subagent", status: "running", canCancel: true }),
+      expect.objectContaining({ id: "job-1", group: "job", status: "completed", canCancel: false }),
+    ])
+    expect(client.requests.find((r) => r.method === "session/tasks")).toMatchObject({
+      method: "session/tasks",
+      params: { sessionId: "s1" },
+    })
+    await expect(backend.cancelTask!("root/helper")).resolves.toBe("cancellation-requested")
+    // the unknown-id error answer surfaces as the wire error (never fabricated)
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-tasks": ["1"] } }
+      if (method === "session/tasks/cancel") {
+        throw new SdkWireError(INVALID_PARAMS, "session/tasks/cancel: unknown task: never-a-task")
+      }
+      return { ok: true }
+    })
+    await expect(backend.cancelTask!("never-a-task")).rejects.toThrow(/unknown task/)
+    await backend.close()
+  })
+
+  it("malformed session/tasks response → SdkWireError (never a fabricated empty)", async () => {
+    const client = fakeWireClient((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-tasks": ["1"] } }
+      if (method === "session/tasks") return { items: 42 }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.tasks !== undefined, 1000)
+    await expect(backend.tasks!()).rejects.toBeInstanceOf(SdkWireError)
+    await backend.close()
+  })
 })

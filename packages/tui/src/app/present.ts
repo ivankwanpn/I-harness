@@ -911,7 +911,11 @@ export function present(
 
   renderStatus(layout.status, app.status, view, palette, glyphs)
   if (layout.tasks !== undefined && app.paneData?.tasks !== undefined) {
-    renderTasksPane(layout.tasks, { groups: app.paneData.tasks }, view, palette, glyphs)
+    renderTasksPane(layout.tasks, {
+      groups: app.paneData.tasks,
+      selectedId: app.paneData.tasksSelectId,
+      available: app.paneData.tasksUnavailable !== true,
+    }, view, palette, glyphs)
   }
   if (layout.todo !== undefined && app.paneData?.todo !== undefined) {
     renderTodoPane(layout.todo, app.paneData.todo, view, palette, glyphs)

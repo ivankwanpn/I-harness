@@ -135,7 +135,7 @@ import type {
   RewindResult,
 } from "@i-harness/rewind"
 import { createEventMapState, mapSessionEvent, type EventMapState } from "./embedded.ts"
-import type { BackendClient, BackendModelState, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { AgentTaskView, BackendClient, BackendModelState, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ wire seam
 
@@ -399,6 +399,56 @@ function parseQueueCancelResult(result: unknown): { cancelled: boolean } {
     throw new SdkWireError(-32603, "malformed session/queue/cancel response: cancelled is not a boolean")
   }
   return { cancelled: r.cancelled }
+}
+
+/** M49 Task 12: session/tasks result — malformed ENTRIES are skipped (never a
+ * fabricated row); a malformed top-level shape is an SdkWireError. */
+function parseTasksResult(result: unknown): AgentTaskView[] {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/tasks response: result is not an object")
+  }
+  const items = (result as { items?: unknown }).items
+  if (!Array.isArray(items)) {
+    throw new SdkWireError(-32603, "malformed session/tasks response: items is not an array")
+  }
+  const out: AgentTaskView[] = []
+  for (const raw of items) {
+    if (raw === null || typeof raw !== "object") continue
+    const r = raw as {
+      id?: unknown; parentId?: unknown; group?: unknown; label?: unknown; status?: unknown
+      summary?: unknown; startedAt?: unknown; updatedAt?: unknown; canCancel?: unknown
+    }
+    if (typeof r.id !== "string" || r.id === "") continue
+    if (r.group !== "subagent" && r.group !== "job" && r.group !== "workflow" && r.group !== "schedule") continue
+    if (typeof r.label !== "string" || r.label === "") continue
+    if (r.status !== "queued" && r.status !== "running" && r.status !== "waiting"
+      && r.status !== "completed" && r.status !== "failed" && r.status !== "cancelled") continue
+    if (typeof r.canCancel !== "boolean") continue
+    out.push({
+      id: r.id,
+      ...(typeof r.parentId === "string" && r.parentId !== "" ? { parentId: r.parentId } : {}),
+      group: r.group,
+      label: r.label,
+      status: r.status,
+      ...(typeof r.summary === "string" ? { summary: r.summary } : {}),
+      ...(typeof r.startedAt === "number" ? { startedAt: r.startedAt } : {}),
+      ...(typeof r.updatedAt === "number" ? { updatedAt: r.updatedAt } : {}),
+      canCancel: r.canCancel,
+    })
+  }
+  return out
+}
+
+/** M49 Task 12: session/tasks/cancel result — the owning registry's status. */
+function parseTaskCancelResult(result: unknown): "cancellation-requested" | "already-finished" {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/tasks/cancel response: result is not an object")
+  }
+  const status = (result as { status?: unknown }).status
+  if (status !== "cancellation-requested" && status !== "already-finished") {
+    throw new SdkWireError(-32603, "malformed session/tasks/cancel response: status is invalid")
+  }
+  return status
 }
 
 /** One entry → engine FileOp. The COMMITTED wire discriminator is `op`
@@ -962,6 +1012,8 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
   let setSessionModelMember: NonNullable<BackendClient["setSessionModel"]> | undefined
   let queueMember: NonNullable<BackendClient["queue"]> | undefined
   let cancelQueuedMember: NonNullable<BackendClient["cancelQueued"]> | undefined
+  let tasksMember: NonNullable<BackendClient["tasks"]> | undefined
+  let cancelTaskMember: NonNullable<BackendClient["cancelTask"]> | undefined
 
   function capabilityRow(capabilities: Record<string, string[]>, key: string): boolean {
     const rows = capabilities[key]
@@ -1008,6 +1060,13 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
         parseQueueResult(await opts.client.request("session/queue", { sessionId }, REQUEST_TIMEOUT_MS))
       cancelQueuedMember = async (id) =>
         parseQueueCancelResult(await opts.client.request("session/queue/cancel", { sessionId, id }, REQUEST_TIMEOUT_MS))
+    }
+    if (capabilityRow(h.capabilities, "session-tasks")) {
+      // M49 Task 12: tasks + cancelTask ride the same wire surface.
+      tasksMember = async () =>
+        parseTasksResult(await opts.client.request("session/tasks", { sessionId }, REQUEST_TIMEOUT_MS))
+      cancelTaskMember = async (id) =>
+        parseTaskCancelResult(await opts.client.request("session/tasks/cancel", { sessionId, id }, REQUEST_TIMEOUT_MS))
     }
   }
 
@@ -1224,6 +1283,11 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     // (absent → the QueuePane renders the honest unavailable state).
     get queue() { return queueMember },
     get cancelQueued() { return cancelQueuedMember },
+    // M49 Task 12: the task projection/cancel — conditional on the
+    // session-tasks row (absent → the TasksPane renders the honest
+    // unavailable state and hides [✗]/[stop]).
+    get tasks() { return tasksMember },
+    get cancelTask() { return cancelTaskMember },
 
     modelLabel: opts.modelLabel,
 

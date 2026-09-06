@@ -140,6 +140,28 @@ export interface SessionQueueItem {
   order: number
 }
 
+/** M49 Task 12 (spec §8.2): agent-task summary group. */
+export type AgentTaskGroup = "subagent" | "job" | "workflow" | "schedule"
+
+/** M49 Task 12: agent-task summary status (error → failed, killed →
+ * cancelled — settled and recovered states display truthfully). */
+export type AgentTaskStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled"
+
+/** M49 Task 12: ONE row of the real task projection (serialized summary —
+ * never a registry object/client). `canCancel` follows the CURRENT registry
+ * state at serve time; absent optional fields mean the owner cannot know them. */
+export interface AgentTaskView {
+  id: string
+  parentId?: string
+  group: AgentTaskGroup
+  label: string
+  status: AgentTaskStatus
+  summary?: string
+  startedAt?: number
+  updatedAt?: number
+  canCancel: boolean
+}
+
 /** The single UI consumption surface implemented by embedded and remote SDK
  * backends. Capability members are OPTIONAL (spec §4.3): an absent member is
  * the truthful "this backend does not wire it" — the UI hides the action or
@@ -175,6 +197,15 @@ export interface BackendClient {
    * are present. `cancelled: false` = nothing cancellable (already
    * finished/cancelled/running) — the UI refreshes from backend truth. */
   cancelQueued?(id: string): Promise<{ cancelled: boolean }>
+  /** M49 Task 12 (spec §8.2): the REAL task projection — subagent/job/workflow
+   * rows, serialized summaries only (never registry objects). OPTIONAL —
+   * absent ⇒ the TasksPane shows the honest unavailable state (never "No active
+   * tasks." as a stand-in). */
+  tasks?(): Promise<AgentTaskView[]>
+  /** M49 Task 12: cancel ONE task by its stable id through the owning
+   * registry. OPTIONAL — absent ⇒ the pane hides [stop]/[✗] even when a row's
+   * `canCancel` is true. `already-finished` = the task was terminal already. */
+  cancelTask?(id: string): Promise<"cancellation-requested" | "already-finished">
   /** Real per-session context usage (M38b G2). OPTIONAL: a backend that cannot
    * price the session honestly has no member — the loop renders only what
    * exists, never an estimate. */

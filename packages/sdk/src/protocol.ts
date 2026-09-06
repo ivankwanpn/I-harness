@@ -164,6 +164,25 @@
  *
  * session/status stays the count-only compatibility surface ({ running,
  * queued } — no rows).
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * Task 12 addendum — M49, 2026-09-07 (ADDITIVE-ONLY).
+ *
+ * PROTOCOL_VERSION remains 2.
+ *
+ *   "session-tasks": ["1"]
+ *     session/tasks { sessionId } → { items: AgentTaskView[] }
+ *       — the real per-session task projection (spec §8.2): subagent rows
+ *         (live agents fused with their durable task records), job rows and
+ *         workflow rows. Rows are plain serializable summaries — NEVER a
+ *         registry object/client. A non-empty sessionId is validated; an
+ *         unknown-but-valid session answers an honest empty list.
+ *     session/tasks/cancel { sessionId, id } → { status }
+ *       — cancel ONE task through the owning registry. `status` is
+ *         "cancellation-requested" | "already-finished" (a terminal id keeps
+ *         the registry's already-finished answer). Unknown ids follow the
+ *         existing not-found semantics: -32602 INVALID_PARAMS with an explicit
+ *         "unknown task" message (never a fabricated "already-finished").
  */
 
 import { createInterface, type Interface } from "node:readline"
@@ -284,6 +303,34 @@ export interface SessionQueueItem {
 export interface QueueCancelResult {
   cancelled: boolean
 }
+
+/** M49 Task 12: agent-task summary group (spec §8.2 — the wire never carries
+ * registry objects/clients, only these serializable rows). */
+export type AgentTaskGroup = "subagent" | "job" | "workflow" | "schedule"
+
+/** M49 Task 12: agent-task summary status (error maps to failed, killed to
+ * cancelled — settled and recovered states display truthfully). */
+export type AgentTaskStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled"
+
+/** M49 Task 12: ONE row of the session/tasks projection. `canCancel` follows
+ * the CURRENT registry state at serve time (never a UI guess); an absent
+ * `parentId`/`summary`/timestamps means the owner cannot know them. */
+export interface AgentTaskView {
+  id: string
+  parentId?: string
+  group: AgentTaskGroup
+  label: string
+  status: AgentTaskStatus
+  summary?: string
+  startedAt?: number
+  updatedAt?: number
+  canCancel: boolean
+}
+
+/** M49 Task 12: session/tasks/cancel answer — the owning registry's outcome
+ * (already-finished = the task was terminal already; an unknown id is an
+ * error frame, the existing not-found semantics). */
+export type TaskCancelStatus = "cancellation-requested" | "already-finished"
 
 /** M41b v1.1: rewind mode union (mirrors packages/rewind RewindMode). */
 export type RewindMode = "all" | "files" | "conversation"
