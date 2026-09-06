@@ -135,7 +135,7 @@ import type {
   RewindResult,
 } from "@i-harness/rewind"
 import { createEventMapState, mapSessionEvent, type EventMapState } from "./embedded.ts"
-import type { BackendClient, BackendModelState, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { BackendClient, BackendModelState, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ wire seam
 
@@ -364,6 +364,41 @@ function parseCancelResult(result: unknown): CancelResult {
     cancelled: r.cancelled,
     ...(r.reason === "not-running" || r.reason === "not-found" ? { reason: r.reason } : {}),
   }
+}
+
+/** M49 Task 11: session/queue result — malformed ENTRIES are skipped (never a
+ * fabricated row); a malformed top-level shape is an SdkWireError. */
+function parseQueueResult(result: unknown): SessionQueueItem[] {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/queue response: result is not an object")
+  }
+  const items = (result as { items?: unknown }).items
+  if (!Array.isArray(items)) {
+    throw new SdkWireError(-32603, "malformed session/queue response: items is not an array")
+  }
+  const out: SessionQueueItem[] = []
+  for (const raw of items) {
+    if (raw === null || typeof raw !== "object") continue
+    const r = raw as { id?: unknown; text?: unknown; delivery?: unknown; intent?: unknown; state?: unknown; order?: unknown }
+    if (typeof r.id !== "string" || r.id === "" || typeof r.text !== "string") continue
+    if (r.delivery !== "queue" && r.delivery !== "steer") continue
+    if (r.intent !== "user" && r.intent !== "system") continue
+    if (r.state !== "queued" && r.state !== "running") continue
+    if (typeof r.order !== "number") continue
+    out.push({ id: r.id, text: r.text, delivery: r.delivery, intent: r.intent, state: r.state, order: r.order })
+  }
+  return out
+}
+
+function parseQueueCancelResult(result: unknown): { cancelled: boolean } {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/queue/cancel response: result is not an object")
+  }
+  const r = result as { cancelled?: unknown }
+  if (typeof r.cancelled !== "boolean") {
+    throw new SdkWireError(-32603, "malformed session/queue/cancel response: cancelled is not a boolean")
+  }
+  return { cancelled: r.cancelled }
 }
 
 /** One entry → engine FileOp. The COMMITTED wire discriminator is `op`
@@ -916,15 +951,75 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     }
   }
 
+  // ---- M49 Task 4/11: the OTHER conditional capability members — the same
+  // slot pattern as rewind: a member is present ONLY when the handshake
+  // advertises the capability row; on an old server the member stays ABSENT
+  // (undefined) and the UI hides the action / renders unavailable honestly.
+  // (M49 Task 4 made createSession/forkSession/setSessionModel capability-
+  // gated per spec §4.3 — they were always-present-and-throwing before.)
+  let createSessionMember: NonNullable<BackendClient["createSession"]> | undefined
+  let forkSessionMember: NonNullable<BackendClient["forkSession"]> | undefined
+  let setSessionModelMember: NonNullable<BackendClient["setSessionModel"]> | undefined
+  let queueMember: NonNullable<BackendClient["queue"]> | undefined
+  let cancelQueuedMember: NonNullable<BackendClient["cancelQueued"]> | undefined
+
+  function capabilityRow(capabilities: Record<string, string[]>, key: string): boolean {
+    const rows = capabilities[key]
+    return Array.isArray(rows) && rows.length > 0
+  }
+
+  function fillMembers(h: { protocolVersion: number; capabilities: Record<string, string[]> }): void {
+    if (capabilityRow(h.capabilities, "session-create")) {
+      createSessionMember = async () => {
+        const result = await opts.client.request("session/create", {}, REQUEST_TIMEOUT_MS)
+        const id = parseSessionIdResult(result, "session/create")
+        await switchSession(id)
+        return id
+      }
+    }
+    if (capabilityRow(h.capabilities, "session-fork")) {
+      forkSessionMember = async () => {
+        const result = await opts.client.request("session/fork", { sessionId }, REQUEST_TIMEOUT_MS)
+        const id = parseSessionIdResult(result, "session/fork")
+        await switchSession(id)
+        return id
+      }
+    }
+    if (capabilityRow(h.capabilities, "session-model")) {
+      setSessionModelMember = async (selection) =>
+        parseModelState(await opts.client.request(
+          "session/model/set",
+          {
+            sessionId,
+            selection: {
+              provider: selection.provider.trim(),
+              model: selection.model.trim(),
+              ...(selection.reasoningEffort !== undefined
+                ? { reasoningEffort: selection.reasoningEffort }
+                : {}),
+            },
+          },
+          REQUEST_TIMEOUT_MS,
+        ))
+    }
+    if (capabilityRow(h.capabilities, "session-queue")) {
+      // M49 Task 11: queue + cancelQueued ride the same wire surface.
+      queueMember = async () =>
+        parseQueueResult(await opts.client.request("session/queue", { sessionId }, REQUEST_TIMEOUT_MS))
+      cancelQueuedMember = async (id) =>
+        parseQueueCancelResult(await opts.client.request("session/queue/cancel", { sessionId, id }, REQUEST_TIMEOUT_MS))
+    }
+  }
+
   // Eager handshake fire: the initialize runs right away so the conditional
-  // rewind slot settles before the first keypress (and the first
+  // slots settle before the first keypress (and the first
   // cancel/listSessions/replay call shares the cached result instead of
   // paying this round-trip itself).
   void probeHandshake().then((h) => {
-    const rows = h.capabilities["session-rewind"]
-    if (Array.isArray(rows) && rows.length > 0) {
+    if (capabilityRow(h.capabilities, "session-rewind")) {
       rewindMember = buildRemoteRewindMember()
     }
+    fillMembers(h)
   })
 
   async function switchSession(id: string): Promise<void> {
@@ -1067,48 +1162,18 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
 
     open: switchSession,
 
-    async createSession(): Promise<string> {
-      await requireCapability("session-create")
-      const result = await opts.client.request("session/create", {}, REQUEST_TIMEOUT_MS)
-      const id = parseSessionIdResult(result, "session/create")
-      await switchSession(id)
-      return id
-    },
-
-    async forkSession(): Promise<string> {
-      await requireCapability("session-fork")
-      const result = await opts.client.request("session/fork", { sessionId }, REQUEST_TIMEOUT_MS)
-      const id = parseSessionIdResult(result, "session/fork")
-      await switchSession(id)
-      return id
-    },
+    // M49 Task 4 rule: capability members as GETTERS over the handshake slots
+    // (undefined until the eager initialize fills them; on an old server,
+    // never — the UI reads the absence, never a thrown error).
+    get createSession() { return createSessionMember },
+    get forkSession() { return forkSessionMember },
+    get setSessionModel() { return setSessionModelMember },
 
     async modelState(): Promise<BackendModelState> {
       await requireCapability("session-model")
       return parseModelState(await opts.client.request(
         "session/model/state",
         { sessionId },
-        REQUEST_TIMEOUT_MS,
-      ))
-    },
-
-    async setSessionModel(selection): Promise<BackendModelState> {
-      await requireCapability("session-model")
-      if (selection.provider.trim() === "" || selection.model.trim() === "") {
-        throw new Error("session model selection requires non-empty provider and model")
-      }
-      return parseModelState(await opts.client.request(
-        "session/model/set",
-        {
-          sessionId,
-          selection: {
-            provider: selection.provider.trim(),
-            model: selection.model.trim(),
-            ...(selection.reasoningEffort !== undefined
-              ? { reasoningEffort: selection.reasoningEffort }
-              : {}),
-          },
-        },
         REQUEST_TIMEOUT_MS,
       ))
     },
@@ -1154,6 +1219,11 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     },
 
     status: () => lastStatus,
+
+    // M49 Task 11: the queue projection — conditional on the session-queue row
+    // (absent → the QueuePane renders the honest unavailable state).
+    get queue() { return queueMember },
+    get cancelQueued() { return cancelQueuedMember },
 
     modelLabel: opts.modelLabel,
 

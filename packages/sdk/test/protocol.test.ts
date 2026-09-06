@@ -389,4 +389,39 @@ describe("HarnessClient session lifecycle and model helpers", () => {
       await client.close()
     }
   })
+
+  it("session/queue + session/queue/cancel: exact wire names/params and parsed results", async () => {
+    const clientRead = new PassThrough() // server → client
+    const clientWrite = new PassThrough() // client → server
+    const client = new HarnessClient(clientRead, clientWrite)
+    const rl = createInterface({ input: clientWrite })
+    const seen: Array<{ method: string; params: unknown }> = []
+    rl.on("line", (line) => {
+      const msg = decodeFrame(line)
+      if (!isRpcRequest(msg)) return
+      seen.push({ method: msg.method, params: msg.params })
+      if (msg.method === "session/queue") {
+        clientRead.write(encodeFrame(makeSuccess(msg.id, {
+          items: [{ id: "q1", text: "second prompt", delivery: "queue", intent: "user", state: "queued", order: 2 }],
+        })))
+      } else if (msg.method === "session/queue/cancel") {
+        clientRead.write(encodeFrame(makeSuccess(msg.id, { cancelled: true })))
+      } else {
+        clientRead.write(encodeFrame(makeFailure(msg.id, INTERNAL_ERROR, "boom")))
+      }
+    })
+    try {
+      await expect(client.queue("s1")).resolves.toEqual([
+        { id: "q1", text: "second prompt", delivery: "queue", intent: "user", state: "queued", order: 2 },
+      ])
+      await expect(client.cancelQueueItem("s1", "q1")).resolves.toEqual({ cancelled: true })
+      expect(seen).toEqual([
+        { method: "session/queue", params: { sessionId: "s1" } },
+        { method: "session/queue/cancel", params: { sessionId: "s1", id: "q1" } },
+      ])
+    } finally {
+      rl.close()
+      await client.close()
+    }
+  })
 })

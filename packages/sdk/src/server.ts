@@ -19,6 +19,12 @@
 //   session/cancel {sessionId}   [M41b v1.1]
 //                          → { cancelled, reason? } — aborts the in-flight
 //                            submit's per-session AbortController
+//   session/queue {sessionId}    [M49 Task 11]
+//                          → { items } — the real per-session queue projection
+//                            (running row first, rest FIFO)
+//   session/queue/cancel {sessionId, id} [M49 Task 11]
+//                          → { cancelled } — one queued row, honest false for
+//                            finished/running/unknown ids
 //   session/rewind/points {sessionId}            [M41b v1.1]
 //   session/rewind/plan {sessionId, target, mode?}
 //   session/rewind/execute {sessionId, target, mode?}
@@ -271,7 +277,10 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             "session-history": ["1"],
             "session-list": ["1"],
             "session-cancel": ["1"],
+            // M49 Task 11: the queue projection comes from the SessionService
+            // itself (never a host seam) — the row is unconditional.
             "session-rewind": ["1"],
+            "session-queue": ["1"],
             ...(opts.createSession !== undefined ? { "session-create": ["1"] } : {}),
             ...(opts.forkSession !== undefined ? { "session-fork": ["1"] } : {}),
             ...(opts.modelState !== undefined && opts.setSessionModel !== undefined
@@ -347,11 +356,34 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         }
       }
       case "session/status": {
+        // Count-only compatibility surface (M49 Task 11 keeps it rowless).
         const p = params as { sessionId?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/status requires a non-empty sessionId")
         }
         return makeSuccess(id, service.queueState(p.sessionId))
+      }
+      case "session/queue": {
+        // M49 Task 11: the REAL projection — the running row is first, the
+        // rest FIFO; the id emits serially-executed rows with their public
+        // ids (service-front + lane merged; never fabricated).
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/queue requires a non-empty sessionId")
+        }
+        return makeSuccess(id, { items: service.queue(p.sessionId) })
+      }
+      case "session/queue/cancel": {
+        const p = params as { sessionId?: unknown; id?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/queue/cancel requires a non-empty sessionId")
+        }
+        if (typeof p?.id !== "string" || p.id === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/queue/cancel requires a non-empty id")
+        }
+        // Honest answer inside the success payload — a finished/unknown id is
+        // a legitimate client question, never an error frame.
+        return makeSuccess(id, service.cancelQueued(p.sessionId, p.id))
       }
       case "session/cancel": {
         // M41b v1.1: abort the in-flight submit's controller (the same one the

@@ -122,21 +122,23 @@ class FakeInline implements InlineHost {
   setRegion(lines: RegionLine[]): void { this.lastRegion = lines }
 }
 
-/** Pushable TuiEvent stream for the loop's backend pump. */
+/** Pushable TuiEvent stream for the loop's backend pump. (M49 Task 11: the
+ * events buffer is named `pendingEvents` — `queue` is now the BackendClient
+ * queue-projection member.) */
 class QueueBackend implements BackendClient {
-  private queue: TuiEvent[] = []
+  private pendingEvents: TuiEvent[] = []
   private wake: (() => void) | undefined
   private ended = false
   closed = false
 
   push(...evs: TuiEvent[]): void {
-    this.queue.push(...evs)
+    this.pendingEvents.push(...evs)
     this.wake?.()
   }
 
   async *events(): AsyncIterable<TuiEvent> {
     for (;;) {
-      while (this.queue.length > 0) yield this.queue.shift()!
+      while (this.pendingEvents.length > 0) yield this.pendingEvents.shift()!
       if (this.ended) return
       await new Promise<void>((r) => { this.wake = r })
     }
@@ -144,15 +146,15 @@ class QueueBackend implements BackendClient {
 
   listSessions(): Promise<SessionSummary[]> { return Promise.resolve([]) }
   open(): Promise<void> { return Promise.resolve() }
-  createSession(): Promise<string> { return unsupportedSessionManagement.createSession() }
-  forkSession(): Promise<string> { return unsupportedSessionManagement.forkSession() }
+  createSession(): Promise<string> { return unsupportedSessionManagement.createSession!() }
+  forkSession(): Promise<string> { return unsupportedSessionManagement.forkSession!() }
   modelState(): ReturnType<BackendClient["modelState"]> {
     return unsupportedSessionManagement.modelState()
   }
   setSessionModel(
-    selection: Parameters<BackendClient["setSessionModel"]>[0],
-  ): ReturnType<BackendClient["setSessionModel"]> {
-    return unsupportedSessionManagement.setSessionModel(selection)
+    selection: Parameters<NonNullable<BackendClient["setSessionModel"]>>[0],
+  ): ReturnType<NonNullable<BackendClient["setSessionModel"]>> {
+    return unsupportedSessionManagement.setSessionModel!(selection)
   }
   submit(): Promise<void> { return Promise.resolve() }
   steer(): Promise<void> { return Promise.resolve() }

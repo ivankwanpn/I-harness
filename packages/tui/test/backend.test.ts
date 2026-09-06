@@ -188,7 +188,7 @@ describe("embedded backend", () => {
       modelId: "default",
       label: "fixture:default",
     })
-    await expect(backend.setSessionModel({
+    await expect(backend.setSessionModel!({
       provider: "deepseek",
       model: "deepseek-chat",
       reasoningEffort: "high",
@@ -205,11 +205,11 @@ describe("embedded backend", () => {
     })
 
     await backend.submit("fork source")
-    const forked = await backend.forkSession()
+    const forked = await backend.forkSession!()
     expect(forked).not.toBe(initial)
     expect((await backend.replay(-1)).some((event) => event.type === "user" && event.text === "fork source")).toBe(true)
 
-    const created = await backend.createSession()
+    const created = await backend.createSession!()
     expect(created).not.toBe(forked)
     expect(backend.seqCursor()).toBe(-1)
   })
@@ -239,7 +239,7 @@ describe("embedded backend", () => {
     })
     backends.push(backend)
 
-    await expect(backend.setSessionModel({
+    await expect(backend.setSessionModel!({
       provider: "deepseek",
       model: "deepseek-chat",
       reasoningEffort: "high",
@@ -274,7 +274,7 @@ describe("embedded backend", () => {
       modelPolicy: "test-mock",
     })
     try {
-      const childId = await backend.forkSession()
+      const childId = await backend.forkSession!()
       expect((await coordinator.profile(childId)).meta).toMatchObject({
         parentSession: "source",
         workspaceId: "ws-source",
@@ -321,7 +321,7 @@ describe("embedded backend", () => {
       },
     })
 
-    const setting = backend.setSessionModel({ provider: "provider-a", model: "model-a" })
+    const setting = backend.setSessionModel!({ provider: "provider-a", model: "model-a" })
     await persistStarted.promise
     await backend.open("b")
     releasePersist.resolve(undefined)
@@ -836,4 +836,61 @@ describe("embedded backend", () => {
     await coordinator.close()
   })
 
+})
+
+describe("embedded backend — real queue projection and cancellation (Task 11)", () => {
+  it("queue() exposes live rows; cancelQueued() marks the row cancelled and it never turns", async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const model: ModelClient = {
+      async *stream() {
+        await gate
+        yield { type: "text/chunk", text: "ok" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: tmp(),
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    })
+    const backend = createEmbeddedBackend({ service, sessionId: "s1" })
+    try {
+      const p1 = backend.submit("first")
+      const p2 = backend.submit("second")
+      await waitFor(() => service.queue("s1")[0]?.state === "running")
+      const rows = await backend.queue!()
+      expect(rows.map((r) => [r.text, r.state])).toEqual([
+        ["first", "running"],
+        ["second", "queued"],
+      ])
+      const second = rows[1]!
+      await expect(backend.cancelQueued!(second.id)).resolves.toEqual({ cancelled: true })
+      // the same id again → honest false (exactly-once removal from the view)
+      await expect(backend.cancelQueued!(second.id)).resolves.toEqual({ cancelled: false })
+      release()
+      await Promise.all([p1, p2])
+      expect(await backend.queue!()).toEqual([])
+      const users = (await backend.replay(-1)).filter((e) => e.type === "user").map((e) => (e as { text: string }).text)
+      expect(users[0]).toBe("first")
+      expect(users).not.toContain("second")
+    } finally {
+      release()
+      await backend.close()
+    }
+  }, 60_000)
+
+  it("queue membership is backend truth only: an absent-session queue is an honest empty list", async () => {
+    const service = makeService({ sessionId: "s1" })
+    const backend = createEmbeddedBackend({ service, sessionId: "s1" })
+    try {
+      expect(await backend.queue!()).toEqual([])
+    } finally {
+      await backend.close()
+    }
+  })
 })

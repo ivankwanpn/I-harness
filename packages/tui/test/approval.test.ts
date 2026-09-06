@@ -228,13 +228,13 @@ describe("attachApproval — BackendClient extension (contracts.ts untouched)", 
     const client = attachApproval(backend, bridge)
     await client.submit("hi")
     await client.open("s1")
-    await expect(client.createSession()).resolves.toBe("created")
-    await expect(client.forkSession()).resolves.toBe("forked")
+    await expect(client.createSession!()).resolves.toBe("created")
+    await expect(client.forkSession!()).resolves.toBe("forked")
     await expect(client.modelState()).resolves.toEqual({
       status: "unconfigured",
       reason: "No model configured",
     })
-    await expect(client.setSessionModel({ provider: "p", model: "m" })).resolves.toEqual({
+    await expect(client.setSessionModel!({ provider: "p", model: "m" })).resolves.toEqual({
       status: "ready",
       providerId: "p",
       modelId: "m",

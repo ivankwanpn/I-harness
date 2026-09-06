@@ -20,6 +20,7 @@ import {
   type RpcMessage,
   type RpcSuccess,
   type RpcFailure,
+  type SessionQueueItem,
 } from "../src/protocol.ts"
 
 async function makeService(): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
@@ -67,6 +68,8 @@ function makeStubService(): SessionService {
     liveSession: () => undefined,
     hasAssembly: () => false,
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
+    queue: vi.fn(() => []),
+    cancelQueued: vi.fn(() => ({ cancelled: false })),
     onAssembly: () => () => {},
     closeSession: vi.fn(async () => {}),
     close: async () => {},
@@ -115,6 +118,7 @@ describe("createSdkServer", () => {
             "session-list": ["1"],
             "session-cancel": ["1"],
             "session-rewind": ["1"],
+            "session-queue": ["1"],
           },
         },
       })
@@ -953,4 +957,95 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
       await cleanup()
     }
   })
+})
+
+describe("createSdkServer session/queue (Task 11)", () => {
+  /** Real service whose model blocks until the gate resolves. */
+  async function gatedQueueService(): Promise<{
+    service: SessionService
+    gate: { promise: Promise<void>; resolve(): void }
+    cleanup: () => Promise<void>
+  }> {
+    const dir = await mkdtemp(join(tmpdir(), "ih-sdk-queue-"))
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => { resolve = done })
+    const model = {
+      async *stream(_request: unknown) {
+        await promise
+        yield { type: "text/chunk" as const, text: "ok" }
+        yield { type: "end" as const }
+      },
+    }
+    const service = createSessionService({
+      workspace: dir,
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    })
+    return { service, gate: { promise, resolve }, cleanup: () => rm(dir, { recursive: true, force: true }) }
+  }
+
+  function queueReply(line: string | null): RpcSuccess | undefined {
+    return line === null ? undefined : decodeFrame(line) as RpcSuccess
+  }
+
+  it("serves the real queue projection and cancels a queued row; session/status stays the count-only surface", async () => {
+    const { service, gate, cleanup } = await gatedQueueService()
+    try {
+      const server = createSdkServer(service)
+      const first = service.submit("s1", "first", new AbortController().signal)
+      const second = service.submit("s1", "second", new AbortController().signal)
+      for (;;) {
+        if (service.queue("s1").some((row) => row.state === "running")) break
+        await new Promise((r) => setTimeout(r, 10))
+      }
+
+      const listed = queueReply(await server.handleLine(encodeFrame(makeRequest(200, "session/queue", { sessionId: "s1" }))))
+      const items = (listed!.result as { items: SessionQueueItem[] }).items
+      expect(items).toHaveLength(2)
+      expect(items.find((r) => r.text === "first")?.state).toBe("running")
+      expect(items.find((r) => r.text === "second")).toMatchObject({ state: "queued", delivery: "queue", intent: "user" })
+      expect(items.map((r) => r.id).every((id) => typeof id === "string" && id !== "")).toBe(true)
+
+      const secondRow = items.find((r) => r.text === "second")!
+      const cancelled = queueReply(await server.handleLine(encodeFrame(makeRequest(201, "session/queue/cancel", { sessionId: "s1", id: secondRow.id }))))
+      expect(cancelled!.result).toEqual({ cancelled: true })
+      // duplicate cancel on the same id → honest false
+      const again = queueReply(await server.handleLine(encodeFrame(makeRequest(202, "session/queue/cancel", { sessionId: "s1", id: secondRow.id }))))
+      expect(again!.result).toEqual({ cancelled: false })
+
+      gate.resolve()
+      await Promise.all([first, second])
+      const drained = queueReply(await server.handleLine(encodeFrame(makeRequest(203, "session/queue", { sessionId: "s1" }))))
+      expect((drained!.result as { items: SessionQueueItem[] }).items).toEqual([])
+      // session/status remains count-only (no rows):
+      const status = queueReply(await server.handleLine(encodeFrame(makeRequest(204, "session/status", { sessionId: "s1" }))))
+      expect(status!.result).toEqual({ running: false, queued: 0 })
+
+      // param validation (fail-closed):
+      for (const bad of [
+        { sessionId: "" },
+        {},
+      ]) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(205, "session/queue", bad)))
+        expect((decodeFrame(reply!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      }
+      for (const bad of [
+        { sessionId: "s1", id: "" },
+        { sessionId: "", id: "x" },
+        { sessionId: "s1" },
+      ]) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(206, "session/queue/cancel", bad)))
+        expect((decodeFrame(reply!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      }
+      await server.close()
+    } finally {
+      gate.resolve()
+      await service.close()
+      await cleanup()
+    }
+  }, 60_000)
 })

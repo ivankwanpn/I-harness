@@ -279,13 +279,23 @@ export interface ApprovalClient extends BackendClient {
  * approval/question streams come from the bridge. contracts.ts stays closed.
  */
 export function attachApproval(backend: BackendClient, bridge: ApprovalBridge): ApprovalClient {
+  // M49 Task 4 rule: the OPTIONAL capability members are forwarded ONLY when
+  // present — the compound client's absence mirrors the source's absence
+  // (never a member that throws). Members are invoked THROUGH the source
+  // object (`backend.x()` — the embedded impl's `this` is bound to it).
   return {
     listSessions: () => backend.listSessions(),
     open: (id) => backend.open(id),
-    createSession: () => backend.createSession(),
-    forkSession: () => backend.forkSession(),
+    ...(backend.createSession !== undefined
+      ? { createSession: () => backend.createSession!() }
+      : {}),
+    ...(backend.forkSession !== undefined
+      ? { forkSession: () => backend.forkSession!() }
+      : {}),
     modelState: () => backend.modelState(),
-    setSessionModel: (selection) => backend.setSessionModel(selection),
+    ...(backend.setSessionModel !== undefined
+      ? { setSessionModel: (selection) => backend.setSessionModel!(selection) }
+      : {}),
     submit: (prompt) => backend.submit(prompt),
     steer: (text) => backend.steer(text),
     cancel: () => backend.cancel(),

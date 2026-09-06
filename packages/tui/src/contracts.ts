@@ -128,16 +128,33 @@ export type ActiveView =
   | { kind: "agent"; sessionId: string }
   | { kind: "dashboard" }
 
+/** M49 Task 11 (spec §8.1): ONE row of the session queue projection. The
+ * running row is always first; the rest follow FIFO. Never fabricated — an
+ * empty list means literally nothing queued/running. */
+export interface SessionQueueItem {
+  id: string
+  text: string
+  delivery: "queue" | "steer"
+  intent: "user" | "system"
+  state: "queued" | "running"
+  order: number
+}
+
 /** The single UI consumption surface implemented by embedded and remote SDK
- * backends. */
+ * backends. Capability members are OPTIONAL (spec §4.3): an absent member is
+ * the truthful "this backend does not wire it" — the UI hides the action or
+ * renders an explicit unavailable state, never a fabricated value. */
 export interface BackendClient {
   listSessions(): Promise<SessionSummary[]>
   open(sessionId: string): Promise<void>
-  /** Create/fork return the authoritative id after switching through open(). */
-  createSession(): Promise<string>
-  forkSession(): Promise<string>
+  /** M49 Task 4 rule: create/fork are OPTIONAL capability members — absent ⇒
+   * the host cannot create/fork (the Welcome "New session" path then fails
+   * loudly instead of silently no-opping). Return the authoritative id after
+   * switching through open(), same semantics when present. */
+  createSession?(): Promise<string>
+  forkSession?(): Promise<string>
   modelState(): Promise<BackendModelState>
-  setSessionModel(selection: SessionModelSelection): Promise<BackendModelState>
+  setSessionModel?(selection: SessionModelSelection): Promise<BackendModelState>
   submit(prompt: string): Promise<void>
   steer(text: string): Promise<void>
   cancel(): Promise<void>
@@ -149,6 +166,15 @@ export interface BackendClient {
   replay(afterSeq: number): Promise<TuiEvent[]>
   /** Current live status bits (queue surface). */
   status(): { running: boolean; queued: number }
+  /** M49 Task 11: the real queue projection (running row first, FIFO).
+   * OPTIONAL — absent ⇒ the QueuePane shows the honest unavailable state
+   * (never "Queue is empty." as a stand-in). */
+  queue?(): Promise<SessionQueueItem[]>
+  /** M49 Task 11: cancel ONE queued row by its stable id (settles without
+   * executing). OPTIONAL — absent ⇒ the pane hides [cancel] even when rows
+   * are present. `cancelled: false` = nothing cancellable (already
+   * finished/cancelled/running) — the UI refreshes from backend truth. */
+  cancelQueued?(id: string): Promise<{ cancelled: boolean }>
   /** Real per-session context usage (M38b G2). OPTIONAL: a backend that cannot
    * price the session honestly has no member — the loop renders only what
    * exists, never an estimate. */

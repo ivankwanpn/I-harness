@@ -925,7 +925,10 @@ export function present(
     renderBtwOverlay(layout.btw, app.paneData.btw, view, palette, glyphs)
   }
   if (layout.queue !== undefined && app.paneData?.queue !== undefined) {
-    renderQueuePane(layout.queue, { rows: app.paneData.queue }, view, palette, glyphs)
+    renderQueuePane(layout.queue, {
+      rows: app.paneData.queue,
+      available: app.paneData.queueUnavailable !== true,
+    }, view, palette, glyphs)
   }
   if (app.turn !== undefined) {
     renderTurnStatus(layout.turn, app.turn, view, palette, glyphs)

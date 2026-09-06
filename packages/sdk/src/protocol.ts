@@ -142,6 +142,28 @@
  * active/queued session, persist the selection, invalidate the live assembly,
  * and resolve a fresh state. Unknown sessions follow the v1 history convention
  * (-32602 with an explicit not-found message).
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * Task 11 addendum — M49, 2026-09-07 (ADDITIVE-ONLY).
+ *
+ * PROTOCOL_VERSION remains 2.
+ *
+ *   "session-queue": ["1"]
+ *     session/queue { sessionId } → { items: SessionQueueItem[] }
+ *       — the REAL per-session queue projection (spec §8.1): the running row
+ *         is always first, the rest FIFO; rows never leave the live lane
+ *         (a finished turnaround is removed by the owner). A non-empty
+ *         sessionId is validated; an unknown-but-valid session answers an
+ *         honest empty list (nothing queued/running for it).
+ *     session/queue/cancel { sessionId, id } → { cancelled }
+ *       — cancel ONE queued row by its stable id: the submit settles without
+ *         executing. `cancelled: false` when the id was already finished,
+ *         already cancelled, or belongs to the RUNNING row (whole-turn cancel
+ *         is session/cancel). Unknown ids are answered inside the success
+ *         payload — never an error frame.
+ *
+ * session/status stays the count-only compatibility surface ({ running,
+ * queued } — no rows).
  */
 
 import { createInterface, type Interface } from "node:readline"
@@ -243,6 +265,24 @@ export type SessionModelState =
 export interface CancelResult {
   cancelled: boolean
   reason?: "not-running" | "not-found"
+}
+
+/** M49 Task 11: ONE row of the session/queue projection (spec §8.1).
+ * `state` is "running" only for the lane's current turn; the running row is
+ * always FIRST. `order` is the per-session FIFO ordinal. */
+export interface SessionQueueItem {
+  id: string
+  text: string
+  delivery: "queue" | "steer"
+  intent: "user" | "system"
+  state: "queued" | "running"
+  order: number
+}
+
+/** M49 Task 11: session/queue/cancel answer — `false` for a finished /
+ * already-cancelled / running row id (never an error frame). */
+export interface QueueCancelResult {
+  cancelled: boolean
 }
 
 /** M41b v1.1: rewind mode union (mirrors packages/rewind RewindMode). */

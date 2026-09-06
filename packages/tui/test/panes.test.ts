@@ -175,37 +175,48 @@ describe("tasks pane (spec §3.12)", () => {
 
 describe("queue pane (spec §3.12)", () => {
   const rows: QueueRow[] = [
-    { n: 1, kind: "shell", text: "pnpm test", extraLines: 2, action: "send" },
-    { n: 2, kind: "prompt", text: "/compact now", action: "cancel" },
-    { n: 3, kind: "cron", text: "regen every 5m" },
+    { id: "r1", text: "first prompt", delivery: "queue", intent: "user", state: "running", order: 1, canCancel: true },
+    { id: "r2", text: "/compact now", delivery: "queue", intent: "user", state: "queued", order: 2, canCancel: true },
+    { id: "r3", text: "steered mid-turn", delivery: "steer", intent: "user", state: "queued", order: 3, canCancel: false },
   ]
 
-  it("renders #N prefixes, kind styles, (+N lines) and right [cancel]/[Send now]", () => {
+  it("renders real rows (#N prefix, prompt body) and [cancel] only for queued items with backend cancel capability", () => {
     const r = make(80, 24)
-    draw(r, (view) => renderQueuePane({ x: 0, y: 0, w: 80, h: 24 }, { rows }, view, palette, GLYPHS))
-    expect(rowText(r, 0)).toContain("#1")
-    expect(rowText(r, 0)).toContain("! pnpm test")
-    expect(rowText(r, 0)).toContain("(+2 lines)")
-    expect(rowText(r, 0)).toContain("[Send now]")
+    draw(r, (view) => renderQueuePane({ x: 0, y: 0, w: 80, h: 24 }, { rows, available: true }, view, palette, GLYPHS))
+    expect(rowText(r, 0)).toContain("#1 first prompt")
+    expect(rowText(r, 0)).not.toContain("[cancel]") // running row is never cancellable
     expect(rowText(r, 1)).toContain("#2 /compact now")
     expect(rowText(r, 1)).toContain("[cancel]")
-    expect(rowText(r, 2)).toContain("#3 ↻ regen every 5m")
-    // shell body yellow (command), prompt body magenta (accent_assistant).
-    expect(cellAt(r, 3, 0).style).toMatchObject(fg(palette.command)) // `!` after `#1 `
+    expect(rowText(r, 2)).toContain("#3 steered mid-turn")
+    expect(rowText(r, 2)).not.toContain("[cancel]") // no backend cancel capability
+    // no shell/cron fixture prefixes; no [Send now] without an atomic promote backend
+    expect(rowText(r, 0)).not.toContain("! ")
+    expect(rowText(r, 0)).not.toContain("↻ ")
+    expect(rowText(r, 0)).not.toContain("[Send now]")
+    // prompt body magenta (accent_assistant).
     const promptBody = rowText(r, 1).indexOf("/compact")
     expect(cellAt(r, promptBody + 1, 1).style).toMatchObject(fg(palette.accentAssistant))
   })
 
-  it("caps at 3 rows; empty state 'Queue is empty.'", () => {
-    const many: QueueRow[] = Array.from({ length: 5 }, (_v, i) => ({ n: i + 1, kind: "prompt", text: `q${i + 1}` }))
+  it("caps at 3 rows; empty state 'Queue is empty.'; unavailable is honest", () => {
+    const many: QueueRow[] = Array.from({ length: 5 }, (_v, i) => ({
+      id: `q${i + 1}`, text: `q${i + 1}`, delivery: "queue" as const, intent: "user" as const,
+      state: "queued" as const, order: i + 1, canCancel: false,
+    }))
     const r = make(80, 24)
-    draw(r, (view) => renderQueuePane({ x: 0, y: 0, w: 80, h: 24 }, { rows: many }, view, palette, GLYPHS))
+    draw(r, (view) => renderQueuePane({ x: 0, y: 0, w: 80, h: 24 }, { rows: many, available: true }, view, palette, GLYPHS))
     expect(rowText(r, 2)).toContain("#3")
     expect(rowText(r, 3).trim()).toBe("")
 
     const r2 = make(80, 24)
-    draw(r2, (view) => renderQueuePane({ x: 1, y: 0, w: 30, h: 3 }, { rows: [] }, view, palette, GLYPHS))
+    draw(r2, (view) => renderQueuePane({ x: 1, y: 0, w: 30, h: 3 }, { rows: [], available: true }, view, palette, GLYPHS))
     expect(rowText(r2, 0)).toContain("Queue is empty.")
+
+    // backend without the queue capability: an honest unavailable line, NEVER
+    // the empty-state claim (the design's no-fake-data rule).
+    const r3 = make(80, 24)
+    draw(r3, (view) => renderQueuePane({ x: 1, y: 0, w: 30, h: 3 }, { rows: [], available: false }, view, palette, GLYPHS))
+    expect(rowText(r3, 0)).toContain("Queue status unavailable")
   })
 })
 

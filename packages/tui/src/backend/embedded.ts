@@ -64,7 +64,7 @@ import {
   type SessionModelSelection,
 } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { toolKindOf, type BackendClient, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
+import { toolKindOf, type BackendClient, type SessionQueueItem, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ mapping
 
@@ -479,50 +479,62 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       }
     },
 
-    async createSession(): Promise<string> {
-      if (opts.createSession === undefined) throw new Error("session-create unavailable")
-      const id = await opts.createSession()
-      if (id === "") throw new Error("session-create returned an empty session id")
-      await this.open(id)
-      return id
-    },
-
-    async forkSession(): Promise<string> {
-      if (opts.forkSession === undefined) throw new Error("session-fork unavailable")
-      const id = await opts.forkSession(sessionId)
-      if (id === "") throw new Error("session-fork returned an empty session id")
-      await this.open(id)
-      return id
-    },
+    // M49 Task 4 rule: the create/fork/setSessionModel members are CAPABILITY
+    // members — present only when the caller actually wired the seam (an
+    // absent member is the contract's truthful "not available"); the loop
+    // guards on presence instead of catching a loud throw.
+    ...(opts.createSession !== undefined
+      ? {
+          async createSession(): Promise<string> {
+            const id = await opts.createSession!()
+            if (id === "") throw new Error("session-create returned an empty session id")
+            await this.open(id)
+            return id
+          },
+        }
+      : {}),
+    ...(opts.forkSession !== undefined
+      ? {
+          async forkSession(): Promise<string> {
+            const id = await opts.forkSession!(sessionId)
+            if (id === "") throw new Error("session-fork returned an empty session id")
+            await this.open(id)
+            return id
+          },
+        }
+      : {}),
 
     modelState() {
       return service.modelState(sessionId)
     },
 
-    async setSessionModel(selection): Promise<import("../contracts.ts").BackendModelState> {
-      if (opts.setSessionModel === undefined) throw new Error("session-model unavailable")
-      if (selection.provider.trim() === "" || selection.model.trim() === "") {
-        throw new Error("session model selection requires non-empty provider and model")
-      }
-      const targetSessionId = sessionId
-      const queueState = service.queueState(targetSessionId)
-      if (queueState.running || queueState.queued > 0) {
-        throw new Error(`session-model unavailable while session is busy: ${targetSessionId}`)
-      }
-      await opts.setSessionModel(targetSessionId, {
-        provider: selection.provider.trim(),
-        model: selection.model.trim(),
-        ...(selection.reasoningEffort !== undefined
-          ? { reasoningEffort: selection.reasoningEffort }
-          : {}),
-      })
-      await service.closeSession(targetSessionId)
-      if (sessionId === targetSessionId) {
-        cachedAssembly = undefined
-        assemblyForId = undefined
-      }
-      return service.modelState(targetSessionId)
-    },
+    ...(opts.setSessionModel !== undefined
+      ? {
+          async setSessionModel(selection): Promise<import("../contracts.ts").BackendModelState> {
+            if (selection.provider.trim() === "" || selection.model.trim() === "") {
+              throw new Error("session model selection requires non-empty provider and model")
+            }
+            const targetSessionId = sessionId
+            const queueState = service.queueState(targetSessionId)
+            if (queueState.running || queueState.queued > 0) {
+              throw new Error(`session-model unavailable while session is busy: ${targetSessionId}`)
+            }
+            await opts.setSessionModel!(targetSessionId, {
+              provider: selection.provider.trim(),
+              model: selection.model.trim(),
+              ...(selection.reasoningEffort !== undefined
+                ? { reasoningEffort: selection.reasoningEffort }
+                : {}),
+            })
+            await service.closeSession(targetSessionId)
+            if (sessionId === targetSessionId) {
+              cachedAssembly = undefined
+              assemblyForId = undefined
+            }
+            return service.modelState(targetSessionId)
+          },
+        }
+      : {}),
 
     async submit(prompt: string): Promise<void> {
       if (closed) throw new Error("embedded backend closed")
@@ -642,6 +654,16 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     },
 
     status: () => service.queueState(sessionId),
+
+    // M49 Task 11: the REAL queue projection — every row is the service's
+    // truth (service-front + lane merged by public id); cancel settles the
+    // submit without executing.
+    async queue(): Promise<SessionQueueItem[]> {
+      return service.queue(sessionId)
+    },
+    async cancelQueued(id: string): Promise<{ cancelled: boolean }> {
+      return service.cancelQueued(sessionId, id)
+    },
 
     modelLabel: opts.modelLabel,
 

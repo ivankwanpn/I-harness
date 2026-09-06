@@ -330,12 +330,13 @@ describe("createRemoteBackend session lifecycle and model capabilities", () => {
       return { ok: true }
     })
     const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.setSessionModel !== undefined, 1000)
 
     await expect(backend.modelState()).resolves.toEqual({
       status: "unconfigured",
       reason: "No model configured",
     })
-    await expect(backend.setSessionModel({
+    await expect(backend.setSessionModel!({
       provider: "deepseek",
       model: "deepseek-chat",
       reasoningEffort: "high",
@@ -347,12 +348,12 @@ describe("createRemoteBackend session lifecycle and model capabilities", () => {
     })
     expect(selected).toEqual({ provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" })
 
-    await expect(backend.createSession()).resolves.toBe("s2")
+    await expect(backend.createSession!()).resolves.toBe("s2")
     await backend.submit("new session")
     expect(client.requests.findLast((request) => request.method === "session/prompt")).toMatchObject({
       params: { sessionId: "s2", prompt: "new session" },
     })
-    await expect(backend.forkSession()).resolves.toBe("s3")
+    await expect(backend.forkSession!()).resolves.toBe("s3")
     await backend.submit("forked session")
     expect(client.requests.findLast((request) => request.method === "session/prompt")).toMatchObject({
       params: { sessionId: "s3", prompt: "forked session" },
@@ -361,19 +362,79 @@ describe("createRemoteBackend session lifecycle and model capabilities", () => {
     await backend.close()
   })
 
-  it("rejects unavailable methods without sending unsupported wire calls", async () => {
+  it("capability-gated members are ABSENT on a server without the rows; modelState stays honest", async () => {
     const client = fakeWireClient((method) => method === "initialize"
       ? { protocolVersion: 2, capabilities: {} }
       : { ok: true })
     const backend = createRemoteBackend({ client, sessionId: "s1" })
-    await expect(backend.createSession()).rejects.toThrow("session-create")
-    await expect(backend.forkSession()).rejects.toThrow("session-fork")
+    await waitFor(() => backend.rewind !== undefined || backend.createSession === undefined, 1000)
+    expect(backend.createSession).toBeUndefined()
+    expect(backend.forkSession).toBeUndefined()
+    // modelState() is required on the contract — the member exists and fails
+    // loudly (never a fabricated state).
     await expect(backend.modelState()).rejects.toThrow("session-model")
     expect(client.requests.some((request) => [
       "session/create",
       "session/fork",
       "session/model/state",
     ].includes(request.method))).toBe(false)
+    await backend.close()
+  })
+})
+
+describe("createRemoteBackend session-queue (Task 11)", () => {
+  it("gates queue/cancelQueued on the session-queue row: absent on a server without it", async () => {
+    const client = fakeWireClient((method) => method === "initialize"
+      ? { protocolVersion: 2, capabilities: { "session-list": ["1"] } }
+      : { ok: true })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await new Promise((r) => setTimeout(r, 20)) // let the eager handshake fill (or not)
+    expect(backend.queue).toBeUndefined()
+    expect(backend.cancelQueued).toBeUndefined()
+    await backend.close()
+  })
+
+  it("with the row: queue lists items (malformed entries skipped), cancelQueued cancels by exact params", async () => {
+    const client = fakeWireClient((method, params) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-queue": ["1"] } }
+      if (method === "session/queue") {
+        return {
+          items: [
+            { id: "q1", text: "second prompt", delivery: "queue", intent: "user", state: "queued", order: 2 },
+            { id: "q2", text: "broken row" }, // malformed entry → skipped, never fabricated
+            null,
+          ],
+        }
+      }
+      if (method === "session/queue/cancel") {
+        expect(params).toEqual({ sessionId: "s1", id: "q1" })
+        return { cancelled: true }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.queue !== undefined, 1000)
+    const items = await backend.queue!()
+    expect(items).toEqual([
+      { id: "q1", text: "second prompt", delivery: "queue", intent: "user", state: "queued", order: 2 },
+    ])
+    await expect(backend.cancelQueued!("q1")).resolves.toEqual({ cancelled: true })
+    expect(client.requests.find((request) => request.method === "session/queue")).toMatchObject({
+      method: "session/queue",
+      params: { sessionId: "s1" },
+    })
+    await backend.close()
+  })
+
+  it("malformed session/queue response → SdkWireError (never a fabricated empty)", async () => {
+    const client = fakeWireClient((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-queue": ["1"] } }
+      if (method === "session/queue") return { items: 42 }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.queue !== undefined, 1000)
+    await expect(backend.queue!()).rejects.toBeInstanceOf(SdkWireError)
     await backend.close()
   })
 })

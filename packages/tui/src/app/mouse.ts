@@ -88,8 +88,9 @@ export interface MouseHooks {
   openPlanView?(): void
   sendBackgroundTaskCancel?(label: string): void
   openSubagentViewer?(label: string): void
-  queueCancel?(n: number): void
-  queueSendNow?(n: number): void
+  /** M49 Task 11: the row's STABLE public id (the backend's cancelQueued
+   * target); absent hook → the honest "(M46c)" toast. */
+  queueCancel?(id: string): void
   /** M46c G2: paste-chip double-click — INSERT the retained paste-source at
    * the cursor (the prompt state's pasteStash[`index`]; absent hook → honest
    * toast — the old "source not retained" path is replaced by this seam).
@@ -633,12 +634,11 @@ export class MouseRouter {
     if (rows === undefined) return
     const idx = ev.y - ctx.y
     const row = rows[Math.min(idx, rows.length - 1)]
-    if (row === undefined) return
-    const right = row.action === "cancel" ? "[cancel]" : row.action === "send" ? "[Send now]" : undefined
-    const rightW = right === undefined ? 0 : strWidth(right) + 1
-    if (rightW > 0 && ev.x >= ctx.x + ctx.w - rightW + 1 && ev.x < ctx.x + ctx.w) {
-      if (row.action === "cancel") this.hookOr(this.hooks.queueCancel, "queue cancel (M46c)", row.n)
-      else this.hookOr(this.hooks.queueSendNow, "queue send-now (M46c)", row.n)
+    if (row === undefined || row.state !== "queued" || !row.canCancel) return
+    const right = "[cancel]"
+    const rightW = strWidth(right) + 1
+    if (ev.x >= ctx.x + ctx.w - rightW + 1 && ev.x < ctx.x + ctx.w) {
+      this.hookOr(this.hooks.queueCancel, "queue cancel (M46c)", row.id)
     }
   }
 

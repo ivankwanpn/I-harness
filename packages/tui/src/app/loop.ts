@@ -15,7 +15,8 @@ import type {
 } from "@i-harness/tui-core"
 import { resolvePalette } from "@i-harness/tui-core"
 import { isAbsolute, join } from "node:path"
-import type { BackendClient, BackendModelState, ScrollbackEngine, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { BackendClient, BackendModelState, ScrollbackEngine, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { QueueRow } from "../views/queue-pane.ts"
 import { dispatchKey, shortcutsFor } from "./keys.ts"
 import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
 import { present } from "./present.ts"
@@ -511,6 +512,9 @@ export class TuiApp {
         // M49 Task 7: the double-click EXPANDS the editor's paste atom (the
         // source is already in the text — the chip is its atomic envelope).
         insertPasteStash: (index) => this.expandPasteStash(index),
+        // M49 Task 11: the queue [cancel] chip fires the SAME action as the
+        // app-level cancelQueueItem (cancel + refresh from backend truth).
+        queueCancel: (id) => { void this.cancelQueueItem(id) },
         // M49 Task 7: the click moves the PromptEditor cursor (atom-safe) —
         // never a direct string write.
         movePromptCursor: (index) => {
@@ -1784,6 +1788,15 @@ export class TuiApp {
   }
 
   private async createSessionAndSubmit(raw: string): Promise<void> {
+    // M49 Task 4 rule: createSession is an OPTIONAL capability member — an
+    // absent seam fails loudly (never a silent no-op). NOTE: the member is
+    // invoked AS A METHOD (never extracted) — the embedded implementation
+    // uses `this.open` and an unbound call would crash (case-026 caught it).
+    if (this.opts.backend.createSession === undefined) {
+      this.setStartupError("session create unavailable on this backend")
+      this.activateWelcome()
+      return
+    }
     try {
       const sessionId = await this.opts.backend.createSession()
       this.activateAgent(sessionId)
@@ -2958,7 +2971,12 @@ export class TuiApp {
 
   private togglePane(kind: "todo" | "tasks" | "queue"): void {
     if (this.app.panes.has(kind)) this.app.panes.delete(kind)
-    else this.app.panes.add(kind)
+    else {
+      this.app.panes.add(kind)
+      // M49 Task 11: opening the queue pane fetches backend truth at OPEN time
+      // (not a stale fixture projection).
+      if (kind === "queue") this.refreshQueuePane()
+    }
     this.requestFrame()
   }
 
@@ -3216,6 +3234,14 @@ export class TuiApp {
             this.openSettings(true)
             return
           }
+          // M49 Task 4 rule: optional capability member — guard + METHOD call
+          // (extracting the member and calling it unbound would lose the
+          // embedded impl's `this` — case-026 regression).
+          if (this.opts.backend.createSession === undefined) {
+            this.setStartupError("session create unavailable on this backend")
+            this.activateWelcome()
+            return
+          }
           const sessionId = await this.opts.backend.createSession()
           this.activateAgent(sessionId)
         })
@@ -3386,6 +3412,89 @@ export class TuiApp {
       this.app.status.queue = q.queued
       this.requestFrame()
     }
+    this.refreshQueuePane()
+  }
+
+  // ------------------------------------------------------------------ real queue pane (M49 Task 11)
+
+  /** In-flight pane-row probe (never two concurrent refreshes — the promise
+   * itself is the guard, same pattern as refreshContext). */
+  private queuePaneProbe: Promise<void> | undefined
+
+  /** M49 Task 11: the queue PANE rows — backend truth only. A backend without
+   * the queue capability flips the pane to the honest unavailable state
+   * (never "Queue is empty." as a stand-in); a failed probe keeps the previous
+   * rows (stale truth stays truthful, never fabricated). */
+  private refreshQueuePane(): void {
+    const probe = this.opts.backend.queue
+    // The pane rows belong to the OPEN pane only — a closed pane keeps
+    // paneData undefined (session-derived state stays clean across resets).
+    const paneOpen = this.app.panes.has("queue")
+    if (probe === undefined) {
+      if (paneOpen) {
+        this.app.paneData = { ...(this.app.paneData ?? {}), queue: [], queueUnavailable: true }
+      }
+      return
+    }
+    if (this.queuePaneProbe !== undefined) return
+    const generation = this.sessionGeneration
+    let pending!: Promise<void>
+    pending = probe()
+      .then((items: SessionQueueItem[]) => {
+        if (generation !== this.sessionGeneration) return
+        if (!this.app.panes.has("queue")) return
+        const canCancel = this.opts.backend.cancelQueued !== undefined
+        this.app.paneData = {
+          ...(this.app.paneData ?? {}),
+          queue: items.map((item): QueueRow => ({
+            id: item.id,
+            text: item.text,
+            delivery: item.delivery,
+            intent: item.intent,
+            state: item.state,
+            order: item.order,
+            canCancel,
+          })),
+          queueUnavailable: false,
+        }
+        this.requestFrame()
+      })
+      .catch(() => { /* backend truth failed — previous rows stay */ })
+      .finally(() => {
+        if (this.queuePaneProbe !== pending) return
+        this.queuePaneProbe = undefined
+        if (generation !== this.sessionGeneration) this.refreshQueuePane()
+      })
+    this.queuePaneProbe = pending
+  }
+
+  /** M49 Task 11 (public test seam + behavior): open the queue pane and
+   * refresh its rows from backend truth. */
+  async openQueue(): Promise<void> {
+    if (!this.app.panes.has("queue")) this.app.panes.add("queue")
+    this.refreshQueue()
+    await this.queuePaneProbe
+    this.requestFrame()
+  }
+
+  /** M49 Task 11: cancel ONE queued row — the single action both call paths
+   * (mouse [cancel], the app-level seam) share; the view then refreshes from
+   * backend truth (a `cancelled:false` host leaves the row exactly as the
+   * backend lists it). */
+  async cancelQueueItem(id: string): Promise<void> {
+    const cancel = this.opts.backend.cancelQueued
+    if (cancel === undefined) {
+      this.toast("queue cancel: backend capability absent")
+      return
+    }
+    try {
+      await cancel(id)
+    } catch (error) {
+      this.toast(`queue cancel failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    this.refreshQueue()
+    await this.queuePaneProbe
+    this.requestFrame()
   }
 
   // ------------------------------------------------------------------ minimal mode (M38a G2)
