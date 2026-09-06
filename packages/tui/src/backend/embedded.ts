@@ -306,7 +306,7 @@ export interface EmbeddedFactoryOptions {
 export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
   const service = opts.service
   const batchMs = opts.batchMs ?? 16
-  const liveState = createEventMapState()
+  let rebindLiveSession: ((session: Session) => void) | undefined
 
   let sessionId = opts.sessionId
   let closed = false
@@ -379,6 +379,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       assemblyForId = undefined
       cursor = -1
       const s = await ensureSession()
+      rebindLiveSession?.(s)
       if (opts.prompt !== undefined && opts.prompt !== "" && s.events.length === 0 && !promptSubmittedFor.has(id)) {
         promptSubmittedFor.add(id)
         // initial kickoff for the fresh session — errors surface on the stream
@@ -428,13 +429,30 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
         pushError(`session open failed: ${errText(error)}`)
         return
       }
+      let mapState = createEventMapState()
       const walkMap = (ev: SessionEvent): TuiEvent[] => {
-        const mapped = mapSessionEvent(ev, liveState)
+        const mapped = mapSessionEvent(ev, mapState)
         return mapped === undefined ? [] : [mapped]
       }
-      const unsubscribe = subscribe(s, (ev) => {
-        for (const mapped of walkMap(ev)) pushEvent(mapped)
-      })
+      let unsubscribe: (() => void) | undefined
+      const bind = (next: Session): void => {
+        unsubscribe?.()
+        if (queue.timer !== undefined) {
+          clearTimeout(queue.timer)
+          queue.timer = undefined
+        }
+        queue.items.length = 0
+        mapState = createEventMapState()
+        unsubscribe = subscribe(next, (ev) => {
+          for (const mapped of walkMap(ev)) pushEvent(mapped)
+        })
+        for (const ev of next.events) {
+          for (const mapped of walkMap(ev)) pushEvent(mapped)
+        }
+        queue.wake?.()
+      }
+      rebindLiveSession = bind
+      bind(s)
       try {
         for (;;) {
           // drain the elapsed batch in one burst, then yield one item per pull
@@ -455,7 +473,8 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
           queue.timer = undefined
         }
         queue.wake = undefined
-        unsubscribe()
+        if (rebindLiveSession === bind) rebindLiveSession = undefined
+        unsubscribe?.()
       }
     },
 
@@ -583,43 +602,78 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
   // A resumed injected coordinator is transferred to this factory instance because
   // adoptOwnership() holds its lease until coordinator.close().
   const ownsCoordinator = opts.coordinator === undefined && opts.storeRoot !== undefined
-  const coordinator = opts.coordinator ?? (opts.storeRoot === undefined ? undefined : createSessionCoordinator(createJsonlBackend(opts.storeRoot), { lock: { enabled: true, lockRoot: opts.storeRoot } }))
+  const jsonlBackend = opts.storeRoot === undefined ? undefined : createJsonlBackend(opts.storeRoot)
+  const coordinator = opts.coordinator ?? (jsonlBackend === undefined ? undefined : createSessionCoordinator(jsonlBackend, { lock: { enabled: true, lockRoot: opts.storeRoot! } }))
   let sessionId = opts.resumeSessionId
-  let session: Session | undefined
+  const sessions = new Map<string, Session>()
+  const openedSessionIds = new Set<string>()
+  const mirroredSession = (id: string, restored?: Session): Session => {
+    const live = createSession((ev) => {
+      coordinator?.enqueue(id, [ev])
+      if (ev.type === "turn/end") void coordinator?.flush(id).catch(() => {})
+    })
+    if (restored !== undefined) {
+      live.events.push(...restored.events)
+      live.formatVersion = restored.formatVersion
+      live.header = restored.header
+    }
+    return live
+  }
+  let sessionFor: SessionServiceOptions["sessionFor"] | undefined
   try {
     if (coordinator !== undefined) {
       if (sessionId !== undefined) {
         const restored = (await coordinator.load(sessionId)).session
-        session = createSession((ev) => {
-          coordinator.enqueue(sessionId!, [ev])
-          if (ev.type === "turn/end") void coordinator.flush(sessionId!).catch(() => {})
-        })
-        session.events.push(...restored.events)
-        session.formatVersion = restored.formatVersion
-        session.header = restored.header
         await coordinator.adoptOwnership(sessionId)
+        sessions.set(sessionId, mirroredSession(sessionId, restored))
       } else {
         sessionId = (await coordinator.create()).id
+      }
+      openedSessionIds.add(sessionId!)
+      sessionFor = async (id: string): Promise<Session | undefined> => {
+        const cached = sessions.get(id)
+        if (cached !== undefined) return cached
+        const ids = await coordinator.list()
+        if (ids.includes(id)) {
+          const restored = (await coordinator.load(id)).session
+          await coordinator.adoptOwnership(id)
+          const live = mirroredSession(id, restored)
+          sessions.set(id, live)
+          openedSessionIds.add(id)
+          return live
+        }
+        await coordinator.create({ sessionId: id })
+        openedSessionIds.add(id)
+        return undefined
       }
     }
     sessionId ??= `sess-${randomUUID().slice(0, 8)}`
     const durableRewindRoot = coordinator === undefined ? undefined : opts.rewindStoreRoot
     const service: SessionService = createSessionService({
       workspace: opts.workspace, sessionId,
-      ...(session !== undefined ? { session } : {}),
+      ...(sessionFor !== undefined ? { sessionFor } : {}),
       ...(coordinator !== undefined ? { coordinator } : {}),
-      ...(coordinator !== undefined ? { beforeDispose: async () => coordinator.flush(sessionId!) } : {}),
+      ...(coordinator !== undefined ? { beforeDispose: async () => { await Promise.all([...openedSessionIds].map((id) => coordinator.flush(id))) } } : {}),
       approveAll: opts.approveAll ?? true, mockCycles: true,
       ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}),
       ...(durableRewindRoot !== undefined ? { rewindStoreRoot: durableRewindRoot } : {}),
     })
     const listSessions = coordinator === undefined ? undefined : async (): Promise<SessionSummary[]> => {
-      const ids = await coordinator.list()
-      return Promise.all(ids.map(async (id) => {
-        const { meta, updatedAt } = await coordinator.profile(id)
-        const restored = await coordinator.load(id)
-        return { id, title: meta.title ?? "Session", updatedAt: updatedAt ?? Date.parse(meta.createdAt), turnCount: restored.session.events.filter((event) => event.type === "turn/start").length }
+      const ids = jsonlBackend === undefined ? await coordinator.list() : await jsonlBackend.list()
+      const rows = await Promise.all(ids.map(async (id): Promise<SessionSummary | undefined> => {
+        try {
+          if (jsonlBackend !== undefined) {
+            const [{ meta, updatedAt }, raw] = await Promise.all([jsonlBackend.profile(id), jsonlBackend.read(id)])
+            return { id, title: meta.title ?? "Session", updatedAt: updatedAt ?? Date.parse(meta.createdAt), turnCount: raw.events.filter((event) => event.type === "turn/start").length }
+          }
+          const { meta, updatedAt } = await coordinator.profile(id)
+          const live = service.liveSession(id)
+          return { id, title: meta.title ?? "Session", updatedAt: updatedAt ?? Date.parse(meta.createdAt), turnCount: live?.events.filter((event) => event.type === "turn/start").length ?? 0 }
+        } catch {
+          return undefined
+        }
       }))
+      return rows.filter((row): row is SessionSummary => row !== undefined)
     }
     const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(durableRewindRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
     if (coordinator === undefined) return backend

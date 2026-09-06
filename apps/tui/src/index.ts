@@ -78,6 +78,9 @@ export function buildSdkArgs(flags: Pick<TuiFlags, "sessionDir">): string[] {
 }
 
 export function buildEmbeddedSessionOptions(flags: Pick<TuiFlags, "sessionDir" | "resume" | "prompt">): { prompt: string; storeRoot?: string; rewindStoreRoot?: string; resumeSessionId?: string } {
+  if (flags.resume !== undefined && flags.sessionDir === undefined) {
+    throw new Error("--resume requires --session-dir")
+  }
   return {
     prompt: flags.resume === undefined ? flags.prompt ?? "" : "",
     ...(flags.sessionDir !== undefined ? { storeRoot: flags.sessionDir, rewindStoreRoot: flags.sessionDir } : {}),
@@ -89,7 +92,7 @@ export interface TuiShutdownController { shutdown(): Promise<void> }
 
 export function createTuiShutdownController(options: { close: () => Promise<void>; stop: () => void; teardown: () => void }): TuiShutdownController {
   let promise: Promise<void> | undefined
-  return { shutdown: () => promise ??= (async () => { try { options.stop() } catch {} await options.close(); try { options.teardown() } catch {} })() }
+  return { shutdown: () => promise ??= (async () => { try { options.stop() } catch {} try { await options.close() } finally { try { options.teardown() } catch {} } })() }
 }
 
 export function parseFlags(argv: string[]): TuiFlags {
@@ -183,6 +186,9 @@ async function loadInlineHost(cols: number, rows: number): Promise<InlineHost | 
 // ------------------------------------------------------------------ main
 
 export async function runTui(flags: TuiFlags): Promise<number> {
+  if (flags.resume !== undefined && flags.sessionDir === undefined) {
+    throw new Error("--resume requires --session-dir")
+  }
   // M37a Windows fix (same as the M36 PTY harness): ConPTY converts the wire
   // stream with the console output codepage unless the console is UTF-8 —
   // multibyte TUI glyphs (❯ ◆ ⠼ …) would be mangled on a legacy codepage.
@@ -394,7 +400,12 @@ export async function runTui(flags: TuiFlags): Promise<number> {
 
   await app.start()
 
-  shutdown()
+  try {
+    await shutdown()
+  } catch (error) {
+    console.error(`[i-harness] shutdown failed: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
   return 0
 }
 
@@ -408,5 +419,11 @@ export async function runTui(flags: TuiFlags): Promise<number> {
 // build-dist.mjs defines I_HARNESS_DIST=1 for the bundle, so the guard is
 // skipped there; source-run never sets it (semantics unchanged).
 if (process.argv[1] && process.env.I_HARNESS_DIST !== "1" && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  runTui(parseFlags(process.argv.slice(2))).then((code) => process.exit(code))
+  runTui(parseFlags(process.argv.slice(2))).then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error(error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    },
+  )
 }

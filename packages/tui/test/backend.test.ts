@@ -2,7 +2,7 @@
 // (mock llm script where a turn runs; manual log appends where the batching
 // window is under test). No persistence dependency: the service is wired
 // coordinator-less exactly like the bridge's own defaultEmbeddedFactory.
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
@@ -321,6 +321,86 @@ describe("embedded backend", () => {
 
   it("durable TUI factory rejects an unknown resume session", async () => {
     await expect(defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: tmp(), resumeSessionId: "missing" })).rejects.toThrow()
+  })
+
+  it("isolates resumed session state when opening another durable session", async () => {
+    const root = tmp()
+    const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    await seed.create({ sessionId: "session-a" })
+    await seed.create({ sessionId: "session-b" })
+    await seed.append("session-a", [
+      { type: "turn/start" },
+      { type: "user/message", text: "A history" },
+      { type: "assistant/message", text: "A answer" },
+      { type: "step/end" },
+      { type: "turn/end" },
+    ])
+    await seed.close()
+    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "session-a" })
+    await backend.open("session-b")
+    const bEvents = await backend.replay(-1)
+    expect(bEvents.some((event) => event.type === "user" && (event as { text: string }).text === "A history")).toBe(false)
+    await backend.submit("B prompt")
+    await backend.close()
+    const check = createSessionCoordinator(createJsonlBackend(root))
+    try {
+      const a = await check.load("session-a")
+      const b = await check.load("session-b")
+      expect(a.session.events.some((event) => event.type === "user/message" && event.text === "B prompt")).toBe(false)
+      expect(b.session.events.some((event) => event.type === "user/message" && event.text === "B prompt")).toBe(true)
+    } finally {
+      await check.close()
+    }
+  })
+
+  it("lists durable sessions without locking or poisoning the picker", async () => {
+    const root = tmp()
+    const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    await seed.create({ sessionId: "good" })
+    await seed.create({ sessionId: "locked" })
+    await seed.close()
+    writeFileSync(join(root, "broken.jsonl"), "{not-json}\n", "utf8")
+    const holder = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    await holder.adoptOwnership("locked")
+    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "good" })
+    try {
+      const rows = await backend.listSessions()
+      expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining(["good", "locked"]))
+      expect(rows.map((row) => row.id)).not.toContain("broken")
+    } finally {
+      await backend.close()
+      await holder.close()
+    }
+  })
+
+  it("rebinds the live event stream when opening another durable session", async () => {
+    const root = tmp()
+    const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+    await seed.create({ sessionId: "session-a" })
+    await seed.create({ sessionId: "session-b" })
+    await seed.close()
+    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "session-a" })
+    const iterator = backend.events()[Symbol.asyncIterator]()
+    try {
+      let pending: Promise<IteratorResult<TuiEvent>> = iterator.next()
+      await backend.open("session-b")
+      await backend.submit("B live")
+      let sawB = false
+      const deadline = Date.now() + 2_000
+      while (!sawB && Date.now() < deadline) {
+        const next = await Promise.race([
+          pending,
+          new Promise<IteratorResult<TuiEvent>>((resolve) => setTimeout(() => resolve({ done: true, value: undefined as never }), 100)),
+        ])
+        if (next.done) break
+        sawB = next.value.type === "user" && next.value.text === "B live"
+        if (!sawB) pending = iterator.next()
+      }
+      expect(sawB).toBe(true)
+    } finally {
+      await backend.close()
+      await iterator.return?.()
+    }
   })
 
   it("durable session ownership rejects a second adopter", async () => {
