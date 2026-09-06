@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
-import { createShellTools } from "@i-harness/shell"
+import { createShellTools, resolveShell } from "@i-harness/shell"
 import { createExecService } from "@i-harness/exec"
 import { createTimeoutGuard, TOOL_TIMEOUT } from "../src/index.ts"
 
@@ -128,17 +128,19 @@ describe("guard-timeout", () => {
     expect(seenAfter).toBeUndefined()
   })
 
-  it("e2e: bash subprocess killed via forwarded abortSignal → TOOL_TIMEOUT", async () => {
+  it("e2e: resolved shell subprocess killed via forwarded abortSignal → TOOL_TIMEOUT", async () => {
     const ctx = createContext()
     const registry = createToolRegistry(ctx)
     ctx.mount(createTimeoutGuard(ctx))
-    const [bash] = createShellTools({ exec: createExecService(), timeoutMs: 300 })
-    registry.register(bash)
+    const resolved = resolveShell()
+    const shell = createShellTools({ exec: createExecService(), timeoutMs: 300 })
+      .find((tool) => tool.name === resolved.name)!
+    registry.register(shell)
 
     const start = Date.now()
     const result = await registry.execute({
-      name: "bash",
-      args: { command: 'node -e "setTimeout(()=>{}, 30000)"' },
+      name: shell.name,
+      args: { command: resolved.name === "pwsh" ? "Start-Sleep -Seconds 30" : "sleep 30" },
     })
     const elapsed = Date.now() - start
 
