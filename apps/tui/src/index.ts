@@ -196,8 +196,10 @@ function createBridgeService(subscriptions: Set<(assembly: SessionAssembly) => v
  * bridge's fail-closed timeout decides). Decisions are ONE-SHOT: each
  * answerApproval/answerQuestion resolves the pending ask exactly once, and
  * the Always/Never scope stays a host-side record (the seam is boolean-only).
+ * EXPORTED for the production-wiring test (a real permission through a real
+ * bridge must land in app.state().overlay).
  */
-async function pumpInteractionBridge(app: TuiApp, bridge: ApprovalBridge): Promise<void> {
+export async function pumpInteractionBridge(app: TuiApp, bridge: ApprovalBridge): Promise<void> {
   const approve = (async () => {
     for await (const surf of bridge.approvals()) {
       if (app.state().overlay !== undefined) continue

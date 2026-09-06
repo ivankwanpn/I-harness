@@ -43,6 +43,11 @@ import { append, createSession, subscribe, type AdmittedInput, type Session, typ
 import { RewindService } from "@i-harness/rewind"
 import { renderUnifiedDiff, type TextDiff } from "@i-harness/text-diff"
 import { applyTitle, normalizeTitle } from "@i-harness/session-title"
+// M49 Task 10: the redaction seam (spec §7.3) — the MAPPER is the UI boundary
+// for the presentation string: any non-fs-change result is stringified ONLY
+// after recursive redaction (the raw `result` field keeps the honest payload —
+// the raw view re-redacts at its own boundary).
+import { redactToolPayload } from "../tool-presentation/redact.ts"
 import {
   createSessionService,
   type ModelPolicy,
@@ -176,10 +181,13 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
       const seq = eventSeq(ev, state)
       const error = toolResultIsError(ev.output)
       // M49 Task 10: the structured fs change renders AS its unified diff;
-      // everything else keeps the faithful stringified payload. `result`
-      // always carries the raw structured payload (the typed surface — the
-      // raw viewer/presentation redacts it at the UI boundary).
-      const text = structuredChangeText(ev.output) ?? stringifyOutput(ev.output)
+      // everything else keeps the faithful stringified payload — but ONLY
+      // AFTER recursive redaction (review F1: a secret-keyed field such as
+      // token/headers.authorization/apiKey in a bash/mcp/web result used to
+      // render verbatim through the scrollback body and the viewer's text
+      // body). `result` always carries the RAW structured payload (the typed
+      // surface — the raw view re-redacts at its own boundary).
+      const text = structuredChangeText(ev.output) ?? stringifyOutput(redactToolPayload(ev.output))
       return {
         type: "tool",
         callId: ev.callId,

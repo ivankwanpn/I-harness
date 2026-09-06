@@ -91,6 +91,27 @@ describe("mapSessionEvent", () => {
     expect(toolResultIsError(null)).toBe(false)
   })
 
+  it("tool/result: secret-keyed fields are masked in the presentation string; the raw result stays intact (review F1)", () => {
+    const state = createEventMapState()
+    const done = mapSessionEvent({
+      type: "tool/result",
+      callId: "m1",
+      name: "bash",
+      output: { stdout: "ok", token: "sc-123", headers: { authorization: "Bearer sc-456" }, keep: "fine" },
+      seq: 5,
+    } as never, state)!
+    expect(done).toMatchObject({ type: "tool", callId: "m1", status: "done" })
+    const out = done.type === "tool" ? done.output : ""
+    expect(out).toContain('"token": "***"')
+    expect(out).toContain('"authorization": "***"')
+    expect(out).not.toContain("sc-123")
+    expect(out).not.toContain("sc-456")
+    expect(out).toContain('"keep": "fine"')
+    // the RAW result is untouched (the honest raw view re-redacts itself)
+    const result = done.type === "tool" ? done.result : undefined
+    expect(JSON.stringify(result)).toContain("sc-123")
+  })
+
   it("tool/result with a structured change renders its unified diff as the presentation text (M49 task 10)", () => {
     const state = createEventMapState()
     const done = mapSessionEvent({

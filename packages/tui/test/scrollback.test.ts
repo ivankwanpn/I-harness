@@ -584,3 +584,19 @@ describe("M49 Task 10 — typed tool blocks (args/result/progress)", () => {
     expect(text).not.toContain("compiling")
   })
 })
+
+describe("M49 Task 10 review F1 — secret-keyed result never renders through the block body", () => {
+  it("a mapped secret-carrying result stays masked on the scrollback (the output string is the mapper's redacted text)", () => {
+    const e = eng({ width: 80 })
+    // the mapper-choke-point contract: `output` carries the REDACTED string;
+    // the engine renders it verbatim → the body must never show the value.
+    e.append({
+      type: "tool", callId: "m1", name: "bash", kind: "execute", status: "done", seq: 1, ts: 0,
+      result: { stdout: "ok", token: "sc-123" },
+      output: '{\n  "stdout": "ok",\n  "token": "***"\n}',
+    })
+    const text = texts(e.viewport(0, 10)).join("\n")
+    expect(text).toContain('"token": "***"')
+    expect(text).not.toContain("sc-123")
+  })
+})
