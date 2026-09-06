@@ -8,9 +8,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import type { TextDiff } from "@i-harness/text-diff"
+import type { TuiToolEvent } from "../src/contracts.ts"
 import type { ToolPresentation } from "../src/tool-presentation/index.ts"
+import { presentTool } from "../src/tool-presentation/index.ts"
 import { createBlockViewer } from "../src/views/block-viewer.ts"
 import { createFileViewer, ModalOwner } from "../src/views/modal.ts"
+import { createEventMapState, mapSessionEvent } from "../src/backend/embedded.ts"
 
 /** Fixture contract: a literal ToolPresentation containing one TextDiff with
  * `-old line` / `+new line` and the raw payload (the raw view's content). */
@@ -139,6 +142,33 @@ describe("createBlockViewer — rendered/raw, search, scroll, selection, copy", 
     const bare = createBlockViewer(diffPresentation(), {})
     expect(bare.slot("copy")?.action).toBeUndefined()
     expect(bare.slot("close")?.action).toBeUndefined()
+  })
+
+  it("review F1: a secret-carrying RESULT is masked in the rendered text body, the copy, AND the raw view", async () => {
+    // the REAL mapper choke point: the presentation `output` string is the
+    // mapper's REDACTED text; the raw `result` keeps the honest payload.
+    const mapped = mapSessionEvent({
+      type: "tool/result",
+      callId: "m1",
+      name: "bash",
+      output: { stdout: "out", token: "sc-view-1", headers: { authorization: "Bearer sc-view-2" } },
+      seq: 5,
+    }, createEventMapState()) as TuiToolEvent
+    const copied: string[] = []
+    const viewer = createBlockViewer(presentTool(mapped), { copy: async (text) => { copied.push(text) } })
+    // rendered text body — the mapper's redacted output string
+    const rendered = viewer.rows().map((r) => r.text).join("\n")
+    expect(rendered).toContain('"token": "***"')
+    expect(rendered).not.toContain("sc-view-1")
+    expect(rendered).not.toContain("sc-view-2")
+    // the copied payload (rerendered rows) is clean
+    await viewer.copy()
+    expect(copied.join("\n")).not.toContain("sc-view-1")
+    // the raw view shows the masked value — never the secret
+    viewer.setRaw(true)
+    const raw = viewer.rows().map((r) => r.text).join("\n")
+    expect(raw).toContain('"token": "***"')
+    expect(raw).not.toContain("sc-view-1")
   })
 })
 

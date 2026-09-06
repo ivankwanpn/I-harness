@@ -21,6 +21,7 @@ import {
   createExecutableApp,
   createExecutableHost,
   createExecutableTui,
+  pumpInteractionBridge,
   createTuiModelBindingFor,
   createTuiShutdownController,
   parseFlags,
@@ -597,6 +598,38 @@ describe("tui production interaction bridges (M49 Task 10)", () => {
       expect(done.type === "tool" && done.output).toContain("bridge-ran")
       // one-shot: a second answer to the same surface id is a no-op
       await expect(host.bridge.answerApproval(surface!.id, { approved: false })).resolves.toBeUndefined()
+    } finally {
+      await host.close()
+    }
+  }, 120_000)
+
+  it("production pump: a real approval through runTui's pumpInteractionBridge surfaces into the app overlay and the answer lets the guarded shell run", async () => {
+    const host = await createExecutableHost({
+      approveAll: false,
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf node_modules && echo pumped-ok" } }] },
+        { role: "assistant", text: "done" },
+      ],
+    })
+    const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "m", label: "fixture:m" })
+    const fixture = await executableFixture({ yes: false }, backend)
+    try {
+      const pumpP = pumpInteractionBridge(fixture.app, host.bridge)
+      await host.service.assemblyFor("s1")
+      const submitP = host.service.submit("s1", "run it", new AbortController().signal).catch(() => {})
+      // THE production route: bridge → pump → app.state().overlay (permission).
+      await waitHost(() => {
+        const ov = fixture.app.state().overlay
+        return ov !== undefined && (ov as { kind?: string }).kind === "permission"
+      }, 30_000)
+      // answer through the overlay's own digit-accept path (1-based: 3 = "Yes, proceed").
+      fixture.app.dispatch({ type: "overlay-accept", index: 3 })
+      // the guard's shell REALLY runs after the real approval.
+      await waitHost(() => mappedOf(host.service, "s1").some((e) => e.type === "tool" && e.status === "done"), 30_000)
+      const done = mappedOf(host.service, "s1").find((e) => e.type === "tool" && e.status === "done")!
+      expect(done.type === "tool" && done.output).toContain("pumped-ok")
+      await submitP
+      void pumpP // the pump never settles (the streams stay open) — fire-and-forget
     } finally {
       await host.close()
     }
