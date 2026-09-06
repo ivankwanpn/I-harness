@@ -608,6 +608,8 @@ function loadRevisionMeta(raw: unknown): Record<string, number> {
 export class SettingsStore {
   private readonly filename: string
   private settings: Settings
+  /** Explicit canonical llm content, excluding the effective legacy projection. */
+  private canonicalLlm: SettingsLlm | undefined
   private loaded = false
   private saving: Promise<void> | null = null
   /** Per-section mutation counters (see loadRevisionMeta). */
@@ -616,6 +618,7 @@ export class SettingsStore {
   constructor(options: SettingsStoreOptions = {}) {
     this.filename = resolveSettingsPath(options)
     this.settings = normalizeSettings(undefined)
+    this.canonicalLlm = undefined
   }
 
   /** The current in-memory snapshot (defaults until load()). */
@@ -636,12 +639,16 @@ export class SettingsStore {
   async load(): Promise<Settings> {
     try {
       const raw = await readFile(this.filename, "utf8")
-      const parsed = JSON.parse(raw)
+      const parsed: unknown = JSON.parse(raw)
+      this.canonicalLlm = isRecord(parsed) && Object.hasOwn(parsed, "llm")
+        ? normalizeLlm(parsed.llm, SETTINGS_DEFAULTS.llm)
+        : undefined
       this.settings = normalizeSettings(parsed)
       this.revision = loadRevisionMeta(parsed)
     } catch {
       // ENOENT (first run) or a corrupt document: keep the defaults in memory.
       this.settings = normalizeSettings(undefined)
+      this.canonicalLlm = undefined
       this.revision = {}
     }
     this.loaded = true
@@ -662,7 +669,11 @@ export class SettingsStore {
    * @returns the merged in-memory settings (already normalized).
    */
   async set(patch: Partial<Settings>): Promise<Settings> {
-    this.settings = normalizeSettings({ ...this.settings, ...patch })
+    if ("llm" in patch) this.canonicalLlm = normalizeLlm(patch.llm, SETTINGS_DEFAULTS.llm)
+    const source: Record<string, unknown> = { ...this.settings, ...patch }
+    if (this.canonicalLlm === undefined) delete source.llm
+    else source.llm = this.canonicalLlm
+    this.settings = normalizeSettings(source)
     // Section content written through the store advances that section's
     // counter: a concurrent mutant holding an older revision then fails its
     // expectedRevision guard ("mutated elsewhere" → 409 → reload/replay).
@@ -676,6 +687,7 @@ export class SettingsStore {
   /** Reset every field to its default and persist. */
   async reset(): Promise<Settings> {
     this.settings = normalizeSettings(undefined)
+    this.canonicalLlm = normalizeLlm(undefined, SETTINGS_DEFAULTS.llm)
     // reset() rewrites every section to defaults — advance counters so a
     // client holding a pre-reset revision refetches instead of stale-mutating.
     this.revision.llm = (this.revision.llm ?? 0) + 1
@@ -702,6 +714,8 @@ export class SettingsStore {
       // guards the single long-lived store instance (web server process);
       // cross-process writers already concede to the 跨 tab/pragmatism stance.
       const doc: Record<string, unknown> = { ...this.settings }
+      if (this.canonicalLlm === undefined) delete doc.llm
+      else doc.llm = this.canonicalLlm
       if (Object.keys(this.revision).length > 0) doc._revision = { ...this.revision }
       await writeFile(tmp, JSON.stringify(doc, null, 2), "utf8")
       await rename(tmp, this.filename)

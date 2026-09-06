@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -137,6 +137,64 @@ describe("resolveSettingsPath", () => {
 })
 
 describe("SettingsStore", () => {
+  it("keeps a legacy-only provider edit current after write and reload", async () => {
+    const root = await tmpRoot()
+    const file = join(root, "settings.json")
+    await writeFile(file, JSON.stringify({
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "custom",
+          providers: {
+            custom: {
+              id: "custom",
+              name: "Provider A",
+              baseUrl: "https://a.example/v1/",
+              protocol: "openai-compatible",
+              apiKeyRef: "PROVIDER_A_API_KEY",
+              modelsUrl: "https://a.example/v1/models",
+            },
+          },
+        },
+      },
+    }))
+    const store = new SettingsStore({ path: file })
+    await store.load()
+
+    const immediate = await store.set({
+      tui: {
+        ...store.get().tui,
+        providers: {
+          version: 1,
+          activeProviderId: "custom",
+          providers: {
+            custom: {
+              id: "custom",
+              name: "Provider B",
+              baseUrl: "https://b.example/v1/",
+              protocol: "anthropic",
+              apiKeyRef: "PROVIDER_B_API_KEY",
+              modelsUrl: "https://b.example/v1/models",
+            },
+          },
+        },
+      },
+    })
+    const expected = {
+      displayName: "Provider B",
+      baseURL: "https://b.example",
+      protocol: "anthropic-messages",
+      apiKeyEnv: "PROVIDER_B_API_KEY",
+      modelsURL: "https://b.example/v1/models",
+    }
+    expect(immediate.llm.providers.custom).toEqual(expected)
+
+    const reloaded = new SettingsStore({ path: file })
+    await reloaded.load()
+    expect(reloaded.get().llm.providers.custom).toEqual(expected)
+    await rm(root, { recursive: true, force: true })
+  })
+
   it("loads defaults when the file is absent (first run)", async () => {
     const root = await tmpRoot()
     const store = new SettingsStore({ path: join(root, "settings.json") })
