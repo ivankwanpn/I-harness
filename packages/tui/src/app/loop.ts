@@ -176,6 +176,12 @@ export interface TuiAppOptions {
    * "queue" submits (the backend runs it after the current turn). Host-
    * resolved durable knob; default queue (the pre-M49 submit behavior). */
   busyEnter?: BusyEnter
+  /** M49 Task 8 (review r1): the persisted theme — seeds app.theme so the
+   * runtime state matches the palette the host resolved. Without it the state
+   * starts "auto" even on a concrete persisted theme, bare /theme would anchor
+   * at "system" after a restart and silently overwrite the user's choice.
+   * Absent → "auto" (legacy hosts/tests). */
+  initialTheme?: SettingsTheme
 }
 
 /** One-time executable startup inputs. `renderWelcomeBeforeModel` lets the
@@ -409,8 +415,11 @@ export class TuiApp {
         modelState: { status: "loading" },
       },
       paneData: opts.initialPanes,
-      // M46a G2: the real toggle knobs (theme auto = the capability guess).
-      theme: "auto",
+      // M46a G2: the real toggle knobs. M49 Task 8 (review r1): the seed
+      // honors the host's active/persisted theme — system-following displays
+      // as "auto"; a concrete persisted theme becomes the runtime anchor so
+      // bare /theme cycles FROM it instead of "system".
+      theme: opts.initialTheme === undefined || opts.initialTheme === "system" ? "auto" : opts.initialTheme,
       timestamps: false,
       compactMode: false,
       autoApprove: false,

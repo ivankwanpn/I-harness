@@ -406,6 +406,9 @@ describe("tui production startup split (M49 Task 8)", () => {
     const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "m", label: "fixture:m" })
     const providerController = new ProviderController({ runtime, settings, backend })
     const terminal = recordingTerminal()
+    // the fixture mirrors runTui: the rendered palette resolves from the
+    // PERSISTED theme (system = auto polarity), never a fixed default.
+    const activeTheme = settings.get().theme
     const created = await createExecutableTui({
       flags: { yes: false },
       screenMode: options.screenMode,
@@ -416,7 +419,7 @@ describe("tui production startup split (M49 Task 8)", () => {
       backend,
       engine: createScrollbackEngine({ width: 80 }),
       capabilities: cap,
-      palette: resolvePalette(cap),
+      palette: resolvePalette(cap, activeTheme === "system" ? undefined : activeTheme),
       glyphs: makeGlyphs(true),
       write: () => {},
       settings,
@@ -426,6 +429,28 @@ describe("tui production startup split (M49 Task 8)", () => {
     })
     return { ...created, terminal, root, settingsPath }
   }
+
+  it("seeds the runtime theme from the persisted choice — bare /theme anchors at the active theme", async () => {
+    const fixture = await tuiFixture({
+      screenMode: "fullscreen",
+      settingsSeed: { theme: "tokyo-night" },
+    })
+    try {
+      // the runtime state matches the rendered palette (persisted anchor).
+      expect(fixture.app.state().theme).toBe("tokyo-night")
+      fixture.app.state().prompt.text = "/theme"
+      fixture.app.dispatch("submit")
+      // the FIRST bare /theme is the NEXT in the cycle — never a discard of
+      // the persisted choice to grok-night.
+      await waitFor(() => fixture.app.state().theme === "rose-pine-moon" && fixture.app.state().theme !== "tokyo-night")
+      expect(fixture.app.state().theme).toBe("rose-pine-moon")
+      // the durable write lands the same value (rollback would restore the
+      // anchor on failure — the preview is committed through the SAME path).
+      await waitFor(() => JSON.parse(readFileSync(fixture.settingsPath, "utf8")).theme === "rose-pine-moon")
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
 
   it("uses explicit flag then persisted screen mode", () => {
     expect(resolveExecutableScreenMode({ flag: "fullscreen", persisted: "minimal" })).toBe("fullscreen")
