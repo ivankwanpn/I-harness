@@ -1,0 +1,107 @@
+# M49 Task 7: case-025 — the grapheme-safe PromptEditor + the VISIBLE terminal
+# cursor at real-PTY level.
+#
+# The host (host-025.ts) runs the REAL app pipeline + the REAL tui-core
+# InputParser: the test writes KEYBOARD bytes to the pty master and the
+# production path decodes them (parser → loop.onInput → PromptEditor → the
+# synced PromptState → present → renderer.flush incl. the cursor transition).
+# Frozen clock 44_444: every printable burst within one step coalesces into a
+# single undo record; the anim pump repaints are byte-identical (zero-byte
+# idle downstream of the diff).
+#
+# Scene (100x30): type an ASCII burst, a line-start movement, a CJK+emoji
+# burst inserted at position 0 (the "insert in the middle" of an existing
+# draft), undo/redo (each burst = one record), line home/end, one grapheme
+# Left, resize 100x30 → 60x20 (the app-resize fs channel — ConPTY master
+# resize is unobservable to the child, host-015 parity), then F3 (sessions
+# modal) → Esc dismiss — the cursor HIDES for the modal and is restored on
+# return (asserted on the raw byte stream in the test).
+#
+# Cursor contract: NO fixed blink phase — the caret is emitted once (Show) and
+# re-asserted with minimal MoveTo bytes per changed frame; the `wait-cursor`
+# steps poll the PARSED terminal cursor cell (1-based col/row — the byte
+# vocabulary of the transition). The ZWJ-family / combining-grapheme cases are
+# editor UNIT-tested (the PTY input channel cannot carry a C1 control byte —
+# U+0301's UTF-8 tail — and ConPTY splits the ESC of a modified arrow).
+name: case-025-grapheme-editor-visible-cursor
+host: test/harness/host-025.ts
+size: [100, 30]
+steps:
+  - await-marker: { name: app-start }
+  - await-quiescent: { ms: 300 }
+  # ---- Step 1: ASCII burst "abc" — the caret follows the text end.
+  - write-pty:
+      data: "abc"
+  - await-quiescent: { ms: 200 }
+  - assert-cell-colors:
+      cells:
+        - { row: 22, col: 5, text: "abc" }
+      timeoutMs: 5000
+  - wait-cursor: { col: 9, row: 23, timeoutMs: 5000 }
+  # ---- Step 2: a movement (Ctrl+A home) breaks the burst, then the CJK +
+  # emoji burst is INSERTED at position 0 (one undo record of its own).
+  - write-pty:
+      data: "\x01" # Ctrl+A = line start (breaks the "abc" burst)
+  - wait-cursor: { col: 6, row: 23, timeoutMs: 5000 }
+  - write-pty:
+      data: " 你好🙂"
+  - await-quiescent: { ms: 200 }
+  - assert-cell-colors:
+      cells:
+        - { row: 22, col: 5, text: " 你好🙂abc" }
+      timeoutMs: 5000
+  - wait-cursor: { col: 13, row: 23, timeoutMs: 5000 }
+  # ---- Step 3: UNDO the second burst (one record → "abc", caret at 0) and
+  # REDO it.
+  - write-pty:
+      data: "\x1a" # Ctrl+Z
+  - await-quiescent: { ms: 150 }
+  - wait-cursor: { col: 6, row: 23, timeoutMs: 5000 }
+  - assert-cell-colors:
+      cells:
+        - { row: 22, col: 5, text: "abc" }
+      timeoutMs: 5000
+  - write-pty:
+      data: "\x19" # Ctrl+Y
+  - await-quiescent: { ms: 150 }
+  - wait-cursor: { col: 13, row: 23, timeoutMs: 5000 }
+  - assert-cell-colors:
+      cells:
+        - { row: 22, col: 5, text: " 你好🙂abc" }
+      timeoutMs: 5000
+  # ---- Step 4: line home/end + ONE grapheme Left (the caret at the end
+  # steps by cluster — the emoji is its own cluster).
+  - write-pty:
+      data: "\x01" # Ctrl+A = line start
+  - wait-cursor: { col: 6, row: 23, timeoutMs: 5000 }
+  - write-pty:
+      data: "\x05" # Ctrl+E = line end
+  - wait-cursor: { col: 16, row: 23, timeoutMs: 5000 }
+  - write-pty:
+      data: "\x01" # Ctrl+A = line start (grapheme steps are unit-tested)
+  - wait-cursor: { col: 6, row: 23, timeoutMs: 5000 }
+  # ---- Step 5: resize 100x30 → 60x20 (app-resize fs channel) — the full
+  # paint re-asserts the caret at the new geometry.
+  - app-resize: { cols: 60, rows: 20 }
+  - await-quiescent: { ms: 300 }
+  - wait-cursor: { col: 6, row: 13, timeoutMs: 5000 }
+  # ---- Step 6: F3 → the sessions modal (cursor HIDDEN — the byte stream
+  # carries \x1b[?25l); Esc dismisses → the caret returns (\x1b[?25h + the
+  # MoveTo back).
+  - write-pty:
+      data: "\x1bOR" # F3 — session picker
+  - await-quiescent: { ms: 300 }
+  - assert-cell-colors:
+      cells:
+        - { row: 7, col: 4, text: "sessions" }
+      timeoutMs: 5000
+  - write-pty:
+      data: "\x1b" # Esc — dismiss
+  - await-quiescent: { ms: 300 }
+  - wait-cursor: { col: 6, row: 13, timeoutMs: 5000 }
+  # ---- close: glyph integrity + the byte budget + exit 0.
+  - assert-glyph-integrity: {}
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote }
+  - assert-byte-budget: { writes: 18 }
+  - wait-exit: { code: 0 }

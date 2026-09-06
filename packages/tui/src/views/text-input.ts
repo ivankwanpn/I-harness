@@ -4,7 +4,8 @@
 // view only paints the box: `╭ {title} ╮`, `│ ❯ {text} │`, hint line
 // `Enter accept · Esc cancel`.
 
-import type { GlyphSet, Palette } from "@i-harness/tui-core"
+import type { CursorTarget, GlyphSet, Palette } from "@i-harness/tui-core"
+import { clusterWidth } from "@i-harness/tui-core"
 import type { Rect, ViewDraw } from "./agent.ts"
 
 export interface TextInputViewState {
@@ -13,6 +14,23 @@ export interface TextInputViewState {
   /** Cursor position (the loop freeform appends/backspaces; the simple
    * projection shows a caret at the end). */
   cursor: number
+}
+
+// M49 Task 7: the input caret cell (after the drawn text — the freeform only
+// edits at the end; the width walk matches the draw's clusterWidth).
+export function textInputCaret(ctx: Rect, state: TextInputViewState): CursorTarget {
+  let w = 0
+  let i = 0
+  for (const ch of state.text) {
+    if (i >= Math.min(state.cursor, state.text.length)) break
+    w += clusterWidth(ch)
+    i += ch.length
+  }
+  return {
+    x: Math.min(ctx.x + ctx.w - 2, ctx.x + 1 + 2 + w),
+    y: ctx.y + 1,
+    visible: true,
+  }
 }
 
 export function renderTextInput(

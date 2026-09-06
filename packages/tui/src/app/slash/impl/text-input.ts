@@ -5,7 +5,7 @@
 
 import type { AppAction } from "../../keys.ts"
 import type { OverlaySeam } from "../../present.ts"
-import { renderTextInput } from "../../../views/text-input.ts"
+import { renderTextInput, textInputCaret } from "../../../views/text-input.ts"
 
 export interface TextInputOptions {
   title: string
@@ -32,6 +32,9 @@ export function bindTextInput(opts: TextInputOptions): OverlaySeam {
     draw: (ctx, view, palette, glyphs) => {
       renderTextInput(ctx, { title: opts.title, text, cursor: text.length }, view, palette, glyphs)
     },
+    // M49 Task 7: the input's caret cell (the view owns the geometry — the
+    // same clusterWidth walk the draw uses).
+    caret: (ctx) => textInputCaret(ctx, { title: opts.title, text, cursor: text.length }),
     act: (action: AppAction): void => {
       switch (action) {
         case "overlay-select": close(true); break

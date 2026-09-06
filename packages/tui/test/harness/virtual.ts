@@ -75,6 +75,14 @@ export class VirtualTerminal {
     this.term.resize(cols, rows)
   }
 
+  /** M49 Task 7: the parsed terminal cursor cell (0-based) — the run's
+   * `wait-cursor` step polls this (the cursor SHOW/MOVE bytes are the
+   * visible-caret proof; no fixed blink phase is assumed). */
+  cursor(): { x: number; y: number } {
+    const b = this.term.buffer.active
+    return { x: b.cursorX, y: b.cursorY }
+  }
+
   private line(y: number): IBufferLine | undefined {
     return this.term.buffer.active.getLine(y)
   }

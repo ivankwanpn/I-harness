@@ -60,6 +60,12 @@ import type { LightPanelState } from "../views/light-panel.ts"
 // M46c G2: paste source retention helpers (the chip labels/threshold) + the
 // default /workflow surface (the real @i-harness/workflow-backed host).
 import { isSizeablePaste, pasteLabel } from "../views/prompt.ts"
+// M49 Task 7: the grapheme-safe PromptEditor — the ONE transaction path for
+// every prompt mutation (insert/delete/newline/motion/paste/history/stash/
+// mouse/external editor) + the history rewind math.
+import { createPromptEditor } from "../editor/index.ts"
+import type { PromptEditor } from "../editor/index.ts"
+import { historyRewind } from "../editor/history.ts"
 import type { WorkflowSurface } from "../contracts.ts"
 import { createDefaultWorkflowSurface } from "./slash/impl/workflow2.ts"
 import { doctorLiveBrand, doctorLiveDark, doctorRows } from "../views/light-doctor.ts"
@@ -165,6 +171,11 @@ export interface TuiAppOptions {
    * (default OFF; the rail replaces the scrollback's right 2 columns only
    * while ON && pane width >= 60 && turns >= 2; /timeline toggles it). */
   showTimeline?: boolean
+  /** M49 Task 7: the persisted `busyEnter` setting (spec §6.2) — Enter while a
+   * turn is RUNNING: "steer" sends the text as an interject (interrupt),
+   * "queue" submits (the backend runs it after the current turn). Host-
+   * resolved durable knob; default queue (the pre-M49 submit behavior). */
+  busyEnter?: BusyEnter
 }
 
 /** One-time executable startup inputs. `renderWelcomeBeforeModel` lets the
@@ -238,6 +249,10 @@ function fuzzyHits(command: string, query: string): number[] {
   return out
 }
 
+/** M49 Task 7: the persisted `busyEnter` setting (spec §6.2 — the host
+ * resolves the durable knob; default queue = the pre-M49 submit behavior). */
+export type BusyEnter = "steer" | "queue"
+
 export class TuiApp {
   private readonly opts: TuiAppOptions
   private readonly app: TuiAppState
@@ -281,6 +296,11 @@ export class TuiApp {
    * /doctor probe's answers merge into it (present + the report rows read it;
    * theme re-resolves use it too). */
   private cap: TerminalCapabilityContext
+  /** M49 Task 7: the prompt editor — the AUTHORITATIVE prompt model. The view
+   * state (app.prompt) is a projection: text = value(), cursor = cursor(),
+   * pasteStash = the editor's paste atoms (the M46c chip rows). Every prompt
+   * mutation routes through here — never direct UTF-16 writes. */
+  private readonly editor: PromptEditor = createPromptEditor()
   /** M47 G2: paint-suspend (the live /doctor probe) — while set and unexpired
    * frame() writes NOTHING (no present, no flush, no minimal repaint); the
    * probe owns the tty. Cleared by the run's settle (answers or ≤800ms
@@ -452,7 +472,17 @@ export class TuiApp {
         },
         // M46c G2: paste-chip double-click → INSERT the retained source at the
         // cursor (the honest "source not retained" toast is superseded).
-        insertPasteStash: (index) => this.insertPasteStash(index),
+        // M49 Task 7: the double-click EXPANDS the editor's paste atom (the
+        // source is already in the text — the chip is its atomic envelope).
+        insertPasteStash: (index) => this.expandPasteStash(index),
+        // M49 Task 7: the click moves the PromptEditor cursor (atom-safe) —
+        // never a direct string write.
+        movePromptCursor: (index) => {
+          this.reconcileEditor()
+          this.editor.moveTo(index)
+          this.syncPrompt()
+          this.refreshDropdowns()
+        },
         onChanged: () => this.requestFrame(),
       },
     })
@@ -708,8 +738,9 @@ export class TuiApp {
 
   private async initializeOnce(options: TuiStartupOptions): Promise<void> {
     if (options.prompt !== undefined) {
-      this.app.prompt.text = options.prompt
-      this.app.prompt.cursor = options.prompt.length
+      // M49 Task 7: the startup prompt seeds the editor (never a raw write).
+      this.editor.replaceAll(options.prompt, this.nowMs())
+      this.syncPrompt()
     }
     if (options.renderWelcomeBeforeModel === true && this.uiMode === "fullscreen") {
       this.activateWelcome()
@@ -934,11 +965,38 @@ export class TuiApp {
       case "focus-prompt": this.focus("prompt"); break
       case "submit": this.submitPrompt(); break
       case "newline": {
-        const p = this.app.prompt
-        p.text += "\n"
-        p.cursor = p.text.length
-        p.multiLine = true
+        // M49 Task 7: the newline goes through the editor (AT the cursor —
+        // multi-line drafts edit in place).
+        this.editor.newline(this.nowMs())
+        this.app.prompt.multiLine = true
+        this.syncPrompt()
+        this.refreshDropdowns()
         this.refreshShortcuts()
+        break
+      }
+      // M49 Task 7: editor motion/undo/redo — the PromptEditor is the only
+      // mutation path (the diff/shortcuts ride the synced view state).
+      case "edit-left": this.editorMove("left"); break
+      case "edit-right": this.editorMove("right"); break
+      case "edit-word-left": this.editorMove("word-left"); break
+      case "edit-word-right": this.editorMove("word-right"); break
+      case "edit-home": this.editorMove("home"); break
+      case "edit-end": this.editorMove("end"); break
+      case "edit-select-all": this.reconcileEditor(); this.editor.selectAll(); this.requestFrame(); break
+      case "edit-undo": {
+        this.reconcileEditor()
+        if (this.editor.undo()) {
+          this.syncPrompt()
+          this.refreshDropdowns()
+        }
+        break
+      }
+      case "edit-redo": {
+        this.reconcileEditor()
+        if (this.editor.redo()) {
+          this.syncPrompt()
+          this.refreshDropdowns()
+        }
         break
       }
       case "interject": {
@@ -1121,12 +1179,17 @@ export class TuiApp {
     if (ev.type === "paste") {
       // Bracketed paste AND Ctrl+V both arrive as `paste` events (the binding
       // in tui-core). The INSERT stays immediate (M37a behavior); M46c G2
-      // additionally RETAINS the source text under a [Pasted: N lines] chip.
+      // RETAINS the source text under a [Pasted: N lines] chip — M49 Task 7:
+      // a sizeable paste is ONE atomic PromptPaste element through the editor
+      // (the cursor never enters it; double-click expands it).
       if (this.app.focused === "prompt") {
-        const p = this.app.prompt
-        p.text = p.text.slice(0, p.cursor) + ev.text + p.text.slice(p.cursor)
-        p.cursor += ev.text.length
-        this.retainPasteSource(ev.text)
+        this.reconcileEditor()
+        if (isSizeablePaste(ev.text)) {
+          this.editor.insertPaste({ display: `[Pasted: ${pasteLabel(ev.text)}]`, source: ev.text }, this.nowMs())
+        } else {
+          this.editor.insert(ev.text, this.nowMs())
+        }
+        this.syncPrompt()
         this.refreshDropdowns()
       }
       this.requestFrame()
@@ -1198,8 +1261,11 @@ export class TuiApp {
         return
       }
       if (ev.code === "Delete") {
-        const p = this.app.prompt
-        p.text = p.text.slice(0, p.cursor) + p.text.slice(p.cursor + 1)
+        // M49 Task 7: delete-forward is an editor transaction (grapheme-safe,
+        // atom-aware).
+        this.reconcileEditor()
+        this.editor.deleteForward()
+        this.syncPrompt()
         this.refreshDropdowns()
         return
       }
@@ -1457,6 +1523,18 @@ export class TuiApp {
       this.requestQuit()
       return
     }
+    // M49 Task 7: busy Enter — the persisted `busyEnter` setting chooses
+    // STEER (interrupt the running turn with the text) or QUEUE (the plain
+    // submit — the backend runs it after the current turn; default).
+    if (this.app.turn !== undefined && (this.opts.busyEnter ?? "queue") === "steer") {
+      this.app.history.push(this.app.prompt.text)
+      this.app.historyIndex = this.app.history.length
+      this.clearPrompt()
+      void this.opts.backend.steer(text).catch((error: unknown) => {
+        this.toast(`steer failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
+      return
+    }
     this.acceptPrompt(this.app.prompt.text)
   }
 
@@ -1534,42 +1612,63 @@ export class TuiApp {
     this.requestFrame()
   }
 
-  private insertText(s: string): void {
+  /** M49 Task 7: the editor → view-state projection. The PromptState is the
+   * render contract; the editor is the source of truth. */
+  private syncPrompt(): void {
     const p = this.app.prompt
-    p.text = p.text.slice(0, p.cursor) + s + p.text.slice(p.cursor)
-    p.cursor += s.length
+    p.text = this.editor.value()
+    p.cursor = this.editor.cursor()
+    // M46c G2: the chip rows are the editor's paste atoms (label from the
+    // source — the atom display and the state never parse each other).
+    p.pasteStash = this.editor.pasteAtoms().map((a) => ({ label: pasteLabel(a.source), text: a.source }))
+  }
+
+  /** External writers (hosts/tests seeding app.prompt.text directly — the
+   * M46c state surface is shared) drift the editor. Called before EVERY
+   * editor entry: the transaction adopts the view state first, then the edit
+   * runs (the adoption is itself undoable). */
+  private reconcileEditor(): void {
+    const p = this.app.prompt
+    if (p.text !== this.editor.value()) {
+      this.editor.replaceAll(p.text, this.nowMs())
+    }
+  }
+
+  private nowMs(): number {
+    return this.opts.now?.() ?? Date.now()
+  }
+
+  private editorMove(direction: "left" | "right" | "word-left" | "word-right" | "home" | "end"): void {
+    this.reconcileEditor()
+    this.editor.move(direction)
+    this.syncPrompt()
+    this.refreshDropdowns()
+  }
+
+  private insertText(s: string): void {
+    this.reconcileEditor()
+    this.editor.insert(s, this.nowMs())
+    this.syncPrompt()
     this.refreshDropdowns()
   }
 
   private backspace(): void {
-    const p = this.app.prompt
-    if (p.cursor <= 0) return
-    p.text = p.text.slice(0, p.cursor - 1) + p.text.slice(p.cursor)
-    p.cursor -= 1
+    this.reconcileEditor()
+    this.editor.backspace()
+    this.syncPrompt()
     this.refreshDropdowns()
   }
 
-  /** M46c G2: paste source retention — a sizeable paste (multi-line or ≥100
-   * chars) stashes the RAW text under its `[Pasted: N lines]` label (the
-   * INSERT above stays immediate; single short pastes keep no chip). */
-  private retainPasteSource(text: string): void {
-    if (!isSizeablePaste(text)) return
-    const p = this.app.prompt
-    p.pasteStash = [...(p.pasteStash ?? []), { label: pasteLabel(text), text }]
-  }
-
-  /** M46c G2: paste-chip double-click seam — INSERT the retained source of
-   * stash `index` AT THE CURSOR (byte-exact — the paste event's own string). */
-  private insertPasteStash(index: number): void {
-    const p = this.app.prompt
-    const item = (p.pasteStash ?? [])[index]
-    if (item === undefined) {
+  /** M46c G2 + M49 Task 7: paste-chip double-click seam — EXPAND the editor's
+   * paste atom at stash `index` (the source byte-preserved in place — it was
+   * already inserted; the atom envelope turns it editable). */
+  private expandPasteStash(index: number): void {
+    this.reconcileEditor()
+    if (!this.editor.expandPaste(index)) {
       this.toast("paste chip expand: stale chip")
       return
     }
-    const text = item.text
-    p.text = p.text.slice(0, p.cursor) + text + p.text.slice(p.cursor)
-    p.cursor += text.length
+    this.syncPrompt()
     this.refreshDropdowns()
   }
 
@@ -1586,31 +1685,25 @@ export class TuiApp {
   }
 
   private clearPrompt(): void {
-    this.app.prompt.text = ""
-    this.app.prompt.cursor = 0
-    // M46c G2: the paste stash is session-scoped-until-submitted — submit and
-    // every clear path releases the retained paste sources.
-    this.app.prompt.pasteStash = []
+    // M49 Task 7: the clear is an editor transaction (the paste stash lives
+    // in the editor's atoms — cleared together).
+    this.editor.clear(this.nowMs())
+    this.syncPrompt()
     this.refreshDropdowns()
     this.refreshShortcuts()
   }
 
+  /** M49 Task 7: history rewind — the restore is an undoable replaceAll (one
+   * transaction per step; the previous draft rides the undo stack). */
   private historyStep(dir: 1 | -1): void {
     const h = this.app.history
     if (h.length === 0) return
-    if (dir === 1) {
-      if (this.app.historyIndex >= h.length - 1) {
-        this.app.historyIndex = h.length
-        this.app.prompt.text = ""
-        this.app.prompt.cursor = 0
-        return
-      }
-    }
-    let i = Math.max(0, Math.min(h.length, this.app.historyIndex + dir))
-    if (i >= h.length) i = h.length - 1
-    this.app.historyIndex = i
-    this.app.prompt.text = h[i]
-    this.app.prompt.cursor = h[i].length
+    const step = historyRewind(h, this.app.historyIndex, dir)
+    if (step === undefined) return
+    this.app.historyIndex = step.index
+    this.editor.replaceAll(step.text, this.nowMs())
+    this.syncPrompt()
+    this.refreshDropdowns()
   }
 
   /** Up on an empty prompt with history opens the browser panel (spec §4). */
@@ -1669,10 +1762,10 @@ export class TuiApp {
   }
 
   /** `c` — comment: prefill the prompt with `comment: ` so the user's text
-   * rides the plan conversation. */
+   * rides the plan conversation. M49 Task 7: an editor transaction. */
   private planComment(): void {
-    this.app.prompt.text = "comment: "
-    this.app.prompt.cursor = "comment: ".length
+    this.editor.replaceAll("comment: ", this.nowMs())
+    this.syncPrompt()
     this.refreshDropdowns()
     this.refreshShortcuts()
   }
@@ -1838,7 +1931,9 @@ export class TuiApp {
   }
 
   /** Ctrl+S / Alt+S: the draft stash/pop — SWAP semantics (store the current
-   * text, restore the stashed one). Toast states per the keys truth. */
+   * text, restore the stashed one). Toast states per the keys truth. M49 Task
+   * 7: both directions are editor transactions (the pop is ONE undoable
+   * replaceAll — the previous draft rides the undo stack). */
   private stashDraft(): void {
     const current = this.app.prompt.text
     if (this.app.draft === undefined) {
@@ -1847,14 +1942,14 @@ export class TuiApp {
         return
       }
       this.app.draft = current
-      this.app.prompt.text = ""
-      this.app.prompt.cursor = 0
+      this.editor.clear(this.nowMs())
+      this.syncPrompt()
       this.toast("Draft stashed")
     } else {
       const stashed = this.app.draft
       this.app.draft = current // swap — the current text returns to the slot
-      this.app.prompt.text = stashed
-      this.app.prompt.cursor = stashed.length
+      this.editor.replaceAll(stashed, this.nowMs())
+      this.syncPrompt()
       this.toast("Draft restored")
     }
     this.refreshDropdowns()
@@ -2040,8 +2135,8 @@ export class TuiApp {
   private resetSession(): void {
     this.app.history = []
     this.app.historyIndex = 0
-    this.app.prompt.text = ""
-    this.app.prompt.cursor = 0
+    this.editor.clear(this.nowMs())
+    this.syncPrompt()
     this.app.prompt.multiLine = false
     this.app.prompt.title = "untitled"
     this.app.title = "untitled"
@@ -2072,13 +2167,12 @@ export class TuiApp {
     this.activateAgent(sessionId)
     this.app.history = []
     this.app.historyIndex = 0
-    this.app.prompt.text = ""
-    this.app.prompt.cursor = 0
+    this.editor.clear(this.nowMs())
+    this.syncPrompt()
     this.app.prompt.multiLine = false
     this.app.prompt.focused = true
     this.app.prompt.title = "untitled"
     this.app.prompt.plan = false
-    this.app.prompt.pasteStash = []
     this.app.promptCursor = 0
     this.app.title = "untitled"
     this.app.mode = "normal"
@@ -2199,8 +2293,9 @@ export class TuiApp {
       const child = spawn(editor, [file], { stdio: "inherit", shell: process.platform === "win32" })
       await new Promise<void>((resolve) => child.once("close", () => resolve()))
       const text = readFileSync(file, "utf8")
-      this.app.prompt.text = text
-      this.app.prompt.cursor = text.length
+      // M49 Task 7: the external-editor replacement is ONE undoable replaceAll.
+      this.editor.replaceAll(text, this.nowMs())
+      this.syncPrompt()
       this.refreshDropdowns()
       this.toast("prompt edited")
     } catch (error) {
@@ -2717,8 +2812,10 @@ export class TuiApp {
     if (h !== undefined) {
       const e = h.entries[h.cursor]
       if (e !== undefined) {
-        this.app.prompt.text = e.text
-        this.app.prompt.cursor = e.text.length
+        // M49 Task 7: the history-panel restore is an undoable transaction.
+        this.editor.replaceAll(e.text, this.nowMs())
+        this.syncPrompt()
+        this.refreshDropdowns()
       }
       this.app.historyPanel = undefined
       return
@@ -2968,13 +3065,14 @@ export class TuiApp {
     }
   }
 
-  /** Replace the token under the caret (slash/at/completion accept). */
+  /** Replace the token under the caret (slash/at/completion accept). M49 Task
+   * 7: an editor transaction (atom-safe range replace). */
   private replaceTokenAtCursor(replacement: string): void {
     const p = this.app.prompt
     const before = p.text.slice(0, p.cursor)
     const start = before.lastIndexOf(" ") + 1
-    p.text = p.text.slice(0, start) + replacement + p.text.slice(p.cursor)
-    p.cursor = start + replacement.length
+    this.editor.replaceRange(start, p.cursor, replacement, this.nowMs())
+    this.syncPrompt()
     this.refreshDropdowns()
   }
 

@@ -5,7 +5,7 @@
 // identical state commits an empty diff → flush "": zero-byte idle (M36).
 
 import { clusterWidth, quantizeColor } from "@i-harness/tui-core"
-import type { GlyphSet, Palette, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
+import type { CursorTarget, GlyphSet, Palette, Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
 import type { ActiveView, ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
 import { layoutAgent, SCROLLBACK_PAD_W, SCROLLBACK_RAIL_W } from "../views/agent.ts"
 import type { AgentViewState, PaneState, Rect, Style, ViewDraw } from "../views/agent.ts"
@@ -209,6 +209,10 @@ export interface OverlaySeam {
   /** Question marker (TRUE = checkbox [ ]/[x] multi-select — the mouse layer's
    * single-click toggle vs single-select-cursor rule). */
   multi?: boolean
+  /** M49 Task 7: the modal's OWN caret cell (freeform/text-input rows draw a
+   * real input — the terminal caret follows them instead of the hidden prompt
+   * caret). Absent → the modal hides the caret (spec §6.3). */
+  caret?(ctx: Rect): CursorTarget | undefined
 }
 
 // ------------------------------------------------------------------ palette → Style
@@ -736,6 +740,7 @@ export function present(
   // clears the terminal when the process exits).
   if (app.screen === "minimal") {
     renderer.commit()
+    renderer.setCursor({ x: 0, y: 0, visible: false }) // M49: the inline host owns the tty
     return { dirty: false }
   }
 
@@ -798,6 +803,8 @@ export function present(
     renderToasts(buf, app.toasts, { x: 0, y: 0, w: area.cols, h: area.rows }, view, palette)
     settleHover(app, mouseEngine)
     renderer.commit()
+    // M49: welcome has no prompt caret — leave the terminal cursor hidden.
+    renderer.setCursor({ x: 0, y: 0, visible: false })
     return { dirty: !renderer.sameFrame() }
   }
 
@@ -826,17 +833,30 @@ export function present(
   }
 
   // Prompt slot: G1 overlay (permission/question/cancel-turn) replaces the box.
+  // M49 Task 7: the terminal caret follows the visible surface — the prompt
+  // caret, the modal's own caret (text-input/freeform rows), or nothing
+  // (spec §6.3: hidden for modal/viewer, disabled prompt, selection drag,
+  // unfocused app).
+  let cursorTarget: CursorTarget = { x: 0, y: 0, visible: false }
   if (app.overlay !== undefined) {
     app.overlay.draw(layout.prompt, view, palette, glyphs)
+    cursorTarget = app.overlay.caret?.(layout.prompt) ?? { x: 0, y: 0, visible: false }
   } else {
     // M46a: /find search mode — the prompt box becomes the search bar (the
     // query text + the `find` title; Enter applies, Esc exits — the loop owns
     // both). The base prompt state is untouched.
     const search = app.search?.active === true ? app.search : undefined
-    renderPrompt(layout.prompt, search !== undefined
+    const promptResult = renderPrompt(layout.prompt, search !== undefined
       ? { ...app.prompt, text: search.text, plan: false, multiLine: false, cursor: search.text.length, title: "find     Enter applies · Esc exits" }
       : app.prompt, view, palette, glyphs)
+    const modalOpen = app.sessions !== undefined || app.historyPanel !== undefined || app.lightPanel !== undefined
+    const visible = app.focused === "prompt"
+      && app.prompt.focused !== false
+      && !modalOpen
+      && app.promptSelect === undefined // an active prompt drag hides the caret
+    cursorTarget = { x: promptResult.cursor.x, y: promptResult.cursor.y, visible }
   }
+  renderer.setCursor(cursorTarget)
 
   // Dropdowns/pickers (spec §3.6) — drawn above the prompt, mutually exclusive.
   if (layout.dropdown.h > 0) {

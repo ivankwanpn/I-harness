@@ -24,9 +24,16 @@ import { makeGlyphs, GLYPHS } from "./glyphs/index.ts"
 import type { GlyphSet } from "./glyphs/index.ts"
 import { wcwidth, clusterWidth } from "./wcwidth/index.ts"
 import type { DiffFrame } from "./grid/index.ts"
+import { createCursorState } from "./cursor/index.ts"
+import type { CursorState, CursorTarget } from "./cursor/index.ts"
 
 export { createRenderer }
 export type { Renderer, RendererOptions, DiffFrame }
+
+// ------------------------------------------------------------------ cursor (M49 Task 7)
+
+export { createCursorState }
+export type { CursorState, CursorTarget }
 
 // ------------------------------------------------------------------ terminal
 

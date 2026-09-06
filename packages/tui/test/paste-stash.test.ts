@@ -124,7 +124,7 @@ describe("TuiApp — paste pipeline (M46c G2)", () => {
     expect(app.state().prompt.pasteStash).toEqual([])
   })
 
-  it("double-click on the chip → the FULL original inserted at the cursor (byte-equal)", () => {
+  it("double-click on the chip → the atom is expanded in place (source stays, chip released)", () => {
     const app = makeApp()
     const big = "alpha\nbeta\ngamma\ndelta\nomega"
     app.feedInput(pasteEv(big))
@@ -140,8 +140,35 @@ describe("TuiApp — paste pipeline (M46c G2)", () => {
     app.feedInput(mouseEv(colX + 1, rowY + 1, false))
     app.feedInput(mouseEv(colX + 1, rowY + 1, true))
     const p = app.state().prompt
-    expect(p.text).toBe(big + big) // the source re-inserted, NOT a toast
-    expect(p.text.split(big)).toHaveLength(3) // both copies byte-preserved
-    expect(p.pasteStash?.[0]?.text).toBe(big)
+    // Task 7: the chip is an atomic element — the double-click EXPANDS it to
+    // editable text (the source byte-preserved in place, NOT re-inserted).
+    expect(p.text).toBe(big)
+    expect(p.text.split(big)).toHaveLength(2)
+    expect(p.cursor).toBe(big.length)
+    expect(p.pasteStash).toEqual([]) // the atom released its chip row
+  })
+
+  it("M49: the pasted block is ONE atomic cursor element — arrows hop over, backspace removes it", () => {
+    const app = makeApp()
+    const big = "alpha\nbeta\ngamma\ndelta\nomega"
+    app.feedInput(pasteEv(big))
+    // From the atom-end, Left hops over the WHOLE block (never into it).
+    const left: InputEvent = newKeyEvent("Left")
+    app.feedInput(left)
+    expect(app.state().prompt.cursor).toBe(0)
+    // Home/End stay useable; a backspace at the end removes the whole atom.
+    app.state().prompt.cursor = big.length // direct fixture write (mouse path)
+    app.feedInput(newKeyEvent("End"))
+    app.feedInput(newKeyEvent("Backspace"))
+    const p = app.state().prompt
+    expect(p.text).toBe("")
+    expect(p.pasteStash).toEqual([]) // the block is gone with its chip
   })
 })
+
+/** A minimal key event (the loop's editor path translates it via the keymap). */
+function newKeyEvent(code: string): InputEvent {
+  return {
+    type: "key", code, key: "", ctrl: false, alt: false, shift: false,
+  } as unknown as InputEvent
+}

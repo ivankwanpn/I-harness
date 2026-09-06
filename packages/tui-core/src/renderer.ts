@@ -21,6 +21,11 @@ import { SgrState } from "./ansi/style.ts"
 import { GLYPHS } from "./glyphs/index.ts"
 import type { GlyphSet } from "./glyphs/index.ts"
 import type { TerminalCapabilityContext } from "./types.ts"
+// M49 Task 7: the visible-cursor state machine — appended transition bytes
+// only on state change; an unchanged frame emits ZERO cursor bytes (the
+// project's zero-byte idle red line).
+import { createCursorState } from "./cursor/index.ts"
+import type { CursorState, CursorTarget } from "./cursor/index.ts"
 
 export interface RendererOptions {
   cols: number
@@ -48,6 +53,12 @@ export interface Renderer {
   sameFrame(): boolean
   /** Rebuild grids at the new size; the next flush() paints the FULL frame. */
   resize(cols: number, rows: number): void
+  /** M49 Task 7: the desired terminal cursor cell for the CURRENT frame (the
+   * app sets it during present, before flush). flush() appends the minimal
+   * Show/MoveTo/Hide transition bytes — AFTER the cell diff (the diff
+   * displaces the real cursor; the transition re-asserts it). An unchanged
+   * target on an unchanged frame emits zero cursor bytes. */
+  setCursor(target: CursorTarget): void
 }
 
 function assertSize(cols: number, rows: number): void {
@@ -73,6 +84,11 @@ class RendererImpl implements Renderer {
   private lastFrame: DiffFrame = { sameFrame: true, runs: [] }
   /** Set by resize(): the next commit() publishes a full-paint frame. */
   private fullPaint = false
+  /** M49 Task 7: the desired cursor cell (default hidden — an app that never
+   * calls setCursor emits zero cursor bytes; a fresh frame never assumes the
+   * terminal shows the caret). */
+  private cursorTarget: CursorTarget = { x: 0, y: 0, visible: false }
+  private cursorState: CursorState = createCursorState()
 
   get buffer(): CellBuffer {
     return this.db.presenter()
@@ -106,8 +122,24 @@ class RendererImpl implements Renderer {
       cap: this.cap,
       cursor: this.cursor,
     })
-    if (bytes.length > 0) write(bytes)
-    return bytes
+    // Cursor transition AFTER the cell bytes: the diff left the REAL cursor
+    // at the tracker end (only when it wrote bytes — an empty diff leaves the
+    // physical cursor exactly where the previous transition put it).
+    const cursorBytes = bytes.length > 0
+      ? this.cursorState.transition(this.cursorTarget, { x: this.cursor.x, y: this.cursor.y })
+      : this.cursorState.transition(this.cursorTarget)
+    // The transition's CUP (when emitted) moved the REAL cursor — the
+    // tracker is the next diff's relative-position truth, so a visible target
+    // keeps it in sync (a skipped CUP means they already agree; a hidden
+    // cursor leaves the tracker at the diff end — the physical position).
+    if (this.cursorTarget.visible) this.cursor.move(this.cursorTarget.x, this.cursorTarget.y)
+    const out = bytes + cursorBytes
+    if (out.length > 0) write(out)
+    return out
+  }
+
+  setCursor(target: CursorTarget): void {
+    this.cursorTarget = target
   }
 
   sameFrame(): boolean {
@@ -121,6 +153,9 @@ class RendererImpl implements Renderer {
     // implementation-defined — seed the tracker OUT OF RANGE so the first run
     // of the full paint always carries an absolute CUP (never assume (0,0)).
     this.cursor = new CursorTracker(cols, cols, rows)
+    // M49: the physical cursor is unknown after the resize (and the tracker
+    // above is out-of-range) — force the next visible MoveTo.
+    this.cursorState.invalidate()
     this.sgr.reset()
     this.lastFrame = { sameFrame: true, runs: [] }
     this.fullPaint = true
