@@ -192,4 +192,51 @@ describe("repairTurnTail through coordinator.load()", () => {
       await rm(dir, { recursive: true, force: true })
     }
   })
+
+  it("loadOwned refuses a non-positional established sequence instead of renumbering references", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-seq-ref-"))
+    const sessionId = "sess-seq-ref"
+    try {
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ type: "user/message", text: "hidden", seq: 0 }),
+        JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
+        "",
+      ].join("\n"), "utf8")
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      await expect(coordinator.loadOwned(sessionId)).rejects.toThrow(/sequence/i)
+      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
+        .map((line) => JSON.parse(line) as SessionEvent)
+      expect(raw[1]?.seq).toBe(20)
+      expect((raw[1] as { shadowedSeqs?: number[] }).shadowedSeqs).toEqual([0])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("loadOwned preserves unknown header fields while replacing the event body", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-header-"))
+    const sessionId = "sess-header-extension"
+    try {
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        JSON.stringify({
+          formatVersion: 1,
+          sessionId,
+          createdAt: "2026-09-06T00:00:00.000Z",
+          extensionField: { keep: true },
+        }),
+        JSON.stringify({ type: "turn/start", seq: 0 }),
+        JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 }),
+        "",
+      ].join("\n"), "utf8")
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      await coordinator.loadOwned(sessionId)
+      const header = JSON.parse(readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").split("\n")[0]!) as {
+        extensionField?: { keep?: boolean }
+      }
+      expect(header.extensionField).toEqual({ keep: true })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
 })

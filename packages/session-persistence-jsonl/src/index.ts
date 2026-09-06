@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, rename, stat, writeFile } from "node:fs/promises"
+import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import { dirname, join, basename } from "node:path"
 import type { SessionEvent } from "@i-harness/core-session"
@@ -10,6 +10,34 @@ import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./fo
 // answer (no turn/start yet); a larger one is served non-blank without a read
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
+
+async function replaceSessionFile(path: string, headerLine: string, events: SessionEvent[]): Promise<void> {
+  const tmp = `${path}.${randomUUID()}.tmp`
+  const body = [headerLine, ...events.map((event) => JSON.stringify(event)), ""].join("\n")
+  const handle = await open(tmp, "wx")
+  try {
+    await handle.writeFile(body, { encoding: "utf-8" })
+    await handle.sync()
+  } catch (error) {
+    await handle.close().catch(() => {})
+    await unlink(tmp).catch(() => {})
+    throw error
+  }
+  await handle.close()
+  try {
+    await rename(tmp, path)
+  } catch (error) {
+    await unlink(tmp).catch(() => {})
+    throw error
+  }
+  // Directory fsync is not supported uniformly on Windows. Best-effort keeps
+  // the stronger durability path on platforms/filesystems that allow it.
+  const directory = await open(dirname(path), "r").catch(() => undefined)
+  if (directory !== undefined) {
+    try { await directory.sync() } catch { /* best-effort */ }
+    await directory.close().catch(() => {})
+  }
+}
 
 export function createJsonlBackend(root: string): PersistenceBackend {
   const filePath = (id: string) => join(root, `${id}.jsonl`)
@@ -68,20 +96,13 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const path = filePath(sessionId)
       const text = await readFile(path, "utf-8")
       const lines = text.split("\n")
-      const header = parseHeader(lines[0]!)
+      const headerLine = lines[0]!
+      const header = parseHeader(headerLine)
       const events = parseEventLines(lines.slice(1))
       const torn = hasTornTail(lines.slice(1))
       const closers = missingClosers(events)
       if (torn || closers.length > 0) {
-        const handle = await open(path, "r+")
-        try {
-          await handle.truncate(0)
-          await handle.write(serializeHeader(header) + "\n")
-          for (const ev of [...events, ...closers]) await handle.write(JSON.stringify(ev) + "\n")
-          await handle.sync()
-        } finally {
-          await handle.close()
-        }
+        await replaceSessionFile(path, headerLine, [...events, ...closers])
       }
       return { version: header.formatVersion, events: [...events, ...closers], meta: header }
     },
@@ -89,11 +110,9 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     async replaceEvents(sessionId, events) {
       const path = filePath(sessionId)
       const text = await readFile(path, "utf-8")
-      const header = parseHeader(text.split("\n")[0]!)
-      const tmp = `${path}.${randomUUID()}.tmp`
-      const body = [serializeHeader(header), ...events.map((event) => JSON.stringify(event)), ""].join("\n")
-      await writeFile(tmp, body, { encoding: "utf-8" })
-      await rename(tmp, path)
+      const headerLine = text.split("\n")[0]!
+      parseHeader(headerLine)
+      await replaceSessionFile(path, headerLine, events)
     },
 
     async profile(sessionId) {
