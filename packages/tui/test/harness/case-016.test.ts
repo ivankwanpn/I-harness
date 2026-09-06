@@ -32,20 +32,25 @@ const HOST_FILE = fileURLToPath(new URL("./host-016.ts", import.meta.url))
  * verified against the captured pty stream (NOTE: ConPTY re-encodes the
  * host's flush bytes — it paints cursor-RELATIVE jumps (\x1b[3C skip over
  * unchanged cells) and emits its own resets — so the pins carry ConPTY's
- * emission shape, not the app's raw bytes; the COLORS are unchanged):
+ * emission shape, not the app's raw bytes; the COLORS are unchanged.
+ * M49 Task 7: the visible-cursor transition moves the terminal caret to the
+ * prompt cell after every frame, so ConPTY's re-encoding of a frame whose
+ * last cell sits on the prompt-checking row differs — the fence-OPEN frame
+ * now carries an ABSOLUTE jump (\x1b[8;7H) and the tail rewrite an absolute
+ * CUP (\x1b[6;16H) — the pins below reflect the post-M49 emission shape):
  *  - fence OPEN frame: plain md-code at the code row (38;2;58;149;171 =
- *    #3a95ab, NO bold) right before "print(1)" (\x1b[3C jumps the rail/pad);
+ *    #3a95ab, NO bold) right before "print(1)";
  *  - fence CLOSED frame: keyword bold (\x1b[1m) reuses the md-code fg for
  *    "print" (hljs-built_in → md-code), the number lands in accent-assistant
  *    (38;2;187;154;247 = #bb9af7, hljs-number) right after a 22m bold-off and
  *    a 1C skip over the unchanged "(";
  *  - the tail-row in-place rewrite: row 6 (1-based) re-rendered from
  *    "Para two " to "Para two line." — the flushed tail keeps its prefix and
- *    the completion lands in the same row (CUP 6;7H + text color 225;225;225). */
-const SGR_FENCE_OPEN_PLAIN = "[38;2;58;149;171m[48;2;28;28;28m[3Cprint(1)"
+ *    the completion lands in the same row (text color 225;225;225). */
+const SGR_FENCE_OPEN_PLAIN = "[38;2;58;149;171m[48;2;28;28;28m[8;7Hprint(1)"
 const SGR_FENCE_CLOSED_KEYWORD_BOLD = "\x1b[1m\x1b[3Cprint"
 const SGR_FENCE_CLOSED_NUMBER = "\x1b[38;2;187;154;247m\x1b[22m\x1b[1C1"
-const SGR_TAIL_REWRITE = "\x1b[6;7HPara two \x1b[m\x1b[38;2;225;225;225mline."
+const SGR_TAIL_REWRITE = "\x1b[38;2;225;225;225m\x1b[6;16Hline."
 
 test(
   "case-016: markdown checkpoint streaming (per-paragraph flush + fence-close highlight + byte budget)",

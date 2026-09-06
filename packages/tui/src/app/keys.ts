@@ -60,6 +60,10 @@ export type AppAction =
   // picker — the prompt-focused Ctrl+M keeps multiline (grok's collision
   // resolution precedent).
   | "open-settings" | "open-model-picker"
+  // M49 Task 7: prompt editor actions (spec §6.2 — grapheme/word/line motion,
+  // select-all, undo/redo). The loop routes them through the PromptEditor.
+  | "edit-left" | "edit-right" | "edit-word-left" | "edit-word-right"
+  | "edit-home" | "edit-end" | "edit-select-all" | "edit-undo" | "edit-redo"
 
 /** The keymap sees a normalized key event (mirrors tui-core KeyEvent). */
 export interface Kbd {
@@ -195,6 +199,16 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
   if (ev.code === "ShiftTab") return "cycle-mode"
   if (ev.code === "Up") return state.promptText.length === 0 ? "history-prev" : "none"
   if (ev.code === "Down") return state.promptText.length === 0 ? "history-next" : "none"
+  // M49 Task 7: editor motion — arrows step per grapheme, Ctrl/Alt+arrows hop
+  // per word, Home/End move per visual line (§6.2). All route through the
+  // PromptEditor — never direct string mutation.
+  if (ev.code === "Left" || ev.code === "Right") {
+    const word = ev.ctrl || ev.alt
+    const left = ev.code === "Left"
+    return left ? (word ? "edit-word-left" : "edit-left") : (word ? "edit-word-right" : "edit-right")
+  }
+  if (ev.code === "Home") return "edit-home"
+  if (ev.code === "End") return "edit-end"
   // M46a keys truth (grok): Alt+S = the draft stash too (Alt+S same as Ctrl+S).
   if (ev.code === "char" && !ev.ctrl && ev.alt && ev.key === "s") return "stash-draft"
   if (ev.code === "char" && ev.ctrl) {
@@ -218,6 +232,15 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
       case "n": return "sessions-new" // spec §4: Ctrl+N new session
       case "p": return "open-command-palette"
       case ",": return "open-settings" // M46a G1: Ctrl+, = settings modal (grok parity)
+      // M49 Task 7: emacs motion + undo/redo (spec §6.2). Ctrl+A = line start,
+      // Ctrl+E = line end, Ctrl+Z undo, Ctrl+Y redo; Ctrl+Shift+A = select-all,
+      // Ctrl+Shift+Z = redo (the shifted spellings arrive as uppercase keys).
+      case "a": return "edit-home"
+      case "e": return "edit-end"
+      case "z": return ev.shift ? "edit-redo" : "edit-undo"
+      case "y": return "edit-redo"
+      case "A": return ev.shift ? "edit-select-all" : "none"
+      case "Z": return ev.shift ? "edit-redo" : "none"
       default: return "none"
     }
   }

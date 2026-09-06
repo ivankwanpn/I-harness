@@ -92,8 +92,13 @@ export interface MouseHooks {
   queueSendNow?(n: number): void
   /** M46c G2: paste-chip double-click — INSERT the retained paste-source at
    * the cursor (the prompt state's pasteStash[`index`]; absent hook → honest
-   * toast — the old "source not retained" path is replaced by this seam). */
+   * toast — the old "source not retained" path is replaced by this seam).
+   * M49 Task 7: the loop hook EXPANDS the editor's paste atom at `index`. */
   insertPasteStash?(index: number): void
+  /** M49 Task 7: the loop-owned prompt-cursor move (the click routes through
+   * the PromptEditor's moveTo — atom-safe). Absent → the router's direct
+   * state write (test-surface fallback). */
+  movePromptCursor?(index: number): void
   /** M46c G1: timeline tick/chevron click → jump the viewport to the turn
    * anchor display line (the /jump goTo seam; absent → the router's own
    * changeScroll fallback). */
@@ -429,8 +434,12 @@ export class MouseRouter {
       }
     }
     // Click → cursor at that cell (approximate column mapping; a chip hint row
-    // keeps the current cursor).
-    p.cursor = promptCursorAtCell(ctx, p, ev.x, ev.y)
+    // keeps the current cursor). M49 Task 7: the loop routes the move through
+    // the PromptEditor (atom-safe snapping) via the hook — the direct state
+    // write is the injected-host test fallback.
+    const offset = promptCursorAtCell(ctx, p, ev.x, ev.y)
+    if (this.hooks.movePromptCursor !== undefined) this.hooks.movePromptCursor(offset)
+    else p.cursor = offset
     this.changed()
     this.press = { x: ev.x, y: ev.y, region: "prompt", char: p.cursor, moved: false, button: ev.button }
     // Drag-selection arm: on motion ≥1 cell the press promotes.

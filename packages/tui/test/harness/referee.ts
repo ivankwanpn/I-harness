@@ -420,6 +420,30 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           }
           break
         }
+        case "wait-cursor": {
+          // M49 Task 7: poll-until-match on the PARSED terminal cursor cell
+          // (the visible-caret byte proof — Show/MoveTo/Hide emissions).
+          // `col`/`row` are 1-based terminal cells (the byte vocabulary).
+          const col = Number(args["col"])
+          const row = Number(args["row"])
+          const timeoutMs = Number(args["timeoutMs"] ?? 2500)
+          const deadline = Date.now() + timeoutMs
+          for (;;) {
+            await virtual.drained()
+            const c = virtual.cursor()
+            if (c.y === row - 1 && c.x === col - 1) break
+            if (Date.now() >= deadline) {
+              return {
+                ok: false,
+                error:
+                  `step ${i} (wait-cursor): cursor never at ${col},${row} within ${timeoutMs}ms ` +
+                  `(got ${c.x + 1},${c.y + 1})`,
+              }
+            }
+            await sleep(50)
+          }
+          break
+        }
         case "assert-idle-bytes": {
           // Closed time window (see header). expected must be 0 — any pty byte
           // inside the window fails the zero-byte idle invariant. The window

@@ -5,7 +5,7 @@
 // focused-only (no 0.66 unfocused blend) and skips the visible cursor.
 
 import { clusterWidth } from "@i-harness/tui-core"
-import type { GlyphSet, Palette } from "@i-harness/tui-core"
+import type { CursorTarget, GlyphSet, Palette } from "@i-harness/tui-core"
 import type { Rect, ViewDraw } from "./agent.ts"
 import { strWidth } from "./status.ts"
 
@@ -220,13 +220,78 @@ function clipRight(s: string, width: number): string {
   return out
 }
 
+// ------------------------------------------------------------------ M49 Task 7: cursor geometry
+
+/** M49 Task 7: the prompt frame's cursor answer — the cell the terminal caret
+ * should sit on, plus the number of text rows laid out (pre-clamp wrap length
+ * would be the layout's natural height; the renderer clamps to the box). */
+export interface PromptRenderResult {
+  cursor: CursorTarget
+  rows: number
+}
+
+/** The wrap line index containing cursor `index` (the line whose [start,
+ * start+text.length) span holds it — end-inclusive so the caret after the
+ * last char of a line stays ON that line). */
+function wrapLineOf(lines: WrappedLine[], index: number): number {
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!
+    const end = l.start + l.text.length
+    if (index <= end && index >= (i === 0 ? 0 : l.start)) return i
+  }
+  return lines.length - 1
+}
+
+/** Column width of line.text[0..local) — the same cluster-width walk the
+ * renderer's drawText uses (never mixes UTF-16 units with columns). */
+function lineColumnWidth(lineText: string, local: number): number {
+  let w = 0
+  let i = 0
+  for (const ch of lineText) {
+    if (i >= local) break
+    w += clusterWidth(ch)
+    i += ch.length
+  }
+  return w
+}
+
+/** M49 Task 7: the caret cell at `state.cursor` after wrap + inline-element
+ * (chip-row) layout — the SAME bottom-anchored window the renderer draws.
+ * When the caret line scrolled above the visible window it clamps to the
+ * START of the first shown line. The caller decides visibility (the renderer
+ * hides the caret for modals/unfocus/disabled/drag). */
+export function promptCursorCell(ctx: Rect, state: PromptState): CursorTarget {
+  const contentW = Math.max(1, ctx.w - 4)
+  const chipRows = pasteChipRowCount(ctx, state)
+  const textRows = Math.max(1, ctx.h - 3 - chipRows)
+  const x0 = ctx.x
+  if (state.text.length === 0) {
+    // Empty prompt: the caret sits on the placeholder start (`❯ ` prefix).
+    return { x: x0 + 1 + PROMPT_PREFIX_W, y: ctx.y + 1 + chipRows, visible: true }
+  }
+  const lines = wrapLinesWithOffsets(state.text, contentW)
+  const firstShown = Math.max(0, lines.length - textRows)
+  const lineIdx = Math.max(0, wrapLineOf(lines, Math.min(state.cursor, state.text.length)))
+  const line = lines[lineIdx] ?? lines[lines.length - 1]
+  const colBase = x0 + 1 + PROMPT_PREFIX_W
+  if (lineIdx < firstShown) {
+    return { x: colBase, y: ctx.y + 1 + chipRows, visible: true }
+  }
+  const local = Math.max(0, Math.min(line.text.length, state.cursor - line.start))
+  const col = Math.min(
+    x0 + ctx.w - 2, // the last content column (never on the right border)
+    Math.max(x0 + 1, colBase + lineColumnWidth(line.text, local)),
+  )
+  return { x: col, y: ctx.y + 1 + chipRows + (lineIdx - firstShown), visible: true }
+}
+
 export function renderPrompt(
   ctx: Rect,
   state: PromptState,
   view: ViewDraw,
   palette: Palette,
   glyphs: GlyphSet,
-): void {
+): PromptRenderResult {
   const y0 = ctx.y
   const y1 = ctx.y + ctx.h - 1
   const x0 = ctx.x
@@ -302,4 +367,5 @@ export function renderPrompt(
     }
     view.text(x, y, shown[j], textStyle, x1) // last text col = x1-1 (right border safe)
   }
+  return { cursor: promptCursorCell(ctx, state), rows: shown.length }
 }

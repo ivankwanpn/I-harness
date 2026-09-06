@@ -140,6 +140,29 @@ describe("dispatchKey — prompt focus: Enter & friends", () => {
     // M46a G1: F2 = the settings modal (grok parity) — no longer unbound.
     expect(dispatchKey(kbd({ code: "F2", key: "F2" }), promptState())).toBe("open-settings")
   })
+
+  it("M49: prompt editing keys — grapheme/word/line motion, undo, redo, select-all", () => {
+    const st = promptState({ promptText: "hello" })
+    const c = (key: string, extra: Partial<Kbd> = {}): Kbd => kbd({ code: "char", key, ctrl: true, ...extra })
+    expect(dispatchKey(kbd({ code: "Left", key: "ArrowLeft" }), st)).toBe("edit-left")
+    expect(dispatchKey(kbd({ code: "Right", key: "ArrowRight" }), st)).toBe("edit-right")
+    // Ctrl/Alt+Left/Right = word motion (accepts both modifier spellings).
+    expect(dispatchKey(kbd({ code: "Left", key: "ArrowLeft", ctrl: true }), st)).toBe("edit-word-left")
+    expect(dispatchKey(kbd({ code: "Right", key: "ArrowRight", alt: true }), st)).toBe("edit-word-right")
+    // Home/End = visual line; Ctrl+A/Ctrl+E are the emacs line bindings.
+    expect(dispatchKey(kbd({ code: "Home", key: "Home" }), st)).toBe("edit-home")
+    expect(dispatchKey(kbd({ code: "End", key: "End" }), st)).toBe("edit-end")
+    expect(dispatchKey(c("a"), st)).toBe("edit-home")
+    expect(dispatchKey(c("e"), st)).toBe("edit-end")
+    // Ctrl+Z undo; Ctrl+Y / Ctrl+Shift+Z redo; Ctrl+Shift+A select-all.
+    expect(dispatchKey(c("z"), st)).toBe("edit-undo")
+    expect(dispatchKey(c("y"), st)).toBe("edit-redo")
+    expect(dispatchKey(c("Z", { shift: true }), st)).toBe("edit-redo")
+    expect(dispatchKey(c("A", { shift: true }), st)).toBe("edit-select-all")
+    // the scrollback focus table keeps its own h/l/Left/Right bindings.
+    expect(dispatchKey(kbd({ code: "Left", key: "ArrowLeft" }), scrollState())).toBe("toggle-fold")
+    expect(dispatchKey(c("z"), scrollState())).toBe("none")
+  })
 })
 
 describe("dispatchKey — overlay routing (spec §4)", () => {
