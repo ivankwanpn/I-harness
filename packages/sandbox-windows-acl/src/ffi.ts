@@ -139,8 +139,9 @@ export interface Win32Bindings {
 const PVOID: Ptr = koffi.pointer('void')
 const PPVOID: Ptr = koffi.pointer(PVOID)
 
-/** koffi STARTUPINFOW layout; its size is asserted against abi.STARTUPINFOW_SIZE at load. */
-export const STARTUPINFOW = koffi.struct('STARTUPINFOW', {
+/** Anonymous koffi STARTUPINFOW layout; the exported TypeObject is the only
+ * lookup path, so module reloads never collide in koffi's global name table. */
+export const STARTUPINFOW = koffi.struct({
   cb: 'uint32',
   lpReserved: 'str16',
   lpDesktop: 'str16',
@@ -161,8 +162,8 @@ export const STARTUPINFOW = koffi.struct('STARTUPINFOW', {
   hStdError: PVOID,
 })
 
-/** koffi PROCESS_INFORMATION layout; its size is asserted against abi.PROCESS_INFORMATION_SIZE at load. */
-export const PROCESS_INFORMATION = koffi.struct('PROCESS_INFORMATION', {
+/** Anonymous koffi PROCESS_INFORMATION layout; see STARTUPINFOW above. */
+export const PROCESS_INFORMATION = koffi.struct({
   hProcess: PVOID,
   hThread: PVOID,
   dwProcessId: 'uint32',

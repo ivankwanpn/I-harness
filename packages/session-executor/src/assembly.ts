@@ -53,9 +53,8 @@ import {
 } from "@i-harness/agent-team"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
-import { createWindowsAclSandbox } from "@i-harness/sandbox-windows-acl"
 import { createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
-import type { SandboxMode } from "@i-harness/sandbox"
+import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
 import { parsePreset } from "@i-harness/preset"
 
 // The m26 mock client is destructive (one script step per turn, exhausted →
@@ -190,10 +189,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // bare SandboxProvider and DROPS the backend's dispose(), so this compose
   // site keeps the raw backend and tears it down in dispose() — otherwise the
   // ACL temp grants would leak in composed use.
-  const winSandbox =
-    process.platform !== "win32" || opts.sandbox === undefined || opts.sandbox === "danger-full-access"
-      ? undefined
-      : createWindowsAclSandbox({ writableDirs: [opts.workspace], mode: "read-only" })
+  let winSandbox: (SandboxProvider & { dispose(): void }) | undefined
+  if (process.platform === "win32" && opts.sandbox !== undefined && opts.sandbox !== "danger-full-access") {
+    const { createWindowsAclSandbox } = await import("@i-harness/sandbox-windows-acl")
+    winSandbox = createWindowsAclSandbox({ writableDirs: [opts.workspace], mode: "read-only" })
+  }
   const sandboxProvider =
     opts.sandbox === undefined || opts.sandbox === "danger-full-access"
       ? undefined
