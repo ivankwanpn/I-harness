@@ -246,7 +246,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
       return 1
     }
     storeRoot = dir
-    coordinator = createSessionCoordinator(createJsonlBackend(dir))
+    coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
   const service = createSessionService({
     workspace: process.cwd(),
@@ -421,7 +421,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
       return 1
     }
     storeRoot = dir
-    coordinator = createSessionCoordinator(createJsonlBackend(dir))
+    coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
   const service = createSessionService({
     workspace: process.cwd(),

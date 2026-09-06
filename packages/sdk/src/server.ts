@@ -133,7 +133,7 @@ interface Inflight {
 export function createSdkServer(service: SessionService, opts: SdkServerOptions = {}): SdkServer {
   const notifiers = new Set<(message: RpcNotification) => void>()
   const knownSessions = new Set<string>()
-  const creatingSessions = new Set<string>()
+  const preparingSessions = new Map<string, Promise<void>>()
   const inflight = new Map<string, Inflight>()
   let closed = false
 
@@ -167,17 +167,30 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const rewindSurfaceFor = (sessionId: string): RewindServiceSurface | null =>
     opts.rewindFactory === undefined ? null : opts.rewindFactory(sessionId) ?? null
 
-  /** Make sure the session exists in the coordinator (create once per id). */
+  /** Make sure the session exists and is owned in the coordinator. */
   async function ensureSession(sessionId: string): Promise<void> {
     if (opts.coordinator === undefined) return
-    if (knownSessions.has(sessionId) || creatingSessions.has(sessionId)) return
-    creatingSessions.add(sessionId)
-    try {
-      const known = (await opts.coordinator.list()).includes(sessionId)
-      if (!known) await opts.coordinator.create({ sessionId })
+    if (knownSessions.has(sessionId)) return
+    const pending = preparingSessions.get(sessionId)
+    if (pending !== undefined) return pending
+
+    const preparation = (async () => {
+      const known = (await opts.coordinator!.list()).includes(sessionId)
+      if (known) {
+        // Existing durable sessions are resumed by this server, so keep the
+        // ownership lease for the lifetime of the coordinator.
+        await opts.coordinator!.adoptOwnership(sessionId)
+      } else {
+        // create() acquires ownership for a newly opened durable session.
+        await opts.coordinator!.create({ sessionId })
+      }
       knownSessions.add(sessionId)
+    })()
+    preparingSessions.set(sessionId, preparation)
+    try {
+      await preparation
     } finally {
-      creatingSessions.delete(sessionId)
+      if (preparingSessions.get(sessionId) === preparation) preparingSessions.delete(sessionId)
     }
   }
 

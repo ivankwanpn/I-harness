@@ -57,6 +57,8 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
   const known = new Map<string, string>()
   /** sessionId → in-flight session/prompt abort controller. */
   const inflight = new Map<string, AbortController>()
+  /** Existing-session ownership preparation, shared by concurrent requests. */
+  const preparingOwnership = new Map<string, Promise<void>>()
 
   async function sessionExists(sessionId: string): Promise<boolean> {
     if (known.has(sessionId)) return true
@@ -66,6 +68,22 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
       return true
     } catch {
       return false
+    }
+  }
+
+  async function ensureOwnership(sessionId: string): Promise<void> {
+    if (opts.coordinator === undefined || known.has(sessionId)) return
+    const pending = preparingOwnership.get(sessionId)
+    if (pending !== undefined) return pending
+    const preparation = (async () => {
+      if (!(await sessionExists(sessionId))) throw new Error("unknown session: " + sessionId)
+      await opts.coordinator!.adoptOwnership(sessionId)
+    })()
+    preparingOwnership.set(sessionId, preparation)
+    try {
+      await preparation
+    } finally {
+      if (preparingOwnership.get(sessionId) === preparation) preparingOwnership.delete(sessionId)
     }
   }
 
@@ -112,6 +130,7 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
     if (!(await sessionExists(sessionId))) {
       throw new Error(`unknown session: ${sessionId}`)
     }
+    await ensureOwnership(sessionId)
     known.set(sessionId, cwd)
     return {}
   })
@@ -136,6 +155,7 @@ export function createAcpServer(opts: AcpServerOptions): AcpServer {
     if (!(await sessionExists(sessionId))) {
       throw new Error(`unknown session: ${sessionId}`)
     }
+    await ensureOwnership(sessionId)
     const text = extractPromptText(prompt)
     if (text === "") {
       throw new Error("session/prompt requires at least one text content block (v0)")
