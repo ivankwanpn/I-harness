@@ -194,6 +194,103 @@ describe("createAcpServer", () => {
     expect(releaseOwnership).toHaveBeenCalledWith("existing")
   })
 
+  it("durable session/prompt stays closed until explicit session/resume", async () => {
+    const service = {
+      submit: vi.fn(async () => {}),
+      assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      closeSession: vi.fn(async () => {}),
+      close: async () => {},
+    } as SessionService
+    const coordinator = {
+      profile: vi.fn(async (_sessionId: string) => ({
+        meta: { formatVersion: 1, sessionId: "existing", createdAt: new Date().toISOString() },
+        blank: false,
+      })),
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+      flush: vi.fn(async (_sessionId: string) => {}),
+      releaseOwnership: vi.fn(async (_sessionId: string) => {}),
+    } as unknown as SessionCoordinator
+    const server = createAcpServer({ service, coordinator })
+    const app = client({ name: "vitest-client" })
+
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      await ctx.request("session/resume", { sessionId: "existing", cwd: join(tmpdir(), "ih-acp-cwd") })
+      await ctx.request("session/close", { sessionId: "existing" })
+      await expect(ctx.request("session/prompt", {
+        sessionId: "existing",
+        prompt: [{ type: "text", text: "must resume" }],
+      })).rejects.toThrow()
+
+      await ctx.request("session/resume", { sessionId: "existing", cwd: join(tmpdir(), "ih-acp-cwd") })
+      await expect(ctx.request("session/prompt", {
+        sessionId: "existing",
+        prompt: [{ type: "text", text: "after resume" }],
+      })).resolves.toEqual({ stopReason: "end_turn" })
+    })
+
+    expect(service.submit).toHaveBeenCalledTimes(1)
+  })
+
+  it("session/close preserves durable ownership and active state when flush fails", async () => {
+    const service = {
+      submit: vi.fn(async () => {}),
+      assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      closeSession: vi.fn(async () => {}),
+      close: async () => {},
+    } as SessionService
+    let flushAttempts = 0
+    const flush = vi.fn(async (_sessionId: string) => {
+      flushAttempts += 1
+      if (flushAttempts === 1) throw new Error("transient flush failure")
+    })
+    const releaseOwnership = vi.fn(async (_sessionId: string) => {})
+    const profile = vi.fn(async (_sessionId: string) => ({
+      meta: { formatVersion: 1, sessionId: "existing", createdAt: new Date().toISOString() },
+      blank: false,
+    }))
+    const coordinator = {
+      profile,
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+      flush,
+      releaseOwnership,
+    } as unknown as SessionCoordinator
+    const server = createAcpServer({ service, coordinator })
+    const app = client({ name: "vitest-client" })
+
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      await ctx.request("session/resume", { sessionId: "existing", cwd: join(tmpdir(), "ih-acp-cwd") })
+
+      await expect(ctx.request("session/close", { sessionId: "existing" })).rejects.toThrow()
+      expect(releaseOwnership).not.toHaveBeenCalled()
+      await expect(ctx.request("session/prompt", {
+        sessionId: "existing",
+        prompt: [{ type: "text", text: "must stay closed" }],
+      })).rejects.toThrow()
+      expect(service.submit).not.toHaveBeenCalled()
+
+      profile.mockRejectedValue(new Error("durable lookup unavailable"))
+      await expect(ctx.request("session/close", { sessionId: "existing" })).resolves.toEqual({})
+      expect(releaseOwnership).toHaveBeenCalledTimes(1)
+      await expect(ctx.request("session/prompt", {
+        sessionId: "existing",
+        prompt: [{ type: "text", text: "closed" }],
+      })).rejects.toThrow()
+    })
+
+    expect(flush).toHaveBeenCalledTimes(2)
+    expect(service.submit).not.toHaveBeenCalled()
+  })
+
   it("session/close removes an in-memory session from the known set", async () => {
     const { service } = await makeService()
     const server = createAcpServer({ service })
@@ -205,6 +302,59 @@ describe("createAcpServer", () => {
       await expect(session.prompt("must not reopen implicitly")).rejects.toThrow()
     })
     await service.close()
+  })
+
+  it("session/cancel aborts a second overlapping prompt after the first settles", async () => {
+    let firstStarted!: () => void
+    const firstStartedP = new Promise<void>((resolve) => { firstStarted = resolve })
+    let secondStarted!: () => void
+    const secondStartedP = new Promise<void>((resolve) => { secondStarted = resolve })
+    let finishFirst!: () => void
+    const firstGate = new Promise<void>((resolve) => { finishFirst = resolve })
+    let finishSecond!: () => void
+    let secondSignal: AbortSignal | undefined
+    const service = {
+      submit: vi.fn(async (_sessionId: string, prompt: string, signal: AbortSignal) => {
+        if (prompt === "first") {
+          firstStarted()
+          await firstGate
+          return
+        }
+        secondSignal = signal
+        secondStarted()
+        await new Promise<void>((resolve, reject) => {
+          finishSecond = resolve
+          signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+        })
+      }),
+      assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      closeSession: vi.fn(async () => {}),
+      close: async () => {},
+    } as SessionService
+    const server = createAcpServer({ service })
+    const app = client({ name: "vitest-client" })
+
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      const session = await ctx.buildSession(join(tmpdir(), "ih-acp-cwd")).start()
+      const first = session.prompt("first")
+      await firstStartedP
+      const second = session.prompt("second")
+      await secondStartedP
+
+      finishFirst()
+      await expect(first).resolves.toEqual({ stopReason: "end_turn" })
+      await ctx.notify("session/cancel", { sessionId: session.sessionId })
+      const secondWasAborted = secondSignal?.aborted
+      finishSecond()
+      const secondResult = await second
+      expect(secondWasAborted).toBe(true)
+      expect(secondResult).toEqual({ stopReason: "cancelled" })
+    })
   })
 
   it("session/close aborts an active prompt before disposing the assembly", async () => {
@@ -248,6 +398,35 @@ describe("createAcpServer", () => {
     })
 
     expect(order).toEqual(["abort", "dispose"])
+  })
+
+  it("concurrent session/close requests share one lifecycle flight", async () => {
+    const closeSession = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    const service = {
+      submit: vi.fn(async () => {}),
+      assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      closeSession,
+      close: async () => {},
+    } as SessionService
+    const server = createAcpServer({ service })
+    const app = client({ name: "vitest-client" })
+
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      const session = await ctx.buildSession(join(tmpdir(), "ih-acp-cwd")).start()
+      await expect(Promise.all([
+        ctx.request("session/close", { sessionId: session.sessionId }),
+        ctx.request("session/close", { sessionId: session.sessionId }),
+      ])).resolves.toEqual([{}, {}])
+    })
+
+    expect(closeSession).toHaveBeenCalledTimes(1)
   })
 })
 
