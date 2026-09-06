@@ -57,7 +57,7 @@ steps:
         - " ┃│                                        │"
         - " ┃│                                        │"
         - " ┃│                                        │"
-        - " ┃╰ mock-model─────────────────────────────╯"
+        - " ┃╰ unconfigured───────────────────────────╯"
   - assert-glyph-integrity: {}
   - await-marker: { name: teardown-wrote }
   - assert-byte-budget: { writes: 5 }

@@ -135,7 +135,7 @@ import type {
   RewindResult,
 } from "@i-harness/rewind"
 import { createEventMapState, mapSessionEvent, type EventMapState } from "./embedded.ts"
-import type { BackendClient, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { BackendClient, BackendModelState, SessionSummary, TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ wire seam
 
@@ -258,6 +258,45 @@ function parseListResult(result: unknown): SessionListResult {
     })
   }
   return { sessions, ...(unavailable ? { listingUnavailable: true } : {}) }
+}
+
+function parseSessionIdResult(result: unknown, method: string): string {
+  if (result === null || typeof result !== "object"
+    || typeof (result as { sessionId?: unknown }).sessionId !== "string"
+    || (result as { sessionId: string }).sessionId === "") {
+    throw new SdkWireError(-32603, `malformed ${method} response: sessionId is missing`)
+  }
+  return (result as { sessionId: string }).sessionId
+}
+
+function parseModelState(result: unknown): BackendModelState {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session model response: result is not an object")
+  }
+  const state = result as Record<string, unknown>
+  if (state.status === "unconfigured" && typeof state.reason === "string") {
+    return { status: "unconfigured", reason: state.reason }
+  }
+  if (state.status === "invalid" && typeof state.reason === "string") {
+    return {
+      status: "invalid",
+      reason: state.reason,
+      ...(typeof state.providerId === "string" ? { providerId: state.providerId } : {}),
+      ...(typeof state.modelId === "string" ? { modelId: state.modelId } : {}),
+    }
+  }
+  if (state.status === "ready"
+    && typeof state.providerId === "string" && state.providerId !== ""
+    && typeof state.modelId === "string" && state.modelId !== ""
+    && typeof state.label === "string" && state.label !== "") {
+    return {
+      status: "ready",
+      providerId: state.providerId,
+      modelId: state.modelId,
+      label: state.label,
+    }
+  }
+  throw new SdkWireError(-32603, "malformed session model response")
 }
 
 // -------------------------------------------------- v1.1 response parsing
@@ -797,6 +836,12 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     return Array.isArray(rows) && rows.length > 0
   }
 
+  async function requireCapability(key: string): Promise<void> {
+    if (!(await hasCapability(key))) {
+      throw new Error(`${key} unavailable: server did not advertise the capability`)
+    }
+  }
+
   /** Wire v1 history — the raw wire method (the seam contract = the wire
    * names; a host's real client — typed helpers of any shape or none — always
    * speaks the same names through request()). */
@@ -881,6 +926,30 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
       rewindMember = buildRemoteRewindMember()
     }
   })
+
+  async function switchSession(id: string): Promise<void> {
+    if (closed) throw new Error("remote backend closed")
+    const generation = ++openGeneration
+    const protocolVersion = await probeVersion()
+    if (closed) throw new Error("remote backend closed")
+    if (generation !== openGeneration) return
+
+    if (protocolVersion < 2) {
+      commitOpen(id, [], [])
+      return
+    }
+
+    const opening: NonNullable<typeof pendingOpen> = { generation, sessionId: id, events: [] }
+    pendingOpen = opening
+    try {
+      const history = await wireFullHistory(id)
+      if (closed) throw new Error("remote backend closed")
+      if (generation !== openGeneration) return
+      commitOpen(id, history, opening.events, opening.status)
+    } finally {
+      if (pendingOpen === opening) pendingOpen = undefined
+    }
+  }
 
   async function submit(prompt: string): Promise<void> {
     if (closed) throw new Error("remote backend closed")
@@ -996,28 +1065,52 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
       return [{ id: sessionId, title: opts.title ?? "Session", updatedAt: Date.now(), turnCount }]
     },
 
-    async open(id: string): Promise<void> {
-      if (closed) throw new Error("remote backend closed")
-      const generation = ++openGeneration
-      const protocolVersion = await probeVersion()
-      if (closed) throw new Error("remote backend closed")
-      if (generation !== openGeneration) return
+    open: switchSession,
 
-      if (protocolVersion < 2) {
-        commitOpen(id, [], [])
-        return
-      }
+    async createSession(): Promise<string> {
+      await requireCapability("session-create")
+      const result = await opts.client.request("session/create", {}, REQUEST_TIMEOUT_MS)
+      const id = parseSessionIdResult(result, "session/create")
+      await switchSession(id)
+      return id
+    },
 
-      const opening: NonNullable<typeof pendingOpen> = { generation, sessionId: id, events: [] }
-      pendingOpen = opening
-      try {
-        const history = await wireFullHistory(id)
-        if (closed) throw new Error("remote backend closed")
-        if (generation !== openGeneration) return
-        commitOpen(id, history, opening.events, opening.status)
-      } finally {
-        if (pendingOpen === opening) pendingOpen = undefined
+    async forkSession(): Promise<string> {
+      await requireCapability("session-fork")
+      const result = await opts.client.request("session/fork", { sessionId }, REQUEST_TIMEOUT_MS)
+      const id = parseSessionIdResult(result, "session/fork")
+      await switchSession(id)
+      return id
+    },
+
+    async modelState(): Promise<BackendModelState> {
+      await requireCapability("session-model")
+      return parseModelState(await opts.client.request(
+        "session/model/state",
+        { sessionId },
+        REQUEST_TIMEOUT_MS,
+      ))
+    },
+
+    async setSessionModel(selection): Promise<BackendModelState> {
+      await requireCapability("session-model")
+      if (selection.provider.trim() === "" || selection.model.trim() === "") {
+        throw new Error("session model selection requires non-empty provider and model")
       }
+      return parseModelState(await opts.client.request(
+        "session/model/set",
+        {
+          sessionId,
+          selection: {
+            provider: selection.provider.trim(),
+            model: selection.model.trim(),
+            ...(selection.reasoningEffort !== undefined
+              ? { reasoningEffort: selection.reasoningEffort }
+              : {}),
+          },
+        },
+        REQUEST_TIMEOUT_MS,
+      ))
     },
 
     submit,

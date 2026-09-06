@@ -17,7 +17,7 @@ async function withHost(
 ): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "i-harness-web-host-feedback-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
-  const executor = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true, coordinator })
+  const executor = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true, coordinator })
   const host = createWebHost({ port: 0, executor, coordinator, ...options })
   const { port } = await host.listen()
   try {

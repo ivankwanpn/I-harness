@@ -8,6 +8,7 @@ import type { Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
 import { TuiApp } from "../src/app/loop.ts"
 import { createScrollbackEngine } from "../src/index.ts"
 import type { BackendClient, TuiEvent } from "../src/index.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap, "groknight")
@@ -17,6 +18,7 @@ const make = (cols: number, rows: number): Renderer => createRenderer({ cols, ro
 function stubBackend(): BackendClient {
   const events: TuiEvent[] = []
   return {
+    ...unsupportedSessionManagement,
     listSessions: async () => [],
     open: async () => {},
     submit: async () => {},

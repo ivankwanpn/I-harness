@@ -58,9 +58,8 @@ export interface SessionServiceOptions extends AssemblyOptions {
   /** Metadata source for an assembly's FIRST build (the tier-1 model chain
    * input, e.g. session.meta.modelSelection). Absent → no meta. */
   loadMeta?: (sessionId: string) => Promise<SessionMeta | undefined>
-  /** Per-assembly model resolution; the chain itself stays in the composition
-   * (apps/cli/src/web.ts resolveModelSpec). Absent → the assembly's mock
-   * default. */
+  /** Legacy per-assembly model resolution. Absent or unresolved means the
+   * assembly follows modelPolicy (production defaults to required). */
   modelBuilder?: (sessionId: string, meta: SessionMeta | undefined) => Promise<ModelClient | undefined>
   /** Atomic per-session model resolution. The local structural type keeps
    * session-executor independent of provider-runtime; app composition adapts
@@ -187,8 +186,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             compact,
           })
         } else {
-          // Transitional legacy path. Task 4 migrates production callers to
-          // modelBindingFor, then changes omitted modelPolicy to required.
+          // Legacy path retained for explicit embedders; production apps use
+          // modelBindingFor so state and construction share one resolution.
           const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
           const model = opts.modelBuilder === undefined ? undefined : await opts.modelBuilder(sessionId, meta)
           const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)

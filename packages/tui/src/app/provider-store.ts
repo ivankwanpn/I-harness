@@ -373,17 +373,26 @@ async function settings_setDefault(
   settings: SettingsStoreSurface,
   value: { provider: string; model: string },
 ): Promise<void> {
-  const cur = settings.get()
+  const effective = settings.get().llm
+  const mutationBase = settings.getSectionMutationBase?.("llm")
+  const canonical = isSettingsLlm(mutationBase) ? mutationBase : effective
   await settings.set({
     llm: {
-      ...cur.llm,
+      ...canonical,
       defaultModel: {
         provider: value.provider,
         model: value.model,
-        ...(cur.llm.defaultModel.reasoningEffort !== undefined
-          ? { reasoningEffort: cur.llm.defaultModel.reasoningEffort }
+        ...(canonical.defaultModel.reasoningEffort !== undefined
+          ? { reasoningEffort: canonical.defaultModel.reasoningEffort }
           : {}),
       },
     },
   })
+}
+
+function isSettingsLlm(value: unknown): value is Settings["llm"] {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return record.providers !== null && typeof record.providers === "object" && !Array.isArray(record.providers)
+    && record.defaultModel !== null && typeof record.defaultModel === "object" && !Array.isArray(record.defaultModel)
 }

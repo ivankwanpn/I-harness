@@ -8,6 +8,7 @@ import { join } from "node:path"
 import { afterEach, describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { MockStep } from "@i-harness/llm-mock"
+import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
@@ -43,6 +44,7 @@ function makeService(opts: { sessionId?: string; mockScript?: MockStep[] }): Ses
   return createSessionService({
     workspace: tmp(),
     approveAll: true,
+    modelPolicy: "test-mock",
     ...(opts.mockScript !== undefined ? { mockScript: opts.mockScript } : { mockCycles: true }),
   })
 }
@@ -113,6 +115,109 @@ describe("embedded backend", () => {
   const backends: { close: () => Promise<void> }[] = []
   afterEach(async () => {
     for (const b of backends.splice(0)) await b.close().catch(() => {})
+  })
+
+  it("creates/forks sessions and refreshes per-session model state after selection", async () => {
+    const root = tmp()
+    const seenSelections: Array<{ provider: string; model: string; reasoningEffort?: string } | undefined> = []
+    const model: ModelClient = {
+      async *stream() {
+        yield { type: "text/chunk", text: "ok" }
+        yield { type: "end" }
+      },
+    }
+    const backend = await defaultEmbeddedFactory({
+      workspace: tmp(),
+      prompt: "",
+      storeRoot: root,
+      modelPolicy: "required",
+      modelBindingFor: async (_sessionId, meta) => {
+        const selection = meta?.modelSelection
+        seenSelections.push(selection)
+        const providerId = selection?.provider ?? "fixture"
+        const modelId = selection?.model ?? "default"
+        return {
+          status: "ready",
+          binding: { model, providerId, modelId, label: `${providerId}:${modelId}` },
+        }
+      },
+    })
+    backends.push(backend)
+
+    const initial = (await backend.listSessions())[0]!.id
+    await expect(backend.modelState()).resolves.toEqual({
+      status: "ready",
+      providerId: "fixture",
+      modelId: "default",
+      label: "fixture:default",
+    })
+    await expect(backend.setSessionModel({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      reasoningEffort: "high",
+    })).resolves.toEqual({
+      status: "ready",
+      providerId: "deepseek",
+      modelId: "deepseek-chat",
+      label: "deepseek:deepseek-chat",
+    })
+    expect(seenSelections.at(-1)).toEqual({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      reasoningEffort: "high",
+    })
+
+    await backend.submit("fork source")
+    const forked = await backend.forkSession()
+    expect(forked).not.toBe(initial)
+    expect((await backend.replay(-1)).some((event) => event.type === "user" && event.text === "fork source")).toBe(true)
+
+    const created = await backend.createSession()
+    expect(created).not.toBe(forked)
+    expect(backend.seqCursor()).toBe(-1)
+  })
+
+  it("updates per-session model state for an ephemeral embedded session", async () => {
+    const seenSelections: Array<{ provider: string; model: string; reasoningEffort?: string } | undefined> = []
+    const model: ModelClient = {
+      async *stream() {
+        yield { type: "text/chunk", text: "ok" }
+        yield { type: "end" }
+      },
+    }
+    const backend = await defaultEmbeddedFactory({
+      workspace: tmp(),
+      prompt: "",
+      modelPolicy: "required",
+      modelBindingFor: async (_sessionId, meta) => {
+        const selection = meta?.modelSelection
+        seenSelections.push(selection)
+        const providerId = selection?.provider ?? "fixture"
+        const modelId = selection?.model ?? "default"
+        return {
+          status: "ready",
+          binding: { model, providerId, modelId, label: `${providerId}:${modelId}` },
+        }
+      },
+    })
+    backends.push(backend)
+
+    await expect(backend.setSessionModel({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      reasoningEffort: "high",
+    })).resolves.toEqual({
+      status: "ready",
+      providerId: "deepseek",
+      modelId: "deepseek-chat",
+      label: "deepseek:deepseek-chat",
+    })
+    await backend.submit("use the selected model")
+    expect(seenSelections.at(-1)).toEqual({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      reasoningEffort: "high",
+    })
   })
 
   it("16ms batching: a burst is delivered in one window, in order, with increasing seq", async () => {
@@ -291,7 +396,7 @@ describe("embedded backend", () => {
   })
 
   it("defaultEmbeddedFactory: mock turn + auto-submit of the initial prompt on open", async () => {
-    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff" })
+    const backend = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "kickoff" })
     backends.push(backend)
     const rows = await backend.listSessions()
     expect(rows).toHaveLength(1)
@@ -312,14 +417,14 @@ describe("embedded backend", () => {
   })
   it("durable TUI session survives close and reopen without repeating kickoff", async () => {
     const root = tmp()
-    const first = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff", storeRoot: root })
+    const first = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "kickoff", storeRoot: root })
     const rows = await first.listSessions()
     expect(rows).toHaveLength(1)
     const id = rows[0]!.id
     await first.open(id)
     await first.submit("distinct history")
     await first.close()
-    const second = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff", storeRoot: root, resumeSessionId: id })
+    const second = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "kickoff", storeRoot: root, resumeSessionId: id })
     await second.open(id)
     const restored = await second.replay(-1)
     const resumedRows = await second.listSessions()
@@ -328,14 +433,14 @@ describe("embedded backend", () => {
     expect(restored.some((e) => e.type === "user" && (e as { text: string }).text === "distinct history")).toBe(true)
     await second.submit("after resume")
     await second.close()
-    const third = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "kickoff", storeRoot: root, resumeSessionId: id })
+    const third = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "kickoff", storeRoot: root, resumeSessionId: id })
     const persistedAfterResume = await third.replay(-1)
     expect(persistedAfterResume.some((e) => e.type === "user" && (e as { text: string }).text === "after resume")).toBe(true)
     await third.close()
   })
 
   it("durable TUI factory rejects an unknown resume session", async () => {
-    await expect(defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: tmp(), resumeSessionId: "missing" })).rejects.toThrow()
+    await expect(defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", storeRoot: tmp(), resumeSessionId: "missing" })).rejects.toThrow()
   })
 
   it("isolates resumed session state when opening another durable session", async () => {
@@ -351,7 +456,7 @@ describe("embedded backend", () => {
       { type: "turn/end" },
     ])
     await seed.close()
-    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "session-a" })
+    const backend = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "session-a" })
     await backend.open("session-b")
     const bEvents = await backend.replay(-1)
     expect(bEvents.some((event) => event.type === "user" && (event as { text: string }).text === "A history")).toBe(false)
@@ -417,7 +522,7 @@ describe("embedded backend", () => {
     writeFileSync(join(root, "broken.jsonl"), "{not-json}\n", "utf8")
     const holder = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
     await holder.adoptOwnership("locked")
-    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "good" })
+    const backend = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "good" })
     try {
       const rows = await backend.listSessions()
       expect(rows.map((row) => row.id)).toEqual(expect.arrayContaining(["good", "locked"]))
@@ -434,7 +539,7 @@ describe("embedded backend", () => {
     await seed.create({ sessionId: "session-a" })
     await seed.create({ sessionId: "session-b" })
     await seed.close()
-    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "session-a" })
+    const backend = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: "session-a" })
     const iterator = backend.events()[Symbol.asyncIterator]()
     try {
       let pending: Promise<IteratorResult<TuiEvent>> = iterator.next()
@@ -465,6 +570,7 @@ describe("embedded backend", () => {
     const service = createSessionService({
       workspace: tmp(),
       approveAll: true,
+      modelPolicy: "test-mock",
       sessionFor: async (sessionId) => sessionId === "initial" ? initial : next,
     })
     const backend = createEmbeddedBackend({ service, sessionId: "initial", prompt: "", batchMs: 0 })
@@ -489,9 +595,9 @@ describe("embedded backend", () => {
     const seed = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
     const id = (await seed.create()).id
     await seed.close()
-    const first = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: id })
+    const first = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", storeRoot: root, resumeSessionId: id })
     const secondCoordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
-    await expect(defaultEmbeddedFactory({ workspace: tmp(), prompt: "", coordinator: secondCoordinator, resumeSessionId: id })).rejects.toThrow()
+    await expect(defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", coordinator: secondCoordinator, resumeSessionId: id })).rejects.toThrow()
     await expect(first.submit("original owner remains usable")).resolves.toBeUndefined()
     await first.close(); await secondCoordinator.close()
   })
@@ -523,6 +629,7 @@ describe("embedded backend", () => {
     }
 
     const backend = await defaultEmbeddedFactory({
+      modelPolicy: "test-mock",
       workspace: tmp(),
       prompt: "",
       coordinator,
@@ -545,7 +652,7 @@ describe("embedded backend", () => {
     const id = (await seed.create()).id
     await seed.close()
     const injected = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
-    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", coordinator: injected, resumeSessionId: id })
+    const backend = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", coordinator: injected, resumeSessionId: id })
     await backend.close()
     const fresh = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
     await expect(fresh.adoptOwnership(id)).rejects.toThrow()
@@ -563,6 +670,7 @@ describe("embedded backend", () => {
     await seed.close()
     const injected = createSessionCoordinator(createJsonlBackend(root))
     const backend = await defaultEmbeddedFactory({
+      modelPolicy: "test-mock",
       workspace: tmp(),
       prompt: "",
       coordinator: injected,
@@ -584,7 +692,7 @@ describe("embedded backend", () => {
     const id = (await seed.create()).id
     await seed.close()
     const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
-    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", coordinator, resumeSessionId: id })
+    const backend = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", coordinator, resumeSessionId: id })
     let flushes = 0
     let closes = 0
     const flush = coordinator.flush.bind(coordinator)
@@ -602,7 +710,7 @@ describe("embedded backend", () => {
   it("durable close propagates flush failure and still closes an owned coordinator", async () => {
     const root = tmp()
     const coordinator = createSessionCoordinator(createJsonlBackend(root))
-    const backend = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot: root, coordinator })
+    const backend = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", storeRoot: root, coordinator })
     const originalFlush = coordinator.flush
     coordinator.flush = async () => { throw new Error("flush failed") }
     await expect(backend.close()).rejects.toThrow("flush failed")

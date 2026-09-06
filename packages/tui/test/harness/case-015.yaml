@@ -98,7 +98,7 @@ steps:
         - "◆  Run read data.txt"
         - "data.txt exists"
         - "It says hello."
-        - "mock-model"
+        - "unconfigured"
         - "❯"
   # resize mid-flow while the region is live: fs request → host app.setSize →
   # virtual reflow (xterm does the terminal resize; no ConPTY replay).
@@ -123,7 +123,7 @@ steps:
         - "data.txt exists"
         - "It says hello."
         - "❯ again"
-        - "mock-model"
+        - "unconfigured"
         - "❯"
   - assert-glyph-integrity: {}
   # byte budget: EXACTLY 10 writes = user(commit+region) 2 + system 2 +

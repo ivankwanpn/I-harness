@@ -64,6 +64,7 @@ import {
 } from "../../src/index.ts"
 import type { BackendClient, InputSource, PermissionState, TuiEvent } from "../../src/index.ts"
 import type { BtwState } from "../../src/views/btw-overlay.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -258,6 +259,7 @@ async function main(): Promise<void> {
   // the interaction 3 btw lifecycle + interaction 4 open record live here.
   let btwStateSeq = 0
   const fakeBackend = (appRef: () => TuiApp | undefined): BackendClient => ({
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       await new Promise<void>(() => {}) // never yields — pump stays alive
     },

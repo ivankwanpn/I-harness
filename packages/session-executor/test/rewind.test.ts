@@ -93,7 +93,7 @@ describe("assembly rewind wiring", () => {
   it("no rewind handle when rewindStoreRoot is absent (off by default)", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "i-harness-rewind-ws2-"))
     cleanup.push(workspace)
-    const assembly = await createSessionAssembly({ workspace, sessionId: "n1" })
+    const assembly = await createSessionAssembly({ workspace, sessionId: "n1", modelPolicy: "test-mock" })
     try {
       expect(assembly.rewind).toBeUndefined()
     } finally {
@@ -105,7 +105,7 @@ describe("assembly rewind wiring", () => {
     const workspace = mkdtempSync(join(tmpdir(), "i-harness-rewind-ws3-"))
     const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-store3-"))
     cleanup.push(workspace, storeRoot)
-    const assembly = await createSessionAssembly({ workspace, rewindStoreRoot: storeRoot })
+    const assembly = await createSessionAssembly({ workspace, rewindStoreRoot: storeRoot, modelPolicy: "test-mock" })
     try {
       expect(assembly.rewind).toBeUndefined()
     } finally {

@@ -20,6 +20,9 @@ import {
   type RewindPlanResponse,
   type RewindExecuteResponse,
   type RewindMode,
+  type SessionIdResult,
+  type SessionModelSelection,
+  type SessionModelState,
 } from "./protocol.ts"
 
 export interface ServerInfo {
@@ -164,6 +167,29 @@ export class HarnessClient {
   /** High-level per-session handle. */
   session(sessionId: string): HarnessSession {
     return new HarnessSession(this, sessionId)
+  }
+
+  async initialize(): Promise<ServerInfo> {
+    return await this.request("initialize", {}) as ServerInfo
+  }
+
+  async createSession(): Promise<SessionIdResult> {
+    return await this.request("session/create", {}) as SessionIdResult
+  }
+
+  async forkSession(sessionId: string): Promise<SessionIdResult> {
+    return await this.request("session/fork", { sessionId }) as SessionIdResult
+  }
+
+  async modelState(sessionId: string): Promise<SessionModelState> {
+    return await this.request("session/model/state", { sessionId }) as SessionModelState
+  }
+
+  async setSessionModel(
+    sessionId: string,
+    selection: SessionModelSelection,
+  ): Promise<SessionModelState> {
+    return await this.request("session/model/set", { sessionId, selection }) as SessionModelState
   }
 
   /** High-level one-shot or continued run: streams the session events and
@@ -315,6 +341,18 @@ export class HarnessSession {
 
   status(): Promise<QueueState> {
     return this.client.status(this.sessionId)
+  }
+
+  fork(): Promise<SessionIdResult> {
+    return this.client.forkSession(this.sessionId)
+  }
+
+  modelState(): Promise<SessionModelState> {
+    return this.client.modelState(this.sessionId)
+  }
+
+  setModel(selection: SessionModelSelection): Promise<SessionModelState> {
+    return this.client.setSessionModel(this.sessionId, selection)
   }
 
   /** M41a v1: history walk for this session (afterSeq exclusive, limit paging). */

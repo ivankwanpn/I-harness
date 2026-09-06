@@ -166,6 +166,16 @@ describe("attachApproval — BackendClient extension (contracts.ts untouched)", 
     const backend: BackendClient = {
       listSessions: async () => { calls.push("listSessions"); return [] },
       open: async () => { calls.push("open") },
+      createSession: async () => { calls.push("createSession"); return "created" },
+      forkSession: async () => { calls.push("forkSession"); return "forked" },
+      modelState: async () => {
+        calls.push("modelState")
+        return { status: "unconfigured", reason: "No model configured" }
+      },
+      setSessionModel: async () => {
+        calls.push("setSessionModel")
+        return { status: "ready", providerId: "p", modelId: "m", label: "p:m" }
+      },
       submit: async () => { calls.push("submit") },
       steer: async () => { calls.push("steer") },
       cancel: async () => { calls.push("cancel") },
@@ -184,7 +194,26 @@ describe("attachApproval — BackendClient extension (contracts.ts untouched)", 
     const client = attachApproval(backend, bridge)
     await client.submit("hi")
     await client.open("s1")
-    expect(calls).toEqual(["submit", "open"])
+    await expect(client.createSession()).resolves.toBe("created")
+    await expect(client.forkSession()).resolves.toBe("forked")
+    await expect(client.modelState()).resolves.toEqual({
+      status: "unconfigured",
+      reason: "No model configured",
+    })
+    await expect(client.setSessionModel({ provider: "p", model: "m" })).resolves.toEqual({
+      status: "ready",
+      providerId: "p",
+      modelId: "m",
+      label: "p:m",
+    })
+    expect(calls).toEqual([
+      "submit",
+      "open",
+      "createSession",
+      "forkSession",
+      "modelState",
+      "setSessionModel",
+    ])
     await client.answerApproval("a1", { approved: true })
     expect(calls).toContain("answerApproval")
   })

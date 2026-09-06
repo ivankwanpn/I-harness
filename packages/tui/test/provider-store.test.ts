@@ -25,6 +25,7 @@ interface FakeStore {
 
 function fakeSettings(initial: Partial<Settings> = {}): FakeStore {
   let current = normalizeSettings(initial)
+  let canonicalLlm = normalizeSettings({ llm: initial.llm }).llm
   const setCalls: Partial<Settings>[] = []
   const surface: SettingsStoreSurface = {
     get: () => current,
@@ -32,14 +33,17 @@ function fakeSettings(initial: Partial<Settings> = {}): FakeStore {
     load: async () => current,
     set: async (patch) => {
       setCalls.push(patch)
-      current = normalizeSettings({ ...current, ...patch })
+      if (patch.llm !== undefined) canonicalLlm = normalizeSettings({ llm: patch.llm }).llm
+      current = normalizeSettings({ ...current, ...patch, llm: canonicalLlm })
       return current
     },
     reset: async () => {
       current = normalizeSettings(undefined)
+      canonicalLlm = current.llm
       return current
     },
     getSectionRevision: () => 0,
+    getSectionMutationBase: (name) => name === "llm" ? canonicalLlm : current.onboarding,
   }
   return { surface, get: () => current, setCalls }
 }
@@ -271,14 +275,20 @@ describe("ProviderStore — discovery (injected fetch)", () => {
     expect(parseModelsBody(null)).toBeUndefined()
   })
 
-  it("setDefaultModel: (no override) clears; a model id pins to the ACTIVE provider", async () => {
+  it("setDefaultModel writes canonical selection without promoting legacy providers", async () => {
     const { store, settings } = makeStore()
     await store.upsert(DEEPSEEK)
     await store.setActive("deepseek")
     await store.setDefaultModel("deepseek-chat")
     expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
     await store.setDefaultModel("")
-    expect(settings.get().llm.defaultModel).toEqual({ provider: "", model: "" })
+    expect(settings.surface.getSectionMutationBase?.("llm")).toEqual({
+      providers: {},
+      defaultModel: { provider: "", model: "" },
+    })
+    // The read view still projects the legacy active provider during the
+    // transition, but an empty model remains an unconfigured selection.
+    expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "" })
     // a provider-less store rejects (the honest guard, never a partial pin)
     const bare = makeStore()
     await expect(bare.store.setDefaultModel("x")).rejects.toThrow(/no active provider/)

@@ -19,7 +19,13 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { MockStep } from "@i-harness/llm-mock"
-import { createSessionService, type ReasoningEffort, type SessionService } from "@i-harness/session-executor"
+import {
+  createSessionService,
+  type ReasoningEffort,
+  type SessionService,
+  type SessionServiceOptions,
+} from "@i-harness/session-executor"
+import { createProviderRuntime, type ProviderRuntime } from "@i-harness/provider-runtime"
 import {
   ApprovalMuxBridge,
   QuestionMuxBridge,
@@ -43,7 +49,6 @@ import {
 import { JobKillUnknownJobError } from "@i-harness/jobs"
 import {
   createProviderRegistry,
-  buildWireClient,
   resolveEffectiveModelContext,
   type ProviderRegistry,
   type ProviderProfile,
@@ -51,16 +56,16 @@ import {
 import {
   SettingsStore,
   SETTINGS_DEFAULTS,
-  resolveProviderProtocol,
   resolveSettingsPath,
   type SettingsProviderConfig,
   type SettingsSandboxMode,
   type SettingsTheme,
 } from "@i-harness/settings"
-import { createCredentialStore } from "@i-harness/credentials"
+import { createCredentialStore, type CredentialStore } from "@i-harness/credentials"
 import { createImageAttachmentStore, type ImageAttachmentStore } from "@i-harness/attachment"
 import { createWorkspaceRegistry } from "@i-harness/workspace"
 import { registerCommand, listCommands, parseCommandLine, runCommand } from "@i-harness/interaction"
+import { loadProviderRuntime } from "./provider-runtime.ts"
 
 export const DEFAULT_WEB_PORT = 4310
 
@@ -95,9 +100,9 @@ export function parsePort(raw: string | undefined, fallback = DEFAULT_WEB_PORT):
 export interface WebServerOptions {
   port: number
   workspace: string
-  /** Explicit model client. Absent → the resolution chain, then the mock. */
+  /** Explicit model client. Absent uses the canonical provider runtime. */
   model?: ModelClient
-  /** Mock script used when no real model resolves. */
+  /** Explicit test-only mock script. */
   mockScript?: MockStep[]
   /** Explicit settings store. Absent → `~/.i-harness/settings.json` (dsh parity). */
   settings?: SettingsStore
@@ -109,6 +114,9 @@ export interface WebServerOptions {
   /** Explicit provider registry. Absent → a FRESH EMPTY registry (amendment:
    * no built-in profiles — every provider is settings-managed). */
   providerRegistry?: ProviderRegistry
+  /** Injectable production runtime. Absent uses the same canonical
+   * settings/credentials composition as run/sdk/acp. */
+  providerRuntime?: ProviderRuntime
   /** Explicit plugin registry + its root (M40 A2). Absent → a fresh one rooted
    * at `<workspace>/.i-harness/plugins` — the host's /api/plugins routes serve
    * over it (catalog + runtime views + source/install/enable mutations). */
@@ -127,7 +135,7 @@ export interface WebServer {
 }
 
 // ── model chain (pure; ported from the abandoned branch's web.ts) ───────────
-interface ModelResolution { spec: string; source: "session" | "default" | "legacy" | "mock" }
+interface ModelResolution { spec: string; source: "session" | "default" | "legacy" | "unconfigured" }
 
 export function resolveModelSpec(opts: WebServerOptions, meta?: SessionMeta): ModelResolution {
   const selection = meta?.modelSelection
@@ -150,31 +158,7 @@ export function resolveModelSpec(opts: WebServerOptions, meta?: SessionMeta): Mo
   if (legacy !== undefined && legacy !== "") {
     return { spec: legacy, source: "legacy" }
   }
-  return { spec: "", source: "mock" }
-}
-
-export function buildAdapterForRoute(
-  route: string,
-  user: SettingsProviderConfig | undefined,
-  profile: ProviderProfile | undefined,
-  model: string | undefined,
-  apiKey: string,
-): ModelClient | undefined {
-  const protocol = resolveProviderProtocol(route, user)
-  const resolvedModel = model ?? profile?.defaultModel ?? "gpt-4o"
-  const client = buildWireClient(protocol, {
-    model: resolvedModel,
-    apiKey,
-    baseUrl: user?.baseURL ?? profile?.baseUrl,
-    ...(profile?.inputModalities !== undefined ? { inputModalities: profile.inputModalities } : {}),
-  })
-  if (client === undefined) {
-    console.warn(
-      `[i-harness] model "${route}:${resolvedModel}" unresolved — unknown protocol "${protocol}", falling back to the mock`,
-    )
-    return undefined
-  }
-  return client
+  return { spec: "", source: "unconfigured" }
 }
 
 export function effectiveProviderProfile(
@@ -219,41 +203,16 @@ async function resolveModelProvider(
   return { ok: false, error: `unknown model provider: ${providerName}` }
 }
 
-/** The tier chain: session.meta.modelSelection > llm.defaultModel > legacy
- * model > mock. An unresolved any-tier spec warns and falls back to undefined
- * (the mock — the web server never REQUIRES an API key). */
-async function buildModelFor(opts: WebServerOptions, meta?: SessionMeta): Promise<ModelClient | undefined> {
-  if (opts.model !== undefined) return opts.model
-  const { spec, source } = resolveModelSpec(opts, meta)
-  if (spec === "") return undefined
-  const [providerName] = spec.split(":")
-  const registry = opts.providerRegistry
-  if (registry === undefined) return undefined
-  const userConfig = opts.settings?.get().llm.providers[providerName]
-  const check = await resolveModelProvider(spec, registry, userConfig)
-  if (!check.ok) {
-    console.warn(
-      `[i-harness] model "${spec}" (${source}) unresolved — 尚未配置模型（falling back to the mock）: ${check.error}`,
-    )
-    return undefined
-  }
-  const baseProfile = registry.get(providerName)
-  const profile = baseProfile !== undefined && userConfig !== undefined
-    ? effectiveProviderProfile(baseProfile, userConfig)
-    : baseProfile
-  const envName = userConfig?.apiKeyEnv ?? profile?.apiKeyEnv
-  const apiKey = envName !== undefined
-    ? opts.credentials?.resolve?.(envName) ?? process.env[envName]
-    : undefined
-  if (apiKey === undefined || apiKey === "") return undefined
-  try {
-    return buildAdapterForRoute(providerName, userConfig, profile, spec.split(":")[1], apiKey)
-  } catch (error) {
-    console.warn(
-      `[i-harness] model "${spec}" (${source}) unresolved — falling back to the mock: `
-      + (error instanceof Error ? error.message : String(error)),
-    )
-    return undefined
+function providerModelBindingFor(runtime: ProviderRuntime): SessionServiceOptions["modelBindingFor"] {
+  return async (_sessionId, meta) => {
+    const state = await runtime.resolveModel({
+      ...(meta?.modelSelection !== undefined
+        ? { sessionSelection: meta.modelSelection }
+        : {}),
+    })
+    if (state.status !== "ready") return state
+    const { client, ...binding } = state.binding
+    return { status: "ready", binding: { model: client, ...binding } }
   }
 }
 
@@ -262,7 +221,12 @@ const THEME_VALUES: readonly SettingsTheme[] = ["light", "dark", "system"]
 const SANDBOX_VALUES: readonly SettingsSandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
 const MODEL_SPEC_RE = /^[a-z][a-z0-9_-]*:[a-zA-Z0-9._-]+$/
 
-function registerDefaultCommands(target: PluginContext, settings: SettingsStore, registry: ProviderRegistry): void {
+function registerDefaultCommands(
+  target: PluginContext,
+  settings: SettingsStore,
+  registry: ProviderRegistry,
+  providerRuntime: ProviderRuntime,
+): void {
   registerCommand(target, {
     name: "theme",
     description: "切换主题：/theme light|dark|system",
@@ -289,9 +253,10 @@ function registerDefaultCommands(target: PluginContext, settings: SettingsStore,
     execute: async (input) => {
       const spec = input.trim()
       if (!MODEL_SPEC_RE.test(spec)) throw new Error("用法: /model provider:model（请先到设置添加提供方）")
-      const check = await resolveModelProvider(spec, registry, settings.get().llm.providers[spec.split(":")[0]!])
+      const [provider, model] = spec.split(":") as [string, string]
+      const check = await resolveModelProvider(spec, registry, settings.get().llm.providers[provider])
       if (!check.ok) throw new Error(`/model 未生效：请先到设置添加提供方（${check.error}）`)
-      await settings.set({ model: spec })
+      await providerRuntime.setDefaultModel({ provider, model })
       return `默认模型已设为 ${spec}（新建会话生效）`
     },
   })
@@ -378,7 +343,7 @@ function appendCommandEvents(executor: SessionService, sessionId: string, name: 
  * (user settings model row > profile.modelContexts[modelId] >
  * profile.contextWindow > undefined). Resolved against the SESSION tier
  * (meta.modelSelection) when present — the web path registers per session.
- * Unknown (mock / no registry entry) → undefined → get_context_remaining
+ * Unknown (unconfigured / no registry entry) → undefined → get_context_remaining
  * fails closed (not registered). */
 export function sessionContextWindow(opts: WebServerOptions, meta?: SessionMeta): number | undefined {
   const { spec } = resolveModelSpec(opts, meta)
@@ -404,17 +369,40 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
   const coordinator: SessionCoordinator = createSessionCoordinator(createJsonlBackend(opts.workspace))
   // E-region seams for the host (optional pieces — the routes 404 per absent
   // piece, so an API-only embedder stays unchanged).
-  const settings = opts.settings ?? new SettingsStore()
-  await settings.load()
-  const credentials = opts.credentials ?? createCredentialStore(
-    join(dirname(resolveSettingsPath()), "credentials.json"),
-  )
   const providerRegistry = opts.providerRegistry ?? createProviderRegistry()
+  let settings: SettingsStore
+  let credentials: CredentialStoreFace
+  let providerRuntime: ProviderRuntime
+  if (opts.settings === undefined
+    && opts.credentials === undefined
+    && opts.providerRuntime === undefined) {
+    const loaded = await loadProviderRuntime({ registry: providerRegistry })
+    settings = loaded.settings
+    credentials = loaded.credentials
+    providerRuntime = loaded.runtime
+  } else {
+    settings = opts.settings ?? new SettingsStore()
+    await settings.load()
+    credentials = opts.credentials ?? createCredentialStore(
+      join(dirname(resolveSettingsPath()), "credentials.json"),
+    )
+    const runtimeCredentials: CredentialStore = {
+      describe: (refs) => credentials.describe(refs),
+      set: (ref, value) => credentials.set(ref, value),
+      unset: (ref) => credentials.unset(ref),
+      resolve: (ref) => credentials.resolve?.(ref),
+    }
+    providerRuntime = opts.providerRuntime ?? createProviderRuntime({
+      settings,
+      credentials: runtimeCredentials,
+      registry: providerRegistry,
+    })
+  }
   const attachments = opts.attachments ?? createImageAttachmentStore({ workspaceDir: opts.workspace })
   const workspaceRegistry = createWorkspaceRegistry(coordinator)
 
   const hostCtx: PluginContext = createContext()
-  registerDefaultCommands(hostCtx, settings, providerRegistry)
+  registerDefaultCommands(hostCtx, settings, providerRegistry, providerRuntime)
   // M40 A2: plugin seam — the default root sits under the workspace
   // (attachments/workspace convention); the face composes the registry's
   // catalog + runtime views for the host's /api/plugins routes.
@@ -433,8 +421,12 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
   const executor = createSessionService({
     workspace: opts.workspace,
     coordinator,
+    modelPolicy: opts.mockScript !== undefined ? "test-mock" : "required",
     ...(opts.model !== undefined ? { model: opts.model } : {}),
     ...(opts.mockScript !== undefined ? { mockScript: opts.mockScript } : {}),
+    ...(opts.model === undefined && opts.mockScript === undefined
+      ? { modelBindingFor: providerModelBindingFor(providerRuntime) }
+      : {}),
     // The web path: job/status events mirror into the live session (the jobs
     // surface folds the durable doc; the mux streams carry the events).
     jobStatusEvents: true,
@@ -451,7 +443,6 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     reasoningEffortFor: (_sessionId, meta) =>
       meta?.modelSelection?.reasoningEffort as ReasoningEffort | undefined,
     loadMeta: async (id) => (await coordinator.profile(id)).meta,
-    modelBuilder: async (_sessionId, meta) => buildModelFor(opts, meta),
   })
   const commandBridge: CommandBridge = {
     list: () => listCommands(hostCtx),

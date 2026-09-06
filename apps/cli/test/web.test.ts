@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { SettingsStore, resolveSettingsPath, type SettingsProviderConfig } from "@i-harness/settings"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createProviderRegistry, resolveModelContext, type ProviderProfile } from "@i-harness/provider"
@@ -10,6 +10,7 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
+import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { parsePort, createWebServer, defaultContextWindow, effectiveProviderProfile, resolveModelSpec, sessionContextWindow, type WebServerOptions } from "../src/web.ts"
 import { pickWebPort } from "../src/index.ts"
 
@@ -66,9 +67,53 @@ describe("web composition (R-C1)", () => {
     }
   }, 60_000)
 
-  it("resolves the model tier chain: session selection > default > legacy > mock", async () => {
+  it("runs web sessions through an injected provider runtime binding", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-provider-runtime-"))
+    const requests: unknown[] = []
+    const model: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "runtime response" }
+        yield { type: "end" }
+      },
+    }
+    const resolveModel = vi.fn(async () => ({
+      status: "ready" as const,
+      binding: {
+        client: model,
+        providerId: "fixture",
+        modelId: "fixture-model",
+        label: "fixture:fixture-model",
+      },
+    }))
+    const providerRuntime = { resolveModel } as unknown as ProviderRuntime
+    const server = await createWebServer(options(workspace, { providerRuntime }))
+    try {
+      const created = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
+        method: "POST",
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      })
+      const { id } = await created.json() as { id: string }
+      await server.executor.submit(id, "hello from web", new AbortController().signal)
+      expect(resolveModel).toHaveBeenCalledWith({})
+      expect(requests).toHaveLength(1)
+      expect(JSON.stringify(requests[0])).toContain("hello from web")
+      await expect(server.executor.modelState(id)).resolves.toEqual({
+        status: "ready",
+        providerId: "fixture",
+        modelId: "fixture-model",
+        label: "fixture:fixture-model",
+      })
+    } finally {
+      await server.close()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it("resolves the model tier chain: session selection > default > legacy > unconfigured", async () => {
     const opts = options(process.cwd())
-    expect(resolveModelSpec(opts).source).toBe("mock")
+    expect(resolveModelSpec(opts).source).toBe("unconfigured")
     const settings = opts.settings!
     await settings.set({ model: "openai:gpt-4o" })
     expect(resolveModelSpec(opts)).toEqual({ spec: "openai:gpt-4o", source: "legacy" })
@@ -85,7 +130,7 @@ describe("web composition (R-C1)", () => {
       contextWindow: 96_000, modelContexts: { small: { contextWindow: 200_000 } }, models: [], defaultModel: "small",
     })
     const opts = options(process.cwd(), { providerRegistry: registry })
-    expect(defaultContextWindow(opts)).toBeUndefined() // mock default → fail-closed (not registered)
+    expect(defaultContextWindow(opts)).toBeUndefined() // unconfigured default → fail-closed (not registered)
     await opts.settings!.set({ model: "acme:small" })
     expect(defaultContextWindow(opts)).toBe(200_000) // per-model override wins
     await opts.settings!.set({ model: "acme:other" })
@@ -244,6 +289,7 @@ describe("web composition (R-C1)", () => {
     const pluginsRoot = join(workspace, ".i-harness", "plugins")
     const server = await createWebServer(options(workspace, {
       pluginRegistry: { registry: new PluginRegistry({ root: pluginsRoot }), root: pluginsRoot },
+      mockScript: [{ role: "assistant", text: "fixture" }],
     }))
     try {
       const post = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, { method: "POST", body: "{}", headers: { "content-type": "application/json" } })

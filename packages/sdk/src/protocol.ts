@@ -123,6 +123,25 @@
  *
  * v1/v0 clients are unaffected: every pre-v1.1 request still answers per the
  * v0/v1 shapes (each appendix is additive-only, forever).
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * Task 4 addendum — M49, 2026-09-06 (ADDITIVE-ONLY).
+ *
+ * PROTOCOL_VERSION remains 2. Hosts advertise only the operations they wire:
+ *
+ *   "session-create": ["1"]
+ *     session/create {} → { sessionId }
+ *   "session-fork": ["1"]
+ *     session/fork { sessionId } → { sessionId }
+ *   "session-model": ["1"]
+ *     session/model/state { sessionId } → SessionModelState
+ *     session/model/set { sessionId, selection } → SessionModelState
+ *
+ * SessionModelState is serialization-only: it contains status, reason, ids,
+ * and label, never credentials or a runtime client. Model changes reject an
+ * active/queued session, persist the selection, invalidate the live assembly,
+ * and resolve a fresh state. Unknown sessions follow the v1 history convention
+ * (-32602 with an explicit not-found message).
  */
 
 import { createInterface, type Interface } from "node:readline"
@@ -192,6 +211,26 @@ export interface SessionListResult {
    * fabricated empty list being read as "no sessions exist". */
   listingUnavailable?: boolean
 }
+
+/** Additive session/create and session/fork result. */
+export interface SessionIdResult {
+  sessionId: string
+}
+
+/** Public SDK selection shape. Kept structurally identical to the durable
+ * SessionMeta field without coupling the wire contract to persistence. */
+export interface SessionModelSelection {
+  provider: string
+  model: string
+  reasoningEffort?: string
+}
+
+/** Serializable per-session model state. Runtime clients and credentials are
+ * deliberately absent from every branch. */
+export type SessionModelState =
+  | { status: "unconfigured"; reason: string }
+  | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
+  | { status: "ready"; providerId: string; modelId: string; label: string }
 
 // ── M41b v1.1: session/cancel + session/rewind/* wire types ─────────────────
 // All shapes below STRUCTURALLY MIRROR packages/rewind's types (the wire can't

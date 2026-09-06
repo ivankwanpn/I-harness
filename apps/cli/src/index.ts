@@ -7,12 +7,13 @@ import { ndJsonStream } from "@agentclientprotocol/sdk"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator, forkSession } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
-import type { SessionAssembly } from "@i-harness/session-executor"
+import type { SessionAssembly, SessionServiceOptions } from "@i-harness/session-executor"
+import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
@@ -21,6 +22,7 @@ import { parsePort, runWebServer } from "./web.ts"
 import type { WebServerOptions } from "./web.ts"
 import { parseFlags, runTui } from "@i-harness/tui-app"
 import { CLI_VERSION } from "./web.ts"
+import { loadProviderRuntime } from "./provider-runtime.ts"
 
 const USAGE =
   "usage: i-harness [<run|web|sdk|acp|tui> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
@@ -61,6 +63,19 @@ export function parseModel(modelSpec: string, apiKey: string): ModelClient {
   const profile = reg.get(provider ?? "")
   if (!profile) throw new Error(`unknown model provider: ${provider}`)
   return buildModelClient(profile, model)
+}
+
+function providerModelBindingFor(runtime: ProviderRuntime): SessionServiceOptions["modelBindingFor"] {
+  return async (_sessionId, meta) => {
+    const state = await runtime.resolveModel({
+      ...(meta?.modelSelection !== undefined
+        ? { sessionSelection: meta.modelSelection }
+        : {}),
+    })
+    if (state.status !== "ready") return state
+    const { client, ...binding } = state.binding
+    return { status: "ready", binding: { model: client, ...binding } }
+  }
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -215,7 +230,11 @@ export async function main(argv: string[]): Promise<number> {
     return Promise.resolve(1)
   }
 
-  const opts: HeadlessOptions = { workspace: process.cwd(), approveAll: yes }
+  const opts: HeadlessOptions = {
+    workspace: process.cwd(),
+    approveAll: yes,
+    modelPolicy: "required",
+  }
   if (model) opts.model = model
   if (telemetry) opts.telemetry = "jsonl"
   if (coordinator) {
@@ -248,8 +267,11 @@ async function runSdkCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
+  const { runtime } = await loadProviderRuntime()
   const service = createSessionService({
     workspace: process.cwd(),
+    modelPolicy: "required",
+    modelBindingFor: providerModelBindingFor(runtime),
     ...(coordinator !== undefined ? { coordinator } : {}),
     ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
@@ -260,13 +282,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
     ...(storeRoot !== undefined ? { rewindStoreRoot: storeRoot } : {}),
     ...(coordinator !== undefined
       ? {
-          loadMeta: async (id: string) => {
-            try {
-              return (await coordinator.profile(id)).meta
-            } catch {
-              return undefined // unknown session: the sdk server creates it first
-            }
-          },
+          loadMeta: async (id: string) => (await coordinator.profile(id)).meta,
         }
       : {}),
   })
@@ -317,6 +333,29 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const rl = createInterface({ input: process.stdin, terminal: false })
   const server = createSdkServer(service, {
     coordinator,
+    ...(coordinator !== undefined
+      ? {
+          createSession: async () => {
+            const { id } = await coordinator.create()
+            return { sessionId: id }
+          },
+          forkSession: async (sessionId: string) => {
+            await coordinator.flush(sessionId)
+            const result = await forkSession(coordinator, sessionId)
+            return { sessionId: result.sessionId }
+          },
+          modelState: async (sessionId: string) => {
+            const known = service.hasAssembly(sessionId) || (await coordinator.list()).includes(sessionId)
+            if (!known) throw new Error(`session not found: ${sessionId}`)
+            return service.modelState(sessionId)
+          },
+          setSessionModel: async (sessionId: string, selection: import("@i-harness/session-persistence").SessionModelSelection) => {
+            const known = service.hasAssembly(sessionId) || (await coordinator.list()).includes(sessionId)
+            if (!known) throw new Error(`session not found: ${sessionId}`)
+            await coordinator.updateMeta(sessionId, { modelSelection: selection })
+          },
+        }
+      : {}),
     // M41b v1.1: the rewind seam (wire-level "session-rewind" capability).
     // Present only with --session-dir (the assembly-side rewindStoreRoot chain
     // above); without it, every rewind method answers "rewind not enabled".
@@ -376,15 +415,13 @@ async function runSdkCommand(args: string[]): Promise<number> {
     onShutdown: () => rl.close(),
   })
 
-  let tornDown = false
-  const teardown = async (): Promise<void> => {
-    if (tornDown) return
-    tornDown = true
+  let teardownPromise: Promise<void> | undefined
+  const teardown = (): Promise<void> => teardownPromise ??= (async () => {
     rl.close()
     await server.close()
     await service.close()
     if (coordinator !== undefined) await coordinator.close()
-  }
+  })()
   rl.on("close", () => { void teardown() })
   const onSignal = (): void => { void teardown() }
   process.on("SIGINT", onSignal)
@@ -424,20 +461,17 @@ async function runAcpCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
+  const { runtime } = await loadProviderRuntime()
   const service = createSessionService({
     workspace: process.cwd(),
+    modelPolicy: "required",
+    modelBindingFor: providerModelBindingFor(runtime),
     ...(coordinator !== undefined ? { coordinator } : {}),
     ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
     ...(coordinator !== undefined
       ? {
-          loadMeta: async (id: string) => {
-            try {
-              return (await coordinator.profile(id)).meta
-            } catch {
-              return undefined // unknown session: session/new is the ACP path to create it
-            }
-          },
+          loadMeta: async (id: string) => (await coordinator.profile(id)).meta,
         }
       : {}),
   })
@@ -457,14 +491,12 @@ async function runAcpCommand(args: string[]): Promise<number> {
   )
   const connection = server.connect(stream)
 
-  let tornDown = false
-  const teardown = async (): Promise<void> => {
-    if (tornDown) return
-    tornDown = true
+  let teardownPromise: Promise<void> | undefined
+  const teardown = (): Promise<void> => teardownPromise ??= (async () => {
     connection.close()
     await service.close()
     if (coordinator !== undefined) await coordinator.close()
-  }
+  })()
   const onSignal = (): void => { void teardown() }
   process.on("SIGINT", onSignal)
   process.on("SIGTERM", onSignal)
@@ -493,5 +525,11 @@ async function runAcpCommand(args: string[]): Promise<number> {
 // comparing import.meta.url (a URL) to pathToFileURL(argv[1]).href holds on
 // Windows and POSIX alike.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main(process.argv).then((code) => process.exit(code))
+  main(process.argv).then(
+    (code) => { process.exitCode = code },
+    (error) => {
+      console.error(error instanceof Error ? error.message : String(error))
+      process.exitCode = 1
+    },
+  )
 }

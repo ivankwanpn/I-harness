@@ -12,6 +12,7 @@ import { createScrollbackEngine } from "../src/index.ts"
 import type { BackendClient, TuiEvent } from "../src/index.ts"
 import { dispatchKey } from "../src/app/keys.ts"
 import type { KeymapState } from "../src/app/keys.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 
 const cap: TerminalCapabilityContext = {
   ...createUnknownCapabilities(),
@@ -27,6 +28,7 @@ const make = (cols: number, rows: number): Renderer => createRenderer({ cols, ro
 function stubBackend(): BackendClient {
   const events: TuiEvent[] = []
   return {
+    ...unsupportedSessionManagement,
     listSessions: async () => [],
     open: async () => {},
     submit: async () => {},

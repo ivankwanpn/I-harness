@@ -106,7 +106,7 @@ steps:
         - " ┃│                                        │"
         - " ┃│                                        │"
         - " ┃│                                        │"
-        - " ┃╰ mock-model─────────────────────────────╯"
+        - " ┃╰ unconfigured───────────────────────────╯"
         - ""
         - "  Enter: submit  │  Ctrl+Enter: interject  │"
   - assert-glyph-integrity: {}

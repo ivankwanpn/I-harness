@@ -44,7 +44,7 @@ async function withHost(
   const root = await mkdtemp(join(tmpdir(), "i-harness-web-host-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
   const executor = createSessionService({
-    workspace: process.cwd(), approveAll: true, mockCycles: true, coordinator,
+    workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true, coordinator,
     ...(serviceOptions.mockScript !== undefined ? { mockScript: serviceOptions.mockScript } : {}),
   })
   const host = createWebHost({ port: 0, executor, coordinator, ...options })

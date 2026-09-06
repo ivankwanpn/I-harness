@@ -41,7 +41,14 @@ import {
 } from "@i-harness/core-session"
 import type { ImageAttachmentRef, ImageAttachmentStore } from "@i-harness/attachment"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { SessionCoordinator, SessionMeta, SessionModelSelection } from "@i-harness/session-persistence"
+import {
+  SessionForkUnavailableError,
+  forkSession,
+  type ForkSessionResult,
+  type SessionCoordinator,
+  type SessionMeta,
+  type SessionModelSelection,
+} from "@i-harness/session-persistence"
 import type { SessionQuery } from "@i-harness/session-query"
 import {
   WorkspaceBadRequestError,
@@ -1212,56 +1219,6 @@ export function createWebHost(opts: WebHostOptions): WebHost {
         }
         childTitle = normalized.title
       }
-      let source: Session
-      try {
-        source = (await coordinator.load(sourceId)).session
-      } catch (error) {
-        if (isUnknownSessionError(error)) {
-          res.writeHead(404, { "content-type": "application/json" })
-          res.end(JSON.stringify({ error: `session not found: ${sourceId}` }))
-          return
-        }
-        throw error
-      }
-      // m26's load() returns the session only — the header metadata (fork
-      // title inheritance) reads through profile() (C5).
-      const sourceTitle = (await coordinator.profile(sourceId)).meta.title
-      const events = source.events
-      // Seq == index for our persisted logs (append() stamps seq =
-      // events.length; jsonl is append-only and dense), so the boundary can be
-      // located by index; the events[].seq fallback keeps legacy seq-less rows
-      // anchored to their position.
-      const atSeq = body.atSeq as number | undefined
-      let boundaryIdx = -1
-      if (atSeq === undefined) {
-        for (let i = events.length - 1; i >= 0; i--) {
-          if (events[i]!.type === "turn/end") { boundaryIdx = i; break }
-        }
-      } else {
-        for (let i = 0; i < events.length; i++) {
-          if (events[i]!.type === "turn/end" && (events[i]!.seq ?? i) >= atSeq) { boundaryIdx = i; break }
-        }
-        if (boundaryIdx === -1 && atSeq > events.length - 1) {
-          for (let i = events.length - 1; i >= 0; i--) {
-            if (events[i]!.type === "turn/end") { boundaryIdx = i; break }
-          }
-        }
-      }
-      if (boundaryIdx === -1) {
-        // DSH fork-unavailable (409): the failure mode is NOT a 404 — the
-        // session exists; its log has no completed turn to fork from.
-        res.writeHead(409, { "content-type": "application/json" })
-        res.end(JSON.stringify({
-          error: atSeq !== undefined && atSeq <= events.length - 1
-            ? `session "${sourceId}" has not completed the turn containing event ${String(atSeq)}`
-            : `session "${sourceId}" has no completed turn to fork from`,
-          code: "fork-unavailable",
-        }))
-        return
-      }
-      let cut = boundaryIdx + 1
-      while (cut < events.length && events[cut]!.type !== "turn/start") cut++
-      const prefix = events.slice(0, cut)
       let childWorkspaceId: string | undefined
       if (workspaceRegistry !== undefined) {
         if (typeof body.workspaceId === "string" && body.workspaceId !== "") {
@@ -1281,14 +1238,27 @@ export function createWebHost(opts: WebHostOptions): WebHost {
           }
         }
       }
-      const titleForChild = childTitle ?? sourceTitle
-      const { id: childId } = await coordinator.create({
-        ...(titleForChild !== undefined ? { title: titleForChild } : {}),
-        ...(childWorkspaceId !== undefined ? { workspaceId: childWorkspaceId } : {}),
-        parentSession: sourceId,
-        seedLength: cut,
-      })
-      if (prefix.length > 0) await coordinator.append(childId, prefix)
+      let forked: ForkSessionResult
+      try {
+        forked = await forkSession(coordinator, sourceId, {
+          ...(body.atSeq !== undefined ? { atSeq: body.atSeq as number } : {}),
+          ...(childTitle !== undefined ? { title: childTitle } : {}),
+          ...(childWorkspaceId !== undefined ? { workspaceId: childWorkspaceId } : {}),
+        })
+      } catch (error) {
+        if (isUnknownSessionError(error)) {
+          res.writeHead(404, { "content-type": "application/json" })
+          res.end(JSON.stringify({ error: `session not found: ${sourceId}` }))
+          return
+        }
+        if (error instanceof SessionForkUnavailableError) {
+          res.writeHead(409, { "content-type": "application/json" })
+          res.end(JSON.stringify({ error: error.message, code: error.code }))
+          return
+        }
+        throw error
+      }
+      const childId = forked.sessionId
       if (childWorkspaceId !== undefined) {
         try {
           await workspaceRegistry!.attachSession(childWorkspaceId, childId)
@@ -1307,8 +1277,8 @@ export function createWebHost(opts: WebHostOptions): WebHost {
       res.writeHead(200, { "content-type": "application/json" })
       res.end(JSON.stringify({
         id: childId,
-        ...(titleForChild !== undefined ? { title: titleForChild } : {}),
-        seedLength: cut,
+        ...(forked.title !== undefined ? { title: forked.title } : {}),
+        seedLength: forked.seedLength,
       }))
       return
     }

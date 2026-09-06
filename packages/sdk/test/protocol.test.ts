@@ -289,3 +289,104 @@ describe("HarnessClient v1.1 helpers (cancel / rewind*, in-process transport)", 
     }
   })
 })
+
+describe("HarnessClient session lifecycle and model helpers", () => {
+  it("advertises additive session create/fork/model capabilities and round-trips the helpers", async () => {
+    const clientRead = new PassThrough()
+    const clientWrite = new PassThrough()
+    const client = new HarnessClient(clientRead, clientWrite)
+    const rl = createInterface({ input: clientWrite })
+    const seen: Array<{ method: string; params: unknown }> = []
+    let selection: { provider: string; model: string; reasoningEffort?: string } | undefined
+
+    rl.on("line", (line) => {
+      const msg = decodeFrame(line)
+      if (!isRpcRequest(msg)) return
+      seen.push({ method: msg.method, params: msg.params })
+      switch (msg.method) {
+        case "initialize":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, {
+            name: "i-harness",
+            version: "0.1.0",
+            protocolVersion: 2,
+            capabilities: {
+              "session-create": ["1"],
+              "session-fork": ["1"],
+              "session-model": ["1"],
+            },
+          })))
+          break
+        case "session/create":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, { sessionId: "s2" })))
+          break
+        case "session/fork":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, { sessionId: "s3" })))
+          break
+        case "session/model/state":
+          clientRead.write(encodeFrame(makeSuccess(msg.id, selection === undefined
+            ? { status: "unconfigured", reason: "No model configured" }
+            : { status: "ready", providerId: selection.provider, modelId: selection.model, label: `${selection.provider}:${selection.model}` })))
+          break
+        case "session/model/set":
+          selection = (msg.params as { selection: typeof selection }).selection
+          clientRead.write(encodeFrame(makeSuccess(msg.id, {
+            status: "ready",
+            providerId: selection!.provider,
+            modelId: selection!.model,
+            label: `${selection!.provider}:${selection!.model}`,
+          })))
+          break
+        default:
+          clientRead.write(encodeFrame(makeFailure(msg.id, INTERNAL_ERROR, "boom")))
+      }
+    })
+
+    try {
+      const info = await client.initialize()
+      expect(info.capabilities["session-create"]).toEqual(["1"])
+      expect(info.capabilities["session-fork"]).toEqual(["1"])
+      expect(info.capabilities["session-model"]).toEqual(["1"])
+      await expect(client.createSession()).resolves.toEqual({ sessionId: "s2" })
+      await expect(client.forkSession("s2")).resolves.toEqual({ sessionId: "s3" })
+      await expect(client.modelState("s1")).resolves.toEqual({
+        status: "unconfigured",
+        reason: "No model configured",
+      })
+      await expect(client.setSessionModel("s1", {
+        provider: "deepseek",
+        model: "deepseek-chat",
+        reasoningEffort: "high",
+      })).resolves.toEqual({
+        status: "ready",
+        providerId: "deepseek",
+        modelId: "deepseek-chat",
+        label: "deepseek:deepseek-chat",
+      })
+      expect(selection).toEqual({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        reasoningEffort: "high",
+      })
+      expect(seen).toEqual([
+        { method: "initialize", params: {} },
+        { method: "session/create", params: {} },
+        { method: "session/fork", params: { sessionId: "s2" } },
+        { method: "session/model/state", params: { sessionId: "s1" } },
+        {
+          method: "session/model/set",
+          params: {
+            sessionId: "s1",
+            selection: {
+              provider: "deepseek",
+              model: "deepseek-chat",
+              reasoningEffort: "high",
+            },
+          },
+        },
+      ])
+    } finally {
+      rl.close()
+      await client.close()
+    }
+  })
+})

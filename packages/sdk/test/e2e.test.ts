@@ -3,7 +3,8 @@
 // model. Windows CI compatible (spawn + pipes; same tsx-loader precedent as
 // e2e/helpers.ts).
 import { describe, expect, it } from "vitest"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -25,16 +26,64 @@ async function waitForFile(path: string, timeoutMs = 5000): Promise<boolean> {
   return false
 }
 
+async function startFixtureModel(): Promise<{ baseURL: string; close(): Promise<void> }> {
+  const server = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+      res.writeHead(404).end()
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "fixture ok" } }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n\n"))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address === "string") throw new Error("fixture model failed to listen")
+  return {
+    baseURL: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error === undefined ? resolve() : reject(error))
+      server.closeAllConnections()
+    }),
+  }
+}
+
+function seedCanonicalProvider(configDir: string, baseURL: string): void {
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({
+    llm: {
+      providers: {
+        fixture: {
+          protocol: "openai-completions",
+          baseURL,
+          apiKeyEnv: "FIXTURE_API_KEY",
+          models: [{ id: "fixture-model" }],
+        },
+      },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    },
+  }), "utf8")
+  writeFileSync(join(configDir, "credentials.json"), JSON.stringify({
+    refs: { FIXTURE_API_KEY: "fixture-key" },
+  }), "utf8")
+}
+
 describe("i-harness sdk end-to-end (real subprocess)", () => {
   it(
     "spawns the real CLI server, initializes, runs a prompt and streams the turn events",
     async () => {
       const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-e2e-ws-"))
       const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-e2e-sess-"))
+      const configDir = mkdtempSync(join(tmpdir(), "ih-sdk-e2e-config-"))
+      const fixture = await startFixtureModel()
+      seedCanonicalProvider(configDir, fixture.baseURL)
       const client = createHarnessClient({
         command: process.execPath,
         args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
         cwd: workspace,
+        env: { IH_CONFIG_DIR: configDir },
       })
       try {
         // handshake: the server answers initialize — v1/v1.1: protocolVersion
@@ -46,8 +95,11 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         expect(info.capabilities["session-list"]).toEqual(["1"])
         expect(info.capabilities["session-cancel"]).toEqual(["1"])
         expect(info.capabilities["session-rewind"]).toEqual(["1"])
+        expect(info.capabilities["session-create"]).toEqual(["1"])
+        expect(info.capabilities["session-fork"]).toEqual(["1"])
+        expect(info.capabilities["session-model"]).toEqual(["1"])
 
-        // high-level run through the real engine (mock model default)
+        // high-level run through the real engine and local fixture provider
         const result = await client.run({ sessionId: "sdk-e2e-1", prompt: "hello" })
         expect(result.sessionId).toBe("sdk-e2e-1")
         const types = result.events.map((e) => e.type)
@@ -55,7 +107,7 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         expect(types).toContain("user/message")
         expect(types).toContain("assistant/message")
         expect(types).toContain("turn/end")
-        expect(result.text).toContain("ok")
+        expect(result.text).toContain("fixture ok")
 
         // the session was created + persisted under --session-dir
         const sessionFile = join(sessionDir, "sdk-e2e-1.jsonl")
@@ -77,8 +129,10 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         expect(list.sessions.map((s) => s.id)).toContain("sdk-e2e-1")
       } finally {
         await client.close().catch(() => {})
+        await fixture.close().catch(() => {})
         rmSync(workspace, { recursive: true, force: true })
         rmSync(sessionDir, { recursive: true, force: true })
+        rmSync(configDir, { recursive: true, force: true })
       }
     },
     120_000,

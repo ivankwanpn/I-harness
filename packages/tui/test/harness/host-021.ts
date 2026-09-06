@@ -23,6 +23,7 @@ import { SettingsStore } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
 import { TuiApp, ProviderStore, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, InputSource, TuiEvent } from "../../src/index.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -126,6 +127,7 @@ function wireInput(): { source: InputSource; endInput: () => void } {
  * (host-020 parity). */
 function quietBackend(): BackendClient {
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for (;;) await new Promise((res) => setTimeout(res, 1000))
     },

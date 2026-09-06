@@ -42,7 +42,6 @@ import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
 import {
   createRemoteBackend,
   createScrollbackEngine,
-  createTuiModelBuilder,
   defaultEmbeddedFactory,
   loadMinimalHost,
   ModeSwitch,
@@ -53,6 +52,8 @@ import {
 import type { BackendClient, InlineHost, InputSource } from "@i-harness/tui"
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
+import type { ProviderRuntime } from "@i-harness/provider-runtime"
+import { createProviderRuntime } from "@i-harness/provider-runtime"
 import { dirname } from "node:path"
 
 // ------------------------------------------------------------------ flags
@@ -93,6 +94,23 @@ export interface TuiShutdownController { shutdown(): Promise<void> }
 export function createTuiShutdownController(options: { close: () => Promise<void>; stop: () => void; teardown: () => void }): TuiShutdownController {
   let promise: Promise<void> | undefined
   return { shutdown: () => promise ??= (async () => { try { options.stop() } catch {} try { await options.close() } finally { try { options.teardown() } catch {} } })() }
+}
+
+export function createTuiModelBindingFor(
+  runtime: Pick<ProviderRuntime, "resolveModel">,
+  override?: string,
+): NonNullable<Parameters<typeof defaultEmbeddedFactory>[0]["modelBindingFor"]> {
+  return async (_sessionId, meta) => {
+    const state = await runtime.resolveModel({
+      ...(meta?.modelSelection !== undefined
+        ? { sessionSelection: meta.modelSelection }
+        : {}),
+      ...(override !== undefined ? { override } : {}),
+    })
+    if (state.status !== "ready") return state
+    const { client, ...binding } = state.binding
+    return { status: "ready", binding: { model: client, ...binding } }
+  }
 }
 
 export function parseFlags(argv: string[]): TuiFlags {
@@ -202,17 +220,15 @@ export async function runTui(flags: TuiFlags): Promise<number> {
 
   const workspace = flags.workspace ?? process.cwd()
 
-  // M46a G1: the provider/model resolution chain (the M37a TODO seam — the
-  // same settings+credentials composition apps/cli/src/web.ts buildModelFor
-  // serves, keyed to the TUI provider store). The modelBuilder's undefined
-  // resolve = the embedded service's mock fallback (today's behavior — no
-  // provider configured → mock). The engine + loop read the durable TUI prefs
+  // M49: production model resolution uses the canonical settings and
+  // credentials through provider-runtime. The engine + loop read the durable TUI prefs
   // (timestamps/compact apply NOW; the modal can also flip them live).
   const settings = new SettingsStore()
   await settings.load()
   const credentials = createCredentialStore(
     join(dirname(resolveSettingsPath()), "credentials.json"),
   )
+  const providerRuntime = createProviderRuntime({ settings, credentials })
   const providerStore = new ProviderStore({ settings, credentials })
   const tuiPrefs = settings.get().tui.prefs
 
@@ -227,16 +243,13 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     .catch(() => createUnknownCapabilities())
 
   // Backend (M38b G2): `--attach <sessionId>` → the REMOTE SDK backend — spawn
-  // `i-harness sdk` (the CLI's stdio JSON-RPC server, mock model default) and
+  // `i-harness sdk` (the CLI's stdio JSON-RPC server) and
   // drive that session over the FROZEN v0 wire. The spawned subprocess dies
   // with backend.close() (shutdown → exit). LOUD: the wire has no history RPC,
   // so an --attach shows the session from THIS moment (pre-attach log lines are
   // NOT replayed — wire v0 append-only rule; history replay needs a v1 RPC).
-  // Otherwise (M46a G1 — the M37a TODO seam resolved): the embedded factory
-  // runs the PRODUCTION modelBuilder chain (settings `tui.providers` → active
-  // provider → credential ref → buildModelClient — createTuiModelBuilder, the
-  // app/cli buildModelFor twin) with the mock as the clean fallback (no
-  // provider configured → mock, today's behavior). --model wins over the
+  // Otherwise the embedded factory resolves through the same canonical
+  // provider runtime. `--model` remains the explicit override.
   const base = flags.attach !== undefined
     ? createRemoteBackend({
         client: spawnSdkSubprocess({
@@ -251,8 +264,8 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     : await defaultEmbeddedFactory({
         workspace,
         ...buildEmbeddedSessionOptions(flags),
-        forceMock: false,
-        modelBuilder: createTuiModelBuilder({ store: providerStore, flagModel: flags.model }),
+        modelPolicy: "required",
+        modelBindingFor: createTuiModelBindingFor(providerRuntime, flags.model),
         modelLabel: flags.model,
         // M46a: the durable TUI prefs drive the assembly's approval stance —
         // guardian ON means tool asks reach the approval bridge (approval
@@ -261,6 +274,11 @@ export async function runTui(flags: TuiFlags): Promise<number> {
         // durable knob + the honest "asks" semantics at the ask surface).
         approveAll: !tuiPrefs.guardian || tuiPrefs.alwaysApprove,
       })
+  const initialModelState = flags.model === undefined
+    ? await base.modelState().catch(() => undefined)
+    : undefined
+  const initialModelLabel = flags.model
+    ?? (initialModelState?.status === "ready" ? initialModelState.label : undefined)
 
   const cols = process.stdout.columns ?? 80
   const rows = process.stdout.rows ?? 24
@@ -340,8 +358,8 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     glyphs: makeGlyphs(true),
     write: out,
     // M38b G2: real info-line model label (the --model spec, e.g.
-    // "openai:gpt-4o"); absent → the "mock-model" fallback.
-    modelLabel: flags.model,
+    // "openai:gpt-4o"); absent → the honest unconfigured label.
+    modelLabel: initialModelLabel,
     // M46a G1: the provider/model modal surfaces + the durable prefs' layout
     // density (compact); the providerStore drives /provider /model /settings.
     ...(attach === undefined ? { providerStore } : {}),

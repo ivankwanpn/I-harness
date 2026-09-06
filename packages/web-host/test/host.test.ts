@@ -18,7 +18,7 @@ async function withHost(
 ): Promise<void> {
   const root = tempStore()
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
-  const executor = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true, coordinator })
+  const executor = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true, coordinator })
   const host: WebHost = createWebHost({ port: 0, executor, coordinator, ...options })
   executor.onAssembly((a) => { if (a.sessionId !== undefined) host.attachLiveSession({ sessionId: a.sessionId, session: a.session }) })
   const { port } = await host.listen()

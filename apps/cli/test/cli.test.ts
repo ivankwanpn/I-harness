@@ -1,9 +1,10 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn } from "node:child_process"
+import { createServer } from "node:http"
 import { fileURLToPath } from "node:url"
 import { runHeadless } from "../src/run.ts"
 import { main, parseModel } from "../src/index.ts"
@@ -21,6 +22,76 @@ import { resolveShell, type ShellRetentionOptions } from "@i-harness/shell"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { probeBwrap } from "@i-harness/sandbox-local"
+
+let canonicalConfigDir: string
+let closeFixtureModel: (() => Promise<void>) | undefined
+const previousConfigDir = process.env.IH_CONFIG_DIR
+
+beforeAll(async () => {
+  const server = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+      res.writeHead(404).end()
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "ok" } }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n\n"))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address === "string") throw new Error("fixture model failed to listen")
+  closeFixtureModel = () => new Promise<void>((resolve, reject) => {
+    server.close((error) => error === undefined ? resolve() : reject(error))
+    server.closeAllConnections()
+  })
+  canonicalConfigDir = mkdtempSync(join(tmpdir(), "ih-cli-canonical-config-"))
+  writeFileSync(join(canonicalConfigDir, "settings.json"), JSON.stringify({
+    llm: {
+      providers: {
+        fixture: {
+          protocol: "openai-completions",
+          baseURL: `http://127.0.0.1:${address.port}`,
+          apiKeyEnv: "M49_FIXTURE_API_KEY",
+          models: [{ id: "fixture-model" }],
+        },
+      },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    },
+  }), "utf8")
+  writeFileSync(join(canonicalConfigDir, "credentials.json"), JSON.stringify({
+    refs: { M49_FIXTURE_API_KEY: "fixture-key" },
+  }), "utf8")
+  process.env.IH_CONFIG_DIR = canonicalConfigDir
+})
+
+afterAll(async () => {
+  if (previousConfigDir === undefined) delete process.env.IH_CONFIG_DIR
+  else process.env.IH_CONFIG_DIR = previousConfigDir
+  await closeFixtureModel?.().catch(() => {})
+  if (canonicalConfigDir !== undefined) rmSync(canonicalConfigDir, { recursive: true, force: true })
+})
+
+async function runNode(args: string[], cwd: string): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const child = spawn(process.execPath, args, {
+    cwd,
+    env: { ...process.env, IH_CONFIG_DIR: canonicalConfigDir },
+    stdio: ["ignore", "pipe", "pipe"],
+  })
+  let stdout = ""
+  let stderr = ""
+  child.stdout.setEncoding("utf8")
+  child.stderr.setEncoding("utf8")
+  child.stdout.on("data", (chunk: string) => { stdout += chunk })
+  child.stderr.on("data", (chunk: string) => { stderr += chunk })
+  const status = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject)
+    child.once("close", resolve)
+  })
+  return { status, stdout, stderr }
+}
 
 // M23: observe — without altering — the createSessionCoordinator call surface
 // so the CLI's ownership-lock wiring is assertable. The wrapper DELEGATES to
@@ -83,6 +154,24 @@ describe("headless CLI (M2)", () => {
     writeFileSync(join(dir, "data.txt"), "old line")
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it("headless production refuses to run without a configured model", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "i-harness-m49-config-"))
+    const previous = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = configDir
+    try {
+      const result = await runHeadless("hello", {
+        workspace: dir,
+        modelPolicy: "required",
+      })
+      expect(result.exitCode).toBe(1)
+      expect(result.error).toContain("No model configured")
+    } finally {
+      if (previous === undefined) delete process.env.IH_CONFIG_DIR
+      else process.env.IH_CONFIG_DIR = previous
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  })
 
   it("runs read→write→report through the full pipeline (fs tools + guard)", async () => {
     const result = await runHeadless("edit data.txt", {
@@ -353,16 +442,13 @@ describe("CLI main + entry guard", () => {
     }
   })
 
-  it("runs main when the CLI module is executed as the entry point", () => {
+  it("runs main when the CLI module is executed as the entry point", async () => {
     // spawn a real node process so the module-level entry guard fires:
     // `node --import tsx apps/cli/src/index.ts run "hello"` must print and exit 0.
     const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
     const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url))
-    const res = spawnSync(process.execPath, ["--import", "tsx", entry, "run", "hello"], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    })
-    expect(res.status).toBe(0)
+    const res = await runNode(["--import", "tsx", entry, "run", "hello"], repoRoot)
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0)
     expect(res.stdout).toContain("ok")
   })
 
@@ -1792,14 +1878,11 @@ describe("M23 CLI session ownership lock wiring", () => {
 // process.stdout)]) in run.ts and routes mcp onStatus through the same stream.
 describe("M25 --telemetry (JSONL host event stream)", () => {
   // e2e: the real CLI process runs with --telemetry → JSONL lines on stdout.
-  it("--telemetry writes JSONL telemetry lines to stdout", () => {
+  it("--telemetry writes JSONL telemetry lines to stdout", async () => {
     const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
     const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url))
-    const res = spawnSync(process.execPath, ["--import", "tsx", entry, "run", "hello", "--telemetry"], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    })
-    expect(res.status).toBe(0)
+    const res = await runNode(["--import", "tsx", entry, "run", "hello", "--telemetry"], repoRoot)
+    expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0)
     expect(res.stdout).toContain('"type":"session/start"') // JSONL 行
     expect(res.stdout).toContain('"type":"turn/start"')
     expect(res.stdout).toContain('"type":"turn/end"')

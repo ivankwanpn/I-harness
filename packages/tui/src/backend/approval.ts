@@ -282,6 +282,10 @@ export function attachApproval(backend: BackendClient, bridge: ApprovalBridge): 
   return {
     listSessions: () => backend.listSessions(),
     open: (id) => backend.open(id),
+    createSession: () => backend.createSession(),
+    forkSession: () => backend.forkSession(),
+    modelState: () => backend.modelState(),
+    setSessionModel: (selection) => backend.setSessionModel(selection),
     submit: (prompt) => backend.submit(prompt),
     steer: (text) => backend.steer(text),
     cancel: () => backend.cancel(),
