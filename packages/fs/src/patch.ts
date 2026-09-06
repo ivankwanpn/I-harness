@@ -1,5 +1,6 @@
 // 不 import index.ts（循環）——resolve 函數由 index.ts 傳入（見 createFsTools）。
 import { readFile, stat, unlink } from "node:fs/promises"
+import { createTextDiff, type TextDiff } from "@i-harness/text-diff"
 import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { assertTextData, normalizeLineEndings, detectLineEndings, restoreLineEndings } from "./text.ts"
@@ -176,8 +177,8 @@ export async function applyPatch(
   resolve: PathResolver,
   hunks: PatchHunk[],
   rewind?: RewindCapture,
-): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; preImageRef?: string; isNewFile?: boolean }[]; errors: { path: string; message: string }[] }> {
-  const applied: { path: string; action: "added" | "deleted" | "updated"; preImageRef?: string; isNewFile?: boolean }[] = []
+): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[]; errors: { path: string; message: string }[] }> {
+  const applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[] = []
   const errors: { path: string; message: string }[] = []
   for (const hunk of hunks) {
     const target = resolve(hunk.path)
@@ -239,7 +240,14 @@ export async function applyPatch(
           if (r.blobId !== null) preImageRef = r.blobId
         }
         await writeFileAtomic(target, restoreLineEndings(result.text, style))
-        applied.push({ path: hunk.path, action: "updated", ...(preImageRef !== undefined ? { preImageRef } : {}) })
+        // M49: structured change — the pre-image text and the post-edit text
+        // are both known here, so the change can always be built (bounded).
+        applied.push({
+          path: hunk.path,
+          action: "updated",
+          change: createTextDiff(hunk.path, normalized, result.text),
+          ...(preImageRef !== undefined ? { preImageRef } : {}),
+        })
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)

@@ -1,6 +1,7 @@
 import { readFile, writeFile, readdir } from "node:fs/promises"
 import { resolve, relative, isAbsolute } from "node:path"
 import type { Tool } from "@i-harness/core-tools"
+import { createTextDiff, type TextDiff } from "@i-harness/text-diff"
 import { FsToolError } from "./error.ts"
 import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
@@ -59,7 +60,7 @@ async function capturePreimage(
   rewind: RewindCapture,
   workspace: string,
   target: string,
-): Promise<{ preImageRef?: string; isNewFile?: boolean }> {
+): Promise<{ preImageRef?: string; isNewFile?: boolean; beforeBytes?: Uint8Array | null }> {
   const rel = relForRewind(workspace, target)
   if (rel === null) return {}
   let before: Uint8Array | null
@@ -72,8 +73,19 @@ async function capturePreimage(
   const r = rewind.take(rel, before)
   const captured = r.blobId !== null || r.isNewFile
   return captured
-    ? { preImageRef: r.blobId ?? undefined, isNewFile: r.isNewFile }
+    ? { preImageRef: r.blobId ?? undefined, isNewFile: r.isNewFile, beforeBytes: before }
     : {}
+}
+
+// M49: the structured diff for a write — before/after are known only when the
+// rewind pre-image was read (existing file); decode failures or new files
+// yield no `change` (only when before AND after are known).
+function decodeUtf8Safely(bytes: Uint8Array): string | undefined {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  } catch {
+    return undefined
+  }
 }
 
 export function createFsTools(deps: FsToolDeps): Tool[] {
@@ -85,7 +97,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isConcurrencySafe: true,
     execute: async ({ path }) => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") }),
   }
-  const write: Tool<{ path: string; text: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean }> = {
+  const write: Tool<{ path: string; text: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff }> = {
     name: "write",
     description: "write a file",
     inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" } }, required: ["path", "text"] },
@@ -93,11 +105,21 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     execute: async ({ path, text }) => {
       // M42 rewind: writeFileAtomic OVERWRITES without reading — when rewind
       // is wired, do one extra read (ENOENT ⇒ new file); otherwise zero cost.
+      const target = resolvePath(deps.workspace, path)
       const captured = deps.rewind !== undefined
-        ? await capturePreimage(deps.rewind, deps.workspace, resolvePath(deps.workspace, path))
+        ? await capturePreimage(deps.rewind, deps.workspace, target)
         : {}
-      await writeFile(resolvePath(deps.workspace, path), text, "utf-8")
-      return { ok: true, ...captured }
+      await writeFile(target, text, "utf-8")
+      const { beforeBytes, preImageRef, isNewFile } = captured
+      const out: { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } = { ok: true }
+      if (preImageRef !== undefined) out.preImageRef = preImageRef
+      if (isNewFile !== undefined) out.isNewFile = isNewFile
+      if (beforeBytes !== undefined && beforeBytes !== null) {
+        // M49: reuse the pre-image read for the diff (no second unbounded read)
+        const beforeText = decodeUtf8Safely(beforeBytes)
+        if (beforeText !== undefined) out.change = createTextDiff(path, beforeText, text)
+      }
+      return out
     },
   }
   const list_dir: Tool<{ path: string }, { entries: string[] }> = {
@@ -108,7 +130,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isConcurrencySafe: true,
     execute: async ({ path }) => ({ entries: await readdir(resolvePath(deps.workspace, path)) }),
   }
-  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number }, { ok: boolean; path: string; replacements: number; preImageRef?: string; isNewFile?: boolean }> = {
+  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean }> = {
     name: "edit",
     description: "edit a file by literal string replacement (single occurrence unless replace_all)",
     inputSchema: {
@@ -171,12 +193,15 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         ok: true,
         path,
         replacements: result.replacements,
+        // M49: the loaded pre-image (normalized) and the post-edit text are
+        // both known — the change is always present (checked, bounded).
+        change: createTextDiff(path, normalized, result.text),
         ...(preImageRef !== undefined ? { preImageRef } : {}),
         ...(deps.rewind !== undefined ? { isNewFile: false } : {}),
       }
     },
   }
-  const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string }[]; errors: { path: string; message: string }[] }> = {
+  const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string }> = {
     name: "apply_patch",
     description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update + @@ context)",
     inputSchema: { type: "object", properties: { patch_content: { type: "string" } }, required: ["patch_content"] },
@@ -187,11 +212,18 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       const hunks = parsePatch(normalizeLineEndings(patch_content))
       // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入；rewind sink 透傳
       const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, deps.rewind)
-      if (errors.length > 0) {
-        // 回報已應用清單 + 錯誤（不 throw——讓模型看到進行到哪）
-        return { ok: false, applied, errors }
+      // M49: aggregate per-file changes when the parser exposed before/after
+      // (update hunks); anything else keeps the original patch text as rawPatch.
+      const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } = {
+        ok: errors.length === 0,
+        applied,
+        errors,
       }
-      return { ok: true, applied, errors: [] }
+      const withChange = applied.filter((entry) => entry.change !== undefined)
+      if (applied.length === 1 && withChange.length === 1) result.change = withChange[0]!.change
+      else if (applied.length > 1 && withChange.length === applied.length) result.changes = withChange.map((entry) => entry.change!)
+      if (withChange.length < applied.length) result.rawPatch = patch_content
+      return result
     },
   }
   return [read, edit, write, apply_patch, list_dir]

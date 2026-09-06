@@ -66,19 +66,21 @@ describe("fs rewind capture", () => {
 
     const upd = (await patch.execute({
       patch_content: `*** Begin Patch\n*** Update File: u.txt\n@@\n-old\n+new\n*** End Patch\n`,
-    }, {})) as { ok: boolean; applied: { path: string; action: string; preImageRef?: string; isNewFile?: boolean }[] }
+    }, {})) as { ok: boolean; applied: { path: string; action: string; change?: unknown; preImageRef?: string; isNewFile?: boolean }[] }
     expect(upd.ok).toBe(true)
-    expect(upd.applied).toEqual([{ path: "u.txt", action: "updated", preImageRef: H("old") }])
+    expect(upd.applied).toMatchObject([{ path: "u.txt", action: "updated", preImageRef: H("old") }])
+    // M49: update hunks also carry the structured per-file change
+    expect(upd.applied[0]!.change).toBeDefined()
 
     const add = (await patch.execute({
       patch_content: `*** Begin Patch\n*** Add File: added.txt\n+content\n*** End Patch\n`,
-    }, {})) as { ok: boolean; applied: { path: string; action: string; preImageRef?: string; isNewFile?: boolean }[] }
+    }, {})) as { ok: boolean; applied: { path: string; action: string; change?: unknown; preImageRef?: string; isNewFile?: boolean }[] }
     expect(add.ok).toBe(true)
     expect(add.applied).toEqual([{ path: "added.txt", action: "added", isNewFile: true }])
 
     const del = (await patch.execute({
       patch_content: `*** Begin Patch\n*** Delete File: u.txt\n*** End Patch\n`,
-    }, {})) as { ok: boolean; applied: { path: string; action: string; preImageRef?: string; isNewFile?: boolean }[] }
+    }, {})) as { ok: boolean; applied: { path: string; action: string; change?: unknown; preImageRef?: string; isNewFile?: boolean }[] }
     expect(del.ok).toBe(true)
     // the deleted file's pre-image is the POST-update content — the patch
     // writer normalizes to a trailing newline ("new" → "new\n")
@@ -118,5 +120,25 @@ describe("fs rewind capture", () => {
     const write = createFsTools({ workspace: dir }).find((t) => t.name === "write")!
     const out = (await write.execute({ path: "a.txt", text: "y" }, {})) as { preImageRef?: string; isNewFile?: boolean }
     expect(out).toEqual({ ok: true })
+  })
+
+  it("write: change diff built from the rewind pre-image", async () => {
+    await writeFile(join(dir, "a.txt"), "one\ntwo\n", "utf8")
+    const { sink } = makeSink()
+    const write = createFsTools({ workspace: dir, rewind: sink }).find((t) => t.name === "write")!
+    const out = (await write.execute({ path: "a.txt", text: "one\nTWO\n" }, {})) as { change?: { path: string; added: number; deleted: number; hunks: { oldStart: number }[] } }
+    expect(out.change).toMatchObject({
+      path: "a.txt",
+      added: 1,
+      deleted: 1,
+      hunks: [expect.objectContaining({ oldStart: 1, newStart: 1 })],
+    })
+  })
+
+  it("write: new file has no change (before not known)", async () => {
+    const { sink } = makeSink()
+    const write = createFsTools({ workspace: dir, rewind: sink }).find((t) => t.name === "write")!
+    const out = (await write.execute({ path: "fresh.txt", text: "hi" }, {})) as { change?: unknown }
+    expect(out.change).toBeUndefined()
   })
 })
