@@ -69,6 +69,40 @@ describe("createTextDiff", () => {
     expect(diff.truncated).toBe(true)
   }, 10_000)
 
+  it("index-aligns truncated windows: no phantom deletions on asymmetric sizes", () => {
+    const before = Array.from({ length: 15_000 }, (_, i) => `L${i}`).join("\n")
+    const after = before + "\n" + Array.from({ length: 45_000 }, (_, i) => `N${i}`).join("\n")
+    const diff = createTextDiff("a.txt", before, after)
+    expect(diff.truncated).toBe(true)
+    expect(diff.deleted).toBe(0)
+    expect(diff.added).toBe(0)
+    expect(diff.hunks).toEqual([])
+  })
+
+  it("index-aligns truncated windows when the after side is shorter", () => {
+    const all = Array.from({ length: 60_000 }, (_, i) => `L${i}`).join("\n")
+    const before = all
+    const after = Array.from({ length: 15_000 }, (_, i) => `L${i}`).join("\n")
+    const diff = createTextDiff("a.txt", before, after)
+    expect(diff.truncated).toBe(true)
+    expect(diff.deleted).toBe(0)
+    expect(diff.added).toBe(0)
+    expect(diff.hunks).toEqual([])
+  })
+
+  it("still reports a real tail append when the windows overlap", () => {
+    const before = Array.from({ length: 60_000 }, (_, i) => `L${i}`).join("\n")
+    const after = before + "\n" + Array.from({ length: 500 }, (_, i) => `E${i}`).join("\n")
+    const diff = createTextDiff("a.txt", before, after)
+    expect(diff.truncated).toBe(true)
+    expect(diff.added).toBeGreaterThanOrEqual(500)
+    // the append lines are reported as real additions (end-anchored windows
+    // still show content that lies inside the overlap); skew at the window
+    // boundary is bounded by the append size, far below full-window fabrication
+    expect(diff.hunks.some((h) => h.lines.some((l) => l.kind === "add" && l.text.startsWith("E")))).toBe(true)
+    expect(diff.deleted).toBeLessThanOrEqual(1000)
+  })
+
   it("splits merged hunks without losing markers or line numbers", () => {
     const diff = createTextDiff("s.txt", "a\nb\nc\nd", "a\nB\nc\nD", { context: 1 })
     const deleted = diff.hunks.flatMap((h) => h.lines).filter((l) => l.kind === "delete")

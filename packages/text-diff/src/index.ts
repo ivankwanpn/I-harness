@@ -58,25 +58,6 @@ function isOversized(text: string): boolean {
   return Buffer.byteLength(text, "utf8") > MAX_BYTES || rowCount(text) > MAX_LINES
 }
 
-interface Windows {
-  head: string[]
-  tail: string[]
-  tailOffset: number
-}
-
-// Head/tail windows for the truncated path. When a side is entirely within
-// 2*WINDOW_LINES its whole content becomes the head window (no tail) — the
-// per-side windows are always disjoint, so no change can be reported twice.
-function computeWindows(text: string): Windows {
-  const rows = text.split("\n")
-  if (rows.length <= 2 * WINDOW_LINES) return { head: rows, tail: [], tailOffset: rows.length }
-  return {
-    head: rows.slice(0, WINDOW_LINES),
-    tail: rows.slice(rows.length - WINDOW_LINES),
-    tailOffset: rows.length - WINDOW_LINES,
-  }
-}
-
 export function createTextDiff(path: string, before: string, after: string, options?: TextDiffOptions): TextDiff {
   const context = Math.max(0, options?.context ?? DEFAULT_CONTEXT)
   const normBefore = toLf(before)
@@ -95,27 +76,56 @@ export function createTextDiff(path: string, before: string, after: string, opti
   })
 }
 
-// Bounded head/tail windows: never let oversized input block the turn —
-// the head tail of each side is diffed separately with adjusted offsets.
+// Bounded head/tail windows: never let oversized input block the turn.
+// Windows are INDEX-ALIGNED: both sides share the same head positions
+// [0..N) and end-anchored tail positions, and each pair always has EQUAL
+// lengths — a window of one side is never diffed against a longer window of
+// the other (that fabricates deletions/additions from positional skew).
+// The tail pair is diffed only when its absolute positions overlap;
+// otherwise the two windows compare unrelated regions and every line would
+// be fabricated as changed (e.g. a pure append above the window size).
 function windowedDiff(path: string, before: string, after: string, context: number): TextDiff {
-  const bWin = computeWindows(before)
-  const aWin = computeWindows(after)
-  const parts = [
-    diffTexts({ path, oldStr: bWin.head.join("\n"), newStr: aWin.head.join("\n"), context, truncated: true, oldOffset: 0, newOffset: 0 }),
-  ]
-  if (bWin.tail.length > 0 && aWin.tail.length > 0) {
-    parts.push(
-      diffTexts({
-        path,
-        oldStr: bWin.tail.join("\n"),
-        newStr: aWin.tail.join("\n"),
-        context,
-        truncated: true,
-        oldOffset: bWin.tailOffset,
-        newOffset: aWin.tailOffset,
-      }),
-    )
+  const bRows = before.split("\n")
+  const aRows = after.split("\n")
+  const parts: TextDiff[] = []
+
+  // Head pair: first min(WINDOW_LINES, lenB, lenA) rows of each side —
+  // positions [0..N) on both sides.
+  const headLen = Math.min(WINDOW_LINES, bRows.length, aRows.length)
+  parts.push(
+    diffTexts({
+      path,
+      oldStr: bRows.slice(0, headLen).join("\n"),
+      newStr: aRows.slice(0, headLen).join("\n"),
+      context,
+      truncated: true,
+      oldOffset: 0,
+      newOffset: 0,
+    }),
+  )
+
+  // Tail pair: end-anchored — the last min(tailB, tailA) rows of each side,
+  // where a side's tail never overlaps its own head window.
+  const m = Math.min(tailWindow(bRows).length, tailWindow(aRows).length)
+  if (m > 0) {
+    const bStart = bRows.length - m
+    const aStart = aRows.length - m
+    const overlaps = bStart < aStart + m && aStart < bStart + m
+    if (overlaps) {
+      parts.push(
+        diffTexts({
+          path,
+          oldStr: bRows.slice(bStart).join("\n"),
+          newStr: aRows.slice(aStart).join("\n"),
+          context,
+          truncated: true,
+          oldOffset: bStart,
+          newOffset: aStart,
+        }),
+      )
+    }
   }
+
   return {
     path,
     hunks: parts.flatMap((p) => p.hunks),
@@ -123,6 +133,13 @@ function windowedDiff(path: string, before: string, after: string, context: numb
     deleted: parts.reduce((sum, p) => sum + p.deleted, 0),
     truncated: true,
   }
+}
+
+// The tail region of a side: the last WINDOW_LINES rows, clipped so it never
+// overlaps the head window (a side smaller than WINDOW_LINES has no tail).
+function tailWindow(rows: string[]): string[] {
+  const size = Math.max(0, Math.min(WINDOW_LINES, rows.length - WINDOW_LINES))
+  return size === 0 ? [] : rows.slice(rows.length - size)
 }
 
 interface DiffInput {
