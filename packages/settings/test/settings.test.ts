@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   SettingsStore,
+  mutateSection,
   normalizeSettings,
   resolveSettingsPath,
   SETTINGS_DEFAULTS,
@@ -137,6 +138,82 @@ describe("resolveSettingsPath", () => {
 })
 
 describe("SettingsStore", () => {
+  it("does not promote legacy providers during a default-model-only section mutation", async () => {
+    const root = await tmpRoot()
+    const file = join(root, "settings.json")
+    await writeFile(file, JSON.stringify({
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "custom",
+          providers: {
+            custom: {
+              id: "custom",
+              name: "Provider A",
+              baseUrl: "https://a.example/v1/",
+              protocol: "openai-compatible",
+              apiKeyRef: "PROVIDER_A_API_KEY",
+              modelsUrl: "https://a.example/v1/models",
+            },
+          },
+        },
+      },
+    }))
+    const store = new SettingsStore({ path: file })
+    await store.load()
+    const mutated = await mutateSection("llm", [{
+      op: "set",
+      path: ["defaultModel", "model"],
+      value: "manual-model",
+    }], store)
+    expect(mutated.revision).toBe(1)
+
+    const immediate = await store.set({
+      tui: {
+        ...store.get().tui,
+        providers: {
+          version: 1,
+          activeProviderId: "custom",
+          providers: {
+            custom: {
+              id: "custom",
+              name: "Provider B",
+              baseUrl: "https://b.example/v1/",
+              protocol: "anthropic",
+              apiKeyRef: "PROVIDER_B_API_KEY",
+              modelsUrl: "https://b.example/v1/models",
+            },
+          },
+        },
+      },
+    })
+    const expectedProvider = {
+      displayName: "Provider B",
+      baseURL: "https://b.example",
+      protocol: "anthropic-messages",
+      apiKeyEnv: "PROVIDER_B_API_KEY",
+      modelsURL: "https://b.example/v1/models",
+    }
+    expect(immediate.llm.providers.custom).toEqual(expectedProvider)
+    expect(immediate.llm.defaultModel.model).toBe("manual-model")
+    expect(store.getSectionRevision("llm")).toBe(1)
+    expect(store.getSectionRevision("tui")).toBe(1)
+
+    const persisted = JSON.parse(await readFile(file, "utf8"))
+    expect(persisted.llm).toEqual({
+      providers: {},
+      defaultModel: { provider: "", model: "manual-model" },
+    })
+
+    const reloaded = new SettingsStore({ path: file })
+    await reloaded.load()
+    expect(reloaded.get().llm.providers.custom).toEqual(expectedProvider)
+    expect(reloaded.get().llm.defaultModel.model).toBe("manual-model")
+    expect(reloaded.getSectionRevision("llm")).toBe(1)
+    expect(reloaded.getSectionRevision("tui")).toBe(1)
+    await rm(root, { recursive: true, force: true })
+  })
+
   it("keeps a legacy-only provider edit current after write and reload", async () => {
     const root = await tmpRoot()
     const file = join(root, "settings.json")

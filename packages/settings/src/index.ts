@@ -632,6 +632,12 @@ export class SettingsStore {
     return this.revision[name] ?? 0
   }
 
+  /** Unprojected section content used when a mutation must preserve provenance. */
+  getSectionMutationBase(name: "llm" | "onboarding"): unknown {
+    if (name === "llm") return this.canonicalLlm ?? normalizeLlm(undefined, SETTINGS_DEFAULTS.llm)
+    return this.settings.onboarding
+  }
+
   /**
    * Load the document from disk, merging onto defaults. Missing/corrupt files
    * are not fatal — they yield the defaults so a first run behaves sanely.
@@ -960,6 +966,8 @@ export interface SettingsStoreSurface {
   set(patch: Partial<Settings>): Promise<Settings>
   reset(): Promise<Settings>
   getSectionRevision(name: string): number
+  /** Optional unprojected source for stores that expose migrated effective views. */
+  getSectionMutationBase?(name: "llm" | "onboarding"): unknown
 }
 
 /**

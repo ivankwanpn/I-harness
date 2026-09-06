@@ -539,7 +539,7 @@ export async function mutateSection(
   expectedRevision?: number,
 ): Promise<SectionView> {
   const schema = SECTION_SCHEMAS[name]
-  const current = store.get()[name] as unknown as Record<string, unknown>
+  const current = (store.getSectionMutationBase?.(name) ?? store.get()[name]) as Record<string, unknown>
   const actual = store.getSectionRevision(name)
   if (expectedRevision !== undefined && expectedRevision !== actual) {
     throw new SettingsConflictError(expectedRevision, actual)
