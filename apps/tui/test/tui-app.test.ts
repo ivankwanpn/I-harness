@@ -2,7 +2,15 @@
 // so the CLI surface cannot drift silently (the PTY proofs of the render
 // pipeline live in packages/tui/test/harness — cases 011/014).
 
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { createCredentialStore } from "@i-harness/credentials"
+import type { ModelClient } from "@i-harness/llm-seam"
+import { createProviderRuntime } from "@i-harness/provider-runtime"
+import { SettingsStore } from "@i-harness/settings"
+import { ProviderStore } from "@i-harness/tui"
 import {
   buildEmbeddedSessionOptions,
   buildSdkArgs,
@@ -12,6 +20,77 @@ import {
 } from "../src/index.ts"
 
 describe("tui flag parser", () => {
+  it("legacy provider add/key/discover/adopt composes a ready canonical runtime", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ih-tui-provider-runtime-"))
+    const settings = new SettingsStore({ path: join(root, "settings.json") })
+    const credentials = createCredentialStore(join(root, "credentials.json"))
+    const model: ModelClient = { async *stream() {} }
+    try {
+      await settings.load()
+      await settings.set({
+        llm: {
+          providers: {
+            fixture: {
+              models: [{ id: "manual-model", name: "Manual", contextWindow: 64_000 }],
+            },
+          },
+          defaultModel: { provider: "", model: "" },
+        },
+      })
+      const store = new ProviderStore({
+        settings,
+        credentials,
+        fetchFn: (async () => new Response(JSON.stringify({
+          data: [{ id: "discovered-model", display_name: "Discovered" }],
+        }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch,
+      })
+
+      await store.upsert({
+        id: "fixture",
+        name: "Fixture Provider",
+        baseUrl: "https://fixture.example/v1/",
+        modelsUrl: "https://fixture.example/v1/models",
+        protocol: "openai-compatible",
+      })
+      await store.setActive("fixture")
+      await store.setApiKey("fixture", "fixture-key")
+      await store.discoverModels("fixture")
+
+      const runtime = createProviderRuntime({
+        settings,
+        credentials,
+        buildClient: () => model,
+      })
+      await expect(runtime.resolveModel({})).resolves.toEqual({
+        status: "ready",
+        binding: {
+          client: model,
+          providerId: "fixture",
+          modelId: "discovered-model",
+          label: "fixture:discovered-model",
+        },
+      })
+      expect(settings.getSectionMutationBase("llm")).toEqual({
+        providers: {
+          fixture: {
+            displayName: "Fixture Provider",
+            baseURL: "https://fixture.example",
+            modelsURL: "https://fixture.example/v1/models",
+            apiKeyEnv: "FIXTURE_API_KEY",
+            protocol: "openai-completions",
+            models: [
+              { id: "manual-model", name: "Manual", contextWindow: 64_000 },
+              { id: "discovered-model", name: "Discovered" },
+            ],
+          },
+        },
+        defaultModel: { provider: "fixture", model: "discovered-model" },
+      })
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("adapts provider runtime clients into session-executor model bindings", async () => {
     const client = { async *stream() { yield { type: "end" as const } } }
     const seen: unknown[] = []

@@ -38,9 +38,10 @@ export async function forkSession(
   ])
   const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq)
   const title = options.title ?? profile.meta.title
+  const workspaceId = options.workspaceId ?? profile.meta.workspaceId
   const { id } = await coordinator.create({
     ...(title !== undefined ? { title } : {}),
-    ...(options.workspaceId !== undefined ? { workspaceId: options.workspaceId } : {}),
+    ...(workspaceId !== undefined ? { workspaceId } : {}),
     parentSession: sourceSessionId,
     seedLength: prefix.length,
   })

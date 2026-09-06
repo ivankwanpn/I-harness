@@ -1,6 +1,6 @@
 import { mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
-import { dirname, join, basename } from "node:path"
+import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
 import type { SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
@@ -40,8 +40,23 @@ async function replaceSessionFile(path: string, headerLine: string, events: Sess
 }
 
 export function createJsonlBackend(root: string): PersistenceBackend {
-  const filePath = (id: string) => join(root, `${id}.jsonl`)
-  const docPath = (key: string) => join(root, `${key}.doc.jsonl`)
+  const rootPath = resolve(root)
+  const artifactPath = (id: string, suffix: string): string => {
+    const portableId = id.replace(/\\/g, "/")
+    const candidate = resolve(rootPath, `${portableId}${suffix}`)
+    const fromRoot = relative(rootPath, candidate)
+    const outside = posix.isAbsolute(portableId)
+      || win32.parse(id).root !== ""
+      || fromRoot === ".."
+      || fromRoot.startsWith(`..${sep}`)
+      || isAbsolute(fromRoot)
+    if (outside) {
+      throw new Error(`artifact ${JSON.stringify(id)} is outside the JSONL store root`)
+    }
+    return candidate
+  }
+  const filePath = (id: string) => artifactPath(id, ".jsonl")
+  const docPath = (key: string) => artifactPath(key, ".doc.jsonl")
 
   return {
     id: "jsonl",
@@ -50,7 +65,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     lockRoot: root,
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
-      await mkdir(root, { recursive: true })
+      await mkdir(rootPath, { recursive: true })
       // wx: fail if the session file already exists.
       await writeFile(filePath(sessionId), serializeHeader(meta) + "\n", { flag: "wx" })
     },
@@ -85,7 +100,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     },
 
     async list(): Promise<string[]> {
-      const names = await readdir(root).catch(() => [] as string[])
+      const names = await readdir(rootPath).catch(() => [] as string[])
       // Skip `.doc.jsonl` document sidecars — they are not sessions.
       return names
         .filter((n) => n.endsWith(".jsonl") && !n.endsWith(".doc.jsonl"))
@@ -151,7 +166,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     },
 
     async putDocument(key: string, data: unknown): Promise<void> {
-      await mkdir(root, { recursive: true })
+      await mkdir(rootPath, { recursive: true })
       const path = docPath(key)
       // Namespaced keys ("session-title/<id>") live in a subdirectory of the
       // store root — create it so nested doc keys work (top-level listings

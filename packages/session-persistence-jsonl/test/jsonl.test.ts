@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { createJsonlBackend } from "../src/index.ts"
 
 let dir: string
@@ -9,6 +9,41 @@ beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "jsonl-backend-")) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 describe("jsonl backend", () => {
+  it("rejects traversal and absolute session ids at every artifact operation", async () => {
+    const backend = createJsonlBackend(dir)
+    const invalidIds = [
+      "../secret",
+      "..\\secret",
+      resolve(dir, "..", "absolute-secret"),
+    ]
+    const operations: Array<(id: string) => Promise<unknown>> = [
+      (id) => backend.create(id, { formatVersion: 1, sessionId: id, createdAt: "x" }),
+      (id) => backend.append(id, [{ type: "turn/start" }]),
+      (id) => backend.read(id),
+      (id) => backend.repair(id),
+      (id) => backend.replaceEvents!(id, []),
+      (id) => backend.profile(id),
+      (id) => backend.updateMeta(id, { title: "blocked" }),
+    ]
+
+    for (const id of invalidIds) {
+      for (const operation of operations) {
+        await expect(operation(id), id).rejects.toThrow(/outside the JSONL store root/)
+      }
+    }
+  })
+
+  it("preserves generated and child session ids", async () => {
+    const backend = createJsonlBackend(dir)
+    for (const id of ["sess-mtpljaje-mnksho", "child-550e8400-e29b-41d4-a716-446655440000"]) {
+      await backend.create(id, { formatVersion: 1, sessionId: id, createdAt: "x" })
+      await backend.append(id, [{ type: "turn/start" }, { type: "turn/end" }])
+      await expect(backend.read(id)).resolves.toMatchObject({
+        events: [{ type: "turn/start" }, { type: "turn/end" }],
+      })
+    }
+  })
+
   it("create writes a header; append+read round-trips events", async () => {
     const backend = createJsonlBackend(dir)
     await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
@@ -96,6 +131,17 @@ describe("jsonl backend", () => {
 })
 
 describe("jsonl documents", () => {
+  it("rejects traversal and absolute document keys while preserving namespaced keys", async () => {
+    const backend = createJsonlBackend(dir)
+    for (const key of ["../secret", "..\\secret", resolve(dir, "..", "absolute-secret")]) {
+      await expect(backend.putDocument(key, { secret: true }), key).rejects.toThrow(/outside the JSONL store root/)
+      await expect(backend.getDocument(key), key).rejects.toThrow(/outside the JSONL store root/)
+    }
+
+    await backend.putDocument("session-title/s1", { title: "inside" })
+    await expect(backend.getDocument("session-title/s1")).resolves.toEqual({ title: "inside" })
+  })
+
   it("putDocument/getDocument persist a sidecar file", async () => {
     const backend = createJsonlBackend(dir)
     await backend.putDocument("subagent-state", { jobs: [{ id: "subagent-1" }] })

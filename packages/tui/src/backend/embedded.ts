@@ -440,21 +440,24 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       if (selection.provider.trim() === "" || selection.model.trim() === "") {
         throw new Error("session model selection requires non-empty provider and model")
       }
-      const queueState = service.queueState(sessionId)
+      const targetSessionId = sessionId
+      const queueState = service.queueState(targetSessionId)
       if (queueState.running || queueState.queued > 0) {
-        throw new Error(`session-model unavailable while session is busy: ${sessionId}`)
+        throw new Error(`session-model unavailable while session is busy: ${targetSessionId}`)
       }
-      await opts.setSessionModel(sessionId, {
+      await opts.setSessionModel(targetSessionId, {
         provider: selection.provider.trim(),
         model: selection.model.trim(),
         ...(selection.reasoningEffort !== undefined
           ? { reasoningEffort: selection.reasoningEffort }
           : {}),
       })
-      await service.closeSession(sessionId)
-      cachedAssembly = undefined
-      assemblyForId = undefined
-      return service.modelState(sessionId)
+      await service.closeSession(targetSessionId)
+      if (sessionId === targetSessionId) {
+        cachedAssembly = undefined
+        assemblyForId = undefined
+      }
+      return service.modelState(targetSessionId)
     },
 
     async submit(prompt: string): Promise<void> {
