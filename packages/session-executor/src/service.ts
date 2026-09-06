@@ -172,6 +172,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           const result = await bindingFor(sessionId)
           if (result.status !== "ready") throw new ModelUnavailableError(result.reason)
           const binding = result.binding
+          const compact = binding.contextWindow === undefined || opts.compact === undefined
+            ? undefined
+            : { ...opts.compact, contextWindow: binding.contextWindow }
           const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
           assembly = await createSessionAssembly({
             ...opts,
@@ -181,6 +184,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             modelLabel: binding.label,
             contextWindow: binding.contextWindow,
             reasoningEffort: binding.reasoningEffort,
+            compact,
           })
         } else {
           // Transitional legacy path. Task 4 migrates production callers to
