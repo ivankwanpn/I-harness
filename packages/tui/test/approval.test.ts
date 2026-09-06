@@ -108,6 +108,40 @@ describe("createApprovalBridge — approval seam", () => {
     await expect(bridge.answerApproval("not-a-pending-id", { approved: true })).resolves.toBeUndefined()
   })
 
+  it("attaches exactly once per ctx (idempotent); answerer/provider read back through ctx.services", async () => {
+    // A service that fires onAssembly twice for the same ctx (a re-created
+    // assembly object resolving to one ctx) — the bridge's guard must not
+    // double-register (the duplicate would swap the pending map and orphan the
+    // first bridge's asks).
+    const ctx = createContext()
+    const hooks = new Set<(a: { ctx: ReturnType<typeof createContext> }) => void>()
+    const service: FakeService = {
+      ctx,
+      onAssembly: (hook) => {
+        hooks.add(hook as never)
+        return () => { hooks.delete(hook as never) }
+      },
+      assemblyFor: async () => ({ ctx } as unknown as SessionAssembly),
+    }
+    const fire = (): void => { for (const h of hooks) h({ ctx } as never) }
+    const bridge = createApprovalBridge(service)
+    fire()
+    fire() // second assembly event — same ctx → no-op
+
+    expect(answererOf(ctx)).toBeTypeOf("function")
+    // the question provider registers as the { ask } surface.
+    expect(providerOf(ctx)).toMatchObject({ ask: expect.any(Function) })
+    // the pending-answer machinery is real: answer once, the ask resolves,
+    // and a second answer to the same surface id is a no-op (one-shot real).
+    const p = answererOf(ctx)!(req())
+    await sleep(30)
+    const it = bridge.approvals()[Symbol.asyncIterator]()
+    const surface = (await it.next()).value
+    await bridge.answerApproval(surface.id, { approved: true })
+    await expect(p).resolves.toBe(true)
+    await expect(bridge.answerApproval(surface.id, { approved: false })).resolves.toBeUndefined()
+  })
+
   it("mcp requests get `all tools from {Server}` scopes", async () => {
     const service = fakeService()
     const bridge = createApprovalBridge(service)

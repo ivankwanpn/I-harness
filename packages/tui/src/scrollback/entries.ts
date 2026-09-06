@@ -50,6 +50,14 @@ export interface ToolBlock extends BlockBase {
   /** Streamed result text; running chunks APPEND, done/error REPLACE. */
   output?: string
   error?: string
+  /** M49 Task 10: the structured tool/call args (the typed headers read it;
+   * the raw viewer renders the REDACTED payload). */
+  args?: unknown
+  /** M49 Task 10: the structured tool/result payload (e.g. an fs edit's
+   * `change: TextDiff` — the (+A/-D) delta and hunk rows come from it). */
+  result?: unknown
+  /** M49 Task 10: running progress text (cleared on the final result). */
+  progress?: string
 }
 
 export interface SystemBlock extends BlockBase {
@@ -140,6 +148,9 @@ export function makeToolBlock(ev: Extract<TuiEvent, { type: "tool" }>): ToolBloc
     summary: ev.summary,
     output: ev.output,
     error: ev.error,
+    args: ev.args,
+    result: ev.result,
+    progress: ev.progress,
     seq: ev.seq,
     ts: ev.ts,
   }

@@ -18,7 +18,7 @@ export interface GroupRange {
 
 /** Non-destructive tool kinds that verb-group into one header row. */
 export const GROUPABLE_KINDS: ReadonlyArray<ToolKind> = [
-  "read", "search", "webfetch", "websearch",
+  "read", "list", "search", "webfetch", "websearch",
 ]
 
 export function isGroupableTool(kind: ToolKind): boolean {
@@ -219,30 +219,111 @@ function toolHeader(b: ToolBlock): StyledRun[] {
   // No leading glyph run — the bullet (◆ / ❙) lives in DisplayLine.glyph and
   // the Presenter draws it in the bullet slot (single-glyph rule, M37a fix).
   // The header text begins with one space so the bullet reads "◆ Run …".
-  const label = b.summary ?? b.name
+  //
+  // M49 Task 10: TYPED headers — the label comes from the structured args
+  // (already REDACTED — a secret value under a secret key can never reach the
+  // header), falling back to the bridge-mapped summary and then the tool name.
+  // The structured payload supplies the field; nothing is regex-extracted
+  // from a JSON string.
+  const label = toolLabel(b)
   const text = (s: string): StyledRun => run(s, "text")
   switch (b.toolKind) {
-    case "execute": return [text(" Run "), text(label)]
+    case "execute": return headerWithProgress(b, [text(" Run "), text(label)])
     case "read": return [text(" Read "), text(label)]
-    case "edit": return [text(" Edit "), text(label)]
+    case "edit": {
+      // The diff delta rides the header in BOTH modes — the default expanded
+      // block shows `Edit {path} (+N/-M)` above the hunk rows (plan §7.3:
+      // typed headers + the structured change's literal counts).
+      const counts = structuredCounts(b.result)
+      if (counts !== undefined) {
+        return headerWithProgress(b, [text(" Edit "), text(label), run(` (+${counts.added}/-${counts.deleted})`, "muted")])
+      }
+      return headerWithProgress(b, [text(" Edit "), text(label)])
+    }
     case "search": {
       const n = matchCount(b)
-      const hdr = [text(" Search "), text(label)]
+      const hdr = headerWithProgress(b, [text(" Search "), text(label)])
       if (n >= 0) hdr.push(run(` (${n} matches)`, "muted"))
       return hdr
     }
+    case "list": return headerWithProgress(b, [text(" List "), text(label)])
     case "webfetch": {
-      const hdr = [text(" Fetch "), text(label)]
+      const hdr = headerWithProgress(b, [text(" Fetch "), text(label)])
       if (b.output !== undefined) hdr.push(run(` (${b.output.length} chars)`, "muted"))
       return hdr
     }
-    case "websearch": return [text(" Search web for "), text(label)]
-    case "skill": return [text(" Invoke "), text(label), text("…")]
-    case "mcp-tool": return [text(" Call "), text(b.name)]
-    case "subagent": return [text(` ${statusWord(b.status)} `), text(label)]
-    case "todo": return [text(" Todo "), text(label)]
-    case "other": return [text(" Call "), text(label)]
+    case "websearch": return headerWithProgress(b, [text(" Search web for "), text(label)])
+    case "skill": return headerWithProgress(b, [text(" Invoke "), text(label), text("…")])
+    case "mcp-tool": return headerWithProgress(b, [text(" Call "), text(b.name)])
+    case "subagent": return headerWithProgress(b, [text(` ${statusWord(b.status)} `), text(label)])
+    case "todo": return headerWithProgress(b, [text(" Todo "), text(label)])
+    case "other": return headerWithProgress(b, [text(" Call "), text(label)])
   }
+}
+
+/** M49 Task 10: the header label from the structured tool args —
+ * command/path/pattern/url/query/skill/… first, the bridge summary second,
+ * the tool name last. ONLY the known non-secret label fields are read; a
+ * secret-keyed value (apiKey/token/authorization/password/…) is never the
+ * header text (the full payload's redaction is the presentation/viewer
+ * boundary's job — tool-presentation.redactToolPayload). */
+function toolLabel(b: ToolBlock): string {
+  const sum = b.summary ?? b.name
+  const args = b.args as Record<string, unknown> | undefined
+  if (args !== undefined && typeof args === "object") {
+    const r = args as unknown as Record<string, unknown>
+    switch (b.toolKind) {
+      case "execute": {
+        const cmd = r.command ?? r.cmd ?? r.script
+        if (typeof cmd === "string" && cmd !== "") return cmd
+        break
+      }
+      case "read": {
+        const path = r.path ?? r.file
+        if (typeof path === "string" && path !== "") return path
+        break
+      }
+      case "edit": {
+        const path = r.path ?? r.file ?? (b.result as { change?: { path?: unknown } } | undefined)?.change?.path
+        if (typeof path === "string" && path !== "") return path
+        break
+      }
+      case "search": {
+        const pattern = r.pattern ?? r.query ?? r.path
+        if (typeof pattern === "string" && pattern !== "") return pattern
+        break
+      }
+      case "webfetch": {
+        const url = r.url ?? r.uri
+        if (typeof url === "string" && url !== "") return url
+        break
+      }
+      case "websearch": {
+        const q = r.query ?? r.q
+        if (typeof q === "string" && q !== "") return q
+        break
+      }
+      case "skill": {
+        const s = r.skill ?? r.name
+        if (typeof s === "string" && s !== "") return s
+        break
+      }
+      case "subagent": {
+        const s = r.subject ?? r.task ?? r.role ?? r.description
+        if (typeof s === "string" && s !== "") return s
+        break
+      }
+      default: break
+    }
+  }
+  return sum
+}
+
+/** M49 Task 10: the running progress text rides the header (`… (compiling
+ * 2/5)`); the terminal result always drops it (the engine clears it). */
+function headerWithProgress(b: ToolBlock, hdr: StyledRun[]): StyledRun[] {
+  if (b.status !== "running" || b.progress === undefined || b.progress === "") return hdr
+  return [...hdr, run(` (${b.progress})`, "muted")]
 }
 
 /** Bullet glyph for a block's header line (◆ blocks, ❙ collapsed, none for
@@ -282,17 +363,44 @@ function toolFold(b: ToolBlock, full: StyledRun[][], state: FoldState, glyphs: G
   return errRow !== undefined ? [head, ...sel, errRow] : [head, ...sel]
 }
 
-/** Collapsed edit header carries its diff delta: `Edit {path} (+N/-M)`. */
+/** COLLAPSED edit header: the delta ALREADY rides toolHeader's edit case
+ * (structured counts — result.change.added/deleted or the aggregated
+ * changes). This keeps the collapsed row identical to the expanded header
+ * (same delta source — the front of the hunk rows reads the same).
+ * LEGACY fallback (no structured counts): the +/- lines of the plain diff
+ * presentation text are scanned. */
 function editCollapsedHeader(b: ToolBlock, hdr: StyledRun[], _glyphs: GlyphSet): StyledRun[] {
+  if (structuredCounts(b.result) !== undefined) return hdr
   if (b.output === undefined) return hdr
   let plus = 0
   let minus = 0
   for (const ln of b.output.split("\n")) {
-    if (ln.startsWith("+")) plus++
-    else if (ln.startsWith("-")) minus++
+    if (ln.startsWith("+") && !ln.startsWith("@@")) plus++
+    else if (ln.startsWith("-") && !ln.startsWith("@@")) minus++
   }
   if (plus === 0 && minus === 0) return hdr
   return [...hdr, run(` (+${plus}/-${minus})`, "muted")]
+}
+
+/** The (added, deleted) counts of the structured change(s) — result.change
+ * (one file) or result.changes (aggregated multi-file) — or undefined. */
+function structuredCounts(result: unknown): { added: number; deleted: number } | undefined {
+  if (result === null || typeof result !== "object") return undefined
+  const r = result as { change?: { added?: unknown; deleted?: unknown }; changes?: Array<{ added?: unknown; deleted?: unknown }> }
+  if (r.change !== undefined && r.changes === undefined) {
+    const c = r.change as { added?: unknown; deleted?: unknown }
+    if (typeof c.added === "number" && typeof c.deleted === "number") return { added: c.added, deleted: c.deleted }
+  }
+  if (Array.isArray(r.changes) && r.changes.length > 0) {
+    let added = 0
+    let deleted = 0
+    for (const c of r.changes) {
+      if (typeof c?.added === "number") added += c.added
+      if (typeof c?.deleted === "number") deleted += c.deleted
+    }
+    return { added, deleted }
+  }
+  return undefined
 }
 
 /** first2 / " …" / last3 stream truncation (spec §3.1 truncate output). */
@@ -354,6 +462,7 @@ function kindLabelRuns(k: ToolKind, n: number): StyledRun[] {
   const nn = run(String(n), "bold")
   switch (k) {
     case "read": return [run("Read ", "text"), nn, run(n === 1 ? " file" : " files", "text")]
+    case "list": return [run("Listed ", "text"), nn, run(n === 1 ? " dir" : " dirs", "text")]
     case "search": return [run("Searched ", "text"), nn, run(n === 1 ? " pattern" : " patterns", "text")]
     case "websearch": return [run("Searched ", "text"), nn, run(n === 1 ? " web query" : " web queries", "text")]
     case "webfetch": return [run("Fetched ", "text"), nn, run(n === 1 ? " url" : " urls", "text")]

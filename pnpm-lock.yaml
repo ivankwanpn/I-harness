@@ -206,6 +206,9 @@ importers:
       '@i-harness/provider-runtime':
         specifier: workspace:*
         version: link:../../packages/provider-runtime
+      '@i-harness/session-executor':
+        specifier: workspace:*
+        version: link:../../packages/session-executor
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../../packages/settings
@@ -1078,6 +1081,9 @@ importers:
       '@i-harness/subagent':
         specifier: workspace:*
         version: link:../subagent
+      '@i-harness/text-diff':
+        specifier: workspace:*
+        version: link:../text-diff
       '@i-harness/token-meter':
         specifier: workspace:*
         version: link:../token-meter

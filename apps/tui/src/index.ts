@@ -41,6 +41,9 @@ import {
 } from "@i-harness/tui-core"
 import type { GlyphSet, InputEvent, Palette, Renderer, TerminalCapabilityContext, TerminalHandles } from "@i-harness/tui-core"
 import {
+  bindPermissionOverlay,
+  bindQuestionOverlay,
+  createApprovalBridge,
   createRemoteBackend,
   createScrollbackEngine,
   defaultEmbeddedFactory,
@@ -51,7 +54,24 @@ import {
   spawnSdkSubprocess,
   TuiApp,
 } from "@i-harness/tui"
-import type { BackendClient, InlineHost, InputSource, ScrollbackEngine, TuiAppOptions } from "@i-harness/tui"
+import type {
+  ApprovalBridge,
+  ApprovalBridgeService,
+  BackendClient,
+  InlineHost,
+  InputSource,
+  PermissionState,
+  QuestionState,
+  ScrollbackEngine,
+  TuiAppOptions,
+} from "@i-harness/tui"
+import { createSessionService, type SessionService } from "@i-harness/session-executor"
+import type { SessionAssembly } from "@i-harness/session-executor"
+// The mock-model script shape (structural — llm-mock stays a tui-only dep; a
+// host only ever hands the script-texture to the service option).
+type MockStep = { role: "assistant"; text?: string; toolCalls?: Array<{ name: string; args: unknown }> }
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import type { SettingsStoreSurface } from "@i-harness/settings"
 import { createCredentialStore } from "@i-harness/credentials"
@@ -97,6 +117,115 @@ export interface TuiShutdownController { shutdown(): Promise<void> }
 export function createTuiShutdownController(options: { close: () => Promise<void>; stop: () => void; teardown: () => void }): TuiShutdownController {
   let promise: Promise<void> | undefined
   return { shutdown: () => promise ??= (async () => { try { options.stop() } catch {} try { await options.close() } finally { try { options.teardown() } catch {} } })() }
+}
+
+/* ------------------------------------------------------------------ M49 Task 10: production interaction bridges */
+
+export interface ExecutableHostOptions {
+  /** The assembly workspace (default: a fresh temp dir). */
+  workspace?: string
+  /** approveAll:false (default) → NO auto-answerer; the bridge is the only
+   * answerer (fail-closed otherwise — the spec's one-shot real decisions). */
+  approveAll?: boolean
+  mockScript?: MockStep[]
+}
+
+/** The attach observer — reads the live plugin ctx the way the answerers
+ * themselves are read (never a synthetic flag). */
+export interface AttachObserver {
+  isAttached(ctx: SessionAssembly["ctx"]): boolean
+}
+
+export interface ExecutableHost {
+  service: SessionService
+  approvals: AttachObserver
+  questions: AttachObserver
+  bridge: ApprovalBridge
+  close(): Promise<void>
+}
+
+/** M49 Task 10: the real apps/tui composition seam over a REAL session
+ * service: the production question/approval bridge attached to EVERY assembly
+ * the service creates. `approvals.isAttached(ctx)` / `questions.isAttached(ctx)`
+ * read the plugin-ctx answerers back — the same read path the core-tools use. */
+export async function createExecutableHost(options: ExecutableHostOptions = {}): Promise<ExecutableHost> {
+  const workspace = options.workspace ?? mkdtempSync(join(tmpdir(), "ih-tui-host-"))
+  const service = createSessionService({
+    workspace,
+    approveAll: options.approveAll ?? false,
+    modelPolicy: "test-mock",
+    mockScript: options.mockScript ?? [{ role: "assistant", text: "ok" }],
+  })
+  const bridge = createApprovalBridge(service)
+  const attached = (key: string) => (ctx: SessionAssembly["ctx"]): boolean => {
+    try {
+      return ctx.services.get(key) !== undefined
+    } catch {
+      return false
+    }
+  }
+  return {
+    service,
+    approvals: { isAttached: attached("approval/answerer") },
+    questions: { isAttached: attached("questions/provider") },
+    bridge,
+    close: () => service.close(),
+  }
+}
+
+/**
+ * M49 Task 10: the bridge subscriber-set — the factory's onAssembly lands the
+ * EMBEDDED service's assemblies here; the same hook set feeds the production
+ * bridge. The remote (--attach) path has no local assembly (the wire is v0 —
+ * approvals live in the SDK subprocess, whose host is the CLI) — guarded.
+ */
+function createBridgeService(subscriptions: Set<(assembly: SessionAssembly) => void>): ApprovalBridgeService {
+  return {
+    onAssembly: (hook) => {
+      subscriptions.add(hook)
+      return () => { subscriptions.delete(hook) }
+    },
+    assemblyFor: async (id) => {
+      throw new Error(`approval bridge assembly resolution unavailable: ${id}`)
+    },
+  }
+}
+
+/** M49 Task 10: pump the approval/question streams into the app's overlay —
+ * the ONE active surface wins (a busy overlay leaves the request pending; the
+ * bridge's fail-closed timeout decides). Decisions are ONE-SHOT: each
+ * answerApproval/answerQuestion resolves the pending ask exactly once, and
+ * the Always/Never scope stays a host-side record (the seam is boolean-only).
+ */
+async function pumpInteractionBridge(app: TuiApp, bridge: ApprovalBridge): Promise<void> {
+  const approve = (async () => {
+    for await (const surf of bridge.approvals()) {
+      if (app.state().overlay !== undefined) continue
+      const state: PermissionState = { cursor: 0, scopeIndex: 0, freeformText: "" }
+      app.state().overlay = bindPermissionOverlay(surf, state, {
+        onDecision: (d) => {
+          void bridge.answerApproval(surf.id, { approved: d.approved }, {
+            ...(d.scope !== undefined ? { scope: d.scope } : {}),
+            ...(d.feedback !== undefined ? { feedback: d.feedback } : {}),
+          })
+        },
+        onClose: () => { app.state().overlay = undefined },
+      })
+      app.dispatch("none")
+    }
+  })()
+  const ask = (async () => {
+    for await (const q of bridge.questions()) {
+      if (app.state().overlay !== undefined) continue
+      const state: QuestionState = { cursor: 0, page: 1, pages: 1, freeformFocused: false, freeformText: "", selected: [] }
+      app.state().overlay = bindQuestionOverlay(q, state, {
+        onDecision: (d) => { void bridge.answerQuestion(q.id, { value: d.value }) },
+        onClose: () => { app.state().overlay = undefined },
+      })
+      app.dispatch("none")
+    }
+  })()
+  await Promise.all([approve, ask])
 }
 
 export function createTuiModelBindingFor(
@@ -430,6 +559,14 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     .then((c) => (c === "timeout" ? createUnknownCapabilities() : c))
     .catch(() => createUnknownCapabilities())
 
+  // M49 Task 10: the production interaction bridge — attached to EVERY
+  // assembly the embedded service creates (onAssembly → the factory's seam)
+  // and pumped into the app's overlay below. The REMOTE path has no local
+  // assembly (the wire is v0 — the SDK subprocess owns its own host; its
+  // approvals/fail-closed semantics are the CLI's, not ours — honest gap).
+  const bridgeSubscriptions = new Set<(assembly: SessionAssembly) => void>()
+  const bridge = createApprovalBridge(createBridgeService(bridgeSubscriptions))
+
   // Backend (M38b G2): `--attach <sessionId>` → the REMOTE SDK backend — spawn
   // `i-harness sdk` (the CLI's stdio JSON-RPC server) and
   // drive that session over the FROZEN v0 wire. The spawned subprocess dies
@@ -462,6 +599,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
         // the default factory never attaches one, so guardian stays the
         // durable knob + the honest "asks" semantics at the ask surface).
         approveAll: !tuiPrefs.guardian || tuiPrefs.alwaysApprove,
+        // M49 Task 10: every production assembly gets the bridge answerers
+        // (the bridge attach — fail-closed when the UI cannot surface).
+        onAssembly: (assembly) => { for (const hook of bridgeSubscriptions) hook(assembly) },
       })
 
   const cols = process.stdout.columns ?? 80
@@ -564,6 +704,11 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     // the inline host paints with the palette-derived SGR (quantized).
     minimalSgr: screenMode === "minimal" ? sgrFromPalette(palette, cap) : undefined,
   })
+
+  // M49 Task 10: pump the production interaction bridge — approval/question
+  // requests surface through the app's overlay (the one active surface); the
+  // embedded path only (the remote SDK host owns its own).
+  if (flags.attach === undefined) void pumpInteractionBridge(app, bridge)
 
   // Resize relay: stdout 'resize' → renderer re-grid + engine re-wrap + the
   // minimal inline host geometry; the next frame is a full paint (renderer

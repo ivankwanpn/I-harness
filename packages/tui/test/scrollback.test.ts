@@ -523,3 +523,64 @@ describe("contract surface", () => {
     expect(e.lineBlock(-1)).toBeUndefined()
   })
 })
+
+describe("M49 Task 10 — typed tool blocks (args/result/progress)", () => {
+  function typed(
+    p: {
+      callId: string; name: string; kind: ToolKind; status: "running" | "done" | "error"; seq: number
+      args?: unknown; result?: unknown; progress?: string; output?: string; error?: string
+    },
+  ): TuiEvent {
+    return {
+      type: "tool", callId: p.callId, name: p.name, kind: p.kind, status: p.status,
+      seq: p.seq, ts: 0, args: p.args, result: p.result, progress: p.progress,
+      output: p.output, error: p.error,
+    } as TuiEvent
+  }
+
+  it("keeps an update that arrives before its base tool call", () => {
+    const e = eng({ width: 80 })
+    e.append(typed({ callId: "c1", name: "bash", kind: "execute", status: "done", seq: 1, result: { stdout: "done" }, output: "done" }))
+    e.append(typed({ callId: "c1", name: "bash", kind: "execute", status: "running", seq: 2, args: { command: "echo hi" } }))
+    expect(e.lineBlock(0)?.title).toContain("echo hi")
+    expect(texts(e.viewport(0, 5))).toContain("done")
+  })
+
+  it("typed headers: command/path/pattern/url come from the structured args", () => {
+    const e = eng({ width: 80 })
+    e.append(typed({ callId: "1", name: "bash", kind: "execute", status: "running", seq: 1, args: { command: "echo hi" } }))
+    e.append(typed({ callId: "2", name: "read", kind: "read", status: "done", seq: 2, args: { path: "src/a.ts" } }))
+    e.append(typed({ callId: "3", name: "glob", kind: "search", status: "done", seq: 3, args: { pattern: "*.ts" } }))
+    e.append(typed({ callId: "4", name: "webfetch", kind: "webfetch", status: "done", seq: 4, args: { url: "https://x/1" } }))
+    // expand the verb group first — each member renders its own typed header.
+    e.toggleExpandAll()
+    expect(texts(e.viewport(0, 10))).toEqual([
+      " Run echo hi",
+      " Read src/a.ts",
+      " Search *.ts",
+      " Fetch https://x/1",
+    ])
+  })
+
+  it("edit delta comes from the structured change when present (never parsing the JSON body)", () => {
+    const e = eng({ width: 80 })
+    e.append(typed({
+      callId: "e1", name: "edit", kind: "edit", status: "done", seq: 1,
+      args: { path: "a.ts", old_string: "old", new_string: "new" },
+      result: { ok: true, path: "a.ts", change: { path: "a.ts", added: 1, deleted: 1, hunks: [], truncated: false } },
+      output: "-old\n+new",
+    }))
+    expect(texts(e.viewport(0, 10))[0]).toBe(" Edit a.ts (+1/-1)")
+  })
+
+  it("progress text rides the running block and is dropped on the final result", () => {
+    const e = eng({ width: 80 })
+    e.append(typed({ callId: "p1", name: "bash", kind: "execute", status: "running", seq: 1, args: { command: "npm run build" }, progress: "compiling 2/5" }))
+    expect(e.lineBlock(0)?.title).toContain("compiling")
+    e.append(typed({ callId: "p1", name: "bash", kind: "execute", status: "running", seq: 2, args: { command: "npm run build" }, progress: "compiling 5/5" }))
+    e.append(typed({ callId: "p1", name: "bash", kind: "execute", status: "done", seq: 3, args: { command: "npm run build" }, result: { stdout: "ok" }, output: "ok" }))
+    const text = texts(e.viewport(0, 10)).join("\n")
+    expect(text).toContain(" Run npm run build")
+    expect(text).not.toContain("compiling")
+  })
+})

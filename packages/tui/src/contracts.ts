@@ -34,7 +34,13 @@ export type TuiEvent =
   | { type: "user/edit"; text: string; seq: number; ts: number }
   | { type: "assistant"; text: string; seq: number; ts: number }   // chunk — appends to the open assistant block
   | { type: "thinking"; text: string; seq: number; ts: number }
-  | { type: "tool"; callId: string; name: string; kind: ToolKind; status: "running" | "done" | "error"; summary?: string; output?: string; error?: string; seq: number; ts: number }
+  // M49 Task 10: the tool event is TYPED — `args` (tool/call payload), `result`
+  // (the structured tool/result payload) and `progress` (running text) ride
+  // the event; `output` remains the presentation string (stringified payload /
+  // synthesized unified diff). Secret keys are redacted at the UI boundary
+  // (tool-presentation.redactToolPayload) — never here (the raw payload must
+  // survive the wire intact for honest replay/views).
+  | { type: "tool"; callId: string; name: string; kind: ToolKind; status: "running" | "done" | "error"; summary?: string; output?: string; error?: string; args?: unknown; result?: unknown; progress?: string; seq: number; ts: number }
   | { type: "turn"; phase: "start" | "end"; seq: number; ts: number }
   | { type: "compaction"; phase: "start" | "end"; seq: number; ts: number }
   | { type: "todo"; items: TodoItem[]; seq: number; ts: number }
@@ -48,8 +54,28 @@ export type TuiEvent =
   | { type: "rewind"; targetTurn: number; anchorSeq: number; mode: RewindMode; seq: number; ts: number }
 
 export type ToolKind =
-  | "execute" | "read" | "edit" | "search" | "webfetch" | "websearch"
+  | "execute" | "read" | "edit" | "list" | "search" | "webfetch" | "websearch"
   | "skill" | "mcp-tool" | "subagent" | "todo" | "other"
+
+/** The typed tool event — the variant the formatters (tool-presentation) and
+ * the engine's ToolBlock share. */
+export type TuiToolEvent = Extract<TuiEvent, { type: "tool" }>
+
+/** M49 Task 10: the tool block's VIEW shape (the block viewer's source — the
+ * engine resolves the block at a display line; the formatter's ToolEventLike
+ * consumes this verbatim). */
+export interface ToolViewInfo {
+  callId: string
+  name: string
+  kind: ToolKind
+  status: "running" | "done" | "error"
+  summary?: string
+  output?: string
+  error?: string
+  args?: unknown
+  result?: unknown
+  progress?: string
+}
 
 /** Map an IH tool name (from tool/call) to a block kind (UI spec §3.1). */
 export function toolKindOf(name: string): ToolKind {
@@ -57,6 +83,8 @@ export function toolKindOf(name: string): ToolKind {
   if (/(bash|pwsh|shell|exec|run|cmd)/.test(n)) return "execute"
   if (/(^_?read$|file.*read|read-?file)/.test(n)) return "read"
   if (/edit|apply|^_?write$|patch/.test(n)) return "edit"
+  // M49 Task 10: the fs list_dir (the spec group "Listed N dirs").
+  if (/(list|^ls([_-]|$)|^dir$|tree)/.test(n)) return "list"
   if (/glob|grep|search|find/.test(n)) return "search"
   if (/fetch/.test(n)) return "webfetch"
   if (/websearch|web-search/.test(n)) return "websearch"
@@ -259,6 +287,10 @@ export interface ScrollbackEngine {
    * O(turns) — the block walk, no per-line scanning. OPTIONAL: engines without
    * the accessor fall back (the /jump walk + the timeline gate turn OFF). */
   turnAnchors?(): Array<{ lineIndex: number; preview: string }>
+  /** M49 Task 10: the typed TOOL block at a display line (the block viewer's
+   * open target — Enter/Ctrl+F). A folded verb-group header resolves to its
+   * FIRST member; a non-tool line is undefined. OPTIONAL accessor. */
+  toolAt?(lineIndex: number): ToolViewInfo | undefined
 }
 
 // ------------------------------------------------------------------ workflow surface (M46c G2)
