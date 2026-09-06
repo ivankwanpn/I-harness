@@ -417,6 +417,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
       invert: tuiPrefs.invertScroll,
     },
     mouseToggleFeature,
+    // M49 Task 7: the persisted `busyEnter` knob (spec §6.2 — Enter while a
+    // turn runs: "interrupt" steers the busy turn, "wait" queues behind it).
+    busyEnter: settings.get().busyEnter === "interrupt" ? "steer" : "queue",
     // Spec §1: the prompt text `/minimal`/`/fullscreen` self-relaunches the
     // same session with the flipped --mode (ModeSwitch spawns; the loop quits).
     modeSwitch: (cmd) => new ModeSwitch({ argv: process.argv.slice(2) }).onSlash(cmd),

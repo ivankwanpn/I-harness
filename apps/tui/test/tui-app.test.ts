@@ -2,7 +2,7 @@
 // so the CLI surface cannot drift silently (the PTY proofs of the render
 // pipeline live in packages/tui/test/harness — cases 011/014).
 
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
@@ -52,7 +52,9 @@ function recordingBackend(modelState: BackendModelState): BackendClient & { call
       calls.push(`submit:${prompt}`)
       submissions.push(prompt)
     },
-    steer: async () => {},
+    steer: async (text) => {
+      calls.push(`steer:${text}`)
+    },
     cancel: async () => {},
     events: async function* (): AsyncIterable<TuiEvent> {},
     seqCursor: () => -1,
@@ -66,8 +68,12 @@ async function executableFixture(
   flags: Parameters<typeof createExecutableApp>[0]["flags"],
   backend: BackendClient,
   input?: InputSource,
+  settingsSeed?: Record<string, unknown>,
 ) {
   const root = mkdtempSync(join(tmpdir(), "ih-tui-executable-"))
+  if (settingsSeed !== undefined) {
+    writeFileSync(join(root, "settings.json"), JSON.stringify(settingsSeed))
+  }
   const settings = new SettingsStore({ path: join(root, "settings.json") })
   await settings.load()
   const credentials = createCredentialStore(join(root, "credentials.json"))
@@ -83,6 +89,8 @@ async function executableFixture(
     palette: resolvePalette(cap),
     glyphs: makeGlyphs(true),
     providerController,
+    // M49 Task 7: the same persisted→option mapping the run-tui host wires.
+    busyEnter: settings.get().busyEnter === "interrupt" ? "steer" : "queue",
     ...(input !== undefined ? { input } : {}),
     write: () => {},
   })
@@ -153,6 +161,38 @@ describe("tui flag parser", () => {
       expect(fixture.app.state().sessions?.groups[0]?.sessions[0]?.id).toBe("s-list")
       fixture.app.dispatch("open-settings")
       expect((fixture.app.state().overlay as { kind?: string } | undefined)?.kind).toBe("settings")
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("wires the persisted busyEnter into busy-Enter (M49): interrupt steers the busy turn", async () => {
+    const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "m", label: "fixture:m" })
+    const fixture = await executableFixture({ yes: false }, backend, undefined, { busyEnter: "interrupt" })
+    try {
+      fixture.app.state().prompt.text = "busy text"
+      fixture.app.state().turn = {
+        phase: "responding", attempts: 1, phaseMs: 0, turnMs: 0, tokens: 0, nowMs: 0, canStop: true,
+      }
+      fixture.app.dispatch("submit")
+      expect(backend.calls).toContain("steer:busy text")
+      expect(backend.calls).not.toContain("submit:busy text")
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("busyEnter wait queues the draft through the submit path (pre-M49 behavior)", async () => {
+    const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "m", label: "fixture:m" })
+    const fixture = await executableFixture({ yes: false }, backend, undefined, { busyEnter: "wait" })
+    try {
+      fixture.app.state().prompt.text = "busy text"
+      fixture.app.state().turn = {
+        phase: "responding", attempts: 1, phaseMs: 0, turnMs: 0, tokens: 0, nowMs: 0, canStop: true,
+      }
+      fixture.app.dispatch("submit")
+      expect(backend.calls).toContain("submit:busy text")
+      expect(backend.calls).not.toContain("steer:busy text")
     } finally {
       rmSync(fixture.root, { recursive: true, force: true })
     }

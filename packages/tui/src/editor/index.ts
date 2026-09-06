@@ -231,7 +231,12 @@ class EditorImpl implements PromptEditor {
 
   // ---------------------------------------------------------- boundary math
 
-  /** The first boundary strictly AFTER `idx` (idx itself at the end). */
+  /** The first boundary strictly AFTER `idx` (idx itself at the end).
+   * At a segment junction (`idx` == the containing segment's last bound AND a
+   * next live segment exists — segContaining's first-match-wins hands the
+   * junction to the EARLIER segment), the next unit belongs to the FOLLOWING
+   * segment: a text segment's first grapheme end, or an atom's END (the atom
+   * is crossed WHOLE — right steps over it as one unit, mirroring left). */
   private nextBound(idx: number): number {
     if (this.segs.length === 0) return 0
     const { seg, index } = segContaining(this.segs, idx)
@@ -241,8 +246,10 @@ class EditorImpl implements PromptEditor {
     for (let j = 1; j < bounds.length; j++) {
       if (bounds[j]! > local) return start + bounds[j]!
     }
-    const nxt = nextLive(this.segs, index)
-    return nxt === undefined ? idx : start + segLen(seg)
+    const nxtLive = nextLive(this.segs, index)
+    if (nxtLive === undefined) return idx
+    const nextStart = start + segLen(seg)
+    return nextStart + boundsOf(nxtLive)[1]!
   }
 
   /** The last boundary strictly BEFORE `idx` (idx itself at the start). */
