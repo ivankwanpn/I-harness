@@ -4,10 +4,11 @@
 // session/new|prompt|list|resume|close, cancel notification no-op, and the
 // v0 permission face (autoApprove). One end-to-end test spawns the real CLI
 // (`i-harness acp`) over stdio NDJSON.
-import { describe, expect, it, vi } from "vitest"
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest"
 import { client } from "@agentclientprotocol/sdk"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
@@ -15,11 +16,56 @@ import { fileURLToPath } from "node:url"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
 import { createAcpServer, ACP_SERVER_NAME, ACP_PROTOCOL_VERSION } from "../src/index.ts"
 
+async function startFixtureModel(): Promise<{ baseURL: string; close(): Promise<void> }> {
+  const server = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+      res.writeHead(404).end()
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "fixture ok" } }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n\n"))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address === "string") throw new Error("fixture model failed to listen")
+  return {
+    baseURL: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error === undefined ? resolve() : reject(error))
+      server.closeAllConnections()
+    }),
+  }
+}
+
+async function seedCanonicalProvider(configDir: string, baseURL: string): Promise<void> {
+  await writeFile(join(configDir, "settings.json"), JSON.stringify({
+    llm: {
+      providers: {
+        fixture: {
+          protocol: "openai-completions",
+          baseURL,
+          apiKeyEnv: "FIXTURE_API_KEY",
+          models: [{ id: "fixture-model" }],
+        },
+      },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    },
+  }), "utf8")
+  await writeFile(join(configDir, "credentials.json"), JSON.stringify({
+    refs: { FIXTURE_API_KEY: "fixture-key" },
+  }), "utf8")
+}
+
 async function makeService(): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "ih-acp-"))
   const service = createSessionService({
     workspace: dir,
     approveAll: true,
+    modelPolicy: "test-mock",
     mockScript: [{ role: "assistant", text: "hello from the mock" }],
   })
   return { service, cleanup: () => rm(dir, { recursive: true, force: true }) }
@@ -162,6 +208,7 @@ describe("createAcpServer", () => {
     const service = {
       submit: vi.fn(async () => {}),
       assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
       liveSession: () => undefined,
       hasAssembly: () => false,
       queueState: () => ({ running: false, queued: 0 }),
@@ -198,6 +245,7 @@ describe("createAcpServer", () => {
     const service = {
       submit: vi.fn(async () => {}),
       assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
       liveSession: () => undefined,
       hasAssembly: () => false,
       queueState: () => ({ running: false, queued: 0 }),
@@ -240,6 +288,7 @@ describe("createAcpServer", () => {
     const service = {
       submit: vi.fn(async () => {}),
       assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
       liveSession: () => undefined,
       hasAssembly: () => false,
       queueState: () => ({ running: false, queued: 0 }),
@@ -328,6 +377,7 @@ describe("createAcpServer", () => {
         })
       }),
       assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
       liveSession: () => undefined,
       hasAssembly: () => false,
       queueState: () => ({ running: false, queued: 0 }),
@@ -374,6 +424,7 @@ describe("createAcpServer", () => {
         })
       }),
       assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
       liveSession: () => undefined,
       hasAssembly: () => false,
       queueState: () => ({ running: false, queued: 0 }),
@@ -407,6 +458,7 @@ describe("createAcpServer", () => {
     const service = {
       submit: vi.fn(async () => {}),
       assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
       liveSession: () => undefined,
       hasAssembly: () => false,
       queueState: () => ({ running: false, queued: 0 }),
@@ -436,6 +488,7 @@ describe("createAcpServer", () => {
     const service = {
       submit: vi.fn(async () => {}),
       assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
       liveSession: () => undefined,
       hasAssembly: () => false,
       queueState: () => ({ running: false, queued: 0 }),
@@ -536,12 +589,27 @@ async function stopCli(child: ChildProcessWithoutNullStreams, stderrText: () => 
 }
 
 describe("i-harness acp (CLI stdio)", () => {
+  let fixture: Awaited<ReturnType<typeof startFixtureModel>>
+  let configDir: string
+
+  beforeAll(async () => {
+    fixture = await startFixtureModel()
+    configDir = await mkdtemp(join(tmpdir(), "ih-acp-config-"))
+    await seedCanonicalProvider(configDir, fixture.baseURL)
+  })
+
+  afterAll(async () => {
+    await fixture.close().catch(() => {})
+    await rm(configDir, { recursive: true, force: true })
+  })
+
   it("initialize → new → prompt → list → close over stdio NDJSON", async () => {
     const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
     const cliEntry = fileURLToPath(new URL("../../../apps/cli/src/index.ts", import.meta.url))
     const cwd = await mkdtemp(join(tmpdir(), "ih-acp-cli-"))
     const child = spawn(process.execPath, ["--import", "tsx", cliEntry, "acp"], {
       cwd: repoRoot,
+      env: { ...process.env, IH_CONFIG_DIR: configDir },
       stdio: ["pipe", "pipe", "pipe"],
     })
     const io = drive(child)
@@ -604,7 +672,11 @@ describe("i-harness acp (CLI stdio)", () => {
     const args = ["--import", "tsx", cliEntry, "acp", "--session-dir", sessionDir]
     let sessionId = ""
 
-    const first = spawn(process.execPath, args, { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"] })
+    const first = spawn(process.execPath, args, {
+      cwd: repoRoot,
+      env: { ...process.env, IH_CONFIG_DIR: configDir },
+      stdio: ["pipe", "pipe", "pipe"],
+    })
     const firstIo = drive(first)
     try {
       firstIo.send({
@@ -629,7 +701,11 @@ describe("i-harness acp (CLI stdio)", () => {
       if (first.exitCode === null) first.kill()
     }
 
-    const second = spawn(process.execPath, args, { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"] })
+    const second = spawn(process.execPath, args, {
+      cwd: repoRoot,
+      env: { ...process.env, IH_CONFIG_DIR: configDir },
+      stdio: ["pipe", "pipe", "pipe"],
+    })
     const secondIo = drive(second)
     try {
       secondIo.send({

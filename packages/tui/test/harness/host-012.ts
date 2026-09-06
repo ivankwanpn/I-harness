@@ -34,6 +34,7 @@ import {
 import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
 import { TuiApp, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, InputSource, TuiEvent } from "../../src/index.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -97,6 +98,7 @@ function scriptedBackend(onClose: () => void): BackendClient {
   const batch2 = new Promise<void>((res) => { release2 = res })
   const closedP = new Promise<void>((res) => { releaseClosed = res })
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       await sleep(250)
       yield { type: "user", text: "hello", seq: 1, ts: 0 }

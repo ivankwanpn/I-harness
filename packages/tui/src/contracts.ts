@@ -20,6 +20,7 @@ import type {
   WorkflowListEntry,
   WorkflowRunOutput,
 } from "@i-harness/workflow"
+import type { SessionModelSelection } from "@i-harness/session-persistence"
 
 // ------------------------------------------------------------------ events
 
@@ -86,11 +87,21 @@ export interface BackendContextUsage {
   total?: number
 }
 
-/** The single UI consumption surface (embedded impl in src/backend/embedded.ts;
- * remote/SDK impl arrives later for --attach). */
+export type BackendModelState =
+  | { status: "unconfigured"; reason: string }
+  | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
+  | { status: "ready"; providerId: string; modelId: string; label: string }
+
+/** The single UI consumption surface implemented by embedded and remote SDK
+ * backends. */
 export interface BackendClient {
   listSessions(): Promise<SessionSummary[]>
   open(sessionId: string): Promise<void>
+  /** Create/fork return the authoritative id after switching through open(). */
+  createSession(): Promise<string>
+  forkSession(): Promise<string>
+  modelState(): Promise<BackendModelState>
+  setSessionModel(selection: SessionModelSelection): Promise<BackendModelState>
   submit(prompt: string): Promise<void>
   steer(text: string): Promise<void>
   cancel(): Promise<void>

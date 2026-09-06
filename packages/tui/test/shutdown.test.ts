@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createRenderer, createUnknownCapabilities, makeGlyphs, resolvePalette } from "@i-harness/tui-core"
 import { TuiApp, createScrollbackEngine } from "../src/index.ts"
 import type { BackendClient, TuiEvent } from "../src/index.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 
 const cap = { ...createUnknownCapabilities(), colorLevel: "truecolor" as const, dark: true }
 
 function backend(close: () => Promise<void>): BackendClient {
   return {
+    ...unsupportedSessionManagement,
     listSessions: async () => [],
     open: async () => {},
     submit: async () => {},

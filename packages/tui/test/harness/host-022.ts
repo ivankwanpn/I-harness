@@ -18,6 +18,7 @@ import { createRenderer, createTerminal, createUnknownCapabilities, makeGlyphs, 
 import type { TerminalCapabilityContext, InputEvent } from "@i-harness/tui-core"
 import { TuiApp, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, InputSource, TuiEvent } from "../../src/index.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -93,6 +94,7 @@ async function* sceneEvents(): AsyncIterable<TuiEvent> {
 /** The fake backend — scripted stream + the /usage context stub. */
 function scriptedBackend(): BackendClient {
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for await (const ev of sceneEvents()) yield ev
     },

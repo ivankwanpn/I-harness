@@ -53,6 +53,9 @@ import {
   type RewindPlanResponse,
   type RewindExecuteResponse,
   type RewindMode,
+  type SessionIdResult,
+  type SessionModelSelection,
+  type SessionModelState,
 } from "./protocol.ts"
 
 export const SDK_SERVER_NAME = "i-harness"
@@ -85,6 +88,12 @@ export interface SdkServerOptions {
    * every rewind method answers "rewind not enabled" (honest capability
    * absence; the client gates on the "session-rewind" capability row). */
   rewindFactory?: (sessionId: string) => RewindServiceSurface | undefined
+  /** Additive session lifecycle/model seams. Capability rows are advertised
+   * only when the corresponding host operation is actually available. */
+  createSession?: () => Promise<SessionIdResult>
+  forkSession?: (sessionId: string) => Promise<SessionIdResult>
+  modelState?: (sessionId: string) => Promise<SessionModelState>
+  setSessionModel?: (sessionId: string, selection: SessionModelSelection) => Promise<void>
   /** Server info version payload (defaults to "0.1.0"). */
   version?: string
   /** Fired after a successful shutdown request. */
@@ -263,8 +272,79 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             "session-list": ["1"],
             "session-cancel": ["1"],
             "session-rewind": ["1"],
+            ...(opts.createSession !== undefined ? { "session-create": ["1"] } : {}),
+            ...(opts.forkSession !== undefined ? { "session-fork": ["1"] } : {}),
+            ...(opts.modelState !== undefined && opts.setSessionModel !== undefined
+              ? { "session-model": ["1"] }
+              : {}),
           },
         })
+      }
+      case "session/create": {
+        if (opts.createSession === undefined) {
+          return makeFailure(id, METHOD_NOT_FOUND, "session/create unavailable")
+        }
+        try {
+          const result = validSessionIdResult(await opts.createSession(), "session/create")
+          knownSessions.add(result.sessionId)
+          return makeSuccess(id, result)
+        } catch (error) {
+          return hostMethodFailure(id, "session/create", error)
+        }
+      }
+      case "session/fork": {
+        if (opts.forkSession === undefined) {
+          return makeFailure(id, METHOD_NOT_FOUND, "session/fork unavailable")
+        }
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/fork requires a non-empty sessionId")
+        }
+        try {
+          const result = validSessionIdResult(await opts.forkSession(p.sessionId), "session/fork")
+          knownSessions.add(result.sessionId)
+          return makeSuccess(id, result)
+        } catch (error) {
+          return hostMethodFailure(id, "session/fork", error)
+        }
+      }
+      case "session/model/state": {
+        if (opts.modelState === undefined) {
+          return makeFailure(id, METHOD_NOT_FOUND, "session/model/state unavailable")
+        }
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/model/state requires a non-empty sessionId")
+        }
+        try {
+          return makeSuccess(id, serializeModelState(await opts.modelState(p.sessionId)))
+        } catch (error) {
+          return hostMethodFailure(id, "session/model/state", error)
+        }
+      }
+      case "session/model/set": {
+        if (opts.modelState === undefined || opts.setSessionModel === undefined) {
+          return makeFailure(id, METHOD_NOT_FOUND, "session/model/set unavailable")
+        }
+        const p = params as { sessionId?: unknown; selection?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/model/set requires a non-empty sessionId")
+        }
+        const selection = parseModelSelection(p.selection)
+        if (selection === undefined) {
+          return makeFailure(id, INVALID_PARAMS, "session/model/set requires non-empty provider and model")
+        }
+        const queue = service.queueState(p.sessionId)
+        if (queue.running || queue.queued > 0) {
+          return makeFailure(id, INTERNAL_ERROR, `session/model/set: session busy: ${p.sessionId}`)
+        }
+        try {
+          await opts.setSessionModel(p.sessionId, selection)
+          await service.closeSession(p.sessionId)
+          return makeSuccess(id, serializeModelState(await opts.modelState(p.sessionId)))
+        } catch (error) {
+          return hostMethodFailure(id, "session/model/set", error)
+        }
       }
       case "session/status": {
         const p = params as { sessionId?: unknown } | undefined
@@ -499,6 +579,72 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       assemblyUnsubscribes.clear()
     },
   }
+}
+
+function validSessionIdResult(result: SessionIdResult, method: string): SessionIdResult {
+  if (typeof result?.sessionId !== "string" || result.sessionId === "") {
+    throw new Error(`${method}: host returned an invalid sessionId`)
+  }
+  return { sessionId: result.sessionId }
+}
+
+function parseModelSelection(value: unknown): SessionModelSelection | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+  if (typeof raw.provider !== "string" || raw.provider.trim() === ""
+    || typeof raw.model !== "string" || raw.model.trim() === "") {
+    return undefined
+  }
+  if (raw.reasoningEffort !== undefined
+    && (typeof raw.reasoningEffort !== "string" || raw.reasoningEffort.trim() === "")) {
+    return undefined
+  }
+  return {
+    provider: raw.provider.trim(),
+    model: raw.model.trim(),
+    ...(typeof raw.reasoningEffort === "string"
+      ? { reasoningEffort: raw.reasoningEffort.trim() }
+      : {}),
+  }
+}
+
+function serializeModelState(state: SessionModelState): SessionModelState {
+  if (state.status === "unconfigured") {
+    if (typeof state.reason !== "string") throw new Error("invalid unconfigured model state")
+    return { status: "unconfigured", reason: state.reason }
+  }
+  if (state.status === "invalid") {
+    if (typeof state.reason !== "string") throw new Error("invalid model state")
+    return {
+      status: "invalid",
+      reason: state.reason,
+      ...(typeof state.providerId === "string" ? { providerId: state.providerId } : {}),
+      ...(typeof state.modelId === "string" ? { modelId: state.modelId } : {}),
+    }
+  }
+  if (state.status === "ready"
+    && typeof state.providerId === "string" && state.providerId !== ""
+    && typeof state.modelId === "string" && state.modelId !== ""
+    && typeof state.label === "string" && state.label !== "") {
+    return {
+      status: "ready",
+      providerId: state.providerId,
+      modelId: state.modelId,
+      label: state.label,
+    }
+  }
+  throw new Error("invalid ready model state")
+}
+
+function hostMethodFailure(id: number | string, method: string, error: unknown): RpcMessage {
+  const message = error instanceof Error ? error.message : String(error)
+  return isSessionNotFoundError(message)
+    ? makeFailure(id, INVALID_PARAMS, `${method}: ${message}`)
+    : makeFailure(id, INTERNAL_ERROR, `${method}: ${message}`)
+}
+
+function isSessionNotFoundError(message: string): boolean {
+  return /(?:unknown session|session not found)/i.test(message)
 }
 
 /** The live session events for an error response (best effort; the submit

@@ -301,7 +301,7 @@ steps:
         - " ┃│                                                                          │"
         - " ┃│                                                                          │"
         - " ┃│                                                                          │"
-        - " ┃╰ mock-model───────────────────────────────────────────────────────────────╯"
+        - " ┃╰ unconfigured─────────────────────────────────────────────────────────────╯"
       timeoutMs: 8000
   # ── close: glyph integrity + the byte budget + exit 0.
   - assert-glyph-integrity: {}

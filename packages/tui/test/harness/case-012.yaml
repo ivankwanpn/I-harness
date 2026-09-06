@@ -13,7 +13,7 @@
 #                 keeps rendering + exit not fired (the next steps still
 #                 produce frames/exit 0 via the final ESC quit)
 #   \x1b[Z      → CSI Z → Shift-Tab → cycle-mode → plan chip (status row +
-#                 prompt info line `mock-model · plan`)
+#                 prompt info line `unconfigured · plan`)
 #   \x1b        → lone ESC → armed → "quit" → backend.close → teardown → 0
 #
 # Rows pinned from the actual renderer grid (identical frame numbering as
@@ -57,7 +57,7 @@ steps:
         - " ┃│                                        │"
         - " ┃│                                        │"
         - " ┃│                                        │"
-        - " ┃╰ mock-model─────────────────────────────╯"
+        - " ┃╰ unconfigured───────────────────────────╯"
         - ""
         - "  Enter: submit  │  Ctrl+Enter: interject  │"
   - assert-glyph-integrity: {}
@@ -133,7 +133,7 @@ steps:
       timeoutMs: 8000
       region: { startRow: 20 }
       rows:
-        - " ┃╰ mock-model · plan──────────────────────╯"
+        - " ┃╰ unconfigured · plan────────────────────╯"
   - assert-glyph-integrity: {}
   # Final lone Esc → armed → "quit" → backend.close → host teardown → exit 0.
   # (The quit produces no visible frame; only the teardown write is added.)

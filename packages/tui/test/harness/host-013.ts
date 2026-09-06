@@ -27,6 +27,7 @@ import {
 import type { InputEvent, TerminalCapabilityContext } from "@i-harness/tui-core"
 import { TuiApp, bindPermissionOverlay, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, InputSource, PermissionSurface, PermissionState, TuiEvent } from "../../src/index.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -131,6 +132,7 @@ async function main(): Promise<void> {
   /** Quiet backend: no events ever (the modal is the direct seam path); the
    * pump stays alive on the never-yielding generator. */
   const backend: BackendClient = {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       await new Promise<void>(() => {})
     },

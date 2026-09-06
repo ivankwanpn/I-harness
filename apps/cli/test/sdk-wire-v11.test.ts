@@ -6,7 +6,8 @@
 // PRE-SEEDED rewind point (the subprocess's default mock turn never writes a
 // file, so the durable rewind fixture is written by THIS test via
 // @i-harness/rewind's RewindStore — the same store root the CLI wires).
-import { describe, expect, it } from "vitest"
+import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { createServer } from "node:http"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -19,7 +20,154 @@ const REPO_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)))
 const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
 const CLI_ENTRY = join(REPO_ROOT, "apps", "cli", "src", "index.ts")
 
+async function startFixtureModel(): Promise<{ baseURL: string; close(): Promise<void> }> {
+  const server = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+      res.writeHead(404).end()
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "fixture ok" } }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n\n"))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address === "string") throw new Error("fixture model failed to listen")
+  return {
+    baseURL: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error === undefined ? resolve() : reject(error))
+      server.closeAllConnections()
+    }),
+  }
+}
+
+function seedCanonicalProvider(configDir: string, baseURL: string): void {
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({
+    llm: {
+      providers: {
+        fixture: {
+          protocol: "openai-completions",
+          baseURL,
+          apiKeyEnv: "FIXTURE_API_KEY",
+          models: [{ id: "fixture-model" }],
+        },
+      },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    },
+  }), "utf8")
+  writeFileSync(join(configDir, "credentials.json"), JSON.stringify({
+    refs: { FIXTURE_API_KEY: "fixture-key" },
+  }), "utf8")
+}
+
 describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
+  let fixture: Awaited<ReturnType<typeof startFixtureModel>>
+  let canonicalConfigDir: string
+
+  beforeAll(async () => {
+    fixture = await startFixtureModel()
+    canonicalConfigDir = mkdtempSync(join(tmpdir(), "ih-sdk-w11-config-"))
+    seedCanonicalProvider(canonicalConfigDir, fixture.baseURL)
+  })
+
+  afterAll(async () => {
+    await fixture.close().catch(() => {})
+    rmSync(canonicalConfigDir, { recursive: true, force: true })
+  })
+  it(
+    "creates, forks, and persists session model selection from canonical settings",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-model-ws-"))
+      const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-model-sess-"))
+      const configDir = mkdtempSync(join(tmpdir(), "ih-sdk-model-config-"))
+      writeFileSync(join(configDir, "settings.json"), JSON.stringify({
+        llm: {
+          providers: {
+            fixture: {
+              protocol: "openai-completions",
+              baseURL: fixture.baseURL,
+              apiKeyEnv: "FIXTURE_API_KEY",
+              models: [{ id: "fixture-model" }, { id: "alternate-model" }],
+            },
+          },
+          defaultModel: { provider: "fixture", model: "fixture-model" },
+        },
+      }), "utf8")
+      writeFileSync(join(configDir, "credentials.json"), JSON.stringify({
+        refs: { FIXTURE_API_KEY: "fixture-key" },
+      }), "utf8")
+      writeFileSync(join(sessionDir, "s1.jsonl"), `${JSON.stringify({
+        formatVersion: 1,
+        sessionId: "s1",
+        createdAt: "2026-09-06T00:00:00.000Z",
+      })}\n`, "utf8")
+
+      const client = createHarnessClient({
+        command: process.execPath,
+        args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
+        cwd: workspace,
+        env: { IH_CONFIG_DIR: configDir },
+      })
+      try {
+        const info = await client.initialize()
+        expect(info.capabilities["session-create"]).toEqual(["1"])
+        expect(info.capabilities["session-fork"]).toEqual(["1"])
+        expect(info.capabilities["session-model"]).toEqual(["1"])
+        await expect(client.modelState("s1")).resolves.toEqual({
+          status: "ready",
+          providerId: "fixture",
+          modelId: "fixture-model",
+          label: "fixture:fixture-model",
+        })
+        await expect(client.setSessionModel("s1", {
+          provider: "fixture",
+          model: "alternate-model",
+          reasoningEffort: "high",
+        })).resolves.toEqual({
+          status: "ready",
+          providerId: "fixture",
+          modelId: "alternate-model",
+          label: "fixture:alternate-model",
+        })
+        const header = JSON.parse(readFileSync(join(sessionDir, "s1.jsonl"), "utf8").split("\n")[0]!) as {
+          modelSelection?: { provider: string; model: string; reasoningEffort?: string }
+        }
+        expect(header.modelSelection).toEqual({
+          provider: "fixture",
+          model: "alternate-model",
+          reasoningEffort: "high",
+        })
+
+        await expect(client.run({ sessionId: "s1", prompt: "fork source" })).resolves.toMatchObject({
+          text: expect.stringContaining("fixture ok"),
+        })
+        const forked = await client.forkSession("s1")
+        expect(forked.sessionId).not.toBe("s1")
+        const forkHistory = await client.history(forked.sessionId)
+        expect(forkHistory.events.some((event) => event.type === "user/message" && event.text === "fork source")).toBe(true)
+        expect(forkHistory.events.at(-1)?.type).toBe("turn/end")
+
+        const created = await client.createSession()
+        expect(created.sessionId).not.toBe("")
+        await expect(client.modelState(created.sessionId)).resolves.toMatchObject({
+          status: "ready",
+          providerId: "fixture",
+          modelId: "fixture-model",
+        })
+      } finally {
+        await client.close().catch(() => {})
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(sessionDir, { recursive: true, force: true })
+        rmSync(configDir, { recursive: true, force: true })
+      }
+    },
+    30_000,
+  )
+
   it(
     "cancel + rewind/* + enriched list rows over the real CLI server",
     async () => {
@@ -42,6 +190,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         command: process.execPath,
         args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
         cwd: workspace,
+        env: { IH_CONFIG_DIR: canonicalConfigDir },
       })
       try {
         // handshake: v1.1 capability rows (protocolVersion stays 2)
@@ -52,6 +201,9 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         expect(info.protocolVersion).toBe(2)
         expect(info.capabilities["session-cancel"]).toEqual(["1"])
         expect(info.capabilities["session-rewind"]).toEqual(["1"])
+        expect(info.capabilities["session-create"]).toEqual(["1"])
+        expect(info.capabilities["session-fork"]).toEqual(["1"])
+        expect(info.capabilities["session-model"]).toEqual(["1"])
 
         // one turn → the live assembly (the rewind factory resolves it)
         const result = await client.run({ sessionId: "sdk-w11", prompt: "hello" })
@@ -114,11 +266,13 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         command: process.execPath,
         args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
         cwd: workspace,
+        env: { IH_CONFIG_DIR: canonicalConfigDir },
       })
       const second = createHarnessClient({
         command: process.execPath,
         args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
         cwd: workspace,
+        env: { IH_CONFIG_DIR: canonicalConfigDir },
       })
       try {
         await first.request("initialize", {})
@@ -146,7 +300,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-resume-ws-"))
       const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-resume-sess-"))
       const args = ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir]
-      const first = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      const first = createHarnessClient({ command: process.execPath, args, cwd: workspace, env: { IH_CONFIG_DIR: canonicalConfigDir } })
       try {
         await first.request("initialize", {})
         await first.run({ sessionId: "sdk-resume", prompt: "first prompt" })
@@ -154,7 +308,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         await first.close().catch(() => {})
       }
 
-      const second = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      const second = createHarnessClient({ command: process.execPath, args, cwd: workspace, env: { IH_CONFIG_DIR: canonicalConfigDir } })
       try {
         await second.request("initialize", {})
         await second.run({ sessionId: "sdk-resume", prompt: "second prompt" })
@@ -194,7 +348,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       ].join("\n"), "utf8")
       const args = ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir]
 
-      const first = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      const first = createHarnessClient({ command: process.execPath, args, cwd: workspace, env: { IH_CONFIG_DIR: canonicalConfigDir } })
       try {
         await first.request("initialize", {})
         await first.run({ sessionId, prompt: "continue after crash" })
@@ -207,7 +361,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       expect(rawAfterFirst.map((event) => event.seq)).toEqual(rawAfterFirst.map((_, index) => index))
       expect(rawAfterFirst.some((event) => event.type === "tool/result" && event.output?.code === "TOOL_ABORTED_BEFORE_DISPATCH")).toBe(true)
 
-      const second = createHarnessClient({ command: process.execPath, args, cwd: workspace })
+      const second = createHarnessClient({ command: process.execPath, args, cwd: workspace, env: { IH_CONFIG_DIR: canonicalConfigDir } })
       try {
         await second.request("initialize", {})
         await second.run({ sessionId, prompt: "second restart" })

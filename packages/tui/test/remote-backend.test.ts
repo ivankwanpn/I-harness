@@ -26,7 +26,8 @@
 //      warning and must be re-run once the v1 server is live. The v1.1
 //      cancel/rewind assertions are likewise gated on the capabilities rows.
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -42,6 +43,50 @@ import {
 } from "../src/backend/remote.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+async function startFixtureModel(): Promise<{ baseURL: string; close(): Promise<void> }> {
+  const server = createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+      res.writeHead(404).end()
+      return
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.end([
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "fixture ok" } }] })}`,
+      "data: [DONE]",
+      "",
+    ].join("\n\n"))
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (address === null || typeof address === "string") throw new Error("fixture model failed to listen")
+  return {
+    baseURL: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve, reject) => {
+      server.close((error) => error === undefined ? resolve() : reject(error))
+      server.closeAllConnections()
+    }),
+  }
+}
+
+function seedCanonicalProvider(configDir: string, baseURL: string): void {
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({
+    llm: {
+      providers: {
+        fixture: {
+          protocol: "openai-completions",
+          baseURL,
+          apiKeyEnv: "FIXTURE_API_KEY",
+          models: [{ id: "fixture-model" }],
+        },
+      },
+      defaultModel: { provider: "fixture", model: "fixture-model" },
+    },
+  }), "utf8")
+  writeFileSync(join(configDir, "credentials.json"), JSON.stringify({
+    refs: { FIXTURE_API_KEY: "fixture-key" },
+  }), "utf8")
+}
 
 function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
   let resolve!: (value: T) => void
@@ -227,6 +272,88 @@ describe("createRemoteBackend (fake wire client)", () => {
     expect(bare.modelLabel).toBeUndefined()
     // no per-session metrics RPC on v0 → the OPTIONAL member must not exist
     expect("context" in bare).toBe(false)
+  })
+})
+
+describe("createRemoteBackend session lifecycle and model capabilities", () => {
+  it("gates new methods on capabilities, switches atomically, and maps serializable model state", async () => {
+    const client = fakeWireClient()
+    let selected: { provider: string; model: string; reasoningEffort?: string } | undefined
+    client.setHandler((method, params) => {
+      if (method === "initialize") {
+        return {
+          protocolVersion: 2,
+          capabilities: {
+            "session-create": ["1"],
+            "session-fork": ["1"],
+            "session-model": ["1"],
+          },
+        }
+      }
+      if (method === "session/create") return { sessionId: "s2" }
+      if (method === "session/fork") {
+        expect(params).toEqual({ sessionId: "s2" })
+        return { sessionId: "s3" }
+      }
+      if (method === "session/history") return { events: [], nextSeq: 0 }
+      if (method === "session/model/state") {
+        return selected === undefined
+          ? { status: "unconfigured", reason: "No model configured", apiKey: "must-not-leak" }
+          : { status: "ready", providerId: selected.provider, modelId: selected.model, label: `${selected.provider}:${selected.model}`, client: {} }
+      }
+      if (method === "session/model/set") {
+        selected = (params as { selection: typeof selected }).selection
+        return { status: "ready", providerId: selected!.provider, modelId: selected!.model, label: `${selected!.provider}:${selected!.model}`, apiKey: "must-not-leak" }
+      }
+      if (method === "session/status") return { running: false, queued: 0 }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+
+    await expect(backend.modelState()).resolves.toEqual({
+      status: "unconfigured",
+      reason: "No model configured",
+    })
+    await expect(backend.setSessionModel({
+      provider: "deepseek",
+      model: "deepseek-chat",
+      reasoningEffort: "high",
+    })).resolves.toEqual({
+      status: "ready",
+      providerId: "deepseek",
+      modelId: "deepseek-chat",
+      label: "deepseek:deepseek-chat",
+    })
+    expect(selected).toEqual({ provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" })
+
+    await expect(backend.createSession()).resolves.toBe("s2")
+    await backend.submit("new session")
+    expect(client.requests.findLast((request) => request.method === "session/prompt")).toMatchObject({
+      params: { sessionId: "s2", prompt: "new session" },
+    })
+    await expect(backend.forkSession()).resolves.toBe("s3")
+    await backend.submit("forked session")
+    expect(client.requests.findLast((request) => request.method === "session/prompt")).toMatchObject({
+      params: { sessionId: "s3", prompt: "forked session" },
+    })
+
+    await backend.close()
+  })
+
+  it("rejects unavailable methods without sending unsupported wire calls", async () => {
+    const client = fakeWireClient((method) => method === "initialize"
+      ? { protocolVersion: 2, capabilities: {} }
+      : { ok: true })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await expect(backend.createSession()).rejects.toThrow("session-create")
+    await expect(backend.forkSession()).rejects.toThrow("session-fork")
+    await expect(backend.modelState()).rejects.toThrow("session-model")
+    expect(client.requests.some((request) => [
+      "session/create",
+      "session/fork",
+      "session/model/state",
+    ].includes(request.method))).toBe(false)
+    await backend.close()
   })
 })
 
@@ -813,10 +940,14 @@ describe("real i-harness sdk subprocess (wire-level end-to-end)", () => {
 
       const workspace = mkdtempSync(join(tmpdir(), "ih-tui-remote-ws-"))
       const sessions = mkdtempSync(join(tmpdir(), "ih-tui-remote-sess-"))
+      const configDir = mkdtempSync(join(tmpdir(), "ih-tui-remote-config-"))
+      const fixture = await startFixtureModel()
+      seedCanonicalProvider(configDir, fixture.baseURL)
       const client = spawnSdkSubprocess({
         command: process.execPath,
         args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessions],
         cwd: workspace,
+        env: { IH_CONFIG_DIR: configDir },
       })
       let backend: ReturnType<typeof createRemoteBackend> | undefined
       try {
@@ -836,7 +967,7 @@ describe("real i-harness sdk subprocess (wire-level end-to-end)", () => {
         await backend.submit("hello")
         await waitFor(() => seen.some((e) => e.type === "turn" && e.phase === "end"), 10_000)
 
-        // REAL server events (mock model default), mapped with real seqs
+        // REAL server events from the local provider fixture, mapped with real seqs
         expect(seen.some((e) => e.type === "user" && e.text === "hello")).toBe(true)
         expect(seen.some((e) => e.type === "assistant" && e.text.includes("ok"))).toBe(true)
         expect(seen.some((e) => e.type === "turn" && e.phase === "start")).toBe(true)
@@ -912,8 +1043,10 @@ describe("real i-harness sdk subprocess (wire-level end-to-end)", () => {
       } finally {
         await backend?.close().catch(() => {})
         await client.close().catch(() => {})
+        await fixture.close().catch(() => {})
         rmSync(workspace, { recursive: true, force: true })
         rmSync(sessions, { recursive: true, force: true })
+        rmSync(configDir, { recursive: true, force: true })
       }
     },
     60_000,

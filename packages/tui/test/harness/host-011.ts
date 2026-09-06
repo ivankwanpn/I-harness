@@ -36,6 +36,7 @@ import { createRenderer, createTerminal, createUnknownCapabilities, makeGlyphs, 
 import type { TerminalCapabilityContext } from "@i-harness/tui-core"
 import { TuiApp, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, TuiEvent } from "../../src/index.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -174,6 +175,7 @@ function sceneSteps(scene: string): Step[] {
 
 function scriptedBackend(events: TuiEvent[], steps: Step[], onResize: (s: { cols: number; rows: number }) => void): BackendClient {
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for (let i = 0; i < events.length; i++) {
         const s = steps[i]!

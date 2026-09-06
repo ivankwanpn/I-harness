@@ -40,6 +40,7 @@ import { TuiApp, bindPermissionOverlay, createScrollbackEngine } from "../../src
 import { createInlineLiveRegion } from "../../src/minimal/inline.ts"
 import type { BackendClient, InputSource, PermissionSurface, PermissionState, TuiEvent } from "../../src/index.ts"
 import type { Clipboard } from "../../src/app/clipboard.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -173,6 +174,7 @@ async function* mainEvents(): AsyncIterable<TuiEvent> {
 
 function scriptedBackend(events: () => AsyncIterable<TuiEvent>): BackendClient {
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for await (const ev of events()) yield ev
     },
@@ -319,6 +321,7 @@ async function main023m(): Promise<void> {
     { type: "turn", phase: "end", seq: 4, ts: 300 },
   ]
   const backend: BackendClient = {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for (const ev of events) {
         await sleep(600)

@@ -10,6 +10,7 @@ import { TuiApp } from "../src/app/loop.ts"
 import { createScrollbackEngine } from "../src/index.ts"
 import type { BackendClient, TuiEvent } from "../src/index.ts"
 import { layoutAgent } from "../src/views/agent.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 import {
   isSizeablePaste,
   pasteChipRowAt,
@@ -31,6 +32,7 @@ const make = (cols: number, rows: number): Renderer => createRenderer({ cols, ro
 function stubBackend(): BackendClient {
   const events: TuiEvent[] = []
   return {
+    ...unsupportedSessionManagement,
     listSessions: async () => [],
     open: async () => {},
     submit: async () => {},

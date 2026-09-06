@@ -103,7 +103,7 @@ steps:
         - " ┃│                            │"
         - " ┃│                            │"
         - " ┃│                            │"
-        - " ┃╰ mock-model─────────────────╯"
+        - " ┃╰ unconfigured───────────────╯"
         - ""
         - "  Enter: submit  │  Ctrl+Enter:"
         - ""

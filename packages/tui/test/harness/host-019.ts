@@ -23,6 +23,7 @@ import { createRenderer, createTerminal, createUnknownCapabilities, makeGlyphs, 
 import type { TerminalCapabilityContext, InputEvent } from "@i-harness/tui-core"
 import { TuiApp, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, InputSource, TuiEvent } from "../../src/index.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -99,6 +100,7 @@ function sceneEvents(): TuiEvent[] {
 
 function scriptedBackend(events: TuiEvent[]): BackendClient {
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for (const ev of events) {
         await sleep(800)

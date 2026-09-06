@@ -42,9 +42,21 @@ import { randomUUID } from "node:crypto"
 import { append, createSession, subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
 import { RewindService } from "@i-harness/rewind"
 import { applyTitle, normalizeTitle } from "@i-harness/session-title"
-import { createSessionService, type SessionAssembly, type SessionService, type SessionServiceOptions } from "@i-harness/session-executor"
+import {
+  createSessionService,
+  type ModelPolicy,
+  type SessionAssembly,
+  type SessionService,
+  type SessionServiceOptions,
+} from "@i-harness/session-executor"
 import { activeTokens } from "@i-harness/token-meter"
-import { createSessionCoordinator, type SessionCoordinator } from "@i-harness/session-persistence"
+import {
+  completedTurnPrefix,
+  createSessionCoordinator,
+  forkSession,
+  type SessionCoordinator,
+  type SessionModelSelection,
+} from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { toolKindOf, type BackendClient, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
@@ -245,7 +257,7 @@ export interface EmbeddedOptions {
   /** Info-line/status model label (M38b G2 — plumbed now). The label is
    * HOST-KNOWN (the --model spec): the resolution chain's ModelClient exposes
    * no name (llm-seam interface is stream() only), so the backend cannot
-   * derive it itself. Absent → the loop's "mock-model" fallback text. */
+   * derive it itself. Absent → the loop's unconfigured fallback text. */
   modelLabel?: string
   /** Model context window (tokens) when the HOST resolved it (M38b G2,
    * read-only). Absent → contextTotal is unknown and the chip renders only
@@ -265,6 +277,9 @@ export interface EmbeddedOptions {
    * Esc-Esc arming stays off). The member's methods still fail loudly when the
    * resolved assembly carries no rewind handle (store not enabled). */
   rewindWorkspace?: string
+  createSession?: () => Promise<string>
+  forkSession?: (sessionId: string) => Promise<string>
+  setSessionModel?: (sessionId: string, selection: SessionModelSelection) => Promise<void>
 }
 
 export interface EmbeddedFactoryOptions {
@@ -272,13 +287,8 @@ export interface EmbeddedFactoryOptions {
   workspace: string
   /** Initial prompt (see EmbeddedOptions.prompt). */
   prompt: string
-  /** Host model resolution seam. When forceMock is false, the resolved client
-   * is built per session by this callback; undefined keeps the mock fallback. */
-  modelBuilder?: SessionServiceOptions["modelBuilder"]
-  /** true (default): force the mock client (cyclic "ok" — repeated turns on
-   * one assembly survive). false + modelBuilder → production resolution chain
-   * with mock fallback when the builder resolves undefined. */
-  forceMock?: boolean
+  modelPolicy?: ModelPolicy
+  modelBindingFor?: SessionServiceOptions["modelBindingFor"]
   /** Assembly auto-approval (M37a default true — the approval bridge via
    * service.onAssembly is an M37b host task; fail-closed otherwise). */
   approveAll?: boolean
@@ -287,7 +297,7 @@ export interface EmbeddedFactoryOptions {
   storeRoot?: string
   /** M38b G2: info-line/status model label — the HOST's --model spec (the
    * resolved ModelClient exposes no name; see EmbeddedOptions.modelLabel).
-   * Absent → the loop falls back to "mock-model". */
+   * Absent → the loop displays an unconfigured label. */
   modelLabel?: string
   /** M38b G2: model context window (tokens) the host resolved (read-only;
    * see EmbeddedOptions.contextWindow). */
@@ -403,6 +413,48 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
           pushError(`initial prompt failed: ${errText(error)}`)
         })
       }
+    },
+
+    async createSession(): Promise<string> {
+      if (opts.createSession === undefined) throw new Error("session-create unavailable")
+      const id = await opts.createSession()
+      if (id === "") throw new Error("session-create returned an empty session id")
+      await this.open(id)
+      return id
+    },
+
+    async forkSession(): Promise<string> {
+      if (opts.forkSession === undefined) throw new Error("session-fork unavailable")
+      const id = await opts.forkSession(sessionId)
+      if (id === "") throw new Error("session-fork returned an empty session id")
+      await this.open(id)
+      return id
+    },
+
+    modelState() {
+      return service.modelState(sessionId)
+    },
+
+    async setSessionModel(selection): Promise<import("../contracts.ts").BackendModelState> {
+      if (opts.setSessionModel === undefined) throw new Error("session-model unavailable")
+      if (selection.provider.trim() === "" || selection.model.trim() === "") {
+        throw new Error("session model selection requires non-empty provider and model")
+      }
+      const queueState = service.queueState(sessionId)
+      if (queueState.running || queueState.queued > 0) {
+        throw new Error(`session-model unavailable while session is busy: ${sessionId}`)
+      }
+      await opts.setSessionModel(sessionId, {
+        provider: selection.provider.trim(),
+        model: selection.model.trim(),
+        ...(selection.reasoningEffort !== undefined
+          ? { reasoningEffort: selection.reasoningEffort }
+          : {}),
+      })
+      await service.closeSession(sessionId)
+      cachedAssembly = undefined
+      assemblyForId = undefined
+      return service.modelState(sessionId)
     },
 
     async submit(prompt: string): Promise<void> {
@@ -624,7 +676,7 @@ function buildRewindMember(
  * session; with a coordinator/store it provides durable create/list/resume/
  * flush lifecycle and optionally the durable rewind bridge. */
 export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Promise<BackendClient> {
-  const forceMock = opts.forceMock ?? true
+  const modelPolicy = opts.modelPolicy ?? "required"
   // A resumed injected coordinator is transferred to this factory instance because
   // adoptOwnership() holds its lease until coordinator.close().
   const ownsCoordinator = opts.coordinator === undefined && opts.storeRoot !== undefined
@@ -632,6 +684,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
   const coordinator = opts.coordinator ?? (jsonlBackend === undefined ? undefined : createSessionCoordinator(jsonlBackend, { lock: { enabled: true, lockRoot: opts.storeRoot! } }))
   let sessionId = opts.resumeSessionId
   const sessions = new Map<string, Session>()
+  const ephemeralModelSelections = new Map<string, SessionModelSelection>()
   const openedSessionIds = new Set<string>()
   const mirroredSession = (id: string, restored?: Session): Session => {
     const live = createSession((ev) => {
@@ -670,16 +723,45 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
         openedSessionIds.add(id)
         return undefined
       }
+    } else {
+      sessionId ??= `sess-${randomUUID().slice(0, 8)}`
+      sessions.set(sessionId, createSession())
+      sessionFor = async (id: string): Promise<Session> => {
+        let session = sessions.get(id)
+        if (session === undefined) {
+          session = createSession()
+          sessions.set(id, session)
+        }
+        return session
+      }
     }
     sessionId ??= `sess-${randomUUID().slice(0, 8)}`
     const durableRewindRoot = coordinator === undefined ? undefined : opts.rewindStoreRoot
+    const loadMeta: SessionServiceOptions["loadMeta"] = async (id) => {
+      if (coordinator !== undefined) {
+        return (await coordinator.profile(id)).meta
+      }
+      const session = sessions.get(id)
+      if (session === undefined) return undefined
+      const modelSelection = ephemeralModelSelections.get(id)
+      return {
+        formatVersion: session.formatVersion,
+        sessionId: id,
+        createdAt: "",
+        ...(session.header ?? {}),
+        ...(modelSelection !== undefined ? { modelSelection } : {}),
+      }
+    }
     const service: SessionService = createSessionService({
       workspace: opts.workspace, sessionId,
+      modelPolicy,
       ...(sessionFor !== undefined ? { sessionFor } : {}),
       ...(coordinator !== undefined ? { coordinator } : {}),
       ...(coordinator !== undefined ? { beforeDispose: async () => { await Promise.all([...openedSessionIds].map((id) => coordinator.flush(id))) } } : {}),
-      approveAll: opts.approveAll ?? true, mockCycles: true,
-      ...(!forceMock && opts.modelBuilder !== undefined ? { modelBuilder: opts.modelBuilder } : {}),
+      ...(coordinator !== undefined || opts.modelBindingFor !== undefined ? { loadMeta } : {}),
+      approveAll: opts.approveAll ?? true,
+      ...(modelPolicy === "test-mock" ? { mockCycles: true } : {}),
+      ...(opts.modelBindingFor !== undefined ? { modelBindingFor: opts.modelBindingFor } : {}),
       ...(durableRewindRoot !== undefined ? { rewindStoreRoot: durableRewindRoot } : {}),
     })
     const listSessions = coordinator === undefined ? undefined : async (): Promise<SessionSummary[]> => {
@@ -707,7 +789,49 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
       }))
       return rows.filter((row): row is SessionSummary => row !== undefined)
     }
-    const backend = createEmbeddedBackend({ service, sessionId, prompt: opts.prompt, ...(listSessions !== undefined ? { listSessions } : {}), ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}), ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}), ...(durableRewindRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}) })
+    const createSessionForBackend = async (): Promise<string> => {
+      if (coordinator !== undefined) return (await coordinator.create()).id
+      const id = `sess-${randomUUID().slice(0, 8)}`
+      sessions.set(id, createSession())
+      return id
+    }
+    const forkSessionForBackend = async (sourceId: string): Promise<string> => {
+      if (coordinator !== undefined) {
+        await coordinator.flush(sourceId)
+        return (await forkSession(coordinator, sourceId)).sessionId
+      }
+      const source = (await service.assemblyFor(sourceId)).session
+      const prefix = completedTurnPrefix(source.events, sourceId, undefined)
+      const id = `sess-${randomUUID().slice(0, 8)}`
+      const child = createSession()
+      child.events.push(...prefix)
+      child.header = { parentSession: sourceId, seedLength: prefix.length }
+      sessions.set(id, child)
+      return id
+    }
+    const setSessionModel = opts.modelBindingFor === undefined
+      ? undefined
+      : async (id: string, selection: SessionModelSelection): Promise<void> => {
+          if (coordinator !== undefined) {
+            if (!(await coordinator.list()).includes(id)) throw new Error(`session not found: ${id}`)
+            await coordinator.updateMeta(id, { modelSelection: selection })
+            return
+          }
+          if (!sessions.has(id)) throw new Error(`session not found: ${id}`)
+          ephemeralModelSelections.set(id, selection)
+        }
+    const backend = createEmbeddedBackend({
+      service,
+      sessionId,
+      prompt: opts.prompt,
+      createSession: createSessionForBackend,
+      forkSession: forkSessionForBackend,
+      ...(setSessionModel !== undefined ? { setSessionModel } : {}),
+      ...(listSessions !== undefined ? { listSessions } : {}),
+      ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
+      ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
+      ...(durableRewindRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}),
+    })
     if (coordinator === undefined) return backend
     const close = backend.close.bind(backend)
     let closePromise: Promise<void> | undefined

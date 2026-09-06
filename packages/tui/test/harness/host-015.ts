@@ -65,6 +65,7 @@ import { TuiApp, createScrollbackEngine, relaunchArgs } from "../../src/index.ts
 import type { BackendClient, TuiEvent } from "../../src/index.ts"
 import { createInlineLiveRegion } from "../../src/minimal/inline.ts"
 import type { InlineLiveRegion } from "../../src/minimal/contracts.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -157,6 +158,7 @@ const PACING_015 = [800, 800, 800, 0, 0, 0, 2500]
 function sceneBackend015(): BackendClient {
   const events = sceneEvents015()
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for (let i = 0; i < events.length; i++) {
         const ms = PACING_015[i]!
@@ -195,6 +197,7 @@ async function main015r(): Promise<void> {
     { type: "turn", phase: "end", seq: 2, ts: 100 },
   ]
   const backend: BackendClient = {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       await sleep(600)
       yield events[0]!

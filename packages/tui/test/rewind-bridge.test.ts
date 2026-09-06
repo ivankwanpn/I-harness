@@ -27,6 +27,7 @@ import {
   mapSessionEvent,
 } from "../src/backend/embedded.ts"
 import type { BackendClient } from "../src/contracts.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
 const H = (s: string) => createHash("sha256").update(utf8(s)).digest("hex")
@@ -84,6 +85,7 @@ function fakeBackend(opts: {
     eventAppended: true,
   }
   const client: BackendClient = {
+    ...unsupportedSessionManagement,
     listSessions: async () => [],
     open: async () => {},
     submit: async () => {},
@@ -410,10 +412,10 @@ describe("createEmbeddedBackend — the conditional rewind member", () => {
   })
 
   it("defaultEmbeddedFactory: ephemeral and missing-session matrix has no rewind capability", async () => {
-    const ephemeral = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "" })
+    const ephemeral = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "" })
     expect(ephemeral.rewind).toBeUndefined()
     await ephemeral.close()
-    const noSession = await createSessionAssembly({ workspace: tmp(), rewindStoreRoot: tmp() })
+    const noSession = await createSessionAssembly({ workspace: tmp(), rewindStoreRoot: tmp(), modelPolicy: "test-mock" })
     expect(noSession.rewind).toBeUndefined()
     await noSession.dispose()
   })
@@ -426,7 +428,17 @@ describe("createEmbeddedBackend — the conditional rewind member", () => {
       { role: "assistant", toolCalls: [{ name: "write", args: { path: "a.txt", text: "after" } }] },
       { role: "assistant", text: "done" },
     ])
-    const first = await defaultEmbeddedFactory({ workspace, prompt: "", storeRoot, rewindStoreRoot: storeRoot, forceMock: false, modelBuilder: async () => script() })
+    const first = await defaultEmbeddedFactory({
+      workspace,
+      prompt: "",
+      storeRoot,
+      rewindStoreRoot: storeRoot,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model: script(), providerId: "fixture", modelId: "fixture", label: "fixture:fixture" },
+      }),
+    })
     const [a] = await first.listSessions()
     const sessionA = a!.id
     await first.submit("rewrite a")
@@ -441,7 +453,7 @@ describe("createEmbeddedBackend — the conditional rewind member", () => {
     expect(plan.ops).toEqual(plan.clean)
     await first.close()
 
-    const resumed = await defaultEmbeddedFactory({ workspace, prompt: "", storeRoot, rewindStoreRoot: storeRoot, resumeSessionId: sessionA })
+    const resumed = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace, prompt: "", storeRoot, rewindStoreRoot: storeRoot, resumeSessionId: sessionA })
     expect(await resumed.rewind!.points()).toEqual([{ turnIndex: 0, preview: "rewrite a", files: 1 }])
     const result = await resumed.rewind!.execute(0, "all")
     expect(result).toMatchObject({ target: 0, mode: "all", revertedFiles: 1, truncated: true, eventAppended: true, errors: [] })
@@ -454,7 +466,7 @@ describe("createEmbeddedBackend — the conditional rewind member", () => {
     const seed = createSessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: true, lockRoot: storeRoot } })
     const sessionB = (await seed.create()).id
     await seed.close()
-    const b = await defaultEmbeddedFactory({ workspace: tmp(), prompt: "", storeRoot, rewindStoreRoot: storeRoot, resumeSessionId: sessionB })
+    const b = await defaultEmbeddedFactory({ modelPolicy: "test-mock", workspace: tmp(), prompt: "", storeRoot, rewindStoreRoot: storeRoot, resumeSessionId: sessionB })
     try {
       expect(sessionB).not.toBe(sessionA)
       expect(await b.rewind!.points()).toEqual([])

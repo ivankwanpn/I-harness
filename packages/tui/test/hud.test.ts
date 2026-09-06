@@ -11,6 +11,7 @@ import type { TuiAppState } from "../src/app/present.ts"
 import { TuiApp } from "../src/app/loop.ts"
 import type { BackendClient, DisplayLine, ScrollbackEngine, TuiEvent } from "../src/contracts.ts"
 import { createScrollbackEngine } from "../src/scrollback/engine.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap, "groknight")
@@ -206,6 +207,7 @@ describe("present() with the hud option", () => {
 /* ------------------------------------------------------------ loop wiring */
 
 const stubBackend = (): BackendClient => ({
+  ...unsupportedSessionManagement,
   listSessions: async () => [],
   open: async () => {},
   submit: async () => {},

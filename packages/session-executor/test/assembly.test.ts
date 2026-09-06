@@ -11,6 +11,12 @@ import {
 } from "../src/assembly.ts"
 
 describe("createSessionAssembly", () => {
+  it("omitted model policy refuses an assembly without a client", async () => {
+    await expect(createSessionAssembly({
+      workspace: process.cwd(),
+    })).rejects.toThrow(ModelUnavailableError)
+  })
+
   it("required model policy refuses an assembly without a client", async () => {
     await expect(createSessionAssembly({
       workspace: process.cwd(),
@@ -31,16 +37,24 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
-  it("composes an agent and a session and disposes cleanly", async () => {
-    const assembly = await createSessionAssembly({ workspace: process.cwd(), sessionId: "s1" })
+  it("composes an agent and a session and disposes cleanly with an explicit test model", async () => {
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      sessionId: "s1",
+      modelPolicy: "test-mock",
+    })
     expect(assembly.session.events).toEqual([])
     expect(assembly.agent).toBeDefined()
     expect(assembly.model).toBeDefined()
     await assembly.dispose()
   }, 30_000)
 
-  it("runs one agent turn with the mock default", async () => {
-    const assembly = await createSessionAssembly({ workspace: process.cwd(), sessionId: "s1" })
+  it("runs one agent turn with the explicit test mock", async () => {
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      sessionId: "s1",
+      modelPolicy: "test-mock",
+    })
     const result = await assembly.agent.run("hello")
     expect(result.finalText).toBeDefined()
     expect(assembly.session.events.length).toBeGreaterThan(0)

@@ -19,6 +19,7 @@ import { createDefaultWorkflowSurface, jobStatusRow, workflowParams } from "../s
 import type { SlashContext, SlashPanelRequest } from "../src/app/slash/types.ts"
 import type { WorkflowListEntry, WorkflowRunOutput } from "@i-harness/workflow"
 import type { WorkflowJobView, WorkflowSurface } from "../src/contracts.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 
 // ------------------------------------------------------------------ the fake surface
 
@@ -220,6 +221,7 @@ describe("/workflow [r] key (loop level)", () => {
   function stubBackend(): BackendClient {
     const events: TuiEvent[] = []
     return {
+      ...unsupportedSessionManagement,
       listSessions: async () => [],
       open: async () => {},
       submit: async () => {},

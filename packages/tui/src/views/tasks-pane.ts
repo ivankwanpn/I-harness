@@ -13,7 +13,7 @@ export interface TaskEntry {
   label: string
   /** Elapsed text, e.g. "2m10s" / "3s". */
   elapsed?: string
-  /** Model name (e.g. "mock-model"). */
+  /** Model name or an honest unconfigured label. */
   model?: string
   /** Count shown as `(N)` (queued subagents etc.); undefined hides it. */
   count?: number

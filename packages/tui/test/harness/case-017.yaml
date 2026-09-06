@@ -63,7 +63,7 @@ steps:
         - " ┃│                                        │"
         - " ┃│                                        │"
         - " ┃│                                        │"
-        - " ┃╰ mock-model─────────────────────────────╯"
+        - " ┃╰ unconfigured───────────────────────────╯"
   # ---- interaction 2: question modal (same bridge) -------------------------
   - await-marker: { name: overlay-q1 }
   - wait-screen:
@@ -87,7 +87,7 @@ steps:
         - " ┃│                                        │"
         - " ┃│                                        │"
         - " ┃│                                        │"
-        - " ┃╰ mock-model─────────────────────────────╯"
+        - " ┃╰ unconfigured───────────────────────────╯"
   # ---- interaction 3: /btw -------------------------------------------------
   - write-pty: { data: "/btw why" }
   - wait-screen:

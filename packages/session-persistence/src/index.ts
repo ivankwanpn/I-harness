@@ -5,6 +5,13 @@ import { repairTurnTail } from "./repair.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
 export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
+export {
+  SessionForkUnavailableError,
+  completedTurnPrefix,
+  forkSession,
+  type ForkSessionOptions,
+  type ForkSessionResult,
+} from "./fork.ts"
 
 // M23: the ownership lease's typed errors are part of the coordinator's
 // fail-closed surface (create/append/adopt/load/flush propagate them), so
@@ -23,7 +30,7 @@ export interface SessionMeta extends SessionHeader {
    * never a SessionEvent (a rename is a metadata rewrite, not a log op). */
   title?: string
   /** C5 per-session model selection: header metadata (resolution chain:
-   * session meta > llm.defaultModel > legacy core.model > mock). */
+   * session meta > llm.defaultModel > legacy core.model > unconfigured). */
   modelSelection?: SessionModelSelection
 }
 

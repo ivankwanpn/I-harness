@@ -83,8 +83,8 @@ export interface AssemblyOptions {
   sessionId?: string
   workspace: string
   /** Explicit clients always win. Under `required`, absence rejects instead
-   * of constructing a mock. Omitted policy temporarily preserves the legacy
-   * mock fallback until production callers are migrated. */
+   * of constructing a mock. Omitted policy is production-safe `required`;
+   * tests must opt into `test-mock` explicitly. */
   modelPolicy?: ModelPolicy
   model?: ModelClient
   modelLabel?: string
@@ -193,10 +193,9 @@ export function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown)
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
   // Resolve before mounting resources so a required-but-missing model cannot
-  // leave a partially initialized assembly behind. Omitted policy is the
-  // Task-3 compatibility bridge; Task 4 changes that default to required.
+  // leave a partially initialized assembly behind.
   const model: ModelClient = opts.model ?? (() => {
-    if (opts.modelPolicy === "required") throw new ModelUnavailableError()
+    if (opts.modelPolicy !== "test-mock") throw new ModelUnavailableError()
     return opts.mockScript === undefined && opts.mockCycles === true
       ? cyclicMockClient([{ role: "assistant", text: "ok" }])
       : createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])

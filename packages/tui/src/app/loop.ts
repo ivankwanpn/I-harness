@@ -308,9 +308,9 @@ export class TuiApp {
       this.fpsMeter.start()
     }
     // M38b G2: REAL model label — the host's --model spec when wired, else the
-    // backend's own knowledge (embedded's modelLabel seam); the "mock-model"
-    // fallback stays for hosts that pass neither (existing tests' text).
-    const model = this.opts.modelLabel ?? this.opts.backend.modelLabel ?? "mock-model"
+    // backend's own knowledge (embedded's modelLabel seam); otherwise display
+    // an honest unconfigured state instead of fabricating a model identity.
+    const model = this.opts.modelLabel ?? this.opts.backend.modelLabel ?? "unconfigured"
     this.app = {
       title: "untitled",
       mode: "normal",

@@ -16,7 +16,13 @@ import { registerCommand } from "@i-harness/interaction"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
-import { createSessionAssembly, type ReasoningEffort } from "@i-harness/session-executor"
+import {
+  createSessionAssembly,
+  type ModelPolicy,
+  type ReasoningEffort,
+} from "@i-harness/session-executor"
+import type { ProviderRuntime, SessionModelBinding } from "@i-harness/provider-runtime"
+import { loadProviderRuntime } from "./provider-runtime.ts"
 
 // M33 §5: the session-compact command handler — pure (testable) surface.
 // v0 error semantics: busy text while the executor lane is running (the
@@ -54,6 +60,12 @@ export interface HeadlessOptions {
   workspace: string
   mockScript?: MockStep[]
   model?: ModelClient
+  /** Production defaults to required. `test-mock` is reserved for explicit
+   * test fixtures; supplying mockScript is itself an explicit mock fixture. */
+  modelPolicy?: ModelPolicy
+  /** Injectable runtime for hermetic composition tests. Absent uses the
+   * canonical settings/credentials paths. */
+  providerRuntime?: ProviderRuntime
   approveAll?: boolean
   shellTimeoutMs?: number // default 120_000; the shipped harness deadline
   shellRetention?: ShellRetentionOptions // M12: cap bash/pwsh output (default 64_000 headTail)
@@ -199,10 +211,34 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     wake: () => {},
   }
   try {
+    const modelPolicy = opts.modelPolicy
+      ?? (opts.mockScript !== undefined ? "test-mock" : "required")
+    let providerBinding: SessionModelBinding | undefined
+    if (opts.model === undefined && modelPolicy === "required") {
+      const runtime = opts.providerRuntime ?? (await loadProviderRuntime()).runtime
+      const meta = opts.coordinator !== undefined && activeId !== undefined
+        ? (await opts.coordinator.profile(activeId)).meta
+        : undefined
+      const state = await runtime.resolveModel({
+        ...(meta?.modelSelection !== undefined
+          ? { sessionSelection: meta.modelSelection }
+          : {}),
+      })
+      if (state.status !== "ready") throw new Error(state.reason)
+      providerBinding = state.binding
+    }
+    const contextWindow = providerBinding?.contextWindow
+    const compact = contextWindow === undefined || opts.compact === undefined
+      ? opts.compact
+      : { ...opts.compact, contextWindow }
     assembly = await createSessionAssembly({
       workspace: opts.workspace,
       ...(activeId !== undefined ? { sessionId: activeId } : {}),
-      ...(opts.model !== undefined ? { model: opts.model } : {}),
+      modelPolicy,
+      ...(opts.model !== undefined
+        ? { model: opts.model }
+        : providerBinding !== undefined ? { model: providerBinding.client } : {}),
+      ...(providerBinding !== undefined ? { modelLabel: providerBinding.label } : {}),
       ...(opts.mockScript !== undefined ? { mockScript: opts.mockScript } : {}),
       approveAll: opts.approveAll,
       ...(opts.shellTimeoutMs !== undefined ? { shellTimeoutMs: opts.shellTimeoutMs } : {}),
@@ -219,7 +255,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.mcp !== undefined ? { mcp: opts.mcp } : {}),
       ...(opts.lsp !== undefined ? { lsp: opts.lsp } : {}),
       ...(opts.team !== undefined ? { team: opts.team } : {}),
-      ...(opts.compact !== undefined ? { compact: opts.compact } : {}),
+      ...(compact !== undefined ? { compact } : {}),
       ...(opts.sessionQuery !== undefined ? { sessionQuery: opts.sessionQuery } : {}),
       ...(opts.coordinator !== undefined ? { coordinator: opts.coordinator } : {}),
       ...(restoredState !== undefined ? { restoredState } : {}),
@@ -227,7 +263,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.planMode ? { planMode: true } : {}),
       ...(opts.guardian !== undefined ? { guardian: opts.guardian } : {}),
       ...(opts.outputSpill !== undefined ? { outputSpill: opts.outputSpill } : {}),
-      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
+      ...(opts.reasoningEffort !== undefined
+        ? { reasoningEffort: opts.reasoningEffort }
+        : providerBinding?.reasoningEffort !== undefined
+          ? { reasoningEffort: providerBinding.reasoningEffort }
+          : {}),
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
       parentNotify,
     })
   } catch (err) {

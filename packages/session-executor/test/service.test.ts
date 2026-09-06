@@ -297,7 +297,7 @@ describe("createSessionService", () => {
   }, 60_000)
 
   it("runs the first submit and serializes the second behind it", async () => {
-    const service = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     const order: string[] = []
     const p1 = service.submit("s1", "first", new AbortController().signal).then(() => order.push("first-done"))
     const p2 = service.submit("s1", "second", new AbortController().signal).then(() => order.push("second-done"))
@@ -308,7 +308,7 @@ describe("createSessionService", () => {
   }, 60_000)
 
   it("an aborted queued turn settles without breaking the chain", async () => {
-    const service = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     const p1 = service.submit("s1", "one", new AbortController().signal)
     const gate = new AbortController()
     gate.abort() // aborted BEFORE the queued turn starts
@@ -320,7 +320,7 @@ describe("createSessionService", () => {
   }, 60_000)
 
   it("onAssembly fires once per session with the assembly ctx", async () => {
-    const service = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     const seen: string[] = []
     service.onAssembly((a) => { seen.push(a.sessionId ?? "") })
     await service.submit("s1", "x", new AbortController().signal)
@@ -330,7 +330,7 @@ describe("createSessionService", () => {
   it("emits session/request then session/queued for a chained submit", async () => {
     const collections = collectEvents()
     const service = createSessionService({
-      workspace: process.cwd(), approveAll: true, mockCycles: true,
+      workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true,
       telemetry: createTelemetry([collections.sink]),
     })
     const p1 = service.submit("s1", "one", new AbortController().signal)
@@ -342,7 +342,7 @@ describe("createSessionService", () => {
   }, 60_000)
 
   it("close() disposes assemblies and settles active turns", async () => {
-    const service: SessionService = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const service: SessionService = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     await service.submit("s1", "x", new AbortController().signal)
     await service.close()
     expect(service.liveSession("s1")).toBeUndefined()
@@ -350,7 +350,7 @@ describe("createSessionService", () => {
   }, 60_000)
 
   it("closeSession() disposes only the selected assembly and allows a later reopen", async () => {
-    const service = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     const first = await service.assemblyFor("first")
     await service.assemblyFor("second")
     const dispose = vi.spyOn(first, "dispose")
@@ -367,6 +367,7 @@ describe("createSessionService", () => {
   it("a failed turn rejects submit (drain rejection → host error frame)", async () => {
     const service: SessionService = createSessionService({
       workspace: process.cwd(), approveAll: true,
+      modelPolicy: "test-mock",
       mockScript: [], // exhausted script → stream error → turn failure
     })
     let failed = false
@@ -377,14 +378,14 @@ describe("createSessionService", () => {
     }
     expect(failed).toBe(true)
     // the lane is still usable after a failure:
-    const again = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const again = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     await again.submit("s1", "x", new AbortController().signal)
     expect(again.hasAssembly("s1")).toBe(true)
   }, 60_000)
 
   it("settles a queued successor after a failed predecessor without an unhandled rejection", async () => {
     let loadCount = 0
-    const service = createSessionService({ workspace: process.cwd(), approveAll: true, loadMeta: async () => { if (++loadCount === 1) throw new Error("load failed"); return undefined } })
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", loadMeta: async () => { if (++loadCount === 1) throw new Error("load failed"); return undefined } })
     const unhandled: unknown[] = []
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
     process.on("unhandledRejection", onUnhandled)
@@ -403,7 +404,7 @@ describe("createSessionService", () => {
 
   it("flushes before assembly disposal and propagates the flush error once", async () => {
     const order: string[] = []
-    const service = createSessionService({ workspace: process.cwd(), approveAll: true, beforeDispose: async () => { order.push("flush"); throw new Error("flush failed") } })
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", beforeDispose: async () => { order.push("flush"); throw new Error("flush failed") } })
     const assembly = await service.assemblyFor("s-order")
     const originalDispose = assembly.dispose
     assembly.dispose = async () => { order.push("dispose"); await originalDispose() }
@@ -412,7 +413,7 @@ describe("createSessionService", () => {
     await expect(service.close()).resolves.toBeUndefined()
   })
   it("queueState reports running/queued from the per-session lane", async () => {
-    const service: SessionService = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const service: SessionService = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
     const p1 = service.submit("s1", "one", new AbortController().signal)
     const p2 = service.submit("s1", "two", new AbortController().signal)

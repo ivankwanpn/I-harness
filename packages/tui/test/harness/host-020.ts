@@ -39,6 +39,7 @@ import type { TerminalCapabilityContext, InputEvent } from "@i-harness/tui-core"
 import { RewindRecorder, RewindService, RewindStore, type RewindEvent } from "@i-harness/rewind"
 import { TuiApp, createScrollbackEngine } from "../../src/index.ts"
 import type { BackendClient, InputSource, TuiEvent } from "../../src/index.ts"
+import { unsupportedSessionManagement } from "../backend-stub.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -182,6 +183,7 @@ function scriptedBackend(s: SceneState): BackendClient {
     },
   }
   return {
+    ...unsupportedSessionManagement,
     async *events(): AsyncIterable<TuiEvent> {
       for await (const ev of sceneEvents(s)) yield ev
     },

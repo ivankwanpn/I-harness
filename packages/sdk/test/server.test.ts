@@ -27,6 +27,7 @@ async function makeService(): Promise<{ service: SessionService; cleanup: () => 
   const service = createSessionService({
     workspace: dir,
     approveAll: true,
+    modelPolicy: "test-mock",
     mockScript: [{ role: "assistant", text: "hello from the mock" }],
   })
   return { service, cleanup: () => rm(dir, { recursive: true, force: true }) }
@@ -62,11 +63,12 @@ function makeStubService(): SessionService {
   return {
     submit: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
+    modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
     liveSession: () => undefined,
     hasAssembly: () => false,
-    queueState: () => ({ running: false, queued: 0 }),
+    queueState: vi.fn(() => ({ running: false, queued: 0 })),
     onAssembly: () => () => {},
-    closeSession: async () => {},
+    closeSession: vi.fn(async () => {}),
     close: async () => {},
   }
 }
@@ -225,6 +227,7 @@ describe("createSdkServer", () => {
     const service = createSessionService({
       workspace: dir,
       approveAll: true,
+      modelPolicy: "test-mock",
       mockScript: [{ role: "assistant", toolCalls: [{ name: "skill_get", args: { name: "missing" } }] }],
     })
     try {
@@ -238,6 +241,140 @@ describe("createSdkServer", () => {
     } finally {
       await service.close()
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("createSdkServer session lifecycle and model capabilities", () => {
+  it("advertises additive session create/fork/model capabilities when the host wires them", async () => {
+    const service = makeStubService()
+    const server = createSdkServer(service, {
+      createSession: async () => ({ sessionId: "created" }),
+      forkSession: async () => ({ sessionId: "forked" }),
+      modelState: async () => ({ status: "unconfigured", reason: "No model configured" }),
+      setSessionModel: async () => {},
+    })
+    try {
+      const reply = await server.handleLine(encodeFrame(makeRequest(8, "initialize", {})))
+      const info = (decodeFrame(reply!) as RpcSuccess).result as { capabilities: Record<string, string[]> }
+      expect(info.capabilities["session-create"]).toEqual(["1"])
+      expect(info.capabilities["session-fork"]).toEqual(["1"])
+      expect(info.capabilities["session-model"]).toEqual(["1"])
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("round-trips create/fork/model state and invalidates the session binding after selection", async () => {
+    const service = makeStubService()
+    const closeSession = vi.mocked(service.closeSession)
+    let selection: { provider: string; model: string; reasoningEffort?: string } | undefined
+    const server = createSdkServer(service, {
+      createSession: async () => ({ sessionId: "created" }),
+      forkSession: async (sessionId) => ({ sessionId: `${sessionId}-fork` }),
+      modelState: async () => selection === undefined
+        ? { status: "unconfigured", reason: "No model configured" }
+        : { status: "ready", providerId: selection.provider, modelId: selection.model, label: `${selection.provider}:${selection.model}` },
+      setSessionModel: async (_sessionId, next) => { selection = next },
+    })
+    try {
+      const created = await server.handleLine(encodeFrame(makeRequest(9, "session/create", {})))
+      expect((decodeFrame(created!) as RpcSuccess).result).toEqual({ sessionId: "created" })
+      const forked = await server.handleLine(encodeFrame(makeRequest(10, "session/fork", { sessionId: "created" })))
+      expect((decodeFrame(forked!) as RpcSuccess).result).toEqual({ sessionId: "created-fork" })
+      const before = await server.handleLine(encodeFrame(makeRequest(11, "session/model/state", { sessionId: "created" })))
+      expect((decodeFrame(before!) as RpcSuccess).result).toEqual({ status: "unconfigured", reason: "No model configured" })
+      const selected = await server.handleLine(encodeFrame(makeRequest(12, "session/model/set", {
+        sessionId: "created",
+        selection: { provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" },
+      })))
+      expect((decodeFrame(selected!) as RpcSuccess).result).toEqual({
+        status: "ready",
+        providerId: "deepseek",
+        modelId: "deepseek-chat",
+        label: "deepseek:deepseek-chat",
+      })
+      expect(selection).toEqual({ provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" })
+      expect(closeSession).toHaveBeenCalledWith("created")
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("rejects invalid or busy model changes and unavailable host seams", async () => {
+    const service = makeStubService()
+    const setSessionModel = vi.fn(async () => {})
+    const server = createSdkServer(service, {
+      modelState: async () => ({ status: "unconfigured", reason: "No model configured" }),
+      setSessionModel,
+    })
+    try {
+      const invalid = await server.handleLine(encodeFrame(makeRequest(13, "session/model/set", {
+        sessionId: "s1",
+        selection: { provider: "", model: "m" },
+      })))
+      expect((decodeFrame(invalid!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      expect(setSessionModel).not.toHaveBeenCalled()
+
+      vi.mocked(service.queueState).mockReturnValue({ running: true, queued: 0 })
+      const busy = await server.handleLine(encodeFrame(makeRequest(14, "session/model/set", {
+        sessionId: "s1",
+        selection: { provider: "p", model: "m" },
+      })))
+      expect((decodeFrame(busy!) as RpcFailure).error.message).toContain("busy")
+      expect(setSessionModel).not.toHaveBeenCalled()
+
+      vi.mocked(service.queueState).mockReturnValue({ running: false, queued: 1 })
+      const queued = await server.handleLine(encodeFrame(makeRequest(15, "session/model/set", {
+        sessionId: "s1",
+        selection: { provider: "p", model: "m" },
+      })))
+      expect((decodeFrame(queued!) as RpcFailure).error.message).toContain("busy")
+      expect(setSessionModel).not.toHaveBeenCalled()
+
+      const unavailable = await server.handleLine(encodeFrame(makeRequest(16, "session/create", {})))
+      expect((decodeFrame(unavailable!) as RpcFailure).error.code).toBe(METHOD_NOT_FOUND)
+    } finally {
+      await server.close()
+    }
+  })
+
+  it("serializes model state without runtime secrets and maps unknown sessions consistently", async () => {
+    const service = makeStubService()
+    const server = createSdkServer(service, {
+      forkSession: async () => { throw new Error("session not found: missing") },
+      modelState: async (sessionId) => {
+        if (sessionId === "missing") throw new Error("session not found: missing")
+        return {
+          status: "ready",
+          providerId: "fixture",
+          modelId: "fixture-model",
+          label: "fixture:fixture-model",
+          apiKey: "must-not-leak",
+          client: {},
+        } as never
+      },
+      setSessionModel: async () => {},
+    })
+    try {
+      const state = await server.handleLine(encodeFrame(makeRequest(17, "session/model/state", {
+        sessionId: "s1",
+      })))
+      expect((decodeFrame(state!) as RpcSuccess).result).toEqual({
+        status: "ready",
+        providerId: "fixture",
+        modelId: "fixture-model",
+        label: "fixture:fixture-model",
+      })
+
+      for (const [id, method] of [[18, "session/fork"], [19, "session/model/state"]] as const) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(id, method, { sessionId: "missing" })))
+        const failure = decodeFrame(reply!) as RpcFailure
+        expect(failure.error.code).toBe(INVALID_PARAMS)
+        expect(failure.error.message).toContain("session not found")
+      }
+    } finally {
+      await server.close()
     }
   })
 })

@@ -3,9 +3,54 @@
 // pipeline live in packages/tui/test/harness — cases 011/014).
 
 import { describe, expect, it } from "vitest"
-import { buildEmbeddedSessionOptions, buildSdkArgs, createTuiShutdownController, parseFlags } from "../src/index.ts"
+import {
+  buildEmbeddedSessionOptions,
+  buildSdkArgs,
+  createTuiModelBindingFor,
+  createTuiShutdownController,
+  parseFlags,
+} from "../src/index.ts"
 
 describe("tui flag parser", () => {
+  it("adapts provider runtime clients into session-executor model bindings", async () => {
+    const client = { async *stream() { yield { type: "end" as const } } }
+    const seen: unknown[] = []
+    const bindingFor = createTuiModelBindingFor({
+      async resolveModel(input: unknown) {
+        seen.push(input)
+        return {
+          status: "ready" as const,
+          binding: {
+            client,
+            providerId: "fixture",
+            modelId: "flag-model",
+            label: "fixture:flag-model",
+            reasoningEffort: "high" as const,
+            contextWindow: 128_000,
+          },
+        }
+      },
+    }, "fixture:flag-model")
+
+    await expect(bindingFor("s1", {
+      modelSelection: { provider: "session", model: "selected" },
+    } as never)).resolves.toEqual({
+      status: "ready",
+      binding: {
+        model: client,
+        providerId: "fixture",
+        modelId: "flag-model",
+        label: "fixture:flag-model",
+        reasoningEffort: "high",
+        contextWindow: 128_000,
+      },
+    })
+    expect(seen).toEqual([{
+      sessionSelection: { provider: "session", model: "selected" },
+      override: "fixture:flag-model",
+    }])
+  })
+
   it("parses value flags in any order plus the boolean --yes", () => {
     expect(
       parseFlags(["--prompt", "hi there", "--workspace", "C:\\w", "--model", "deepseek:deepseek-chat", "--yes", "--session-dir", "C:\\sessions", "--resume", "s-123"]),

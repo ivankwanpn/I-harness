@@ -20,6 +20,7 @@ import { dispatchKey } from "../src/app/keys.ts"
 import type { Kbd, KeymapState } from "../src/app/keys.ts"
 import type { BackendClient, DisplayLine, ScrollbackEngine, SessionSummary, TuiEvent } from "../src/contracts.ts"
 import type { RegionLine } from "../src/minimal/contracts.ts"
+import { unsupportedSessionManagement } from "./backend-stub.ts"
 
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap)
@@ -142,6 +143,16 @@ class QueueBackend implements BackendClient {
 
   listSessions(): Promise<SessionSummary[]> { return Promise.resolve([]) }
   open(): Promise<void> { return Promise.resolve() }
+  createSession(): Promise<string> { return unsupportedSessionManagement.createSession() }
+  forkSession(): Promise<string> { return unsupportedSessionManagement.forkSession() }
+  modelState(): ReturnType<BackendClient["modelState"]> {
+    return unsupportedSessionManagement.modelState()
+  }
+  setSessionModel(
+    selection: Parameters<BackendClient["setSessionModel"]>[0],
+  ): ReturnType<BackendClient["setSessionModel"]> {
+    return unsupportedSessionManagement.setSessionModel(selection)
+  }
   submit(): Promise<void> { return Promise.resolve() }
   steer(): Promise<void> { return Promise.resolve() }
   cancel(): Promise<void> { return Promise.resolve() }
@@ -386,7 +397,7 @@ describe("TuiApp minimal path (fake InlineLiveRegion + fake engine)", () => {
     const r = inline.lastRegion
     expect(r.length).toBeGreaterThanOrEqual(2)
     expect(r[r.length - 1]).toMatchObject({ runs: [{ text: "", style: "text" }], glyph: "❯" }) // prompt row, bottom, focused
-    expect(r[r.length - 2].runs[0].text).toBe("mock-model") // status row (single part: no chips yet)
+    expect(r[r.length - 2].runs[0].text).toBe("unconfigured") // status row (single part: no chips yet)
     // Every byte through the app sink (ledger saw commit + region writes).
     expect(writes.join("")).toContain("[commit 1]")
     expect(writes.join("")).toContain("[commit 2]")
