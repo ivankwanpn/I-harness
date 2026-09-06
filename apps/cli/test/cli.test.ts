@@ -17,7 +17,7 @@ import { createFileBackedSessionQuery, closeSessionQueries } from "@i-harness/se
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { CompactionConfig } from "@i-harness/compaction"
 import type { RetryConfig } from "@i-harness/guard-retry"
-import type { ShellRetentionOptions } from "@i-harness/shell"
+import { resolveShell, type ShellRetentionOptions } from "@i-harness/shell"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { probeBwrap } from "@i-harness/sandbox-local"
@@ -1107,16 +1107,20 @@ describe("headless CLI multi-turn subagents (M9)", () => {
 })
 
 describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
-  it("bash that outlives shellTimeoutMs → TOOL_TIMEOUT marker on tool/result, run completes", async () => {
+  it("resolved shell that outlives shellTimeoutMs → TOOL_TIMEOUT marker on tool/result, run completes", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m10a-"))
     try {
+      const shell = resolveShell().name
       const start = performance.now()
       const result = await runHeadless("slow", {
         workspace: dir,
         approveAll: true,
         shellTimeoutMs: 300,
         mockScript: [
-          { role: "assistant", toolCalls: [{ name: "bash", args: { command: 'node -e "setTimeout(()=>{}, 30000)"' } }] },
+          { role: "assistant", toolCalls: [{
+            name: shell,
+            args: { command: shell === "pwsh" ? "Start-Sleep -Seconds 30" : "sleep 30" },
+          }] },
           { role: "assistant", text: "done" },
         ],
       })
@@ -1128,9 +1132,9 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
       // the session's tool/result carries the substituted output with the
       // TOOL_TIMEOUT marker at the TOP level of `output` (registry wraps the
       // guard's substituted value in { name, output })
-      const bashResult = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash")
-      expect(bashResult).toBeDefined()
-      const output = (bashResult as { output: { code?: string; error?: string } }).output
+      const shellResult = result.session?.events.find((e) => e.type === "tool/result" && e.name === shell)
+      expect(shellResult).toBeDefined()
+      const output = (shellResult as { output: { code?: string; error?: string } }).output
       expect(output.code).toBe("TOOL_TIMEOUT")
       expect(output.error).toContain("timed out after 300ms")
     } finally {
@@ -1138,17 +1142,18 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
     }
   }, 20_000)
 
-  it("four identical bash calls → plugin user/message consecutive-times reminder", async () => {
+  it("four identical shell calls → plugin user/message consecutive-times reminder", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m10a-"))
     try {
+      const shell = resolveShell().name
       const result = await runHeadless("repeat", {
         workspace: dir,
         approveAll: true,
         mockScript: [
-          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
-          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
-          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
-          { role: "assistant", toolCalls: [{ name: "bash", args: { command: "echo hi" } }] },
+          { role: "assistant", toolCalls: [{ name: shell, args: { command: "echo hi" } }] },
+          { role: "assistant", toolCalls: [{ name: shell, args: { command: "echo hi" } }] },
+          { role: "assistant", toolCalls: [{ name: shell, args: { command: "echo hi" } }] },
+          { role: "assistant", toolCalls: [{ name: shell, args: { command: "echo hi" } }] },
           { role: "assistant", text: "done" },
         ],
       })
@@ -1171,21 +1176,24 @@ describe("headless CLI M12 retry + retention", () => {
   })
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
-  it("retries a timed-out bash call and succeeds on the retry", async () => {
+  it("retries a timed-out shell call and succeeds on the retry", async () => {
     // Deterministic: the command touches a guard file on the FIRST run and sleeps
     // (so it times out), then runs fast on later invocations.
     const flag = join(dir, "attempt")
     const command = `node -e "const fs=require('fs');const f='${flag.replace(/\\/g, "/")}';if(!fs.existsSync(f)){fs.writeFileSync(f,'1');setTimeout(()=>{},5000)}"`
+    const shell = resolveShell().name
+    const shellTimeoutMs = shell === "pwsh" ? 1500 : 300
     const retry: RetryConfig = { maxRetries: 1, initialDelayMs: 1, maxDelayMs: 5 }
     const result = await runHeadless("retry", {
       workspace: dir,
       approveAll: true,
-      // 300 to match the M10a timeout tests: the RETRY attempt must complete
-      // (node startup + script) inside this budget, and 200ms flakes on slow CI.
-      shellTimeoutMs: 300,
+      // PowerShell adds another process before node and routinely needs more
+      // than 300ms to start on Windows. The first attempt still sleeps for 5s,
+      // while the retry has enough budget to prove that it exits normally.
+      shellTimeoutMs,
       retry,
       mockScript: [
-        { role: "assistant", toolCalls: [{ name: "bash", args: { command } }] },
+        { role: "assistant", toolCalls: [{ name: shell, args: { command } }] },
         { role: "assistant", text: "done" },
       ],
     })
@@ -1202,14 +1210,15 @@ describe("headless CLI M12 retry + retention", () => {
     expect(resultEvent!.output.stdout ?? "").not.toContain("timed out")
   })
 
-  it("shellRetention caps a verbose bash output with the truncated marker", async () => {
+  it("shellRetention caps verbose shell output with the truncated marker", async () => {
     const retention: ShellRetentionOptions = { maxBytes: 100 }
+    const shell = resolveShell().name
     const result = await runHeadless("verbose", {
       workspace: dir,
       approveAll: true,
       shellRetention: retention,
       mockScript: [
-        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "node -e \"process.stdout.write('y'.repeat(5000))\"" } }] },
+        { role: "assistant", toolCalls: [{ name: shell, args: { command: "node -e \"process.stdout.write('y'.repeat(5000))\"" } }] },
         { role: "assistant", text: "ok" },
       ],
     })
