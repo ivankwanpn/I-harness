@@ -814,11 +814,18 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
    * for the whole walk even while another open changes the active session. */
   async function wireFullHistory(targetSessionId: string): Promise<SessionEvent[]> {
     const events: SessionEvent[] = []
+    const seenSeqs = new Set<number>()
     let afterSeq = 0
     for (;;) {
       const page = await wireHistory(targetSessionId, afterSeq, HISTORY_PAGE_LIMIT)
-      events.push(...page.events)
-      if (page.events.length < HISTORY_PAGE_LIMIT) return events
+      for (const event of page.events) {
+        if (typeof event.seq === "number") {
+          if (seenSeqs.has(event.seq)) continue
+          seenSeqs.add(event.seq)
+        }
+        events.push(event)
+      }
+      if (page.events.length === 0) return events
       if (!Number.isInteger(page.nextSeq) || page.nextSeq <= afterSeq) {
         throw new SdkWireError(-32603, "malformed session/history response: paging cursor did not advance")
       }
