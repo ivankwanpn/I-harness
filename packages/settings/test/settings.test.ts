@@ -38,7 +38,7 @@ describe("normalizeSettings", () => {
 
   it("keeps valid values and merges partial unknowns", () => {
     const s = normalizeSettings({ theme: "dark", fontSize: 16, plugins: { bash: false } })
-    expect(s.theme).toBe("dark")
+    expect(s.theme).toBe("grok-night")
     expect(s.fontSize).toBe(16)
     expect(s.plugins.bash).toBe(false)
     // untouched fields stay at defaults
@@ -60,6 +60,29 @@ describe("normalizeSettings", () => {
     expect(s.sandboxMode).toBe("workspace-write")
     expect(s.searchBackend).toBe("jsonl")
     expect(s.plugins.webSearch).toBe(false)
+    // unknown theme ids degrade to the default (system) — never a silent keep.
+    expect(normalizeSettings({ theme: "midnight" }).theme).toBe("system")
+  })
+
+  it("normalizes legacy light/dark theme values", () => {
+    expect(normalizeSettings({ theme: "light" }).theme).toBe("grok-day")
+    expect(normalizeSettings({ theme: "dark" }).theme).toBe("grok-night")
+  })
+
+  it("accepts all six modern theme ids verbatim", () => {
+    for (const theme of [
+      "system", "grok-night", "grok-day", "tokyo-night", "rose-pine-moon", "oscura-midnight",
+    ] as const) {
+      expect(normalizeSettings({ theme }).theme).toBe(theme)
+    }
+  })
+
+  it("tui.prefs.screenMode defaults to fullscreen and validates minimal", () => {
+    expect(SETTINGS_DEFAULTS.tui.prefs.screenMode).toBe("fullscreen")
+    expect(normalizeSettings(undefined).tui.prefs.screenMode).toBe("fullscreen")
+    expect(normalizeSettings({ tui: { prefs: { screenMode: "minimal" } } }).tui.prefs.screenMode).toBe("minimal")
+    // unknown / wrong-typed values degrade to the default (never corrupt)
+    expect(normalizeSettings({ tui: { prefs: { screenMode: "tiny" } } }).tui.prefs.screenMode).toBe("fullscreen")
   })
 
   it("searchBackend (Task 1.2): defaults to jsonl, accepts sqlite, rejects unknowns", () => {
@@ -231,14 +254,14 @@ describe("SettingsStore", () => {
     const store = new SettingsStore({ path: file })
     await store.load()
 
-    const immediate = await store.set({ theme: "light" })
-    expect(immediate.theme).toBe("light")
+    const immediate = await store.set({ theme: "grok-day" })
+    expect(immediate.theme).toBe("grok-day")
     expect(immediate.llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
     // the normalized section still never exposes the legacy plane.
     expect("providers" in immediate.tui).toBe(false)
 
     const persisted = JSON.parse(await readFile(file, "utf8"))
-    expect(persisted.theme).toBe("light")
+    expect(persisted.theme).toBe("grok-day")
     expect(persisted.tui.providers.providers.custom).toEqual(LEGACY_FILE.tui.providers.providers.custom)
 
     const reloaded = new SettingsStore({ path: file })
@@ -260,10 +283,10 @@ describe("SettingsStore", () => {
     const file = join(root, "settings.json")
     const store = new SettingsStore({ path: file })
     await store.load()
-    await store.set({ theme: "dark", fontSize: 16, searchBackend: "sqlite" })
+    await store.set({ theme: "grok-night", fontSize: 16, searchBackend: "sqlite" })
     const again = new SettingsStore({ path: file })
     const s = await again.load()
-    expect(s.theme).toBe("dark")
+    expect(s.theme).toBe("grok-night")
     expect(s.fontSize).toBe(16)
     expect(s.searchBackend).toBe("sqlite")
     expect(s.model).toBe(SETTINGS_DEFAULTS.model)
@@ -275,7 +298,7 @@ describe("SettingsStore", () => {
     const file = join(root, "settings.json")
     const store = new SettingsStore({ path: file })
     await store.load()
-    await store.set({ theme: "dark" })
+    await store.set({ theme: "grok-night" })
     await store.reset()
     const s = store.get()
     expect(s.theme).toBe("system")

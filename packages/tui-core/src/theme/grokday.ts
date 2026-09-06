@@ -6,6 +6,7 @@
 import type { Palette } from "./index.ts"
 
 export const GROKDAY: Palette = Object.freeze<Palette>({
+  name: "grok-day",
   bgTerminal: "#fafafa",
   bgDark: "#f5f5f5",
   bgBase: "#eeeeee",

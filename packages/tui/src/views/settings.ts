@@ -15,7 +15,8 @@
 // master/detail flow (provider roster) and the default-model picker.
 
 import type { GlyphSet, Palette } from "@i-harness/tui-core"
-import type { Settings, SettingsStoreSurface } from "@i-harness/settings"
+import { SETTINGS_THEMES, SETTINGS_THEMES_LOW_COLOR } from "@i-harness/settings"
+import type { Settings, SettingsStoreSurface, SettingsTheme } from "@i-harness/settings"
 import type { AppAction } from "../app/keys.ts"
 import type { OverlaySeam } from "../app/present.ts"
 import type { SettingsContext, SettingDefinition, SettingValueKind } from "../settings/registry.ts"
@@ -121,22 +122,24 @@ export function settingsSnapshot(
 
 // ------------------------------------------------------------------ row builders (pure)
 
-/** grok's theme display names (groknight/grokday/auto). */
-export function themeDisplayName(theme: SettingsSnapshot["theme"]): string {
-  switch (theme) {
-    case "light": return "grokday"
-    case "dark": return "groknight"
-    case "system": return "auto"
-  }
+/** The theme ids the modal exposes for a terminal's color depth (M49 Task 8,
+ * design §9.3): the tinted palettes are truecolor-only — low-color terminals
+ * see only system/grok-night/grok-day. */
+export function themeValuesFor(colorLevel: string | undefined): readonly SettingsTheme[] {
+  return colorLevel === "truecolor" ? SETTINGS_THEMES : SETTINGS_THEMES_LOW_COLOR
 }
 
-/** The next theme in the cycle dark(groknight) → light(grokday) → system(auto). */
-export function nextTheme(theme: SettingsSnapshot["theme"]): Settings["theme"] {
-  switch (theme) {
-    case "dark": return "light"
-    case "light": return "system"
-    default: return "dark"
-  }
+/** Theme display names (M49 Task 8 — the six-id vocabulary; system → auto). */
+export function themeDisplayName(theme: SettingsSnapshot["theme"]): string {
+  return theme === "system" ? "auto" : theme
+}
+
+/** The next theme in the cycle (system → grok-night → grok-day → … → system),
+ * bounded to the visible set for the terminal's color depth. */
+export function nextTheme(theme: SettingsSnapshot["theme"], colorLevel?: string): Settings["theme"] {
+  const visible = themeValuesFor(colorLevel)
+  const idx = visible.indexOf(theme)
+  return visible[(idx + 1) % visible.length]!
 }
 
 /** The knob rows of one category (pure — the binder refreshes after writes).
@@ -288,6 +291,9 @@ export function isSettingsOverlay(ov: OverlaySeam): boolean {
  * modal-launched surfaces). */
 export interface TuiSettingsHost {
   settings: SettingsStoreSurface
+  /** M49 Task 8: the terminal's real color depth — the theme row exposes only
+   * the themes the terminal can honor (tinted palettes are truecolor-only). */
+  colorLevel?: string
   /** Live application closures (loop-wired). */
   applyTheme?(theme: Settings["theme"]): void
   applyTimestamps?(on: boolean): void
@@ -368,18 +374,21 @@ export function tuiSettingsDefinitions(host: TuiSettingsHost): TuiSettingDefinit
       commit: async () => { host.onOpenPicker?.() },
       appliesToNewSessions: false,
     },
-    // ---- Appearance
+    // ---- Appearance (M49 Task 8: preview → commit → rollback — the SAME
+    // live path /theme uses (host.applyTheme = the loop's themePreview); a
+    // failed persist rolls the live palette back before the error surfaces).
     {
       key: "theme",
       category: "Appearance",
       label: "theme",
-      description: "Color scheme (groknight/grokday/auto)",
-      valueKind: { kind: "enum", values: ["dark", "light", "system"] },
+      description: `Color scheme (${themeValuesFor(host.colorLevel).map(themeDisplayName).join(" / ")})`,
+      valueKind: { kind: "enum", values: [...themeValuesFor(host.colorLevel)] },
       visible: () => true,
       read: (ctx) => ctx.settings.get().theme,
       display: (ctx) => themeDisplayName(ctx.settings.get().theme),
-      commit: async (ctx, value) => { await ctx.settings.set({ theme: value as Settings["theme"] }) },
-      liveApply: (value) => host.applyTheme?.(value as Settings["theme"]),
+      preview: (_ctx, value) => host.applyTheme?.(value as SettingsTheme),
+      commit: async (ctx, value) => { await ctx.settings.set({ theme: value as SettingsTheme }) },
+      rollback: (_ctx, previous) => host.applyTheme?.(previous as SettingsTheme),
     },
     {
       key: "compact",
@@ -606,6 +615,15 @@ export function bindSettingsOverlay(
     // present.ts's kind union is closed (G2-owned); runtime string dispatch —
     // rewind's cast precedent (isSettingsOverlay probe).
     kind: "settings" as unknown as OverlaySeam["kind"],
+    // M49 Task 8: minimal-mode embedded chrome — the same row model the cell
+    // modals draw, borderless (no box) in the live region.
+    minimalRows: () =>
+      rowsOf().map((r, i) => ({
+        runs: [{
+          text: `${i === state.cursor ? "● " : "○ "}${r.label}${r.value !== "" ? `  ${r.value}` : ""}`,
+          style: "text",
+        }],
+      })),
     draw: (ctx, view, palette, glyphs) => {
       renderSettingsModal(ctx, state, rowsOf(), view, palette, glyphs, categories())
     },

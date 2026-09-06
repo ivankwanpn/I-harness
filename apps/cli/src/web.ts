@@ -221,7 +221,13 @@ function providerModelBindingFor(runtime: ProviderRuntime): SessionServiceOption
 }
 
 // ── default commands (DSH parity minimal set; the web command palette) ──────
-const THEME_VALUES: readonly SettingsTheme[] = ["light", "dark", "system"]
+// M49 Task 8: the six modern theme ids (design spec §9.3); the legacy
+// "light"/"dark" values below are still accepted for hand-typed input — the
+// settings read migration soft-upgrades them to grok-day/grok-night.
+const THEME_VALUES: readonly SettingsTheme[] = [
+  "system", "grok-night", "grok-day", "tokyo-night", "rose-pine-moon", "oscura-midnight",
+]
+const THEME_LEGACY: readonly string[] = ["light", "dark"]
 const SANDBOX_VALUES: readonly SettingsSandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
 const MODEL_SPEC_RE = /^[a-z][a-z0-9_-]*:[a-zA-Z0-9._-]+$/
 
@@ -233,10 +239,12 @@ function registerDefaultCommands(
 ): void {
   registerCommand(target, {
     name: "theme",
-    description: "切换主题：/theme light|dark|system",
+    description: "切换主题：/theme system|grok-night|grok-day|tokyo-night|rose-pine-moon|oscura-midnight",
     execute: async (input) => {
       const theme = input.trim()
-      if (!THEME_VALUES.includes(theme as SettingsTheme)) throw new Error("用法: /theme light|dark|system")
+      if (!THEME_VALUES.includes(theme as SettingsTheme) && !THEME_LEGACY.includes(theme)) {
+        throw new Error("用法: /theme system|grok-night|grok-day|tokyo-night|rose-pine-moon|oscura-midnight")
+      }
       await settings.set({ theme: theme as SettingsTheme })
       return `主题已切换为 ${theme}`
     },

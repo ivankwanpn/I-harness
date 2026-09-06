@@ -16,6 +16,10 @@ export interface ModeSwitchOptions {
   argv: string[]
   /** Injectable spawn — tests record instead of exec (default: self relaunch). */
   spawn?: RelaunchSpawn
+  /** M49 Task 8: persist the flipped mode to the durable `tui.prefs.screenMode`
+   * (optional — hosts wire the settings store; the persist failure must NEVER
+   * block the relaunch, the choice is a hint for the NEXT startup). */
+  persist?: (mode: "minimal" | "fullscreen") => void
 }
 
 /** Parse the displayed mode from argv: `--minimal`/`--fullscreen` flags or
@@ -89,10 +93,12 @@ export class ModeSwitch {
     const m = cmd.trim()
     const spawn = this.opts.spawn ?? defaultRelaunchSpawn
     if (m === "/minimal") {
+      this.opts.persist?.("minimal")
       spawn(relaunchArgs("minimal", this.opts.argv), "minimal")
       return true
     }
     if (m === "/fullscreen") {
+      this.opts.persist?.("fullscreen")
       spawn(relaunchArgs("fullscreen", this.opts.argv), "fullscreen")
       return true
     }

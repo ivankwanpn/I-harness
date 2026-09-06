@@ -1,0 +1,60 @@
+// M49 Task 8: TokyoNight palette (the Storm flavor Grok's `Theme::tokyonight`
+// ships) — RGB literals ported from the Grok source inventory
+// (xai-grok-pager-render `theme/tokyonight.rs`: BG #1a1b26 / BG_STORM
+// #24283b / BG_HIGHLIGHT #292e42, fg #c0caf5, comment #565f89, blue #7aa2f7,
+// magenta #bb9af7, red #f7768e, green #9ece6a, cyan #7dcfff, orange #ff9e64,
+// yellow #e0af68, teal #73daca, gold-plan #e6b432, selection #3a4873,
+// diff 550f14/0f4114, etc.). Semantic port — NOT from screenshots.
+// All slots use the GrokNite field names and flow through the capability
+// quantizers (256/16/mono).
+
+import type { Palette } from "./index.ts"
+
+export const TOKYONIGHT: Palette = Object.freeze<Palette>({
+  name: "tokyo-night",
+  bgTerminal: "#1a1b26",
+  bgDark: "#292e42",
+  bgBase: "#24283b",
+  bgLight: "#292e42",
+  bgHover: "#28314c",
+  bgVisual: "#283457",
+  textPrimary: "#c0caf5",
+  textSecondary: "#a9b1d6",
+  gray: "#565f89",
+  grayBright: "#737aa2",
+  grayDim: "#3b4261",
+  accentUser: "#7aa2f7",
+  accentAssistant: "#bb9af7",
+  accentSystem: "#7aa2f7",
+  accentError: "#f7768e",
+  accentSuccess: "#9ece6a",
+  accentPlan: "#e6b432",
+  accentVerify: "#bb9af7",
+  accentFeedback: "#73daca",
+  accentModel: "#1abc9c",
+  command: "#e0af68",
+  path: "#ff9e64",
+  running: "#7dcfff",
+  warning: "#e0af68",
+  promptBorder: "#323e64",
+  promptBorderActive: "#4b5c8c",
+  hoverBorder: "#373a50",
+  selectionBorder: "#3a4873",
+  scrollbarBg: "#1f2335",
+  scrollbarFg: "#292e42",
+  diffDeleteBg: "#550f14",
+  diffDeleteFg: "#f7768e",
+  diffInsertBg: "#0f4114",
+  diffInsertFg: "#9ece6a",
+  diffEqualFg: "#565f89",
+  mdHeading: ["#1abc9c", "#7aa2f7", "#ff9e64", "#f7768e", "#9ece6a", "#bb9af7"],
+  mdCode: "#73daca",
+  mdTaskChecked: "#7dcfff",
+  mdTaskUnchecked: "#7aa2f7",
+  mdMuted: "#565f89",
+  mdCodeBg: "#292e42",
+  mdText: "#c0caf5",
+  linkFg: "#7aa2f7",
+  pasteBg: "#1f2335",
+  pasteFg: "#a9b1d6",
+})

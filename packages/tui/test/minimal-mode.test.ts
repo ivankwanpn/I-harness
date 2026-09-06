@@ -7,7 +7,7 @@
 // import it (returns undefined → fullscreen fallback is app-level behavior).
 
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
+import { createRenderer, createUnknownCapabilities, GLYPHS, hexToRgb, quantizeColor, resolvePalette } from "@i-harness/tui-core"
 import type { TerminalCapabilityContext } from "@i-harness/tui-core"
 import { TuiApp } from "../src/app/loop.ts"
 import { createScrollbackEngine } from "../src/scrollback/engine.ts"
@@ -16,6 +16,7 @@ import { composeRegion } from "../src/minimal/live-region.ts"
 import type { LiveRegionState } from "../src/minimal/live-region.ts"
 import { MinimalCommits, commitDelta } from "../src/minimal/commit.ts"
 import { ModeSwitch, parseModeArg, relaunchArgs } from "../src/minimal/mode.ts"
+import { createInlineLiveRegion, InlineLiveRegionImpl, sgrFromPalette } from "../src/minimal/inline.ts"
 import { dispatchKey } from "../src/app/keys.ts"
 import type { Kbd, KeymapState } from "../src/app/keys.ts"
 import type { BackendClient, DisplayLine, ScrollbackEngine, SessionSummary, TuiEvent } from "../src/contracts.ts"
@@ -341,6 +342,50 @@ describe("ModeSwitch.onSlash", () => {
       { args: ["--workspace", "w"], mode: "fullscreen" },
       { args: ["--workspace", "w", "--mode", "minimal"], mode: "minimal" },
     ])
+  })
+
+  it("persists the flipped screen mode through the optional hook (durable tui.prefs.screenMode)", () => {
+    const persisted: string[] = []
+    const sw = new ModeSwitch({ argv: [], spawn: () => {}, persist: (mode) => persisted.push(mode) })
+    expect(sw.onSlash("/minimal")).toBe(true)
+    expect(sw.onSlash("/fullscreen")).toBe(true)
+    expect(sw.onSlash("/model")).toBe(false)
+    expect(persisted).toEqual(["minimal", "fullscreen"])
+  })
+})
+
+describe("minimal palette-derived ANSI (M49 Task 8 — no fixed color table)", () => {
+  it("sgrFromPalette derives SGR from the ACTIVE palette slots (truecolor + ansi256 + ansi16)", () => {
+    const tn = resolvePalette(cap, "tokyo-night")
+    const tc = sgrFromPalette(tn, cap)
+    expect(tc["accent-user"]).toBe(`\x1b[38;2;122;162;247m`) // tokyonight BLUE #7aa2f7
+    expect(tc["accent-error"]).toBe(`\x1b[38;2;247;118;142m`) // RED #f7768e
+    expect(tc["link"]).toContain("\x1b[38;2;122;162;247m") // link_fg + underline
+    expect(tc["link"]).toContain("\x1b[4m")
+    expect(tc["bold"]).toBe("\x1b[1m")
+    expect(tc["muted"]).toBe("\x1b[2m")
+    expect(tc["text"]).toBe("")
+    // ansi256: values pass through the existing quantizer (nearest cube).
+    const p256 = quantizeColor(hexToRgb(tn.accentUser), { ...cap, colorLevel: "ansi256" })
+    const t256 = sgrFromPalette(tn, { ...cap, colorLevel: "ansi256" })
+    expect(t256["accent-user"]).toBe(`\x1b[38;5;${(p256 as { idx: number }).idx}m`)
+    // ansi16: bright-family pinning (9X on a dark terminal).
+    const t16 = sgrFromPalette(tn, { ...cap, colorLevel: "ansi16" })
+    expect(t16["accent-user"]).toMatch(/^\x1b\[9[0-6]m$/)
+  })
+
+  it("the region paints with palette-derived SGR when the engine is built with the override", () => {
+    const sgr = sgrFromPalette(resolvePalette(cap, "tokyo-night"), cap)
+    const eng = createInlineLiveRegion(46, 24, { sgr }) as InlineLiveRegionImpl
+    eng.setRegionLines([
+      { runs: [{ text: "Q ", style: "accent-user" }, { text: "hello", style: "bold" }] },
+    ])
+    let bytes = ""
+    eng.drawRegion((s) => { bytes += s })
+    // the single region line sits bottom-anchored (46x24 → region rows 15..24).
+    expect(bytes).toContain(`\x1b[24;1H\x1b[0m\x1b[38;2;122;162;247mQ \x1b[0m\x1b[1mhello\x1b[K`)
+    // the palette-derived SGR replaced the fixed 36m cyan accent.
+    expect(bytes).not.toContain("\x1b[36mQ")
   })
 })
 

@@ -26,8 +26,34 @@ import type { Telemetry } from "@i-harness/telemetry"
  * dependency-free — the settings package must not import sandbox). */
 export type SettingsSandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 
-/** Theme preference: which color scheme to apply. `system` follows the OS. */
-export type SettingsTheme = "light" | "dark" | "system"
+/** Theme preference (M49 Task 8 — design spec §9.3): six persisted ids;
+ * `system` follows the OS appearance (auto). Legacy on-disk `light` / `dark`
+ * values soft-normalize to `grok-day` / `grok-night` at read. */
+export type SettingsTheme =
+  | "system"
+  | "grok-night"
+  | "grok-day"
+  | "tokyo-night"
+  | "rose-pine-moon"
+  | "oscura-midnight"
+
+/** The six accepted theme ids, in the settings modal's cycle order. */
+export const SETTINGS_THEMES: readonly SettingsTheme[] = [
+  "system",
+  "grok-night",
+  "grok-day",
+  "tokyo-night",
+  "rose-pine-moon",
+  "oscura-midnight",
+]
+
+/** The theme ids low-color terminals can distinguish (design §9.3 — the tinted
+ * palettes "lose their character" when quantized — pickers expose only these). */
+export const SETTINGS_THEMES_LOW_COLOR: readonly SettingsTheme[] = [
+  "system",
+  "grok-night",
+  "grok-day",
+]
 
 /** Completed-turn transcript presentation (dsh settings.transcript). */
 export type SettingsTranscriptMode = "normal" | "compact"
@@ -152,6 +178,10 @@ export interface SettingsTuiPrefs {
    * that flips mouse capture/hover at runtime (and GROK_MOUSE_REPORTING_TOGGLE
    * forces it ON at startup). */
   mouseReportingToggle: boolean
+  /** M49 Task 8: production UI surface mode. The executable resolves explicit
+   * `--mode` flag > this persisted value > fullscreen default; `/minimal` and
+   * `/fullscreen` write it on switch. */
+  screenMode: "fullscreen" | "minimal"
 }
 
 /** The appended TUI section (M49 Task 6: presentation preferences only — the
@@ -231,6 +261,9 @@ export const SETTINGS_DEFAULTS: Settings = {
       scrollSpeed: 50, scrollMode: "auto", scrollLines: 3, invertScroll: false,
       keepTextSelection: "flash", wordSeparators: SETTINGS_DEFAULT_WORD_SEPARATORS,
       mouseReportingToggle: false,
+      // M49 Task 8: fullscreen is the executable default (the resolver order):
+      // explicit flag > this persisted value > fullscreen.
+      screenMode: "fullscreen",
     },
   },
 }
@@ -240,7 +273,17 @@ export const FONT_SIZE_MIN = 13
 export const FONT_SIZE_MAX = 16
 
 const SANDBOX_MODES: readonly SettingsSandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
-const THEMES: readonly SettingsTheme[] = ["light", "dark", "system"]
+const THEMES: readonly SettingsTheme[] = SETTINGS_THEMES
+/** Legacy on-disk vocabulary (design §9.3): light/dark → grok-day/grok-night. */
+const LEGACY_THEMES: Record<string, SettingsTheme> = { light: "grok-day", dark: "grok-night" }
+
+/** Theme value normalization: legacy light/dark soft-upgrade to the modern ids
+ * (D5 — no migration chain, no file rewrite), the six modern ids pass, and an
+ * unknown value degrades to the default (`system`). */
+function normalizeTheme(value: unknown): SettingsTheme {
+  if (typeof value === "string" && value in LEGACY_THEMES) return LEGACY_THEMES[value]!
+  return oneOf(value, THEMES, SETTINGS_DEFAULTS.theme)
+}
 const TRANSCRIPT_MODES: readonly SettingsTranscriptMode[] = ["normal", "compact"]
 const BUSY_ENTERS: readonly SettingsBusyEnter[] = ["interrupt", "wait"]
 const SEARCH_BACKENDS: readonly SettingsSearchBackend[] = ["jsonl", "sqlite"]
@@ -448,6 +491,7 @@ function normalizeTui(raw: unknown, base: SettingsTui): SettingsTui {
       mouseReportingToggle: typeof prefsRaw.mouseReportingToggle === "boolean"
         ? prefsRaw.mouseReportingToggle
         : b.mouseReportingToggle,
+      screenMode: oneOf(prefsRaw.screenMode, ["fullscreen", "minimal"] as const, b.screenMode),
     },
   }
 }
@@ -475,7 +519,7 @@ export function normalizeSettings(raw: unknown): Settings {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,
     language: oneOf(raw.language, LANGUAGES, base.language),
-    theme: oneOf(raw.theme, THEMES, base.theme),
+    theme: normalizeTheme(raw.theme),
     fontSize: numberInList(raw.fontSize, FONT_SIZE_MIN, FONT_SIZE_MAX, base.fontSize),
     transcriptMode: oneOf(raw.transcriptMode, TRANSCRIPT_MODES, base.transcriptMode),
     busyEnter: oneOf(raw.busyEnter, BUSY_ENTERS, base.busyEnter),

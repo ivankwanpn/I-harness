@@ -97,21 +97,29 @@ const run = async (line: string, ctx: SlashContext): Promise<void> => {
 }
 
 describe("slash commands — state-changing units (fake ctx)", () => {
-  it("nextTheme cycles groknight → grokday → auto → groknight", () => {
-    expect(nextTheme("groknight")).toBe("grokday")
-    expect(nextTheme("grokday")).toBe("auto")
-    expect(nextTheme("auto")).toBe("groknight")
+  it("nextTheme cycles system → grok-night → grok-day → tokyo-night → rose-pine-moon → oscura-midnight → system", () => {
+    expect(nextTheme("system")).toBe("grok-night")
+    expect(nextTheme("grok-night")).toBe("grok-day")
+    expect(nextTheme("grok-day")).toBe("tokyo-night")
+    expect(nextTheme("tokyo-night")).toBe("rose-pine-moon")
+    expect(nextTheme("rose-pine-moon")).toBe("oscura-midnight")
+    expect(nextTheme("oscura-midnight")).toBe("system")
   })
 
   it("/theme (bare) cycles the app theme; /theme <name> sets it", async () => {
     const app = fakeApp()
     const ctx = fakeCtx(app)
     await run("/theme", ctx)
-    expect(ctx.calls).toContain("setTheme:groknight")
+    // auto (system-following) → the first concrete kind.
+    expect(ctx.calls).toContain("setTheme:grok-night")
     expect(ctx.calls.some((c) => c.startsWith("toast:theme:"))).toBe(true)
     const ctx2 = fakeCtx(app)
-    await run("/theme grokday", ctx2)
-    expect(ctx2.calls).toContain("setTheme:grokday")
+    await run("/theme grok-day", ctx2)
+    expect(ctx2.calls).toContain("setTheme:grok-day")
+    const ctxAuto = fakeCtx(app)
+    await run("/theme auto", ctxAuto)
+    expect(ctxAuto.calls).toContain("setTheme:system")
+    expect(ctxAuto.calls.some((c) => c === "toast:theme: auto")).toBe(true)
     const ctx3 = fakeCtx(app)
     await run("/theme nonsense", ctx3)
     expect(ctx3.calls.some((c) => c.startsWith("toast:theme: unknown"))).toBe(true)

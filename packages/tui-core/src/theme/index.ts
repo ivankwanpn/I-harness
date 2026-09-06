@@ -8,6 +8,9 @@ import type { RgbOrIndex } from "../ansi/style.ts"
 import type { TerminalCapabilityContext } from "../types.ts"
 import { GROKDAY } from "./grokday.ts"
 import { GROKNIGHT } from "./groknight.ts"
+import { TOKYONIGHT } from "./tokyonight.ts"
+import { ROSEPINE_MOON } from "./rose-pine-moon.ts"
+import { OSCURA_MIDNIGHT } from "./oscura-midnight.ts"
 
 export interface Rgb {
   r: number
@@ -15,9 +18,27 @@ export interface Rgb {
   b: number
 }
 
-export type ThemeKind = "groknight" | "grokday"
+/** The five concrete theme ids (M49 Task 8 — design spec §9.3; the shared
+ * vocabulary with the settings plane). */
+export type ThemeKind = "grok-night" | "grok-day" | "tokyo-night" | "rose-pine-moon" | "oscura-midnight"
+
+/** Pre-M49 aliases (the Grok source kebab style) — accepted by resolvePalette
+ * so the old call sites keep compiling while the persisted vocabulary is the
+ * modern one. */
+export type LegacyThemeKind = "groknight" | "grokday"
+
+/** The five palettes in one indexed map (resolution + iteration). */
+export const THEME_PALETTES: Record<ThemeKind, Palette> = {
+  "grok-night": GROKNIGHT,
+  "grok-day": GROKDAY,
+  "tokyo-night": TOKYONIGHT,
+  "rose-pine-moon": ROSEPINE_MOON,
+  "oscura-midnight": OSCURA_MIDNIGHT,
+}
 
 export interface Palette {
+  /** The theme id (M49 Task 8 — identity carried by the palette itself). */
+  readonly name: ThemeKind
   bgTerminal: string
   bgDark: string
   bgBase: string
@@ -169,8 +190,14 @@ export function quantizeColor(rgb: Rgb, cap: TerminalCapabilityContext, boost = 
   return { idx: nearest256(b) }
 }
 
-/** dark → groknight, light → grokday; an explicit `kind` wins. */
-export function resolvePalette(cap: TerminalCapabilityContext, kind?: ThemeKind): Palette {
-  const effective = kind ?? (cap.dark ? "groknight" : "grokday")
-  return effective === "groknight" ? GROKNIGHT : GROKDAY
+/** Resolve the active palette. An explicit kind wins; auto (`undefined`) follows
+ * the capability polarity (dark → grok-night, light → grok-day). The legacy
+ * `groknight`/`grokday` aliases map to the canonical ids. */
+export function resolvePalette(
+  cap: TerminalCapabilityContext,
+  kind?: ThemeKind | LegacyThemeKind,
+): Palette {
+  const id = kind === "groknight" ? "grok-night" : kind === "grokday" ? "grok-day" : kind
+  const effective = id ?? (cap.dark ? "grok-night" : "grok-day")
+  return THEME_PALETTES[effective]
 }

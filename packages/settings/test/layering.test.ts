@@ -60,7 +60,7 @@ describe("createLayeredStore", () => {
       })
       await store.load()
       expect(store.get().model).toBe("p-model")
-      expect(store.get().theme).toBe("dark")
+      expect(store.get().theme).toBe("grok-night") // legacy "dark" normalizes
       // unknown/partial keys degrade per-normalize; merged values are normalized once
       expect(store.get().fontSize).toBe(14)
     } finally {
@@ -78,8 +78,8 @@ describe("createLayeredStore", () => {
       const s = await store.load()
       expect(s.model).toBe("p")
       // writes go to the master (last source), never a silent first-source write
-      await store.set({ theme: "light" })
-      expect(await readFile(join(root, "p.json"), "utf8")).toContain("light")
+      await store.set({ theme: "grok-day" })
+      expect(await readFile(join(root, "p.json"), "utf8")).toContain("grok-day")
       expect(await readFile(join(root, "g.json"), "utf8").catch(() => "MISSING")).toBe("MISSING")
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -97,14 +97,13 @@ describe("createLayeredStore", () => {
       )
       const store = createLayeredStore({ files: [file] })
       await store.load()
-      await store.set({ theme: "dark" })
+      await store.set({ theme: "grok-night" })
       const raw = JSON.parse(await readFile(file, "utf8"))
       // the hand-edited unknown key and the revision meta survive the write
       expect(raw.team).toEqual({ role: "dev" })
       expect(raw._revision).toEqual({ llm: 3 })
-      expect(raw.theme).toBe("dark")
-      // the in-memory view is normalized (unknown keys invisible)
-      expect(store.get().theme).toBe("dark")
+      expect(raw.theme).toBe("grok-night") // raw doc keeps the written value verbatim
+      expect(store.get().theme).toBe("grok-night")
       expect((store.get() as unknown as Record<string, unknown>).team).toBeUndefined()
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -197,7 +196,7 @@ describe("M40 A6: settings/changed telemetry on hot-reload", () => {
       // Mutation → later tick detects + reloads + emits with the changed path.
       await writeFile(file, JSON.stringify({ theme: "light" }), "utf8")
       await new Promise((r) => setTimeout(r, 200))
-      expect(store.get().theme).toBe("light")
+      expect(store.get().theme).toBe("grok-day") // legacy "light" normalizes
       const changed = events.filter((e) => e.type === "settings/changed")
       expect(changed.length).toBe(1)
       expect(changed[0]!.data.path).toBe(file)
