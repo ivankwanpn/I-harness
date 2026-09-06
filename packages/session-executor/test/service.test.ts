@@ -141,6 +141,12 @@ describe("createSessionService", () => {
       await expect(assembly.agent.run("continue")).resolves.toMatchObject({ finalText: "ok" })
       expect(requests).toHaveLength(1)
       expect(session.events.some((event) => event.type.startsWith("compaction/"))).toBe(false)
+
+      const compacted = await assembly.compactNow()
+      expect(compacted.compacted).toBe(true)
+      expect(compacted.shadowedSeqs.length).toBeGreaterThan(0)
+      expect(requests).toHaveLength(2)
+      expect(session.events.some((event) => event.type === "compaction/end")).toBe(true)
     } finally {
       await service.close()
     }
