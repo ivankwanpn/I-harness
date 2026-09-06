@@ -616,6 +616,68 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       await service.close()
     }
   }, 60_000)
+
+  it("cancelQueued consults the LANE for running — a stale record state can never kill a running turn", async () => {
+    // Review regression: the record's state is a queue()-read projection; the
+    // lane promotion is invisible to it. Snapshot the row as service-front,
+    // let the lane promote it WITHOUT another queue() read, then cancelQueued
+    // must see the lane's current input (running → { cancelled: false }) and
+    // the running turn must keep executing to completion.
+    const seen: string[] = []
+    let releaseBinding!: () => void
+    const bindingGate = new Promise<void>((resolve) => { releaseBinding = resolve })
+    let releaseModel!: () => void
+    const modelGate = new Promise<void>((resolve) => { releaseModel = resolve })
+    const model: ModelClient = {
+      async *stream(request: LLMRequest) {
+        const authored = request.messages
+          .filter((m) => m.role === "user")
+          .map((m) => typeof m.content === "string" ? m.content : "")
+          .filter((t) => !t.startsWith("Current runtime context:"))
+        seen.push(authored.at(-1) ?? "")
+        await modelGate
+        yield { type: "text/chunk", text: "ok" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: process.cwd(),
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => {
+        await bindingGate
+        return {
+          status: "ready",
+          binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+        }
+      },
+    })
+    try {
+      const first = service.submit("s1", "first", new AbortController().signal)
+      const second = service.submit("s1", "second", new AbortController().signal)
+      // Snapshot while the row is service-front: the pane shows it queued and
+      // the RECORD is still "wait" (the lane cannot start — the binding is
+      // gated).
+      const row = await waitForQueueText(service, "s1", "first")
+      expect(row.state).toBe("queued")
+      // Let the lane promote it: release the binding (the model run blocks on
+      // its own gate). NO queue() read afterwards → the record state is
+      // deliberately stale while the lane is running this row.
+      releaseBinding()
+      await waitFor(() => seen.length === 1)
+      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      // the running turn keeps executing to completion (no abort path taken);
+      // the second row was never cancelled and runs after it.
+      releaseModel()
+      await Promise.all([first, second])
+      expect(seen[0]).toBe("first")
+    } finally {
+      releaseBinding()
+      releaseModel()
+      await service.close()
+    }
+  }, 60_000)
 })
 
 describe("createSessionService — close lifecycle with a queue in flight (Task 11 regression)", () => {

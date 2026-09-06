@@ -491,6 +491,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function cancelQueued(sessionId: string, id: string): { cancelled: boolean } {
+    // THE LANE is the ground truth for "running": the record's state is a
+    // queue()-read projection and can lag a fresh promotion — consulting it
+    // alone would abort a running turn's controller (agent.run's signal) and
+    // report an honest-but-false { cancelled: true } (review fix).
+    if (lanes.get(sessionId)?.currentInput()?.inputId === id) return { cancelled: false }
     const rec = queues.get(sessionId)?.byId.get(id)
     // Already-cancelled / running / unknown ids are all an honest false — the
     // row is no longer cancellable at the moment (the UI refresh shows truth).
