@@ -91,6 +91,10 @@ export interface PaneState {
   todo?: TodoItem[]
   tasks?: TaskGroup[]
   queue?: QueueRow[]
+  /** M49 Task 11: backend with no queue capability — the pane renders the
+   * honest unavailable line (never "Queue is empty." as a stand-in).
+   * Default: available (queue data always carries when the backend wires it). */
+  queueUnavailable?: boolean
   btw?: BtwState
   /** M46b G2 (mouse click semantics): todo row clicked/selected (index into
    * `todo`) — state-only for now (the pane's row-selection visual is a

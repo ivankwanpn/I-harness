@@ -639,23 +639,31 @@ describe("panes", () => {
     expect(app.toasts.map((x) => x.text)).toContain("cancel task (M46c)")
   })
 
-  it("queue [cancel]/[Send now] toasts; todo row select sets paneData.todoSelect", () => {
+  it("queue [cancel] fires with the row id; no [Send now] chip; todo row select sets paneData.todoSelect", () => {
     const engine = seeded()
+    const cancelled: string[] = []
     const app = base(engine, {
       paneData: {
-        queue: [{ n: 1, kind: "prompt", text: "make tea", action: "cancel" }],
+        queue: [{ id: "q1", text: "make tea", delivery: "queue", intent: "user", state: "queued", order: 1, canCancel: true }],
         todo: [{ id: "t1", text: "ship", status: "pending" }, { id: "t2", text: "docs", status: "completed" }],
       },
       panes: new Set(["queue", "todo"]),
     })
     const clipboard = makeClipboard()
-    const router = new MouseRouter({ app, engine, size: () => AREA, now: () => 0, clipboard, glyphs: GLYPHS, compact: false, hooks: {} })
+    const router = new MouseRouter({
+      app, engine, size: () => AREA, now: () => 0, clipboard, glyphs: GLYPHS, compact: false,
+      hooks: { queueCancel: (id) => cancelled.push(id) },
+    })
     const lay = layoutAgent(AREA, { ...app, dropdown: undefined }, { compact: false })
     // queue: the [cancel] chip is at the pane's right edge.
     const qy = lay.queue!.y
     router.handle({ x: lay.queue!.x + lay.queue!.w - 2, y: qy, button: "left", kind: "down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
     router.handle({ x: lay.queue!.x + lay.queue!.w - 2, y: qy, button: "left", kind: "up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
-    expect(app.toasts.map((x) => x.text)).toContain("queue cancel (M46c)")
+    expect(cancelled).toEqual(["q1"])
+    // the body of a queued row has no send-now action: a body click does nothing.
+    router.handle({ x: lay.queue!.x + 3, y: qy, button: "left", kind: "down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    router.handle({ x: lay.queue!.x + 3, y: qy, button: "left", kind: "up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
+    expect(cancelled).toEqual(["q1"])
     // todo: click the SECOND row → todoSelect = 1.
     router.handle({ x: lay.todo!.x + 2, y: lay.todo!.y + 1, button: "left", kind: "down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
     router.handle({ x: lay.todo!.x + 2, y: lay.todo!.y + 1, button: "left", kind: "up", drag: false, mods: { ctrl: false, shift: false, alt: false } })

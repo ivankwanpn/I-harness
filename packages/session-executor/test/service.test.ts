@@ -4,6 +4,7 @@ import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createDurableSessionLoader, ModelUnavailableError } from "../src/index.ts"
 import { createSessionService, type SessionService } from "../src/service.ts"
+import type { SessionQueueItem } from "../src/index.ts"
 import { createTelemetry, type TelemetrySink } from "@i-harness/telemetry"
 import { createMockClient } from "@i-harness/llm-mock"
 
@@ -469,5 +470,177 @@ describe("createSessionService", () => {
     })
     await service.submit("s1", "hi", new AbortController().signal)
     expect(captured).toEqual([undefined])
+  }, 60_000)
+})
+
+// ── Task 11: real session queue projection — fixtures per the plan's Test
+// Fixture Contract (real SessionService; injected model only for gating).
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    // settle the event loop first — the lane start (assembly build + pump
+    // microtasks) must get a window before the first evaluation.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    if (cond()) return
+    if (Date.now() >= deadline) throw new Error("waitFor: condition not met within budget")
+  }
+}
+
+/** Real SessionService whose injected model waits on `gate` before yielding
+ * end — the running turn blocks until the test releases it. */
+function serviceWithBlockingModel(gate: { promise: Promise<void> }): SessionService {
+  const model: ModelClient = {
+    async *stream() {
+      await gate.promise
+      yield { type: "text/chunk", text: "ok" }
+      yield { type: "end" }
+    },
+  }
+  return createSessionService({
+    workspace: process.cwd(),
+    approveAll: true,
+    modelPolicy: "required",
+    modelBindingFor: async () => ({
+      status: "ready",
+      binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+    }),
+  })
+}
+
+/** `{ service, seen, release }` — seen records the model tasks that actually
+ * ran (by last user-message content); release() settles the first turn. */
+function blockingService(): { service: SessionService; seen: string[]; release(): void } {
+  const seen: string[] = []
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const model: ModelClient = {
+    async *stream(request: LLMRequest) {
+      // `seen` records the model tasks that ACTUALLY RAN, keyed by the last
+      // authored user prompt — the engine's runtime-context bookkeeping
+      // message (appended per step next to the user prompt) is not a task.
+      const authored = request.messages
+        .filter((m) => m.role === "user")
+        .map((m) => typeof m.content === "string" ? m.content : "")
+        .filter((t) => !t.startsWith("Current runtime context:"))
+      seen.push(authored.at(-1) ?? "")
+      await gate
+      yield { type: "text/chunk", text: "ok" }
+      yield { type: "end" }
+    },
+  }
+  return {
+    service: createSessionService({
+      workspace: process.cwd(),
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    }),
+    seen,
+    release,
+  }
+}
+
+/** Condition-polls service.queue() until `text` appears or throws (5 s). */
+async function waitForQueueText(service: SessionService, sessionId: string, text: string): Promise<SessionQueueItem> {
+  let found: SessionQueueItem | undefined
+  await waitFor(() => {
+    found = service.queue(sessionId).find((row) => row.text === text)
+    return found !== undefined
+  })
+  return found!
+}
+
+describe("createSessionService — real session queue projection (Task 11)", () => {
+  it("lists a running row followed by queued rows in FIFO order", async () => {
+    const gate = deferred<void>()
+    const service = serviceWithBlockingModel(gate)
+    try {
+      const first = service.submit("s1", "first", new AbortController().signal)
+      const second = service.submit("s1", "second", new AbortController().signal)
+      const third = service.submit("s1", "third", new AbortController().signal)
+      await waitFor(() => service.queue("s1").length === 3)
+      expect(service.queue("s1").map((row) => [row.text, row.state])).toEqual([
+        ["first", "running"],
+        ["second", "queued"],
+        ["third", "queued"],
+      ])
+      gate.resolve()
+      await Promise.all([first, second, third])
+      expect(service.queue("s1")).toEqual([])
+    } finally {
+      gate.resolve()
+      await service.close()
+    }
+  }, 60_000)
+
+  it("cancels a service-front queued row without executing it", async () => {
+    const { service, seen, release } = blockingService()
+    try {
+      const first = service.submit("s1", "first", new AbortController().signal)
+      const second = service.submit("s1", "second", new AbortController().signal)
+      const row = await waitForQueueText(service, "s1", "second")
+      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: true })
+      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      release()
+      await Promise.all([first, second])
+      expect(seen).toEqual(["first"])
+      expect(service.queue("s1")).toEqual([])
+    } finally {
+      release()
+      await service.close()
+    }
+  }, 60_000)
+
+  it("cancelQueued on an already-settled id is an honest false", async () => {
+    const { service, release } = blockingService()
+    try {
+      const first = service.submit("s1", "first", new AbortController().signal)
+      const second = service.submit("s1", "second", new AbortController().signal)
+      const row = await waitForQueueText(service, "s1", "second")
+      release()
+      await Promise.all([first, second])
+      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(service.cancelQueued("s1", "never-existed")).toEqual({ cancelled: false })
+    } finally {
+      release()
+      await service.close()
+    }
+  }, 60_000)
+})
+
+describe("createSessionService — close lifecycle with a queue in flight (Task 11 regression)", () => {
+  it("closeSession() with a submit in flight settles the binding promise, clears queue rows, and never crashes", async () => {
+    const gate = deferred<void>()
+    const service = serviceWithBlockingModel(gate)
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      const submit = service.submit("s1", "in flight", new AbortController().signal)
+      await waitFor(() => service.queue("s1").length === 1)
+      const closing = service.closeSession("s1")
+      gate.resolve()
+      await closing
+      await expect(submit).resolves.toBeUndefined()
+      expect(service.queue("s1")).toEqual([])
+      expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
+      expect(service.hasAssembly("s1")).toBe(false)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(unhandled).toEqual([])
+    } finally {
+      gate.resolve()
+      await service.close()
+      process.off("unhandledRejection", onUnhandled)
+    }
   }, 60_000)
 })

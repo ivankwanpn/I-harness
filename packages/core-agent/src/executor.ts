@@ -24,10 +24,20 @@ export interface SessionExecutorDeps {
 }
 
 export interface SessionExecutor {
-  submit(input: InputSubmit): { inputId: string }
+  /** Submit one input onto the serial lane. `inputId` (OPTIONAL, M49 Task 11)
+   * lets a caller (session-executor service) retain its service row id
+   * THROUGH the lane admission so a queue projection can merge service-front
+   * and lane rows by the same public id and cancel by it. Absent → a fresh id
+   * is generated (pre-M49 behavior). */
+  submit(input: InputSubmit, inputId?: string): { inputId: string }
   cancel(inputId: string): { cancelled: boolean }
   pending(): PendingInput[]
   isRunning(): boolean
+  /** M49 Task 11: the input the lane is currently executing (promoted, not yet
+   * finished) — undefined when idle. The queue projection's single "running"
+   * row, with the honest text/delivery/intent (a lane-only steer that just
+   * left pending is still representable). */
+  currentInput(): PendingInput | undefined
   drain(): Promise<void>
   dispose(): void
 }
@@ -65,6 +75,7 @@ export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
 export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecutor {
   let chain: Promise<void> = Promise.resolve()
   let running = false
+  let current: PendingInput | undefined
   let disposed = false
   // Serial-lane error surface: a rejected turn must not permanently break the
   // lane (hardening, driveFollowups precedent) — but the failure DOES need to
@@ -82,6 +93,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
         const next = deps.inbox.pending()[0]
         if (next === undefined) return
         running = true
+        current = next
         try {
           deps.inbox.promote(next.inputId)
           // turn/start + user/message are appended BY the agent loop here
@@ -96,6 +108,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           // for a future pump); the error surfaces through drain()
         } finally {
           running = false
+          current = undefined
         }
       }
     }).catch(() => {
@@ -106,8 +119,12 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   }
 
   return {
-    submit(input: InputSubmit) {
+    submit(input: InputSubmit, inputId?: string) {
       const admission = mapSubmitToAdmission(input)
+      // Task 11: the caller-supplied public id is retained THROUGH the lane so
+      // the service queue projection merges by one id (inbox.admit fails
+      // closed on duplicates — a memory is ground truth, never overwritten).
+      if (inputId !== undefined) admission.inputId = inputId
       deps.inbox.admit(admission)
       const signal = (input as InputSubmit & { signal?: AbortSignal }).signal
       if (signal !== undefined) turnSignals.set(admission.inputId, signal)
@@ -120,6 +137,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
     },
     pending: () => deps.inbox.pending(),
     isRunning: () => running,
+    currentInput: () => current,
     drain: () => chain.then(() => {
       if (lastError !== undefined) throw lastError
     }),

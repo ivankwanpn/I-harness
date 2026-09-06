@@ -128,6 +128,53 @@ describe("SessionExecutor", () => {
 })
 
 describe("SessionExecutor — M41b per-submit signal", () => {
+  it("accepts a caller-supplied public input id into the pending row (service row id before the chain)", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const inbox = new Inbox(session)
+    const tools = createToolRegistry(ctx)
+    const model = createMockClient([{ role: "assistant", text: "ok" }])
+    const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p" })
+    const executor = createSessionExecutor({ session, agent, inbox })
+    const admitted = executor.submit({ tier: "send", text: "with id" }, "row-1")
+    expect(admitted.inputId).toBe("row-1")
+    expect(executor.pending().map((p) => p.inputId)).toEqual(["row-1"])
+    await executor.drain()
+    expect(executor.pending()).toEqual([])
+    expect(session.events.filter((e) => e.type === "user/message").map((e) => (e as { text: string }).text)).toEqual(["with id"])
+  })
+
+  it("exposes the currently running input with its honest data (undefined when idle)", async () => {
+    const session = createSession()
+    const inbox = new Inbox(session)
+    let gate!: () => void
+    const blocked = new Promise<void>((resolve) => { gate = resolve })
+    const agent = {
+      run: async (task: string): Promise<unknown> => {
+        expect(task).toBe("run me")
+        await blocked
+        return { finalText: "", turns: 1, reasoning: [] }
+      },
+    }
+    const executor = createSessionExecutor({ session, agent: agent as never, inbox })
+    expect(executor.currentInput()).toBeUndefined()
+    executor.submit({ tier: "send", text: "run me" }, "run-1")
+    const deadline = Date.now() + 2000
+    while (executor.currentInput() === undefined && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10))
+    }
+    expect(executor.currentInput()).toMatchObject({
+      inputId: "run-1",
+      text: "run me",
+      delivery: "queue",
+      intent: "user",
+    })
+    gate()
+    await executor.drain()
+    expect(executor.currentInput()).toBeUndefined()
+    expect(executor.isRunning()).toBe(false)
+  })
+
   it("reaches agent.run so an IN-FLIGHT turn aborts at the engine", async () => {
     const session = createSession()
     const inbox = new Inbox(session)

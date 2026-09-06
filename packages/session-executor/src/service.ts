@@ -20,6 +20,7 @@
 // queued turns. A's `drain()` REJECTS on the first turn failure (CLI
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
+import { randomUUID } from "node:crypto"
 import type { Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -46,6 +47,18 @@ export type SessionModelBindingResult =
         contextWindow?: number
       }
     }
+
+/** M49 Task 11 (spec §8.1): one row of the real session queue projection.
+ * `order` is the per-session FIFO ordinal; the running row is always
+ * reported FIRST by queue() — the rest follow FIFO by `order`. */
+export interface SessionQueueItem {
+  id: string
+  text: string
+  delivery: "queue" | "steer"
+  intent: "user" | "system"
+  state: "queued" | "running"
+  order: number
+}
 
 type SessionModelState =
   | Exclude<SessionModelBindingResult, { status: "ready" }>
@@ -99,6 +112,16 @@ export interface SessionService {
    * running = a turn is executing; queued = registered submit turns not yet
    * started (the service pacing chain, in front of the lane). */
   queueState(sessionId: string): { running: boolean; queued: number }
+  /** M49 Task 11 (spec §8.1): the REAL per-session queue projection —
+   * service-front (pacing chain) rows merged with lane rows by public id;
+   * the running row is first, the rest FIFO. Never fabricated: {} here means
+   * literally no queued/running work for the session. */
+  queue(sessionId: string): SessionQueueItem[]
+  /** Cancel ONE queued row by its stable public id: the submit settles without
+   * executing (never leaving the lane to turn). `cancelled: false` for an
+   * unknown/already-finished row or a RUNNING one (whole-turn cancel is
+   * session/cancel, not row cancel). */
+  cancelQueued(sessionId: string, id: string): { cancelled: boolean }
   /** Fires once per created assembly — the bridge attach point
    * (approval/question bridges). */
   onAssembly(hook: (assembly: SessionAssembly) => void): () => void
@@ -120,11 +143,57 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const chains = new Map<string, Promise<void>>()
   const active = new Set<Promise<void>>()
   const closing = new Map<string, Promise<void>>()
-  // Registered-but-unsettled turns per session (the service's own pacing
-  // queue, in front of the lane) — the jobs/queue observation surface.
-  const registered = new Map<string, number>()
   const telemetry = opts.telemetry
   let closed = false
+
+  // M49 Task 11: the per-session queue projection state. ONE record per
+  // submit (and per adopted lane-only steer), keyed by the STABLE public id
+  // generated BEFORE the pacing chain. `wait` = service-front (not yet
+  // admitted to the lane); `queued` = admitted and pending; `running` = the
+  // lane's current turn; `cancelled` = abort-before-run (hidden, settled by
+  // the chain hand-over). Records are removed exactly once on settle/error/
+  // cancel/close (the submit cleanup + the queue() finished-purge).
+  interface QueueRowRecord {
+    id: string
+    text: string
+    delivery: "queue" | "steer"
+    intent: "user" | "system"
+    order: number
+    controller: AbortController
+    state: "wait" | "queued" | "running" | "cancelled"
+  }
+  interface SessionQueueState {
+    byId: Map<string, QueueRowRecord>
+    /** Next submission-order ordinal (per-session FIFO among service rows). */
+    nextOrder: number
+    /** Steer-adoption ladder: orders live inside (window, window+1) so they
+     * sort after every already-admitted record and before the next one —
+     * the adopted steer was admitted DURING the running record's turn. */
+    adoptWindow: number
+    adoptCount: number
+  }
+  const queues = new Map<string, SessionQueueState>()
+
+  function sessionQueueState(sessionId: string): SessionQueueState {
+    let st = queues.get(sessionId)
+    if (st === undefined) {
+      st = { byId: new Map(), nextOrder: 1, adoptWindow: 0, adoptCount: 0 }
+      queues.set(sessionId, st)
+    }
+    return st
+  }
+
+  /** Order for a lane-only steer adopted at first sight: strictly inside
+   * (admittedWindow, admittedWindow+1), the ladder after the currently
+   * running record's order — bounded below by the next unadmitted record. */
+  function adoptOrder(st: SessionQueueState, window: number): number {
+    if (st.adoptWindow !== window) {
+      st.adoptWindow = window
+      st.adoptCount = 0
+    }
+    st.adoptCount += 1
+    return window + 1 - Math.pow(0.5, st.adoptCount)
+  }
 
   function bindingFor(sessionId: string): Promise<SessionModelBindingResult> {
     let pending = modelBindings.get(sessionId)
@@ -233,6 +302,34 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   function submit(sessionId: string, prompt: string, signal: AbortSignal): Promise<void> {
     if (closed) return Promise.reject(new Error("session service closed"))
     if (closing.has(sessionId)) return Promise.reject(new Error(`session closing: ${sessionId}`))
+    // M49 Task 11: the STABLE row id + a SERVICE-OWNED controller are created
+    // BEFORE the pacing chain (spec §8.1 — a service-front turn must have its
+    // own id/controller). The caller signal is LINKED to it (M41b abort
+    // semantics flow through: abort the caller's signal → controller aborts →
+    // the queued gate settles, the in-flight engine copies abort).
+    const st = sessionQueueState(sessionId)
+    const id = randomUUID()
+    const controller = new AbortController()
+    const record: QueueRowRecord = {
+      id,
+      text: prompt,
+      delivery: "queue",
+      intent: "user",
+      order: st.nextOrder++,
+      controller,
+      state: "wait",
+    }
+    st.byId.set(id, record)
+    const markFromCaller = (): void => {
+      // M41b: the caller's abort flows INTO the service-owned controller —
+      // the queued gate settles (never starts), the in-flight engine aborts
+      // (the lane hands the controller signal to agent.run). An unstarted
+      // row also flips to cancelled so the projection hides it immediately.
+      if (record.state === "wait") record.state = "cancelled"
+      controller.abort()
+    }
+    signal.addEventListener("abort", markFromCaller)
+    if (signal.aborted) markFromCaller()
     const hasQueued = chains.has(sessionId)
     const prev = chains.get(sessionId) ?? Promise.resolve()
     let settle!: () => void
@@ -240,9 +337,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const turn = new Promise<void>((resolve, reject) => { settle = resolve; settleError = reject })
     chains.set(sessionId, turn)
     active.add(turn)
-    registered.set(sessionId, (registered.get(sessionId) ?? 0) + 1)
     const cleanup = (): void => {
-      registered.set(sessionId, Math.max(0, (registered.get(sessionId) ?? 1) - 1))
+      // Exactly-once removal for service rows (settle/error/cancel path); the
+      // queue() finished-purge is the read-side twin — both delete idempotently.
+      st.byId.delete(id)
       if (chains.get(sessionId) === turn) chains.delete(sessionId)
       active.delete(turn)
     }
@@ -255,12 +353,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       telemetry?.emit({ type: "session/queued", ts: Date.now(), data: { sessionId } })
     }
     const startTurn = (): void => {
-      if (closed || signal.aborted) {
+      if (closed || controller.signal.aborted) {
         settle() // the queued turn never starts; the chain keeps moving
         return
       }
       getOrCreate(sessionId).then(() => {
-        if (signal.aborted || closed) {
+        if (controller.signal.aborted || closed) {
           settle()
           return
         }
@@ -268,8 +366,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         try {
           // M41b: the submit signal now rides INTO the lane — the agent's
           // run() gets it and aborts at step boundaries/yields (in-flight
-          // cancel reaches the engine, not just the queue gate).
-          lane.submit({ tier: "send", text: prompt, signal })
+          // cancel reaches the engine, not just the queue gate). Task 11:
+          // the row id is RETAINED through the lane (public id == lane input
+          // id) so the projection merges service-front + lane rows by id.
+          lane.submit({ tier: "send", text: prompt, signal: controller.signal }, id)
+          record.state = "queued"
         } catch (error) {
           // A synchronous lane failure still settles this turn.
           if (!closed) telemetry?.emit({
@@ -309,6 +410,100 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return turn
   }
 
+  // ── M49 Task 11: the real queue projection ────────────────────────────────
+  // Single read (no UI-derived truth — the projection is the service records +
+  // the lane's own truth). Merges service-front and lane rows BY PUBLIC ID;
+  // state is "running" only for the lane's current turn; the running row is
+  // first, the rest FIFO. Records whose turn already finished are purged here
+  // (their submit cleanup may still be waiting on the chain — exactly-once
+  // removal on the read side too).
+
+  function queue(sessionId: string): SessionQueueItem[] {
+    const lane = lanes.get(sessionId)
+    const st = sessionQueueState(sessionId)
+    const pending = lane?.pending() ?? []
+    const current = lane?.currentInput() ?? undefined
+    const pendingIds = new Set(pending.map((p) => p.inputId))
+
+    // Adopt lane-only rows (steers admitted directly into the inbox — the
+    // embedded inbound seam) at first sight so they get a stable FIFO order
+    // inside the currently admitted window.
+    // The adoption window = the highest order among ADMITTED-or-running rows
+    // (served or adopted) — service-front ("wait") rows are after the window.
+    let window = 0
+    for (const rec of st.byId.values()) {
+      if (rec.state === "queued" || rec.state === "running") {
+        window = Math.max(window, Math.floor(rec.order))
+      }
+    }
+    for (const p of pending) {
+      if (st.byId.has(p.inputId)) continue
+      st.byId.set(p.inputId, {
+        id: p.inputId,
+        text: p.text,
+        delivery: p.delivery,
+        intent: p.intent,
+        order: adoptOrder(st, window),
+        controller: new AbortController(),
+        state: "queued",
+      })
+    }
+    if (current !== undefined && !st.byId.has(current.inputId)) {
+      st.byId.set(current.inputId, {
+        id: current.inputId,
+        text: current.text,
+        delivery: current.delivery,
+        intent: current.intent,
+        order: adoptOrder(st, window),
+        controller: new AbortController(),
+        state: "running",
+      })
+    }
+
+    const out: SessionQueueItem[] = []
+    const finished: string[] = []
+    for (const rec of st.byId.values()) {
+      if (rec.state === "cancelled") {
+        continue // hidden — the submit settles at its chain hand-over
+      }
+      if (current?.inputId === rec.id) {
+        rec.state = "running"
+        out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "running", order: rec.order })
+        continue
+      }
+      if (pendingIds.has(rec.id)) {
+        rec.state = "queued"
+        out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "queued", order: rec.order })
+        continue
+      }
+      if (rec.state === "wait") {
+        // service-front: admitted to the chain, not yet to the lane — queued.
+        out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "queued", order: rec.order })
+        continue
+      }
+      // The turn's input left the lane (promoted → done): the row is finished
+      // even though the submit's chain promise may not have settled yet.
+      finished.push(rec.id)
+    }
+    for (const id of finished) st.byId.delete(id)
+    out.sort((a, b) => (a.state === "running" ? -1 : b.state === "running" ? 1 : a.order - b.order))
+    return out
+  }
+
+  function cancelQueued(sessionId: string, id: string): { cancelled: boolean } {
+    const rec = queues.get(sessionId)?.byId.get(id)
+    // Already-cancelled / running / unknown ids are all an honest false — the
+    // row is no longer cancellable at the moment (the UI refresh shows truth).
+    if (rec === undefined || rec.state === "running" || rec.state === "cancelled") return { cancelled: false }
+    // Abort the row controller (settles the submit's chain gate without
+    // executing) and retract a lane-admitted input synchronously — the inbox
+    // cancel is append-marked, so the projection drops the row immediately.
+    rec.controller.abort()
+    rec.state = "cancelled"
+    lanes.get(sessionId)?.cancel(id)
+    return { cancelled: true }
+  }
+
   async function close(): Promise<void> {
     if (closed) return
     closed = true
@@ -325,7 +520,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     lanes.clear()
     modelBindings.clear()
     chains.clear()
-    registered.clear()
+    queues.clear()
     for (const handle of handles) await handle.dispose().catch(() => {})
     if (failure !== undefined) throw failure
   }
@@ -346,7 +541,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       lanes.delete(sessionId)
       modelBindings.delete(sessionId)
       chains.delete(sessionId)
-      registered.delete(sessionId)
+      queues.delete(sessionId)
       await handle?.dispose().catch(() => {})
     })().finally(() => {
       if (closing.get(sessionId) === pending) closing.delete(sessionId)
@@ -362,11 +557,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState: (sessionId) => {
-      const lane = lanes.get(sessionId)
-      const running = lane?.isRunning() ?? false
-      const total = registered.get(sessionId) ?? 0
-      return { running, queued: Math.max(0, total - (running ? 1 : 0)) }
+      // Count-only compatibility surface (session/status) — derived from the
+      // SAME projection, so the counts and the rows never disagree.
+      let running = false
+      let queued = 0
+      for (const item of queue(sessionId)) {
+        if (item.state === "running") running = true
+        else queued++
+      }
+      return { running, queued }
     },
+    queue: (sessionId) => queue(sessionId),
+    cancelQueued: (sessionId, id) => cancelQueued(sessionId, id),
     onAssembly: (hook) => {
       hooks.add(hook)
       return () => { hooks.delete(hook) }

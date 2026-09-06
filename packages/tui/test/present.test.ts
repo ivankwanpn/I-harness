@@ -135,7 +135,7 @@ describe("present — ActiveView and constrained layout", () => {
       paneData: {
         tasks: [{ label: "Subagents", entries: [{ status: "running", label: "worker" }] }],
         todo: [{ id: "todo-1", text: "Ship it", status: "in_progress" }],
-        queue: [{ n: 1, kind: "prompt", text: "Queued prompt" }],
+        queue: [{ id: "q1", text: "Queued prompt", delivery: "queue", intent: "user", state: "queued", order: 1, canCancel: false }],
         btw: { question: "Why?", state: "answering" },
       },
       turn: {

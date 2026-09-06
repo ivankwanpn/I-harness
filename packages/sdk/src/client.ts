@@ -23,6 +23,8 @@ import {
   type SessionIdResult,
   type SessionModelSelection,
   type SessionModelState,
+  type SessionQueueItem,
+  type QueueCancelResult,
 } from "./protocol.ts"
 
 export interface ServerInfo {
@@ -259,6 +261,20 @@ export class HarnessClient {
     return result as CancelResult
   }
 
+  /** M49 Task 11: the per-session queue projection — the running row first,
+   * the rest FIFO (rows come from the live lane; never fabricated). */
+  async queue(sessionId: string): Promise<SessionQueueItem[]> {
+    const result = await this.request("session/queue", { sessionId })
+    return (result as { items: SessionQueueItem[] }).items
+  }
+
+  /** M49 Task 11: cancel ONE queued row by its stable id. `cancelled` false
+   * for a finished / already-cancelled / running row id — never an error. */
+  async cancelQueueItem(sessionId: string, id: string): Promise<QueueCancelResult> {
+    const result = await this.request("session/queue/cancel", { sessionId, id })
+    return result as QueueCancelResult
+  }
+
   /** M41b v1.1: the rewind engine's durable points of a live session.
    * Rejects with RpcError(-32602, "session not found") for an unknown
    * session, -32603 "rewind not enabled" when the host wired no rewind seam. */
@@ -363,6 +379,16 @@ export class HarnessSession {
   /** M41b v1.1: abort this session's in-flight submit. */
   cancel(): Promise<CancelResult> {
     return this.client.cancel(this.sessionId)
+  }
+
+  /** M49 Task 11: this session's queue projection (running row first, FIFO). */
+  queue(): Promise<SessionQueueItem[]> {
+    return this.client.queue(this.sessionId)
+  }
+
+  /** M49 Task 11: cancel one queued row of this session by its stable id. */
+  cancelQueueItem(id: string): Promise<QueueCancelResult> {
+    return this.client.cancelQueueItem(this.sessionId, id)
   }
 
   /** M41b v1.1: this session's rewind points. */
