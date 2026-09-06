@@ -203,7 +203,7 @@ apps/
 | M45 | 分發：esbuild 捆包 + NSIS 自包含安裝器 |
 | M46a/b/c | 提供商/模型管理 + Slash 註冊表 + 鍵表真理 + **鼠標全 parity** + 選區/時間線軌/粘貼源/workflow 面 |
 | M47 | 質量輪 2：鼠標/hover bench + live 探測 + line-viewer |
-| M48 | 可靠性與 TUI 交付：G1 chain rejection 推進；配置 session-dir 時 TUI session 建立/列表/resume/close flush；durable Rewind bridge（僅 recorder-backed 檔案變更）；PTY case-010 修復 Windows `chcp` codepage 命令解析；⚠️ 全量驗證受 Windows ACL／installer runtime 阻塞 |
+| M48 | 可靠性與 TUI 交付：G1 chain rejection 推進；配置 session-dir 時 TUI session 建立/列表/resume/close flush；transactional session switch + scrollback/app reset；SDK/ACP 跨進程恢復舊 history 並延續 seq；ACP per-session close/lease release；durable Rewind bridge（僅 recorder-backed 檔案變更）；PTY case-010 修復 Windows `chcp` codepage 命令解析 |
 
 ---
 
