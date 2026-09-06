@@ -640,6 +640,21 @@ importers:
         specifier: workspace:*
         version: link:../llm-seam
 
+  packages/provider-runtime:
+    dependencies:
+      '@i-harness/credentials':
+        specifier: workspace:*
+        version: link:../credentials
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
+
   packages/rewind:
     dependencies:
       '@i-harness/fs':
