@@ -23,6 +23,12 @@ describe("tui flag parser", () => {
     expect(buildEmbeddedSessionOptions({ sessionDir: "C:\\sessions", resume: "s-123", prompt: "kickoff" })).toEqual({ prompt: "", storeRoot: "C:\\sessions", rewindStoreRoot: "C:\\sessions", resumeSessionId: "s-123" })
   })
 
+  it("rejects resume without a durable session directory", () => {
+    expect(() => buildEmbeddedSessionOptions({ resume: "s-123", prompt: "" })).toThrow(
+      "--resume requires --session-dir",
+    )
+  })
+
   it("passes the durable root to the attached SDK and preserves ephemeral attach args", () => {
     expect(buildSdkArgs({ sessionDir: "C:\\sessions" })).toEqual(["sdk", "--session-dir", "C:\\sessions"])
     expect(buildSdkArgs({ sessionDir: undefined })).toEqual(["sdk"])
@@ -41,6 +47,19 @@ describe("tui flag parser", () => {
     release()
     await first
     expect(events).toEqual(["stop", "close-start", "close-end", "teardown"])
+  })
+
+  it("attempts teardown and preserves close failures", async () => {
+    const events: string[] = []
+    const failure = new Error("flush failed")
+    const controller = createTuiShutdownController({
+      close: async () => { events.push("close"); throw failure },
+      stop: () => events.push("stop"),
+      teardown: () => events.push("teardown"),
+    })
+
+    await expect(controller.shutdown()).rejects.toBe(failure)
+    expect(events).toEqual(["stop", "close", "teardown"])
   })
 
   it("treats every flag as optional and unknown flags as no-ops", () => {

@@ -921,10 +921,10 @@ export class TuiApp {
       // (native select), ON restores in-app hover/scroll. State-only (the host
       // owns the terminal bytes; the toggle does not re-emit the 5-mode set).
       case "toggle-mouse-reporting": this.toggleMouseReporting(); break
-      case "quit": void this.quitNow(); break
+      case "quit": this.requestQuit(); break
       case "quit-arm1":
         // First press (Esc-empty / unarmed) arms; a later press quits.
-        if (this.armedQuit) void this.quitNow()
+        if (this.armedQuit) this.requestQuit()
         else {
           this.armedQuit = true
           this.toast("Press again to quit")
@@ -1318,7 +1318,7 @@ export class TuiApp {
     const modeSwitch = this.opts.modeSwitch
     if (modeSwitch !== undefined && modeSwitch(text)) {
       this.clearPrompt()
-      void this.quitNow()
+      this.requestQuit()
       return
     }
     this.app.history.push(this.app.prompt.text)
@@ -1552,7 +1552,7 @@ export class TuiApp {
       renameSession: (title) => void this.renameSession(title),
       deleteSession: () => this.deleteSession(),
       relaunch: () => this.relaunchSlash(input),
-      quitApp: () => void this.quitNow(),
+      quitApp: () => this.requestQuit(),
       copyBlock: () => this.toast("Copied!"), // clipboard M38 (parity with `y`)
       editPromptInEditor: () => this.editPromptInEditor(),
       exportTranscript: () => this.exportTranscript(),
@@ -2506,7 +2506,7 @@ export class TuiApp {
     const w = this.app.welcome
     if (w === undefined) return
     const m = w.menus[w.cursor]
-    if (m?.key.endsWith("q")) { void this.quitNow(); return }
+    if (m?.key.endsWith("q")) { this.requestQuit(); return }
     if (m?.key.includes("Resume session")) { this.toast("resume session: M38"); return }
     // agent screen; the host wires real session creation at G4/harmonization.
     this.app.screen = "agent"
@@ -2606,6 +2606,14 @@ export class TuiApp {
     } finally {
       await this.stop()
     }
+  }
+
+  /** Fire-and-forget quit actions must own close failures; the host-level
+   * shutdown path still observes the same backend error when it awaits. */
+  private requestQuit(): void {
+    void this.quitNow().catch((error: unknown) => {
+      console.error(`[i-harness] shutdown failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
   }
 
   private requestFrame(): void {
