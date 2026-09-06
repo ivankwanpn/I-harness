@@ -6,6 +6,9 @@
 // (TuiAppOptions.openLineViewer) stays first-priority.
 
 import { describe, expect, it, beforeEach } from "vitest"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
 import type { Renderer, TerminalCapabilityContext, InputEvent } from "@i-harness/tui-core"
 import { TuiApp } from "../src/app/loop.ts"
@@ -131,5 +134,29 @@ describe("TuiApp — openLineViewer wiring (M47 G2)", () => {
     doubleClickRef(app, text, "src/make-grid.py")
     expect(app.state().lightPanel?.kind).toBe("line-viewer")
     expect(app.state().lightPanel?.title).toBe("Run python src/make-grid.py")
+  })
+
+  it("M49 task 10: a ref naming a REAL file opens the modal line viewer with the exact line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-tui-lineviewer-"))
+    writeFileSync(join(dir, "real.txt"), "r1\nr2\nr3\nr4\nr5\n", "utf8")
+    const app = makeApp({ workspace: dir })
+    const text = "see real.txt:4 please"
+    app.state().prompt.text = text
+    doubleClickRef(app, text, "real.txt")
+    const deadline = Date.now() + 2_000
+    while (app.state().modal === undefined && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    const modal = app.state().modal
+    expect(modal).toBeDefined()
+    if (modal === undefined || modal.kind !== "line-viewer") throw new Error("expected the line-viewer modal")
+    const view = modal.view
+    expect(view.error).toBeUndefined()
+    expect(view.lines).toEqual(["r1", "r2", "r3", "r4", "r5"])
+    expect(view.cursor).toBe(3) // the exact 1-based line 4
+    expect(view.lineAtCursor()).toBe("r4")
+    app.dispatch("overlay-dismiss")
+    expect(app.state().modal).toBeUndefined()
+    rmSync(dir, { recursive: true, force: true })
   })
 })

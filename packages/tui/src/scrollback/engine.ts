@@ -5,7 +5,7 @@
 
 import type { GlyphSet } from "@i-harness/tui-core"
 import { GLYPHS } from "@i-harness/tui-core"
-import type { DisplayLine, ScrollbackEngine, StyledRun, TuiEvent } from "../contracts.ts"
+import type { DisplayLine, ScrollbackEngine, StyledRun, ToolViewInfo, TuiEvent } from "../contracts.ts"
 import type { Block, ThinkingBlock } from "./entries.ts"
 import {
   blockIdOf, isOpenThinking, makeAssistantBlock, makeCompactionBlock,
@@ -344,6 +344,34 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     return this.seg.sumBefore(this.rewindMarkerBlock) + shifted
   }
 
+  /** M49 Task 10: the typed tool block at a display line — the block viewer's
+   * source; a folded verb-group header resolves to the group's FIRST member
+   * (the group unit), a non-tool line stays undefined. */
+  toolAt(lineIndex: number): ToolViewInfo | undefined {
+    const q = this.foldQuery()
+    const total = this.seg.total(q)
+    if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= total) return undefined
+    if (this.seg.truncatedBlocks() > 0 && lineIndex === 0) return undefined
+    let { index } = this.seg.blockIndexAtLine(lineIndex)
+    // a collapsed verb-group header → its first member's block
+    const g = this.groupOf(index)
+    if (g !== undefined && this.effectiveGroupState(g) === "collapsed") index = g.start
+    const b = this.blocks[index]
+    if (b === undefined || b.kind !== "tool") return undefined
+    return {
+      callId: b.callId,
+      name: b.name,
+      kind: b.toolKind,
+      status: b.status,
+      summary: b.summary,
+      output: b.output,
+      error: b.error,
+      args: b.args,
+      result: b.result,
+      progress: b.progress,
+    }
+  }
+
   /** M46c G1 (timeline rail / /jump machinery reuse): the turn anchors — one
    * entry per User block, O(turns): the block's first display line (folding
    * + retain-marker resolved) + the stripped prompt-first-line preview. This
@@ -402,7 +430,18 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     if (existingIdx !== undefined) {
       const b = this.blocks[existingIdx]
       if (b.kind !== "tool") return
-      // streaming: running→running chunks append; done/error carry the final text.
+      // M49 Task 10: identity fields merge from ANY later event (an update
+      // that arrives BEFORE its base call — out-of-order completion — keeps
+      // the block and adopts the call's structured args/name/kind; the done/
+      // error result is retained regardless of arrival order).
+      if (ev.name !== undefined) b.name = ev.name
+      if (ev.kind !== undefined) b.toolKind = ev.kind
+      if (ev.args !== undefined) b.args = ev.args
+      if (ev.result !== undefined) b.result = ev.result
+      // streaming: running→running chunks append; done/error carry the final
+      // text; the terminal result also drops BOTH the progress text and the
+      // summary-ish identity residue (the final header/render reads the
+      // structured payload).
       if (ev.status === "running" && b.status === "running" && ev.output !== undefined) {
         b.output = (b.output ?? "") + ev.output
       } else if (ev.output !== undefined) {
@@ -410,6 +449,8 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
       }
       if (ev.error !== undefined) b.error = ev.error
       if (ev.summary !== undefined) b.summary = ev.summary
+      if (ev.progress !== undefined) b.progress = ev.progress
+      if (ev.status !== "running" && ev.progress === undefined) b.progress = undefined
       b.status = ev.status
       this.seg.contentChanged(existingIdx, this.groupOf(existingIdx)?.start)
       return

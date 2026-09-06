@@ -41,6 +41,7 @@
 import { randomUUID } from "node:crypto"
 import { append, createSession, subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
 import { RewindService } from "@i-harness/rewind"
+import { renderUnifiedDiff, type TextDiff } from "@i-harness/text-diff"
 import { applyTitle, normalizeTitle } from "@i-harness/session-title"
 import {
   createSessionService,
@@ -94,6 +95,33 @@ function stringifyOutput(output: unknown): string {
   }
 }
 
+/** M49 Task 10: when the tool/result's STRUCTURED payload supplies an fs
+ * change (change: TextDiff / changes: TextDiff[] — edit/write/apply_patch)
+ * the presentation string IS its unified diff; a rawPatch string (apply_patch
+ * without parseable per-file changes) renders verbatim. The field came from
+ * the structured payload itself — no regex string extraction.
+ * Returns undefined when no change-shaped member exists (the caller then
+ * keeps the plain stringified JSON). */
+function structuredChangeText(output: unknown): string | undefined {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) return undefined
+  const r = output as Record<string, unknown>
+  const validDiff = (c: unknown): c is TextDiff =>
+    c !== null && typeof c === "object"
+    && typeof (c as TextDiff).path === "string"
+    && typeof (c as TextDiff).added === "number"
+    && typeof (c as TextDiff).deleted === "number"
+    && Array.isArray((c as TextDiff).hunks)
+  const changes = r.changes
+  if (Array.isArray(changes) && changes.length > 0 && changes.every((c) => validDiff(c))) {
+    return (changes as unknown as TextDiff[]).map(renderUnifiedDiff).join("")
+  }
+  if (validDiff(r.change)) {
+    return renderUnifiedDiff(r.change)
+  }
+  if (typeof r.rawPatch === "string" && r.rawPatch !== "") return r.rawPatch
+  return undefined
+}
+
 /** Heuristic error output detection for tool/result (M37a):
  * - an object with a truthy `error` field (engine synthetic abort result and
  *   fs error results look exactly like this), or
@@ -140,13 +168,18 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
         name: ev.name,
         kind: toolKindOf(ev.name),
         status: "running",
+        args: ev.args,
         seq: eventSeq(ev, state),
         ts,
       }
     case "tool/result": {
       const seq = eventSeq(ev, state)
       const error = toolResultIsError(ev.output)
-      const text = stringifyOutput(ev.output)
+      // M49 Task 10: the structured fs change renders AS its unified diff;
+      // everything else keeps the faithful stringified payload. `result`
+      // always carries the raw structured payload (the typed surface — the
+      // raw viewer/presentation redacts it at the UI boundary).
+      const text = structuredChangeText(ev.output) ?? stringifyOutput(ev.output)
       return {
         type: "tool",
         callId: ev.callId,
@@ -154,6 +187,7 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
         kind: toolKindOf(ev.name),
         status: error ? "error" : "done",
         output: text,
+        result: ev.output,
         ...(error ? { error: text } : {}),
         seq,
         ts,
@@ -280,6 +314,12 @@ export interface EmbeddedOptions {
   createSession?: () => Promise<string>
   forkSession?: (sessionId: string) => Promise<string>
   setSessionModel?: (sessionId: string, selection: SessionModelSelection) => Promise<void>
+  /** M49 Task 10: the assembly seam for the interaction bridges — EVERY
+   * assembly the backend resolves is forwarded ONCE here (before any tools
+   * run: the resolution precedes the submit), so the approval/question
+   * answerers land in time. Absent → the host owns the service's onAssembly
+   * (the direct-backend path). */
+  onAssembly?: (assembly: SessionAssembly) => void
 }
 
 export interface EmbeddedFactoryOptions {
@@ -309,6 +349,10 @@ export interface EmbeddedFactoryOptions {
   rewindStoreRoot?: string
   coordinator?: SessionCoordinator
   resumeSessionId?: string
+  /** M49 Task 10: the interaction-bridge assembly seam — forwarded to
+   * createEmbeddedBackend (see EmbeddedOptions.onAssembly); the host's
+   * ApprovalBridgeService.onAssembly subscription lands here. */
+  onAssembly?: (assembly: SessionAssembly) => void
 }
 
 // ------------------------------------------------------------------ backend
@@ -367,6 +411,16 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
   let cachedAssembly: SessionAssembly | undefined
   let assemblyForId: string | undefined
 
+  /** M49 Task 10: the bridge seam — notify once per unique assembly (the ctx
+   * is the attach key: answerers land before any submit, so the ask surface
+   * is live when the tools need it). */
+  const notifiedAssemblies = new Set<SessionAssembly>()
+  function notifyAssembly(assembly: SessionAssembly): void {
+    if (notifiedAssemblies.has(assembly)) return
+    notifiedAssemblies.add(assembly)
+    opts.onAssembly?.(assembly)
+  }
+
   async function ensureAssembly(): Promise<SessionAssembly> {
     for (;;) {
       if (closed) throw new Error("embedded backend closed")
@@ -376,6 +430,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       if (targetId !== sessionId) continue
       cachedAssembly = assembly
       assemblyForId = targetId
+      notifyAssembly(assembly)
       return assembly
     }
   }
@@ -402,6 +457,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       sessionId = id
       cachedAssembly = assembly
       assemblyForId = id
+      notifyAssembly(assembly)
       cursor = -1
       const s = assembly.session
       if (rebindLiveSession !== undefined) rebindLiveSession(s, id)
@@ -834,6 +890,7 @@ export async function defaultEmbeddedFactory(opts: EmbeddedFactoryOptions): Prom
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
       ...(durableRewindRoot !== undefined ? { rewindWorkspace: opts.workspace } : {}),
+      ...(opts.onAssembly !== undefined ? { onAssembly: opts.onAssembly } : {}),
     })
     if (coordinator === undefined) return backend
     const close = backend.close.bind(backend)

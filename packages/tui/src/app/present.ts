@@ -49,6 +49,8 @@ import { renderTimelineRail, TIMELINE_W, timelineActive } from "../views/timelin
 import type { AppAction } from "./keys.ts"
 import { HUD_PANEL_W, renderHud } from "./hud.ts"
 import type { HudState } from "./hud.ts"
+// M49 Task 10: THE one-active modal/viewer union (block viewer + line viewer).
+import type { ActiveModal } from "../views/modal.ts"
 
 /** The coordinator state — the loop mutates it, present() only reads it.
  * Superset of AgentViewState (extra fields: history, focused, toasts, panes). */
@@ -153,6 +155,11 @@ export interface TuiAppState {
    * router sets/clears it) — the selection `▏` tape draws at this line's row
    * while the drag is open; undefined = no tape. */
   selectionDragLine?: number
+  // ---- M49 Task 10: THE ONE active modal/viewer union. While set, the modal
+  // draws FULLSCREEN (over everything — its own bg fill) and the loop's input
+  // owner routes every key to it BEFORE panes→prompt→scrollback. At most one
+  // modal ever exists (the owner's open() replaces).
+  modal?: ActiveModal
 }
 
 /** The active dropdown 1: kind + height (layoutAgent places the rect above
@@ -721,6 +728,88 @@ export function renderToasts(
   drawText(buf, x + pad, y, latest.text, textStyle, x + w - pad)
 }
 
+// ------------------------------------------------------------------ modal (M49 Task 10)
+
+/** The fullscreen modal (spec §3.12 block viewer): its own bg fill covers the
+ * whole rect (nothing of the agent view bleeds through — the modal is the
+ * ONLY visible surface while open). One header row (`Block {title} … [✗]`),
+ * the body window with gutter line numbers, one footer row (search/copy
+ * feedback left, `y copy · Esc close` hints right). Hit slots registered only
+ * for targets with real actions (modalHitTargets emits them already). */
+function drawModalSurface(
+  buf: Renderer["buffer"],
+  modal: ActiveModal,
+  rect: Rect,
+  view: ViewDraw,
+  palette: Palette,
+  cap: TerminalCapabilityContext | undefined,
+): void {
+  const bg = hexToRgbLocal(palette.bgBase)
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      view.cell(x, y, { text: " ", style: { bg }, width: 1, continuation: false })
+    }
+  }
+  const y0 = rect.y
+  const y1 = rect.y + rect.h - 1
+  const x1 = rect.x + rect.w - 1
+  const headerStyle = view.color(palette.textPrimary, { bold: true })
+  const dimStyle = view.color(palette.grayDim)
+
+  // header: `Block {title}` + raw/rendered chip + close ✗ (hit slot).
+  const viewer = modal.kind === "block-viewer" ? modal.viewer : undefined
+  const rows = modal.kind === "block-viewer" ? modal.viewer.rows() : modal.view.rows()
+  const scroll = modal.kind === "block-viewer" ? modal.viewer.scroll : modal.view.scroll
+  const search = modal.kind === "block-viewer" ? modal.viewer.searchState : undefined
+  const searchInput = modal.kind === "block-viewer" ? modal.viewer.searchInput : undefined
+  const copyFeedback = modal.kind === "block-viewer" ? modal.viewer.copyFeedback : modal.view.copyFeedback
+
+  const title = modal.kind === "block-viewer" ? modal.viewer.presentation.title : modal.view.file
+  drawText(buf, rect.x + 1, y0, `Block ${title}`, headerStyle, Math.max(rect.x + 1, x1 - 10))
+  if (viewer !== undefined) {
+    let cx = rect.x + 1 + strWidth(`Block ${title}`)
+    cx = drawText(buf, cx + 2, y0, `  ${viewer.raw ? "raw" : "rendered"}`, dimStyle, x1 - 5)
+  }
+  // the close ✗ at the header's far right (the mouse router resolves the hit
+  // via modalHitTargets(owner, rect) — same geometry: footer row + header
+  // right end).
+  const closeHovered = view.hit!({ x: x1 - 3, y: y0, w: 3, h: 1 }, "modal-close", "modal-close")
+  drawText(buf, x1 - 3, y0, "[✗]", closeHovered ? view.color(palette.accentError, { bold: true }) : dimStyle, x1 + 1)
+
+  // body window: gutter (1-based numbers right-aligned) + the row text.
+  const bodyH = Math.max(0, rect.h - 2)
+  const contentX = rect.x + 5 // gutter 4 + space
+  for (let i = 0; i < bodyH; i++) {
+    const li = scroll + i
+    const row = rows[li]
+    if (row === undefined) break
+    const y = y0 + 1 + i
+    drawText(buf, rect.x + 1, y, String(li + 1).padStart(4, " "), dimStyle, rect.x + 4)
+    const st = styleFor(row.style, palette, cap)
+    if (row.matched === true) st.invert = true
+    drawText(buf, contentX, y, row.text, st, x1)
+    if (row.matched === true) {
+      // the inverted text is the highlight; nothing more to draw.
+    }
+  }
+
+  // footer: search input / match count + copy feedback left; hints right.
+  const footerStyle = view.color(palette.gray)
+  const footerError = view.color(palette.accentError)
+  let fx = rect.x + 1
+  if (searchInput !== undefined) {
+    fx = drawText(buf, fx, y1, " search: ", footerStyle, x1)
+    drawText(buf, fx, y1, searchInput, view.color(palette.textPrimary, { bold: true }), x1 - 20)
+  } else if (search !== undefined && search.query !== "") {
+    const cur = search.current >= 0 ? search.current + 1 : 0
+    drawText(buf, fx, y1, ` ${cur}/${search.matches.length} matches`, footerStyle, x1)
+  } else if (copyFeedback !== undefined) {
+    drawText(buf, fx, y1, ` ${copyFeedback.text}`, copyFeedback.ok ? footerStyle : footerError, x1)
+  }
+  const hints = " y copy · / search · Esc close"
+  drawText(buf, x1 - strWidth(hints), y1, hints, footerStyle, x1 + 1)
+}
+
 // ------------------------------------------------------------------ present
 
 export interface PresentOptions {
@@ -848,7 +937,10 @@ export function present(
   // (spec §6.3: hidden for modal/viewer, disabled prompt, selection drag,
   // unfocused app).
   let cursorTarget: CursorTarget = { x: 0, y: 0, visible: false }
-  if (app.overlay !== undefined) {
+  if (app.modal !== undefined) {
+    // the modal owns the screen — the terminal caret is hidden (spec §6.3).
+    cursorTarget = { x: 0, y: 0, visible: false }
+  } else if (app.overlay !== undefined) {
     app.overlay.draw(layout.prompt, view, palette, glyphs)
     cursorTarget = app.overlay.caret?.(layout.prompt) ?? { x: 0, y: 0, visible: false }
   } else {
@@ -887,6 +979,13 @@ export function present(
     }
   }
   if (layout.shortcuts.h > 0) renderShortcuts(layout.shortcuts, app.shortcuts, view, palette)
+
+  // M49 Task 10: THE one active modal/viewer union — the fullscreen surface
+  // drawn over EVERYTHING (its own bg fill): the only surface visible while
+  // a block/line viewer is open.
+  if (app.modal !== undefined) {
+    drawModalSurface(buf, app.modal, { x: 0, y: 0, w: buf.width, h: buf.height }, view, palette, cap)
+  }
 
   // Debug HUD (M39) — top-right band; toasts draw AFTER it (M40 G2: the toast
   // card is above everything — bottom-right, newest-only, fit-to-width).

@@ -12,12 +12,14 @@ import { createProviderRegistry } from "@i-harness/provider"
 import { createProviderRuntime } from "@i-harness/provider-runtime"
 import { SettingsStore } from "@i-harness/settings"
 import { createRenderer, createUnknownCapabilities, makeGlyphs, resolvePalette } from "@i-harness/tui-core"
-import { ProviderController, createScrollbackEngine } from "@i-harness/tui"
+import { ProviderController, createEventMapState, createScrollbackEngine, mapSessionEvent } from "@i-harness/tui"
 import type { BackendClient, InputSource, TuiEvent } from "@i-harness/tui"
+import { createSessionService } from "@i-harness/session-executor"
 import {
   buildEmbeddedSessionOptions,
   buildSdkArgs,
   createExecutableApp,
+  createExecutableHost,
   createExecutableTui,
   createTuiModelBindingFor,
   createTuiShutdownController,
@@ -507,4 +509,96 @@ describe("tui production startup split (M49 Task 8)", () => {
       rmSync(fixture.root, { recursive: true, force: true })
     }
   })
+})
+
+
+describe("tui production interaction bridges (M49 Task 10)", () => {
+  async function waitHost(cond: () => boolean, timeoutMs = 10_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    while (!cond()) {
+      if (Date.now() >= deadline) throw new Error("condition did not settle")
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+
+  /** Poll-based event projection of a live session's durable log (the
+   * production mapper — no subscription needed). */
+  function mappedOf(service: ReturnType<typeof createSessionService>, sessionId: string): TuiEvent[] {
+    const session = service.liveSession(sessionId)
+    if (session === undefined) return []
+    const state = createEventMapState()
+    const out: TuiEvent[] = []
+    for (const ev of session.events) {
+      const m = mapSessionEvent(ev as never, state)
+      if (m !== undefined) out.push(m)
+    }
+    return out
+  }
+
+  it("attaches approval and question bridges to every production assembly (approveAll:false)", async () => {
+    const host = await createExecutableHost({ approveAll: false })
+    try {
+      const assembly = await host.service.assemblyFor("s1")
+      expect(host.approvals.isAttached(assembly.ctx)).toBe(true)
+      expect(host.questions.isAttached(assembly.ctx)).toBe(true)
+    } finally {
+      await host.close()
+    }
+  })
+
+  it("fail-closed: an assembly without a UI provider denies the ask (no answerer registered)", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-host-failclosed-"))
+    const service = createSessionService({
+      workspace,
+      approveAll: false,
+      modelPolicy: "test-mock",
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf node_modules" } }] },
+        { role: "assistant", text: "done" },
+      ],
+    })
+    try {
+      await service.assemblyFor("s1") // build the assembly WITHOUT any bridge
+      // the deny happens at the dispatch (no answerer ⇒ fail closed) — the
+      // turn REJECTS with the verdict; the call event is still in the log.
+      await expect(service.submit("s1", "run it", new AbortController().signal))
+        .rejects.toThrow(/no answerer|fail closed|approval required/i)
+      const running = mappedOf(service, "s1").filter((e) => e.type === "tool" && e.status === "running")
+      expect(running.length).toBeGreaterThanOrEqual(1)
+    } finally {
+      await service.close().catch(() => {})
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  it("one-shot real: an approval answered through the bridge lets the bash tool RUN", async () => {
+    const host = await createExecutableHost({
+      approveAll: false,
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf node_modules && echo bridge-ran" } }] },
+        { role: "assistant", text: "done" },
+      ],
+    })
+    try {
+      const it = host.bridge.approvals()[Symbol.asyncIterator]()
+      await host.service.assemblyFor("s1")
+      const submitP = host.service.submit("s1", "run it", new AbortController().signal).catch(() => {})
+      await waitHost(() => mappedOf(host.service, "s1").some((e) => e.type === "tool" && e.status === "running"), 30_000)
+      // the bridge surfaced exactly one permission for this turn
+      const surface = (await Promise.race([
+        it.next().then((r) => r.value),
+        new Promise((resolve) => setTimeout(() => resolve(undefined), 8_000)),
+      ])) as { id: string } | undefined
+      expect(surface).toBeDefined()
+      expect(surface).toMatchObject({ kind: "bash" })
+      await host.bridge.answerApproval(surface!.id, { approved: true })
+      await waitHost(() => mappedOf(host.service, "s1").some((e) => e.type === "tool" && e.status === "done"), 30_000)
+      const done = mappedOf(host.service, "s1").find((e) => e.type === "tool" && e.status === "done")!
+      expect(done.type === "tool" && done.output).toContain("bridge-ran")
+      // one-shot: a second answer to the same surface id is a no-op
+      await expect(host.bridge.answerApproval(surface!.id, { approved: false })).resolves.toBeUndefined()
+    } finally {
+      await host.close()
+    }
+  }, 120_000)
 })

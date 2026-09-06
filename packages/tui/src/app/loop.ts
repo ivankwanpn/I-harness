@@ -14,6 +14,7 @@ import type {
   TerminalCapabilityContext,
 } from "@i-harness/tui-core"
 import { resolvePalette } from "@i-harness/tui-core"
+import { isAbsolute, join } from "node:path"
 import type { BackendClient, BackendModelState, ScrollbackEngine, SessionSummary, TuiEvent } from "../contracts.ts"
 import { dispatchKey, shortcutsFor } from "./keys.ts"
 import type { AppAction, Kbd, KeymapState, OverlayKind } from "./keys.ts"
@@ -46,6 +47,7 @@ import { composeRegion } from "../minimal/live-region.ts"
 import { fmtCompact } from "../views/status.ts"
 import type { TurnPhase } from "../views/turn-status.ts"
 import type { PaneState } from "../views/agent.ts"
+import { layoutAgent } from "../views/agent.ts"
 import type { SlashEntry } from "../views/slash-dropdown.ts"
 import type { CompletionEntry } from "../views/completion-dropdown.ts"
 import type { SearchResult } from "../views/file-search.ts"
@@ -74,10 +76,18 @@ import { doctorLiveBrand, doctorLiveDark, doctorRows } from "../views/light-doct
 // (constructed below; present settles it per frame) and the wheel stream is
 // G1's ScrollStreamNormalizer (push on events, onTick drain on the anim pump).
 import { MouseRouter } from "./mouse.ts"
-import { defaultClipboard } from "./clipboard.ts"
+import { defaultClipboard, checkedCopy } from "./clipboard.ts"
 import type { Clipboard } from "./clipboard.ts"
 import { goalRows } from "../views/light-goal.ts"
 import { usageRows } from "../views/light-usage.ts"
+// M49 Task 10: the ONE active modal/viewer union — the input owner routes
+// keys/mouse here before panes→prompt→scrollback; the block viewer is the
+// typed tool surface (presentTool over the engine's ToolViewInfo); the line
+// viewer reads the REAL file.
+import { ModalOwner, createFileViewer, modalHitTargets } from "../views/modal.ts"
+import { createBlockViewer } from "../views/block-viewer.ts"
+import { presentTool } from "../tool-presentation/index.ts"
+import type { ToolViewInfo } from "../contracts.ts"
 
 export interface InputSource {
   next(): AsyncIterable<InputEvent>
@@ -215,6 +225,12 @@ export interface InlineHost {
 
 const ANIM_MS = 33 // 30fps pump
 
+/** M49 Task 10: last path segment (the line-viewer toasts label the file). */
+function basenameOf(file: string): string {
+  const i = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"))
+  return i === -1 ? file : file.slice(i + 1)
+}
+
 /** M47 G2: the live /doctor probe's paint-suspend window (≤800ms — settled
  * earlier when the run's answers are complete; released on timeout, no
  * deadlock; the query bytes arrive back through the input path's parser
@@ -298,6 +314,10 @@ export class TuiApp {
   private palette: Palette
   /** M46b G2: the clipboard injection layer (options ?? system clipboard). */
   private readonly clipboard: Clipboard
+  /** M49 Task 10: THE one-active-modal input owner. While a modal is open,
+   * every key routes here FIRST (owning input before panes→prompt→scrollback);
+   * closing clears app.modal through the onClose wiring below. */
+  private readonly modalOwner: ModalOwner
   /** M47 G2: the ACTIVE capability context — the host's at start; the live
    * /doctor probe's answers merge into it (present + the report rows read it;
    * theme re-resolves use it too). */
@@ -353,6 +373,13 @@ export class TuiApp {
     this.uiMode = opts.mode ?? "fullscreen"
     this.palette = opts.palette
     this.clipboard = opts.clipboard ?? defaultClipboard()
+    // M49 Task 10: the modal input owner — onClose clears the state + repaint.
+    this.modalOwner = new ModalOwner({
+      onClose: () => {
+        this.app.modal = undefined
+        this.requestFrame()
+      },
+    })
     this.cap = opts.capabilities
     this.probeSuspend = undefined
     // M46b G1: the wheel stream (brand profile + knob defaults while the
@@ -510,6 +537,48 @@ export class TuiApp {
       open(file, line)
       return
     }
+    // M49 Task 10: the LINE VIEWER reads the REAL file when it can resolve
+    // one (absolute path, or a ref under a known workspace) and positions the
+    // exact 1-based line. An unresolvable/missing file falls through to the
+    // engine block walk (M47 baseline) — the honest toast path stays there.
+    const target = isAbsolute(file)
+      ? file
+      : this.opts.workspace !== undefined
+        ? join(this.opts.workspace, file)
+        : undefined
+    if (target !== undefined) {
+      void this.tryRealFileViewer(target, line)
+        .then((opened) => { if (!opened) this.blockWalkLineViewer(file, line) })
+      return
+    }
+    this.blockWalkLineViewer(file, line)
+  }
+
+  /** M49 Task 10: read the REAL file and open the line viewer in the modal
+   * union (exact lines, exact 1-based cursor). Returns false when reading
+   * failed (the honest fallback then runs the block walk). */
+  private async tryRealFileViewer(target: string, line?: number): Promise<boolean> {
+    if (this.inlineActive()) return false
+    const view = await createFileViewer(target, {
+      line,
+      copy: async (text) => {
+        const r = await checkedCopy(this.clipboard, text)
+        if (!r.ok) throw new Error(r.error)
+      },
+    })
+    if (view.error !== undefined) {
+      this.toast(`line viewer: ${basenameOf(target)}${line !== undefined ? `:${line}` : ""} — ${view.error}`)
+      return false
+    }
+    this.modalOwner.open({ kind: "line-viewer", view })
+    this.app.modal = { kind: "line-viewer", view }
+    this.requestFrame()
+    this.toast(`line viewer: ${basenameOf(target)} → ${view.lines.length} lines`)
+    return true
+  }
+
+  /** M47 baseline: the engine block walk light panel (see the method note). */
+  private blockWalkLineViewer(file: string, line?: number): void {
     const eng = this.opts.engine
     const total = eng.lineCount()
     const suffix = line !== undefined ? `:${line}` : ""
@@ -567,6 +636,86 @@ export class TuiApp {
     this.app.sessions = undefined
     this.requestFrame()
     this.toast(`line viewer (M47): ${file}${suffix} → ${title}`)
+  }
+
+  // ------------------------------------------------------------------ block viewer (M49 Task 10)
+
+  /** Enter (alt Ctrl+F) on the scrollback — the open gate: NO overlay/
+   * dropdown open, search bar idle, a tool block under the viewport's first
+   * visible line (the engine resolves it — no block keeps the honest toast). */
+  private blockViewerOpenKey(kbd: Kbd): boolean {
+    // minimal mode has no fullscreen surface — the modal stays closed there.
+    if (this.inlineActive()) return false
+    // the SCROLLBACK's Enter/Ctrl+F only (a prompt-focused Enter submits;
+    // the Welcome menu keeps its own Enter) — the modal is not an overlay
+    // replacement.
+    if (this.app.focused !== "scrollback" || this.app.screen === "welcome") return false
+    if (this.overlayState() !== undefined || this.app.search?.active === true) return false
+    const enter = kbd.code === "Enter" && !kbd.ctrl && !kbd.alt && !kbd.shift
+    const ctrlF = kbd.code === "char" && kbd.ctrl && !kbd.alt && !kbd.shift && kbd.key.toLowerCase() === "f"
+    if (!enter && !ctrlF) return false
+    this.openBlockViewerAt(this.anchorDisplayLine())
+    this.requestFrame()
+    return true
+  }
+
+  /** The viewport's first visible display line (follow ⇒ the tail window) —
+   * the SCROLLBACK rect's height is the real window (the renderer height
+   * includes the panes/prompt rows, which would anchor the block viewer at a
+   * line several rows ABOVE the visible top). */
+  private anchorDisplayLine(): number {
+    const total = this.opts.engine.lineCount()
+    const rect = layoutAgent(
+      { cols: this.opts.renderer.buffer.width, rows: this.opts.renderer.buffer.height },
+      this.app,
+      { compact: this.opts.compact },
+    ).scrollback
+    return this.app.scroll.follow ? Math.max(0, total - rect.h + 1) : Math.max(0, this.app.scroll.offset)
+  }
+
+  /** Open THE block viewer (the typed tool presentation over the engine block
+   * at `line`) — the one active modal union; the modal becomes the input
+   * owner; the copy adapter is the checked path (failures render the error). */
+  private openBlockViewerAt(line: number): void {
+    const info = this.opts.engine.toolAt?.(line)
+    if (info === undefined) {
+      this.toast("block viewer: no tool block at the cursor")
+      return
+    }
+    const viewer = createBlockViewer(presentTool(info as ToolViewInfo), {
+      copy: async (text) => {
+        const r = await checkedCopy(this.clipboard, text)
+        if (!r.ok) throw new Error(r.error)
+      },
+    })
+    this.modalOwner.open({ kind: "block-viewer", viewer })
+    this.app.modal = { kind: "block-viewer", viewer }
+    this.app.slash = undefined
+    this.app.completion = undefined
+    this.app.fileSearch = undefined
+    this.app.historyPanel = undefined
+    this.app.sessions = undefined
+    this.app.lightPanel = undefined
+    this.requestFrame()
+  }
+
+  /** The modal's wheel scroll (3 rows/tick — scrollback parity). */
+  private modalScroll(delta: number): void {
+    const modal = this.app.modal
+    if (modal === undefined) return
+    if (modal.kind === "block-viewer") modal.viewer.move(delta)
+    else modal.view.move(delta)
+  }
+
+  private modalMove(delta: number): void {
+    this.modalScroll(delta)
+  }
+
+  private modalMovePage(delta: number): void {
+    const modal = this.app.modal
+    if (modal === undefined) return
+    if (modal.kind === "block-viewer") modal.viewer.page(delta)
+    else modal.view.page(delta)
   }
 
   // ------------------------------------------------------------------ live /doctor probe (M47 G2)
@@ -934,6 +1083,27 @@ export class TuiApp {
       this.requestFrame()
       return
     }
+    // M49 Task 10: while the modal is open it owns the surface — the modal
+    // semantics (Esc closes / y copies / arrows move) route here; quit stays
+    // global (Ctrl+Q must still work over a modal).
+    if (this.app.modal !== undefined && action !== "quit") {
+      switch (action) {
+        case "overlay-dismiss": this.modalOwner.close(); break
+        case "overlay-copy": {
+          const modal = this.app.modal
+          const live = modal?.kind === "block-viewer" ? modal.viewer : modal?.kind === "line-viewer" ? modal.view : undefined
+          if (live !== undefined) void live.copy()
+          break
+        }
+        case "overlay-nav-prev": this.modalMove(-1); break
+        case "overlay-nav-next": this.modalMove(1); break
+        case "overlay-page-prev": this.modalMovePage(-1); break
+        case "overlay-page-next": this.modalMovePage(1); break
+        default: break
+      }
+      this.requestFrame()
+      return
+    }
     switch (action) {
       case "scroll-up": this.scrollBy(-3); break
       case "scroll-down": this.scrollBy(3); break
@@ -1217,6 +1387,22 @@ export class TuiApp {
       // machinery + scroll stream + the click router). When off, the terminal
       // owns the mouse (native select) — nothing routes here.
       if (mouse === undefined || !mouse.enabled) return
+      // M49 Task 10: the modal owns the MOUSE too — its hit targets (copy/
+      // close — emitted only with real actions) resolve first; a click or
+      // wheel anywhere else is consumed (the modal is the only surface).
+      if (this.app.modal !== undefined) {
+        const modalRect = { x: 0, y: 0, w: this.opts.renderer.buffer.width, h: this.opts.renderer.buffer.height }
+        for (const t of modalHitTargets(this.modalOwner, modalRect)) {
+          if (col >= t.rect.x && col < t.rect.x + t.rect.w && row >= t.rect.y && row < t.rect.y + t.rect.h) {
+            t.action?.()
+            this.requestFrame()
+            return
+          }
+        }
+        if (ev.button === "wheel-up") { this.modalScroll(3); this.requestFrame(); return }
+        if (ev.button === "wheel-down") { this.modalScroll(-3); this.requestFrame(); return }
+        return
+      }
       // G1: the settled pointer — present() settles the hovered set every
       // frame (dirty-repaint only: engine.update returns the change flag).
       mouse.last = { col, row }
@@ -1237,6 +1423,17 @@ export class TuiApp {
       return
     }
     if (ev.type !== "key") return
+    // M49 Task 10: the modal is the INPUT OWNER — keys route here FIRST
+    // (before panes→prompt→scrollback: an open modal consumes everything).
+    const modalKbd: Kbd = { code: ev.code, key: ev.key, ctrl: ev.ctrl, alt: ev.alt, shift: ev.shift }
+    if (this.modalOwner.key(modalKbd)) {
+      this.requestFrame()
+      return
+    }
+    // M49 Task 10: Enter (alt Ctrl+F) on the scrollback — no overlay/dropdown
+    // open, search bar idle — opens the block viewer for the block at the
+    // viewport's first visible line.
+    if (this.blockViewerOpenKey(modalKbd)) return
     // M46a: /find search mode — chars/Backspace/Enter/Esc own the search bar
     // (scrollback focus while active); everything else falls through.
     if (this.searchKey(ev)) return
@@ -2233,6 +2430,9 @@ export class TuiApp {
     this.app.historyPanel = undefined
     this.app.slash = undefined
     this.app.completion = undefined
+    // M49 Task 10: a session switch closes any open modal (the owner + state).
+    this.modalOwner.close()
+    this.app.modal = undefined
     this.app.fileSearch = undefined
     this.app.dimFrom = undefined
     this.app.draft = undefined

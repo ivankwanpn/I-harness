@@ -211,6 +211,27 @@ describe("createRemoteBackend (fake wire client)", () => {
     await backend.close()
   })
 
+  it("preserves typed tool args and structured results through the wire (M49 task 10)", async () => {
+    const client = fakeWireClient()
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    const seen = startConsumer(backend)
+
+    sendEvent(client, "s1", { type: "tool/call", callId: "c1", name: "edit", args: { path: "a.ts", old_string: "x", new_string: "y" }, seq: 1 })
+    sendEvent(client, "s1", { type: "tool/result", callId: "c1", name: "edit", output: { ok: true, path: "a.ts", change: { path: "a.ts", added: 1, deleted: 1, hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [{ kind: "delete", text: "x", oldLine: 1 }, { kind: "add", text: "y", newLine: 1 }] }], truncated: false } }, seq: 2 })
+    await waitFor(() => seen.some((e) => e.type === "tool" && e.callId === "c1" && e.status === "done"), 1000)
+
+    const call = seen.find((e) => e.type === "tool" && e.status === "running")
+    const done = seen.find((e) => e.type === "tool" && e.status === "done")
+    // the structured payload survives the wire (same mapper as embedded — the
+    // determinism anchor); the presentation text is the unified diff.
+    expect(call).toMatchObject({ type: "tool", callId: "c1", args: { path: "a.ts", old_string: "x", new_string: "y" } })
+    expect(done).toMatchObject({ type: "tool", callId: "c1", result: { ok: true, path: "a.ts" } })
+    expect(done && done.type === "tool" && done.output).toContain("-x")
+    expect(done && done.type === "tool" && done.output).toContain("+y")
+
+    await backend.close()
+  })
+
   it("cancel without the session-cancel row: one honest stream note, NO wire RPC; close idempotent", async () => {
     const client = fakeWireClient()
     const backend = createRemoteBackend({ client, sessionId: "s1" })

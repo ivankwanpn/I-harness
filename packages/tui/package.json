@@ -29,6 +29,7 @@
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-persistence-jsonl": "workspace:*",
     "@i-harness/session-title": "workspace:*",
+    "@i-harness/text-diff": "workspace:*",
     "@i-harness/token-meter": "workspace:*",
     "@i-harness/tui-core": "workspace:*",
     "highlight.js": "^11.12.0",

@@ -77,10 +77,10 @@ describe("mapSessionEvent", () => {
   it("tool: call → running, result → done/error by callId, kind lookup", () => {
     const state = createEventMapState()
     expect(mapSessionEvent({ type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 4 } as never, state)).toEqual({
-      type: "tool", callId: "c1", name: "bash", kind: "execute", status: "running", seq: 4, ts: expect.any(Number),
+      type: "tool", callId: "c1", name: "bash", kind: "execute", status: "running", args: {}, seq: 4, ts: expect.any(Number),
     })
     expect(mapSessionEvent({ type: "tool/result", callId: "c1", name: "bash", output: { content: "out" }, seq: 5 } as never, state)).toMatchObject({
-      type: "tool", callId: "c1", status: "done", output: '{\n  "content": "out"\n}', seq: 5,
+      type: "tool", callId: "c1", status: "done", output: '{\n  "content": "out"\n}', result: { content: "out" }, seq: 5,
     })
     expect(mapSessionEvent({ type: "tool/result", callId: "c1", name: "bash", output: { error: "boom" }, seq: 6 } as never, state)).toMatchObject({
       type: "tool", status: "error", error: '{\n  "error": "boom"\n}', seq: 6,
@@ -89,6 +89,22 @@ describe("mapSessionEvent", () => {
     expect(toolResultIsError("Error: nope")).toBe(true)
     expect(toolResultIsError({ content: "ok" })).toBe(false)
     expect(toolResultIsError(null)).toBe(false)
+  })
+
+  it("tool/result with a structured change renders its unified diff as the presentation text (M49 task 10)", () => {
+    const state = createEventMapState()
+    const done = mapSessionEvent({
+      type: "tool/result",
+      callId: "e1",
+      name: "edit",
+      output: { ok: true, path: "a.ts", replacements: 1, change: { path: "a.ts", added: 1, deleted: 1, truncated: false, hunks: [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [{ kind: "delete", text: "old", oldLine: 1 }, { kind: "add", text: "new", newLine: 1 }] }] } },
+      seq: 5,
+    } as never, state)
+    expect(done).toMatchObject({ type: "tool", callId: "e1", status: "done", result: { ok: true, path: "a.ts" } })
+    const out = done && done.type === "tool" ? done.output : ""
+    expect(out).toContain("-old")
+    expect(out).toContain("+new")
+    expect(out).toContain("@@ -1,1 +1,1 @@")
   })
 
   it("system/compaction/todo/goal/subagent/command families + skipped bookkeeping", () => {

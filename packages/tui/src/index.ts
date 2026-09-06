@@ -11,6 +11,15 @@
 export { TuiApp } from "./app/loop.ts"
 export type { TuiAppOptions, InputSource, InlineHost } from "./app/loop.ts"
 export type { TuiAppState } from "./app/present.ts"
+// M49 Task 10: the typed tool presentation (redaction seam §7.3 + the family
+// formatters) and THE one-active modal/viewer union (block viewer + the
+// real-file line viewer + the input owner).
+export { redactToolPayload, SECRET_KEYS, presentTool } from "./tool-presentation/index.ts"
+export type { ToolPresentation, ToolBodyEntry, ToolEventLike } from "./tool-presentation/index.ts"
+export { createBlockViewer } from "./views/block-viewer.ts"
+export type { BlockViewerState, BlockViewerRow, BlockViewerOptions, BlockViewerSearchState, BlockViewerCopyFeedback } from "./views/block-viewer.ts"
+export { ModalOwner, createFileViewer, modalHitTargets } from "./views/modal.ts"
+export type { ActiveModal, FileViewerState, FileViewerOptions, ModalHitTarget } from "./views/modal.ts"
 // M39 G2: FPS/scroll-debug HUD — zero overhead (allocated only when the app
 // option hud:true is on; renderHud draws the top-right 32-col band).
 export { FpsMeter, HUD_PANEL_W, renderHud } from "./app/hud.ts"
@@ -36,6 +45,10 @@ import type { TextStyle } from "./contracts.ts"
 export type { ScrollbackEngineOptions } from "./scrollback/engine.ts"
 export { createEmbeddedBackend, defaultEmbeddedFactory } from "./backend/embedded.ts"
 export type { EmbeddedOptions, EmbeddedFactoryOptions } from "./backend/embedded.ts"
+// M49 Task 10: the typed session-event mapper is re-exported too — the app
+// host (apps/tui) uses the SAME pure mapper when it owns the assembly itself
+// (bridge tests + the production interaction pump).
+export { createEventMapState, mapSessionEvent } from "./backend/embedded.ts"
 // M38b G2: remote/SDK backend (--attach) — the stdio wire client
 // (spawnSdkSubprocess, mirrors @i-harness/sdk HarnessClient.spawn without the
 // dep) + the BackendClient adapter (createRemoteBackend; SdkClientLike is the
@@ -84,7 +97,9 @@ export type {
   TextStyle,
   TodoItem,
   ToolKind,
+  ToolViewInfo,
   TuiEvent,
+  TuiToolEvent,
 } from "./contracts.ts"
 // G1↔G2 minimal-mode contracts (contracts.ts is G1's — re-exported read-only).
 export type { InlineLiveRegion, InlineMetrics, RegionLine } from "./minimal/contracts.ts"
