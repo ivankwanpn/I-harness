@@ -1,301 +1,373 @@
-// M46a G1: the ProviderStore — CRUD over the settings `tui.providers` section
-// (refs-NOT-values: the raw key NEVER lands in the settings document), the
-// credential-ref boundary (set/describe/mask — never echo), the injectable
-// discovery fetch (memo + candidate strategy + modelsUrl override + adoption
-// of the first model into settings llm.defaultModel).
+// M49 Task 6: the legacy ProviderStore is gone. This file is now:
+//   (a) ProviderController coverage — the UI-only adapter over provider-
+//       runtime: refs-not-values saves, discovery state (manual-only /
+//       failed-with-attempts / ready), session-model selection through the
+//       backend capability vs the durable llm.defaultModel fallback, removal;
+//   (b) migration/regression evidence — legacy `tui.providers` settings
+//       documents still LOAD into the canonical llm.providers plane (read
+//       migration), and the normalized document no longer exposes the legacy
+//       section (the legacy plane is gone; new writes go to llm.providers).
 
 import { describe, expect, it } from "vitest"
-import { normalizeSettings, type Settings, type SettingsStoreSurface } from "@i-harness/settings"
-import {
-  ProviderStore,
-  discoveryCandidates,
-  maskKey,
-  parseModelsBody,
-  providerApiKeyRef,
-  type FetchedModel,
-} from "../src/app/provider-store.ts"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { SettingsStore, normalizeSettings } from "@i-harness/settings"
+import { createCredentialStore } from "@i-harness/credentials"
+import { createProviderRegistry } from "@i-harness/provider"
+import { createProviderRuntime } from "@i-harness/provider-runtime"
+import type { ModelClient } from "@i-harness/llm-seam"
+import { ProviderController } from "../src/app/provider-controller.ts"
 
-// ------------------------------------------------------------------ fakes
+const FIXTURE_MODEL: ModelClient = { async *stream() {} }
 
-interface FakeStore {
-  surface: SettingsStoreSurface
-  get(): Settings
-  setCalls: Partial<Settings>[]
+interface FixtureOptions {
+  providers?: Record<string, unknown>
+  defaultModel?: { provider: string; model: string; reasoningEffort?: string }
+  credentials?: Record<string, string>
+  templates?: (registry: ReturnType<typeof createProviderRegistry>) => void
+  /** Inject the models endpoint per route (no CI network). */
+  probe?: (registry: ReturnType<typeof createProviderRegistry>) => void
 }
 
-function fakeSettings(initial: Partial<Settings> = {}): FakeStore {
-  let current = normalizeSettings(initial)
-  let canonicalLlm = normalizeSettings({ llm: initial.llm }).llm
-  const setCalls: Partial<Settings>[] = []
-  const surface: SettingsStoreSurface = {
-    get: () => current,
-    isLoaded: () => true,
-    load: async () => current,
-    set: async (patch) => {
-      setCalls.push(patch)
-      if (patch.llm !== undefined) canonicalLlm = normalizeSettings({ llm: patch.llm }).llm
-      current = normalizeSettings({ ...current, ...patch, llm: canonicalLlm })
-      return current
-    },
-    reset: async () => {
-      current = normalizeSettings(undefined)
-      canonicalLlm = current.llm
-      return current
-    },
-    getSectionRevision: () => 0,
-    getSectionMutationBase: (name) => name === "llm" ? canonicalLlm : current.onboarding,
-  }
-  return { surface, get: () => current, setCalls }
+interface Fixture {
+  controller: ProviderController
+  runtime: ReturnType<typeof createProviderRuntime>
+  settings: SettingsStore
+  credentials: ReturnType<typeof createCredentialStore>
+  root: string
 }
 
-interface FakeCreds {
-  face: { describe: (refs: string[]) => Record<string, { configured: boolean; source: "env" | "file"; writable: boolean }>; set: (ref: string, v: string) => Promise<void>; unset: (ref: string) => Promise<void>; resolve: (ref: string) => string | undefined }
-  values: Map<string, string>
-  setCalls: Array<{ ref: string; value: string }>
-}
-
-function fakeCreds(): FakeCreds {
-  const values = new Map<string, string>()
-  const setCalls: Array<{ ref: string; value: string }> = []
-  return {
-    values,
-    setCalls,
-    face: {
-      describe: (refs) => {
-        const out: Record<string, { configured: boolean; source: "env" | "file"; writable: boolean }> = {}
-        for (const r of refs) out[r] = values.has(r)
-          ? { configured: true, source: "file", writable: true }
-          : { configured: false, source: "file", writable: true }
-        return out
-      },
-      set: async (ref, value) => {
-        setCalls.push({ ref, value })
-        values.set(ref, value)
-      },
-      unset: async (ref) => { values.delete(ref) },
-      resolve: (ref) => values.get(ref),
-    },
-  }
-}
-
-function fakeFetch(results: FetchedModel[]): { fn: typeof fetch; calls: string[] } {
-  const calls: string[] = []
-  const fn = (async (input: RequestInfo | URL) => {
-    calls.push(String(input))
-    return new Response(JSON.stringify({ data: results }), { status: 200, headers: { "content-type": "application/json" } })
-  }) as unknown as typeof fetch
-  return { fn, calls }
-}
-
-const DEEPSEEK = {
-  id: "deepseek",
-  baseUrl: "https://api.deepseek.com",
-  protocol: "openai-compatible" as const,
-}
-
-function makeStore(overrides: Partial<{ settings: FakeStore; creds: FakeCreds; fetch: typeof fetch }> = {}): {
-  store: ProviderStore
-  settings: FakeStore
-  creds: FakeCreds
-  fetchCalls: () => string[]
-} {
-  const settings = fakeSettings()
-  const creds = fakeCreds()
-  const fetchBox = overrides.fetch !== undefined
-    ? { fn: overrides.fetch, calls: [] as string[] }
-    : undefined
-  const store = new ProviderStore({
-    settings: settings.surface,
-    credentials: creds.face,
-    ...(overrides.fetch !== undefined ? { fetchFn: overrides.fetch } : {}),
-  })
-  return {
-    store,
-    settings,
-    creds,
-    fetchCalls: () => fetchBox?.calls ?? [],
-  }
-}
-
-// ------------------------------------------------------------------ section shape
-
-describe("ProviderStore — settings section shape", () => {
-  it("stores the tui.providers section verbatim: {version, activeProviderId, providers}", async () => {
-    const { store, settings } = makeStore()
-    await store.upsert(DEEPSEEK)
-    await store.setActive("deepseek")
-    const doc = settings.get().tui.providers
-    expect(doc.version).toBe(1)
-    expect(doc.activeProviderId).toBe("deepseek")
-    expect(doc.providers.deepseek).toEqual(DEEPSEEK)
-    // The persisted document is the normalize-verified shape (no drift).
-    expect(JSON.parse(JSON.stringify(settings.get().tui))).toEqual({
-      providers: { version: 1, activeProviderId: "deepseek", providers: { deepseek: DEEPSEEK } },
-      // M46b G1: the Mouse knobs joined the prefs (normalize defaults).
-      prefs: {
-        timestamps: false,
-        compact: false,
-        guardian: false,
-        alwaysApprove: true,
-        scrollSpeed: 50,
-        scrollMode: "auto",
-        scrollLines: 3,
-        invertScroll: false,
-        keepTextSelection: "flash",
-        wordSeparators: "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~",
-        mouseReportingToggle: false,
+async function makeFixture(options: FixtureOptions = {}): Promise<Fixture> {
+  const root = mkdtempSync(join(tmpdir(), "tui-provider-controller-"))
+  const settings = new SettingsStore({ path: join(root, "settings.json") })
+  await settings.load()
+  if (options.providers !== undefined) {
+    await settings.set({
+      llm: {
+        providers: options.providers as never,
+        defaultModel: options.defaultModel ?? { provider: "", model: "" },
       },
     })
+  }
+  const credentials = createCredentialStore(join(root, "credentials.json"))
+  for (const [ref, value] of Object.entries(options.credentials ?? {})) {
+    await credentials.set(ref, value)
+  }
+  const registry = createProviderRegistry()
+  options.templates?.(registry)
+  if (options.probe !== undefined) options.probe(registry)
+  const runtime = createProviderRuntime({ settings, credentials, registry, buildClient: () => FIXTURE_MODEL })
+  const controller = new ProviderController({ runtime, settings })
+  return { controller, runtime, settings, credentials, root }
+}
+
+interface RecordingBackend {
+  selections: Array<{ provider: string; model: string; reasoningEffort?: string }>
+  backend: { setSessionModel(selection: unknown): Promise<unknown> }
+}
+
+function recordingBackend(): RecordingBackend {
+  const selections: Array<{ provider: string; model: string; reasoningEffort?: string }> = []
+  return {
+    selections,
+    backend: {
+      setSessionModel: async (selection) => {
+        selections.push(selection as { provider: string; model: string; reasoningEffort?: string })
+        return { status: "ready", label: "fixture" }
+      },
+    },
+  }
+}
+
+const DEEPSEEK_CONFIG = {
+  baseURL: "https://api.deepseek.com",
+  protocol: "openai-completions" as const,
+  apiKeyEnv: "DEEPSEEK_API_KEY",
+}
+
+// ------------------------------------------------------------------ controller: refs-not-values
+
+describe("ProviderController — adds a provider without storing the raw key in settings", () => {
+  it("writes only llm.providers + credential refs; the raw key never lands in settings", async () => {
+    const fixture = await makeFixture()
+    try {
+      await fixture.controller.saveProvider({
+        id: "custom",
+        displayName: "Custom",
+        protocol: "openai-completions",
+        baseURL: "https://api.example",
+        modelsURL: "https://api.example/v1/models",
+        apiKey: "secret",
+      })
+      expect(fixture.settings.get().llm.providers.custom).toMatchObject({
+        apiKeyEnv: "CUSTOM_API_KEY",
+        baseURL: "https://api.example",
+      })
+      expect(JSON.stringify(fixture.settings.get())).not.toContain("secret")
+      expect(JSON.stringify(fixture.settings.get().tui)).not.toContain("providers")
+      expect(fixture.credentials.resolve("CUSTOM_API_KEY")).toBe("secret")
+      await expect(fixture.runtime.directory()).resolves.toContainEqual(expect.objectContaining({ id: "custom" }))
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
-  it("list sorts by id; get returns a copy; activeEntry mirrors the pin", async () => {
-    const { store } = makeStore()
-    await store.upsert({ ...DEEPSEEK, id: "b-again", baseUrl: "https://b" })
-    await store.upsert({ ...DEEPSEEK, id: "a-first", baseUrl: "https://a" })
-    expect(store.list().map((e) => e.id)).toEqual(["a-first", "b-again"])
-    expect(store.get("a-first")?.baseUrl).toBe("https://a")
-    await store.setActive("a-first")
-    expect(store.activeEntry()?.id).toBe("a-first")
-    expect(store.activeId()).toBe("a-first")
+  it("rejects an empty id / base URL (fail-loud — never a partial provider)", async () => {
+    const fixture = await makeFixture()
+    try {
+      await expect(fixture.controller.saveProvider({
+        id: " ", baseURL: "https://x", protocol: "openai-completions",
+      })).rejects.toThrow(/id is required/)
+      await expect(fixture.controller.saveProvider({
+        id: "x", baseURL: "", protocol: "openai-completions",
+      })).rejects.toThrow(/base URL is required/)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
-  it("setActive rejects an unknown id; remove of the active clears the pin", async () => {
-    const { store } = makeStore()
-    await expect(store.setActive("nope")).rejects.toThrow(/is not configured/)
-    await store.upsert(DEEPSEEK)
-    await store.setActive("deepseek")
-    await store.remove("deepseek")
-    expect(store.activeId()).toBe("")
-    expect(store.has("deepseek")).toBe(false)
+  it("the persisted document never carries the legacy tui.providers section", async () => {
+    const fixture = await makeFixture()
+    try {
+      await fixture.controller.saveProvider({
+        id: "custom", protocol: "openai-completions", baseURL: "https://api.example", apiKey: "k",
+      })
+      const tui = JSON.stringify(fixture.settings.get().tui)
+      expect(tui).not.toContain("providers")
+      expect(fixture.settings.get().llm.providers.custom).toBeDefined()
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  })
+
+  it("an empty key keeps nothing bound (a new provider without a key has no ref)", async () => {
+    const fixture = await makeFixture()
+    try {
+      await fixture.controller.saveProvider({
+        id: "nokey", protocol: "openai-completions", baseURL: "https://api.example",
+      })
+      expect(fixture.settings.get().llm.providers.nokey?.apiKeyEnv).toBeUndefined()
+      expect(fixture.credentials.resolve("NOKEY_API_KEY")).toBeUndefined()
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 })
 
-// ------------------------------------------------------------------ refs-not-values
+// ------------------------------------------------------------------ controller: discovery state
 
-describe("ProviderStore — credential refs (never the raw key in settings)", () => {
-  it("setApiKey writes the VALUE into the credential store and ONLY the ref into settings", async () => {
-    const { store, settings, creds } = makeStore()
-    await store.upsert(DEEPSEEK)
-    await store.setApiKey("deepseek", "sk-super-secret")
-    expect(creds.values.get("DEEPSEEK_API_KEY")).toBe("sk-super-secret")
-    expect(providerApiKeyRef("deepseek")).toBe("DEEPSEEK_API_KEY")
-    const entry = settings.get().tui.providers.providers.deepseek
-    expect(entry.apiKeyRef).toBe("DEEPSEEK_API_KEY")
-    // the RAW key must never be representable in the settings document:
-    expect(JSON.stringify(settings.get())).not.toContain("sk-super-secret")
-    expect(store.resolveKey("deepseek")).toBe("sk-super-secret") // build path only
+describe("ProviderController — discovery state machine (manual-only / failure)", () => {
+  it("shows manual model entry when discovery is unavailable", async () => {
+    const fixture = await makeFixture({
+      templates: (registry) => {
+        registry.register({
+          name: "bedrock",
+          displayName: "Bedrock",
+          protocol: "bedrock",
+          models: [],
+        } as never)
+      },
+    })
+    try {
+      await fixture.controller.selectProvider("bedrock")
+      expect(fixture.controller.state().discovery).toEqual({
+        status: "manual-only",
+        providerId: "bedrock",
+        message: "Discovery is not available for this provider; add a model ID manually.",
+      })
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
-  it("maskFor shows `x…` + the tail; credentialInfo reports the source", async () => {
-    const { store } = makeStore()
-    await store.upsert(DEEPSEEK)
-    expect(store.maskFor("deepseek")).toBe("not set")
-    await store.setApiKey("deepseek", "sk-1234567890abcd")
-    expect(store.maskFor("deepseek")).toBe("x…abcd")
-    expect(store.credentialInfo("deepseek")).toEqual({ configured: true, source: "file", writable: true })
-    expect(maskKey(undefined)).toBe("not set")
-    expect(maskKey("x1y2")).toBe("x…x1y2")
+  it("a failed discovery preserves stored models and displays the attempt summary", async () => {
+    const fixture = await makeFixture({
+      providers: { deepseek: { ...DEEPSEEK_CONFIG, models: [{ id: "manual-model" }] } },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      probe: (registry) => registry.registerProbe("deepseek", async () => { throw new Error("GET https://api.deepseek.com/v1/models → 500; GET https://api.deepseek.com/models → 500") }),
+    })
+    try {
+      await fixture.controller.selectProvider("deepseek")
+      expect(fixture.controller.state().discovery.status).toBe("failed")
+      expect(fixture.controller.state().discovery.message).toMatch(/→ 500/)
+      // stored models are untouched (the runtime persists only on success).
+      expect(fixture.settings.get().llm.providers.deepseek?.models).toEqual([{ id: "manual-model" }])
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
-  it("clearApiKey drops both the cref and the ref", async () => {
-    const { store } = makeStore()
-    await store.upsert(DEEPSEEK)
-    await store.setApiKey("deepseek", "sk-secret")
-    await store.clearApiKey("deepseek")
-    expect(store.get("deepseek")?.apiKeyRef).toBeUndefined()
-    expect(store.resolveKey("deepseek")).toBeUndefined()
+  it("a successful discovery merges model ids into the stored catalog (never wipes manual ones)", async () => {
+    const fixture = await makeFixture({
+      providers: { deepseek: { ...DEEPSEEK_CONFIG, models: [{ id: "manual-model" }] } },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      probe: (registry) => registry.registerProbe("deepseek", async () => [{ id: "discovered-model", name: "Discovered" }]),
+    })
+    try {
+      await fixture.controller.selectProvider("deepseek")
+      expect(fixture.controller.state().discovery).toEqual({
+        status: "ready",
+        providerId: "deepseek",
+        modelCount: 2,
+      })
+      const ids = fixture.settings.get().llm.providers.deepseek?.models?.map((m) => m.id)
+      expect(ids).toEqual(expect.arrayContaining(["manual-model", "discovered-model"]))
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 })
 
-// ------------------------------------------------------------------ discovery
+// ------------------------------------------------------------------ controller: model selection
 
-describe("ProviderStore — discovery (injected fetch)", () => {
-  it("reuses the web-host candidate strategy; memoizes per provider; adopts the first model", async () => {
-    const fetchBox = fakeFetch([{ id: "deepseek-chat", name: "DeepSeek Chat" }, { id: "deepseek-reasoner", name: "DeepSeek R1" }])
-    const { store, settings } = makeStore({ fetch: fetchBox.fn })
-    await store.upsert(DEEPSEEK)
-    expect(discoveryCandidates(DEEPSEEK)).toEqual([
-      "https://api.deepseek.com/v1/models",
-      "https://api.deepseek.com/models",
-    ])
-    const models = await store.discoverModels("deepseek")
-    expect(models.map((m) => m.id)).toEqual(["deepseek-chat", "deepseek-reasoner"])
-    expect(store.cachedModels("deepseek")?.length).toBe(2)
-    // candidate probing stops at the FIRST 2xx (one call).
-    expect(fetchBox.calls).toEqual(["https://api.deepseek.com/v1/models"])
-    // adoption: llm.defaultModel {provider, model} — the durable record.
-    expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
-    // memo: a second call resolves CACHED — no extra fetch.
-    const again = await store.discoverModels("deepseek")
-    expect(again.length).toBe(2)
-    expect(fetchBox.calls.length).toBe(1)
+async function readyFixture(withBackend: boolean): Promise<{
+  fixture: Fixture
+  controller: ProviderController
+  filter: RecordingBackend | undefined
+}> {
+  const fixture = await makeFixture({
+    providers: { deepseek: { ...DEEPSEEK_CONFIG, models: [{ id: "deepseek-chat", name: "DeepSeek Chat" }] } },
+    credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    probe: (registry) => registry.registerProbe("deepseek", async () => [{ id: "deepseek-chat", name: "DeepSeek Chat" }]),
+  })
+  await fixture.controller.selectProvider("deepseek")
+  if (!withBackend) return { fixture, controller: fixture.controller, filter: undefined }
+  const filter = recordingBackend()
+  const controller = new ProviderController({
+    runtime: fixture.runtime,
+    settings: fixture.settings,
+    backend: filter.backend,
+    sessionId: "s1",
+  })
+  controller.state().selectedProviderId = fixture.controller.state().selectedProviderId
+  return { fixture, controller, filter }
+}
+
+describe("ProviderController — model selection routing", () => {
+  it("sets the current session model only through the backend capability", async () => {
+    const { fixture, controller, filter } = await readyFixture(true)
+    try {
+      await controller.selectModel("deepseek-chat", "high")
+      expect(filter!.selections).toEqual([{
+        provider: "deepseek",
+        model: "deepseek-chat",
+        reasoningEffort: "high",
+      }])
+      // the durable default is NOT rewritten while a session selection is live.
+      expect(fixture.settings.get().llm.defaultModel).toEqual({ provider: "", model: "" })
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
-  it("modelsUrl override probes ONLY that URL (no candidate derivation)", async () => {
-    const fetchBox = fakeFetch([{ id: "m1" }])
-    const { store } = makeStore({ fetch: fetchBox.fn })
-    await store.upsert({ ...DEEPSEEK, modelsUrl: "https://custom.example/models" })
-    await store.discoverModels("deepseek")
-    expect(fetchBox.calls).toEqual(["https://custom.example/models"])
-    expect(discoveryCandidates({ ...DEEPSEEK, modelsUrl: "https://custom.example/models" })).toEqual(["https://custom.example/models"])
+  it("persists the selection to llm.defaultModel when no session backend is wired", async () => {
+    const { fixture, controller } = await readyFixture(false)
+    try {
+      await controller.selectModel("deepseek-chat")
+      expect(fixture.settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
+      expect(controller.state().defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
-  it("adoption NEVER clobbers a user-chosen default", async () => {
-    const fetchBox = fakeFetch([{ id: "new-model" }])
-    const { store, settings } = makeStore({ fetch: fetchBox.fn })
-    await store.upsert(DEEPSEEK)
-    await settings.surface.set({ llm: { ...settings.get().llm, defaultModel: { provider: "deepseek", model: "chosen" } } })
-    await store.discoverModels("deepseek")
-    expect(settings.get().llm.defaultModel.model).toBe("chosen")
-    // the (no overload) arm: unset stays adopted.
-    await settings.surface.set({ llm: { ...settings.get().llm, defaultModel: { provider: "", model: "" } } })
-    const fetch2 = fakeFetch([{ id: "fresh" }])
-    const store2 = makeStore({ fetch: fetch2.fn })
-    await store2.store.upsert(DEEPSEEK)
-    await store2.store.discoverModels("deepseek")
-    expect(store2.settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "fresh" })
+  it("keeps the current reasoning effort when selecting without an explicit level", async () => {
+    const { fixture, controller, filter } = await readyFixture(true)
+    try {
+      await fixture.settings.set({
+        llm: { ...fixture.settings.get().llm, defaultModel: { provider: "deepseek", model: "m", reasoningEffort: "high" } },
+      })
+      await controller.selectModel("deepseek-chat")
+      expect(filter!.selections[0]).toEqual({ provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" })
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
-  it("a failed candidate brands the error honestly; a corrupt body is dropped", async () => {
-    const status500 = (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch
-    const { store } = makeStore({ fetch: status500 })
-    await store.upsert(DEEPSEEK)
-    await expect(store.discoverModels("deepseek")).rejects.toThrow(/GET https:\/\/api.deepseek.com\/v1\/models → 500/)
-
-    const notJson = (async () => new Response("<html>", { status: 200 })) as unknown as typeof fetch
-    const { store: store2 } = makeStore({ fetch: notJson })
-    await store2.upsert(DEEPSEEK)
-    await expect(store2.discoverModels("deepseek")).rejects.toThrow(/2 candidate attempts failed/)
+  it("rejects a selection with no selected provider", async () => {
+    const fixture = await makeFixture()
+    try {
+      await expect(fixture.controller.selectModel("m")).rejects.toThrow(/no provider selected/)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
+})
 
-  it("parseModelsBody: {data:[{id,owned_by,display_name}]} + lenient junk dropping", () => {
-    expect(parseModelsBody({ data: [{ id: "a", owned_by: "deepseek" }, { id: "b", display_name: "BB" }, { junk: true }, "c"] }))
-      .toEqual([{ id: "a", name: "deepseek" }, { id: "b", name: "BB" }, { id: "c" }])
-    expect(parseModelsBody({ wrong: [] })).toBeUndefined()
-    expect(parseModelsBody(null)).toBeUndefined()
+// ------------------------------------------------------------------ controller: remove
+
+describe("ProviderController — remove", () => {
+  it("removes the provider from llm.providers and clears the default pin", async () => {
+    const fixture = await makeFixture({
+      providers: { deepseek: { ...DEEPSEEK_CONFIG } },
+      defaultModel: { provider: "deepseek", model: "deepseek-chat" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    })
+    try {
+      await fixture.controller.removeProvider("deepseek")
+      expect(fixture.settings.get().llm.providers.deepseek).toBeUndefined()
+      expect(fixture.settings.get().llm.defaultModel).toEqual({ provider: "", model: "" })
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
+})
 
-  it("setDefaultModel writes canonical selection without promoting legacy providers", async () => {
-    const { store, settings } = makeStore()
-    await store.upsert(DEEPSEEK)
-    await store.setActive("deepseek")
-    await store.setDefaultModel("deepseek-chat")
-    expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
-    await store.setDefaultModel("")
-    expect(settings.surface.getSectionMutationBase?.("llm")).toEqual({
-      providers: {
-        deepseek: {
-          baseURL: "https://api.deepseek.com",
-          protocol: "openai-completions",
+// ------------------------------------------------------------------ migration/regression evidence
+
+describe("legacy plane — migration/regression evidence", () => {
+  it("a legacy tui.providers document still LOADS into llm.providers (read migration)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "tui-legacy-load-"))
+    try {
+      const file = join(root, "settings.json")
+      writeFileSync(file, JSON.stringify({
+        theme: "dark",
+        tui: {
+          providers: {
+            version: 1,
+            activeProviderId: "deepseek",
+            providers: {
+              deepseek: {
+                id: "deepseek",
+                name: "DeepSeek",
+                baseUrl: "https://api.deepseek.com/v1/",
+                protocol: "openai-compatible",
+                apiKeyRef: "DEEPSEEK_API_KEY",
+                modelsUrl: "https://api.deepseek.com/v1/models",
+              },
+            },
+          },
         },
-      },
-      defaultModel: { provider: "", model: "" },
-    })
-    // The read view still projects the legacy active provider during the
-    // transition, but an empty model remains an unconfigured selection.
-    expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "" })
-    // a provider-less store rejects (the honest guard, never a partial pin)
-    const bare = makeStore()
-    await expect(bare.store.setDefaultModel("x")).rejects.toThrow(/no active provider/)
+      }))
+      const settings = new SettingsStore({ path: file })
+      await settings.load()
+      expect(settings.get().llm.providers.deepseek).toMatchObject({
+        displayName: "DeepSeek",
+        baseURL: "https://api.deepseek.com",
+        protocol: "openai-completions",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        modelsURL: "https://api.deepseek.com/v1/models",
+      })
+      const credentials = createCredentialStore(join(root, "credentials.json"))
+      await credentials.set("DEEPSEEK_API_KEY", "legacy-key")
+      const runtime = createProviderRuntime({ settings, credentials, buildClient: () => FIXTURE_MODEL })
+      const rows = await runtime.directory()
+      expect(rows).toContainEqual(expect.objectContaining({
+        id: "deepseek",
+        configured: true,
+        auth: expect.objectContaining({ configured: true }),
+      }))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("the normalized document no longer exposes tui.providers (legacy plane gone)", () => {
+    const out = normalizeSettings({ tui: { prefs: { timestamps: true } } })
+    expect("providers" in out.tui).toBe(false)
+    expect(out.tui.prefs.timestamps).toBe(true)
+    // llm is the single provider plane — no legacy segment reaches it.
+    expect("tui" in out.llm).toBe(false)
   })
 })

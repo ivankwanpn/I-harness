@@ -19,6 +19,7 @@
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/plugin-registry": "workspace:*",
     "@i-harness/provider": "workspace:*",
+    "@i-harness/provider-runtime": "workspace:*",
     "@i-harness/settings": "workspace:*",
     "@i-harness/skills": "workspace:*",
     "@i-harness/subagent": "workspace:*",

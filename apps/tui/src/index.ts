@@ -13,9 +13,10 @@
 // --resume restores the selected session and keeps subsequent turns durable.
 // Without --session-dir, the embedded session remains intentionally ephemeral.
 //   - M38b G2: --model now carries a REAL INFO-LINE label (the loop renders it
-//     in the prompt chrome + status row; the model RESOLUTION chain still
-//     mock-first). --attach <sessionId> switches the backend to the REMOTE
-//     SDK stdio server (see the spawn block in runTui).
+//     in the prompt chrome + status row; M49 the production model resolution
+//     is the canonical provider runtime — required-model policy). --attach
+//     <sessionId> switches the backend to the REMOTE SDK stdio server (see
+//     the spawn block in runTui).
 //   - capabilities: probeCapabilities() with a 2 s outer cap; a PTY / no-
 //     answer terminal falls back to createUnknownCapabilities() (its
 //     env-derived colorLevel still lands even without replies). The deep
@@ -45,7 +46,7 @@ import {
   defaultEmbeddedFactory,
   loadMinimalHost,
   ModeSwitch,
-  ProviderStore,
+  ProviderController,
   spawnSdkSubprocess,
   TuiApp,
 } from "@i-harness/tui"
@@ -67,7 +68,7 @@ export interface TuiFlags {
   sessionDir?: string
   /** M38b G2: attach to a REMOTE session — spawns `i-harness sdk` (the CLI's
    * stdio JSON-RPC server) and drives the session over the wire (the SDK
-   * backend). Absent → the embedded (mock-first) backend. */
+   * backend). Absent → the embedded (provider-runtime-backed) backend. */
   attach?: string
   /** Minimized UI (M38a spec §0/§1.1): the terminal's own scrollback holds
    * history; the app writes through the G1 inline live-region engine. */
@@ -115,11 +116,11 @@ export function createTuiModelBindingFor(
 
 export type CreateExecutableAppOptions = Omit<
   TuiAppOptions,
-  "backend" | "providerStore" | "listSessions" | "sessionId"
+  "backend" | "providerController" | "listSessions" | "sessionId"
 > & {
   flags: TuiFlags
   backend: BackendClient
-  providerStore: ProviderStore
+  providerController: ProviderController
 }
 
 /** Build and initialize the real app without entering its unbounded pumps.
@@ -129,12 +130,12 @@ export type CreateExecutableAppOptions = Omit<
 export async function createExecutableApp(
   options: CreateExecutableAppOptions,
 ): Promise<{ app: TuiApp; backend: BackendClient }> {
-  const { flags, backend, providerStore, ...appOptions } = options
+  const { flags, backend, providerController, ...appOptions } = options
   const explicitSessionId = flags.attach ?? flags.resume
   const app = new TuiApp({
     ...appOptions,
     backend,
-    providerStore,
+    providerController,
     listSessions: () => backend.listSessions(),
     ...(explicitSessionId !== undefined ? { sessionId: explicitSessionId } : {}),
   })
@@ -262,7 +263,6 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     join(dirname(resolveSettingsPath()), "credentials.json"),
   )
   const providerRuntime = createProviderRuntime({ settings, credentials })
-  const providerStore = new ProviderStore({ settings, credentials })
   const tuiPrefs = settings.get().tui.prefs
 
   // Capabilities: the probe writes its queries to stdout; a PTY / no-answer
@@ -379,6 +379,15 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   const mouseToggleFeature = process.env.GROK_MOUSE_REPORTING_TOGGLE === "1"
     || tuiPrefs.mouseReportingToggle
   terminal.init()
+  // M49 Task 6: the provider controller — the UI adapter over the runtime +
+  // the live backend (active-session model selections ride setSessionModel;
+  // no session → durable llm.defaultModel).
+  const providerController = new ProviderController({
+    runtime: providerRuntime,
+    settings,
+    backend,
+    sessionId: flags.attach ?? flags.resume,
+  })
   const { app } = await createExecutableApp({
     flags,
     renderer,
@@ -389,8 +398,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     glyphs: makeGlyphs(true),
     write: out,
     // M46a G1: the provider/model modal surfaces + the durable prefs' layout
-    // density (compact); the providerStore drives /provider /model /settings.
-    providerStore,
+    // density (compact); the providerController drives /provider /model
+    // /settings through provider-runtime.
+    providerController,
     compact: tuiPrefs.compact,
     // M46a G2: the slash registry's workspace root (skills/hooks/plugins/
     // workflow scans). createExecutableApp owns the explicit session id.

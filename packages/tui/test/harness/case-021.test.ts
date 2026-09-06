@@ -1,13 +1,14 @@
-// M46a G1: case-021 — the FULL provider/model flow at REAL-PTY level.
+// M49 Task 6: case-021 — the Models & Providers flow at REAL-PTY level.
 // The host (host-021.ts) drives the real app + the real stdin path against
-// REAL settings/credentials stores (temp dir) with the DISCOVERY FETCH
-// INJECTED (two fake DeepSeek models — no CI network).
+// REAL settings/credentials stores (temp dir) with the DISCOVERY PROBE and
+// the building CLIENT INJECTED (two fake DeepSeek models + the literal
+// `fixture response` — no CI network).
 //
-// The strict asserts: (a) the saved TUI section snapshot — the ProviderEntry
-// with the credential REF (never the raw key) + activeProviderId; (b) the
-// default-model adoption record (llm.defaultModel = deepseek:deepseek-chat);
-// (c) the ui screens (menu / wizard / picker / settings-Models rows) plus the
-// byte budget + exit 0.
+// The strict asserts: (a) the saved settings document — canonical
+// llm.providers with the credential REF (never the raw key), the discovery
+// merge (manual + discovered models) and NO tui.providers section; (b) the
+// adopted default {deepseek, deepseek-reasoner}; (c) the client actually
+// received `hello` and the screen shows the literal `fixture response`.
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -24,7 +25,7 @@ import type { Scene } from "./referee.ts"
 const HOST_FILE = fileURLToPath(new URL("./host-021.ts", import.meta.url))
 
 test(
-  "case-021: provider/model flow — /provider wizard (DeepSeek, refs-not-raw) → /model picker → default adoption → /settings Models",
+  "case-021: Models & Providers flow — canonical llm.providers + refs-only → discovery merge → default selection → fixture response",
   async () => {
     const scene = parse(
       readFileSync(fileURLToPath(new URL("./case-021.yaml", import.meta.url)), "utf8"),
@@ -52,27 +53,35 @@ test(
       }
       expect(result.ok, result.ok ? "ok" : `scenario failed: ${result.error}`).toBe(true)
 
-      // (a) the TUI section: refs-only (the RAW key is never in settings),
-      // activeProviderId pinned, entry protocol/baseUrl verbatim.
-      const tui = JSON.parse(readFileSync(join(markerDir, "tui-section-snapshot.json"), "utf8"))
-      expect(tui.providers.version).toBe(1)
-      expect(tui.providers.activeProviderId).toBe("deepseek")
-      expect(tui.providers.providers.deepseek).toEqual({
-        id: "deepseek",
-        baseUrl: "https://api.deepseek.com",
-        protocol: "openai-compatible",
-        apiKeyRef: "DEEPSEEK_API_KEY",
+      // (a) the CANONICAL llm section: refs-only (the RAW key never lands in
+      // settings), the protocol/baseURL canonical, the discovery merge kept
+      // BOTH the manual row and the discovered one.
+      const llm = JSON.parse(readFileSync(join(markerDir, "llm-section-snapshot.json"), "utf8"))
+      expect(llm.providers.deepseek).toEqual({
+        baseURL: "https://api.deepseek.com",
+        protocol: "openai-completions",
+        apiKeyEnv: "DEEPSEEK_API_KEY",
+        models: [
+          { id: "deepseek-chat", name: "DeepSeek Chat" },
+          { id: "deepseek-reasoner", name: "DeepSeek R1" },
+        ],
       })
-      // the whole settings document never carries the raw key:
+      // the whole settings document never carries the raw key OR the legacy
+      // provider section:
       const docText = readFileSync(join(markerDir, "settings-doc-snapshot.json"), "utf8")
       expect(docText).not.toContain("sk-dummy")
+      expect(docText).not.toContain('"activeProviderId"')
+      expect(docText).not.toContain('"apiKeyRef"')
       // the credential FILE holds the value (the refs-not-values split):
       const creds = JSON.parse(readFileSync(join(markerDir, "credentials.json"), "utf8"))
       expect(creds.refs.DEEPSEEK_API_KEY).toBe("sk-dummykey-123456")
 
-      // (b) the adoption record: the picker selection became the settings default.
-      const dm = JSON.parse(readFileSync(join(markerDir, "default-model.json"), "utf8"))
-      expect(dm).toEqual({ provider: "deepseek", model: "deepseek-chat" })
+      // (b) the discovered model became the durable default.
+      expect(llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-reasoner" })
+
+      // (c) the injected client received `hello` and streamed the response.
+      const request = JSON.parse(readFileSync(join(markerDir, "client-request.json"), "utf8"))
+      expect(request.prompt).toBe("hello")
     } finally {
       off?.()
       if (runner !== undefined) {

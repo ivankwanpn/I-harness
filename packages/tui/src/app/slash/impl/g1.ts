@@ -1,12 +1,12 @@
 // @i-harness/tui — G2 (M46a): the G1-owned slash surfaces in the registry.
-// /provider /model /settings run G1's modal overlays (provider menu/wizard,
-// ArgPicker model select, settings modal) — the loop's tryG1SlashModal owns
-// the text-match (it intercepts these BEFORE the registry run in the submit
-// path); these registry entries exist so the M37b dropdown lists them and the
-// registry inventory stays complete. /effort writes the settings
-// llm.defaultModel.reasoningEffort through G1's settings store surface when
-// the host wired a provider store (the real write — 6-dial ArgPicker is the
-// settings modal's Models class, G1).
+// /provider /model /settings run the M49 Task 6 modal overlays (provider
+// master/detail, model picker, typed settings modal) — the loop's
+// tryG1SlashModal owns the text-match (it intercepts these BEFORE the
+// registry run in the submit path); these registry entries exist so the M37b
+// dropdown lists them and the registry inventory stays complete. /effort
+// writes the settings llm.defaultModel.reasoningEffort through the provider
+// controller's settings surface when the host wired it (the real write — the
+// six-level picker is the settings modal's Models & Providers flow).
 
 import type { SlashCommand } from "../types.ts"
 

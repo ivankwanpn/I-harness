@@ -8,10 +8,11 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { createCredentialStore } from "@i-harness/credentials"
 import type { ModelClient } from "@i-harness/llm-seam"
+import { createProviderRegistry } from "@i-harness/provider"
 import { createProviderRuntime } from "@i-harness/provider-runtime"
 import { SettingsStore } from "@i-harness/settings"
 import { createRenderer, createUnknownCapabilities, makeGlyphs, resolvePalette } from "@i-harness/tui-core"
-import { createScrollbackEngine, ProviderStore } from "@i-harness/tui"
+import { ProviderController, createScrollbackEngine } from "@i-harness/tui"
 import type { BackendClient, InputSource, TuiEvent } from "@i-harness/tui"
 import {
   buildEmbeddedSessionOptions,
@@ -69,7 +70,9 @@ async function executableFixture(
   const root = mkdtempSync(join(tmpdir(), "ih-tui-executable-"))
   const settings = new SettingsStore({ path: join(root, "settings.json") })
   await settings.load()
-  const providerStore = new ProviderStore({ settings, credentials: createCredentialStore(join(root, "credentials.json")) })
+  const credentials = createCredentialStore(join(root, "credentials.json"))
+  const runtime = createProviderRuntime({ settings, credentials, registry: createProviderRegistry() })
+  const providerController = new ProviderController({ runtime, settings, backend })
   const renderer = createRenderer({ cols: 80, rows: 24, cap })
   const created = await createExecutableApp({
     flags,
@@ -79,7 +82,7 @@ async function executableFixture(
     capabilities: cap,
     palette: resolvePalette(cap),
     glyphs: makeGlyphs(true),
-    providerStore,
+    providerController,
     ...(input !== undefined ? { input } : {}),
     write: () => {},
   })
@@ -155,7 +158,7 @@ describe("tui flag parser", () => {
     }
   })
 
-  it("legacy provider add/key/discover/adopt composes a ready canonical runtime", async () => {
+  it("writer + discovery + selection compose a ready canonical runtime (M49 controller plane)", async () => {
     const root = mkdtempSync(join(tmpdir(), "ih-tui-provider-runtime-"))
     const settings = new SettingsStore({ path: join(root, "settings.json") })
     const credentials = createCredentialStore(join(root, "credentials.json"))
@@ -172,30 +175,22 @@ describe("tui flag parser", () => {
           defaultModel: { provider: "", model: "" },
         },
       })
-      const store = new ProviderStore({
-        settings,
-        credentials,
-        fetchFn: (async () => new Response(JSON.stringify({
-          data: [{ id: "discovered-model", display_name: "Discovered" }],
-        }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch,
-      })
+      const registry = createProviderRegistry()
+      registry.registerProbe("fixture", async () => [{ id: "discovered-model", name: "Discovered" }])
+      const runtime = createProviderRuntime({ settings, credentials, registry, buildClient: () => model })
+      const controller = new ProviderController({ runtime, settings })
 
-      await store.upsert({
+      await controller.saveProvider({
         id: "fixture",
-        name: "Fixture Provider",
-        baseUrl: "https://fixture.example/v1/",
-        modelsUrl: "https://fixture.example/v1/models",
-        protocol: "openai-compatible",
+        displayName: "Fixture Provider",
+        protocol: "openai-completions",
+        baseURL: "https://fixture.example/v1/",
+        modelsURL: "https://fixture.example/v1/models",
+        apiKey: "fixture-key",
       })
-      await store.setActive("fixture")
-      await store.setApiKey("fixture", "fixture-key")
-      await store.discoverModels("fixture")
+      await controller.selectProvider("fixture")
+      await controller.selectModel("discovered-model")
 
-      const runtime = createProviderRuntime({
-        settings,
-        credentials,
-        buildClient: () => model,
-      })
       await expect(runtime.resolveModel({})).resolves.toEqual({
         status: "ready",
         binding: {

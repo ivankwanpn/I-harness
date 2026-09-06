@@ -11,7 +11,9 @@ import { createCredentialStore } from "@i-harness/credentials"
 import { SettingsStore } from "@i-harness/settings"
 import { TuiApp } from "../src/app/loop.ts"
 import { makeDraw } from "../src/app/present.ts"
-import { ProviderStore } from "../src/app/provider-store.ts"
+import { ProviderController } from "../src/app/provider-controller.ts"
+import { createProviderRuntime } from "@i-harness/provider-runtime"
+import { createProviderRegistry } from "@i-harness/provider"
 import { createScrollbackEngine } from "../src/scrollback/engine.ts"
 import { layoutWelcome, renderWelcome, WELCOME_WIDE_MIN } from "../src/views/welcome.ts"
 import type { WelcomeState } from "../src/views/welcome.ts"
@@ -71,12 +73,17 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-async function providerStore(): Promise<ProviderStore> {
+async function providerController(): Promise<ProviderController> {
   const root = mkdtempSync(join(tmpdir(), "ih-welcome-"))
   roots.push(root)
   const settings = new SettingsStore({ path: join(root, "settings.json") })
   await settings.load()
-  return new ProviderStore({ settings, credentials: createCredentialStore(join(root, "credentials.json")) })
+  const runtime = createProviderRuntime({
+    settings,
+    credentials: createCredentialStore(join(root, "credentials.json")),
+    registry: createProviderRegistry(),
+  })
+  return new ProviderController({ runtime, settings })
 }
 
 function recordingBackend(
@@ -118,7 +125,7 @@ function recordingBackend(
   }
 }
 
-function testApp(backend: BackendClient, store: ProviderStore): { app: TuiApp; renderer: Renderer } {
+function testApp(backend: BackendClient, controller: ProviderController): { app: TuiApp; renderer: Renderer } {
   const renderer = make(80, 24)
   return {
     renderer,
@@ -129,7 +136,7 @@ function testApp(backend: BackendClient, store: ProviderStore): { app: TuiApp; r
       capabilities: cap,
       palette,
       glyphs: GLYPHS,
-      providerStore: store,
+      providerController: controller,
       listSessions: () => backend.listSessions(),
       write: () => {},
     }),
@@ -286,7 +293,7 @@ describe("welcome hero (spec §2a)", () => {
 describe("TuiApp Welcome model gate", () => {
   it("starts on Welcome and disables prompt when no model is configured", async () => {
     const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
-    const { app, renderer } = testApp(backend, await providerStore())
+    const { app, renderer } = testApp(backend, await providerController())
 
     expect(app.state().view).toEqual({ kind: "welcome" })
     await app.initialize({ renderWelcomeBeforeModel: true })
@@ -299,7 +306,7 @@ describe("TuiApp Welcome model gate", () => {
 
   it("Enter on a disabled Welcome prompt opens Models & Providers without submitting", async () => {
     const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
-    const { app, renderer } = testApp(backend, await providerStore())
+    const { app, renderer } = testApp(backend, await providerController())
     await app.initialize({ renderWelcomeBeforeModel: true })
     app.state().prompt.text = "hello"
     app.state().prompt.cursor = 5
@@ -315,7 +322,7 @@ describe("TuiApp Welcome model gate", () => {
 
   it("routes Esc to the Settings overlay before the underlying Welcome menu", async () => {
     const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
-    const { app } = testApp(backend, await providerStore())
+    const { app } = testApp(backend, await providerController())
     await app.initialize({ renderWelcomeBeforeModel: true })
     app.state().prompt.text = "hello"
     app.state().prompt.cursor = 5
@@ -339,7 +346,7 @@ describe("TuiApp Welcome model gate", () => {
         { id: "resume-2", title: "Second", updatedAt: 2 },
       ],
     )
-    const { app } = testApp(backend, await providerStore())
+    const { app } = testApp(backend, await providerController())
     await app.initialize({ renderWelcomeBeforeModel: true })
     app.dispatch("sessions")
     await waitFor(() => app.state().sessions?.loading === false)
@@ -361,7 +368,7 @@ describe("TuiApp Welcome model gate", () => {
       label: "fixture:model",
     }
     const newBackend = recordingBackend(modelState)
-    const { app: newApp } = testApp(newBackend, await providerStore())
+    const { app: newApp } = testApp(newBackend, await providerController())
     await newApp.initialize({ renderWelcomeBeforeModel: true })
     newApp.state().welcome!.cursor = 3
 
@@ -378,7 +385,7 @@ describe("TuiApp Welcome model gate", () => {
       label: "fixture:model",
     }
     const resumeBackend = recordingBackend(modelState)
-    const { app: resumeApp } = testApp(resumeBackend, await providerStore())
+    const { app: resumeApp } = testApp(resumeBackend, await providerController())
     await resumeApp.initialize({ renderWelcomeBeforeModel: true })
     resumeApp.state().welcome!.cursor = 0
 
@@ -389,7 +396,7 @@ describe("TuiApp Welcome model gate", () => {
 
   it("opens Welcome Settings with F2 independently of the menu cursor", async () => {
     const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
-    const { app, renderer } = testApp(backend, await providerStore())
+    const { app, renderer } = testApp(backend, await providerController())
     await app.initialize({ renderWelcomeBeforeModel: true })
     app.state().welcome!.cursor = 3
 
@@ -402,7 +409,7 @@ describe("TuiApp Welcome model gate", () => {
 
   it("a ready Welcome prompt creates and opens a session before submitting", async () => {
     const backend = recordingBackend({ status: "ready", providerId: "fixture", modelId: "model", label: "fixture:model" })
-    const { app } = testApp(backend, await providerStore())
+    const { app } = testApp(backend, await providerController())
     await app.initialize({ renderWelcomeBeforeModel: true })
     app.state().prompt.text = "ship it"
     app.state().prompt.cursor = 7

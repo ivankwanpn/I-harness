@@ -21,11 +21,19 @@ import { present } from "./present.ts"
 import type { TuiAppState } from "./present.ts"
 import { bindRewindOverlay, isRewindOverlay } from "./overlay-seam.ts"
 import type { RewindState } from "../views/rewind.ts"
-// M46a G1: provider menu/wizard + settings modal + model picker overlays.
-import { bindProviderOverlay, makeWizard, type ProviderBindOptions, type ProviderViewState } from "../views/provider.ts"
+// M49 Task 6: provider menu/master-detail + settings modal + model picker
+// overlays over the ProviderController (provider-runtime + settings + backend).
+import {
+  bindProviderOverlay,
+  type ProviderBindOptions,
+  type ProviderEditorState,
+  type ProviderRow,
+} from "../views/provider.ts"
 import { bindModelPickerOverlay, modelPickerEntries, type ModelPickerState } from "../views/model-picker.ts"
-import { bindSettingsOverlay, type SettingsModalState } from "../views/settings.ts"
-import type { FetchedModel, ProviderEntry, ProviderStore } from "./provider-store.ts"
+import { bindSettingsOverlay, createTuiSettingsRegistry, type SettingsModalState } from "../views/settings.ts"
+import { createSettingsController } from "../settings/controller.ts"
+import type { SettingsProviderProtocol } from "@i-harness/settings"
+import { ProviderController } from "./provider-controller.ts"
 import { FpsMeter } from "./hud.ts"
 import type { HudState } from "./hud.ts"
 // M46b G1: the HitArea hover engine + the grok scroll-stream normalizer.
@@ -119,11 +127,13 @@ export interface TuiAppOptions {
    * spawns the same session relaunched in the target mode (returns true =
    * handled; the loop quits). */
   modeSwitch?: (cmd: string) => boolean
-  /** M46a G1: the provider/model store behind `/provider`, `/model`,
+  /** M49 Task 6: the provider controller behind `/provider`, `/model`,
    * `/settings` + Ctrl+M/F2/Ctrl+, — host-constructed over real settings +
-   * credentials (the injected fetchFn is the CI discovery seam). Absent →
-   * the modal slash surfaces toast "provider UI: host store not wired". */
-  providerStore?: ProviderStore
+   * credentials + the live backend (provider-runtime is the write path;
+   * session-model selections ride the backend's setSessionModel capability).
+   * Absent → the modal slash surfaces toast "provider UI: host store not
+   * wired". */
+  providerController?: ProviderController
   /** M46a G2: workspace root — the skills/hooks/plugins/workflow scans
    * (eco panels) land under it. Absent → process.cwd() at run time. */
   workspace?: string
@@ -199,8 +209,19 @@ const PROBE_SUSPEND_REASON = "live /doctor probe"
  * line — same window the /plan plan-text viewer uses). */
 const LINE_VIEWER_ROWS = 24
 
-/** M46a G1: the TUI provider protocol vocabulary (the /provider arg parse). */
+/** M46a G1: the TUI provider protocol vocabulary (the /provider arg parse).
+ * M49: the arg values are canonicalized to the settings plane vocabulary
+ * when the draft is built (openai-compatible → openai-completions,
+ * anthropic → anthropic-messages). */
 const TUI_PROTOCOLS = ["openai-responses", "openai-compatible", "anthropic", "gemini", "bedrock"] as const
+
+/** The /provider arg protocol → the canonical settings plane vocabulary. */
+function canonicalProtocolOf(value: string): SettingsProviderProtocol | undefined {
+  if (value === "openai-compatible") return "openai-completions"
+  if (value === "anthropic") return "anthropic-messages"
+  if (value === "openai-responses" || value === "gemini" || value === "bedrock") return value
+  return undefined
+}
 
 /** Case-insensitive subsequence hit indices (fuzzy-hit letters, spec §3.6). */
 function fuzzyHits(command: string, query: string): number[] {
@@ -2135,21 +2156,22 @@ export class TuiApp {
   }
 
   /** /effort — the REAL settings write (llm.defaultModel.reasoningEffort via
-   * G1's settings store surface); the interactive 6-dial ArgPicker is the
-   * settings modal's Models class. No arg → report the current effort. */
+   * the provider controller's settings surface); the interactive six-level
+   * picker is the settings modal's Models & Providers flow. No arg → report
+   * the current effort. */
   private effort(level: string): void {
-    const store = this.opts.providerStore
-    if (store === undefined) {
+    const controller = this.providerController()
+    if (controller === undefined) {
       this.toast("effort: settings host store not wired")
       return
     }
-    const dm = store.defaultModel()
+    const dm = controller.defaultModel()
     if (level.trim() === "") {
       this.toast(`effort: ${dm.reasoningEffort ?? "default"} — /effort <level> to set`)
       return
     }
     const lv = level.trim()
-    const surface = store.settingsSurface()
+    const surface = controller.settingsSurface()
     const cur = surface.get()
     void surface
       .set({ llm: { ...cur.llm, defaultModel: { ...cur.llm.defaultModel, reasoningEffort: lv } } })
@@ -2240,15 +2262,20 @@ export class TuiApp {
     return lines.map((l) => l.runs.map((r) => r.text).join("")).join("\n") + "\n"
   }
 
-  // ------------------------------------------------------------------ provider/settings/model modals (M46a G1)
+  // ------------------------------------------------------------------ provider/settings/model modals (M49 Task 6)
+
+  /** The provider controller (host option else undefined). */
+  private providerController(): ProviderController | undefined {
+    return this.opts.providerController
+  }
 
   /** The G1 slash-text interception: "/provider [variant]", "/model [name]",
    * "/settings" — returns true when handled (the prompt is cleared; the modal
    * opens or a toast explains). Unrecognized G1 text (e.g. "/effort" — G2's)
    * falls through to the backend. */
   private tryG1SlashModal(line: string): boolean {
-    const store = this.opts.providerStore
-    if (store === undefined) {
+    const controller = this.providerController()
+    if (controller === undefined) {
       if (/^\/provider(?:\s|$)/.test(line) || /^\/model(?:\s|$)/.test(line) || line === "/settings") {
         this.toast("provider UI: host store not wired")
         return true
@@ -2273,13 +2300,13 @@ export class TuiApp {
   }
 
   /** `/provider [args]` — variants: show|list → the menu; add <id> [base] →
-   * the wizard prefilled; update <id> → the wizard editing; use|switch <id> →
-   * setActive + toast; delete [id] → the delete view (row preselected); reload
-   * → re-run discovery over the active provider (toast result/error). A bare
+   * the editor prefilled; update <id> → the editor editing; use|switch <id> →
+   * select (discovery) + toast; delete [id] → the confirm preselect; reload →
+   * re-run discovery over the selected provider (toast result/error). A bare
    * `/provider` = the menu (cc parity). */
   private openProvider(args: string): void {
-    const store = this.opts.providerStore
-    if (store === undefined) {
+    const controller = this.providerController()
+    if (controller === undefined) {
       this.toast("provider UI: host store not wired")
       return
     }
@@ -2287,31 +2314,30 @@ export class TuiApp {
     const cmd = tokens[0] ?? ""
 
     if (cmd === "reload") {
-      const active = store.activeEntry()
-      if (active === undefined) {
-        this.toast("no active provider — add one with /provider add first")
+      const id = this.selectedProviderId(controller)
+      if (id === "") {
+        this.toast("no provider selected — add one with /provider add first")
         return
       }
-      this.toast(`discovering models for ${active.id}…`)
-      void store.discoverModels(active.id, { force: true }).then(
-        (models) => this.toast(`discovered ${models.length} model(s) for ${active.id}`),
+      this.toast(`discovering models for ${id}…`)
+      void controller.discoverModels(id, true).then(
+        (count) => this.toast(`discovered ${count} model(s) for ${id}`),
         (error: unknown) => this.toast(error instanceof Error ? error.message : String(error)),
       )
       return
     }
     if (cmd === "use" || cmd === "switch" || cmd === "show" || cmd === "list") {
-      const id = tokens[1] ?? store.activeId()
-      if (id === "") {
-        if (cmd === "show" || cmd === "list") this.openProviderMenu()
-        else this.toast("no active provider — add one with /provider add first")
-        return
-      }
+      const id = tokens[1] ?? this.selectedProviderId(controller)
       if (cmd === "show" || cmd === "list") {
         this.openProviderMenu()
         return
       }
-      void store.setActive(id).then(
-        () => this.toast(`active provider: ${id}`),
+      if (id === "" || tokens[1] === undefined) {
+        this.toast("no provider selected — add one with /provider add first")
+        return
+      }
+      void controller.selectProvider(id).then(
+        () => this.toast(`provider selected: ${id} — ${controller.state().discovery.status === "ready" ? `${controller.state().discovery.modelCount ?? 0} model(s)` : controller.state().discovery.status}`),
         (error: unknown) => this.toast(error instanceof Error ? error.message : String(error)),
       )
       return
@@ -2319,102 +2345,134 @@ export class TuiApp {
     if (cmd === "add" || cmd === "update") {
       const id = tokens[1]
       const base = tokens[2]
-      // protocol=x / modelsUrl=y optional tokens (arg form only — the wizard
-      // itself defaults protocol to openai-compatible).
-      let protocol: ProviderEntry["protocol"] | undefined
+      // protocol=x / modelsUrl=y optional tokens (arg form only — the editor
+      // itself defaults the protocol to the canonical openai-completions).
+      let protocol: SettingsProviderProtocol | undefined
+      let modelsUrl: string | undefined
       for (const t of tokens.slice(1)) {
-        const m = /^protocol=(.+)$/.exec(t)
-        if (m !== null) {
-          const p = m[1]
-          if (p !== undefined && (TUI_PROTOCOLS as readonly string[]).includes(p)) {
-            protocol = p as ProviderEntry["protocol"]
-          }
+        const p = /^protocol=(.+)$/.exec(t)
+        if (p !== null && p !== undefined && (TUI_PROTOCOLS as readonly string[]).includes(p[1]!)) {
+          protocol = canonicalProtocolOf(p[1]!)
         }
+        const u = /^modelsUrl=(.+)$/.exec(t)
+        if (u !== null && u !== undefined) modelsUrl = u[1]
       }
-      const editing = cmd === "update" ? store.get(id ?? "") : undefined
+      const editing = cmd === "update" ? controller.configOf(id ?? "") : undefined
       if (cmd === "update" && editing === undefined) {
         this.toast(`provider "${id}" is not configured`)
         return
       }
       if (id !== undefined && base !== undefined) {
-        // Prefilled save path (arg form): create/update + activate + discover.
+        // Prefilled save path (arg form): create/update + discover.
         void (async () => {
           try {
-            const entry: ProviderEntry = {
+            await controller.saveProvider({
               id,
-              baseUrl: base.replace(/\/+$/, ""),
-              protocol: protocol ?? (editing?.protocol ?? "openai-compatible"),
-              ...(editing?.name !== undefined ? { name: editing.name } : {}),
-            }
-            await store.upsert(entry)
-            await store.setActive(id)
-            void store.discoverModels(id).catch(() => {})
-            this.toast(`provider saved & active: ${id}`)
+              ...(editing?.displayName !== undefined ? { displayName: editing.displayName } : {}),
+              protocol: protocol ?? editing?.protocol ?? "openai-completions",
+              baseURL: base.replace(/\/+$/, ""),
+              ...(modelsUrl !== undefined ? { modelsURL: modelsUrl } : {}),
+            })
+            await controller.selectProvider(id)
+            this.toast(`provider saved: ${id}`)
           } catch (error) {
             this.toast(error instanceof Error ? error.message : String(error))
           }
         })()
         return
       }
-      // Interactive wizard (prefilled only with the id/base token — the key
+      // Interactive editor (prefilled only with the id/base token — the key
       // field starts empty: "Leave empty to keep the current key.").
-      const state: ProviderViewState = {
-        phase: "wizard",
-        cursor: 0,
-        providers: store.list(),
-        wizard: editing !== undefined
-          ? makeWizard(editing, store.maskFor(editing.id) !== "not set")
-          : makeWizard(id !== undefined ? { id, baseUrl: "" } : undefined, false),
-        error: undefined,
-        pendingId: undefined,
+      const state = this.providerEditorState()
+      state.mode = "edit"
+      state.editingId = editing !== undefined ? id : undefined
+      state.hasExistingKey = editing !== undefined
+        && controller.state().providers.find((p) => p.id === id)?.auth?.configured === true
+      state.draft = {
+        id: id ?? "",
+        baseURL: editing?.baseURL ?? "",
+        apiKey: "",
       }
-      this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(store))
+      state.field = 0
+      state.error = undefined
+      state.cursor = 0
+      this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(controller))
       this.requestFrame()
       return
     }
     if (cmd === "delete") {
-      const rows = store.list()
-      const target = tokens[1]
-      const cursor = target === undefined ? 0 : Math.max(0, rows.findIndex((p) => p.id === target))
-      const state: ProviderViewState = {
-        phase: "delete",
-        cursor,
-        providers: rows,
-        error: undefined,
-        pendingId: undefined,
-        wizard: undefined,
-      }
-      this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(store))
-      this.requestFrame()
+      const target = tokens[1] ?? ""
+      this.openProviderMenu(target)
       return
     }
     // bare /provider → the menu (cc parity)
     this.openProviderMenu()
   }
 
-  private openProviderMenu(): void {
-    const store = this.opts.providerStore
-    if (store === undefined) {
+  /** The provider the UI operations target: the controller's selection, else
+   * the durable default provider. */
+  private selectedProviderId(controller: ProviderController): string {
+    return controller.state().selectedProviderId ?? controller.defaultModel().provider ?? ""
+  }
+
+  /** A fresh provider editor state (directory rows arrive async — the binder
+   * renders it as the honest empty while it loads). */
+  private providerEditorState(): ProviderEditorState {
+    return {
+      mode: "list",
+      cursor: 0,
+      rows: [],
+      draft: undefined,
+      field: 0,
+      editingId: undefined,
+      hasExistingKey: false,
+      models: [],
+      manual: undefined,
+      providerId: "",
+      pendingId: undefined,
+      error: undefined,
+    }
+  }
+
+  private async providerRows(controller: ProviderController): Promise<ProviderRow[]> {
+    const rows = await controller.directory()
+    return rows.map((r) => ({
+      id: r.id,
+      displayName: r.displayName,
+      configured: r.configured,
+      hasKey: r.auth.configured,
+    }))
+  }
+
+  private openProviderMenu(preselectTarget = ""): void {
+    const controller = this.providerController()
+    if (controller === undefined) {
       this.toast("provider UI: host store not wired")
       return
     }
-    const state: ProviderViewState = {
-      phase: "menu",
-      cursor: 0,
-      providers: store.list(),
-      error: undefined,
-      pendingId: undefined,
-      wizard: undefined,
+    const state = this.providerEditorState()
+    if (preselectTarget !== "") {
+      state.mode = "confirm-delete"
+      state.pendingId = preselectTarget
+      state.cursor = 0
     }
-    this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(store))
+    void this.providerRows(controller).then((rows) => {
+      state.rows = rows
+      if (preselectTarget !== "" && !rows.some((r) => r.id === preselectTarget)) {
+        state.mode = "list"
+        state.pendingId = undefined
+        this.toast(`provider "${preselectTarget}" is not configured`)
+      }
+      this.requestFrame()
+    })
+    this.app.overlay = bindProviderOverlay(state, this.providerBindOptions(controller))
     this.requestFrame()
   }
 
   /** The shared provider-binder options: the loop's close + toast channels. */
-  private providerBindOptions(store: ProviderStore): ProviderBindOptions {
+  private providerBindOptions(controller: ProviderController): ProviderBindOptions {
     return {
-      store,
-      activeId: store.activeId(),
+      controller,
       onSaved: (outcome) => {
         const verb = outcome.kind === "delete" ? "deleted" : outcome.kind === "add" ? "saved & active" : "updated"
         this.toast(`provider ${verb}: ${outcome.id}`)
@@ -2429,71 +2487,97 @@ export class TuiApp {
     this.requestFrame()
   }
 
-  /** The settings modal (F2/Ctrl+,//settings) — keys per the new-new truth
+  /** The settings modal (F2/Ctrl+,//settings) — keys per the typed registry
    * (sidebar categories; Enter browses; Esc backs). */
   private openSettings(modelsAndProviders = false): void {
-    const store = this.opts.providerStore
-    if (store === undefined || store === null) {
-      this.toast("settings modal: host provider store not wired")
+    const controller = this.providerController()
+    if (controller === undefined) {
+      this.toast("settings modal: host provider controller not wired")
       return
     }
-    const state: SettingsModalState = modelsAndProviders
-      ? { phase: "category", cursor: 0, category: "Models", error: undefined }
-      : { phase: "categories", cursor: 0, category: undefined, error: undefined }
-    const overlay = bindSettingsOverlay(state, {
-      settings: store.settingsSurface(),
-      providerStore: store,
-      onTimestamps: (on) => {
+    const registry = createTuiSettingsRegistry({
+      settings: controller.settingsSurface(),
+      applyTheme: (theme) => this.setTheme(theme === "dark" ? "groknight" : theme === "light" ? "grokday" : "auto"),
+      applyTimestamps: (on) => {
         // Live engine flip (the knob renders what the engine does).
         this.opts.engine.setShowTimestamps?.(on)
         this.requestFrame()
       },
+      applyCompact: (on) => {
+        this.app.compactMode = on
+        this.requestFrame()
+      },
+      applyAutoApprove: (on) => {
+        this.app.autoApprove = on
+      },
+      onOpenProviders: () => {
+        // The dedicated Models & Providers master/detail flow.
+        this.closeModal()
+        this.openProviderMenu()
+      },
       onOpenPicker: () => {
-        // Models default_model → the same picker Ctrl+M//model use; its
-        // select writes the settings default (settings modal reopens below).
+        // default_model → the same picker Ctrl+M//model use; its select
+        // writes the settings default (settings modal reopens below).
         this.openModelPicker(undefined, true)
       },
+    })
+    const state: SettingsModalState = modelsAndProviders
+      ? { phase: "category", cursor: 0, category: "Models & Providers", error: undefined }
+      : { phase: "categories", cursor: 0, category: undefined, error: undefined }
+    const ctx = {
+      has: () => false,
+      settings: controller.settingsSurface(),
+      providers: controller.providerRuntime(),
+      backend: this.opts.backend,
+    }
+    const overlay = bindSettingsOverlay(state, {
+      registry,
+      controller: createSettingsController(registry.definitions(), ctx),
+      ctx,
       onClose: () => this.closeModal(),
     })
     this.app.overlay = modelsAndProviders
       ? {
           ...overlay,
-          draw: (ctx, view, palette, glyphs) => {
-            overlay.draw(ctx, view, palette, glyphs)
-            view.text(ctx.x + 2, ctx.y, "Models & Providers", view.color(palette.textPrimary, { bold: true }), ctx.x + ctx.w - 1)
+          draw: (ctxD, view, palette, glyphs) => {
+            overlay.draw(ctxD, view, palette, glyphs)
+            view.text(ctxD.x + 2, ctxD.y, "Models & Providers", view.color(palette.textPrimary, { bold: true }), ctxD.x + ctxD.w - 1)
           },
         }
       : overlay
     this.requestFrame()
   }
 
-  /** The model picker (Ctrl+M on the agent screen, /model, settings Models).
-   * The list comes from the ACTIVE provider's discovered catalog (runtime
-   * memo); an un-discovered provider kicks discovery (loading state).
-   * `reopenSettings` — after the picker select, reopen the settings modal
-   * (the default_model row now shows the pick). */
+  /** The model picker (Ctrl+M on the agent screen, /model, settings default).
+   * The list comes from the SELECTED provider's catalog; an un-discovered
+   * provider kicks discovery (loading state). `reopenSettings` — after the
+   * picker select, reopen the settings modal (the default_model row now shows
+   * the pick). */
   private openModelPicker(_preselect?: string, reopenSettings = false): void {
-    const store = this.opts.providerStore
-    if (store === undefined) {
-      this.toast("model picker: host provider store not wired")
+    const controller = this.providerController()
+    if (controller === undefined) {
+      this.toast("model picker: host provider controller not wired")
       return
     }
-    const active = store.activeEntry()
-    if (active === undefined) {
-      this.toast("no active provider — /provider add first")
+    const selectedId = this.selectedProviderId(controller)
+    if (selectedId === "") {
+      this.toast("no provider selected — /provider add first")
       return
     }
-    const cached = store.cachedModels(active.id)
+    void controller.selectProvider(selectedId).catch(() => {})
     const state: ModelPickerState = {
-      entries: cached !== undefined ? modelPickerEntries(cached) : [],
+      entries: modelPickerEntries(controller.modelsOf(selectedId)),
       cursor: 0,
-      loading: cached === undefined,
-      provider: active.id,
+      loading: false,
+      provider: selectedId,
     }
     this.app.overlay = bindModelPickerOverlay(state, {
       onSelect: (value) => {
         const choice = value === undefined || value === "" ? "(no override)" : value
-        void store.setDefaultModel(value ?? "").then(
+        const apply = value === undefined || value === ""
+          ? controller.clearModelSelection()
+          : controller.selectModel(value)
+        void apply.then(
           () => this.toast(`default model: ${choice}`),
           (error: unknown) => this.toast(error instanceof Error ? error.message : String(error)),
         )
@@ -2501,28 +2585,28 @@ export class TuiApp {
       },
       onClose: () => this.closeModal(),
     })
-    if (cached === undefined) {
-      void store.discoverModels(active.id).then(
-        (models: FetchedModel[]) => {
-          // The picker may have closed (Esc) before discovery resolved — guard.
-          if (this.app.overlay === undefined) return
-          const cur = this.app.overlay
-          if ((cur as { kind?: string }).kind !== "model-picker") return
-          state.entries = modelPickerEntries(models)
-          state.loading = false
-          this.requestFrame()
-        },
-        (error: unknown) => {
-          if (this.app.overlay === undefined) return
-          const cur = this.app.overlay
-          if ((cur as { kind?: string }).kind !== "model-picker") return
-          state.entries = []
-          state.loading = false
-          this.toast(error instanceof Error ? error.message : String(error))
-          this.requestFrame()
-        },
-      )
-    }
+    void controller.discoverModels(selectedId).then(
+      (count) => {
+        // The picker may have closed (Esc) before discovery resolved — guard.
+        if (this.app.overlay === undefined) return
+        const cur = this.app.overlay
+        if ((cur as { kind?: string }).kind !== "model-picker") return
+        state.entries = modelPickerEntries(controller.modelsOf(selectedId))
+        state.loading = count === 0
+        this.requestFrame()
+      },
+      (error: unknown) => {
+        if (this.app.overlay === undefined) return
+        const cur = this.app.overlay
+        if ((cur as { kind?: string }).kind !== "model-picker") return
+        // Failure preserves stored models — the catalog below is the stored
+        // one; the toast carries the attempt summary.
+        state.entries = modelPickerEntries(controller.modelsOf(selectedId))
+        state.loading = false
+        this.toast(error instanceof Error ? error.message : String(error))
+        this.requestFrame()
+      },
+    )
     this.requestFrame()
   }
 
