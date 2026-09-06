@@ -894,3 +894,73 @@ describe("embedded backend — real queue projection and cancellation (Task 11)"
     }
   })
 })
+
+describe("embedded backend — real task projection and cancellation (Task 12)", () => {
+  it("tasks() exposes real rows; cancelTask() cancels through the owning registry and reports already-finished", async () => {
+    let spawned = false
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const model: ModelClient = {
+      async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
+        // The child's requests end with ITS authored task message ("inspect
+        // code"); the parent's continuation ends with the spawn tool result.
+        const last = request.messages.at(-1)
+        const isChild = last?.role === "user" && typeof last.content === "string" && last.content.includes("inspect code")
+        if (isChild) {
+          // the child's blocked turn keeps the entry running for cancellation
+          await gate
+          yield { type: "text/chunk", text: "child ok" }
+          yield { type: "end" }
+          return
+        }
+        if (!spawned) {
+          // spawn a real `helper` subagent through the assembly's mount
+          spawned = true
+          yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "inspect code", task_name: "helper" } } }
+          yield { type: "end" }
+          return
+        }
+        yield { type: "text/chunk", text: "spawned" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: tmp(),
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    })
+    const backend = createEmbeddedBackend({ service, sessionId: "s1" })
+    try {
+      await backend.submit("spawn a helper")
+      await waitFor(() => service.tasks("s1").some((r) => r.id === "root/helper"))
+      const rows = await backend.tasks!()
+      expect(rows).toContainEqual(expect.objectContaining({ id: "root/helper", group: "subagent", status: "running", canCancel: true }))
+      await expect(backend.cancelTask!("root/helper")).resolves.toBe("cancellation-requested")
+      // settled child → the projection stops claiming canCancel, and a
+      // duplicate cancel answers already-finished (the registry's semantics).
+      release()
+      await waitFor(() => service.tasks("s1").find((r) => r.id === "root/helper")?.status === "cancelled")
+      const settled = (await backend.tasks!()).find((r) => r.id === "root/helper")!
+      expect(settled.canCancel).toBe(false)
+      await expect(backend.cancelTask!("root/helper")).resolves.toBe("already-finished")
+    } finally {
+      release()
+      await backend.close()
+    }
+  }, 60_000)
+
+  it("tasks() is backend truth only: an absent-session task list is honest empty", async () => {
+    const service = makeService({ sessionId: "s1" })
+    const backend = createEmbeddedBackend({ service, sessionId: "s1" })
+    try {
+      expect(await backend.tasks!()).toEqual([])
+      await expect(backend.cancelTask!("never-a-task")).rejects.toThrow(/unknown/)
+    } finally {
+      await backend.close()
+    }
+  })
+})

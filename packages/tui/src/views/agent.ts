@@ -90,6 +90,13 @@ export interface AgentViewState {
 export interface PaneState {
   todo?: TodoItem[]
   tasks?: TaskGroup[]
+  /** M49 Task 12: the pane's selected row — the STABLE TASK ID (survives
+   * refreshes as long as the row still exists; never a row index). */
+  tasksSelectId?: string
+  /** M49 Task 12: backend with no tasks capability — the pane renders the
+   * honest unavailable line (never "No active tasks." as a stand-in).
+   * Default: available (task data always carries when the backend wires it). */
+  tasksUnavailable?: boolean
   queue?: QueueRow[]
   /** M49 Task 11: backend with no queue capability — the pane renders the
    * honest unavailable line (never "Queue is empty." as a stand-in).

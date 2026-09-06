@@ -111,22 +111,23 @@ describe("todo pane (spec §3.12)", () => {
 
 // ------------------------------------------------------------------ tasks
 
-describe("tasks pane (spec §3.12)", () => {
+describe("tasks pane (spec §3.12, M49 Task 12)", () => {
   const groups: TaskGroup[] = [
     {
       label: "Subagents",
       entries: [
-        { status: "running", label: "search repo", elapsed: "2m10s", model: "mock", count: 2, action: "cancel" },
-        { status: "done", label: "find api", elapsed: "1m02s", action: "expand" },
-        { status: "error", label: "fail", elapsed: "3s" },
+        { id: "root/search", status: "running", label: "search repo", elapsed: "2m10s", model: "mock", count: 2, action: "cancel" },
+        { id: "task-1", status: "completed", label: "find api", elapsed: "1m02s", action: "expand" },
+        { id: "task-2", status: "failed", label: "fail", elapsed: "3s" },
       ],
     },
-    { label: "Background", entries: [{ status: "running", label: "compile", elapsed: "5m" }] },
+    { label: "Background", entries: [{ id: "job-1", status: "running", label: "compile", elapsed: "5m" }] },
+    { label: "Workflows", entries: [{ id: "workflow-1", status: "completed", label: "workflow-1" }] },
   ]
 
-  it("draws ▾ headers with counts, rows with glyph/elapsed/label/(N)/model and [✗]/[↗]", () => {
+  it("draws ▾ headers with counts, rows with glyph/elapsed/label/(N)/model and [✗]/[↗]; the selected row is bold", () => {
     const r = make(80, 24)
-    draw(r, (view) => renderTasksPane({ x: 0, y: 0, w: 80, h: 24 }, { groups }, view, palette, GLYPHS))
+    draw(r, (view) => renderTasksPane({ x: 0, y: 0, w: 80, h: 24 }, { groups, selectedId: "root/search" }, view, palette, GLYPHS))
     expect(rowText(r, 0)).toContain("▾ Subagents 3")
     expect(rowText(r, 1)).toContain("⠋ 2m10s search repo (2) mock")
     expect(rowText(r, 1)).toContain("[✗]")
@@ -135,12 +136,33 @@ describe("tasks pane (spec §3.12)", () => {
     expect(rowText(r, 3)).toContain("✗ 3s fail")
     expect(rowText(r, 4)).toContain("▾ Background 1")
     expect(rowText(r, 5)).toContain("⠋ 5m compile")
-    // running glyph colored accent_running (cyan).
+    expect(rowText(r, 6)).toContain("▾ Workflows 1")
+    expect(rowText(r, 7)).toContain("✓ workflow-1")
+    // running glyph colored accent_running (cyan); the selected row's label is bold.
     expect(cellAt(r, 0, 1).style).toMatchObject(fg(palette.running))
     expect(cellAt(r, 0, 3).style).toMatchObject(fg(palette.accentError))
+    const selectedLabelStyle = cellAt(r, 9, 1).style // inside "search repo"
+    expect(selectedLabelStyle.bold).toBe(true)
   })
 
-  it("collapsed groups use ▸; empty state text", () => {
+  it("waiting/queued/cancelled statuses render their honest glyphs and colors", () => {
+    const r = make(80, 24)
+    draw(r, (view) => renderTasksPane({ x: 0, y: 0, w: 80, h: 24 }, {
+      groups: [{
+        label: "Subagents",
+        entries: [
+          { id: "a", status: "waiting", label: "waiter" },
+          { id: "b", status: "queued", label: "queuer" },
+          { id: "c", status: "cancelled", label: "cancelled" },
+        ],
+      }],
+    }, view, palette, GLYPHS))
+    expect(rowText(r, 1)).toContain("⠼ waiter")
+    expect(rowText(r, 2)).toContain("⠷ queuer")
+    expect(rowText(r, 3)).toContain("✗ cancelled")
+  })
+
+  it("collapsed groups use ▸; empty is the exact 'No active tasks.'; unavailable is honest", () => {
     const r = make(80, 24)
     draw(r, (view) => renderTasksPane({ x: 0, y: 0, w: 80, h: 24 }, {
       groups: [{ label: "Schedule", entries: [], collapsed: true }, { label: "Schedule", entries: [] }],
@@ -150,12 +172,19 @@ describe("tasks pane (spec §3.12)", () => {
 
     const r2 = make(80, 24)
     draw(r2, (view) => renderTasksPane({ x: 2, y: 3, w: 40, h: 4 }, { groups: [] }, view, palette, GLYPHS))
-    expect(rowText(r2, 3)).toContain("No tasks or agents.")
+    expect(rowText(r2, 3)).toContain("No active tasks.")
+
+    // backend without the tasks capability: an honest unavailable line, NEVER
+    // the empty-state claim.
+    const r3 = make(80, 24)
+    draw(r3, (view) => renderTasksPane({ x: 2, y: 3, w: 40, h: 4 }, { groups: [], available: false }, view, palette, GLYPHS))
+    expect(rowText(r3, 3)).toContain("Tasks unavailable")
+    expect(rowText(r3, 3)).not.toContain("No active tasks.")
   })
 
   it("overflow arrows ▲/▼ when rows exceed the rect", () => {
     const big: TaskGroup = { label: "Subagents", entries: Array.from({ length: 6 }, (_v, i) => ({
-      status: "running", label: `task ${i}`, elapsed: "1m",
+      id: `t${i}`, status: "running", label: `task ${i}`, elapsed: "1m",
     })) }
     const r = make(80, 24)
     draw(r, (view) => renderTasksPane({ x: 0, y: 0, w: 80, h: 4 }, { groups: [big] }, view, palette, GLYPHS))

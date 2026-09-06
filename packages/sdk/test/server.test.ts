@@ -70,6 +70,8 @@ function makeStubService(): SessionService {
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
     queue: vi.fn(() => []),
     cancelQueued: vi.fn(() => ({ cancelled: false })),
+    tasks: vi.fn(() => []),
+    cancelTask: vi.fn(() => "already-finished" as const),
     onAssembly: () => () => {},
     closeSession: vi.fn(async () => {}),
     close: async () => {},
@@ -119,6 +121,7 @@ describe("createSdkServer", () => {
             "session-cancel": ["1"],
             "session-rewind": ["1"],
             "session-queue": ["1"],
+            "session-tasks": ["1"],
           },
         },
       })
@@ -957,6 +960,138 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
       await cleanup()
     }
   })
+})
+
+describe("createSdkServer session/tasks (Task 12)", () => {
+  /** Real service whose parent turn spawns a real `helper` subagent (through
+   * the assembly's own registerSubagent mount) and whose child runs block on
+   * the gate — the projection + cancel path stay deterministic. */
+  async function gatedTaskService(): Promise<{
+    service: SessionService
+    gate: { promise: Promise<void>; resolve(): void }
+    cleanup: () => Promise<void>
+  }> {
+    const dir = await mkdtemp(join(tmpdir(), "ih-sdk-tasks-"))
+    let spawned = false
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => { resolve = done })
+    const model = {
+      async *stream(request: unknown) {
+        // The child's requests end with ITS authored task message; the
+        // parent's continuation ends with the spawn tool result.
+        const messages = (request as { messages?: Array<{ role?: string; content?: unknown }> }).messages ?? []
+        const last = messages.at(-1)
+        const isChild = last?.role === "user" && typeof last.content === "string" && last.content.includes("inspect code")
+        if (isChild) {
+          // the child's turn: blocked → the row stays running/cancellable
+          await promise
+          yield { type: "text/chunk" as const, text: "child ok" }
+          yield { type: "end" as const }
+          return
+        }
+        if (!spawned) {
+          spawned = true
+          yield { type: "tool_call" as const, call: { name: "spawn_agent", args: { message: "inspect code", task_name: "helper" } } }
+          yield { type: "end" as const }
+          return
+        }
+        yield { type: "text/chunk" as const, text: "spawned" }
+        yield { type: "end" as const }
+      },
+    }
+    const service = createSessionService({
+      workspace: dir,
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    })
+    return { service, gate: { promise, resolve }, cleanup: () => rm(dir, { recursive: true, force: true }) }
+  }
+
+  async function waitForTasks(
+    service: SessionService,
+    sessionId: string,
+    cond: (rows: Array<{ id: string; status: string }>) => boolean,
+    timeoutMs = 5000,
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      if (cond(service.tasks(sessionId) as unknown as Array<{ id: string; status: string }>)) return
+      if (Date.now() >= deadline) throw new Error("waitForTasks: condition not met within budget")
+      await new Promise((r) => setTimeout(r, 10))
+    }
+  }
+
+  function tasksReply(line: string | null): RpcSuccess | undefined {
+    return line === null ? undefined : decodeFrame(line) as RpcSuccess
+  }
+
+  it("serves the real task projection, cancels through the registry, and answers unknown ids per the existing semantics", async () => {
+    const { service, gate, cleanup } = await gatedTaskService()
+    try {
+      const server = createSdkServer(service)
+      const promptReply = await server.handleLine(encodeFrame(makeRequest(300, "session/prompt", { sessionId: "s1", prompt: "spawn a helper" })))
+      expect(tasksReply(promptReply)?.result).toEqual({ sessionId: "s1", ok: true })
+
+      await waitForTasks(service, "s1", (rows) => rows.some((r) => r.id === "root/helper"))
+
+      const listed = tasksReply(await server.handleLine(encodeFrame(makeRequest(301, "session/tasks", { sessionId: "s1" }))))
+      const items = (listed!.result as { items: Array<{ id: string; group: string; status: string; canCancel: boolean }> }).items
+      expect(items).toContainEqual(expect.objectContaining({ id: "root/helper", group: "subagent", status: "running", canCancel: true }))
+      expect(items).toContainEqual(expect.objectContaining({ id: "subagent-1", group: "job", status: "running" }))
+
+      const cancelled = tasksReply(await server.handleLine(encodeFrame(makeRequest(302, "session/tasks/cancel", { sessionId: "s1", id: "root/helper" }))))
+      expect(cancelled!.result).toEqual({ status: "cancellation-requested" })
+
+      // unknown id → the existing not-found semantics (the registry's explicit
+      // "unknown job" error — never a fabricated "already-finished").
+      const unknown = await server.handleLine(encodeFrame(makeRequest(303, "session/tasks/cancel", { sessionId: "s1", id: "never-a-task" })))
+      expect((decodeFrame(unknown!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      expect(String((decodeFrame(unknown!) as RpcFailure).error.message)).toContain("unknown job")
+      expect(String((decodeFrame(unknown!) as RpcFailure).error.message)).toContain("session/tasks/cancel")
+
+      // settle the child — a duplicate cancel then answers already-finished.
+      gate.resolve()
+      await waitForTasks(service, "s1", (rows) => rows.find((r) => r.id === "root/helper")?.status === "cancelled")
+      const again = tasksReply(await server.handleLine(encodeFrame(makeRequest(304, "session/tasks/cancel", { sessionId: "s1", id: "root/helper" }))))
+      expect(again!.result).toEqual({ status: "already-finished" })
+
+      // param validation (fail-closed):
+      for (const bad of [{ sessionId: "" }, {}]) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(305, "session/tasks", bad)))
+        expect((decodeFrame(reply!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      }
+      for (const bad of [
+        { sessionId: "s1", id: "" },
+        { sessionId: "", id: "x" },
+        { sessionId: "s1" },
+      ]) {
+        const reply = await server.handleLine(encodeFrame(makeRequest(306, "session/tasks/cancel", bad)))
+        expect((decodeFrame(reply!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      }
+      await server.close()
+    } finally {
+      gate.resolve()
+      await service.close()
+      await cleanup()
+    }
+  }, 60_000)
+
+  it("an unknown-but-valid session answers an honest empty task list", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const listed = tasksReply(await server.handleLine(encodeFrame(makeRequest(307, "session/tasks", { sessionId: "never-seen" }))))
+      expect((listed!.result as { items: unknown[] }).items).toEqual([])
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  }, 60_000)
 })
 
 describe("createSdkServer session/queue (Task 11)", () => {

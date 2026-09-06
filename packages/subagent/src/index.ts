@@ -1,5 +1,7 @@
 export { createJobRegistry } from "./jobs.ts"
 export type { JobRegistry, JobSnapshot, JobStatus } from "./jobs.ts"
+export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkflowRows } from "./projection.ts"
+export type { AgentTaskDetail, AgentTaskGroup, AgentTaskStatus, AgentTaskView, SubagentTaskSource, TaskSourceStatus, WorkflowTaskRow } from "./projection.ts"
 export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { SubagentRole, RoleRegistry } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
@@ -29,6 +31,7 @@ import type { WorkflowExecutor } from "@i-harness/workflow"
 import { createJobRegistry, type JobRegistry } from "./jobs.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
 import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent-table.ts"
+import { projectAgentTasks, type AgentTaskView } from "./projection.ts"
 import { createSubagentTools, ensureResidentAgent, sweepPendingInbox } from "./tools.ts"
 import type { SubagentToolDeps } from "./tools.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
@@ -91,6 +94,10 @@ export interface RegisterSubagentResult {
   // outbox) behind this mount. With persistence the ready chain already
   // restored + classified the records from `task:<stateId>`.
   tasks: TaskRegistry
+  // M49 Task 12 (spec §8.2): the read-only task projection over THIS mount's
+  // registries — summary rows only; no registry object ever escapes (the UI
+  // builds its rows through this seam, not by casts).
+  projectTasks(): AgentTaskView[]
 }
 
 // Mount entry point (spec §1.1.6 / §2.3): seeds the role registry with the
@@ -184,7 +191,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // rebuild + G4 pending-inbox sweep. `ready` gates hosts until it completes.
     ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks, notifDrain)
   }
-  return { roles, jobs, table, agents, ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry), ready, tasks }
+  return {
+    roles, jobs, table, agents,
+    ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry),
+    ready, tasks,
+    projectTasks: () => projectAgentTasks({ table, jobs, roles, tasks }),
+  }
 }
 
 // M26-D1/D2: post-restore task protocol chain — (1) load the durable task doc

@@ -619,7 +619,7 @@ describe("panes", () => {
       paneData: {
         tasks: [{
           label: "Subagents",
-          entries: [{ status: "running", label: "worker-1", action: "cancel" }],
+          entries: [{ id: "worker-1", status: "running", label: "worker-1", action: "cancel" }],
         }],
       },
       panes: new Set(["tasks"]),
@@ -632,11 +632,12 @@ describe("panes", () => {
     router.handle({ x: t.x + 2, y: t.y, button: "left", kind: "down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
     router.handle({ x: t.x + 2, y: t.y, button: "left", kind: "up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
     expect(app.paneData!.tasks![0]!.collapsed).toBe(true)
-    // entry row — the [✗] button at the right edge.
+    // entry row — the [✗] button at the right edge (M49 Task 12: the row
+    // carries its stable id, so the id-based action fires).
     const entryY = t.y + 1
     router.handle({ x: t.x + t.w - 2, y: entryY, button: "left", kind: "down", drag: false, mods: { ctrl: false, shift: false, alt: false } })
     router.handle({ x: t.x + t.w - 2, y: entryY, button: "left", kind: "up", drag: false, mods: { ctrl: false, shift: false, alt: false } })
-    expect(app.toasts.map((x) => x.text)).toContain("cancel task (M46c)")
+    expect(app.toasts.map((x) => x.text)).toContain("cancel task (M49)")
   })
 
   it("queue [cancel] fires with the row id; no [Send now] chip; todo row select sets paneData.todoSelect", () => {

@@ -133,7 +133,7 @@ describe("present — ActiveView and constrained layout", () => {
     const state = baseState(new StubEngine(), {
       panes: new Set(["tasks", "todo", "queue"]),
       paneData: {
-        tasks: [{ label: "Subagents", entries: [{ status: "running", label: "worker" }] }],
+        tasks: [{ label: "Subagents", entries: [{ id: "worker-1", status: "running", label: "worker" }] }],
         todo: [{ id: "todo-1", text: "Ship it", status: "in_progress" }],
         queue: [{ id: "q1", text: "Queued prompt", delivery: "queue", intent: "user", state: "queued", order: 1, canCancel: false }],
         btw: { question: "Why?", state: "answering" },

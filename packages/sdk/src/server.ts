@@ -62,6 +62,7 @@ import {
   type SessionIdResult,
   type SessionModelSelection,
   type SessionModelState,
+  type TaskCancelStatus,
 } from "./protocol.ts"
 
 export const SDK_SERVER_NAME = "i-harness"
@@ -281,6 +282,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             // itself (never a host seam) — the row is unconditional.
             "session-rewind": ["1"],
             "session-queue": ["1"],
+            // M49 Task 12: the task projection + cancellation (same service,
+            // Serialize-only rows) — unconditional too.
+            "session-tasks": ["1"],
             ...(opts.createSession !== undefined ? { "session-create": ["1"] } : {}),
             ...(opts.forkSession !== undefined ? { "session-fork": ["1"] } : {}),
             ...(opts.modelState !== undefined && opts.setSessionModel !== undefined
@@ -384,6 +388,37 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         // Honest answer inside the success payload — a finished/unknown id is
         // a legitimate client question, never an error frame.
         return makeSuccess(id, service.cancelQueued(p.sessionId, p.id))
+      }
+      case "session/tasks": {
+        // M49 Task 12: the REAL per-session task projection — serialized
+        // summary rows only (never a registry object); an unknown-but-valid
+        // session answers an honest empty list.
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/tasks requires a non-empty sessionId")
+        }
+        return makeSuccess(id, { items: service.tasks(p.sessionId) })
+      }
+      case "session/tasks/cancel": {
+        const p = params as { sessionId?: unknown; id?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/tasks/cancel requires a non-empty sessionId")
+        }
+        if (typeof p?.id !== "string" || p.id === "") {
+          return makeFailure(id, INVALID_PARAMS, "session/tasks/cancel requires a non-empty id")
+        }
+        try {
+          const status: TaskCancelStatus = service.cancelTask(p.sessionId, p.id)
+          return makeSuccess(id, { status })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          // Unknown ids keep the existing not-found semantics (the owning
+          // registry's explicit "unknown job/task" error — never a fabricated
+          // "already-finished").
+          return /unknown (?:job|task)/i.test(message)
+            ? makeFailure(id, INVALID_PARAMS, `session/tasks/cancel: ${message}`)
+            : hostMethodFailure(id, "session/tasks/cancel", error)
+        }
       }
       case "session/cancel": {
         // M41b v1.1: abort the in-flight submit's controller (the same one the

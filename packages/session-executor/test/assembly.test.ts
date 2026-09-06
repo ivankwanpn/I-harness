@@ -1,4 +1,15 @@
 import { describe, expect, it } from "vitest"
+
+/** Poll `cond` (the projection settles asynchronously — the child's abort
+ * path lands after the gate release). */
+async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    if (cond()) return
+    if (Date.now() >= deadline) throw new Error("waitFor: condition not met within budget")
+  }
+}
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor } from "@i-harness/core-agent"
@@ -214,4 +225,95 @@ describe("createSessionAssembly", () => {
       await assembly.dispose()
     }
   }, 30_000)
+})
+
+// ── M49 Task 12: real per-assembly task projection (spec §8.2) ─────────────
+
+describe("createSessionAssembly — task projection (Task 12)", () => {
+  /** Scripted model: the parent turn (whose messages carry only "spawn a
+   * helper") first spawns a `helper` subagent through the assembly's own
+   * subagent mount and then produces its final text; the CHILD's turns are
+   * recognized by their message content ("inspect code") and block on the
+   * gate — the entry stays "running" (canCancel) until the test settles it.
+   * Routing by message content keeps the ordering robust (the child run's
+   * first stream call races the parent's continuation).
+   */
+  function spawnBlockingModel(): { model: ModelClient; release(): void } {
+    let spawned = false
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const model: ModelClient = {
+      async *stream(request: LLMRequest) {
+        // The child's requests end with ITS authored task message ("inspect
+        // code"); the parent's continuation ends with the spawn tool result.
+        const last = request.messages.at(-1)
+        const isChild = last?.role === "user" && typeof last.content === "string" && last.content.includes("inspect code")
+        if (isChild) {
+          await gate
+          yield { type: "text/chunk", text: "child ok" }
+          yield { type: "end" }
+          return
+        }
+        if (!spawned) {
+          spawned = true
+          yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "inspect code", task_name: "helper" } } }
+          yield { type: "end" }
+          return
+        }
+        yield { type: "text/chunk", text: "spawned" }
+        yield { type: "end" }
+      },
+    }
+    return { model, release: () => release() }
+  }
+
+  it("tasks() projects subagent + job + (owner-only) workflow rows; cancelTask routes through the owning registry", async () => {
+    const { model, release } = spawnBlockingModel()
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      sessionId: "s1",
+      approveAll: true,
+      model,
+    })
+    try {
+      // nothing mounted into the registries yet — honest rowless projection
+      expect(assembly.tasks()).toEqual([])
+
+      await assembly.agent.run("spawn a helper")
+
+      const rows = assembly.tasks()
+      // the subagent row rides the REAL agent-table entry (stable path id;
+      // its label is the role name the child was spawned with — "general").
+      expect(rows).toContainEqual(expect.objectContaining({
+        id: "root/helper",
+        parentId: "root",
+        group: "subagent",
+        label: "general",
+        status: "running",
+        canCancel: true,
+      }))
+      // the job row rides the REAL jobs registry (stable job id).
+      expect(rows).toContainEqual(expect.objectContaining({
+        group: "job",
+        status: "running",
+        canCancel: true,
+      }))
+
+      // cancel through the owning registry: the agent entry's abort channel
+      // + its job registry kill (they cannot disagree).
+      expect(assembly.cancelTask("root/helper")).toBe("cancellation-requested")
+      // let the child's blocked turn settle (it settles as aborted).
+      release()
+      await waitFor(() => assembly.tasks().find((r) => r.id === "root/helper")?.status === "cancelled")
+      expect(assembly.tasks().find((r) => r.id === "root/helper")!.canCancel).toBe(false)
+      expect(assembly.cancelTask("root/helper")).toBe("already-finished")
+
+      // unknown id → the existing registry not-found semantics (never a
+      // fabricated silent success).
+      expect(() => assembly.cancelTask("never-a-task")).toThrow(/unknown/)
+    } finally {
+      release()
+      await assembly.dispose()
+    }
+  }, 60_000)
 })

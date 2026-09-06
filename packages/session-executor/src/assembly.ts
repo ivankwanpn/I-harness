@@ -33,7 +33,7 @@ import { PLAN_MODE_SYSTEM_PROMPT, ensurePlanModeTool } from "@i-harness/plan-mod
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
-import { registerSubagent, type ParentInputAdmission, type SubagentStateSnapshot } from "@i-harness/subagent"
+import { registerSubagent, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { registerSkills } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
@@ -164,6 +164,19 @@ export interface SessionAssembly {
   /** Request cancellation of one background job through the subagent job
    * registry (the model-facing job_kill machinery). */
   killJob(jobId: string): "cancellation-requested" | "already-finished"
+  /** M49 Task 12 (spec §8.2): the REAL task projection — subagent rows (live
+   * agent-table entries fused with their durable task records, plus
+   * record-only recovered rows), job rows (the subagent jobs registry) and
+   * workflow rows ONLY when this assembly's workflow executor owns them.
+   * Never fabricated: an empty list means literally nothing running. */
+  tasks(): AgentTaskView[]
+  /** M49 Task 12: cancel ONE task by its stable id THROUGH THE OWNING
+   * registry — an agent path aborts the live entry + kills its job (the
+   * interrupt_agent/job_kill machinery); a `workflow-` id routes to the
+   * workflow executor's killJob; everything else is the jobs registry's
+   * kill (job_kill). Unknown ids reuse the registry not-found semantics
+   * ("unknown task/job"); terminal ids answer "already-finished". */
+  cancelTask(id: string): "cancellation-requested" | "already-finished"
   /** M33 §5: manual compaction surface — binds the agent's compaction seam
    * (no engine configured → { compacted: false } fallback). `instructions` are
    * forwarded to the summarizer prompt ("User instructions" section; absent →
@@ -506,6 +519,30 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       inbox,
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
+      // M49 Task 12: the projection owns NO registry object — rows only. The
+      // workflow group comes from THIS workflow executor's real store rows
+      // (mounted unconditionally above — the non-null claim is the mount
+      // ordering).
+      tasks: () => [
+        ...subagent.projectTasks(),
+        ...projectWorkflowRows(workflowMount!.executor.listJobs()),
+      ],
+      // Cancellation routes by owner: agent path → the live entry's abort
+      // channel + its job kill (interrupt_agent/job_kill parity — the two
+      // cannot disagree); `workflow-` ids → the workflow store's killJob;
+      // everything else → the jobs registry's kill (job_kill). Unknown ids
+      // propagate the registry's "unknown job/task" error — never a silent
+      // success; terminal ids answer already-finished.
+      cancelTask: (id: string): "cancellation-requested" | "already-finished" => {
+        const entry = subagent.table.get(id)
+        if (entry !== undefined) {
+          if (entry.status !== "running") return "already-finished"
+          entry.controller.abort()
+          return entry.jobId !== undefined ? subagent.jobs.kill(entry.jobId) : "cancellation-requested"
+        }
+        if (id.startsWith("workflow-")) return workflowMount!.executor.killJob(id)
+        return subagent.jobs.kill(id)
+      },
       compactNow: async (instructions?: string) =>
         agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
       pluginMcpResults,

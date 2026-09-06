@@ -91,6 +91,12 @@ export interface MouseHooks {
   /** M49 Task 11: the row's STABLE public id (the backend's cancelQueued
    * target); absent hook → the honest "(M46c)" toast. */
   queueCancel?(id: string): void
+  /** M49 Task 12: cancel ONE task row by its STABLE id (the loop's
+   * cancelTaskId action). Absent hook → the honest seam toast. */
+  taskCancel?(id: string): void
+  /** M49 Task 12: open the detail viewer for ONE task row by its STABLE id
+   * (the loop's openTaskViewer action — Enter/double-click share it). */
+  openTaskViewer?(id: string): void
   /** M46c G2: paste-chip double-click — INSERT the retained paste-source at
    * the cursor (the prompt state's pasteStash[`index`]; absent hook → honest
    * toast — the old "source not retained" path is replaced by this seam).
@@ -572,8 +578,14 @@ export class MouseRouter {
     switch (kind) {
       case "tasks": {
         // tasks chip → pane toggle (the app's own Set — the loop's toggle).
-        if (this.app.panes.has("tasks")) this.app.panes.delete("tasks")
-        else this.app.panes.add("tasks")
+        if (this.app.panes.has("tasks")) {
+          this.app.panes.delete("tasks")
+          // M49 Task 12: closing the pane clears the stale row selection (the
+          // Enter-seam gate is the pane-open check; this keeps state clean).
+          this.app.paneData = { ...(this.app.paneData ?? {}), tasksSelectId: undefined }
+        } else {
+          this.app.panes.add("tasks")
+        }
         this.changed()
         break
       }
@@ -609,12 +621,30 @@ export class MouseRouter {
     }
     const rightW = row.right === undefined ? 0 : strWidth(row.right) + 1
     if (rightW > 0 && ev.x >= ctx.x + ctx.w - rightW + 1 && ev.x < ctx.x + ctx.w) {
-      if (row.right === "[✗]") this.hookOr(this.hooks.sendBackgroundTaskCancel, "cancel task (M46c)", row.label)
-      else this.hookOr(this.hooks.openSubagentViewer, "viewer (M46c)", row.label)
+      if (row.right === "[✗]") {
+        // M49 Task 12: cancel by STABLE id (the same action Enter/the
+        // app-level cancelTaskId use); id-less legacy rows keep the M46c
+        // label toast path.
+        if (row.id !== undefined) this.hookOr(this.hooks.taskCancel, "cancel task (M49)", row.id)
+        else this.hookOr(this.hooks.sendBackgroundTaskCancel, "cancel task (M46c)", row.label)
+      } else if (row.id !== undefined) {
+        this.hookOr(this.hooks.openTaskViewer, "task viewer (M49)", row.id)
+      } else {
+        this.hookOr(this.hooks.openSubagentViewer, "viewer (M46c)", row.label)
+      }
       return
     }
-    // body click — no row action semantics (spec: the per-row BUTTONS are the
-    // interactive parts).
+    // M49 Task 12: body click SELECTS the row by its stable id (the
+    // selection lives across backend refreshes) and hands focus to the
+    // scrollback so Enter opens the viewer; a double click opens it directly.
+    if (row.id !== undefined) {
+      this.app.paneData = { ...(this.app.paneData ?? {}), tasksSelectId: row.id }
+      this.focus("scrollback")
+      this.changed()
+      if (this.nextClick(`tasks-${row.id}`) >= 2) {
+        this.hookOr(this.hooks.openTaskViewer, "task viewer (M49)", row.id)
+      }
+    }
   }
 
   private todoDown(ev: MouseCellEvent, ctx: Rect): void {
@@ -1002,11 +1032,13 @@ export function statusChipAt(app: TuiAppState, glyphs: GlyphSet, ctx: Rect, col:
 }
 
 /** Flattened tasks pane rows (header + entries) for click mapping — same order
- * as renderTasksPane's flatten. */
+ * as renderTasksPane's flatten. M49 Task 12: entries carry the STABLE id (the
+ * selection/cancel/viewer target; id-less rows are the legacy fixture shape). */
 export interface TasksHitRow {
   header: boolean
   group: number
   label: string
+  id?: string
   right?: string
 }
 
@@ -1019,6 +1051,7 @@ export function flattenTasks(groups: TaskGroup[]): TasksHitRow[] {
         header: false,
         group: gi,
         label: e.label,
+        ...(e.id !== undefined ? { id: e.id } : {}),
         right: e.action === "cancel" ? "[✗]" : e.action === "expand" ? "[↗]" : undefined,
       })
     }

@@ -1,6 +1,10 @@
 export type JobStatus = "running" | "completed" | "killed" | "error"
 export interface JobSnapshot {
   id: string
+  // M49 Task 12: the registry's owner lane on the public snapshot (the private
+  // record + the durable DurableJobRecord have always carried it) — the task
+  // projection links a job row to its owning agent through it.
+  owner: string
   kind: string
   label: string
   status: JobStatus
@@ -27,6 +31,9 @@ export interface JobRegistry {
   updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output" | "startedAt" | "endedAt">>): boolean
   read(id: string): JobSnapshot
   list(owner: string): JobSnapshot[]
+  // M49 Task 12: the full enumeration (every owner lane) — the task projection
+  // reads ALL jobs (a job row links to its owner agent through `owner`).
+  listAll(): JobSnapshot[]
   wait(id: string, timeoutMs: number): Promise<void>
   kill(id: string): "cancellation-requested" | "already-finished"
 }
@@ -80,7 +87,7 @@ export function createJobRegistry(): JobRegistry {
       const rec = records.get(id)
       if (!rec) throw new Error(`unknown job: ${id}`)
       return {
-        id: rec.id, kind: rec.kind, label: rec.label, status: rec.status, output: rec.output,
+        id: rec.id, owner: rec.owner, kind: rec.kind, label: rec.label, status: rec.status, output: rec.output,
         ...(rec.startedAt !== undefined ? { startedAt: rec.startedAt } : {}),
         ...(rec.endedAt !== undefined ? { endedAt: rec.endedAt } : {}),
       }
@@ -88,10 +95,17 @@ export function createJobRegistry(): JobRegistry {
     list(owner: string) {
       return [...records.values()].filter((r) => r.owner === owner)
         .map((r) => ({
-          id: r.id, kind: r.kind, label: r.label, status: r.status, output: r.output,
+          id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output,
           ...(r.startedAt !== undefined ? { startedAt: r.startedAt } : {}),
           ...(r.endedAt !== undefined ? { endedAt: r.endedAt } : {}),
         }))
+    },
+    listAll() {
+      return [...records.values()].map((r) => ({
+        id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output,
+        ...(r.startedAt !== undefined ? { startedAt: r.startedAt } : {}),
+        ...(r.endedAt !== undefined ? { endedAt: r.endedAt } : {}),
+      }))
     },
     async wait(id: string, timeoutMs: number) {
       const deadline = Date.now() + timeoutMs

@@ -25,6 +25,8 @@ import {
   type SessionModelState,
   type SessionQueueItem,
   type QueueCancelResult,
+  type AgentTaskView,
+  type TaskCancelStatus,
 } from "./protocol.ts"
 
 export interface ServerInfo {
@@ -275,6 +277,21 @@ export class HarnessClient {
     return result as QueueCancelResult
   }
 
+  /** M49 Task 12: the per-session task projection (serialized summary rows —
+   * never registry objects). */
+  async tasks(sessionId: string): Promise<AgentTaskView[]> {
+    const result = await this.request("session/tasks", { sessionId })
+    return (result as { items: AgentTaskView[] }).items
+  }
+
+  /** M49 Task 12: cancel ONE task by its stable id (the server routes through
+   * the owning registry). Rejects with RpcError(-32602, "unknown job/task: …")
+   * for an id this session does not own. */
+  async cancelTask(sessionId: string, id: string): Promise<TaskCancelStatus> {
+    const result = await this.request("session/tasks/cancel", { sessionId, id })
+    return (result as { status: TaskCancelStatus }).status
+  }
+
   /** M41b v1.1: the rewind engine's durable points of a live session.
    * Rejects with RpcError(-32602, "session not found") for an unknown
    * session, -32603 "rewind not enabled" when the host wired no rewind seam. */
@@ -389,6 +406,17 @@ export class HarnessSession {
   /** M49 Task 11: cancel one queued row of this session by its stable id. */
   cancelQueueItem(id: string): Promise<QueueCancelResult> {
     return this.client.cancelQueueItem(this.sessionId, id)
+  }
+
+  /** M49 Task 12: this session's real task projection (summary rows only). */
+  tasks(): Promise<AgentTaskView[]> {
+    return this.client.tasks(this.sessionId)
+  }
+
+  /** M49 Task 12: cancel one task by its stable id (the registry owns the
+   * authority; an unknown id rejects with the not-found error). */
+  cancelTask(id: string): Promise<TaskCancelStatus> {
+    return this.client.cancelTask(this.sessionId, id)
   }
 
   /** M41b v1.1: this session's rewind points. */

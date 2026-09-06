@@ -680,6 +680,103 @@ describe("createSessionService — real session queue projection (Task 11)", () 
   }, 60_000)
 })
 
+// ── Task 12: real task projection per assembly/session — the fixture drives a
+// REAL spawn through the assembly's own subagent mount (scripted model emits
+// the spawn_agent tool call; the child's run is gated so the row stays running
+// until the test cancels/settles). No mocked registries.
+
+/** Real SessionService whose parent turn spawns a `helper` subagent and whose
+ * child turns block on a gate ("cancellation-requested" stays deterministic).
+ * The child's turns are recognized by their message content (the child run's
+ * first stream call races the parent's continuation — content routing keeps
+ * the fixture robust). `release()` settles the child runs. */
+function serviceWithSubagentFixture(): { service: SessionService; release(): void } {
+  let spawned = false
+  let release!: () => void
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const model: ModelClient = {
+    async *stream(request: LLMRequest) {
+      // The child's requests end with ITS authored task message ("inspect
+      // code"); the parent's continuation ends with the spawn tool result.
+      const last = request.messages.at(-1)
+      const isChild = last?.role === "user" && typeof last.content === "string" && last.content.includes("inspect code")
+      if (isChild) {
+        // the child's turn: blocked → the agent entry stays "running"
+        await gate
+        yield { type: "text/chunk", text: "child ok" }
+        yield { type: "end" }
+        return
+      }
+      if (!spawned) {
+        // the parent turn: spawn the helper through the assembly's subagent
+        // mount (the real registerSubagent path — its registries drive the
+        // projection).
+        spawned = true
+        yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "inspect code", task_name: "helper" } } }
+        yield { type: "end" }
+        return
+      }
+      // the parent's continuation after the tool executed
+      yield { type: "text/chunk", text: "spawned" }
+      yield { type: "end" }
+    },
+  }
+  return {
+    service: createSessionService({
+      workspace: process.cwd(),
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    }),
+    release: () => release(),
+  }
+}
+
+describe("createSessionService — real task projection (Task 12)", () => {
+  it("serves task rows for one live assembly and cancels through the owning registry", async () => {
+    const { service, release } = serviceWithSubagentFixture()
+    try {
+      await service.assemblyFor("s1")
+      expect(service.tasks("s1")).toEqual([]) // no spawn yet — honest empty
+      await service.submit("s1", "spawn a helper", new AbortController().signal)
+      await waitFor(() => service.tasks("s1").some((row) => row.id === "root/helper"))
+      expect(service.tasks("s1")).toContainEqual(expect.objectContaining({
+        id: "root/helper",
+        group: "subagent",
+        status: "running",
+        canCancel: true,
+      }))
+      expect(service.cancelTask("s1", "root/helper")).toBe("cancellation-requested")
+      // a second cancel before the child settles still asks the registry —
+      // honest (the UI re-reads the projection after refresh).
+      expect(() => service.cancelTask("s1", "never-a-task")).toThrow(/unknown/)
+      // unknown SESSION: no owner → the existing not-found semantics.
+      expect(() => service.cancelTask("no-such-session", "root/helper")).toThrow(/unknown task/)
+      // settle the child → the row turns cancelled and stops being cancellable.
+      release()
+      await waitFor(() => service.tasks("s1").find((row) => row.id === "root/helper")?.status === "cancelled")
+      const settled = service.tasks("s1").find((row) => row.id === "root/helper")!
+      expect(settled.canCancel).toBe(false)
+      expect(service.cancelTask("s1", "root/helper")).toBe("already-finished")
+    } finally {
+      release()
+      await service.close()
+    }
+  }, 60_000)
+
+  it("an unknown session tasks() is an honest empty list", async () => {
+    const { service } = serviceWithSubagentFixture()
+    try {
+      expect(service.tasks("never-assembled")).toEqual([])
+    } finally {
+      await service.close()
+    }
+  }, 60_000)
+})
+
 describe("createSessionService — close lifecycle with a queue in flight (Task 11 regression)", () => {
   it("closeSession() with a submit in flight settles the binding promise, clears queue rows, and never crashes", async () => {
     const gate = deferred<void>()

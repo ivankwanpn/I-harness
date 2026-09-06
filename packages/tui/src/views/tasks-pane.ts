@@ -1,28 +1,36 @@
-// @i-harness/tui — G2: Tasks pane (UI spec §3.12, M37b).
-// Group headers `▾ Subagents 2` (chevron gray, label gray_bright BOLD, count
-// gray); rows `{⠋|✓|✗} {elapsed} {label} (N) {model} …` + right `[✗]`/`[↗]`
-// action; empty "No tasks or agents."; overflow arrows ▲/▼ when rows exceed
-// the rect (offset scrolls; the arrows mark above/below content).
+// @i-harness/tui — G2: Tasks pane (spec §3.12, M49 Task 12).
+// REAL groups only ("Subagents" / "Background" / "Workflows" / "Schedule") —
+// each row carries its stable task id (the selection/cancel/viewer target);
+// group headers `▾ Subagents 2` (chevron gray, label gray_bright BOLD, count
+// gray); rows `{⠋|✓|✗|…} {elapsed} {label} (N) {model} …` + right `[✗]`
+// ONLY where canCancel && backend capability, `[↗]` where the viewer opens;
+// the SELECTED row renders its label bold (selection survives refresh by id).
+// Empty renders the exact "No active tasks."; a backend WITHOUT the tasks
+// capability renders the honest unavailable line (never the empty claim).
 
 import type { GlyphSet, Palette } from "@i-harness/tui-core"
 import type { Rect, Style, ViewDraw } from "./agent.ts"
+import type { AgentTaskStatus } from "../contracts.ts"
 import { strWidth } from "./status.ts"
 
 export interface TaskEntry {
-  status: "running" | "done" | "error"
+  /** Stable task id (the selection/cancel/viewer target — never array position). */
+  id: string
+  status: AgentTaskStatus
   label: string
   /** Elapsed text, e.g. "2m10s" / "3s". */
   elapsed?: string
   /** Model name or an honest unconfigured label. */
   model?: string
-  /** Count shown as `(N)` (queued subagents etc.); undefined hides it. */
+  /** Count shown as `(N)` (queued tasks of the same kind); undefined hides it. */
   count?: number
-  /** Right-edge action: `[✗]` for cancel / `[↗]` for expand (spec §3.12). */
+  /** Right-edge action: `[✗]` for cancel (ONLY where canCancel && backend
+   * capability) / `[↗]` for the detail viewer (spec §3.12). */
   action?: "cancel" | "expand"
 }
 
 export interface TaskGroup {
-  label: "Subagents" | "Background" | "Schedule"
+  label: "Subagents" | "Background" | "Workflows" | "Schedule"
   entries: TaskEntry[]
   /** Collapsed groups render `▸` instead of `▾`. */
   collapsed?: boolean
@@ -33,9 +41,15 @@ export interface TasksPaneState {
   groups: TaskGroup[]
   /** First visible flattened row (overflow scroll; the arrows reflect it). */
   offset?: number
+  /** Selected row id (stable across refresh by id — the renderer bolds it). */
+  selectedId?: string
+  /** false when the backend exposes no tasks capability (honest unavailable).
+   * Default true (available). */
+  available?: boolean
 }
 
-export const TASKS_EMPTY = "No tasks or agents."
+export const TASKS_EMPTY = "No active tasks."
+export const TASKS_UNAVAILABLE = "Tasks unavailable on this backend."
 
 export function renderTasksPane(
   ctx: Rect,
@@ -45,7 +59,11 @@ export function renderTasksPane(
   _glyphs: GlyphSet,
 ): void {
   const limitX = ctx.x + ctx.w
-  const rows = flatten(state.groups)
+  if (state.available === false) {
+    view.text(ctx.x, ctx.y, TASKS_UNAVAILABLE, view.color(palette.grayDim), limitX)
+    return
+  }
+  const rows = flatten(state.groups, state.selectedId)
   if (rows.length === 0) {
     view.text(ctx.x, ctx.y, TASKS_EMPTY, view.color(palette.grayDim), limitX)
     return
@@ -86,14 +104,14 @@ export function renderTasksPane(
     const rightW = row.right === undefined ? 0 : strWidth(row.right) + 1
     const textLimit = arrowLimit - rightW
     let x = ctx.x
-    const glyphStyle = row.status === "running"
-      ? view.color(palette.running)
-      : row.status === "done" ? view.color(palette.accentSuccess) : view.color(palette.accentError)
+    const glyphStyle = glyphStyleOf(row.status, view, palette)
     x = view.text(x, y, row.glyph ?? "", glyphStyle, textLimit)
 
     const runs: Array<{ text: string; style: Style }> = []
     if (row.elapsed !== undefined) runs.push({ text: ` ${row.elapsed} `, style: view.color(palette.grayDim) })
-    runs.push({ text: row.elapsed !== undefined ? row.label : ` ${row.label}`, style: view.color(palette.textPrimary) })
+    // The selected row's label is BOLD (the pane's selection visual).
+    const labelStyle = row.selected ? view.color(palette.textPrimary, { bold: true }) : view.color(palette.textPrimary)
+    runs.push({ text: row.elapsed !== undefined ? row.label : ` ${row.label}`, style: labelStyle })
     if (row.count !== undefined) runs.push({ text: ` (${row.count})`, style: view.color(palette.gray) })
     if (row.model !== undefined) runs.push({ text: ` ${row.model}`, style: view.color(palette.accentModel) })
     for (const r of runs) {
@@ -136,18 +154,40 @@ export function renderTasksPane(
 /** One flat row of the pane (header or entry), pre-resolved for drawing. */
 interface PaneRow {
   kind: "header" | "entry"
+  id?: string
   label: string
   count?: number
   collapsed?: boolean
-  status?: TaskEntry["status"]
+  status?: AgentTaskStatus
   glyph?: string
   elapsed?: string
   model?: string
+  selected?: boolean
   right?: string
   rightStyle?: "gray" | "accent-user"
 }
 
-function flatten(groups: TaskGroup[]): PaneRow[] {
+function glyphStyleOf(status: AgentTaskStatus | undefined, view: ViewDraw, palette: Palette): Style {
+  switch (status) {
+    case "running": return view.color(palette.running)
+    case "waiting": return view.color(palette.warning)
+    case "queued": return view.color(palette.gray)
+    case "completed": return view.color(palette.accentSuccess)
+    default: return view.color(palette.accentError)
+  }
+}
+
+function glyphOf(status: AgentTaskStatus): string {
+  switch (status) {
+    case "running": return "⠋"
+    case "queued": return "⠷"
+    case "waiting": return "⠼"
+    case "completed": return "✓"
+    default: return "✗" // failed / cancelled
+  }
+}
+
+function flatten(groups: TaskGroup[], selectedId: string | undefined): PaneRow[] {
   const rows: PaneRow[] = []
   for (const g of groups) {
     rows.push({
@@ -157,15 +197,18 @@ function flatten(groups: TaskGroup[]): PaneRow[] {
       collapsed: g.collapsed,
     })
     for (const e of g.entries) {
-      const glyph = e.status === "running" ? "⠋" : e.status === "done" ? "✓" : "✗"
       rows.push({
         kind: "entry",
+        // M49 Task 12: flattenTasks exposes the STABLE ID (selection/cancel/
+        // viewer by id — never a row index).
+        id: e.id,
         label: e.label,
         status: e.status,
-        glyph,
+        glyph: glyphOf(e.status),
         elapsed: e.elapsed,
         model: e.model,
         count: e.count,
+        selected: e.id === selectedId,
         right: e.action === "cancel" ? "[✗]" : e.action === "expand" ? "[↗]" : undefined,
         rightStyle: e.action === "cancel" ? "gray" : "accent-user",
       })
