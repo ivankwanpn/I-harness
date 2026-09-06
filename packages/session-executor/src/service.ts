@@ -70,6 +70,9 @@ export interface SessionService {
   /** Fires once per created assembly — the bridge attach point
    * (approval/question bridges). */
   onAssembly(hook: (assembly: SessionAssembly) => void): () => void
+  /** Wait for this session's pending work/build, remove its lane/assembly,
+   * and dispose only that assembly. A later request may build it again. */
+  closeSession(sessionId: string): Promise<void>
   /** Wait for active turns, then dispose every assembly best-effort. NEVER
    * closes a caller-owned telemetry stream or coordinator. */
   close(): Promise<void>
@@ -82,6 +85,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const hooks = new Set<(assembly: SessionAssembly) => void>()
   const chains = new Map<string, Promise<void>>()
   const active = new Set<Promise<void>>()
+  const closing = new Map<string, Promise<void>>()
   // Registered-but-unsettled turns per session (the service's own pacing
   // queue, in front of the lane) — the jobs/queue observation surface.
   const registered = new Map<string, number>()
@@ -89,6 +93,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   let closed = false
 
   async function getOrCreate(sessionId: string): Promise<SessionAssembly> {
+    if (closed) throw new Error("session service closed")
+    const pendingClose = closing.get(sessionId)
+    if (pendingClose !== undefined) await pendingClose
+    if (closed) throw new Error("session service closed")
     const existing = assemblies.get(sessionId)
     if (existing !== undefined) return existing
     let pending = creating.get(sessionId)
@@ -136,6 +144,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function submit(sessionId: string, prompt: string, signal: AbortSignal): Promise<void> {
+    if (closed) return Promise.reject(new Error("session service closed"))
+    if (closing.has(sessionId)) return Promise.reject(new Error(`session closing: ${sessionId}`))
     const hasQueued = chains.has(sessionId)
     const prev = chains.get(sessionId) ?? Promise.resolve()
     let settle!: () => void
@@ -215,15 +225,38 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   async function close(): Promise<void> {
     if (closed) return
     closed = true
-    await Promise.allSettled([...active])
+    await Promise.allSettled([...active, ...creating.values(), ...closing.values()])
     let failure: unknown
     try { await opts.beforeDispose?.() } catch (error) { failure = error }
     const handles = [...assemblies.values()]
     assemblies.clear()
     lanes.clear()
     chains.clear()
+    registered.clear()
     for (const handle of handles) await handle.dispose().catch(() => {})
     if (failure !== undefined) throw failure
+  }
+
+  function closeSession(sessionId: string): Promise<void> {
+    const existing = closing.get(sessionId)
+    if (existing !== undefined) return existing
+    let pending!: Promise<void>
+    pending = (async () => {
+      const turn = chains.get(sessionId)
+      if (turn !== undefined) await Promise.allSettled([turn])
+      const build = creating.get(sessionId)
+      if (build !== undefined) await build.catch(() => undefined)
+      const handle = assemblies.get(sessionId)
+      assemblies.delete(sessionId)
+      lanes.delete(sessionId)
+      chains.delete(sessionId)
+      registered.delete(sessionId)
+      await handle?.dispose().catch(() => {})
+    })().finally(() => {
+      if (closing.get(sessionId) === pending) closing.delete(sessionId)
+    })
+    closing.set(sessionId, pending)
+    return pending
   }
 
   return {
@@ -241,6 +274,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       hooks.add(hook)
       return () => { hooks.delete(hook) }
     },
+    closeSession,
     close,
   }
 }

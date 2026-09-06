@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { append, createSession } from "@i-harness/core-session"
+import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
+import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createDurableSessionLoader } from "../src/index.ts"
 import { createSessionService, type SessionService } from "../src/service.ts"
 import { createTelemetry, type TelemetrySink } from "@i-harness/telemetry"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -10,6 +14,51 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it("restores durable history into the model and mirrors continuation with increasing seqs", async () => {
+    const restored = createSession()
+    append(restored, { type: "turn/start" })
+    append(restored, { type: "user/message", text: "earlier question" })
+    append(restored, { type: "assistant/message", text: "earlier answer" })
+    append(restored, { type: "turn/end" })
+    const enqueue = vi.fn()
+    const flush = vi.fn(async () => {})
+    const coordinator = {
+      load: vi.fn(async () => ({ session: restored })),
+      enqueue,
+      flush,
+    } as unknown as SessionCoordinator
+    const requests: LLMRequest[] = []
+    const model: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "continued" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: process.cwd(),
+      approveAll: true,
+      model,
+      sessionFor: createDurableSessionLoader(coordinator),
+    })
+
+    try {
+      await service.submit("durable", "continue here", new AbortController().signal)
+      const texts = requests[0]!.messages.map((message) => message.content)
+      expect(texts).toContain("earlier question")
+      expect(texts).toContain("earlier answer")
+      expect(texts).toContain("continue here")
+      const live = service.liveSession("durable")!
+      expect(live.events.slice(0, restored.events.length)).toEqual(restored.events)
+      expect(live.events.map((event) => event.seq)).toEqual(live.events.map((_, index) => index))
+      const mirrored = enqueue.mock.calls.flatMap((call) => call[1] as Array<{ seq?: number }>)
+      expect(mirrored[0]?.seq).toBe(restored.events.length)
+      expect(flush).toHaveBeenCalledWith("durable")
+    } finally {
+      await service.close()
+    }
+  }, 60_000)
+
   it("runs the first submit and serializes the second behind it", async () => {
     const service = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
     const order: string[] = []
@@ -62,6 +111,21 @@ describe("createSessionService", () => {
     expect(service.liveSession("s1")).toBeUndefined()
     expect(service.hasAssembly("s1")).toBe(false)
   }, 60_000)
+
+  it("closeSession() disposes only the selected assembly and allows a later reopen", async () => {
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, mockCycles: true })
+    const first = await service.assemblyFor("first")
+    await service.assemblyFor("second")
+    const dispose = vi.spyOn(first, "dispose")
+
+    await service.closeSession("first")
+    expect(dispose).toHaveBeenCalledTimes(1)
+    expect(service.hasAssembly("first")).toBe(false)
+    expect(service.hasAssembly("second")).toBe(true)
+    const reopened = await service.assemblyFor("first")
+    expect(reopened).not.toBe(first)
+    await service.close()
+  })
 
   it("a failed turn rejects submit (drain rejection → host error frame)", async () => {
     const service: SessionService = createSessionService({

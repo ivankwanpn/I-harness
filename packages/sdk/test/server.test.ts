@@ -66,6 +66,7 @@ function makeStubService(): SessionService {
     hasAssembly: () => false,
     queueState: () => ({ running: false, queued: 0 }),
     onAssembly: () => () => {},
+    closeSession: async () => {},
     close: async () => {},
   }
 }

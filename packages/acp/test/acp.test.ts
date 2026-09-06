@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { client } from "@agentclientprotocol/sdk"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
@@ -156,6 +156,99 @@ describe("createAcpServer", () => {
     expect(adoptOwnership).toHaveBeenCalledWith("existing")
     await service.close()
   })
+
+  it("session/close disposes, flushes, and releases one durable session", async () => {
+    const closeSession = vi.fn(async (_sessionId: string) => {})
+    const service = {
+      submit: vi.fn(async () => {}),
+      assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      closeSession,
+      close: async () => {},
+    } as SessionService
+    const flush = vi.fn(async (_sessionId: string) => {})
+    const releaseOwnership = vi.fn(async (_sessionId: string) => {})
+    const coordinator = {
+      profile: vi.fn(async (_sessionId: string) => ({
+        meta: { formatVersion: 1, sessionId: "existing", createdAt: new Date().toISOString() },
+        blank: false,
+      })),
+      adoptOwnership: vi.fn(async (_sessionId: string) => {}),
+      flush,
+      releaseOwnership,
+    } as unknown as SessionCoordinator
+    const server = createAcpServer({ service, coordinator })
+    const app = client({ name: "vitest-client" })
+
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      await ctx.request("session/resume", { sessionId: "existing", cwd: join(tmpdir(), "ih-acp-cwd") })
+      await ctx.request("session/close", { sessionId: "existing" })
+    })
+
+    expect(closeSession).toHaveBeenCalledWith("existing")
+    expect(flush).toHaveBeenCalledWith("existing")
+    expect(releaseOwnership).toHaveBeenCalledWith("existing")
+  })
+
+  it("session/close removes an in-memory session from the known set", async () => {
+    const { service } = await makeService()
+    const server = createAcpServer({ service })
+    const app = client({ name: "vitest-client" })
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      const session = await ctx.buildSession(join(tmpdir(), "ih-acp-cwd")).start()
+      await ctx.request("session/close", { sessionId: session.sessionId })
+      await expect(session.prompt("must not reopen implicitly")).rejects.toThrow()
+    })
+    await service.close()
+  })
+
+  it("session/close aborts an active prompt before disposing the assembly", async () => {
+    let started!: () => void
+    const startedP = new Promise<void>((resolve) => { started = resolve })
+    let submitSignal: AbortSignal | undefined
+    const order: string[] = []
+    const service = {
+      submit: vi.fn(async (_sessionId: string, _prompt: string, signal: AbortSignal) => {
+        submitSignal = signal
+        started()
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            order.push("abort")
+            reject(new Error("aborted"))
+          }, { once: true })
+        })
+      }),
+      assemblyFor: vi.fn(async () => { throw new Error("unused") }),
+      liveSession: () => undefined,
+      hasAssembly: () => false,
+      queueState: () => ({ running: false, queued: 0 }),
+      onAssembly: () => () => {},
+      closeSession: vi.fn(async () => {
+        expect(submitSignal?.aborted).toBe(true)
+        order.push("dispose")
+      }),
+      close: async () => {},
+    } as SessionService
+    const server = createAcpServer({ service })
+    const app = client({ name: "vitest-client" })
+
+    await app.connectWith(server, async (ctx) => {
+      await init(ctx)
+      const session = await ctx.buildSession(join(tmpdir(), "ih-acp-cwd")).start()
+      const prompt = session.prompt("wait")
+      await startedP
+      const close = ctx.request("session/close", { sessionId: session.sessionId })
+      await expect(prompt).resolves.toEqual({ stopReason: "cancelled" })
+      await expect(close).resolves.toEqual({})
+    })
+
+    expect(order).toEqual(["abort", "dispose"])
+  })
 })
 
 /** NDJSON stdio driver for the spawned CLI subprocess. */
@@ -201,6 +294,17 @@ function drive(child: ChildProcessWithoutNullStreams): {
       }),
     stderrText: () => stderr,
   }
+}
+
+async function stopCli(child: ChildProcessWithoutNullStreams, stderrText: () => string): Promise<number> {
+  child.stdin.end()
+  return new Promise<number>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("CLI did not exit; stderr: " + stderrText())), 15000)
+    child.on("exit", (exitCode) => {
+      clearTimeout(timer)
+      resolve(exitCode ?? -1)
+    })
+  })
 }
 
 describe("i-harness acp (CLI stdio)", () => {
@@ -263,4 +367,74 @@ describe("i-harness acp (CLI stdio)", () => {
       if (child.exitCode === null) child.kill()
     }
   }, 30000)
+
+  it("restores one durable session across ACP process restarts without duplicate seqs", async () => {
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
+    const cliEntry = fileURLToPath(new URL("../../../apps/cli/src/index.ts", import.meta.url))
+    const cwd = await mkdtemp(join(tmpdir(), "ih-acp-resume-cwd-"))
+    const sessionDir = await mkdtemp(join(tmpdir(), "ih-acp-resume-sess-"))
+    const args = ["--import", "tsx", cliEntry, "acp", "--session-dir", sessionDir]
+    let sessionId = ""
+
+    const first = spawn(process.execPath, args, { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"] })
+    const firstIo = drive(first)
+    try {
+      firstIo.send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: ACP_PROTOCOL_VERSION, clientInfo: { name: "vitest-client", version: "0.0.0" } },
+      })
+      await firstIo.waitFor((message) => message.id === 1, "first initialize")
+      firstIo.send({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd, mcpServers: [] } })
+      const created = await firstIo.waitFor((message) => message.id === 2, "first session/new")
+      sessionId = (created.result as { sessionId: string }).sessionId
+      firstIo.send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "session/prompt",
+        params: { sessionId, prompt: [{ type: "text", text: "first prompt" }] },
+      })
+      await firstIo.waitFor((message) => message.id === 3, "first prompt")
+      expect(await stopCli(first, firstIo.stderrText)).toBe(0)
+    } finally {
+      if (first.exitCode === null) first.kill()
+    }
+
+    const second = spawn(process.execPath, args, { cwd: repoRoot, stdio: ["pipe", "pipe", "pipe"] })
+    const secondIo = drive(second)
+    try {
+      secondIo.send({
+        jsonrpc: "2.0",
+        id: 10,
+        method: "initialize",
+        params: { protocolVersion: ACP_PROTOCOL_VERSION, clientInfo: { name: "vitest-client", version: "0.0.0" } },
+      })
+      await secondIo.waitFor((message) => message.id === 10, "second initialize")
+      secondIo.send({ jsonrpc: "2.0", id: 11, method: "session/resume", params: { sessionId, cwd } })
+      await secondIo.waitFor((message) => message.id === 11, "second session/resume")
+      secondIo.send({
+        jsonrpc: "2.0",
+        id: 12,
+        method: "session/prompt",
+        params: { sessionId, prompt: [{ type: "text", text: "second prompt" }] },
+      })
+      await secondIo.waitFor((message) => message.id === 12, "second prompt")
+      expect(await stopCli(second, secondIo.stderrText)).toBe(0)
+
+      const lines = (await readFile(join(sessionDir, `${sessionId}.jsonl`), "utf8")).trim().split("\n")
+      const events = lines.slice(1).map((line) => JSON.parse(line) as { type: string; text?: string; seq?: number })
+      expect(events
+        .filter((event) => event.type === "user/message" && (event.text === "first prompt" || event.text === "second prompt"))
+        .map((event) => event.text)).toEqual([
+        "first prompt",
+        "second prompt",
+      ])
+      expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index))
+    } finally {
+      if (second.exitCode === null) second.kill()
+      await rm(cwd, { recursive: true, force: true }).catch(() => {})
+      await rm(sessionDir, { recursive: true, force: true }).catch(() => {})
+    }
+  }, 60_000)
 })

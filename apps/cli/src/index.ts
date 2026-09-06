@@ -11,7 +11,7 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
-import { createSessionService } from "@i-harness/session-executor"
+import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import type { SessionAssembly } from "@i-harness/session-executor"
 import { RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
@@ -251,6 +251,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const service = createSessionService({
     workspace: process.cwd(),
     ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
     // M41b v1.1: rewind engine — the assembly creates the RewindStore +
     // RewindRecorder per session (keyed on sessionId) and records turns; the
@@ -426,6 +427,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
   const service = createSessionService({
     workspace: process.cwd(),
     ...(coordinator !== undefined ? { coordinator } : {}),
+    ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
     ...(coordinator !== undefined
       ? {
