@@ -353,6 +353,10 @@ export async function createExecutableTui(
     capabilities: appInputs.capabilities,
     palette: appInputs.palette,
     glyphs: appInputs.glyphs,
+    // M49 Task 8 (review r1): seed the runtime theme FROM the persisted
+    // choice — the state anchor must match the rendered palette, so bare
+    // /theme after a restart cycles from the active theme, never "system".
+    initialTheme: settings.get().theme,
     write: appInputs.write,
     providerController,
     compact: tuiPrefs.compact,
