@@ -56,9 +56,11 @@ describe("e2e apply_patch", () => {
       expect(result.exitCode, result.error).toBe(0)
       const output = findPatchResult(result.session!)
       expect(output?.ok).toBe(true)
-      expect(output?.applied).toEqual([
+      // M49: the applied rows carry the structured-change member (the typed
+      // tool block's delta — added/deleted counts + the hunk lines).
+      expect(output?.applied).toMatchObject([
         { path: "src/hello.txt", action: "added" },
-        { path: "notes.md", action: "updated" },
+        { path: "notes.md", action: "updated", change: { added: 1, deleted: 1 } },
       ])
       // REAL disk effects (not just session echoes): the Add created the file
       // inside a NEW directory (atomic write mkdir -p), the Update replaced

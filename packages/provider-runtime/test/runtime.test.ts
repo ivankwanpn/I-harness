@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -592,12 +592,30 @@ describe("canonical mutations", () => {
     })
   })
 
-  it("does not persist legacy provider projections during canonical writes", async () => {
-    const { runtime, settings, settingsPath } = await fixture()
-    const current = settings.get()
-    await settings.set({
+  it("never promotes the legacy tui.providers pin into the canonical plane (read-pin provenance only)", async () => {
+    const { runtime, settings, settingsPath } = await fixture({
+      providers: {
+        canonical: {
+          baseURL: "https://canonical.example",
+          protocol: "openai-completions",
+        },
+      },
+    })
+    // The legacy carrier is the RAW document (the pre-Task-6 layout): write it
+    // directly and RELOAD — the store's read migration projects the legacy
+    // section into llm.providers IN MEMORY ONLY (the typed set path no longer
+    // accepts a tui.providers field — Task 6 removed the legacy typed plane).
+    const rawLegacy = {
+      llm: {
+        providers: {
+          canonical: {
+            baseURL: "https://canonical.example",
+            protocol: "openai-completions",
+          },
+        },
+        defaultModel: { provider: "", model: "" },
+      },
       tui: {
-        ...current.tui,
         providers: {
           version: 1,
           activeProviderId: "legacy",
@@ -610,24 +628,54 @@ describe("canonical mutations", () => {
           },
         },
       },
-    })
+    }
+    writeFileSync(settingsPath, JSON.stringify(rawLegacy, null, 2))
+    await settings.load()
+    // the READ-PIN projects the legacy rows into the canonical plane VIEW...
     expect(settings.get().llm.providers.legacy).toMatchObject({
       baseURL: "https://legacy.example",
       apiKeyEnv: "LEGACY_API_KEY",
     })
 
+    // ...but a CANONICAL write flows through the typed/store path — the
+    // canonical plane is derived from the llm SECTION ONLY (the projection is
+    // never a mutation base).
     await runtime.upsertProvider("canonical", {
       baseURL: "https://canonical.example",
+      protocol: "openai-completions",
+    })
+    await runtime.upsertProvider("next", {
+      baseURL: "https://next.example",
       protocol: "openai-completions",
     })
 
     const raw = JSON.parse(readFileSync(settingsPath, "utf8")) as {
       llm: { providers: Record<string, SettingsProviderConfig> }
+      tui: { providers?: Record<string, unknown> }
     }
+    // the legacy rows are NEVER persisted into llm.providers (the canonical
+    // plane holds only the canonical writes)...
     expect(raw.llm.providers.legacy).toBeUndefined()
     expect(raw.llm.providers.canonical).toEqual({
       baseURL: "https://canonical.example",
       protocol: "openai-completions",
+    })
+    expect(raw.llm.providers.next).toEqual({
+      baseURL: "https://next.example",
+      protocol: "openai-completions",
+    })
+    // ...and the legacy section survives ONLY via the read-pin (the file keeps
+    // its own copy verbatim — the write path never rewrites it through the
+    // typed plane).
+    expect(raw.tui.providers).toBeDefined()
+    expect(
+      (raw.tui.providers as { providers: Record<string, { id: string }> }).providers.legacy.id,
+    ).toBe("legacy")
+    // the in-memory projected rows still come from the pin (the read
+    // migration is the only promotion channel — never a persisted section).
+    expect(settings.get().llm.providers.legacy).toMatchObject({
+      baseURL: "https://legacy.example",
+      apiKeyEnv: "LEGACY_API_KEY",
     })
   })
 })

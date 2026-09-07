@@ -215,7 +215,7 @@ describe("createAcpServer", () => {
       onAssembly: () => () => {},
       closeSession,
       close: async () => {},
-    } as SessionService
+    } as unknown as SessionService
     const flush = vi.fn(async (_sessionId: string) => {})
     const releaseOwnership = vi.fn(async (_sessionId: string) => {})
     const coordinator = {
@@ -252,7 +252,7 @@ describe("createAcpServer", () => {
       onAssembly: () => () => {},
       closeSession: vi.fn(async () => {}),
       close: async () => {},
-    } as SessionService
+    } as unknown as SessionService
     const coordinator = {
       profile: vi.fn(async (_sessionId: string) => ({
         meta: { formatVersion: 1, sessionId: "existing", createdAt: new Date().toISOString() },
@@ -295,7 +295,7 @@ describe("createAcpServer", () => {
       onAssembly: () => () => {},
       closeSession: vi.fn(async () => {}),
       close: async () => {},
-    } as SessionService
+    } as unknown as SessionService
     let flushAttempts = 0
     const flush = vi.fn(async (_sessionId: string) => {
       flushAttempts += 1
@@ -384,7 +384,7 @@ describe("createAcpServer", () => {
       onAssembly: () => () => {},
       closeSession: vi.fn(async () => {}),
       close: async () => {},
-    } as SessionService
+    } as unknown as SessionService
     const server = createAcpServer({ service })
     const app = client({ name: "vitest-client" })
 
@@ -434,7 +434,7 @@ describe("createAcpServer", () => {
         order.push("dispose")
       }),
       close: async () => {},
-    } as SessionService
+    } as unknown as SessionService
     const server = createAcpServer({ service })
     const app = client({ name: "vitest-client" })
 
@@ -465,7 +465,7 @@ describe("createAcpServer", () => {
       onAssembly: () => () => {},
       closeSession,
       close: async () => {},
-    } as SessionService
+    } as unknown as SessionService
     const server = createAcpServer({ service })
     const app = client({ name: "vitest-client" })
 
@@ -495,7 +495,7 @@ describe("createAcpServer", () => {
       onAssembly: () => () => {},
       closeSession: vi.fn(async () => {}),
       close: async () => {},
-    } as SessionService
+    } as unknown as SessionService
     const coordinator = {
       profile: vi.fn(async (_sessionId: string) => {
         profileCalls += 1

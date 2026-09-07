@@ -5,6 +5,8 @@ Branch：`m49`
 起點：M48 final `e9e6530aaabe6c39d93bed22b77a60adc31d5a36`  
 詳細盤點：`docs/research/2026-09-06-m49-grok-tui-parity-inventory.md`
 
+> **2026-09-07 交付注**：本規格的全部目標（§0 的 1–5）已於 m49 交付並由 PTY case-024..case-028 + 全包測試驗證。交付紀實：`docs/superpowers/plans/2026-09-06-m49-grok-tui-parity.md`（Task 1–15）+ `.superpowers/sdd/2026-09-06-m49-grok-tui-parity/*-report.md`。**規格中標記 M49 付諸實現的規定**（canonical provider plane、required-model、typed settings/provider、grapheme editor/cursor、六主題、minimal 生產、typed tool blocks/viewers、queue/tasks、local dashboard、內建 status line、capability-gated slash、鼠標捕獲切換、unsupported-command 語義）均以當下程式碼狀態為準；**規格 §10.3 排除項**（login/logout/share/privacy/delete/cd/memory/media/voice/imagine 等）維持「不註冊」狀態；OAuth/billing/帳號/跨機 dashboard 維持排除。剩餘 Minor findings 見 Task 15 報告。
+
 ## 0. 目標
 
 M49 將 I-harness TUI 的畫面、資訊密度、互動模型與 Grok Build 對齊，但所有資料與 action 必須來自 I-harness 真實後端。保留 I-harness 自有 agent/runtime；不移植 Grok Rust crates；不實作 xAI/Grok 帳號、訂閱或計費。

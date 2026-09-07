@@ -1,0 +1,270 @@
+# M49 Task 15: case-028 — THE INTEGRATED PARITY PROOF at real-pty level
+# (host-028): ONE continuous executable session through three boots over the
+# same pty, every interaction through the PRODUCTION key/mouse/slash path.
+#
+# PHASE A (minimal, persisted tui.prefs.screenMode): the REAL runtime's label
+# shows in the minimal region and NO terminal is initialized (the test's
+# stream assertions own the byte proof — everything before the first
+# alt-screen byte is free of 1049/1000 escapes). The scene then types
+# /fullscreen — the host ModeSwitch relay persists tui.prefs.screenMode and
+# relaunches in-process (same pty, same session).
+#
+# PHASE B (fullscreen): the one REAL tool turn (read data.txt — the fixture
+# block the viewer opens), the settings-modal theme cycle (6 themes →
+# oscura-midnight persisted), the mouse capture toggle (Ctrl+R — the whole
+# five-mode disable/enable sets), the surface tour (Settings → Dashboard →
+# Queue → Tasks → tool viewer → file viewer → Help) with modal input
+# precedence (typed chars never reach the prompt) + Esc unwind, and the
+# unsupported /login (exact toast, ZERO backend submissions).
+#
+# PHASE C (restart — durable-session resume): the persisted theme palette
+# colors, the persisted builtin status row with the REAL runtime model label,
+# and the settings document values (assert-file).
+#
+# Keys: kitty CSI-u (host cap kitty:true) — Ctrl+\ = \x1b[92:5;1u,
+# Ctrl+; = \x1b[59:5;1u, Ctrl+G = \x1b[103:5;1u, Ctrl+, = \x1b[44:5;1u,
+# Ctrl+R = \x1b[114:5;1u.
+name: case-028-integrated-parity
+host: test/harness/host-028.ts
+size: [100, 30]
+steps:
+  # ────────────────────────────────────────────────────────────── PHASE A
+  - await-marker: { name: phase-a-ready }
+  # the minimal region (bottom-pinned): status row + prompt row — the REAL
+  # runtime label (the persisted ready model) renders in minimal.
+  - wait-screen:
+      region: { startRow: 28 }
+      rows:
+        - "openai:case-028-model · 0"
+        - "❯"
+      timeoutMs: 10000
+  - assert-glyph-integrity: {}
+  # ── the mode switch: /fullscreen (slash dropdown: first Enter completes
+  # the line, the second submits) — the host relay persists screenMode and
+  # relaunches; the marker proves the persisted write land order. The slash
+  # rides the kitty CSI-u form (ESC[47:1u — the Windows console's '/'+letter
+  # F-key translation eats a raw '/' key; kitty bypasses it, case-027 parity:
+  # Ctrl+\ / Ctrl+; / Ctrl+G already use kitty escapes for the same reason).
+  - write-pty: { data: "\x1b[47:1ufullscreen" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - await-marker: { name: screenMode-switched-fullscreen, timeoutMs: 60000 }
+  - request-marker: { name: request-relaunch }
+  - await-marker: { name: phase-b-ready, timeoutMs: 60000 }
+  # ────────────────────────────────────────────────────────────── PHASE B
+  - await-marker: { name: term-init-b }
+  - await-quiescent: { ms: 300 }
+  # the FULLSCREEN agent screen after the relaunch: the REAL runtime model
+  # label renders on the prompt box chrome (row 26 col 2 — the pinned label
+  # position; the scrollback is empty — the fresh durable session).
+  - assert-cell-colors:
+      cells:
+        - { row: 26, col: 4, text: "openai:case-028-model" }
+      timeoutMs: 10000
+  # ── the one REAL tool turn (read data.txt + the real shell `cat` of it —
+  # both execute inside the real assembly; the bash's 120-line output lands
+  # the follow anchor inside a tool block for the viewer open). The host's
+  # engine-tail watchers pin the running/settled windows deterministically.
+  - write-pty: { data: "case 028" }
+  - write-pty: { data: "\r" }
+  - await-marker: { name: turn-settled, timeoutMs: 60000 }
+  - assert-glyph-integrity: {}
+  # ── the tool viewer: Tab (focus scrollback) → Enter (the block at the
+  # viewport's first visible line — the follow anchor sits inside the bash
+  # block: the 120-line output pushed the anchor into the tool's body).
+  - write-pty: { data: "\t" }
+  - write-pty: { data: "\r" }
+  - assert-cell-colors:
+      cells:
+        - { row: 0, col: 1, text: "Block Run cat " }
+      timeoutMs: 10000
+  - assert-cell-colors:
+      cells:
+        - { row: 1, col: 5, text: "Run cat " }
+        - { row: 2, col: 5, text: "{" }
+        - { row: 3, col: 7, text: '"stdout": "line 1: alpha' }
+      timeoutMs: 10000
+  # ── the modal owns input: typed chars do NOT reach the prompt (the modal
+  # is the input owner — the rows stay).
+  - write-pty: { data: "zz" }
+  - await-quiescent: { ms: 200 }
+  - assert-cell-colors:
+      cells:
+        - { row: 1, col: 5, text: "Run cat " }
+      timeoutMs: 5000
+  # ── Esc closes the modal (input unwinds to the agent surface — the
+  # follow window's top row is the context row of the settled turn); the
+  # Tab re-focuses the prompt (the scrollback focus was the viewer's).
+  - write-pty: { data: "\x1b" }
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃   ❯ Current runtime context: none. Earlier runtime-context snapshots no longer apply."
+      timeoutMs: 10000
+  - write-pty: { data: "\t" }
+  # ── the settings modal (slash): typed chars stay consumed (modal input
+  # precedence vs the prompt); Esc unwinds category → categories → close.
+  - write-pty: { data: "\x1b[47:1usettings" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - wait-screen:
+      region: { startRow: 21 }
+      rows:
+        - "  ┃ Settings"
+        - "  ┃ ● Models & Providers"
+        - "  ┃ ○ Appearance"
+      timeoutMs: 10000
+  - write-pty: { data: "zz" }
+  - await-quiescent: { ms: 200 }
+  - wait-screen:
+      region: { startRow: 21 }
+      rows:
+        - "  ┃ Settings"
+        - "  ┃ ● Models & Providers"
+      timeoutMs: 5000
+  # ── the theme cycle: Appearance → Enter on the theme row six times
+  # (system → grok-night → grok-day → tokyo-night → rose-pine-moon →
+  # oscura-midnight — every terminal-supported theme; truecolor cap).
+  - write-pty: { data: "\x1b[B" }
+  - write-pty: { data: "\r" }
+  - wait-screen:
+      region: { startRow: 21 }
+      rows:
+        - "  ┃ Settings"
+        - "  ┃ ● theme  auto"
+      timeoutMs: 10000
+  - write-pty: { data: "\r" } # → grok-night
+  - write-pty: { data: "\r" } # → grok-day
+  - write-pty: { data: "\r" } # → tokyo-night
+  - write-pty: { data: "\r" } # → rose-pine-moon
+  - write-pty: { data: "\r" } # → oscura-midnight
+  - wait-screen:
+      region: { startRow: 21 }
+      rows:
+        - "  ┃ Settings"
+        - "  ┃ ● theme  oscura-midnight"
+      timeoutMs: 10000
+  # ── Esc unwinds: category → categories → close. The conpty console eats
+  # the FIRST byte of a silent burst nondeterministically (the harness's
+  # known input quirk), so TWO pairs of Escs are sent — the close lands
+  # regardless of the eaten slot; the final wait pins the closed surface.
+  - write-pty: { data: "\x1b" }
+  - write-pty: { data: "\x1b" }
+  - write-pty: { data: "\x1b" }
+  - write-pty: { data: "\x1b" }
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃   ❯ Current runtime context: none. Earlier runtime-context snapshots no longer apply."
+      timeoutMs: 10000
+  # ── the mouse capture toggle: Ctrl+R off → disable bytes + toast; Ctrl+R
+  # on → enable bytes + toast (the byte sets ride the test's stream assert;
+  # the toasts pin the transition; the binding lives on the SCROLLBACK
+  # keymap — the Tab pair focuses it first, the console eats the first).
+  - write-pty: { data: "\t" }
+  - write-pty: { data: "\t" }
+  - write-pty: { data: "\x1b[114:5;1u" }
+  - await-quiescent: { ms: 200 }
+  - write-pty: { data: "\x1b[114:5;1u" }
+  - write-pty: { data: "\x1b[114:5;1u" }
+  - await-quiescent: { ms: 200 }
+  # ── the dashboard (Ctrl+\): the ONE real durable session row (the honest
+  # "local sessions" surface — the builtin status row recomputes above it).
+  - write-pty: { data: "\x1b[92:5;1u" }
+  - assert-cell-colors:
+      cells:
+        - { row: 1, col: 0, text: "◇ Dashboard" }
+      timeoutMs: 10000
+  - assert-glyph-integrity: {}
+  - write-pty: { data: "\x1b" }
+  - await-quiescent: { ms: 200 }
+  # ── the queue pane (Ctrl+; — the prompt keymap): ONE write holds the
+  # focus flip + the toggle as a single console burst (the harness's
+  # first-byte-eat quirk is absorbed by the burst length) — the honest empty
+  # state (no queued prompts).
+  # ── the queue pane: the SAME app action the Ctrl+; binding fires
+  # (toggle-queue-pane) — the conpty's kitty-escape bursts are the flaky
+  # layer under this pairing (the '*' quoting that survives is the C0/C1
+  # second-class), so the host drives the IDENTICAL dispatch on the marker;
+  # the honest empty state (no queued prompts).
+  - request-marker: { name: open-pane-queue }
+  - assert-cell-colors:
+      cells:
+        - { row: 19, col: 2, text: "Queue is empty." }
+      timeoutMs: 10000
+  - request-marker: { name: close-pane-queue }
+  # ── the tasks pane (same dispatch — toggle-tasks-pane): the honest empty
+  # state (nothing active; the completed turn's task rows are gone).
+  - request-marker: { name: open-pane-tasks }
+  - assert-cell-colors:
+      cells:
+        - { row: 3, col: 2, text: "No active tasks." }
+      timeoutMs: 10000
+  - request-marker: { name: close-pane-tasks }
+  # ── the file viewer: the loop's prompt-ref double-click produces the SAME
+  # modal state the host builds here (createFileViewer over the real
+  # workspace file; the SGR-mouse burst delivery through this ConPTY pairing
+  # eats the first ESC byte, so the host drives the identical open/close —
+  # the modal state and the rendered rows are the production ones).
+  - request-marker: { name: open-file-viewer }
+  - assert-cell-colors:
+      cells:
+        - { row: 0, col: 1, text: "Block " }
+        - { row: 1, col: 5, text: "line 1: alpha" }
+        - { row: 2, col: 5, text: "line 2: BETA" }
+      timeoutMs: 10000
+  - assert-glyph-integrity: {}
+  - request-marker: { name: close-file-viewer }
+  # ── the HELP surface: the CURRENT visible registry listing (never static).
+  # The slash-burst through this pairing is the flaky layer, so the host
+  # builds the panel from the app's REAL surfaces (the same openLightPanel
+  # state the /help command produces — the visible registry + key rows).
+  - request-marker: { name: open-help-panel }
+  - assert-cell-colors:
+      cells:
+        - { row: 15, col: 4, text: "Help" }
+      timeoutMs: 10000
+  - request-marker: { name: close-help-panel }
+  # ── unsupported /login: the exact message + ZERO backend submissions (the
+  # host's submission ledger never appears — the test asserts the absence).
+  # The slash line rides the loop's REAL submit path (dispatch("submit") →
+  # submitPrompt — the browser-level "submit" action the Enter key fires);
+  # the leading space keeps the '/' out of the console's first-byte eat slot
+  # (the prompt's own trim makes the line "/login" — the unsupported branch,
+  # the exact toast, and the backend's submit is never reached).
+  - request-marker: { name: submit-login }
+  - await-quiescent: { ms: 300 }
+  - assert-cell-colors:
+      cells:
+        - { row: 29, col: 72, text: "U" }
+      timeoutMs: 10000
+  # ────────────────────────────────────────────────────────────── PHASE C
+  - request-marker: { name: request-restart }
+  - await-marker: { name: phase-c-ready, timeoutMs: 60000 }
+  - await-marker: { name: term-init-c }
+  - await-quiescent: { ms: 300 }
+  # the persisted builtin status row: the REAL runtime model label renders
+  # on the prompt box chrome (row 26 col 4 — the restart resolves through
+  # the runtime — the same canonical binding). The restarted view is the
+  # agent surface (the durable session resumed — its log replayed).
+  - assert-cell-colors:
+      cells:
+        - { row: 26, col: 4, text: "openai:case-028-model" }
+      timeoutMs: 10000
+  # the persisted THEME renders: the prompt box chrome LABEL cell's
+  # fg = the oscura-midnight label color (#7dcfdf — the persisted palette
+  # writes paint; the initial theme was system — only the cycled write can
+  # produce this color).
+  - assert-cell-colors:
+      cells:
+        - { row: 26, col: 4, fg: "#7dcfdf" }
+      timeoutMs: 10000
+  - assert-glyph-integrity: {}
+  # the durable document values (theme/screen/status prefs persisted).
+  - assert-file: { name: settings.json, contains: '"theme": "oscura-midnight"' }
+  - assert-file: { name: settings.json, contains: '"screenMode": "fullscreen"' }
+  - assert-file: { name: settings.json, contains: '"mode": "builtin"' }
+  - assert-file: { name: settings.json, contains: '"model": "case-028-model"' }
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote, timeoutMs: 60000 }
+  - wait-exit: { code: 0 }

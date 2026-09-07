@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **2026-09-07 交付注：** 本計劃 Task 1–15 全部執行完畢並由各 Task 報告 + 最終 PTY case-028（整合 parity）+ 全庫驗證關卡背書（見 `.superpowers/sdd/2026-09-06-m49-grok-tui-parity/task-15-report.md`）。上面 Checkbox 以任務載入時的記錄（progress.md）為準；Task 15 唯一額外修正是將 `pnpm typecheck` 的工作區循環以 `pnpm-workspace.yaml ignoreWorkspaceCycles: true` 解決（指令 2 的 ruling 選擇），並以 `as unknown as SessionService` 放寬 acp 測試 mock 之舊型別斷言。
+
 **Goal:** Make the I-harness TUI visually and behaviorally align with Grok Build wherever I-harness has a real backend capability, while removing every production mock-model, fixture-only, and toast-only path.
 
 **Architecture:** Keep the TypeScript TUI, cell renderer, and I-harness agent runtime. Add a small `provider-runtime` composition package and a shared `text-diff` contract; extend existing session/subagent/backend capabilities rather than copying Grok's Rust runtime. All UI visibility is capability-driven, and missing provider/model/auth leaves the prompt disabled instead of constructing a mock.

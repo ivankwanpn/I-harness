@@ -42,7 +42,7 @@ ih --attach <session-id>
 ih help             # 全部子命令（run / web / sdk / acp / tui）
 ```
 
-> 未配置任何提供商時回退 **mock 模型**（開發友好；解析鏈 `--model` > settings 默認 > mock，每一步缺都以醒目 warn 告知）。
+> **M49 起（superseded）**：模型解析是**必需**——未配置任何提供商時按 `No model configured` 拒絕啟動（Welcome 頁開放 Settings），不再有 mock 回退。解析鏈：session model selection > `llm.defaultModel` > 明確的 `--model` override；provider 設定走**canonical settings 平面**（`llm.providers` 為唯一真源；M46 的 `tui.providers` 布局僅以 read-pin 方式被兼容讀取，永不寫回主力平面）。
 
 **Windows 安裝器**（自包含——見「分發與打包」）：
 
@@ -204,14 +204,15 @@ apps/
 | M46a/b/c | 提供商/模型管理 + Slash 註冊表 + 鍵表真理 + **鼠標全 parity** + 選區/時間線軌/粘貼源/workflow 面 |
 | M47 | 質量輪 2：鼠標/hover bench + live 探測 + line-viewer |
 | M48 | 可靠性與 TUI 交付：G1 chain rejection 推進；配置 session-dir 時 TUI session 建立/列表/resume/close flush；transactional session switch + scrollback/app reset；SDK/ACP 跨進程恢復舊 history 並延續 seq；ACP per-session close/lease release；durable Rewind bridge（僅 recorder-backed 檔案變更）；PTY case-010 修復 Windows `chcp` codepage 命令解析 |
+| M49 | Grok TUI parity 收官：canonical provider settings（`llm.providers` 唯一真源 + M46 `tui.providers` read-pin）、required-model gate、Welcome 面、typed settings/provider 流、grapheme editor + cursor、主題（system/grok-night/grok-day/tokyo-night/rose-pine-moon/oscura-midnight）+ minimal 生產化、typed tool 塊 + viewers/clipboard/bridges、真實 prompt queue、tasks/subagents 投影、本地 dashboard + 內建 status line（模型標籤為 runtime 真綁定）、capability-gated slash + prompts + Ctrl+R mouse 捕獲切換；PTY case-028 整合 parity 證明（最低啟動無 alt-screen/mouse 位元組、theme/screen/status 持久化重啟、unsupported `/login` 零提交） |
 
 ---
 
 ## 邊界與遠期
 
-- **明確不做**：PTC/run_code、plugin 代碼執行、默認提供商、dashboard/leader 多進程、grok 賬戶登錄面
-- **明確限制**：未配置 store root 的 TUI 仍是 ephemeral fallback；Rewind 不涵蓋 shell/外部編輯器等未經 recorder 的變更；PTY 時間窗採樣仍不可靠。
-- **遠期隊列**：web/desktop 面（排在很後面）、mermaid PNG 評估、Rewind 冷啟動恢復、MCP OAuth 實線刷新、macOS 沙箱、R-B4 git undo、記憶（R-A10）
+- **明確不做**：PTC/run_code、plugin 代碼執行、默認提供商、dashboard/leader 多進程、grok 賬戶登錄/賬單/共享/刪除面、remote/session 刪除、跨機器 dashboard 同步、account OAuth 綁定
+- **明確限制**：未配置 store root 的 TUI 仍是 ephemeral fallback；Rewind 不涵蓋 shell/外部編輯器等未經 recorder 的變更；PTY 時間窗採樣仍不可靠；dashboard 為**本地機器**面（durable session store + 真實 backend 投影——無跨機同步）；Bedrock ambient 認證（無 API key 環境即用；OAuth-account 類型為未來擴展邊界，本期未實作）；發現機制 = **手動添加 + 明確 discovery（probe）**——入門教程/自動爬取不支持
+- **遠期隊列**：web/desktop 面（排在很後面）、mermaid PNG 評估、Rewind 冷啟動恢復、MCP OAuth 實線刷新、macOS 沙箱、R-B4 git undo、記憶（R-A10）、provider OAuth 賬號綁定
 - 每個「後端沒有」的功能在 TUI 一律**誠實降級**（toast + 記錄），不捏造
 
 ---
