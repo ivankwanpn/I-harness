@@ -14,14 +14,17 @@ import { tutorialIndexRows, tutorialContentRows, TUTORIAL_TOPICS } from "../../.
 export const surfaceCommands: SlashCommand[] = [
   {
     name: "usage",
-    description: "Token meter (context used/total/remaining)",
+    description: "Context usage for THIS session only (no account quota)",
     run: async (ctx) => {
+      // M49 Task 14 (spec §10.2 "Local info"): LOCAL context/session usage
+      // only — the panel self-labels ("this session"); account/subscription
+      // quota is never shown (no such capability — explicit omission).
       const usage = await ctx.backend.context?.().catch(() => undefined)
       if (usage === undefined) {
-        ctx.openPanel({ kind: "usage", title: "Usage", rows: [{ label: USAGE_EMPTY.trim() }] })
+        ctx.openPanel({ kind: "usage", title: "Usage · this session", rows: [{ label: USAGE_EMPTY.trim() }] })
         return
       }
-      ctx.openPanel({ kind: "usage", title: "Usage", rows: usageRows(usage) })
+      ctx.openPanel({ kind: "usage", title: "Usage · this session", rows: usageRows(usage) })
     },
   },
   {

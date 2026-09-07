@@ -4,16 +4,15 @@
 // doctor panel in the "Probing…" state FIRST, then the loop's probeReport
 // suspends the frame pump (≤800ms), re-issues the capability queries through
 // the app's write sink and merges the answers into the context; the report
-// rows land when the run settles. (The M46a note — re-running mid-frame would
-// interleave raw escape queries with TUI bytes — is superseded by the
-// paint-suspend: NO frames are written while the probe owns the tty.)
-// /copy = the existing `y` copy-block action (toast; clipboard M38).
-// /export writes a real transcript txt into the workspace (fs).
+// rows land when the run settles.
+// /copy = the existing copy-block action through the checked clipboard
+// adapter. /export writes a real transcript txt into the workspace (fs).
 // /transcript serializes the engine rows to a temp .ansi/txt and spawns
 // $PAGER (honest simple; Windows fallback `cmd /c start` the temp file).
-// /help = shortcuts cheatsheet; /quit = the normal quit sequence.
+// M49 Task 14 (spec §10.2): /help renders the CURRENT visible registry + the
+// ACTIVE key bindings through the ctx seams — never the static list.
 
-import type { SlashCommand } from "../types.ts"
+import type { SlashCommand, SlashPanelRow } from "../types.ts"
 import type { LightPanelRow } from "../../../views/light-panel.ts"
 import { doctorProbingRows } from "../../../views/light-doctor.ts"
 
@@ -39,7 +38,7 @@ export const toolsCommands: SlashCommand[] = [
     name: "copy",
     description: "Copy the selected block",
     run(ctx) {
-      ctx.copyBlock()
+      ctx.copy()
     },
   },
   {
@@ -60,9 +59,19 @@ export const toolsCommands: SlashCommand[] = [
   },
   {
     name: "help",
-    description: "Shortcuts cheatsheet",
+    description: "Slash commands + active key bindings",
     run(ctx) {
-      ctx.openPanel({ kind: "cheatsheet", title: "Shortcuts", rows: helpRows() })
+      // M49 Task 14 (spec §10.2): the CURRENT visible inventory + the CURRENT
+      // key bindings (the shortcuts-bar rows) — a static list is gone.
+      const commands = ctx.visibleCommands?.() ?? []
+      const keys = ctx.keyBindings?.() ?? []
+      const rows: LightPanelRow[] = [
+        { label: "Commands", header: true },
+        ...commands.map((c): SlashPanelRow => ({ label: `/${c.name}`, detail: c.description })),
+        { label: "Keys", header: true },
+        ...keys.map((k): SlashPanelRow => ({ label: k.key, detail: k.label })),
+      ]
+      ctx.openPanel({ kind: "cheatsheet", title: "Help", rows })
     },
   },
   {
@@ -73,23 +82,3 @@ export const toolsCommands: SlashCommand[] = [
     },
   },
 ]
-
-export function helpRows(): LightPanelRow[] {
-  return [
-    { label: "j/k", detail: "scroll up/down" },
-    { label: "g/G", detail: "top/bottom" },
-    { label: "L/H", detail: "next/prev turn" },
-    { label: "y", detail: "copy block" },
-    { label: "Tab", detail: "prompt ⇄ scrollback" },
-    { label: "Enter", detail: "submit · Ctrl+Enter interject" },
-    { label: "Shift+Tab", detail: "mode (normal → plan)" },
-    { label: "Ctrl+Q", detail: "quit" },
-    { label: "Ctrl+S / Alt+S", detail: "stash/pop prompt draft" },
-    { label: "F3", detail: "session picker" },
-    { label: "Ctrl+G", detail: "tasks pane (fullscreen) / $EDITOR (minimal)" },
-    { label: "Ctrl+T", detail: "todo pane" },
-    { label: "Ctrl+;", detail: "queue pane" },
-    { label: "Esc (empty, ≥1 turn)", detail: "rewind picker (Esc Esc)" },
-    { label: "/ <name>", detail: "slash command (Enter runs on submit)" },
-  ]
-}

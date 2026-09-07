@@ -1,10 +1,40 @@
 // @i-harness/tui — G2 (M46a): slash registry TYPES (spec §2 — the grok
-// registry shape: SlashCommand + visible() gating).
-// Pure types — impls import this module only; the loop wires the context.
+// registry shape: SlashCommand + visible() gating). M49 Task 14 (spec §10):
+// the typed SlashCapability inventory + the capability-gated ctx seams.
+// Pure types + one helper — impls import this module only; the loop wires the
+// context.
 
 import type { BackendClient, ScrollbackEngine, WorkflowSurface } from "../../contracts.ts"
 import type { SettingsTheme } from "@i-harness/settings"
 import type { TuiAppState } from "../present.ts"
+
+// ------------------------------------------------------------------ capabilities
+
+/**
+ * The typed capability inventory (spec §10.1): one string per LIVE backend/
+ * host surface the registry gates on. `visible()` checks only REAL capability
+ * strings — the loop derives `ctx.capabilities` from the wired host members
+ * (never a fake). The M49 TUI backend has no live switching/guardian/vim
+ * capability, so plan-mode/guardian/vim-mode are NEVER supplied (their
+ * commands stay hidden — no UI-state-only fakes).
+ */
+export type SlashCapability =
+  | "session-create"     // backend.createSession — /new
+  | "session-list"       // backend.listSessions — /resume
+  | "dashboard"          // backend.dashboard — /dashboard
+  | "provider-settings"  // the provider controller — /settings //provider //model /effort
+  | "rewind"             // backend.rewind bridge — /rewind
+  | "compact"            // backend.compact — /compact
+  | "fork"               // backend.forkSession — /fork
+  | "context"            // backend.context — /context
+  | "plan-mode"          // live backend switching/guardian — /plan //view-plan (absent at M49)
+  | "guardian"           // live guardian capability — /auto //always-approve (absent at M49)
+  | "vim-mode"           // live vim editor capability — /vim-mode (absent at M49)
+
+/** Capability gate helper (impls use it instead of hand-written includes). */
+export function hasCapability(ctx: SlashContext, cap: SlashCapability): boolean {
+  return ctx.capabilities !== undefined && ctx.capabilities.includes(cap)
+}
 
 // ------------------------------------------------------------------ panels
 
@@ -55,9 +85,9 @@ export interface SlashCommand {
   /** Shown after the name in the dropdown ghost row ("/name <hint>"). */
   argumentHint?: string
   run(ctx: SlashContext): Promise<void> | void
-  /** Visibility gate — a hidden command exists in the registry (documented,
-   * testable) but is not listed nor matched for execution (spec §2: the
-   * skip-list is registered hidden with a comment instead of omitted). */
+  /** Visibility gate — checks the live capability inventory (spec §10.1:
+   * view/screenMode/session/backend capability/feature setting). A hidden
+   * command is not listed nor matched — its run can never fire. */
   visible?(ctx: SlashContext): boolean
 }
 
@@ -73,6 +103,10 @@ export interface SlashContext {
   arg: string
   /** Show a bottom-right toast (3 s). */
   toast(text: string): void
+  /** The typed capability inventory (spec §10.1) — the visible() gates read
+   * it; the loop derives it from the REAL backend/host members. Absent =
+   * every capability-gated command stays hidden (never reachable). */
+  capabilities?: SlashCapability[]
   /** Workspace root the host runs in (skills/hooks/plugins/workflow scans). */
   workspace?: string
   /** Current session id when the host or backend session/open event knows it. */
@@ -88,7 +122,8 @@ export interface SlashContext {
   openSessions(): void
   openHistoryPanel(): void
   openRewind(): void
-  startSearch(): void
+  /** /find <pattern> — activate the scrollback search, prefilled. */
+  startSearch(pattern?: string): void
   /** The last assistant block's rows (the plan text viewer). */
   planRows(): Array<{ label: string }>
   /** /btw <question> — show the btw overlay + steer the question. */
@@ -96,40 +131,30 @@ export interface SlashContext {
   /** /btw with no arg — prompt for the question (text-input overlay). */
   openBtwInput(): void
   // ---- ui / toggles
-  togglePane(kind: "todo" | "tasks" | "queue"): void
   setScreen(screen: "agent" | "welcome"): void
-  /** M49 Task 13 (spec §8.3): /dashboard opens the LOCAL dashboard — the SAME
-   * view the Welcome menu entry and Ctrl+\ use (shared state — the previous
-   * filter/cursor survive). OPTIONAL (older test ctx fixtures lack it). */
-  openDashboard?(): void
-  /** M49 Task 8 — the shared preview/commit/rollback theme path (the loop
-   * resolves preview live, persists to the settings surface and rolls back on
-   * a failed write; `/theme` and the Settings row use the SAME route). */
+  /** /theme — the shared preview/commit/rollback path (M49 Task 8). */
   setTheme(kind: SettingsTheme): void
   setTimestamps(on: boolean): void
   setMultiline(on: boolean): void
   setCompactMode(on: boolean): void
-  setAutoApprove(on: boolean): void
   focusPrompt(): void
   // ---- session lifecycle
   resetSession(): void
   renameSession(title: string): void
-  deleteSession(): void
   /** /minimal //fullscreen: the host relaunches the same session in the target
    * mode (ModeSwitch); true = spawned (the loop then quits this process). */
   relaunch(): boolean
   quitApp(): void
-  /** G1-owned modal surfaces (/provider //model //settings — their
-   * text-match intercepts BEFORE the registry run; absent host store → false). */
-  g1Modal?(input: string): boolean
-  /** /effort — the settings reasoningEffort surface (G1 provider store). */
+  /** /effort — the settings reasoningEffort surface (the six-level contract). */
   effort?(level: string): void
   /** M46b G1: the mouse-reporting-toggle feature gate (settings knob / env
    * forced) — true exposes /toggle-mouse-reporting (visible + executable);
-   * false keeps it hidden and inert. */
+   * false keeps it hidden and inert (feature setting per spec §10.1). */
   mouseReportingToggle?: boolean
   // ---- tools
-  copyBlock(): void
+  /** /copy — copy the selected block (the clipboard adapter's checked path). */
+  copy(): void
+  /** /edit-prompt — the $EDITOR round-trip over the prompt draft. */
   editPromptInEditor(): void
   /** /export — write the transcript; resolves the written path (undefined =
    * failure). */
@@ -145,4 +170,27 @@ export interface SlashContext {
   /** Open the text-input overlay (the /workflow run params line — the same
    * bindTextInput seam /btw uses). Absent → the command toasts honestly. */
   openTextInput?(opts: { title: string; initial?: string; onSubmit(text: string): void; onCancel?(): void }): void
+  // ---- M49 Task 14 capability-gated seams (spec §10.2)
+  /** /new — backend session create. */
+  createSession?(): Promise<void> | void
+  /** /dashboard — the local dashboard projection. */
+  dashboard?(): void
+  /** /queue — the queue pane (honest empty/unavailable states). */
+  queue?(): void
+  /** /tasks — the tasks pane. */
+  tasks?(): void
+  /** /settings — the settings modal. */
+  openSettings?(): void
+  /** /provider [arg] — the provider master/detail modal. */
+  provider?(arg: string): void
+  /** /model [name] — the model picker over the active provider catalog. */
+  model?(arg: string): void
+  /** /fork [title] — backend session fork. */
+  fork?(title?: string): void
+  /** /context — the local context-usage panel. */
+  openContext?(): void
+  /** /help — the CURRENT visible command rows (never a static list). */
+  visibleCommands?(): Array<{ name: string; description: string }>
+  /** /help — the ACTIVE key bindings (the shortcuts-bar rows). */
+  keyBindings?(): Array<{ key: string; label: string }>
 }

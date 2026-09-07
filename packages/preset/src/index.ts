@@ -2,6 +2,8 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import { createToolRegistry } from "@i-harness/core-tools"
 
+export { DEFAULT_AGENT_PRESET } from "./default.ts"
+
 export interface AgentPreset {
   name: string
   systemPrompt: string

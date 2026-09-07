@@ -9,6 +9,7 @@ import { TuiApp } from "../src/app/loop.ts"
 import { createScrollbackEngine } from "../src/index.ts"
 import type { BackendClient, TuiEvent } from "../src/index.ts"
 import { unsupportedSessionManagement } from "./backend-stub.ts"
+import { recordingBackend, slashApp } from "./slash-fixtures.ts"
 
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap, "groknight")
@@ -135,11 +136,124 @@ describe("TuiApp — M46a slash registry run + keys truth", () => {
     expect(app.state().lightPanel?.rows.some((row) => row.label === "context used" && row.detail === "42")).toBe(true)
   })
 
-  it("unknown '/x' falls through to the normal submit (history records the line)", () => {
+  it("unknown '/x' renders the exact Unsupported command toast and never submits", async () => {
+    const backend = stubBackend()
+    const submissions: string[] = []
+    backend.submit = async (t) => { submissions.push(t) }
+    const app2 = new TuiApp({
+      renderer: r, backend, engine: createScrollbackEngine({ width: 100 }),
+      capabilities: cap, palette, glyphs: GLYPHS, write: () => {}, now: () => 13_334,
+    })
+    app2.state().prompt.text = "/definitely-not-a-command"
+    app2.dispatch("submit")
+    expect(app2.state().toasts.at(-1)?.text).toBe("Unsupported command: /definitely-not-a-command")
+    expect(submissions).toEqual([])
+    expect(app2.state().history).not.toContain("/definitely-not-a-command")
+  })
+
+  it("never submits an excluded slash command to the model (the exact toast contract)", async () => {
+    const { backend, submissions } = recordingBackend()
+    const app = slashApp(backend)
+    app.editor.replaceAll("/login")
+    await app.submitPrompt()
+    expect(app.toast).toBe("Unsupported command: /login")
+    expect(submissions).toEqual([])
+  })
+
+  it("slash commands hidden by an absent capability are Unsupported too", async () => {
+    const { backend, submissions } = recordingBackend()
+    const app = slashApp(backend)
+    app.editor.replaceAll("/rewind") // recordingBackend has no rewind member
+    await app.submitPrompt()
+    expect(app.toast).toBe("Unsupported command: /rewind")
+    expect(submissions).toEqual([])
+  })
+
+  it("a capability-absent G1 modal (/provider) renders the unsupported contract too", async () => {
+    const { backend, submissions } = recordingBackend() // no provider controller
+    const app = slashApp(backend)
+    app.editor.replaceAll("/provider")
+    await app.submitPrompt()
+    expect(app.toast).toBe("Unsupported command: /provider")
+    expect(submissions).toEqual([])
+  })
+
+  it("a host startup prompt that starts with / is never submitted either", async () => {
+    const { backend, submissions } = recordingBackend()
+    const app = slashApp(backend)
+    await app.app.initialize({ prompt: "/login", sessionId: "s" })
+    expect(submissions).toEqual([])
+    expect(app.toast).toBe("Unsupported command: /login")
+  })
+
+  it("the runtime mouse toggle writes the 5-mode disable/enable bytes on transitions only", () => {
+    const capM: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true, mouse: true }
+    const renderer = createRenderer({ cols: 100, rows: 24, cap: capM })
+    const written: string[] = []
+    const tui = new TuiApp({
+      renderer,
+      backend: recordingBackend().backend,
+      engine: createScrollbackEngine({ width: 100 }),
+      capabilities: capM,
+      palette: resolvePalette(capM, "groknight"),
+      glyphs: GLYPHS,
+      write: (s: string) => { written.push(s) },
+      now: () => 13_334,
+      mouseToggleFeature: true,
+    })
+    const DISABLE = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1015l\x1b[?1006l"
+    const ENABLE = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1015h\x1b[?1006h"
+    const counts = (s: string): { off: number; on: number } => ({
+      off: s.split(DISABLE).length - 1,
+      on: s.split(ENABLE).length - 1,
+    })
+    // capture starts ON (the host initialized it) → first toggle = OFF bytes
+    // (the write sink ALSO carries frame bytes — assert the sequence counts).
+    tui.dispatch("toggle-mouse-reporting")
+    expect(tui.state().mouse?.enabled).toBe(false)
+    expect(counts(written.join(""))).toEqual({ off: 1, on: 0 })
+    tui.dispatch("toggle-mouse-reporting") // ON
+    tui.dispatch("toggle-mouse-reporting") // OFF
+    expect(counts(written.join(""))).toEqual({ off: 2, on: 1 })
+  })
+
+  it("input precedence: a permission overlay answers BEFORE an open viewer (spec §9.4)", () => {
     const app = makeApp()
-    app.state().prompt.text = "/definitely-not-a-command"
-    app.dispatch("submit")
-    expect(app.state().history).toContain("/definitely-not-a-command")
+    const engine = app.state().engine
+    engine.append({
+      type: "tool", callId: "c1", name: "read-file", kind: "read", status: "done",
+      summary: "read 1 file", output: "ok", seq: 1, ts: 100,
+    })
+    app.state().focused = "scrollback"
+    app.feedInput({ type: "key", code: "Enter", key: "Enter", ctrl: false, alt: false, shift: false })
+    expect(app.state().modal?.kind).toBe("block-viewer")
+    const acts: Array<{ type: "overlay-accept"; index: number } | string> = []
+    app.state().overlay = {
+      kind: "permission",
+      draw: () => {},
+      act: (a: never) => acts.push(a),
+      setCursor: () => {},
+      rowYs: () => [0, 1],
+    } as never
+    // The digit answers the PERMISSION (tier 1) — never the viewer.
+    app.feedInput({ type: "key", code: "char", key: "3", ctrl: false, alt: false, shift: false })
+    expect(acts).toEqual([{ type: "overlay-accept", index: 3 }])
+    expect(app.state().modal?.kind).toBe("block-viewer") // the viewer stays open underneath
+  })
+
+  it("input precedence: the viewer consumes keys before panes/prompt/scrollback", () => {
+    const app = makeApp()
+    const engine = app.state().engine
+    engine.append({
+      type: "tool", callId: "c2", name: "read-file", kind: "read", status: "done",
+      summary: "x", output: "ok", seq: 1, ts: 100,
+    })
+    app.state().focused = "scrollback"
+    app.feedInput({ type: "key", code: "Enter", key: "Enter", ctrl: false, alt: false, shift: false })
+    expect(app.state().modal?.kind).toBe("block-viewer")
+    app.state().prompt.text = "draft"
+    app.feedInput({ type: "key", code: "char", key: "a", ctrl: false, alt: false, shift: false })
+    expect(app.state().prompt.text).toBe("draft") // the char never reached the editor
   })
 
   it("/btw 'question' shows the btw overlay + steers the question", () => {

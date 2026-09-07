@@ -1,7 +1,7 @@
 // G2 terminal init/teardown — golden byte sequences for full/minimal caps and
 // TeardownGuard one-shot semantics (idempotent, panic-safe, registry install).
 import { describe, expect, it } from "vitest"
-import { initSequence, teardownSequence, TeardownGuard, MOUSE_DISABLE_SEQ, MOUSE_ENABLE_SEQ } from "../src/terminal/index.ts"
+import { initSequence, teardownSequence, TeardownGuard, MOUSE_DISABLE_SEQ, MOUSE_ENABLE_SEQ, createMouseReportingToggle } from "../src/terminal/index.ts"
 import { createUnknownCapabilities, type TerminalCapabilityContext } from "../src/types.ts"
 
 const fullCap: TerminalCapabilityContext = {
@@ -47,6 +47,31 @@ describe("teardownSequence", () => {
     const expected = "\x1b[?2026l\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1015l\x1b[?1006l\x1b[?2004l\x1b[?1004l\x1b[?1049l"
     expect(teardownSequence(fullCap)).toBe(expected)
     expect(teardownSequence(createUnknownCapabilities())).toBe(expected)
+  })
+})
+
+describe("createMouseReportingToggle — runtime capture on/off (spec §9.7)", () => {
+  it("emits enable/disable bytes ONLY on transitions (idempotent set = zero bytes)", () => {
+    const rt = createMouseReportingToggle(fullCap)
+    expect(rt.set(true)).toBe(MOUSE_ENABLE_SEQ)
+    expect(rt.set(true)).toBe("") // no transition → zero bytes
+    expect(rt.enabled).toBe(true)
+    expect(rt.set(false)).toBe(MOUSE_DISABLE_SEQ)
+    expect(rt.set(false)).toBe("") // no transition → zero bytes
+    expect(rt.enabled).toBe(false)
+    expect(rt.set(true)).toBe(MOUSE_ENABLE_SEQ) // transitions again
+  })
+
+  it("a terminal without the mouse capability ignores attempts and stays OFF", () => {
+    const rt = createMouseReportingToggle(createUnknownCapabilities())
+    expect(rt.set(true)).toBe("")
+    expect(rt.enabled).toBe(false)
+    expect(rt.set(false)).toBe("")
+    expect(rt.enabled).toBe(false)
+  })
+
+  it("starts off regardless of the construction cap", () => {
+    expect(createMouseReportingToggle(fullCap).enabled).toBe(false)
   })
 })
 

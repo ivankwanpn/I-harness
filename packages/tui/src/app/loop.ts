@@ -13,7 +13,8 @@ import type {
   Renderer,
   TerminalCapabilityContext,
 } from "@i-harness/tui-core"
-import { resolvePalette } from "@i-harness/tui-core"
+import { createMouseReportingToggle, resolvePalette } from "@i-harness/tui-core"
+import type { MouseReportingToggle } from "@i-harness/tui-core"
 import { isAbsolute, join } from "node:path"
 import type { BackendClient, BackendModelState, ScrollbackEngine, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
 import type { QueueRow } from "../views/queue-pane.ts"
@@ -57,7 +58,7 @@ import type { SessionRow } from "../views/session-picker.ts"
 // M46a G2: the slash command registry (builtin map + visible gating) + the
 // light panel/kitchen seams the commands' ctx exposes.
 import { CommandRegistry, defaultRegistry } from "./slash/registry.ts"
-import type { SlashCommand, SlashContext, SlashPanelRequest } from "./slash/types.ts"
+import type { SlashCapability, SlashCommand, SlashContext, SlashPanelRequest } from "./slash/types.ts"
 import { bindTextInput } from "./slash/impl/text-input.ts"
 import type { LightPanelState } from "../views/light-panel.ts"
 // M46c G2: paste source retention helpers (the chip labels/threshold) + the
@@ -434,7 +435,11 @@ export class TuiApp {
    * state (app.prompt) is a projection: text = value(), cursor = cursor(),
    * pasteStash = the editor's paste atoms (the M46c chip rows). Every prompt
    * mutation routes through here — never direct UTF-16 writes. */
-  private readonly editor: PromptEditor = createPromptEditor()
+  readonly editor: PromptEditor = createPromptEditor()
+  /** M49 Task 14 (spec §9.7): the runtime terminal mouse-capture toggle — the
+   * real byte seam (enable/disable ONLY on transitions); minimal/no-mouse
+   * terminals ignore attempts and stay OFF. */
+  private readonly mouseReporting: MouseReportingToggle
   /** M47 G2: paint-suspend (the live /doctor probe) — while set and unexpired
    * frame() writes NOTHING (no present, no flush, no minimal repaint); the
    * probe owns the tty. Cleared by the run's settle (answers or ≤800ms
@@ -489,6 +494,7 @@ export class TuiApp {
       },
     })
     this.cap = opts.capabilities
+    this.mouseReporting = createMouseReportingToggle(opts.capabilities)
     this.probeSuspend = undefined
     // M46b G1: the wheel stream (brand profile + knob defaults while the
     // settings snapshot wiring feeds real prefs — mousePrefs() above).
@@ -592,6 +598,12 @@ export class TuiApp {
   /** M46b G2: the mouse router — bounds the loop's widget semantics to the
    * router's hooks (loop-owned behaviors) + the injected clipboard. */
   private initMouse(): void {
+    // M49 Task 14 (spec §9.7): the runtime seam's settled state must MATCH the
+    // app's capture state — the fullscreen host already emitted the init
+    // capture bytes (app.mouse starts enabled). Warm the seam (discard the
+    // warm-up return bytes — the host owns the init emission; the first
+    // USER toggle is a real transition and emits the disable bytes).
+    this.mouseReporting.set(this.app.mouse?.enabled === true)
     this.mouse = new MouseRouter({
       app: this.app,
       engine: this.opts.engine,
@@ -1288,19 +1300,7 @@ export class TuiApp {
         break
       }
       case "toggle-expand-all": this.opts.engine.toggleExpandAll(); break
-      case "copy-block": {
-        // M46b G2: the `y` copy now goes through the injected clipboard layer
-        // (the selection text when one is active — the block-body copy M38
-        // deferred). "Copied!" toast unchanged.
-        const sel = this.opts.engine.selection()
-        if (sel !== undefined) {
-          const total = this.opts.engine.lineCount()
-          const lines = this.opts.engine.viewport(0, total).slice(Math.max(0, sel.a), Math.min(total, sel.b + 1))
-          this.clipboard.copy(lines.map((l) => l.runs.map((r) => r.text).join("")).join("\n"))
-        }
-        this.toast("Copied!")
-        break
-      }
+      case "copy-block": this.copySelectedBlock(); break
       case "focus-scrollback": this.focus("scrollback"); break
       case "focus-prompt": this.focus("prompt"); break
       case "submit": this.submitPrompt(); break
@@ -1457,8 +1457,9 @@ export class TuiApp {
       // M46b G1: Ctrl+R / /toggle-mouse-reporting (feature-gated) — flips
       // `app.mouse.enabled` (the whole mouse path: capture gate → hover
       // machinery + scroll stream): OFF hands the mouse back to the terminal
-      // (native select), ON restores in-app hover/scroll. State-only (the host
-      // owns the terminal bytes; the toggle does not re-emit the 5-mode set).
+      // (native select), ON restores in-app hover/scroll. M49 Task 14: the
+      // same toggle drives the REAL terminal seam (enable/disable bytes only
+      // on transitions — see toggleMouseReporting below).
       case "toggle-mouse-reporting": this.toggleMouseReporting(); break
       case "quit": this.requestQuit(); break
       case "quit-arm1":
@@ -1600,9 +1601,36 @@ export class TuiApp {
       return
     }
     if (ev.type !== "key") return
-    // M49 Task 10: the modal is the INPUT OWNER — keys route here FIRST
-    // (before panes→prompt→scrollback: an open modal consumes everything).
     const modalKbd: Kbd = { code: ev.code, key: ev.key, ctrl: ev.ctrl, alt: ev.alt, shift: ev.shift }
+    // M49 Task 14 (spec §9.4 input precedence): confirm/permission/question
+    // overlays are the TOP tier — they own the input BEFORE the viewer/modal
+    // (an interactive permission prompt beats an open block viewer). The
+    // overlay answers go through the same keymap actions; the freeform capture
+    // owns plain chars; everything else is consumed by the active surface.
+    // (Pickers/panels/settings/rewind stay in the tier BELOW the viewer —
+    // they fall through to the keymap routing below.)
+    const topOv = this.overlayState()
+    if (topOv !== undefined && (topOv.kind === "permission" || topOv.kind === "question" || topOv.kind === "cancel-turn")) {
+      const action = dispatchKey(modalKbd, this.keymapState())
+      if (action !== "none") {
+        this.dispatch(action)
+        this.requestFrame()
+        return
+      }
+      const fft = this.app.overlay?.freeform
+      if (fft !== undefined && fft.active()) {
+        if (ev.code === "char" && !ev.ctrl && !ev.alt) { fft.append(ev.key); this.requestFrame(); return }
+        if (ev.code === "Backspace") { fft.backspace(); this.requestFrame(); return }
+        if (ev.code === "Enter") { fft.submit(); this.requestFrame(); return }
+        if (ev.code === "Esc") { fft.abort(); this.requestFrame(); return }
+      }
+      // the top-tier overlay owns input: other keys are consumed.
+      this.requestFrame()
+      return
+    }
+    // M49 Task 10: the modal (viewer) is the next tier — the input OWNER
+    // after top-tier overlays (before panes→prompt→scrollback: an open modal
+    // consumes everything).
     if (this.modalOwner.key(modalKbd)) {
       this.requestFrame()
       return
@@ -1890,19 +1918,39 @@ export class TuiApp {
   }
 
   /** M46b G1: the mouse-reporting toggle (Ctrl+R / /toggle-mouse-reporting).
-   * Flips the whole mouse path gate + clears the hover state (the settled set
-   * and stream carry are stale once the path disables). */
+   * M49 Task 14 (spec §9.7): the toggle drives the REAL terminal seam —
+   * enable/disable bytes are written ONLY on a transition (the
+   * MouseReportingToggle identity) and turning OFF hands the mouse back to the
+   * terminal for native selection (no hover/capture state survives) —
+   * the MouseRouter state (press/drag/latch/link) is cancelled, the hover
+   * engine + settled set + scroll stream are cleared, and the app routing
+   * gate flips. Minimal mode ignores the toggle (no capture, no bytes —
+   * createMouseReportingToggle stays OFF for no-mouse caps). */
   private toggleMouseReporting(): void {
     const mouse = this.app.mouse
-    if (mouse === undefined) {
-      this.toast("mouse capture: no mouse path")
+    if (mouse === undefined || this.inlineActive()) {
+      // minimal has no fullscreen surface: the attempt is ignored (no bytes).
+      this.toast("mouse capture: no fullscreen mouse path")
       return
     }
-    mouse.enabled = !mouse.enabled
+    const next = !mouse.enabled
+    const bytes = this.mouseReporting.set(next)
+    if (bytes !== "") this.opts.write?.(bytes) // transition only — zero bytes on no-op
+    mouse.enabled = next
     mouse.engine.clear()
     mouse.hovered.clear()
+    this.mouse.cancel() // press/drag/scrollbar-latch/link-arm + drag-line cleared
+    if (!next) {
+      // capture OFF: drop every interaction artifact (the drag selection, its
+      // flash window and the prompt text selection) — the terminal-native
+      // selection takes over with nothing stale on screen.
+      this.opts.engine.clearSelection?.()
+      this.app.selectionFlashUntil = undefined
+      this.app.promptSelect = undefined
+      this.app.selectionDragLine = undefined
+    }
     this.scrollNormalizer.reset()
-    this.toast(mouse.enabled ? "Mouse reporting on" : "Mouse reporting off")
+    this.toast(next ? "Mouse reporting on" : "Mouse reporting off")
     this.requestFrame()
   }
 
@@ -1910,7 +1958,7 @@ export class TuiApp {
     return Math.max(1, Math.floor(this.opts.renderer.buffer.height / 2))
   }
 
-  private submitPrompt(): void {
+  submitPrompt(): void {
     const text = this.app.prompt.text.trim()
     if (text.length === 0) return // queue-top force-send lands M38 (spec §4)
     // M46a G1 slash modals: /provider, /model, /settings (each = the modal
@@ -1920,15 +1968,23 @@ export class TuiApp {
       this.clearPrompt()
       return
     }
-    // M46a G2: the slash REGISTRY run — every backend-supported command hits
-    // here (the M37b text-match relay is superseded). Matched → run + return;
-    // UNKNOWN "/x" falls through to the normal submit (spec §2 fallback).
+    // M46a G2: the slash REGISTRY run — every capability-gated command hits
+    // here. Matched → run + return.
     const matched = this.slash.matches(text, this.slashCtx(text))
     if (matched !== undefined) {
       this.app.history.push(this.app.prompt.text)
       this.app.historyIndex = this.app.history.length
       this.clearPrompt()
       void this.runSlashCommand(matched.command, matched.arg, text)
+      return
+    }
+    // M49 Task 14 (spec §10.1): an unknown / hidden slash line NEVER becomes a
+    // user prompt — the unsupported path fires BEFORE the user-message append
+    // (exact message, no backend submission).
+    if (text.startsWith("/")) {
+      const name = text.slice(1).split(/\s+/, 1)[0] ?? ""
+      this.toast(`Unsupported command: /${name}`)
+      this.clearPrompt()
       return
     }
     // Mode-switch relay (spec §1, still the /minimal //fullscreen host path
@@ -2018,10 +2074,19 @@ export class TuiApp {
   }
 
   /** Record and clear only after the model/session gate accepted the prompt.
-   * Invalid and unconfigured paths never call this, so their draft survives. */
+   * Invalid and unconfigured paths never call this, so their draft survives.
+   * M49 Task 14 (spec §10.1): a slash line never becomes a user message —
+   * submitPrompt owns the interactive guard; this is the same guard for the
+   * host/startup prompt path (a "/login" boot prompt is rejected, never
+   * submitted). */
   private acceptPrompt(raw: string): void {
     const text = raw.trim()
     if (text === "") return
+    if (text.startsWith("/")) {
+      const name = text.slice(1).split(/\s+/, 1)[0] ?? ""
+      this.toast(`Unsupported command: /${name}`)
+      return
+    }
     this.app.history.push(raw)
     this.app.historyIndex = this.app.history.length
     this.clearPrompt()
@@ -2210,6 +2275,24 @@ export class TuiApp {
 
   // ------------------------------------------------------------------ slash registry wiring (M46a G2)
 
+  /** M49 Task 14 (spec §10.1): the typed capability inventory the registry
+   * gates on — derived from the REAL backend/host members. plan-mode/
+   * guardian/vim-mode have NO live backend capability at M49 and are NEVER
+   * supplied (their commands stay hidden — no UI-state-only fakes). */
+  private slashCapabilities(): SlashCapability[] {
+    const b = this.opts.backend
+    const caps: SlashCapability[] = []
+    if (b.listSessions !== undefined) caps.push("session-list")
+    if (b.createSession !== undefined) caps.push("session-create")
+    if (b.dashboard !== undefined) caps.push("dashboard")
+    if (b.rewind !== undefined) caps.push("rewind")
+    if (b.compact !== undefined) caps.push("compact")
+    if (b.forkSession !== undefined) caps.push("fork")
+    if (b.context !== undefined) caps.push("context")
+    if (this.providerController() !== undefined) caps.push("provider-settings")
+    return caps
+  }
+
   /** The per-invocation SlashContext: every command behavior is a closure
    * here (the impls never import the loop — unit-testable against a fake ctx). */
   private slashCtx(input: string, arg = ""): SlashContext {
@@ -2220,6 +2303,7 @@ export class TuiApp {
       engine: this.opts.engine,
       input,
       arg,
+      capabilities: this.slashCapabilities(),
       workspace: this.opts.workspace,
       sessionId: this.currentSessionId,
       toast: (text) => this.toast(text),
@@ -2235,12 +2319,10 @@ export class TuiApp {
       },
       openHistoryPanel: () => this.openHistoryPicker(),
       openRewind: () => this.openRewind(),
-      startSearch: () => this.activateSearch(),
+      startSearch: (pattern) => this.activateSearch(pattern),
       planRows: () => this.lastAssistantRows(),
       toggleBtwWith: (question) => this.toggleBtwWith(question),
       openBtwInput: () => this.openBtwInput(),
-      togglePane: (kind) => this.togglePane(kind),
-      openDashboard: () => void this.openDashboard(),
       setScreen: (screen) => {
         if (screen === "welcome") {
           this.activateWelcome()
@@ -2270,16 +2352,12 @@ export class TuiApp {
       setCompactMode: (on) => {
         app.compactMode = on
       },
-      setAutoApprove: (on) => {
-        app.autoApprove = on
-      },
       focusPrompt: () => this.focus("prompt"),
       resetSession: () => this.resetSession(),
       renameSession: (title) => void this.renameSession(title),
-      deleteSession: () => this.deleteSession(),
       relaunch: () => this.relaunchSlash(input),
       quitApp: () => this.requestQuit(),
-      copyBlock: () => this.toast("Copied!"), // clipboard M38 (parity with `y`)
+      copy: () => this.copySelectedBlock(),
       editPromptInEditor: () => this.editPromptInEditor(),
       exportTranscript: () => this.exportTranscript(),
       openTranscriptPager: () => this.openTranscriptPager(),
@@ -2292,14 +2370,96 @@ export class TuiApp {
         await this.armLiveProbe()
         return doctorRows(this.cap)
       },
-      g1Modal: (line) => this.tryG1SlashModal(line),
       effort: (level) => this.effort(level),
       mouseReportingToggle: this.mouseToggleFeature(),
       // M46c G2: the /workflow surface + the text-input seam (workflow run
       // params line — the existing bindTextInput overlay under a ctx call).
       workflow: this.workflowSurface(),
       openTextInput: (opts) => this.openTextInputOverlay(opts),
+      // ---- M49 Task 14 capability-gated seams (spec §10.2)
+      createSession: () => this.newSession(),
+      dashboard: () => void this.openDashboard(),
+      queue: () => this.togglePane("queue"),
+      tasks: () => this.togglePane("tasks"),
+      openSettings: () => this.openSettings(),
+      provider: (arg) => this.openProvider(arg),
+      model: (arg) => this.openModelPicker(arg === "" ? undefined : arg),
+      fork: (title) => this.forkSession(title),
+      openContext: () => this.openContextPanel(),
+      visibleCommands: () => this.slash.visible(this.slashCtx(""))
+        .map((c) => ({ name: c.name, description: c.description })),
+      keyBindings: () => shortcutsFor({
+        focused: app.focused,
+        multiLine: app.prompt.multiLine,
+        turnRunning: app.turn !== undefined,
+        mode: app.mode,
+        planReview: this.planReviewActive(),
+      }).map((s) => ({ key: s.key, label: s.label })),
     }
+  }
+
+  /** /new — real backend create (Task 4 rule: absent member fails loudly). */
+  private newSession(): void {
+    const create = this.opts.backend.createSession
+    if (create === undefined) {
+      this.toast("new session: backend create seam absent")
+      return
+    }
+    void create().then(
+      (sessionId) => {
+        this.activateAgent(sessionId)
+        this.requestFrame()
+      },
+      (error: unknown) => this.toast(`new session failed: ${error instanceof Error ? error.message : String(error)}`),
+    )
+  }
+
+  /** /fork [title] — backend fork (forkSession), optional title rename. */
+  private forkSession(title?: string): void {
+    const fork = this.opts.backend.forkSession
+    if (fork === undefined) {
+      this.toast("fork: backend fork seam absent")
+      return
+    }
+    void fork().then(
+      (sessionId) => {
+        this.activateAgent(sessionId)
+        if (title !== undefined && title !== "") void this.renameSession(title)
+        this.requestFrame()
+      },
+      (error: unknown) => this.toast(`fork failed: ${error instanceof Error ? error.message : String(error)}`),
+    )
+  }
+
+  /** /context — the LOCAL context meter (backend.context; honest empties). */
+  private openContextPanel(): void {
+    void this.opts.backend.context?.().then(
+      (usage) => {
+        if (usage === undefined) {
+          this.openLightPanel({ kind: "usage", title: "Context · this session", rows: [{ label: "no context usage available (backend probe absent)" }] })
+          return
+        }
+        this.openLightPanel({ kind: "usage", title: "Context · this session", rows: usageRows(usage) })
+      },
+      (error: unknown) => {
+        this.openLightPanel({
+          kind: "usage",
+          title: "Context · this session",
+          rows: [{ label: `context probe failed: ${error instanceof Error ? error.message : String(error)}` }],
+        })
+      },
+    )
+  }
+
+  /** /copy — the copy-block action (the checked clipboard adapter; same as y). */
+  private copySelectedBlock(): void {
+    const sel = this.opts.engine.selection()
+    if (sel !== undefined) {
+      const total = this.opts.engine.lineCount()
+      const lines = this.opts.engine.viewport(0, total).slice(Math.max(0, sel.a), Math.min(total, sel.b + 1))
+      this.clipboard.copy(lines.map((l) => l.runs.map((r) => r.text).join("")).join("\n"))
+    }
+    this.toast("Copied!")
   }
 
   /**
@@ -2392,9 +2552,11 @@ export class TuiApp {
   }
 
   /** /find: activate the scrollback search mode (the prompt box becomes the
-   * search bar; the loop intercepts chars while search is active). */
-  private activateSearch(): void {
-    this.app.search = { active: true, text: "", matches: [], current: 1 }
+   * search bar; the loop intercepts chars while search is active). An optional
+   * pattern prefills the search text (/find <pattern> — the pattern is NOT
+   * applied until Enter runs engine.search). */
+  private activateSearch(pattern?: string): void {
+    this.app.search = { active: true, text: pattern ?? "", matches: [], current: 1 }
     this.focus("scrollback")
     this.toast("find: type the pattern · Enter applies · Esc exits")
   }
@@ -2705,13 +2867,6 @@ export class TuiApp {
 
   /** /delete — confirm → the deleted marker + welcome (the honest embedded
    * limits: an in-process session has no durable store to delete). */
-  private deleteSession(): void {
-    this.resetSession()
-    this.activateWelcome()
-    this.toast("session deleted (embedded store is in-process — persistence M38)")
-    this.requestFrame()
-  }
-
   /** /minimal //fullscreen — the host's ModeSwitch relay (spawns the same
    * session in the target mode); true ⇒ the command's run quits the loop. */
   private relaunchSlash(input: string): boolean {
@@ -2842,13 +2997,11 @@ export class TuiApp {
    * falls through to the backend. */
   private tryG1SlashModal(line: string): boolean {
     const controller = this.providerController()
-    if (controller === undefined) {
-      if (/^\/provider(?:\s|$)/.test(line) || /^\/model(?:\s|$)/.test(line) || line === "/settings") {
-        this.toast("provider UI: host store not wired")
-        return true
-      }
-      return false
-    }
+    // M49 Task 14: with no live provider controller the G1 modals are NOT
+    // reachable — the registry's provider-settings gate hides them and the
+    // submit path renders the exact "Unsupported command: /<name>" contract
+    // (never a separate not-wired toast-fake).
+    if (controller === undefined) return false
     if (line === "/settings" || line.startsWith("/settings ")) {
       this.openSettings()
       return true

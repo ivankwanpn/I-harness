@@ -55,7 +55,7 @@ import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
 import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
-import { parsePreset } from "@i-harness/preset"
+import { DEFAULT_AGENT_PRESET, parsePreset } from "@i-harness/preset"
 
 export type ModelPolicy = "required" | "test-mock"
 
@@ -463,7 +463,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       } satisfies TeamDeps, opts.team))
     }
 
-    let systemPrompt = opts.preset !== undefined ? parsePreset(opts.preset).systemPrompt : "You are a coding agent."
+    // M49 Task 14 (spec §11): the base system prompt is the I-harness-owned
+    // DEFAULT_AGENT_PRESET (readable source in @i-harness/preset) when the
+    // host supplied no override; an explicit preset override stays
+    // authoritative (parsePreset validates name/systemPrompt/tools — a host
+    // preset must satisfy the same contract). Plan-mode/sandbox fragments are
+    // composed ON TOP (the default prompt never overrides those).
+    let systemPrompt = opts.preset !== undefined
+      ? parsePreset(opts.preset).systemPrompt
+      : DEFAULT_AGENT_PRESET.systemPrompt
     if (opts.planMode) systemPrompt = `${systemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`
     if (sandboxPolicy) {
       systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicy)}`

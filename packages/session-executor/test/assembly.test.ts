@@ -317,3 +317,59 @@ describe("createSessionAssembly — task projection (Task 12)", () => {
     }
   }, 60_000)
 })
+
+// ------------------------------------------------------------------ M49 Task 14 (spec §11): default agent prompt composition
+
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import type { LLMStreamEvent } from "@i-harness/llm-seam"
+
+/** Real ModelClient double: records every LLMRequest and yields one text chunk
+ * then end (the plan's capturingModel fixture contract). */
+function capturingModel(): ModelClient & { requests: LLMRequest[] } {
+  const requests: LLMRequest[] = []
+  return {
+    requests,
+    async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      requests.push(request)
+      yield { type: "text/chunk", text: "inspect done" }
+      yield { type: "end" }
+    },
+  }
+}
+
+describe("createSessionAssembly — default prompt composition (spec §11)", () => {
+  it("uses the I-harness default preset when no override is supplied", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-prompt-"))
+    const model = capturingModel()
+    const assembly = await createSessionAssembly({ workspace: dir, model })
+    try {
+      await assembly.agent.run("inspect")
+      const prompt = model.requests[0]!.systemPrompt
+      expect(prompt).toContain("I-harness")
+      expect(prompt).toContain("verify before claiming completion")
+      expect(prompt).not.toContain("Grok")
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("keeps an explicit preset override authoritative", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-prompt-"))
+    const model = capturingModel()
+    const assembly = await createSessionAssembly({
+      workspace: dir,
+      model,
+      preset: JSON.stringify({ name: "custom", systemPrompt: "custom-system", tools: [] }),
+    })
+    try {
+      await assembly.agent.run("inspect")
+      const prompt = model.requests[0]!.systemPrompt
+      expect(prompt).toContain("custom-system")
+      expect(prompt).not.toContain("verify before claiming completion")
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+})
