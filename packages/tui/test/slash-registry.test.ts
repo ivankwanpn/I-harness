@@ -39,6 +39,9 @@ const EXPECTED_VISIBLE = new Set([
   "config-agents", "workflow",
   // new surfaces
   "usage", "tutorial", "goal",
+  // M49 Task 13: /dashboard — the local dashboard view (the skip entry
+  // superseded, same as /timeline).
+  "dashboard",
 ])
 
 /** The skip-list — registered hidden with visible() false. ("settings" is NOT
@@ -46,7 +49,7 @@ const EXPECTED_VISIBLE = new Set([
 const EXPECTED_HIDDEN = new Set([
   "share", "login", "logout", "import-claude", "remember", "recap",
   "loop", "voice", "imagine", "imagine-video", "gboom", "cd", "fork",
-  "dashboard", "context", "edit-prompt", "expand",
+  "context", "edit-prompt", "expand",
   "toggle-mouse-reporting", "debug", "scroll-debug",
 ])
 

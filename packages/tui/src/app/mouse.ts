@@ -49,6 +49,7 @@ import { SLASH_MAX_ROWS } from "../views/slash-dropdown.ts"
 import { COMPLETION_MAX_ROWS } from "../views/completion-dropdown.ts"
 import { flattenSessions } from "../views/session-picker.ts"
 import { statusChipsOf, statusPathSpan, strWidth } from "../views/status.ts"
+import { dashboardRowsStartY } from "../views/dashboard.ts"
 import { pasteChipRowAt, pasteChipRowCount, promptCursorAtCell, promptLineAtRow } from "../views/prompt.ts"
 // M46c G1: the selection ✗ geometry (shared pure box) + the timeline gate
 // (the rail replaces the scrollbar slot while the gate holds).
@@ -102,6 +103,9 @@ export interface MouseHooks {
    * chip duplicates the pane Set otherwise, leaving a blank pane after a
    * session switch); absent → the router's direct Set toggle (dry-run tests). */
   tasksPaneToggle?(): void
+  /** M49 Task 13: dashboard row double-click → open the session (the SAME
+   * action Enter uses); absent → the honest seam toast. */
+  openDashboardSession?(id: string): void
   /** M46c G2: paste-chip double-click — INSERT the retained paste-source at
    * the cursor (the prompt state's pasteStash[`index`]; absent hook → honest
    * toast — the old "source not retained" path is replaced by this seam).
@@ -326,6 +330,13 @@ export class MouseRouter {
   /* ---------------------------------------------------------------- down */
 
   private onDown(ev: MouseCellEvent): void {
+    // M49 Task 13: the local dashboard (spec §8.3) — the row band is the click
+    // surface: single click selects the row by its stable session id,
+    // double-click fires the OPEN action (the SAME action Enter uses).
+    if (this.app.screen === "dashboard") {
+      this.dashboardDown(ev)
+      return
+    }
     const layout = this.layout()
     if (layout === undefined) return
     // A fresh press while a drag is still open → the button-up was LOST:
@@ -374,6 +385,25 @@ export class MouseRouter {
       return
     }
     // shortcuts/welcome/btw rows — no click semantics
+  }
+
+  /** M49 Task 13: the local dashboard's row band — a single click selects by
+   * the stable session id; a ≤300ms double-click fires the OPEN action (the
+   * same one Enter uses — keyboard and mouse share it, spec §8.3). */
+  private dashboardDown(ev: MouseCellEvent): void {
+    const dash = this.app.dashboard
+    if (dash === undefined) return
+    const statusOn = this.app.statusLine !== "disabled"
+    const startY = dashboardRowsStartY({ x: 0, y: statusOn ? 1 : 0, w: 0, h: 0 })
+    if (ev.y < startY) return
+    const row = dash.visibleRows()[ev.y - startY]
+    if (row === undefined) return
+    if (this.nextClick(`dash:${row.id}`) === 2) {
+      this.hookOr(this.hooks.openDashboardSession, "dashboard open (M46c)", row.id)
+      return
+    }
+    dash.select(row.id)
+    this.changed()
   }
 
   private overlayDown(ev: MouseCellEvent, ov: NonNullable<TuiAppState["overlay"]>, ctx: Rect): void {
@@ -1034,7 +1064,10 @@ export function pasteChipAt(text: string, col: number): { lines: number } | unde
 }
 
 /** Status chip hit-testing: right chip under the column (or undefined). */
-export function statusChipAt(app: TuiAppState, glyphs: GlyphSet, ctx: Rect, col: number): "tasks" | "plan" | "goal" | "mcp" | "context" | "queue" | "todo" | undefined {
+export function statusChipAt(app: TuiAppState, glyphs: GlyphSet, ctx: Rect, col: number): "tasks" | "plan" | "goal" | "mcp" | "context" | "queue" | "todo" | "model" | "session" | "turn-timer" | undefined {
+  // M49 Task 13: the hit map mirrors statusChipsOf — the new segments have no
+  // click semantics yet (they return their kind; the router's switch below
+  // keeps the no-op default for them — they never crash a click).
   const pieces = statusChipsOf(app.status, glyphs)
   let totalW = 0
   for (const p of pieces) totalW += (p.sepBefore ? 3 : 0) + strWidth(p.text)

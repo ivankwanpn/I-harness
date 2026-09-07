@@ -19,8 +19,9 @@ function sceneFor(cols: 80 | 120, rows: 24 | 32): Scene {
   if (cols === 120) {
     const modelStatus = scene.steps[2]!["wait-screen"] as { region: { startRow: number } }
     const promptRail = scene.steps[7]!["assert-cell-colors"] as { cells: Array<{ row: number }> }
-    modelStatus.region.startRow = 13
-    for (const cell of promptRail.cells) cell.row = 10
+    // M49 Task 13: the dashboard menu row makes the hero one row taller.
+    modelStatus.region.startRow = 14
+    for (const cell of promptRail.cells) cell.row = 11
   }
   return scene
 }

@@ -85,6 +85,46 @@ describe("normalizeSettings", () => {
     expect(normalizeSettings({ tui: { prefs: { screenMode: "tiny" } } }).tui.prefs.screenMode).toBe("fullscreen")
   })
 
+  it("tui.prefs.dashboard + statusLine (Task 13, spec §9.2): defaults, valid parse, corrupt degrade", () => {
+    expect(SETTINGS_DEFAULTS.tui.prefs.dashboard).toEqual({ pinned: [], order: [] })
+    expect(SETTINGS_DEFAULTS.tui.prefs.statusLine).toEqual({
+      mode: "builtin",
+      items: ["cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks"],
+    })
+    const s = normalizeSettings({
+      tui: {
+        prefs: {
+          dashboard: { pinned: ["s2", "s1"], order: ["s2", "s1"] },
+          statusLine: { mode: "command", items: ["cwd", "queue"], command: "git status --short", refreshMs: 500 },
+        },
+      },
+    })
+    expect(s.tui.prefs.dashboard).toEqual({ pinned: ["s2", "s1"], order: ["s2", "s1"] })
+    expect(s.tui.prefs.statusLine).toEqual({
+      mode: "command",
+      items: ["cwd", "queue"],
+      command: "git status --short",
+      refreshMs: 500,
+    })
+    // corrupt input degrades per field without touching the rest
+    const bad = normalizeSettings({
+      tui: {
+        prefs: {
+          dashboard: { pinned: [42, ""], order: "s1" },
+          statusLine: { mode: "inline", items: ["nope", 5], command: "", refreshMs: 20 },
+        },
+      },
+    })
+    expect(bad.tui.prefs.dashboard).toEqual({ pinned: [], order: [] })
+    expect(bad.tui.prefs.statusLine.mode).toBe("builtin")
+    expect(bad.tui.prefs.statusLine.items).toEqual([
+      "cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks",
+    ])
+    expect(bad.tui.prefs.statusLine.command).toBeUndefined()
+    // refreshMs is clamped to the 300ms floor (spec §9.6), invalid → absent
+    expect(bad.tui.prefs.statusLine.refreshMs).toBe(300)
+  })
+
   it("searchBackend (Task 1.2): defaults to jsonl, accepts sqlite, rejects unknowns", () => {
     expect(SETTINGS_DEFAULTS.searchBackend).toBe("jsonl")
     expect(normalizeSettings({ searchBackend: "sqlite" }).searchBackend).toBe("sqlite")

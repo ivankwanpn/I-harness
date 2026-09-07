@@ -200,6 +200,9 @@ importers:
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../../packages/credentials
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../../packages/exec
       '@i-harness/provider':
         specifier: workspace:*
         version: link:../../packages/provider
@@ -212,6 +215,9 @@ importers:
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../../packages/settings
+      '@i-harness/shell':
+        specifier: workspace:*
+        version: link:../../packages/shell
       '@i-harness/tui':
         specifier: workspace:*
         version: link:../../packages/tui

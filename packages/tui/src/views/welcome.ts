@@ -10,7 +10,7 @@ import { renderPrompt } from "./prompt.ts"
 import type { Rect, Style, ViewDraw } from "./agent.ts"
 import { strWidth } from "./status.ts"
 
-export type WelcomeAction = "new" | "resume" | "settings" | "quit"
+export type WelcomeAction = "new" | "resume" | "settings" | "quit" | "dashboard"
 export type WelcomeModelState = BackendModelState | { status: "loading" }
 
 export interface WelcomeState {

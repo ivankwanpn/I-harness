@@ -1,0 +1,173 @@
+# M49 Task 13: case-027 — the LOCAL DASHBOARD + TRUTHFUL STATUS LINE at
+# real-pty level (host-027): the REAL embedded service with a gated spawn —
+# session "Alpha" runs a REAL subagent, carries one queued prompt, and the
+# durable store holds a second listing-only session "Beta".
+#
+# Scene (100x30): submit the spawn → submit "second" (queued) → /dashboard
+# opens the dashboard → filter "beta" → clear → pin "Alpha" → peek its real
+# tail → Enter opens "Alpha" → Ctrl+; queue pane → mouse [cancel] on the
+# queued row → Ctrl+G tasks pane → mouse [✗] on the subagent → the status
+# counts drop (live tasks 2 → 0, host marker live-tasks-zero) → Ctrl+\ back
+# to the dashboard → selection stable (Alpha — host witness
+# dashboard-selection.json) → a second backend snapshot shows the cleaned
+# projection (no cost member, ever).
+#
+# Keys: kitty CSI-u (host cap kitty:true) — Ctrl+\ = \x1b[92:5;1u,
+# Ctrl+; = \x1b[59:5;1u, Ctrl+G = \x1b[103:5;1u (legacy C0 has no encodings
+# for them); per the InputParser decode, the accepted form is
+# ESC[<code>:<mods>;<event>u with xterm mods (5 = ctrl).
+name: case-027-local-dashboard-status
+host: test/harness/host-027.ts
+size: [100, 30]
+steps:
+  - await-marker: { name: scene-027-ready }
+  # ── the running subagent (real spawn over the production key path).
+  - write-pty: { data: "spawn a helper" }
+  - write-pty: { data: "\r" }
+  - await-marker: { name: spawn-running, timeoutMs: 60000 }
+  # ── the queued prompt.
+  - write-pty: { data: "second" }
+  - write-pty: { data: "\r" }
+  - await-marker: { name: queued-prompt, timeoutMs: 40000 }
+  - await-quiescent: { ms: 300 }
+  # ── dashboard (/dashboard — the same VIEW the Welcome menu + Ctrl+\ use;
+  # the Ctrl+\ byte cannot ride the pty parser, the slash path is the
+  # production equivalent). The slash dropdown accepts the first Enter
+  # (completion), the second submits the command.
+  - write-pty: { data: "/dashboard" }
+  - write-pty: { data: "\r" }
+  - write-pty: { data: "\r" }
+  - assert-cell-colors:
+      cells:
+        - { row: 1, col: 0, text: "◇ Dashboard" }
+      timeoutMs: 5000
+  - assert-glyph-integrity: {}
+  # ── the truthful status row (the dashboard surface recomputes the builtin
+  # row): the RIGHT-anchored queue count (+1 — the real queued prompt) at the
+  # row; the LEFT "⎇" git icon leads the REAL workspace path (the temp dir is
+  # no git repo → the branch segment is omitted, never invented; the
+  # model/context/tasks chips ride between them — the model label is also on
+  # the dashboard row below).
+  - assert-cell-colors:
+      cells:
+        - { row: 0, col: 98, text: "+1" }
+      timeoutMs: 5000
+  # ── the two REAL durable sessions: Alpha (live: real run/queued/tasks/
+  # model) first (newest), Beta listing-only second.
+  - assert-cell-colors:
+      cells:
+        - { row: 4, col: 0, text: "▸○ Alpha" }
+        - { row: 5, col: 0, text: " ○ Beta" }
+      timeoutMs: 5000
+  # ── the host's backend projection witness (no cost member, ever).
+  - request-marker: { name: snap-request }
+  - await-marker: { name: snap-wrote }
+  - assert-file: { name: dashboard-rows.json, contains: '"live":true' }
+  - assert-file: { name: dashboard-rows.json, contains: '"title":"Alpha"' }
+  - assert-file: { name: dashboard-rows.json, contains: '"title":"Beta"' }
+  - assert-file: { name: dashboard-rows.json, contains: '"modelLabel":"mock:mock-story"' }
+  - assert-file: { name: dashboard-rows.json, contains: '"tasks":2' }
+  - assert-file: { name: dashboard-rows.json, contains: '"queued":1' }
+  # ── filter "beta" → only Beta remains (Alpha is hidden, Beta moves to the
+  # top row; the selection stays stable on Alpha — the cursor falls back to
+  # the visible Beta row).
+  - write-pty: { data: "beta" }
+  - assert-cell-colors:
+      cells:
+        - { row: 4, col: 0, text: "▸○ Beta" }
+      timeoutMs: 5000
+  - await-quiescent: { ms: 200 }
+  # ── clear the filter (Backspace x4) → both rows again.
+  - write-pty: { data: "\x7f\x7f\x7f\x7f" }
+  - assert-cell-colors:
+      cells:
+        - { row: 4, col: 0, text: "▸○ Alpha" }
+        - { row: 5, col: 0, text: " ○ Beta" }
+      timeoutMs: 5000
+  # ── pin the selected (Alpha) → ● + it stays first.
+  - write-pty: { data: "P" }
+  - assert-cell-colors:
+      cells:
+        - { row: 4, col: 0, text: "▸● Alpha" }
+        - { row: 5, col: 0, text: " ○ Beta" }
+      timeoutMs: 5000
+  # ── peek (p): the selected LIVE session's real tail lines (the peek box
+  # starts below the row band; the first tail line is a real ❯ prompt).
+  - write-pty: { data: "p" }
+  - assert-cell-colors:
+      cells:
+        - { row: 23, col: 0, text: "── peek" }
+      timeoutMs: 5000
+  - assert-cell-colors:
+      cells:
+        - { row: 24, col: 2, text: "❯ spawn a helper" }
+      timeoutMs: 5000
+  # ── Enter opens the selected session (Alpha — the app's own live session):
+  # the agent screen's scrollback re-renders the REAL log (" ❯ spawn a
+  # helper" — the scrollback row prefix "  ┃   ❯" is the case-026 format).
+  - write-pty: { data: "\r" }
+  - await-quiescent: { ms: 300 }
+  - assert-cell-colors:
+      cells:
+        - { row: 3, col: 6, text: "❯" }
+      timeoutMs: 5000
+  # ── queue pane: Ctrl+; → #2 second with the [cancel] chip (real queued
+  # row; the running row is #1).
+  - write-pty: { data: "\x1b[59:5;1u" }
+  - assert-cell-colors:
+      cells:
+        - { row: 17, col: 0, text: "#2 second" }
+        - { row: 17, col: 90, text: "[cancel]" }
+      timeoutMs: 5000
+  # ── mouse [cancel] on the queued row (SGR 1006: press+release at 95,18).
+  - write-pty: { data: "\x1b[<0;95;18M\x1b[<0;95;18m" }
+  - await-marker: { name: queue-cancelled, timeoutMs: 30000 }
+  - await-quiescent: { ms: 300 }
+  # ── the queued row is gone; the RUNNING row stays (the pane never claims
+  # "empty" while a prompt is running — the row order/shrink is the proof).
+  - assert-cell-colors:
+      cells:
+        - { row: 17, col: 2, text: "#1 spawn a helper" }
+      timeoutMs: 5000
+  # ── tasks pane: Ctrl+G → the REAL task groups: "Subagents 1" (the running
+  # subagent row) + "Background 1" (the helper job) — each with [✗].
+  - write-pty: { data: "\x1b[103:5;1u" }
+  - assert-cell-colors:
+      cells:
+        - { row: 3, col: 2, text: "▾ Subagents 1" }
+      timeoutMs: 5000
+  - assert-cell-colors:
+      cells:
+        - { row: 4, col: 2, text: "⠋ general" }
+        - { row: 4, col: 95, text: "[✗]" }
+      timeoutMs: 5000
+  # ── mouse [✗] on the subagent row (SGR 1006 press+release at 96,5 — the
+  # row-band right zone of the Subagents header's first entry — the app's
+  # cancelTask sends the abort request; the host release request then lets
+  # the gated child settle and the witness marker fires on the REAL status
+  # change (the entry leaves the active set).
+  - write-pty: { data: "\x1b[<0;96;5M\x1b[<0;96;5m" }
+  - request-marker: { name: task-cancel-actioned }
+  - await-marker: { name: task-cancelled, timeoutMs: 30000 }
+  - await-marker: { name: live-tasks-zero, timeoutMs: 40000 }
+  # ── back to the dashboard: Ctrl+\ (kitty) — the SAME toggle the menu row
+  # uses; the row selection survives the round trip (stable by session id).
+  - write-pty: { data: "\x1b[92:5;1u" }
+  - assert-cell-colors:
+      cells:
+        - { row: 1, col: 0, text: "◇ Dashboard" }
+      timeoutMs: 5000
+  - request-marker: { name: sel-request }
+  - await-marker: { name: selection-wrote }
+  - assert-file: { name: dashboard-selection.json, contains: '"selectedId":' }
+  # ── the second backend snapshot: the cancels landed — the projection still
+  # lists both sessions (Alpha live, Beta listing-only) and never a cost
+  # member (the rows' live fields now only what the service knows).
+  - request-marker: { name: snap-request }
+  - await-marker: { name: snap-wrote }
+  - assert-file: { name: dashboard-rows.json, contains: '"title":"Alpha"' }
+  - assert-file: { name: dashboard-rows.json, contains: '"title":"Beta"' }
+  - assert-glyph-integrity: {}
+  - request-marker: { name: request-exit }
+  - await-marker: { name: teardown-wrote, timeoutMs: 60000 }
+  - wait-exit: { code: 0 }

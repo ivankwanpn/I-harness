@@ -8,6 +8,10 @@ import { clusterWidth, quantizeColor } from "@i-harness/tui-core"
 import type { CursorTarget, GlyphSet, Palette, Renderer, TerminalCapabilityContext, ThemeKind } from "@i-harness/tui-core"
 import type { ActiveView, ScrollbackEngine, StyledRun, TextStyle } from "../contracts.ts"
 import type { RegionLine } from "../minimal/contracts.ts"
+// M49 Task 13: the local dashboard surface (spec §8.3).
+import { renderDashboard } from "../views/dashboard.ts"
+import type { DashboardPeek } from "../views/dashboard.ts"
+import type { DashboardState } from "../views/dashboard-state.ts"
 
 /** The app's active-theme state (M49 Task 8): concrete palette ids, or "auto"
  * = following the system appearance (the persisted "system"). */
@@ -73,10 +77,11 @@ export interface TuiAppState {
   /** Authoritative navigation state. Optional only for older static test
    * fixtures; TuiApp always supplies it. */
   view?: ActiveView
-  /** Screen: "agent" (default), the welcome hero (spec §2a), or "minimal"
-   * (M38a spec §0/§1.1 — the loop drives the live-region writer through the
-   * InlineHost; present() never draws cells on that screen). */
-  screen?: "agent" | "welcome" | "minimal"
+  /** Screen: "agent" (default), the welcome hero (spec §2a), the local
+   * dashboard (M49 Task 13, spec §8.3), or "minimal" (M38a spec §0/§1.1 —
+   * the loop drives the live-region writer through the InlineHost; present()
+   * never draws cells on that screen). */
+  screen?: "agent" | "welcome" | "minimal" | "dashboard"
   welcome?: WelcomeState
   /** Pane content (todo/tasks/queue/btw) — rendered when Panes flags/data set. */
   paneData?: PaneState
@@ -160,6 +165,24 @@ export interface TuiAppState {
   // owner routes every key to it BEFORE panes→prompt→scrollback. At most one
   // modal ever exists (the owner's open() replaces).
   modal?: ActiveModal
+  // ---- M49 Task 13 (spec §8.3/§9.6): the local dashboard + the status line.
+  /** The shared dashboard state (rows/filter/selection/pins — the loop's
+   * dashboard view). Absent → no dashboard surface (older fixtures). */
+  dashboard?: DashboardState
+  /** Dashboard view bits (backend fetching is async / capability-gated). */
+  dashboardLoading?: boolean
+  /** True when the backend carries NO dashboard capability (honest
+   * unavailable — never a fabricated empty list). */
+  dashboardUnavailable?: boolean
+  /** True when the LAST dashboard fetch failed (the view keeps the previous
+   * rows and shows the honest note — never "no sessions" for an error). */
+  dashboardFetchFailed?: boolean
+  /** The open tail peek (p on the dashboard) — REAL session log lines. */
+  dashboardPeek?: DashboardPeek
+  /** The status line mode — "disabled" hides the row (spec §9.6); absent =
+   * the legacy row (pre-M49 hosts). The loop resolves it from the host
+   * option; present() only reads it. */
+  statusLine?: "builtin" | "command" | "disabled"
 }
 
 /** The active dropdown 1: kind + height (layoutAgent places the rect above
@@ -907,9 +930,52 @@ export function present(
     return { dirty: !renderer.sameFrame() }
   }
 
+  // M49 Task 13: the local dashboard screen (spec §8.3) — the status line
+  // stays on top (when enabled), the dashboard draws its own header/list/
+  // peek/footer below. Overlays (resume picker etc.) draw over the list.
+  if (app.screen === "dashboard" || (app.screen === undefined && app.view?.kind === "dashboard")) {
+    const statusOn = app.statusLine !== "disabled"
+    const dashTop = statusOn ? 1 : 0
+    if (statusOn) renderStatus({ x: 0, y: 0, w: area.cols, h: 1 }, app.status, view, palette, glyphs)
+    if (app.dashboard !== undefined) {
+      renderDashboard(
+        { x: 0, y: dashTop, w: area.cols, h: area.rows - dashTop },
+        {
+          dashboard: app.dashboard,
+          ...(app.dashboardLoading === true ? { loading: true } : {}),
+          ...(app.dashboardUnavailable === true ? { unavailable: true } : {}),
+          ...(app.dashboardFetchFailed === true ? { fetchFailed: true } : {}),
+          ...(app.dashboardPeek !== undefined ? { peek: app.dashboardPeek } : {}),
+          now: Date.now(),
+        },
+        view,
+        palette,
+        glyphs,
+      )
+    }
+    if (app.overlay !== undefined) {
+      app.overlay.draw({ x: 0, y: 0, w: area.cols, h: area.rows }, view, palette, glyphs)
+    } else if (app.sessions !== undefined) {
+      renderSessionPicker({ x: 0, y: 0, w: area.cols, h: area.rows }, app.sessions, view, palette, glyphs)
+    }
+    if (opts.hud !== undefined && area.cols >= 12) {
+      renderHud(buf, opts.hud, {
+        x: area.cols - Math.min(HUD_PANEL_W, area.cols),
+        y: 0,
+        w: Math.min(HUD_PANEL_W, area.cols),
+        h: 2,
+      }, view, palette)
+    }
+    renderToasts(buf, app.toasts, { x: 0, y: 0, w: area.cols, h: area.rows }, view, palette)
+    settleHover(app, mouseEngine)
+    renderer.commit()
+    renderer.setCursor({ x: 0, y: 0, visible: false })
+    return { dirty: !renderer.sameFrame() }
+  }
+
   const layout = layoutAgent(area, { ...app, dropdown: dropdownDescOf(app) }, { compact: opts.compact })
 
-  renderStatus(layout.status, app.status, view, palette, glyphs)
+  if (app.statusLine !== "disabled") renderStatus(layout.status, app.status, view, palette, glyphs)
   if (layout.tasks !== undefined && app.paneData?.tasks !== undefined) {
     renderTasksPane(layout.tasks, {
       groups: app.paneData.tasks,

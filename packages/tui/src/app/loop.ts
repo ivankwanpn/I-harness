@@ -90,6 +90,19 @@ import { createBlockViewer, createTaskPresentation } from "../views/block-viewer
 import { presentTool } from "../tool-presentation/index.ts"
 import type { AgentTaskView, ToolViewInfo } from "../contracts.ts"
 import type { TaskEntry, TaskGroup } from "../views/tasks-pane.ts"
+// M49 Task 13: the local dashboard state + the status-line truth source
+// (spec §8.3/§9.6) — pure modules, real values only.
+import { createDashboardState } from "../views/dashboard-state.ts"
+import type { DashboardState } from "../views/dashboard-state.ts"
+import {
+  STATUS_LINE_MIN_REFRESH_MS,
+  collectStatus,
+  type StatusLineState,
+  type StatusAggregateInput,
+  type StatusCommandContext,
+  type StatusCommandSource,
+  type StatusLineSegmentKind,
+} from "./status-source.ts"
 
 export interface InputSource {
   next(): AsyncIterable<InputEvent>
@@ -194,6 +207,41 @@ export interface TuiAppOptions {
    * at "system" after a restart and silently overwrite the user's choice.
    * Absent → "auto" (legacy hosts/tests). */
   initialTheme?: SettingsTheme
+  /** M49 Task 13 (spec §9.6): the status line. Absent / no mode → the legacy
+   * builtin row (pre-M49 hosts keep their exact rendering). mode "disabled"
+   * hides the row; "builtin" (default when the option is present) derives
+   * every segment from the app's REAL values + the host extras below;
+   * "command" renders the injected command source's sanitized text. */
+  statusLine?: StatusLineOptions
+  /** M49 Task 13 (spec §8.3): the persisted dashboard pins/order
+   * (tui.prefs.dashboard) — ids only; missing ids are ignored for display and
+   * are deleted only after the next successful commit (the host prunes via
+   * state.pruneMissing after its settings write resolves). */
+  dashboardPrefs?: { pinned: string[]; order: string[] }
+  /** M49 Task 13: the dashboard pin/order persistence hook — the loop forwards
+   * the current id lists here on every pin/unpin/order change and NEVER
+   * writes settings itself (the host owns the store — it writes
+   * tui.prefs.dashboard). When the RESOLVED promise settles successfully the
+   * loop prunes missing ids from its state (the "deleted only after the next
+   * successful commit" rule); a rejection keeps them. */
+  onDashboardPrefs?: (prefs: { pinned: string[]; order: string[] }) => Promise<unknown> | void
+}
+
+/** M49 Task 13: the status-line host option (spec §9.6). */
+export interface StatusLineOptions {
+  mode?: "disabled" | "builtin" | "command"
+  /** Host-resolved REAL git branch (apps/tui probes the workspace HEAD);
+   * absent → the branch segment is omitted (unknown is never fabricated). */
+  branch?: string
+  /** The persisted tui.prefs.statusLine.items allowlist (builtin mode); absent
+   * → every sourced configurable segment renders. */
+  items?: readonly StatusLineSegmentKind[]
+  /** Command-mode source (createCommandStatusSource over the host's exec
+   * runner — workspace cwd, JSON stdin, 1000ms timeout, sanitized + capped). */
+  commandSource?: StatusCommandSource
+  /** The command refresh interval (ms) — the loop's cadence floor is 300ms
+   * (spec §9.6); the source itself never drops an explicit refresh. */
+  commandRefreshMs?: number
 }
 
 /** One-time executable startup inputs. `renderWelcomeBeforeModel` lets the
@@ -349,6 +397,19 @@ export class TuiApp {
   /** Invalidates async session-derived probes when session/open commits. */
   private sessionGeneration = 0
   private currentSessionId: string | undefined
+  /** M49 Task 13: the last RESOLVED model state (the builtin status row's
+   * model segment source — ready → the label; anything else → unknown →
+   * omitted, never a fabricated identity). */
+  private lastModelState: BackendModelState | undefined
+  /** M49 Task 13: the surface the dashboard was opened from (backFromDashboard
+   * returns there — "Agent→Dashboard preserves filter/cursor"). */
+  private dashboardFrom: "welcome" | "agent" = "agent"
+  /** M49 Task 13: in-flight status-line recompute (never two concurrent — the
+   * promise itself is the guard, same pattern as refreshContext). */
+  private statusLineProbe: Promise<void> | undefined
+  /** M49 Task 13: the command-status cadence clock (spec §9.6 — refreshes no
+   * faster than max(300ms, refreshMs); the source never blocks this). */
+  private lastCommandRefreshAt = 0
   /** M46c G2: the /workflow surface (host option else the default real host) —
    * cached per app so the executor's process-shared job store is one instance. */
   private workflowHost: WorkflowSurface | undefined
@@ -457,7 +518,9 @@ export class TuiApp {
       search: undefined,
       status: {
         branch: undefined,
-        path: "~/workspace",
+        // M49 Task 13: the cwd segment is the host workspace when wired
+        // (production always passes it; legacy hosts keep the placeholder).
+        path: opts.workspace ?? "~/workspace",
         tickMs: 0,
         model,
         plan: false,
@@ -482,6 +545,9 @@ export class TuiApp {
         menus: [
           { action: "new", key: "ctrl+n", label: "New session" },
           { action: "resume", key: "ctrl+s", label: "Resume session" },
+          // M49 Task 13 (spec §8.3): the Dashboard shares one view with
+          // /dashboard — an Enter on the row opens the same local view.
+          { action: "dashboard", key: "ctrl+\\", label: "Dashboard (local sessions)" },
           { action: "settings", key: "F2", label: "Settings" },
           { action: "quit", key: "ctrl+q", label: "Quit" },
         ],
@@ -510,6 +576,15 @@ export class TuiApp {
       // the last-Moved coordinate every frame). `enabled` gates the whole
       // mouse path (G1's mouse-reporting toggle flips it).
       mouse: { enabled: true, last: { col: 0, row: 0 }, hovered: new Set(), engine: new HoverEngine() },
+      // M49 Task 13: the shared dashboard state (the persisted pins/order ids
+      // seed only what tui.prefs.dashboard carries — missing ids are kept
+      // until the next successful commit, never eagerly pruned).
+      dashboard: createDashboardState([], opts.dashboardPrefs),
+      dashboardLoading: false,
+      dashboardUnavailable: false,
+      dashboardFetchFailed: false,
+      dashboardPeek: undefined,
+      statusLine: opts.statusLine !== undefined ? (opts.statusLine.mode ?? "builtin") : undefined,
     }
     this.initMouse()
   }
@@ -561,6 +636,12 @@ export class TuiApp {
         // M49 Task 11: the queue [cancel] chip fires the SAME action as the
         // app-level cancelQueueItem (cancel + refresh from backend truth).
         queueCancel: (id) => { void this.cancelQueueItem(id) },
+        // M49 Task 13: dashboard row double-click → the SAME open action the
+        // Enter key uses (keyboard and mouse share one action, spec §8.3).
+        openDashboardSession: (id) => {
+          this.app.dashboard?.select(id)
+          void this.openSelectedDashboardSession()
+        },
         // M49 Task 12: the tasks-pane row actions fire the SAME app actions as
         // the keyboard path (cancel + refresh from backend truth / viewer);
         // the status-chip toggle routes through togglePane so opening
@@ -1059,6 +1140,8 @@ export class TuiApp {
     // before the first frame — afterwards they ride the turn boundaries.
     this.refreshContext()
     this.refreshQueue()
+    // M49 Task 13: the status line's first recompute (tasks/model/queue…).
+    this.refreshStatusLine()
     await this.runP
   }
 
@@ -1125,6 +1208,11 @@ export class TuiApp {
       turn.nowMs = t
       turn.phaseMs = t - this.phaseStartedAt
       turn.turnMs = t - this.turnStartedAt
+    }
+    // M49 Task 13: the turn-timer segment is live (per frame — real elapsed;
+    // undefined while idle = the segment is omitted).
+    if (this.app.statusLine !== undefined && this.app.statusLine !== "disabled") {
+      this.app.status.turnTimerMs = this.app.turn === undefined ? undefined : this.app.turn.turnMs
     }
     // M39: sample the frame interval per coalesced repaint (the meter is
     // undefined when the HUD is off — zero cost).
@@ -1350,6 +1438,18 @@ export class TuiApp {
       case "welcome-new": this.welcomeActivate("new"); break
       case "welcome-resume": this.welcomeActivate("resume"); break
       case "welcome-settings": this.welcomeActivate("settings"); break
+      // ---- dashboard (M49 Task 13, spec §8.3)
+      case "open-dashboard": this.toggleDashboard(); break
+      case "dashboard-up": this.app.dashboard?.move(-1); break
+      case "dashboard-down": this.app.dashboard?.move(1); break
+      case "dashboard-open": void this.openSelectedDashboardSession(); break
+      case "dashboard-back": this.backFromDashboard(); break
+      case "dashboard-peek": this.peekDashboardSession(); break
+      case "dashboard-pin": this.toggleDashboardPin(); break
+      case "dashboard-move-up": this.dashboardMoveOrder(-1); break
+      case "dashboard-move-down": this.dashboardMoveOrder(1); break
+      case "dashboard-filter-backspace": this.dashboardFilterBackspace(); break
+      case "dashboard-new": this.dashboardCreateSession(); break
       // M46a G1: the provider/model modal surfaces (F2/Ctrl+, → settings;
       // Ctrl+M on the agent screen → the model picker).
       case "open-settings": this.openSettings(); break
@@ -1398,6 +1498,10 @@ export class TuiApp {
     if (this.stopped) return
     const t = this.opts.now?.() ?? Date.now()
     this.app.status.tickMs = t
+    // M49 Task 13: the command status line refreshes on the anim pump — the
+    // source owns the ≥300ms floor and the two-failure retention, so this is
+    // a cheap no-op between refreshes and NEVER blocks the draw path.
+    if (this.app.statusLine === "command") this.refreshStatusLine()
     // Minimal mode: the 500ms tail-flush sits on THIS pump (idle tick) — a
     // long assistant stream with no block close commits its partial delta.
     if (this.inlineActive() && this.minimalCommits().idleFlushDue(t)) {
@@ -1525,6 +1629,46 @@ export class TuiApp {
       if (ev.key === "c") { this.planComment(); this.requestFrame(); return }
       if (ev.key === "q") { this.planQuit(); this.requestFrame(); return }
     }
+    // M39 wheel close: overlay freeform capture — the permission reject row /
+    // question `z` row own the printable chars while focused (the shipped
+    // keymap has no char case for overlays; without this, typed feedback was
+    // dropped — case-017 needed a host-side gutter, now the production path).
+    const ff = this.app.overlay?.freeform
+    if (ff !== undefined && ff.active()) {
+      if (ev.code === "char" && !ev.ctrl && !ev.alt) { ff.append(ev.key); this.requestFrame(); return }
+      if (ev.code === "Backspace") { ff.backspace(); this.requestFrame(); return }
+      if (ev.code === "Enter") { ff.submit(); this.requestFrame(); return }
+      if (ev.code === "Esc") { ff.abort(); this.requestFrame(); return }
+      // fall through — nav/scope keys stay keymap-routed
+    }
+    // M46c G2: workflow panel refresh — [r] while the /workflow status panel is
+    // open re-fetches its rows (no-pump discipline: refresh on open + here).
+    if (this.workflowRefreshKey(ev)) return
+    // M49 Task 13: the DASHBOARD screen owns its input — the keymap routes the
+    // special keys (nav/open/back/peek/pin/filter-backspace) and plain chars
+    // APPEND to the filter (the prompt never sees them on this surface).
+    // MUST run BEFORE the prompt-edit branch: the dashboard screen keeps the
+    // app.focused "prompt" (no prompt box exists there — the previous
+    // session's focus persists), so the prompt-editing branch would swallow
+    // the chars (typed filter letters landed in the invisible prompt).
+    if (this.app.screen === "dashboard") {
+      const dkbd: Kbd = { code: ev.code, key: ev.key, ctrl: ev.ctrl, alt: ev.alt, shift: ev.shift }
+      const action = dispatchKey(dkbd, this.keymapState())
+      if (action !== "none") {
+        this.dispatch(action)
+        return
+      }
+      if (ev.code === "char" && !ev.ctrl && !ev.alt) {
+        const dash = this.app.dashboard
+        if (dash !== undefined) {
+          dash.setFilter(`${dash.filter()}${ev.key}`)
+          this.requestFrame()
+        }
+        return
+      }
+      this.requestFrame()
+      return
+    }
     // Text editing for the prompt comes BEFORE the keymap — M37a subset:
     // printable chars + Backspace/Delete; emacs motion lands M37b. When a
     // non-dropdown overlay is open (pickers/panels), chars are NOT prompt
@@ -1549,21 +1693,6 @@ export class TuiApp {
         return
       }
     }
-    // M39 wheel close: overlay freeform capture — the permission reject row /
-    // question `z` row own the printable chars while focused (the shipped
-    // keymap has no char case for overlays; without this, typed feedback was
-    // dropped — case-017 needed a host-side gutter, now the production path).
-    const ff = this.app.overlay?.freeform
-    if (ff !== undefined && ff.active()) {
-      if (ev.code === "char" && !ev.ctrl && !ev.alt) { ff.append(ev.key); this.requestFrame(); return }
-      if (ev.code === "Backspace") { ff.backspace(); this.requestFrame(); return }
-      if (ev.code === "Enter") { ff.submit(); this.requestFrame(); return }
-      if (ev.code === "Esc") { ff.abort(); this.requestFrame(); return }
-      // fall through — nav/scope keys stay keymap-routed
-    }
-    // M46c G2: workflow panel refresh — [r] while the /workflow status panel is
-    // open re-fetches its rows (no-pump discipline: refresh on open + here).
-    if (this.workflowRefreshKey(ev)) return
     const kbd: Kbd = { code: ev.code, key: ev.key, ctrl: ev.ctrl, alt: ev.alt, shift: ev.shift }
     this.dispatch(dispatchKey(kbd, this.keymapState()))
   }
@@ -1580,6 +1709,8 @@ export class TuiApp {
       overlay: ov?.kind,
       dropdown: ov?.dropdown,
       welcome: this.app.screen === "welcome",
+      // M49 Task 13: the dashboard screen owns its key/prompt routing.
+      dashboard: this.app.screen === "dashboard",
       minimal: this.inlineActive(),
       rewindAvailable: this.rewindEligible(),
       rewindArmed: this.armedRewind,
@@ -1663,6 +1794,12 @@ export class TuiApp {
       case "title":
         this.app.title = ev.title
         this.app.prompt.title = ev.title
+        // M49 Task 13: the session segment is a REAL title (the event is the
+        // source; an absent title leaves the segment omitted).
+        if (this.app.statusLine !== undefined && ev.title !== "") {
+          this.app.status.session = ev.title
+          this.refreshStatusLine()
+        }
         break
       case "plan": {
         this.app.mode = ev.phase === "on" ? "plan" : "normal"
@@ -1818,10 +1955,14 @@ export class TuiApp {
   }
 
   private applyModelState(state: BackendModelState): void {
+    // M49 Task 13: the builtin status row's model segment source — the label
+    // is REAL only when the resolution says ready.
+    this.lastModelState = state
     if (this.app.welcome !== undefined) this.app.welcome.modelState = state
     const label = state.status === "ready" ? state.label : state.status
     this.app.prompt.model = label
     this.app.status.model = label
+    this.refreshStatusLine()
   }
 
   private setStartupError(message: string): void {
@@ -2099,6 +2240,7 @@ export class TuiApp {
       toggleBtwWith: (question) => this.toggleBtwWith(question),
       openBtwInput: () => this.openBtwInput(),
       togglePane: (kind) => this.togglePane(kind),
+      openDashboard: () => void this.openDashboard(),
       setScreen: (screen) => {
         if (screen === "welcome") {
           this.activateWelcome()
@@ -2500,6 +2642,14 @@ export class TuiApp {
     this.app.status.todo = { done: 0, total: 0 }
     this.app.status.tasks = { running: 0, labels: [] }
     this.app.status.queue = 0
+    // M49 Task 13: the derived status segments belong to the closed session
+    // (the recompute below re-derives them from backend truth).
+    this.app.status.session = undefined
+    this.app.status.turnTimerMs = undefined
+    // M49 Task 13 (spec §9.6): the reset cleared the session-derived counts —
+    // RECOMPUTE from backend truth NOW (the next boundary may be far away and
+    // the empty queue/0 may be the lie — the real queued prompt still waits).
+    this.refreshStatusLine()
     this.app.paneData = undefined
     // M49 Task 12: the task-view cache belongs to the closed session.
     this.tasksViewCache = undefined
@@ -3305,6 +3455,9 @@ export class TuiApp {
     switch (selectedAction) {
       case "quit": this.requestQuit(); return
       case "resume": this.toggleSessions(); return
+      // M49 Task 13: the Dashboard row needs no model gate — the local view
+      // opens directly (the SAME view /dashboard uses).
+      case "dashboard": void this.openDashboard(); return
       case "settings": this.openSettings(true); return
       case "new":
         this.runWelcomeAction(async () => {
@@ -3493,6 +3646,8 @@ export class TuiApp {
     }
     this.refreshQueuePane()
     this.refreshTasksPane()
+    // M49 Task 13: the queue/task counts ride the same boundaries.
+    this.refreshStatusLine()
   }
 
   // ------------------------------------------------------------------ real queue pane (M49 Task 11)
@@ -3683,6 +3838,330 @@ export class TuiApp {
     this.app.sessions = undefined
     this.app.lightPanel = undefined
     this.requestFrame()
+  }
+
+  // ------------------------------------------------------------------ local dashboard + status line (M49 Task 13)
+
+  /** The shared dashboard state (rows/filter/selection/pins). */
+  get dashboard(): DashboardState {
+    return this.app.dashboard!
+  }
+
+  /** Open the dashboard (from the welcome screen or the agent screen). The
+   * dashboard state persists — the filter/cursor survive the round trip
+   * (spec §8.3: Agent→Dashboard preserves them). */
+  async openDashboard(): Promise<void> {
+    this.dashboardFrom = this.app.screen === "welcome" ? "welcome" : "agent"
+    this.app.view = { kind: "dashboard" }
+    this.app.screen = "dashboard"
+    this.app.dashboardPeek = undefined
+    this.refreshDashboard()
+    this.refreshStatusLine()
+    this.requestFrame()
+  }
+
+  /** Toggle: agent/welcome → dashboard; dashboard → the previous surface. */
+  toggleDashboard(): void {
+    if (this.app.screen === "dashboard") {
+      this.backFromDashboard()
+      return
+    }
+    void this.openDashboard()
+  }
+
+  /** Close the dashboard back to the surface it was opened from (the row
+   * selection/filter survive — the dashboard state is the app's). */
+  async goHome(): Promise<void> {
+    this.app.dashboardPeek = undefined
+    if (this.dashboardFrom === "welcome") {
+      this.activateWelcome()
+    } else if (this.currentSessionId !== undefined) {
+      this.activateAgent(this.currentSessionId)
+    } else {
+      this.app.screen = "agent"
+    }
+    this.requestFrame()
+  }
+
+  private backFromDashboard(): void {
+    void this.goHome()
+  }
+
+  /** Open the SELECTED dashboard row (Enter — the same action the keyboard
+   * and the mouse double-click share): the backend switches, the agent view
+   * activates; the return path (goHome) preserves the dashboard state. */
+  async openSelectedDashboardSession(): Promise<void> {
+    const id = this.app.dashboard?.selectedId()
+    if (id === undefined) {
+      this.toast("dashboard: nothing to open")
+      return
+    }
+    try {
+      await this.opts.backend.open(id)
+    } catch (error) {
+      this.toast(`session open failed: ${error instanceof Error ? error.message : String(error)}`)
+      return
+    }
+    this.activateAgent(id)
+    this.app.dashboardPeek = undefined
+    this.refreshDashboard()
+    this.requestFrame()
+  }
+
+  /** Refresh the dashboard rows from backend truth. A capability-absent
+   * backend flips the honest unavailable state (never a fabricated empty
+   * list); a FAILED fetch keeps the previous rows (stale truth stays
+   * truthful). */
+  async refreshDashboard(): Promise<void> {
+    const probe = this.opts.backend.dashboard
+    if (probe === undefined) {
+      this.app.dashboardLoading = false
+      this.app.dashboardUnavailable = true
+      this.app.dashboardFetchFailed = false
+      this.app.dashboard?.replaceRows([])
+      this.requestFrame()
+      return
+    }
+    this.app.dashboardLoading = true
+    this.requestFrame()
+    try {
+      const rows = await probe()
+      this.app.dashboard?.replaceRows(rows)
+      this.app.dashboardUnavailable = false
+      this.app.dashboardFetchFailed = false
+    } catch {
+      // Backend truth failed — the previous rows STAY (stale truth stays
+      // truthful) and the honest fetch-failed note marks the surface (never
+      // "no sessions" standing in for an error).
+      this.app.dashboardUnavailable = false
+      this.app.dashboardFetchFailed = true
+    } finally {
+      this.app.dashboardLoading = false
+      this.requestFrame()
+    }
+  }
+
+  /** Dashboard "new session" (Ctrl+N): the normal create gate — capability-
+   * gated (an absent seam fails loudly, never a silent no-op), opens the
+   * created session in the agent view and refreshes the dashboard list. */
+  private dashboardCreateSession(): void {
+    if (this.opts.backend.createSession === undefined) {
+      this.toast("dashboard: session create unavailable on this backend")
+      return
+    }
+    void this.opts.backend.createSession().then(
+      (id) => {
+        void this.refreshDashboard()
+        this.activateAgent(id)
+        this.requestFrame()
+      },
+      (error: unknown) => {
+        this.toast(`dashboard: session create failed: ${error instanceof Error ? error.message : String(error)}`)
+        void this.refreshDashboard()
+        this.requestFrame()
+      },
+    )
+  }
+
+  /** Dashboard tail peek (p): the selected LIVE session's real log tail. */
+  private peekDashboardSession(): void {
+    const id = this.app.dashboard?.selectedId()
+    if (id === undefined) {
+      this.toast("dashboard: nothing to peek")
+      return
+    }
+    const peek = this.opts.backend.peekTail
+    if (peek === undefined) {
+      this.toast("dashboard: tail peek unavailable on this backend")
+      return
+    }
+    void peek(id).then(
+      (lines) => {
+        this.app.dashboardPeek = { id, lines: lines.slice(-5) }
+        this.requestFrame()
+      },
+      (error: unknown) => {
+        if (this.app.screen !== "dashboard") return
+        this.toast(`dashboard peek failed: ${error instanceof Error ? error.message : String(error)}`)
+        this.requestFrame()
+      },
+    )
+  }
+
+  /** Dashboard pin toggle (P) — persisted ONLY as the id lists (the host
+   * commit path prunes missing ids after a successful write). */
+  private toggleDashboardPin(): void {
+    const dash = this.app.dashboard
+    const id = dash?.selectedId()
+    if (dash === undefined || id === undefined) return
+    if (dash.isPinned(id)) dash.unpin(id)
+    else dash.pin(id)
+    this.persistDashboardPrefs()
+    this.requestFrame()
+  }
+
+  /** Dashboard pin-order move ([ / ]) — reorders the pinned block. */
+  private dashboardMoveOrder(delta: 1 | -1): void {
+    const dash = this.app.dashboard
+    const id = dash?.selectedId()
+    if (dash === undefined || id === undefined || !dash.isPinned(id)) return
+    dash.movePin(id, delta)
+    this.persistDashboardPrefs()
+    this.requestFrame()
+  }
+
+  /** The host persistence hook — the loop NEVER writes settings itself (the
+   * host owns the store; this only forwards the current id lists). When the
+   * write RESOLVES successfully the state prunes ids that are no longer in
+   * the authoritative rows (missing ids are deleted only there — a failed
+   * write keeps them). */
+  private persistDashboardPrefs(): void {
+    const dash = this.app.dashboard
+    if (dash === undefined) return
+    const result = this.opts.onDashboardPrefs?.(dash.persistedDashboard())
+    void Promise.resolve(result).then(
+      () => {
+        if (this.app.dashboard !== dash) return
+        dash.pruneMissing(dash.rows())
+      },
+      () => { /* failed write — missing ids stay (not deleted) */ },
+    )
+  }
+
+  private dashboardFilterBackspace(): void {
+    const dash = this.app.dashboard
+    if (dash === undefined) return
+    dash.setFilter(dash.filter().slice(0, -1))
+    this.requestFrame()
+  }
+
+  /** M49 Task 13 (spec §9.6): recompute the status row from the app's REAL
+   * sources — guarded by the in-flight promise (never two concurrent, same
+   * pattern as refreshContext). The command branch refreshes through the
+   * injected source (the source owns the ≥300ms floor and the two-failure
+   * retention — the loop only expects its sanitized text or the error
+   * indicator). */
+  private refreshStatusLine(): void {
+    if (this.statusLineProbe !== undefined) return
+    const cfg = this.opts.statusLine
+    if (cfg === undefined) return
+    const generation = this.sessionGeneration
+    let pending!: Promise<void>
+    pending = (async () => {
+      // The command branch is gated FIRST (its cadence): the anim pump calls
+      // the recompute every 33ms — a not-due tick does NO backend work
+      // (no tasks() RPC 30×/s against a remote backend), and the draw path
+      // never blocks on the source (fire-and-forget, guarded per interval).
+      if (cfg.mode === "command") {
+        const source = cfg.commandSource
+        if (source === undefined) return
+        // refresh cadence (spec §9.6): the source is skipped until
+        // max(300ms, refreshMs) elapsed (the source never drops an explicit
+        // refresh itself: this is the ONLY rate gate).
+        const now = this.nowMs()
+        const interval = Math.max(STATUS_LINE_MIN_REFRESH_MS, cfg.commandRefreshMs ?? STATUS_LINE_MIN_REFRESH_MS)
+        if (now - this.lastCommandRefreshAt < interval) return
+        this.lastCommandRefreshAt = now
+        // the context carries the CURRENT task count — backend-tasks truth
+        // only; a failed fetch keeps the last known count (never a fabricated
+        // zero), a capability-absent backend sends the app's last known too.
+        let tasksRunning = this.app.status.tasks.running
+        const tasksProbe = this.opts.backend.tasks
+        if (tasksProbe !== undefined) {
+          try {
+            const rows = await tasksProbe()
+            tasksRunning = rows.filter(
+              (row) => row.status === "queued" || row.status === "running" || row.status === "waiting",
+            ).length
+          } catch {
+            /* backend truth failed — the ctx keeps the last known count */
+          }
+        }
+        if (generation !== this.sessionGeneration) return
+        const s = this.app.status
+        const ctx: StatusCommandContext = {
+          workspace: this.opts.workspace ?? process.cwd(),
+          ...(this.currentSessionId !== undefined ? { sessionId: this.currentSessionId } : {}),
+          ...(s.session !== undefined ? { sessionTitle: s.session } : {}),
+          ...(s.modelKnown === true && s.model !== "" ? { model: s.model } : {}),
+          queue: this.opts.backend.status(),
+          tasks: tasksRunning,
+          ...(s.todo.total > 0 ? { todo: s.todo } : {}),
+          ...(s.goal !== undefined ? { goal: s.goal } : {}),
+          nowMs: this.nowMs(),
+        }
+        try {
+          const text = await source.refresh(ctx)
+          if (generation !== this.sessionGeneration) return
+          if (this.app.status.command !== text) {
+            this.app.status.command = text
+            this.requestFrame()
+          }
+        } catch {
+          /* the source never rejects (it owns the error indicator) — a
+           * defensive catch keeps the previous row value */
+        }
+        return
+      }
+      // tasks segment: backend-tasks truth only (capability-absent → omitted).
+      let tasks: { running: number } | undefined
+      const probe = this.opts.backend.tasks
+      if (probe !== undefined) {
+        try {
+          const rows = await probe()
+          const running = rows.filter(
+            (row) => row.status === "queued" || row.status === "running" || row.status === "waiting",
+          ).length
+          if (running > 0) tasks = { running }
+        } catch {
+          /* backend truth failed — the tasks segment stays omitted */
+        }
+      }
+      if (generation !== this.sessionGeneration) return
+      const s = this.app.status
+      const input: StatusAggregateInput = {
+        workspace: this.opts.workspace ?? process.cwd(),
+        ...(cfg.branch !== undefined ? { branch: cfg.branch } : {}),
+        ...(this.lastModelState !== undefined ? { modelState: this.lastModelState } : {}),
+        context: s.contextUsed !== undefined
+          ? { used: s.contextUsed, ...(s.contextTotal !== undefined ? { total: s.contextTotal } : {}) }
+          : undefined,
+        turnTimerMs: this.app.turn !== undefined ? this.app.turn.turnMs : undefined,
+        ...(s.session !== undefined && s.session !== "" ? { session: s.session } : {}),
+        queueState: this.opts.backend.status(),
+        tasks,
+        ...(s.todo.total > 0 ? { todo: s.todo } : {}),
+        ...(s.goal !== undefined ? { goal: s.goal } : {}),
+      }
+      const st = await collectStatus(input, { items: cfg.items })
+      if (generation !== this.sessionGeneration) return
+      this.applyStatusState(st, tasks)
+      this.requestFrame()
+    })().finally(() => {
+      if (this.statusLineProbe === pending) this.statusLineProbe = undefined
+    })
+    this.statusLineProbe = pending
+  }
+
+  /** The StatusLineState → app.status mapping: a segment with NO source is
+   * CLEARED (unknown → omitted — never a fabricated default left behind). */
+  private applyStatusState(st: StatusLineState, tasks: { running: number } | undefined): void {
+    const s = this.app.status
+    s.modelKnown = st.model !== undefined
+    s.branch = st.branch
+    s.path = st.cwd ?? s.path
+    s.contextUsed = st.context?.used
+    s.contextTotal = st.context?.total
+    s.turnTimerMs = st.turnTimerMs
+    s.session = st.session
+    if (tasks !== undefined) s.tasks = { running: tasks.running, labels: [] }
+    else s.tasks = { running: 0, labels: [] }
+    // the queue chip: the source's 0/absent means nothing queued (the
+    // aggregation only emits >0) — the previous value MUST clear or a
+    // drained queue leaves a stale "+N" on the row.
+    s.queue = st.queue ?? 0
+    if (st.todo !== undefined) s.todo = st.todo
+    if (st.goal !== undefined) s.goal = st.goal
   }
 
   /** M49 Task 12: the TRANSCRIPT evidence lines for one task — parents can

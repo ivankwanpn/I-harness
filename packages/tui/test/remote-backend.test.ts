@@ -1209,3 +1209,53 @@ describe("createRemoteBackend session-tasks (Task 12)", () => {
     await backend.close()
   })
 })
+
+describe("createRemoteBackend session-dashboard (Task 13)", () => {
+  it("gates the dashboard member on the session-dashboard row: absent on a server without it", async () => {
+    const client = fakeWireClient((method) => method === "initialize"
+      ? { protocolVersion: 2, capabilities: { "session-list": ["1"] } }
+      : { ok: true })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await new Promise((r) => setTimeout(r, 20)) // let the eager handshake fill (or not)
+    expect(backend.dashboard).toBeUndefined()
+    expect(client.requests.some((request) => request.method === "session/dashboard")).toBe(false)
+    await backend.close()
+  })
+
+  it("with the row: dashboard wires session/dashboard and keeps only serializable fields (no cost, ever)", async () => {
+    const client = fakeWireClient((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-dashboard": ["1"] } }
+      if (method === "session/dashboard") {
+        return {
+          sessions: [
+            { id: "s1", title: "One", updatedAt: 1, live: true, running: true, queued: 1, tasks: 2, modelLabel: "mock:x", cost: 999 },
+            { id: "s2", title: "Two", updatedAt: 2, live: false, cost: 42 },
+          ],
+        }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.dashboard !== undefined, 1000)
+    const rows = await backend.dashboard!()
+    const first = rows.find((item) => item.id === "s1")!
+    expect(first).toMatchObject({ id: "s1", live: true, running: true, queued: 1, tasks: 2, modelLabel: "mock:x" })
+    expect(first).not.toHaveProperty("cost")
+    const second = rows.find((item) => item.id === "s2")!
+    expect(second).toEqual({ id: "s2", title: "Two", updatedAt: 2, live: false })
+    expect(second).not.toHaveProperty("cost")
+    await backend.close()
+  })
+
+  it("malformed session/dashboard response → SdkWireError (never a fabricated list)", async () => {
+    const client = fakeWireClient((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-dashboard": ["1"] } }
+      if (method === "session/dashboard") return { sessions: 42 }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.dashboard !== undefined, 1000)
+    await expect(backend.dashboard!()).rejects.toBeInstanceOf(SdkWireError)
+    await backend.close()
+  })
+})

@@ -98,6 +98,10 @@ export interface SlashContext {
   // ---- ui / toggles
   togglePane(kind: "todo" | "tasks" | "queue"): void
   setScreen(screen: "agent" | "welcome"): void
+  /** M49 Task 13 (spec §8.3): /dashboard opens the LOCAL dashboard — the SAME
+   * view the Welcome menu entry and Ctrl+\ use (shared state — the previous
+   * filter/cursor survive). OPTIONAL (older test ctx fixtures lack it). */
+  openDashboard?(): void
   /** M49 Task 8 — the shared preview/commit/rollback theme path (the loop
    * resolves preview live, persists to the settings surface and rolls back on
    * a failed write; `/theme` and the Settings row use the SAME route). */

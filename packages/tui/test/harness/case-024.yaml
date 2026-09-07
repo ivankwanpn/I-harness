@@ -8,8 +8,11 @@ steps:
       rows:
         - "  No model configured"
       timeoutMs: 5000
+  # M49 Task 13: the Welcome menu gained the "Dashboard (local sessions)"
+  # row (spec §8.3) — the hero is one row taller; the model-status line moved
+  # one row down (row 16).
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 16 }
       rows:
         - "  No model configured. Open Settings > Models & Providers."
       timeoutMs: 5000

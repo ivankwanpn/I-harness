@@ -23,6 +23,16 @@ export interface StatusState {
   queue: number
   /** MCP connection summary (e.g. "3/5"); null hides the chip. */
   mcp: string | null
+  // ---- M49 Task 13 (spec §9.6): the status line's truthful extra segments —
+  // a segment renders ONLY when its real source knows the value (never a
+  // fabricated default). modelKnown flips when the resolved model state is
+  // "ready"; session is the known session title; turnTimerMs the elapsed turn
+  // (present only while a turn runs); command replaces the row content in
+  // statusLine.mode "command" (the command source's sanitized text).
+  modelKnown?: boolean
+  session?: string
+  turnTimerMs?: number
+  command?: string
 }
 
 /** spec §3.3: branch_icon() — we render the generic `⎇` glyph. */
@@ -57,11 +67,6 @@ export function contextStyle(fraction: number): "text" | "accent-user" | "warnin
   return "accent-error"
 }
 
-interface Slot {
-  text: string
-  style: Style
-}
-
 const SEP = " │ " // spec §3.3: dim spacer between right chips
 
 // ---- M46b G2 (mouse click semantics): hit-testing surface — the RIGHT chip
@@ -74,14 +79,47 @@ const SEP = " │ " // spec §3.3: dim spacer between right chips
 export interface StatusChipPiece {
   text: string
   kind: "tasks" | "plan" | "goal" | "mcp" | "context" | "queue" | "todo"
+    // M49 Task 13 (spec §9.6): the builtin row's additional segments —
+    // model/session/turn-timer render only when their real source exists.
+    | "model" | "session" | "turn-timer"
   /** Renderer parity: SEP is drawn before this piece in the chip stream (the
    * goal composite and the badge+glyph pair DO NOT carry separators). */
   sepBefore: boolean
 }
 
+/** M49 Task 13 (spec §9.6): fit the right-chip stream into `available`
+ * columns — DROP whole rightmost (lowest-priority) groups first, never
+ * truncating a segment's text (the path/cwd is the highest priority and is
+ * never dropped; its own clipping stays the last resort). The chip order IS
+ * the priority order (leftmost highest — the draw order). Consecutive
+ * same-kind pieces are one group (goal = brackets+label). */
+export function fitStatusChips(chips: StatusChipPiece[], available: number): StatusChipPiece[] {
+  // The separator is BETWEEN chips — the first drawn piece never carries one
+  // (the old push-chain semantics: SEP only when chips already exist).
+  const widthOf = (list: StatusChipPiece[]): number => {
+    let w = 0
+    for (let i = 0; i < list.length; i++) {
+      if (i > 0 && list[i]!.sepBefore) w += strWidth(SEP)
+      w += strWidth(list[i]!.text)
+    }
+    return w
+  }
+  if (widthOf(chips) <= available) return chips
+  let kept = chips
+  while (kept.length > 0 && widthOf(kept) > available) {
+    const lastKind = kept[kept.length - 1]!.kind
+    let i = kept.length - 1
+    while (i > 0 && kept[i - 1]!.kind === lastKind) i--
+    kept = kept.slice(0, i)
+  }
+  return kept
+}
+
 /** The right-chip text pieces IN RENDER ORDER (separators are NOT included;
  * the router interleaves SEP per `sepBefore`). Mirrors renderStatus's push
- * order — the drawn stream is what the hits must match. */
+ * order — the drawn stream is what the hits must match. M49 Task 13: the
+ * builtin row's extra segments (model/session/turn-timer) appear ONLY when
+ * their real source exists (modelKnown + a real turn timer + a known title). */
 export function statusChipsOf(state: StatusState, glyphs: GlyphSet): StatusChipPiece[] {
   const out: StatusChipPiece[] = []
   if (state.tasks.running > 0) {
@@ -97,11 +135,20 @@ export function statusChipsOf(state: StatusState, glyphs: GlyphSet): StatusChipP
   if (state.mcp !== null && state.mcp.length > 0) {
     out.push({ text: `⠋ MCP (${state.mcp})`, kind: "mcp", sepBefore: true })
   }
+  if (state.modelKnown === true && state.model !== "" && state.model !== "unconfigured" && state.model !== "invalid") {
+    out.push({ text: state.model, kind: "model", sepBefore: true })
+  }
   if (state.contextUsed !== undefined && state.contextUsed >= 0) {
     const used = state.contextUsed
     const total = state.contextTotal !== undefined && state.contextTotal > 0 ? state.contextTotal : undefined
     const text = total !== undefined ? `${fmtCompact(used)} / ${fmtCompact(total)}` : `${fmtCompact(used)}`
     out.push({ text, kind: "context", sepBefore: true })
+  }
+  if (state.turnTimerMs !== undefined && state.turnTimerMs >= 0) {
+    out.push({ text: elapsedTextOf(state.turnTimerMs), kind: "turn-timer", sepBefore: true })
+  }
+  if (state.session !== undefined && state.session !== "") {
+    out.push({ text: state.session, kind: "session", sepBefore: true })
   }
   if (state.queue > 0) out.push({ text: `+${state.queue}`, kind: "queue", sepBefore: true })
   if (state.todo.total > 0) {
@@ -110,6 +157,14 @@ export function statusChipsOf(state: StatusState, glyphs: GlyphSet): StatusChipP
     out.push({ text: ` ${glyphs.checkMark}`, kind: "todo", sepBefore: false })
   }
   return out
+}
+
+/** "2m10s" / "45s" — the turn-timer segment text. */
+function elapsedTextOf(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  return `${m}m${sec % 60}s`
 }
 
 /** X spans (screen cols) of the LEFT `⎇ {branch}  {path}` — the cwd path click
@@ -122,6 +177,49 @@ export function statusPathSpan(state: StatusState): { start: number; end: number
   return { start: start + 2, end: start + 2 + strWidth(state.path) } // `  {path}`
 }
 
+/** The style of one status piece (mirrors the old push-chain colors). */
+function pieceStyle(
+  piece: StatusChipPiece,
+  state: StatusState,
+  view: ViewDraw,
+  palette: Palette,
+  glyphs: GlyphSet,
+): Style {
+  switch (piece.kind) {
+    case "tasks": return view.color(palette.running)
+    case "plan": return view.color(palette.accentPlan)
+    case "goal":
+      // [Goal: {label}] — brackets dim, label accent_plan (spec §3.3).
+      return piece.text.startsWith("[") || piece.text === "]"
+        ? view.color(palette.grayDim)
+        : view.color(palette.accentPlan)
+    case "mcp": return view.color(palette.grayDim)
+    case "model": return view.color(palette.accentModel)
+    case "context": {
+      const total = state.contextTotal !== undefined && state.contextTotal > 0
+        ? state.contextTotal
+        : undefined
+      const f = total !== undefined ? (state.contextUsed ?? 0) / total : 0
+      const tok = contextStyle(f)
+      const hex = tok === "text" ? palette.textPrimary
+        : tok === "accent-user" ? palette.accentUser
+        : tok === "warning" ? palette.warning
+        : palette.accentError
+      return view.color(hex)
+    }
+    case "turn-timer": return view.color(palette.gray)
+    case "session": return view.color(palette.grayBright)
+    case "queue": return view.color(palette.accentUser)
+    case "todo":
+      // the badge pair: ` 2/5` primary, ` {checkMark}` success — the tail
+      // piece's text IS the check glyph (statusChipsOf lockstep).
+      return piece.text.trim() === glyphs.checkMark
+        ? view.color(palette.accentSuccess)
+        : view.color(palette.textPrimary)
+    default: return view.color(palette.textPrimary)
+  }
+}
+
 export function renderStatus(
   ctx: Rect,
   state: StatusState,
@@ -129,56 +227,33 @@ export function renderStatus(
   palette: Palette,
   glyphs: GlyphSet,
 ): void {
+  // M49 Task 13: command mode — the command source's sanitized text IS the row
+  // (one stable row; left-anchored, clipped at the width — nothing fabricated).
+  if (state.command !== undefined && state.command !== "") {
+    view.text(ctx.x, ctx.y, state.command, view.color(palette.textPrimary), ctx.x + ctx.w)
+    return
+  }
   const sepStyle = view.color(palette.grayDim)
-  // M46b G1: the chip walk carries the semantic KIND so the hover machinery
+  // M46b G1: the piece walk carries the semantic KIND so the hover machinery
   // can register one hit area per chip (multi-slot chips like [Goal: x] group).
-  const chips: Array<Slot & { kind?: string }> = []
-  const push = (text: string, style: Style, kind?: string): void => {
-    if (chips.length > 0) chips.push({ text: SEP, style: sepStyle })
-    chips.push({ text, style, kind })
-  }
+  const pieces = statusChipsOf(state, glyphs)
 
-  // bg_tasks — dot-spinner (tick/4 = 125ms) + count, accent_running (§3.3)
-  if (state.tasks.running > 0) {
-    const frame = glyphs.dotSpinner[Math.floor(state.tickMs / 125) % glyphs.dotSpinner.length]
-    push(`${frame} ${state.tasks.running}`, view.color(palette.running), "tasks")
-  }
-  if (state.plan) push("plan", view.color(palette.accentPlan), "plan")
-  if (state.goal !== undefined && state.goal.length > 0) {
-    // [Goal: {label}] — brackets dim, label accent_plan (spec §3.3)
-    if (chips.length > 0) chips.push({ text: SEP, style: sepStyle })
-    chips.push({ text: "[Goal: ", style: view.color(palette.grayDim), kind: "goal" })
-    chips.push({ text: state.goal, style: view.color(palette.accentPlan), kind: "goal" })
-    chips.push({ text: "]", style: view.color(palette.grayDim), kind: "goal" })
-  }
-  if (state.mcp !== null && state.mcp.length > 0) {
-    push(`⠋ MCP (${state.mcp})`, view.color(palette.grayDim), "mcp")
-  }
-  if (state.contextUsed !== undefined && state.contextUsed >= 0) {
-    const used = state.contextUsed
-    const total = state.contextTotal !== undefined && state.contextTotal > 0
-      ? state.contextTotal
-      : undefined
-    const f = total !== undefined ? used / total : 0
-    const tok = contextStyle(f)
-    const hex = tok === "text" ? palette.textPrimary
-      : tok === "accent-user" ? palette.accentUser
-      : tok === "warning" ? palette.warning
-      : palette.accentError
-    const text = total !== undefined
-      ? `${fmtCompact(used)} / ${fmtCompact(total)}`
-      : `${fmtCompact(used)}`
-    push(text, view.color(hex), "context")
-  }
-  if (state.queue > 0) push(`+${state.queue}`, view.color(palette.accentUser), "queue")
-  if (state.todo.total > 0) {
-    chips.push({ text: " " + state.todo.done + "/" + state.todo.total, style: view.color(palette.textPrimary), kind: "todo" })
-    chips.push({ text: " " + glyphs.checkMark, style: view.color(palette.accentSuccess), kind: "todo" })
-  }
+  // M49 Task 13 (spec §9.6): drop rightmost low-priority segments BEFORE any
+  // text truncation — `available` is the width left of the fixed left side
+  // (`⎇ {branch}  {path}` — never dropped; its own clip stays the last resort).
+  const leftW = 1
+    + (state.branch !== undefined && state.branch.length > 0 ? 1 + strWidth(state.branch) : 0)
+    + 2 + strWidth(state.path)
+  const chips = fitStatusChips(pieces, Math.max(0, ctx.w - leftW - 2))
 
-  // Right-side chips are drawn first (anchored at the right edge).
+  // Right-side chips are drawn first (anchored at the right edge). The
+  // separator is BETWEEN chips (the first drawn piece carries none — the
+  // cursor/x math below matches the draw loop exactly).
   let totalW = 0
-  for (const c of chips) totalW += strWidth(c.text)
+  for (let i = 0; i < chips.length; i++) {
+    if (i > 0 && chips[i]!.sepBefore) totalW += strWidth(SEP)
+    totalW += strWidth(chips[i]!.text)
+  }
   let x = ctx.x + ctx.w - totalW
   if (totalW > 0 && x < ctx.x) x = ctx.x // overflow: clip the tail via limitX below
   // M46b G1: register the per-chip hit areas (grouped rects — the slot walk
@@ -189,23 +264,27 @@ export function renderStatus(
     let gx = x
     let curKind: string | undefined
     let spanStart = x
-    for (const c of chips) {
+    for (let i = 0; i < chips.length; i++) {
+      const c = chips[i]!
       const w = strWidth(c.text)
-      if (c.kind !== undefined && curKind !== undefined && c.kind !== curKind) {
+      if (i > 0 && c.sepBefore) gx += strWidth(SEP)
+      if (curKind !== undefined && c.kind !== curKind) {
         if (view.hit != null && view.hit({ x: spanStart, y: ctx.y, w: gx - spanStart, h: 1 }, `chip-${curKind}`, "status-chip")) {
           hoveredChip = curKind
         }
         spanStart = gx
       }
-      if (c.kind !== undefined) curKind = c.kind
+      curKind = c.kind
       gx += w
     }
     if (curKind !== undefined && gx > spanStart && view.hit != null && view.hit({ x: spanStart, y: ctx.y, w: gx - spanStart, h: 1 }, `chip-${curKind}`, "status-chip")) {
       hoveredChip = curKind
     }
   }
-  for (const c of chips) {
-    x = view.text(x, ctx.y, c.text, c.style, ctx.x + ctx.w)
+  for (let i = 0; i < chips.length; i++) {
+    const c = chips[i]!
+    if (i > 0 && c.sepBefore) x = view.text(x, ctx.y, SEP, sepStyle, ctx.x + ctx.w)
+    x = view.text(x, ctx.y, c.text, pieceStyle(c, state, view, palette, glyphs), ctx.x + ctx.w)
   }
   // M46b G1: the context chip hover — the eighth-block bar (min 6 cols, the
   // spec §3.3 context gauge) drawn in the free gap left of the chips.

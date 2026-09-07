@@ -10,6 +10,7 @@ import { present } from "../src/app/present.ts"
 import type { TuiAppState } from "../src/app/present.ts"
 import type { DisplayLine, ScrollbackEngine, TuiEvent } from "../src/contracts.ts"
 import { layoutAgent } from "../src/views/agent.ts"
+import { createDashboardState } from "../src/views/dashboard-state.ts"
 
 const cap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
 const palette = resolvePalette(cap, "groknight")
@@ -119,6 +120,27 @@ describe("present — ActiveView and constrained layout", () => {
     expect(text).toContain("I-harness")
     expect(text).toContain("No model configured")
     expect(text).toContain("Settings > Models & Providers")
+  })
+
+  it("renders the Dashboard screen from the ActiveView contract with real rows (Task 13)", () => {
+    const r = make(80, 24)
+    const state = baseState(new StubEngine(), {
+      view: { kind: "dashboard" },
+      screen: "dashboard",
+      dashboard: createDashboardState([
+        { id: "s1", title: "One", updatedAt: 21, live: true, running: true, queued: 2, tasks: 1, modelLabel: "mock:mock-story" },
+        { id: "s2", title: "Two", updatedAt: 9, live: false },
+      ]),
+    })
+    present(state, r, palette, GLYPHS, {})
+    r.flush(() => {})
+    const text = Array.from({ length: 24 }, (_, y) => rowText(r, y)).join("\n")
+    expect(text).toContain("Dashboard")
+    expect(text).toContain("One")
+    expect(text).toContain("Two")
+    expect(text).toContain("mock:mock-story")
+    // unknown fields are omitted — no cost/team/fabricated columns
+    expect(text).not.toContain("cost")
   })
 
   it("drops shortcuts before allowing scrollback below five rows", () => {

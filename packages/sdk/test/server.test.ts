@@ -5,9 +5,12 @@ import { describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { createInterface } from "node:readline"
+import { PassThrough } from "node:stream"
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import { createSessionService, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { HarnessClient } from "../src/client.ts"
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 import {
   decodeFrame,
@@ -122,6 +125,7 @@ describe("createSdkServer", () => {
             "session-rewind": ["1"],
             "session-queue": ["1"],
             "session-tasks": ["1"],
+            "session-dashboard": ["1"],
           },
         },
       })
@@ -1183,4 +1187,72 @@ describe("createSdkServer session/queue (Task 11)", () => {
       await cleanup()
     }
   }, 60_000)
+})
+
+describe("createSdkServer session/dashboard (Task 13)", () => {
+  /** A real HarnessClient wired to the in-process server (two PassThroughs). */
+  function linkClient(server: SdkServer): HarnessClient {
+    const clientRead = new PassThrough() // server → client
+    const clientWrite = new PassThrough() // client → server
+    const rl = createInterface({ input: clientWrite })
+    rl.on("line", (line) => {
+      void server.handleLine(line).then((reply) => {
+        if (reply !== null) clientRead.write(reply)
+      })
+    })
+    server.onNotify((message) => clientRead.write(encodeFrame(message)))
+    return new HarnessClient(clientRead, clientWrite)
+  }
+
+  it("returns dashboard rows enriched only with known live fields (no cost, ever)", async () => {
+    const service = makeStubService()
+    service.hasAssembly = vi.fn((id: string) => id === "s1")
+    service.queueState = vi.fn(() => ({ running: true, queued: 1 }))
+    service.tasks = vi.fn(() => [
+      { id: "t1", group: "subagent" as const, label: "helper", status: "running" as const, canCancel: true },
+      { id: "t2", group: "subagent" as const, label: "helper2", status: "waiting" as const, canCancel: true },
+    ])
+    service.modelState = vi.fn(async () => ({
+      status: "ready" as const,
+      providerId: "fixture",
+      modelId: "bit",
+      label: "fixture:bit",
+    }))
+    const server = createSdkServer(service, {
+      listSessions: async () => ({
+        sessions: [
+          { id: "s1", title: "One", updatedAt: 1 },
+          { id: "s2", title: "Two", updatedAt: 2 },
+        ],
+      }),
+    })
+    const client = linkClient(server)
+    try {
+      const result = await client.dashboard()
+      expect(result.sessions).toContainEqual(expect.objectContaining({
+        id: "s1", live: true, running: true, queued: 1, tasks: 2,
+      }))
+      const s1 = result.sessions[0]!
+      expect(s1).not.toHaveProperty("cost")
+      // a listing-only session keeps NO live fields (never a fabricated zero)
+      const s2 = result.sessions.find((row) => row.id === "s2")!
+      expect(s2).toEqual({ id: "s2", title: "Two", updatedAt: 2, live: false })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it("session/dashboard without a listing source → honest blank (never fabricated rows)", async () => {
+    const server = createSdkServer(makeStubService())
+    const client = linkClient(server)
+    try {
+      const result = await client.dashboard()
+      expect(result.sessions).toEqual([])
+      expect(result.listingUnavailable).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
 })
