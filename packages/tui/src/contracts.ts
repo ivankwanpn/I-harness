@@ -161,6 +161,15 @@ export interface DashboardSessionRow extends SessionSummary {
   modelLabel?: string
 }
 
+/** M49 Task 13 (review fix): the dashboard projection result — the rows PLUS
+ * the honest listing verdict. `listingUnavailable` true = the listing source
+ * is absent (the server's honest blank — the UI MUST render the unavailable
+ * state, NEVER "No local sessions yet" for it). */
+export interface DashboardSessionResult {
+  sessions: DashboardSessionRow[]
+  listingUnavailable?: boolean
+}
+
 /** M49 Task 12: ONE row of the real task projection (serialized summary —
  * never a registry object/client). `canCancel` follows the CURRENT registry
  * state at serve time; absent optional fields mean the owner cannot know them. */
@@ -223,8 +232,10 @@ export interface BackendClient {
   /** M49 Task 13 (spec §8.3): the LOCAL dashboard projection — session-list
    * rows enriched with the known live model/queue/task values (backend truth
    * only). OPTIONAL — absent ⇒ the dashboard view renders the honest
-   * unavailable state (never a fabricated blank standing for "no sessions"). */
-  dashboard?(): Promise<DashboardSessionRow[]>
+   * unavailable state (never a fabricated blank standing for "no sessions").
+   * `listingUnavailable` (the server's honest blank) travels the SAME
+   * result — the UI renders the unavailable state for it too. */
+  dashboard?(): Promise<DashboardSessionResult>
   /** M49 Task 13: the session's REAL tail lines (the dashboard "peek" — the
    * last few log lines of a LIVE session). OPTIONAL — absent ⇒ the peek action
    * toasts the missing seam. */

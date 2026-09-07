@@ -126,7 +126,8 @@ function dashboardBackend(
     status: () => ({ ...bits }),
     close: async () => {},
     async dashboard() {
-      return items.map((r) => ({ ...r }))
+      // the result shape: rows plus (absent here) the listing verdict.
+      return { sessions: items.map((r) => ({ ...r })) }
     },
   }
 }
@@ -302,6 +303,27 @@ describe("dashboard over the real app (Task 13)", () => {
     await app.stop()
   })
 
+  it("the server's listingUnavailable verdict renders the unavailable state (never 'no sessions')", async () => {
+    // A capability-carrying server with no listing source answers the honest
+    // blank — the UI must NOT turn it into "No local sessions yet".
+    const backend = dashboardBackend([])
+    const honestBlank: BackendClient = {
+      ...backend,
+      async dashboard() {
+        return { sessions: [], listingUnavailable: true }
+      },
+    }
+    const app = new TuiApp(testOptions({ backend: honestBlank }))
+    await app.openDashboard()
+    await waitFor(() => {
+      app.frame()
+      return screenText().includes("Dashboard unavailable")
+    })
+    expect(screenText()).toContain("Dashboard unavailable")
+    expect(screenText()).not.toContain("No local sessions yet")
+    await app.stop()
+  })
+
   it("a FAILED dashboard fetch keeps the previous rows and says so (never 'no sessions' for an error)", async () => {
     let failures = 0
     const backend = dashboardBackend([row("s1", "Alpha")])
@@ -310,7 +332,7 @@ describe("dashboard over the real app (Task 13)", () => {
       async dashboard() {
         const call = failures
         failures++
-        if (call === 0) return backend.rows0()
+        if (call === 0) return { sessions: backend.rows0() }
         throw new Error(`backend down (call ${call})`)
       },
     }

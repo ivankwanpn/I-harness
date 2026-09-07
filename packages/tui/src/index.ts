@@ -89,6 +89,7 @@ export { toolKindOf } from "./contracts.ts"
 export type {
   BackendClient,
   BackendContextUsage,
+  DashboardSessionResult,
   DashboardSessionRow,
   DisplayLine,
   ScrollbackEngine,

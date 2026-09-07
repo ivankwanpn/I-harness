@@ -3925,9 +3925,12 @@ export class TuiApp {
     this.app.dashboardLoading = true
     this.requestFrame()
     try {
-      const rows = await probe()
-      this.app.dashboard?.replaceRows(rows)
-      this.app.dashboardUnavailable = false
+      const result = await probe()
+      this.app.dashboard?.replaceRows(result.sessions)
+      // listingUnavailable (the server's honest blank — no listing source)
+      // renders the SAME unavailable state as a capability-absent backend,
+      // NEVER "No local sessions yet" for it.
+      this.app.dashboardUnavailable = result.listingUnavailable === true
       this.app.dashboardFetchFailed = false
     } catch {
       // Backend truth failed — the previous rows STAY (stale truth stays
