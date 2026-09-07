@@ -216,15 +216,20 @@ steps:
   - assert-glyph-integrity: {}
   - request-marker: { name: close-file-viewer }
   # ── the HELP surface: the CURRENT visible registry listing (never static).
-  # The slash-burst through this pairing is the flaky layer, so the host
-  # builds the panel from the app's REAL surfaces (the same openLightPanel
-  # state the /help command produces — the visible registry + key rows).
+  # The host submits the "/help" LINE through the loop's REAL submit path —
+  # the production /help command builds the rows from the app's own ctx
+  # seams (visibleCommands() through the real slash context + keyBindings()
+  # of the real app state); the row asserts pin the real inventory.
   - request-marker: { name: open-help-panel }
   - assert-cell-colors:
       cells:
-        - { row: 15, col: 4, text: "Help" }
+        - { row: 9, col: 4, text: "Help" }
+        - { row: 11, col: 5, text: "/new" }
+        - { row: 12, col: 5, text: "/home" }
       timeoutMs: 10000
+  - await-quiescent: { ms: 300 }
   - request-marker: { name: close-help-panel }
+  - await-quiescent: { ms: 200 }
   # ── unsupported /login: the exact message + ZERO backend submissions (the
   # host's submission ledger never appears — the test asserts the absence).
   # The slash line rides the loop's REAL submit path (dispatch("submit") →
@@ -234,9 +239,12 @@ steps:
   # the exact toast, and the backend's submit is never reached).
   - request-marker: { name: submit-login }
   - await-quiescent: { ms: 300 }
-  - assert-cell-colors:
-      cells:
-        - { row: 29, col: 72, text: "U" }
+  # the EXACT unsupported message (the full right-anchored toast row — the
+  # fixed 72-column leading pad, the verbatim line the loop renders).
+  - wait-screen:
+      region: { startRow: 29 }
+      rows:
+        - "                                                                        Unsupported command: /login"
       timeoutMs: 10000
   # ────────────────────────────────────────────────────────────── PHASE C
   - request-marker: { name: request-restart }

@@ -15,7 +15,7 @@
 //      evidence: the theme's palette colors, the model label from the REAL
 //      runtime binding, and the settings document values.
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -67,6 +67,14 @@ test(
       expect(result.ok, result.ok ? "ok" : `scenario failed: ${result.error}`).toBe(true)
       expect(exited).toBe(true)
       expect(virtual.cols).toBe(scene.size[0])
+      // the unsupported /login: it NEVER reaches the backend's submit — the
+      // host's submission ledger records EVERY submit (the real tool turn's
+      // "case 028" is there), so the proof is the ABSENCE of the "/login"
+      // payload: the ledger still holds the last REAL prompt, not the slash
+      // line (case-024/025 parity — the '/'-line is rejected before append).
+      if (existsSync(join(markerDir, "submission"))) {
+        expect(readFileSync(join(markerDir, "submission"), "utf8")).not.toContain("/login")
+      }
       expect(virtual.rows).toBe(scene.size[1])
 
       // ── the byte discipline proofs (on the captured stream).
