@@ -524,23 +524,17 @@ async function main(): Promise<void> {
       state.modal = undefined
       pieces.app.dispatch("none")
     }
-    // The /help surface (the same openLightPanel state the production
-    // registry run produces): the visible registry + key rows.
+    // The /help surface — the PRODUCTION command path: the host submits the
+    // "/help" line through the loop's REAL submit (dispatch("submit") →
+    // submitPrompt → registry run) — the panel rows come from the app's OWN
+    // ctx seams: visibleCommands() (the registry's visible inventory through
+    // the real slash context) + keyBindings() (shortcutsFor with the real
+    // app state) — never a hard-coded list.
     if (existsSync(`${MARKER_DIR}/open-help-panel`)) {
       rmSync(`${MARKER_DIR}/open-help-panel`, { force: true })
       const state = pieces.app.state()
-      state.lightPanel = {
-        kind: "cheatsheet",
-        title: "Help",
-        rows: [
-          { label: "Commands", header: true },
-          { label: "/help", detail: "Slash commands + active key bindings" },
-          { label: "Keys", header: true },
-          { label: "Ctrl+R", detail: "Mouse reporting toggle" },
-        ],
-        cursor: 0,
-      }
-      pieces.app.dispatch("none")
+      state.prompt.text = "/help"
+      pieces.app.dispatch("submit")
     }
     if (existsSync(`${MARKER_DIR}/close-help-panel`)) {
       rmSync(`${MARKER_DIR}/close-help-panel`, { force: true })

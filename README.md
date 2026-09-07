@@ -42,7 +42,7 @@ ih --attach <session-id>
 ih help             # 全部子命令（run / web / sdk / acp / tui）
 ```
 
-> **M49 起（superseded）**：模型解析是**必需**——未配置任何提供商時按 `No model configured` 拒絕啟動（Welcome 頁開放 Settings），不再有 mock 回退。解析鏈：session model selection > `llm.defaultModel` > 明確的 `--model` override；provider 設定走**canonical settings 平面**（`llm.providers` 為唯一真源；M46 的 `tui.providers` 布局僅以 read-pin 方式被兼容讀取，永不寫回主力平面）。
+> **M49 起（superseded）**：模型解析是**必需**——未配置任何提供商時按 `No model configured` 拒絕啟動（Welcome 頁開放 Settings），不再有 mock 回退。解析鏈（`provider-runtime.selectModel`：override 先判，再 session selection，最後 defaultModel）：明確的 `--model` override > session model selection > `llm.defaultModel`；provider 設定走**canonical settings 平面**（`llm.providers` 為唯一真源；M46 的 `tui.providers` 布局僅以 read-pin 方式被兼容讀取，永不寫回主力平面）。
 
 **Windows 安裝器**（自包含——見「分發與打包」）：
 

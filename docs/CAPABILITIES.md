@@ -75,7 +75,7 @@
 - 立場：**不默認任何 provider**、static switch（不追 dsh 註冊表/discovery 自動合併）
 
 ## 八、質量/工程
-- 每一輪 full 審計鏈；全量測試綠（64 測試文件、~4000+ 測試）、typecheck 0、e2e 11/11
+- 每一輪 full 審計鏈；全量測試綠（64 測試文件、~4000+ 測試）、typecheck 0、e2e 11/11——M49 交付時的實測記錄（task-15-report.md）：`pnpm -r typecheck` exit 0、`pnpm e2e` 11/11、全部 19 個 PTY case 逐一獨立運行 exit 0、14 個 Step-4 包測試 exit 0（唯一例外：apps/cli 的 sdk-wire-v11 在此環境為基線既有失敗——stash 驗證）；本環境根 `pnpm test` 視同為此兩項基線/併發條件所限（TUI 全體 735/736 + case-027 全套併發 flake——獨立跑 1/1）
 - 依賴原則：通用公開庫自由、私有禁入（`chokidar`/`@aws-sdk`/`@agentclientprotocol` 為 M28+ 實踐）
 - 已知問題實錄：README quirks（vitest worker flake 已 M31 修復——web-host forks pool）
 - 多輪執行模式：worktree 隔離 + 雙組平行 + 調和審查 + 可追溯的執行者報告
@@ -94,7 +94,7 @@
 ## 八¾¾、Provider/模型 plane + TUI parity（M49——Grok parity 收官）
 
 - **Canonical provider settings**：settings `llm.providers`（id 化、protocol/baseURL/modelsURL/models/displayName/apiKeyEnv 引用）+ `llm.defaultModel` 為唯一解析真源；TUI `/provider` master/detail 寫入此平面（`createProviderRuntime`——directory/upsert/remove/setApiKey/discoverModels/setDefaultModel/resolveModel）。M46 `tui.providers` 佈局僅**讀取 pin**（重寫時文件原樣保留、規格化輸出永不暴露、永不推入 `llm.providers` 持久化）。provider 目錄 = registry 模板 + user 覆蓋合併；身份/密鑰**絕不進 settings**（credentials 引用 + `apiKeyEnv` env 覆寫、shadowed 拒絕）。
-- **解析鏈**：session model selection > `llm.defaultModel` > `--model` override；未配置 → `No model configured`（required-model gate——Welcome 路由 Settings；無 mock 回退）；`reasoningEffort` 6 檔、`contextWindow` 來自 model card 有效上下文（stale-window 防止單元級）。
+- **解析鏈**（`provider-runtime/src/index.ts:456-483` selectModel：override 先判）：`--model` override > session model selection > `llm.defaultModel`；未配置 → `No model configured`（required-model gate——Welcome 路由 Settings；無 mock 回退）；`reasoningEffort` 6 檔、`contextWindow` 來自 model card 有效上下文（stale-window 防止單元級）。
 - **認證面**：refs-not-values 的三源 resolve（env > file）＋ **Bedrock ambient**（無 key 環境即用——僅 `bedrock` provider 與 `ambient` ref 合法，其他協議拒絕）；**OAuth-account 類型為未來擴展邊界**（ProviderAuthRef 型別預留 `oauth-account-ref`，本期無實作/無 UI 側）。
 - **發現**：model 目錄 = 手動（`/provider` 內置 model id 增刪）+ **明確 discovery**（`discoverModels` probe——`modelsURL` 全端點支持；bedrock 為 manual-only、明確拒絕發現）；無自動爬取/入門教程。
 - **Slash 註冊表（可見清單——M49 實測）**：`provider model settings effort`（provider-settings 能力）；`theme timestamps multiline compact-mode minimal fullscreen`；`doctor copy export transcript help quit`；`skills mcps hooks plugins marketplace config-agents`；`workflow workflows`；`usage tutorial goal`；`timeline`；`toggle-mouse-reporting`（mouse_reporting_toggle 開）；`always-approve auto`（guardian 能力）；`find jump history edit-prompt new home resume dashboard queue tasks btw rename session-info fork context rewind compact plan view-plan`（各別後端能力門控）；`vim-mode` 註冊但 M49 能力缺席——**不可見**。排除名單（未註冊——無 hidden skip-list）：`login logout share privacy delete cd remember recap voice imagine imagine-video`。`/help` 渲染**當前**可見清單 + 現行鍵行（絕非靜態）。
