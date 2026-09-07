@@ -44,6 +44,7 @@ import {
   bindPermissionOverlay,
   bindQuestionOverlay,
   createApprovalBridge,
+  createCommandStatusSource,
   createRemoteBackend,
   createScrollbackEngine,
   defaultEmbeddedFactory,
@@ -67,6 +68,11 @@ import type {
 } from "@i-harness/tui"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
 import type { SessionAssembly } from "@i-harness/session-executor"
+// M49 Task 13: the status-line command runner — the REAL exec service + the
+// canonical shell resolution (the same path the engine's bash tool takes).
+import { createExecService, type ExecService } from "@i-harness/exec"
+import { resolveShell } from "@i-harness/shell"
+import type { StatusRunner, StatusCommandContext } from "@i-harness/tui"
 // The mock-model script shape (structural — llm-mock stays a tui-only dep; a
 // host only ever hands the script-texture to the service option).
 type MockStep = { role: "assistant"; text?: string; toolCalls?: Array<{ name: string; args: unknown }> }
@@ -228,6 +234,78 @@ export async function pumpInteractionBridge(app: TuiApp, bridge: ApprovalBridge)
     }
   })()
   await Promise.all([approve, ask])
+}
+
+/** M49 Task 13 (spec §9.6): the workspace's REAL git branch — probed ONCE at
+ * startup (git rev-parse, 1s cap). Unknown → undefined → the builtin status
+ * row omits the branch segment (never a fabricated default). */
+export function resolveWorkspaceGitBranch(workspace: string): string | undefined {
+  try {
+    const out = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: workspace,
+      timeout: 1000,
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    const branch = out.toString("utf8").trim()
+    return branch !== "" ? branch : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** M49 Task 13 (spec §9.6): the command-mode status runner — @i-harness/exec
+ * with the workspace cwd, the JSON status context on stdin, 1000ms timeout,
+ * and the resolved shell (bash-or-pwsh — the engine's own convention). The
+ * output discipline (first non-empty line, 4096-byte cap, control-code
+ * sanitization, two-failure retention) lives in the shared
+ * createCommandStatusSource (apps/tui wires the runner only). */
+export function createStatusRunner(
+  exec: ExecService,
+  workspace: string,
+  command: string,
+): StatusRunner {
+  const shell = resolveShell()
+  return async (ctx: StatusCommandContext) => {
+    const result = await exec.run({
+      argv: [...shell.argv, command],
+      cwd: workspace,
+      input: JSON.stringify(ctx),
+      timeoutMs: 1000,
+    })
+    if (result.exitCode !== 0) {
+      const detail = result.stderr.trim()
+      throw new Error(`status command exit ${result.exitCode}${detail !== "" ? `: ${detail}` : ""}`)
+    }
+    return result.stdout
+  }
+}
+
+/** M49 Task 13: compose the loop's status-line option from the persisted
+ * tui.prefs.statusLine — mode/items/command/refreshMs, plus the REAL host
+ * values (the workspace git branch probe). The command source is wired only
+ * for mode "command" (an absent command → the honest undefined source — the
+ * loop keeps the previous row value). */
+export function buildStatusLineOption(
+  settings: SettingsStoreSurface,
+  workspace: string,
+): NonNullable<TuiAppOptions["statusLine"]> {
+  const prefs = settings.get().tui.prefs.statusLine
+  const branch = resolveWorkspaceGitBranch(workspace)
+  return {
+    mode: prefs.mode,
+    items: prefs.items,
+    ...(branch !== undefined ? { branch } : {}),
+    ...(prefs.mode === "command" && prefs.command !== undefined && prefs.command !== ""
+      ? {
+          commandSource: createCommandStatusSource(
+            createStatusRunner(createExecService(), workspace, prefs.command),
+            { timeoutMs: 1000, refreshMs: prefs.refreshMs ?? 1000 },
+          ),
+          // the loop's cadence uses the same interval (floor 300ms).
+          commandRefreshMs: prefs.refreshMs ?? 1000,
+        }
+      : {}),
+  }
 }
 
 export function createTuiModelBindingFor(
@@ -492,6 +570,18 @@ export async function createExecutableTui(
     providerController,
     compact: tuiPrefs.compact,
     workspace: appInputs.workspace,
+    // M49 Task 13 (spec §9.2/§8.3/§9.6): the durable status-line + dashboard
+    // prefs — every visible value is live-applied (the loop derives the row
+    // from the app's real values + the host extras; the dashboard pins/order
+    // persist ONLY the id lists under tui.prefs.dashboard).
+    statusLine: buildStatusLineOption(settings, appInputs.workspace),
+    dashboardPrefs: { ...tuiPrefs.dashboard, pinned: [...tuiPrefs.dashboard.pinned], order: [...tuiPrefs.dashboard.order] },
+    onDashboardPrefs: (prefs) => {
+      const current = settings.get().tui.prefs
+      // ids ONLY — the missing-id deletion happens in the loop AFTER this
+      // write resolves (a failure keeps them — never eagerly pruned).
+      return settings.set({ tui: { prefs: { ...current, dashboard: prefs } } })
+    },
     ...(appInputs.input !== undefined ? { input: appInputs.input } : {}),
     ...(inline !== undefined ? { mode: "minimal" as const, inline } : {}),
     mousePrefs: {
@@ -555,7 +645,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // terminal resolves to the env-derived defaults (2 s outer cap on top of
   // the probe's own 500 ms deadline).
   const cap: TerminalCapabilityContext = await Promise.race([
-    probeCapabilities(() => ({ write: (s) => process.stdout.write(s) })),
+    probeCapabilities(() => ({ write: (s: string) => process.stdout.write(s) })),
     new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 2000)),
   ])
     .then((c) => (c === "timeout" ? createUnknownCapabilities() : c))
@@ -603,7 +693,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
         approveAll: !tuiPrefs.guardian || tuiPrefs.alwaysApprove,
         // M49 Task 10: every production assembly gets the bridge answerers
         // (the bridge attach — fail-closed when the UI cannot surface).
-        onAssembly: (assembly) => { for (const hook of bridgeSubscriptions) hook(assembly) },
+        onAssembly: (assembly: SessionAssembly) => { for (const hook of bridgeSubscriptions) hook(assembly) },
       })
 
   const cols = process.stdout.columns ?? 80
@@ -654,7 +744,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   try {
     attach = attachInput({
       stdin: process.stdin,
-      onEvent: (ev) => {
+      onEvent: (ev: InputEvent) => {
         inputQueue.push(ev)
         inputWake?.()
       },

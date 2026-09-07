@@ -44,7 +44,8 @@ export const skippedCommands: SlashCommand[] = [
   hidden("gboom", "no dashboard/video surface (skip-list)"),
   hidden("cd", "no session cwd change surface (skip-list)"),
   hidden("fork", "no fork surface (skip-list)"),
-  hidden("dashboard", "dashboard is the welcome/agent screen (spec §1)"),
+  // /dashboard: M49 Task 13 landed it — a REAL command (impl/sessions.ts) and
+  // a real screen (views/dashboard.ts) replaced the previous inventory row.
   hidden("context", "context surface rides the settings modal (M46a G1 — the visible /settings command owns the name)"),
   hidden("edit-prompt", "$EDITOR prompt editing lands M46b (minimal Ctrl+G slot exists)"),
   hidden("expand", "expand/minimal full-view lands M46b"),

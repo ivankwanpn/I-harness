@@ -89,6 +89,7 @@ export { toolKindOf } from "./contracts.ts"
 export type {
   BackendClient,
   BackendContextUsage,
+  DashboardSessionRow,
   DisplayLine,
   ScrollbackEngine,
   ScrollbackSearchResult,
@@ -101,6 +102,25 @@ export type {
   TuiEvent,
   TuiToolEvent,
 } from "./contracts.ts"
+// M49 Task 13: the local dashboard state + the status-line truth source (the
+// apps/tui host composes them from settings + @i-harness/exec).
+export { createDashboardState } from "./views/dashboard-state.ts"
+export type { DashboardState, DashboardPrefs } from "./views/dashboard-state.ts"
+export {
+  collectStatus,
+  createCommandStatusSource,
+  sanitizeStatusText,
+  firstNonEmptyLine,
+} from "./app/status-source.ts"
+export type {
+  StatusLineState,
+  StatusAggregateInput,
+  StatusCommandContext,
+  StatusCommandSource,
+  StatusRunner,
+  StatusLineSegmentKind,
+} from "./app/status-source.ts"
+export type { StatusLineOptions } from "./app/loop.ts"
 // G1↔G2 minimal-mode contracts (contracts.ts is G1's — re-exported read-only).
 export type { InlineLiveRegion, InlineMetrics, RegionLine } from "./minimal/contracts.ts"
 // M49 Task 8: minimal ANSI from the active semantic palette (design §9.3) —

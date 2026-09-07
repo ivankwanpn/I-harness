@@ -147,6 +147,20 @@ export type AgentTaskGroup = "subagent" | "job" | "workflow" | "schedule"
  * cancelled — settled and recovered states display truthfully). */
 export type AgentTaskStatus = "queued" | "running" | "waiting" | "completed" | "failed" | "cancelled"
 
+/** M49 Task 13 (spec §8.3): ONE local-dashboard row — the session summary plus
+ * the KNOWN live-projection fields. `live` is the honest verdict (a live
+ * assembly exists); running/queued/tasks/modelLabel are present ONLY when
+ * known (absent = the row omits the field — never a fabricated zero). The
+ * shape carries NO cost/team/cross-machine member by contract (spec: no
+ * fabricated cost, local-only). */
+export interface DashboardSessionRow extends SessionSummary {
+  live: boolean
+  running?: boolean
+  queued?: number
+  tasks?: number
+  modelLabel?: string
+}
+
 /** M49 Task 12: ONE row of the real task projection (serialized summary —
  * never a registry object/client). `canCancel` follows the CURRENT registry
  * state at serve time; absent optional fields mean the owner cannot know them. */
@@ -206,6 +220,15 @@ export interface BackendClient {
    * registry. OPTIONAL — absent ⇒ the pane hides [stop]/[✗] even when a row's
    * `canCancel` is true. `already-finished` = the task was terminal already. */
   cancelTask?(id: string): Promise<"cancellation-requested" | "already-finished">
+  /** M49 Task 13 (spec §8.3): the LOCAL dashboard projection — session-list
+   * rows enriched with the known live model/queue/task values (backend truth
+   * only). OPTIONAL — absent ⇒ the dashboard view renders the honest
+   * unavailable state (never a fabricated blank standing for "no sessions"). */
+  dashboard?(): Promise<DashboardSessionRow[]>
+  /** M49 Task 13: the session's REAL tail lines (the dashboard "peek" — the
+   * last few log lines of a LIVE session). OPTIONAL — absent ⇒ the peek action
+   * toasts the missing seam. */
+  peekTail?(sessionId: string): Promise<string[]>
   /** Real per-session context usage (M38b G2). OPTIONAL: a backend that cannot
    * price the session honestly has no member — the loop renders only what
    * exists, never an estimate. */

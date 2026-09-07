@@ -20,7 +20,7 @@ import {
   mapSessionEvent,
   toolResultIsError,
 } from "../src/backend/embedded.ts"
-import type { TuiEvent } from "../src/contracts.ts"
+import type { DashboardSessionRow, TuiEvent } from "../src/contracts.ts"
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 const tmp = (): string => mkdtempSync(join(tmpdir(), "ih-tui-backend-"))
@@ -959,6 +959,121 @@ describe("embedded backend — real task projection and cancellation (Task 12)",
     try {
       expect(await backend.tasks!()).toEqual([])
       await expect(backend.cancelTask!("never-a-task")).rejects.toThrow(/unknown/)
+    } finally {
+      await backend.close()
+    }
+  })
+})
+
+describe("embedded backend — local dashboard projection (Task 13)", () => {
+  it("dashboard() enriches listed rows only with known live fields; no cost member, ever", async () => {
+    let spawned = false
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const model: ModelClient = {
+      async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
+        const last = request.messages.at(-1)
+        const isChild = last?.role === "user" && typeof last.content === "string" && last.content.includes("inspect code")
+        if (isChild) {
+          await gate
+          yield { type: "text/chunk", text: "child ok" }
+          yield { type: "end" }
+          return
+        }
+        if (!spawned) {
+          // the FIRST parent stream: spawn the real `helper` subagent.
+          spawned = true
+          yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "inspect code", task_name: "helper" } } }
+          yield { type: "end" }
+          return
+        }
+        yield { type: "text/chunk", text: "spawned" }
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: tmp(),
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model, providerId: "fixture", modelId: "bit", label: "fixture:bit" },
+      }),
+    })
+    const backend = createEmbeddedBackend({
+      service,
+      sessionId: "s1",
+      listSessions: async () => [
+        { id: "s1", title: "Live", updatedAt: 2 },
+        { id: "s2", title: "Idle", updatedAt: 1 },
+      ],
+    })
+    try {
+      const first = backend.submit("spawn a helper")
+      const second = backend.submit("second")
+      await waitFor(() => service.tasks("s1").some((row) => row.id === "root/helper"))
+      const rows = await backend.dashboard!()
+      const liveRow = rows.find((item) => item.id === "s1")!
+      // the live projection: the running subagent + its session task record
+      // (2 live task rows), the resolved model label — everything the service
+      // genuinely knows — never a fabricated count.
+      expect(liveRow).toMatchObject({ id: "s1", title: "Live", live: true, tasks: 2, modelLabel: "fixture:bit" })
+      expect(liveRow).not.toHaveProperty("cost")
+      const idleRow = rows.find((item) => item.id === "s2")!
+      expect(idleRow.live).toBe(false)
+      // unknown live fields are omitted — never a fabricated zero
+      expect(idleRow).not.toHaveProperty("running")
+      expect(idleRow).not.toHaveProperty("queued")
+      expect(idleRow).not.toHaveProperty("tasks")
+      expect(idleRow).not.toHaveProperty("modelLabel")
+      expect(idleRow).not.toHaveProperty("cost")
+      release()
+      await Promise.all([first, second])
+      expect(await backend.dashboard!()).toHaveLength(2)
+    } finally {
+      release()
+      await backend.close()
+    }
+  }, 60_000)
+
+  it("peekTail() shows the real tail of a LIVE session and rejects for a never-live one", async () => {
+    const service = makeService({ sessionId: "s1" })
+    const backend = createEmbeddedBackend({
+      service,
+      sessionId: "s1",
+      listSessions: async () => [{ id: "s1", title: "Live", updatedAt: 1 }],
+    })
+    try {
+      await service.submit("s1", "hello peek", new AbortController().signal)
+      await waitFor(() => service.liveSession("s1") !== undefined)
+      const lines = await backend.peekTail!("s1")
+      expect(lines.some((line) => line.includes("hello peek"))).toBe(true)
+      await expect(backend.peekTail!("never-live")).rejects.toThrow(/not live|not found/)
+    } finally {
+      await backend.close()
+    }
+  }, 60_000)
+
+  it("dashboard() survives a DETACHED probe call (the loop's call style — regression)", async () => {
+    const service = makeService({ sessionId: "s1" })
+    const backend = createEmbeddedBackend({
+      service,
+      sessionId: "s1",
+      listSessions: async () => [
+        { id: "s1", title: "Live", updatedAt: 2 },
+        { id: "s2", title: "Idle", updatedAt: 1 },
+      ],
+    })
+    try {
+      // The loop calls `const probe = backend.dashboard; await probe()` — the
+      // member must not depend on `this` (Task 13 regression: a TypeError
+      // surfaced as an honest-but-wrong "0 sessions" dashboard).
+      const probe = backend.dashboard!
+      let rows: DashboardSessionRow[] | undefined
+      rows = await probe()
+      expect(rows.map((row) => row.id)).toEqual(["s1", "s2"])
+      // the member still works through method-style access (other callers).
+      expect((await backend.dashboard!()).length).toBe(2)
     } finally {
       await backend.close()
     }

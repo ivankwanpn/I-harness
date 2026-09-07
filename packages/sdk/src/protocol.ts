@@ -170,6 +170,19 @@
  *
  * PROTOCOL_VERSION remains 2.
  *
+ *   "session-dashboard": ["1"]
+ *     session/dashboard {} → { sessions: DashboardSessionRow[] }
+ *       — the LOCAL dashboard projection (spec §8.3): the listed sessions
+ *         enriched with KNOWN live fields (live/running/queued/tasks/
+ *         modelLabel) — never a cost/team field (the shape has none), never a
+ *         fabricated zero. A session with no listing source → the honest
+ *         `listingUnavailable` blank (never rows the server did not provide).
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * Task 12 addendum — M49, 2026-09-07 (ADDITIVE-ONLY).
+ *
+ * PROTOCOL_VERSION remains 2.
+ *
  *   "session-tasks": ["1"]
  *     session/tasks { sessionId } → { items: AgentTaskView[] }
  *       — the real per-session task projection (spec §8.2): subagent rows
@@ -339,6 +352,34 @@ export interface AgentTaskView {
  * (already-finished = the task was terminal already; an unknown id is an
  * error frame, the existing not-found semantics). */
 export type TaskCancelStatus = "cancellation-requested" | "already-finished"
+
+/** M49 Task 13 (spec §8.3): ONE session/dashboard row on the wire — the
+ * session-list entry plus KNOWN live fields. Serialized only: no registry
+ * object, no client, and by shape NO cost/team/cross-machine member (never
+ * fabricated). Absent optional fields = the server cannot know them. */
+export interface DashboardSessionRow {
+  id: string
+  title?: string
+  updatedAt?: number
+  turnCount?: number
+  contextUsed?: number
+  contextTotal?: number
+  /** True when the session has a live assembly (honest — a listing-only
+   * session is live: false, never a guessed default). */
+  live: boolean
+  running?: boolean
+  queued?: number
+  tasks?: number
+  modelLabel?: string
+}
+
+/** M49 Task 13: the session/dashboard response payload. */
+export interface SessionDashboardResult {
+  sessions: DashboardSessionRow[]
+  /** True when no listing source was wired (honest "unknown" — never read as
+   * "no sessions exist"). */
+  listingUnavailable?: boolean
+}
 
 /** M41b v1.1: rewind mode union (mirrors packages/rewind RewindMode). */
 export type RewindMode = "all" | "files" | "conversation"

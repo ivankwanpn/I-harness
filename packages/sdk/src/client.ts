@@ -27,6 +27,7 @@ import {
   type QueueCancelResult,
   type AgentTaskView,
   type TaskCancelStatus,
+  type SessionDashboardResult,
 } from "./protocol.ts"
 
 export interface ServerInfo {
@@ -234,6 +235,14 @@ export class HarnessClient {
   async status(sessionId: string): Promise<QueueState> {
     const state = await this.request("session/status", { sessionId })
     return state as QueueState
+  }
+
+  /** M49 Task 13 (spec §8.3): the LOCAL dashboard projection — the
+   * session/dashboard wire payload (serializable rows only; the shape carries
+   * no cost/team member, never fabricated). The TUI's remote backend gates
+   * the member on the session-dashboard capability row itself. */
+  async dashboard(): Promise<SessionDashboardResult> {
+    return await this.request("session/dashboard", {}) as SessionDashboardResult
   }
 
   /** M41a v1: walk a session's live event log from `afterSeq` (exclusive),

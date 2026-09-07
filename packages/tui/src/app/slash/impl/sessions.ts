@@ -44,6 +44,17 @@ export const sessionCommands: SlashCommand[] = [
     },
   },
   {
+    // M49 Task 13 (spec §8.3): the local dashboard — the SAME view the Welcome
+    // menu entry and Ctrl+\ use (no remote/team/cost fields, ever). The skip
+    // list's /dashboard entry is REMOVED with it (the M46c /timeline
+    // precedent: a real command replaces the hidden inventory row).
+    name: "dashboard",
+    description: "Open the local session dashboard",
+    run(ctx) {
+      ctx.openDashboard?.()
+    },
+  },
+  {
     name: "delete",
     description: "Delete the current session (confirm → welcome)",
     run(ctx) {

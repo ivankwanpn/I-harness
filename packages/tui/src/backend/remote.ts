@@ -135,7 +135,7 @@ import type {
   RewindResult,
 } from "@i-harness/rewind"
 import { createEventMapState, mapSessionEvent, type EventMapState } from "./embedded.ts"
-import type { AgentTaskView, BackendClient, BackendModelState, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { AgentTaskView, BackendClient, BackendModelState, DashboardSessionRow, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ wire seam
 
@@ -434,6 +434,44 @@ function parseTasksResult(result: unknown): AgentTaskView[] {
       ...(typeof r.startedAt === "number" ? { startedAt: r.startedAt } : {}),
       ...(typeof r.updatedAt === "number" ? { updatedAt: r.updatedAt } : {}),
       canCancel: r.canCancel,
+    })
+  }
+  return out
+}
+
+/** M49 Task 13: session/dashboard result — malformed ENTRIES are skipped and
+ * ONLY the known fields are carried forward (a stray "cost"/team member never
+ * survives the wire — the parsed row shape has none); a malformed top-level
+ * shape is an SdkWireError. Never fabricated: unknown live fields stay absent. */
+function parseDashboardResult(result: unknown): DashboardSessionRow[] {
+  if (result === null || typeof result !== "object") {
+    throw new SdkWireError(-32603, "malformed session/dashboard response: result is not an object")
+  }
+  const sessions = (result as { sessions?: unknown }).sessions
+  if (!Array.isArray(sessions)) {
+    throw new SdkWireError(-32603, "malformed session/dashboard response: sessions is not an array")
+  }
+  const out: DashboardSessionRow[] = []
+  for (const raw of sessions) {
+    if (raw === null || typeof raw !== "object") continue
+    const r = raw as Record<string, unknown>
+    if (typeof r["id"] !== "string" || r["id"] === "") continue
+    if (typeof r["live"] !== "boolean") continue
+    out.push({
+      id: r["id"],
+      // title is required on the client surface — a title-less wire row gets
+      // the same honest placeholder the v0 listing stub uses (never fabricated
+      // content, a display label only).
+      title: typeof r["title"] === "string" ? r["title"] : "Session",
+      updatedAt: typeof r["updatedAt"] === "number" ? r["updatedAt"] : 0,
+      ...(typeof r["turnCount"] === "number" ? { turnCount: r["turnCount"] } : {}),
+      ...(typeof r["contextUsed"] === "number" ? { contextUsed: r["contextUsed"] } : {}),
+      ...(typeof r["contextTotal"] === "number" ? { contextTotal: r["contextTotal"] } : {}),
+      live: r["live"],
+      ...(typeof r["running"] === "boolean" ? { running: r["running"] } : {}),
+      ...(typeof r["queued"] === "number" ? { queued: r["queued"] } : {}),
+      ...(typeof r["tasks"] === "number" ? { tasks: r["tasks"] } : {}),
+      ...(typeof r["modelLabel"] === "string" && r["modelLabel"] !== "" ? { modelLabel: r["modelLabel"] } : {}),
     })
   }
   return out
@@ -1014,6 +1052,7 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
   let cancelQueuedMember: NonNullable<BackendClient["cancelQueued"]> | undefined
   let tasksMember: NonNullable<BackendClient["tasks"]> | undefined
   let cancelTaskMember: NonNullable<BackendClient["cancelTask"]> | undefined
+  let dashboardMember: NonNullable<BackendClient["dashboard"]> | undefined
 
   function capabilityRow(capabilities: Record<string, string[]>, key: string): boolean {
     const rows = capabilities[key]
@@ -1067,6 +1106,11 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
         parseTasksResult(await opts.client.request("session/tasks", { sessionId }, REQUEST_TIMEOUT_MS))
       cancelTaskMember = async (id) =>
         parseTaskCancelResult(await opts.client.request("session/tasks/cancel", { sessionId, id }, REQUEST_TIMEOUT_MS))
+    }
+    if (capabilityRow(h.capabilities, "session-dashboard")) {
+      // M49 Task 13: session/dashboard is session-less (the WHOLE local list).
+      dashboardMember = async () =>
+        parseDashboardResult(await opts.client.request("session/dashboard", {}, REQUEST_TIMEOUT_MS))
     }
   }
 
@@ -1288,6 +1332,10 @@ export function createRemoteBackend(opts: RemoteBackendOptions): BackendClient {
     // unavailable state and hides [✗]/[stop]).
     get tasks() { return tasksMember },
     get cancelTask() { return cancelTaskMember },
+    // M49 Task 13: the local dashboard projection — conditional on the
+    // session-dashboard row (absent → the dashboard view renders the honest
+    // unavailable state).
+    get dashboard() { return dashboardMember },
 
     modelLabel: opts.modelLabel,
 

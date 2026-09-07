@@ -63,6 +63,7 @@ import {
   type SessionModelSelection,
   type SessionModelState,
   type TaskCancelStatus,
+  type DashboardSessionRow,
 } from "./protocol.ts"
 
 export const SDK_SERVER_NAME = "i-harness"
@@ -285,6 +286,10 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             // M49 Task 12: the task projection + cancellation (same service,
             // Serialize-only rows) — unconditional too.
             "session-tasks": ["1"],
+            // M49 Task 13: the local dashboard projection (spec §8.3) — the
+            // service's own per-session live/queue/task/model values over the
+            // listing source; no host seam needed.
+            "session-dashboard": ["1"],
             ...(opts.createSession !== undefined ? { "session-create": ["1"] } : {}),
             ...(opts.forkSession !== undefined ? { "session-fork": ["1"] } : {}),
             ...(opts.modelState !== undefined && opts.setSessionModel !== undefined
@@ -489,6 +494,54 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         } catch (error) {
           // same convention as session/prompt's failure frame: the raw error
           // message rides in `message` (never a silent empty list)
+          const message = error instanceof Error ? error.message : String(error)
+          return makeFailure(id, INTERNAL_ERROR, message)
+        }
+      }
+      case "session/dashboard": {
+        // M49 Task 13 (spec §8.3): the LOCAL dashboard projection — the
+        // listing rows enriched with KNOWN live fields (the service's own
+        // truth per session). Absent listing source → the honest
+        // listingUnavailable blank (never rows the server did not provide).
+        // The wire shape has NO cost/team member — serializable only.
+        if (opts.listSessions === undefined) {
+          return makeSuccess(id, { sessions: [], listingUnavailable: true })
+        }
+        try {
+          const listed = await opts.listSessions()
+          const sessions: DashboardSessionRow[] = []
+          for (const row of listed.sessions) {
+            const live = service.hasAssembly(row.id)
+            const out: DashboardSessionRow = {
+              id: row.id,
+              ...(typeof row.title === "string" ? { title: row.title } : {}),
+              ...(typeof row.updatedAt === "number" ? { updatedAt: row.updatedAt } : {}),
+              ...(typeof row.turnCount === "number" ? { turnCount: row.turnCount } : {}),
+              ...(typeof row.contextUsed === "number" ? { contextUsed: row.contextUsed } : {}),
+              ...(typeof row.contextTotal === "number" ? { contextTotal: row.contextTotal } : {}),
+              live,
+            }
+            if (live) {
+              const queue = service.queueState(row.id)
+              out.running = queue.running
+              if (queue.queued > 0) out.queued = queue.queued
+              const liveTasks = service.tasks(row.id)
+                .filter((task) => task.status === "queued" || task.status === "running" || task.status === "waiting")
+                .length
+              if (liveTasks > 0) out.tasks = liveTasks
+              try {
+                const model = await service.modelState(row.id)
+                if (model.status === "ready" && model.label !== "") {
+                  out.modelLabel = model.label
+                }
+              } catch {
+                // model resolution failed — the field stays absent (never fabricated)
+              }
+            }
+            sessions.push(out)
+          }
+          return makeSuccess(id, { sessions })
+        } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           return makeFailure(id, INTERNAL_ERROR, message)
         }

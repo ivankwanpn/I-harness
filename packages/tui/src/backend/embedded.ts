@@ -64,7 +64,7 @@ import {
   type SessionModelSelection,
 } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { toolKindOf, type AgentTaskView, type BackendClient, type SessionQueueItem, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
+import { toolKindOf, type AgentTaskView, type BackendClient, type DashboardSessionRow, type SessionQueueItem, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ mapping
 
@@ -443,17 +443,25 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     }
   }
 
+  /** The listing implementation (holder-INDEPENDENT — the app's loop calls
+   * members DETACHED (`const probe = backend.dashboard; await probe()`), so
+   * no data path may rely on `this`. The returned object wires it under both
+   * names for call-colon style callers. */
+  const listSessionsImpl = async (): Promise<SessionSummary[]> => {
+    if (opts.listSessions !== undefined) return opts.listSessions()
+    const live = await ensureSession().catch(() => undefined)
+    const turnCount = live?.events.filter((e) => e.type === "turn/start").length
+    return [{
+      id: sessionId,
+      title: "Session",
+      updatedAt: Date.now(),
+      ...(turnCount !== undefined ? { turnCount } : {}),
+    }]
+  }
+
   return {
     async listSessions(): Promise<SessionSummary[]> {
-      if (opts.listSessions !== undefined) return opts.listSessions()
-      const live = await ensureSession().catch(() => undefined)
-      const turnCount = live?.events.filter((e) => e.type === "turn/start").length
-      return [{
-        id: sessionId,
-        title: "Session",
-        updatedAt: Date.now(),
-        ...(turnCount !== undefined ? { turnCount } : {}),
-      }]
+      return listSessionsImpl()
     },
 
     async open(id: string): Promise<void> {
@@ -672,6 +680,49 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     },
     async cancelTask(id: string): Promise<"cancellation-requested" | "already-finished"> {
       return service.cancelTask(sessionId, id)
+    },
+    // M49 Task 13 (spec §8.3): the LOCAL dashboard projection — the listing
+    // rows enriched with KNOWN live per-session values (service truth only).
+    // A listing-only session carries NO live field (never a fabricated zero)
+    // and the shape carries NO cost member.
+    async dashboard(): Promise<DashboardSessionRow[]> {
+      const listing = await listSessionsImpl()
+      const out: DashboardSessionRow[] = []
+      for (const row of listing) {
+        const live = service.hasAssembly(row.id)
+        const outRow: DashboardSessionRow = { ...row, live }
+        if (live) {
+          const queue = service.queueState(row.id)
+          outRow.running = queue.running
+          if (queue.queued > 0) outRow.queued = queue.queued
+          const liveTasks = service.tasks(row.id)
+            .filter((task) => task.status === "queued" || task.status === "running" || task.status === "waiting")
+            .length
+          if (liveTasks > 0) outRow.tasks = liveTasks
+          try {
+            const model = await service.modelState(row.id)
+            if (model.status === "ready" && model.label !== "") outRow.modelLabel = model.label
+          } catch {
+            // model resolution failed — the field stays absent (never fabricated)
+          }
+        }
+        out.push(outRow)
+      }
+      return out
+    },
+    // M49 Task 13: the session's REAL tail lines (the dashboard "peek") — the
+    // live log is the source; a never-live session is an honest rejection
+    // (never a fabricated tail).
+    async peekTail(targetSessionId: string): Promise<string[]> {
+      const live = service.liveSession(targetSessionId)
+      if (live === undefined) throw new Error(`session not live: ${targetSessionId}`)
+      const lines: string[] = []
+      for (const ev of live.events.slice(-30)) {
+        if (ev.type === "user/message") lines.push(`❯ ${ev.text}`)
+        else if (ev.type === "assistant/message") lines.push(`Assistant: ${ev.text.slice(0, 80)}`)
+        else if (ev.type === "tool/result") lines.push(`… ${ev.name} done`)
+      }
+      return lines
     },
 
     modelLabel: opts.modelLabel,

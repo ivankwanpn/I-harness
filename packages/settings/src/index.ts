@@ -150,6 +150,35 @@ export const SETTINGS_DEFAULT_WORD_SEPARATORS = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|
  * M46b G1 appends the mouse knobs (grok's Mouse settings category): the
  * scroll-stream profile math, the selection-hold semantics and the opt-in
  * mouse-reporting toggle (Ctrl+R binding + /toggle-mouse-reporting). */
+/** M49 Task 13 (spec §9.2): the configurable builtin status-line segments
+ * (the order is the row's priority from left to right — the rightmost drop
+ * first on a narrow row per spec §9.6). */
+export const SETTINGS_STATUS_LINE_SEGMENTS = [
+  "cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks",
+] as const
+export type SettingsStatusLineSegment = (typeof SETTINGS_STATUS_LINE_SEGMENTS)[number]
+
+/** M49 Task 13 (spec §8.3): dashboard pin/order ids (tui.prefs.dashboard) —
+ * ids ONLY; missing ids are ignored for display and deleted only after the
+ * next successful commit. */
+export interface SettingsTuiDashboardPrefs {
+  pinned: string[]
+  order: string[]
+}
+
+/** M49 Task 13 (spec §9.2/§9.6): the status line preferences. */
+export interface SettingsTuiStatusLinePrefs {
+  mode: "disabled" | "builtin" | "command"
+  /** The builtin segments rendered (gated ALSO by real-value availability —
+   * an unknown value is omitted, never fabricated). Default: all. */
+  items: SettingsStatusLineSegment[]
+  /** The command-mode command (an opaque shell command — the host's exec
+   * runner owns the actual interpretation). Present only for mode "command". */
+  command?: string
+  /** Command refresh interval; minimum 300ms (spec §9.6). Default 1000. */
+  refreshMs?: number
+}
+
 export interface SettingsTuiPrefs {
   /** Scrollback timestamps (the engine's showTimestamps). */
   timestamps: boolean
@@ -182,6 +211,10 @@ export interface SettingsTuiPrefs {
    * `--mode` flag > this persisted value > fullscreen default; `/minimal` and
    * `/fullscreen` write it on switch. */
   screenMode: "fullscreen" | "minimal"
+  /** M49 Task 13 (spec §9.2): the local dashboard's pinned/order id lists. */
+  dashboard: SettingsTuiDashboardPrefs
+  /** M49 Task 13 (spec §9.2): the status-line preferences. */
+  statusLine: SettingsTuiStatusLinePrefs
 }
 
 /** The appended TUI section (M49 Task 6: presentation preferences only — the
@@ -264,6 +297,10 @@ export const SETTINGS_DEFAULTS: Settings = {
       // M49 Task 8: fullscreen is the executable default (the resolver order):
       // explicit flag > this persisted value > fullscreen.
       screenMode: "fullscreen",
+      // M49 Task 13 (spec §9.2): dashboard pins/order empty; the builtin
+      // status line with every configurable segment.
+      dashboard: { pinned: [], order: [] },
+      statusLine: { mode: "builtin", items: [...SETTINGS_STATUS_LINE_SEGMENTS] },
     },
   },
 }
@@ -315,6 +352,31 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isProviderProtocol(value: unknown): value is SettingsProviderProtocol {
   return typeof value === "string" && (PROVIDER_PROTOCOLS as readonly string[]).includes(value)
+}
+
+/** M49 Task 13: a string id list (non-empty strings, deduped — corrupt entries
+ * dropped, non-array input degrades to []). */
+function stringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const entry of value) {
+    if (typeof entry === "string" && entry !== "" && !out.includes(entry)) out.push(entry)
+  }
+  return out
+}
+
+/** M49 Task 13: the status-segment allowlist — only valid segments survive;
+ * a NON-array input (or an all-corrupt list) falls back to the full default
+ * list (a corrupt file must not silently hide every segment). */
+function statusLineItems(value: unknown): SettingsStatusLineSegment[] {
+  if (!Array.isArray(value)) return [...SETTINGS_STATUS_LINE_SEGMENTS]
+  const out: SettingsStatusLineSegment[] = []
+  for (const entry of value) {
+    if ((SETTINGS_STATUS_LINE_SEGMENTS as readonly string[]).includes(entry as string)) {
+      out.push(entry as SettingsStatusLineSegment)
+    }
+  }
+  return out.length > 0 ? out : [...SETTINGS_STATUS_LINE_SEGMENTS]
 }
 
 /** cc-switch rule (spec D3): a trailing `/v1` or `/v1/` is the client-facing
@@ -492,6 +554,22 @@ function normalizeTui(raw: unknown, base: SettingsTui): SettingsTui {
         ? prefsRaw.mouseReportingToggle
         : b.mouseReportingToggle,
       screenMode: oneOf(prefsRaw.screenMode, ["fullscreen", "minimal"] as const, b.screenMode),
+      // M49 Task 13 (spec §9.2): dashboard pin/order + the status line —
+      // corrupt input degrades per field (the run-time nullability of
+      // command/refreshMs is preserved — an absent value means "host default
+      // 1000ms/1s", never a fabricated one).
+      dashboard: {
+        pinned: stringList((isRecord(prefsRaw.dashboard) ? prefsRaw.dashboard : {}).pinned),
+        order: stringList((isRecord(prefsRaw.dashboard) ? prefsRaw.dashboard : {}).order),
+      },
+      statusLine: (() => {
+        const slRaw = isRecord(prefsRaw.statusLine) ? prefsRaw.statusLine : {}
+        const mode = oneOf(slRaw.mode, ["disabled", "builtin", "command"] as const, b.statusLine.mode)
+        const items = statusLineItems(slRaw.items)
+        const command = typeof slRaw.command === "string" && slRaw.command !== "" ? slRaw.command : undefined
+        const refreshMs = isPositiveInteger(slRaw.refreshMs) ? Math.max(300, slRaw.refreshMs) : undefined
+        return { mode, items, ...(command !== undefined ? { command } : {}), ...(refreshMs !== undefined ? { refreshMs } : {}) }
+      })(),
     },
   }
 }

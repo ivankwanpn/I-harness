@@ -55,6 +55,13 @@ export type AppAction =
   // welcome (spec §2a)
   | "menu-up" | "menu-down" | "menu-top" | "menu-bottom"
   | "menu-activate" | "welcome-new" | "welcome-resume" | "welcome-settings"
+  // M49 Task 13: the local dashboard (spec §8.3 — Ctrl+\ toggles from the
+  // agent/welcome screens; the dashboard screen owns its own table).
+  | "open-dashboard"
+  | "dashboard-up" | "dashboard-down" | "dashboard-open" | "dashboard-back"
+  | "dashboard-peek" | "dashboard-pin"
+  | "dashboard-move-up" | "dashboard-move-down"
+  | "dashboard-filter-backspace" | "dashboard-new"
   // M46a G1 (provider/model): F2/Ctrl+, = the settings modal (grok parity);
   // Ctrl+M on the SCROLLBACK screen (agent screen non-prompt) = the model
   // picker — the prompt-focused Ctrl+M keeps multiline (grok's collision
@@ -97,6 +104,9 @@ export interface KeymapState {
   dropdown?: "slash" | "completion" | "file-search"
   /** True on the welcome screen (spec §2a). */
   welcome?: boolean
+  /** True on the local dashboard screen (M49 Task 13, spec §8.3) — its own
+   * key table owns nav/open/back/peek/pin/filter. */
+  dashboard?: boolean
   /** True in minimal mode (M38a — spec §1.1): the prompt is ALWAYS focused
    * and there is no scrollback surface; Esc is a no-op guard. */
   minimal?: boolean
@@ -123,6 +133,9 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
   if (state.overlay !== undefined) return overlayKeys(ev, state.overlay)
   // Unobscured Welcome routes through its own navigation/prompt table (§2a).
   if (state.welcome === true) return welcomeKey(ev)
+  // M49 Task 13: the local dashboard owns its surface (spec §8.3) — plain
+  // printable chars return "none" and the LOOP appends them to the filter.
+  if (state.dashboard === true) return dashboardKey(ev)
   // Minimal mode (M38a): quick-prompt table — Enter submits, Esc is a
   // no-op guard (no scrollback surface, no quit-arming on the quick prompt;
   // `/minimal`/`/fullscreen` relay lives in the loop's submit path).
@@ -154,6 +167,7 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
         // feature knob is on — else the default 'none'); sessions moved to F3.
         case "g": return "toggle-tasks-pane"
         case "b": return "send-background"
+        case "\\": return "open-dashboard" // M49 Task 13 (grok parity: Ctrl+\ = dashboard)
         case "r": return state.mouseToggle === true ? "toggle-mouse-reporting" : "none"
       }
     }
@@ -230,6 +244,7 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
       case ";": return "toggle-queue-pane" // spec §4: Ctrl+; queue pane
       case "s": return "stash-draft" // keys truth: Ctrl+S = stash/pop the draft
       case "n": return "sessions-new" // spec §4: Ctrl+N new session
+      case "\\": return "open-dashboard" // M49 Task 13 (grok parity: Ctrl+\ = dashboard)
       case "p": return "open-command-palette"
       case ",": return "open-settings" // M46a G1: Ctrl+, = settings modal (grok parity)
       // M49 Task 7: emacs motion + undo/redo (spec §6.2). Ctrl+A = line start,
@@ -349,6 +364,35 @@ export function overlayKeys(ev: Kbd, kind: OverlayKind): AppAction {
   return "none"
 }
 
+/** M49 Task 13 dashboard keys (spec §8.3): ↑↓/j/k select, Enter open/resume,
+ * Esc/ShiftTab back, P pin, p peek, [ ] pin-order, Ctrl+N new, Backspace
+ * filter backspace; plain chars return "none" (the loop filters with them). */
+export function dashboardKey(ev: Kbd): AppAction {
+  if (ev.code === "Enter" || ev.code === "Tab") return "dashboard-open"
+  if (ev.code === "Esc") return "dashboard-back"
+  if (ev.code === "ShiftTab") return "dashboard-back"
+  if (ev.code === "Backspace") return "dashboard-filter-backspace"
+  if (ev.code === "Up") return "dashboard-up"
+  if (ev.code === "Down") return "dashboard-down"
+  if (ev.code === "char" && ev.ctrl) {
+    switch (ev.key) {
+      case "\\": return "dashboard-back"
+      case "n": return "dashboard-new"
+      default: return "none"
+    }
+  }
+  if (ev.code === "char" && ev.alt) return "none"
+  switch (ev.key) {
+    case "j": return "dashboard-down"
+    case "k": return "dashboard-up"
+    case "p": return "dashboard-peek"
+    case "P": return "dashboard-pin"
+    case "[": return "dashboard-move-up"
+    case "]": return "dashboard-move-down"
+    default: return "none"
+  }
+}
+
 /** Welcome screen keys (spec §2a/§4): ↑/↓ (j/k) navigate, Enter activate,
  * g/l top/bottom, q quits; ctrl+s/n activate the matching menu row. */
 export function welcomeKey(ev: Kbd): AppAction {
@@ -361,6 +405,7 @@ export function welcomeKey(ev: Kbd): AppAction {
       switch (ev.key.toLowerCase()) {
         case "n": return "welcome-new"
         case "s": return "welcome-resume"
+        case "\\": return "open-dashboard" // M49 Task 13: the Dashboard entry shares the agent binding
         case "q": return "quit"
         default: return "none"
       }

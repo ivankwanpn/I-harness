@@ -12,10 +12,12 @@
   },
   "dependencies": {
     "@i-harness/credentials": "workspace:*",
+    "@i-harness/exec": "workspace:*",
     "@i-harness/provider": "workspace:*",
     "@i-harness/provider-runtime": "workspace:*",
     "@i-harness/session-executor": "workspace:*",
     "@i-harness/settings": "workspace:*",
+    "@i-harness/shell": "workspace:*",
     "@i-harness/tui": "workspace:*",
     "@i-harness/tui-core": "workspace:*"
   }

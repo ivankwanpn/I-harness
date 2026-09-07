@@ -25,6 +25,7 @@ import {
   createTuiModelBindingFor,
   createTuiShutdownController,
   parseFlags,
+  buildStatusLineOption,
   resolveExecutableScreenMode,
 } from "../src/index.ts"
 import type { InlineHost, RegionLine } from "@i-harness/tui"
@@ -634,4 +635,56 @@ describe("tui production interaction bridges (M49 Task 10)", () => {
       await host.close()
     }
   }, 120_000)
+})
+
+describe("M49 Task 13 — status-line + dashboard prefs wiring (host)", () => {
+  it("buildStatusLineOption composes the persisted statusLine prefs and omits an unknown branch", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ih-tui-statusline-"))
+    try {
+      writeFileSync(join(root, "settings.json"), JSON.stringify({
+        tui: { prefs: { statusLine: { mode: "command", items: ["cwd", "queue"], command: "git status --short", refreshMs: 999 } } },
+      }))
+      const settings = new SettingsStore({ path: join(root, "settings.json") })
+      await settings.load()
+      const opt = buildStatusLineOption(settings, root)
+      expect(opt.mode).toBe("command")
+      expect(opt.items).toEqual(["cwd", "queue"])
+      expect(opt.commandSource).toBeDefined()
+      // the temp dir is not a git repo — branch unknown → omitted (never fabricated)
+      expect(opt.branch).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("absent statusLine prefs normalize to the builtin default with every segment", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ih-tui-statusline-"))
+    try {
+      writeFileSync(join(root, "settings.json"), "{}")
+      const settings = new SettingsStore({ path: join(root, "settings.json") })
+      await settings.load()
+      const opt = buildStatusLineOption(settings, root)
+      expect(opt.mode).toBe("builtin")
+      expect(opt.items).toEqual(["cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks"])
+      expect(opt.commandSource).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("the status-line COMMAND runner posts the JSON context on stdin (real exec service)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ih-tui-statusline-"))
+    try {
+      writeFileSync(join(root, "settings.json"), JSON.stringify({
+        tui: { prefs: { statusLine: { mode: "command", command: "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const j=JSON.parse(d);console.log(j.workspace)})\"" } } },
+      }))
+      const settings = new SettingsStore({ path: join(root, "settings.json") })
+      await settings.load()
+      const opt = buildStatusLineOption(settings, root)
+      const text = await opt.commandSource!.refresh({ workspace: root })
+      expect(text).toBe(root)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
