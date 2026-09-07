@@ -1237,13 +1237,29 @@ describe("createRemoteBackend session-dashboard (Task 13)", () => {
     })
     const backend = createRemoteBackend({ client, sessionId: "s1" })
     await waitFor(() => backend.dashboard !== undefined, 1000)
-    const rows = await backend.dashboard!()
+    const { sessions: rows, listingUnavailable } = await backend.dashboard!()
     const first = rows.find((item) => item.id === "s1")!
     expect(first).toMatchObject({ id: "s1", live: true, running: true, queued: 1, tasks: 2, modelLabel: "mock:x" })
     expect(first).not.toHaveProperty("cost")
     const second = rows.find((item) => item.id === "s2")!
     expect(second).toEqual({ id: "s2", title: "Two", updatedAt: 2, live: false })
     expect(second).not.toHaveProperty("cost")
+    // the wire carried no listing verdict — the member stays honest (absent)
+    expect(listingUnavailable).toBeUndefined()
+    await backend.close()
+  })
+
+  it("carries the server's listingUnavailable verdict — an honest blank, never read as 'no sessions'", async () => {
+    const client = fakeWireClient((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-dashboard": ["1"] } }
+      if (method === "session/dashboard") return { sessions: [], listingUnavailable: true }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.dashboard !== undefined, 1000)
+    const result = await backend.dashboard!()
+    expect(result.sessions).toEqual([])
+    expect(result.listingUnavailable).toBe(true)
     await backend.close()
   })
 

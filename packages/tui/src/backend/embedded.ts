@@ -64,7 +64,7 @@ import {
   type SessionModelSelection,
 } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { toolKindOf, type AgentTaskView, type BackendClient, type DashboardSessionRow, type SessionQueueItem, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
+import { toolKindOf, type AgentTaskView, type BackendClient, type DashboardSessionResult, type DashboardSessionRow, type SessionQueueItem, type SessionSummary, type TodoItem as TuiTodoItem, type TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ mapping
 
@@ -685,7 +685,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
     // rows enriched with KNOWN live per-session values (service truth only).
     // A listing-only session carries NO live field (never a fabricated zero)
     // and the shape carries NO cost member.
-    async dashboard(): Promise<DashboardSessionRow[]> {
+    async dashboard(): Promise<DashboardSessionResult> {
       const listing = await listSessionsImpl()
       const out: DashboardSessionRow[] = []
       for (const row of listing) {
@@ -708,7 +708,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
         }
         out.push(outRow)
       }
-      return out
+      return { sessions: out }
     },
     // M49 Task 13: the session's REAL tail lines (the dashboard "peek") — the
     // live log is the source; a never-live session is an honest rejection

@@ -135,7 +135,7 @@ import type {
   RewindResult,
 } from "@i-harness/rewind"
 import { createEventMapState, mapSessionEvent, type EventMapState } from "./embedded.ts"
-import type { AgentTaskView, BackendClient, BackendModelState, DashboardSessionRow, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
+import type { AgentTaskView, BackendClient, BackendModelState, DashboardSessionResult, DashboardSessionRow, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
 
 // ------------------------------------------------------------------ wire seam
 
@@ -442,8 +442,10 @@ function parseTasksResult(result: unknown): AgentTaskView[] {
 /** M49 Task 13: session/dashboard result — malformed ENTRIES are skipped and
  * ONLY the known fields are carried forward (a stray "cost"/team member never
  * survives the wire — the parsed row shape has none); a malformed top-level
- * shape is an SdkWireError. Never fabricated: unknown live fields stay absent. */
-function parseDashboardResult(result: unknown): DashboardSessionRow[] {
+ * shape is an SdkWireError. Never fabricated: unknown live fields stay absent
+ * AND the server's honest `listingUnavailable` verdict survives the wire (the
+ * UI must render the unavailable state for it — NEVER "no sessions"). */
+function parseDashboardResult(result: unknown): DashboardSessionResult {
   if (result === null || typeof result !== "object") {
     throw new SdkWireError(-32603, "malformed session/dashboard response: result is not an object")
   }
@@ -474,7 +476,12 @@ function parseDashboardResult(result: unknown): DashboardSessionRow[] {
       ...(typeof r["modelLabel"] === "string" && r["modelLabel"] !== "" ? { modelLabel: r["modelLabel"] } : {}),
     })
   }
-  return out
+  return {
+    sessions: out,
+    // the honest listing verdict (true/no source; a non-boolean/malformed
+    // member degrades to absent — unknown is never fabricated either way).
+    ...((result as Record<string, unknown>)["listingUnavailable"] === true ? { listingUnavailable: true } : {}),
+  }
 }
 
 /** M49 Task 12: session/tasks/cancel result — the owning registry's status. */

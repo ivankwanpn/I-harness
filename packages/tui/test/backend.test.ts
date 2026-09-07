@@ -1012,7 +1012,7 @@ describe("embedded backend — local dashboard projection (Task 13)", () => {
       const first = backend.submit("spawn a helper")
       const second = backend.submit("second")
       await waitFor(() => service.tasks("s1").some((row) => row.id === "root/helper"))
-      const rows = await backend.dashboard!()
+      const rows = (await backend.dashboard!()).sessions
       const liveRow = rows.find((item) => item.id === "s1")!
       // the live projection: the running subagent + its session task record
       // (2 live task rows), the resolved model label — everything the service
@@ -1029,7 +1029,7 @@ describe("embedded backend — local dashboard projection (Task 13)", () => {
       expect(idleRow).not.toHaveProperty("cost")
       release()
       await Promise.all([first, second])
-      expect(await backend.dashboard!()).toHaveLength(2)
+      expect((await backend.dashboard!()).sessions).toHaveLength(2)
     } finally {
       release()
       await backend.close()
@@ -1070,10 +1070,10 @@ describe("embedded backend — local dashboard projection (Task 13)", () => {
       // surfaced as an honest-but-wrong "0 sessions" dashboard).
       const probe = backend.dashboard!
       let rows: DashboardSessionRow[] | undefined
-      rows = await probe()
+      rows = (await probe()).sessions
       expect(rows.map((row) => row.id)).toEqual(["s1", "s2"])
       // the member still works through method-style access (other callers).
-      expect((await backend.dashboard!()).length).toBe(2)
+      expect((await backend.dashboard!()).sessions.length).toBe(2)
     } finally {
       await backend.close()
     }
