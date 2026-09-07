@@ -217,28 +217,80 @@ describe("TuiApp — M46a slash registry run + keys truth", () => {
     expect(counts(written.join(""))).toEqual({ off: 2, on: 1 })
   })
 
-  it("input precedence: a permission overlay answers BEFORE an open viewer (spec §9.4)", () => {
+  it("input precedence: permission/question/cancel-turn overlays own Esc/Enter/nav/digits before the viewer (spec §9.4)", () => {
+    for (const kind of ["permission", "question", "cancel-turn"] as const) {
+      const app = makeApp()
+      const engine = app.state().engine
+      engine.append({
+        type: "tool", callId: "c1", name: "read-file", kind: "read", status: "done",
+        summary: "read 1 file", output: "ok", seq: 1, ts: 100,
+      })
+      app.state().focused = "scrollback"
+      app.feedInput({ type: "key", code: "Enter", key: "Enter", ctrl: false, alt: false, shift: false })
+      expect(app.state().modal?.kind).toBe("block-viewer")
+      const acts: Array<string | { type: "overlay-accept"; index: number }> = []
+      app.state().overlay = {
+        kind,
+        draw: () => {},
+        act: (a: never) => acts.push(a),
+        setCursor: () => {},
+        rowYs: () => [0, 1],
+      } as never
+      // Esc dismisses the OVERLAY — never the viewer underneath.
+      app.feedInput({ type: "key", code: "Esc", key: "Esc", ctrl: false, alt: false, shift: false })
+      expect(acts).toEqual(["overlay-dismiss"])
+      expect(app.state().modal?.kind).toBe("block-viewer")
+      // Enter accepts the overlay row (overlay-select) — not a viewer key.
+      app.feedInput({ type: "key", code: "Enter", key: "Enter", ctrl: false, alt: false, shift: false })
+      expect(acts).toEqual(["overlay-dismiss", "overlay-select"])
+      expect(app.state().modal?.kind).toBe("block-viewer")
+      // nav keys move the overlay's rows — not the viewer.
+      app.feedInput({ type: "key", code: "Down", key: "ArrowDown", ctrl: false, alt: false, shift: false })
+      expect(acts).toEqual(["overlay-dismiss", "overlay-select", "overlay-nav-next"])
+      expect(app.state().modal?.kind).toBe("block-viewer")
+      // digits answer by index (the object-form accept).
+      app.feedInput({ type: "key", code: "char", key: "3", ctrl: false, alt: false, shift: false })
+      expect(acts).toEqual([
+        "overlay-dismiss", "overlay-select", "overlay-nav-next",
+        { type: "overlay-accept", index: 3 },
+      ])
+      expect(app.state().modal?.kind).toBe("block-viewer") // the viewer stays open underneath
+    }
+  })
+
+  it("top-tier overlay freeform owns chars/Enter/Esc even with an open viewer", () => {
     const app = makeApp()
     const engine = app.state().engine
     engine.append({
       type: "tool", callId: "c1", name: "read-file", kind: "read", status: "done",
-      summary: "read 1 file", output: "ok", seq: 1, ts: 100,
+      summary: "x", output: "ok", seq: 1, ts: 100,
     })
     app.state().focused = "scrollback"
     app.feedInput({ type: "key", code: "Enter", key: "Enter", ctrl: false, alt: false, shift: false })
     expect(app.state().modal?.kind).toBe("block-viewer")
-    const acts: Array<{ type: "overlay-accept"; index: number } | string> = []
+    const free: string[] = []
     app.state().overlay = {
-      kind: "permission",
+      kind: "question",
       draw: () => {},
-      act: (a: never) => acts.push(a),
       setCursor: () => {},
       rowYs: () => [0, 1],
+      freeform: {
+        active: () => true,
+        append: (t: string) => free.push(`append:${t}`),
+        backspace: () => free.push("backspace"),
+        submit: () => free.push("submit"),
+        abort: () => free.push("abort"),
+      },
     } as never
-    // The digit answers the PERMISSION (tier 1) — never the viewer.
-    app.feedInput({ type: "key", code: "char", key: "3", ctrl: false, alt: false, shift: false })
-    expect(acts).toEqual([{ type: "overlay-accept", index: 3 }])
-    expect(app.state().modal?.kind).toBe("block-viewer") // the viewer stays open underneath
+    app.feedInput({ type: "key", code: "char", key: "z", ctrl: false, alt: false, shift: false })
+    expect(free).toEqual(["append:z"])
+    // Enter submits the freeform (never the viewer); Esc aborts it.
+    app.feedInput({ type: "key", code: "Enter", key: "Enter", ctrl: false, alt: false, shift: false })
+    expect(free).toEqual(["append:z", "submit"])
+    expect(app.state().modal?.kind).toBe("block-viewer")
+    app.feedInput({ type: "key", code: "Esc", key: "Esc", ctrl: false, alt: false, shift: false })
+    expect(free).toEqual(["append:z", "submit", "abort"])
+    expect(app.state().modal?.kind).toBe("block-viewer")
   })
 
   it("input precedence: the viewer consumes keys before panes/prompt/scrollback", () => {

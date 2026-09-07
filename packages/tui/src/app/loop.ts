@@ -1248,8 +1248,12 @@ export class TuiApp {
     return { meter: this.fpsMeter!, lineCount: this.opts.engine.lineCount() }
   }
 
-  /** Keymap/backend/anim results funnel here; the loop paints after. */
-  dispatch(action: AppAction): void {
+  /** Keymap/backend/anim results funnel here; the loop paints after.
+   * `skipModal` (M49 Task 14, spec §9.4): the top-tier overlay routing uses it
+   * — an interactive confirm/permission/question overlay owns the input BEFORE
+   * the viewer, so its actions must NOT take the modal branch (Esc closes the
+   * overlay, Enter accepts its row, nav moves its rows — never the viewer's). */
+  dispatch(action: AppAction, skipModal = false): void {
     // Index-carrying accept (digits 1-9, spec §4 permission/question/cancel).
     if (typeof action !== "string") {
       if (action.type === "overlay-accept") this.overlayAccept(action.index)
@@ -1259,7 +1263,7 @@ export class TuiApp {
     // M49 Task 10: while the modal is open it owns the surface — the modal
     // semantics (Esc closes / y copies / arrows move) route here; quit stays
     // global (Ctrl+Q must still work over a modal).
-    if (this.app.modal !== undefined && action !== "quit") {
+    if (!skipModal && this.app.modal !== undefined && action !== "quit") {
       switch (action) {
         case "overlay-dismiss": this.modalOwner.close(); break
         case "overlay-copy": {
@@ -1611,18 +1615,25 @@ export class TuiApp {
     // they fall through to the keymap routing below.)
     const topOv = this.overlayState()
     if (topOv !== undefined && (topOv.kind === "permission" || topOv.kind === "question" || topOv.kind === "cancel-turn")) {
-      const action = dispatchKey(modalKbd, this.keymapState())
-      if (action !== "none") {
-        this.dispatch(action)
-        this.requestFrame()
-        return
-      }
+      // The active freeform owns plain chars/Enter/Esc FIRST (the original
+      // overlay-capture semantics — a question-esque freeform submit/abort
+      // never reaches the keymap or the viewer).
       const fft = this.app.overlay?.freeform
       if (fft !== undefined && fft.active()) {
         if (ev.code === "char" && !ev.ctrl && !ev.alt) { fft.append(ev.key); this.requestFrame(); return }
         if (ev.code === "Backspace") { fft.backspace(); this.requestFrame(); return }
         if (ev.code === "Enter") { fft.submit(); this.requestFrame(); return }
         if (ev.code === "Esc") { fft.abort(); this.requestFrame(); return }
+      }
+      const action = dispatchKey(modalKbd, this.keymapState())
+      if (action !== "none") {
+        // Skip the modal branch: dispatch() must NOT route these OVERLAY
+        // actions into an open viewer (an interactive permission/question
+        // prompt owns input — Esc closes the overlay, Enter accepts it, nav
+        // moves its rows; the viewer underneath stays untouched).
+        this.dispatch(action, true)
+        this.requestFrame()
+        return
       }
       // the top-tier overlay owns input: other keys are consumed.
       this.requestFrame()
