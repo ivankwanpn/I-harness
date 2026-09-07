@@ -80,14 +80,32 @@
 - 已知問題實錄：README quirks（vitest worker flake 已 M31 修復——web-host forks pool）
 - 多輪執行模式：worktree 隔離 + 雙組平行 + 調和審查 + 可追溯的執行者報告
 
-## 八&frac34;½、Provider/模型 TUI 管理 + Slash 註冊表（M46a 新增）
+## 八&frac34;½、Provider/模型 TUI 管理 + Slash 註冊表（M46a 新增——M49 超集）
 
-- **Provider**：settings `tui.providers`（版本化、`apiKeyRef` only——明文絕不進 settings；mask 顯示）＋ `discoverModels`（`@i-harness/provider` 的 `probeCandidatePaths` 進程復用；記憶體 memo；CI 注入式）＋ 三步嚮導/菜單/刪除（cc-custom 字形面）。
-- **模型**：`/model` ArgPicker（目錄 + `(no override)`）+ `/effort`（settings.llm.defaultModel.reasoningEffort）+ factory 鏈 `--model` > settings > mock（三級缺 → mock 今日行為）。
-- **Settings modal**：新版 8 分類（Appearance/Mouse 骨架/Models/Agent&Approval/Session——真旋鈕 + 誠實佔位）。
-- **Slash**：CommandRegistry（grok 形狀，visible/門控）45 可見 + 21 跳過清單（後端支持優先原則）；輕量面板 14（skills/mcps(配置源)/hooks/plugins/personas→builtinRoles/config-agents/workflow/usage/session-info/goal/tutorial/jump/doctor(啟動探測報告)）。
-- **鍵表真理**（新版為準）：Ctrl+S stash + Alt+S、F3 sessions、Ctrl+G 模式拆分（全屏 tasks / minimal $EDITOR）、Ctrl+B 送後台（jobs 未接——toast 誠實 (M46b)）、Ctrl+R 槽位（m46b 門控）。
+> **M49 supersede 注**：M46a 的 `tui.providers` 平面、`tui.providers` 版本化佈局與「缺 → mock」鏈均已替換——見下方 M49 節（canonical `llm.providers`、required-model、read-pin）；本節收錄的 M46a 機制描述（mask 顯示、三步嚮導、ArgPicker、Settings modal 形狀、鍵表）仍以 M49 狀態為準。
+
+- **Provider**：settings `tui.providers`（M46a 佈局——**M49 起僅 read-pin 兼容**；README/本節如下「Provider/模型 plane（M49）」；明文絕不進 settings；mask 顯示）＋ `discoverModels`（`@i-harness/provider` 的 `probeCandidatePaths` 進程復用；記憶體 memo；CI 注入式）＋ 三步嚮導/菜單/刪除（cc-custom 字形面）。
+- **模型**：`/model` ArgPicker（目錄 + `(no override)`）+ `/effort`（llm.defaultModel.reasoningEffort）+ factory 鏈 `--model` > settings 默認——**M49 起無 mock 兜底**（未配置 = Welcome gate，required-model policy；子代理測試/示範性組裝方可顯式注入 llm-mock）。
+- **Settings modal**：新版 8 分類（Appearance/Mouse/Models&Providers/Sessions/Safety——真旋鈕 + 誠實佔位；Appearance 主題 4-6 階依色彩深度；Models&Providers 為 master/detail 與 model picker 啟動行）。
+- **Slash**：CommandRegistry（grok 形狀，visible/門控）——**M49 起供應能力門控清單**（無隱藏跳過表；`login/logout/share/privacy/delete/cd/memory/media/voice/imagine/…` 根本不註冊，提交即 `Unsupported command: /<name>` 且零後端提交）；輕量面板（skills/mcps/hooks/plugins/marketplace/config-agents/workflow/usage/session-info/goal/tutorial/jump/doctor/help/timeline…）。
+- **鍵表真理**（新版為準）：Ctrl+S stash + Alt+S、F3 sessions、Ctrl+G 模式拆分（全屏 tasks / minimal $EDITOR）、Ctrl+B 送後台（jobs 未接——toast 誠實 (M46b)）、Ctrl+R 槽位（m46b 門控；M49 起切換真實 terminal 捕獲位元組集）。
 - 誠實縫：compact/rename = BackendClient 可選成員（assembly/後臺裝配）；always-approve 運行時線縫 = m46b。
+
+## 八¾¾、Provider/模型 plane + TUI parity（M49——Grok parity 收官）
+
+- **Canonical provider settings**：settings `llm.providers`（id 化、protocol/baseURL/modelsURL/models/displayName/apiKeyEnv 引用）+ `llm.defaultModel` 為唯一解析真源；TUI `/provider` master/detail 寫入此平面（`createProviderRuntime`——directory/upsert/remove/setApiKey/discoverModels/setDefaultModel/resolveModel）。M46 `tui.providers` 佈局僅**讀取 pin**（重寫時文件原樣保留、規格化輸出永不暴露、永不推入 `llm.providers` 持久化）。provider 目錄 = registry 模板 + user 覆蓋合併；身份/密鑰**絕不進 settings**（credentials 引用 + `apiKeyEnv` env 覆寫、shadowed 拒絕）。
+- **解析鏈**：session model selection > `llm.defaultModel` > `--model` override；未配置 → `No model configured`（required-model gate——Welcome 路由 Settings；無 mock 回退）；`reasoningEffort` 6 檔、`contextWindow` 來自 model card 有效上下文（stale-window 防止單元級）。
+- **認證面**：refs-not-values 的三源 resolve（env > file）＋ **Bedrock ambient**（無 key 環境即用——僅 `bedrock` provider 與 `ambient` ref 合法，其他協議拒絕）；**OAuth-account 類型為未來擴展邊界**（ProviderAuthRef 型別預留 `oauth-account-ref`，本期無實作/無 UI 側）。
+- **發現**：model 目錄 = 手動（`/provider` 內置 model id 增刪）+ **明確 discovery**（`discoverModels` probe——`modelsURL` 全端點支持；bedrock 為 manual-only、明確拒絕發現）；無自動爬取/入門教程。
+- **Slash 註冊表（可見清單——M49 實測）**：`provider model settings effort`（provider-settings 能力）；`theme timestamps multiline compact-mode minimal fullscreen`；`doctor copy export transcript help quit`；`skills mcps hooks plugins marketplace config-agents`；`workflow workflows`；`usage tutorial goal`；`timeline`；`toggle-mouse-reporting`（mouse_reporting_toggle 開）；`always-approve auto`（guardian 能力）；`find jump history edit-prompt new home resume dashboard queue tasks btw rename session-info fork context rewind compact plan view-plan`（各別後端能力門控）；`vim-mode` 註冊但 M49 能力缺席——**不可見**。排除名單（未註冊——無 hidden skip-list）：`login logout share privacy delete cd remember recap voice imagine imagine-video`。`/help` 渲染**當前**可見清單 + 現行鍵行（絕非靜態）。
+- **主題/畫面模式**：六主題（system→auto / grok-night / grok-day / tokyo-night / rose-pine-moon / oscura-midnight；truecolor 全六，低彩四）+ 每主題專屬 palette；`/theme` + Settings Appearance 同路徑（preview → persist → rollback）；startup `initialTheme` 種子（重啟後裸 `/theme` 從實態循環起）。`tui.prefs.screenMode` 持久化（`--mode` 旗標 > persisted > fullscreen）；minimal = **無終端 init**（無 alt-screen/無捕獲——啟動 split 結構性保證）；`/minimal` `/fullscreen` 寫回持久實態並同會話重啟。
+- **Status line（內建）**：真實值派生（model label = runtime 綁定標籤、workspace git branch、context 計數、turn timer、session 標題、queue/tasks 計數——未知即省略，絕不虛構）；segments 可配置（`tui.prefs.statusLine.items`）；mode disabled/builtin/command。
+- **Dashboard**：**本地機器**面——durable session store + backend 真投影（title/updatedAt/turnCount/live/modelLabel/tasks/queued——失敗即誠實跳過，never fabricated）；filter/peek/pin/order 持久化（pinned/order ids 僅本地設定）；無跨機器同步；無 account 面。
+- **鼠標捕獲切換**：opt-in `mouse_reporting_toggle`（或 `GROK_MOUSE_REPORTING_TOGGLE=1`）→ 全屏 scrollback Ctrl+R / `/toggle-mouse-reporting` 切換真 terminal 捕獲（僅轉換發位元組；五模 enable/disable 集）；minimal/無鼠標終端忽略（保持 OFF）。
+- **Grapheme editor + cursor**：PromptEditor 權威模型（clusters 原子移動/多點擊、paste atoms、undo/redo、@@-編輯）；可見 cursor 位元組（Show/MoveTo/Hide——case-025）。
+- **Typed tool 呈現**：tool 家族（README/exec/tool/eslint/steps…）+ 結構化 diff（+A/-D 會計、hunk 行）+ 原始視圖（secret 紅化——redact 縫）+ copy（注入夾層——唯一複製路徑）+ block/line viewer（真檔讀取、1-based 游標、真實 JSON 投影）。
+- **Queue/Tasks**：真實 queue 投影（service-front + lane 合併；queued/running/delivery/order）+ [cancel]/[Send now]；tasks 分組（Subagents/Background/Workflows/Schedule——僅有列之組）、[✗] cancel、task viewer；計數為 backend 真值。
+- **PTY parity 證明（case-028）**：一連續 executable session——minimal 啟動無 alt-screen/鼠標位元組（runtime 標籤先現）、`/fullscreen` 重啟持久化、Settings 主題六循環、Ctrl+R off/on 位元組集、Settings/Dashboard/Queue/Tasks/viewer/file viewer/Help 面 + modal 輸入優先 + Esc unwinding、`/login` 精確「Unsupported command: /login」+ 零後端提交、重啟主題/畫面/狀態持久化 + 模型標籤 = runtime 真綁定。
 
 ## 八¾2、鼠標五分面（M46b 新增——grok 鼠標全 parity）
 

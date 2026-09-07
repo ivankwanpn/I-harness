@@ -169,6 +169,23 @@ describe("case 1: empty start drawRegion goldens", () => {
   })
 })
 
+describe("object-initializer form (loadMinimalHost / MinimalHostFactory contract)", () => {
+  it("initializes the geometry from the object and paints the region at the BOTTOM", async () => {
+    const eng = createInlineLiveRegion({ cols: COLS, rows: ROWS }) as InlineLiveRegionImpl
+    expect(eng.metrics()).toEqual({ cols: COLS, rows: ROWS, regionRows: REGION_ROWS })
+    eng.setRegionLines(rcGrid)
+    const t = new Xterm(COLS, ROWS)
+    t.write(drawAll(eng))
+    await t.drain()
+    expect(Array.from({ length: REGION_ROWS }, (_, i) => t.row(ROWS - REGION_ROWS + i)).join("|")).toBe(rcTexts.join("|"))
+    expect(t.baseY).toBe(0)
+  })
+  it("carries the palette sgr through the initializer object", () => {
+    const eng = createInlineLiveRegion({ cols: COLS, rows: ROWS, sgr: { text: "\x1b[31m" } }) as InlineLiveRegionImpl
+    expect(eng.metrics()).toEqual({ cols: COLS, rows: ROWS, regionRows: REGION_ROWS })
+  })
+})
+
 describe("case 2: commit one line", () => {
   it("bytes: one row at the region top + bottom-row cursor + 1 LF + region re-draw", () => {
     const eng = createInlineLiveRegion(COLS, ROWS) as InlineLiveRegionImpl

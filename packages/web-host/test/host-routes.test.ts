@@ -140,21 +140,24 @@ describe("web-host HTTP", () => {
         expect(snap1.settings.theme).toBe("system")
         expect(snap1.settings.fontSize).toBe(14)
 
-        // PUT a partial patch; response carries the merged snapshot.
+        // PUT a partial patch; response carries the merged snapshot. The
+        // theme vocabulary is the M49 six-id set — a LEGACY "dark"/"light"
+        // value is soft-upgraded at read (dark → grok-night), so the modern
+        // id round-trips verbatim.
         const put = await fetch(`${base}/api/settings`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ theme: "dark", fontSize: 16 }),
+          body: JSON.stringify({ theme: "grok-night", fontSize: 16 }),
         })
         expect(put.status).toBe(200)
         const snap2 = await put.json() as { settings: { theme: string; fontSize: number } }
-        expect(snap2.settings.theme).toBe("dark")
+        expect(snap2.settings.theme).toBe("grok-night")
         expect(snap2.settings.fontSize).toBe(16)
 
         // Second GET reflects the persisted state.
         const get2 = await fetch(`${base}/api/settings`)
         const snap3 = await get2.json() as { settings: { theme: string; fontSize: number } }
-        expect(snap3.settings.theme).toBe("dark")
+        expect(snap3.settings.theme).toBe("grok-night")
         expect(snap3.settings.fontSize).toBe(16)
       }, { settings })
     } finally {

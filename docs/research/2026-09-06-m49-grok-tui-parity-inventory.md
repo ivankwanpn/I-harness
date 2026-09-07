@@ -4,6 +4,8 @@
 I-harness：`D:\I-harness-main\.worktrees\m49`，branch `m49`  
 Grok Build：`D:\agent-complete\grok-build-main`（來源快照沒有 `.git`）
 
+> **2026-09-07 交付更新（supersede）**：本盤點的 M46 時期結論——`tui.providers` provider plane、mock fallback 解析鏈與 fixture-only pane 狀態——已被 M49 全部落地/取代；交付後狀態以 `docs/CAPABILITIES.md` 的「八¾¾、Provider/模型 plane + TUI parity（M49）」節 + README M49 行為為準。**盤點時的「M49 補足」行現況**：canonical provider settings（required-model）、typed settings/provider flow、grapheme editor + 可見 cursor、typed tool blocks + viewers/copy、queue、tasks/subagents、主題 + minimal 生產化、local dashboard + 內建 status line、capability-gated slash + 鼠標捕獲切換——均已在 production composition 接線（各對應 PTY case-024..case-028）。**排除項維持**：Grok/xAI 帳號、訂閱、計費、account OAuth（僅型別擴展邊界）、billing、delete、跨機器 dashboard、自動 discovery 爬取——I-harness 不實作。（本盤點的「fixture-only」標記僅記錄盤點當下；後續任務已交付者以此注澄清。）
+
 ## 0. 方法與判定
 
 本盤點同時閱讀兩邊 production source、使用者指南、既有研究、單元測試與 PTY harness。Grok 完整 TUI 的 live black-box 路徑被 xAI OAuth device-code gate 擋住，因此登入後畫面以 Rust production source、guide 與 snapshot/PTY tests 為準；登入牆本身已有 live 驗證。I-harness 的判定以 composition root 是否真正接線為準，不能因 renderer、fixture 或測試 fake 存在就宣稱功能已交付。

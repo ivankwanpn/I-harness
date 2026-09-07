@@ -377,6 +377,25 @@ export class InlineLiveRegionImpl implements InlineLiveRegion {
   }
 }
 
-export function createInlineLiveRegion(cols: number, rows: number, options?: InlineEngineOptions): InlineLiveRegion {
-  return new InlineLiveRegionImpl(cols, rows, options)
+/** M49 Task 15: the `loadMinimalHost`/`MinimalHostFactory` contract (index.ts +
+ * apps/tui's loadInlineHost) initializes by OBJECT — the same geometry/sgr the
+ * positional form takes. Both forms are accepted (the harness + the inline
+ * tests keep the positional shape). */
+export interface InlineLiveRegionInit {
+  cols: number
+  rows: number
+  sgr?: Partial<Record<TextStyle, string>>
+}
+
+export function createInlineLiveRegion(init: InlineLiveRegionInit): InlineLiveRegion
+export function createInlineLiveRegion(cols: number, rows: number, options?: InlineEngineOptions): InlineLiveRegion
+export function createInlineLiveRegion(
+  cols: number | InlineLiveRegionInit,
+  rows?: number,
+  options: InlineEngineOptions = {},
+): InlineLiveRegion {
+  if (typeof cols === "object") {
+    return new InlineLiveRegionImpl(cols.cols, cols.rows, cols.sgr !== undefined ? { sgr: cols.sgr } : {})
+  }
+  return new InlineLiveRegionImpl(cols, rows ?? 0, options)
 }
