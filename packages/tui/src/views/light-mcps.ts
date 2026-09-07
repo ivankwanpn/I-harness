@@ -21,5 +21,8 @@ export function mcpsRows(servers: McpServerBrief[]): LightPanelRow[] {
   if (servers.length === 0) {
     return [{ label: MCPS_EMPTY.trim() }]
   }
-  return servers.map((s) => ({ label: s.name, detail: s.transport }))
+  // M49 Task 14 (spec §10.2): the rows label the CONFIGURED state (the only
+  // state this host can observe — the TUI has no MCP supervisor status
+  // source; mount/online verdicts are never fabricated).
+  return servers.map((s) => ({ label: s.name, detail: `configured · ${s.transport}` }))
 }

@@ -6,6 +6,8 @@
 import type { AppAction } from "../../keys.ts"
 import type { OverlaySeam } from "../../present.ts"
 import { renderTextInput, textInputCaret } from "../../../views/text-input.ts"
+import type { SlashCommand } from "../types.ts"
+import { hasCapability } from "../types.ts"
 
 export interface TextInputOptions {
   title: string
@@ -51,3 +53,20 @@ export function bindTextInput(opts: TextInputOptions): OverlaySeam {
     },
   }
 }
+
+// ------------------------------------------------------------------ vim-mode (spec §10.2 "Conditional editor/safety")
+
+/** M49 Task 14 (spec §10.2): /vim-mode joins the visible set ONLY when a live
+ * vim/editor-mode capability exists. The M49 TUI has none — registered behind
+ * the "vim-mode" gate (never listed, never matched) with an honest run body;
+ * no UI-state fake is kept in the visible set. */
+export const editorSafetyCommands: SlashCommand[] = [
+  {
+    name: "vim-mode",
+    description: "Vim-style editing mode (live editor capability)",
+    visible: (ctx) => hasCapability(ctx, "vim-mode"),
+    run(ctx) {
+      ctx.toast("vim-mode: live editor capability not wired")
+    },
+  },
+]

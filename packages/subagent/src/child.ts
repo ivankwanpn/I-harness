@@ -11,6 +11,33 @@ import type { AgentTable } from "./agent-table.ts"
 import type { SubagentRole } from "./roles.ts"
 import { forkTurns } from "./fork.ts"
 
+/**
+ * M49 Task 14 (spec §11): the subagent prompt contract — appended AFTER the
+ * role prompt on every child agent. It carries the delegated-task scope, the
+ * no-recursive-delegation rule, the changed-files/test reporting and the
+ * result delivery; the closing note keeps human/project instructions (the
+ * task message, project rules) above this contract.
+ */
+export const SUBAGENT_PROMPT_CONTRACT = `Subagent contract:
+- Scope: complete the delegated task only; do not expand into adjacent work.
+  Your task scope is exactly what was asked of you. The parent owns the
+  overall plan — ask about ambiguity instead of assuming scope.
+- Delegation: do not delegate recursively unless the harness explicitly
+  supports it. Use the tools you were given; your tools list is the authority.
+- Reporting: in your final result, report the changed files and the tests you
+  ran or added, with their outcomes.
+- Result delivery: deliver the concrete deliverable of your task in your final
+  message. The parent integrates your result into its own work — do not
+  repeat work the parent already owns.
+Note: human and project instructions (your task message, project rules, and
+the role prompt above) remain higher priority than this contract.`
+
+/** Role system prompt + the subagent contract (the child agent's system
+ * prompt). The role prompt always leads; the contract follows. */
+export function composeSubagentPrompt(roleSystemPrompt: string): string {
+  return `${roleSystemPrompt}\n\n${SUBAGENT_PROMPT_CONTRACT}`
+}
+
 export interface SpawnOptions {
   taskName: string
   message: string
@@ -95,7 +122,10 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     session: childSession,
     tools: childReg,
     model,
-    systemPrompt: opts.role.systemPrompt,
+    // M49 Task 14 (spec §11): role prompt + the subagent contract (scope/
+    // delegation/changed-files+test reporting/result delivery). Human and
+    // project instructions remain higher priority (the contract says so).
+    systemPrompt: composeSubagentPrompt(opts.role.systemPrompt),
     signal: controller.signal,
     // M19 (Ruling 24): the child's durable session id is seeded onto every
     // prepared ToolExec so the agent-team scheduler can attribute the child's

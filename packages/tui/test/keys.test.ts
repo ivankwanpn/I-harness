@@ -283,6 +283,28 @@ describe("shortcutsFor — the bar content", () => {
   })
 })
 
+describe("dispatchKey — input precedence rows (spec §9.4)", () => {
+  it("a confirm/permission/question overlay preempts welcome, dashboard, minimal, scrollback and prompt", () => {
+    const base = promptState({ overlay: "permission" })
+    const states: KeymapState[] = [
+      base,
+      { ...base, welcome: true },
+      { ...base, dashboard: true },
+      { ...base, minimal: true },
+      { ...base, focused: "scrollback" },
+      { ...base, promptText: "draft" },
+    ]
+    for (const st of states) {
+      expect(dispatchKey(kbd({ code: "Enter", key: "Enter" }), st)).toBe("overlay-select")
+      expect(dispatchKey(kbd({ code: "Esc", key: "Esc" }), st)).toBe("overlay-dismiss")
+      // F2 is bound below every surface — the overlay swallows it.
+      expect(dispatchKey(kbd({ code: "F2", key: "F2" }), st)).toBe("none")
+    }
+    // without the overlay the same states keep their own bindings
+    expect(dispatchKey(kbd({ code: "F2", key: "F2" }), promptState({ welcome: true }))).toBe("welcome-settings")
+  })
+})
+
 describe("shortcutsFor — plan review (M40 G2 / C13)", () => {
   it("plan review active → the bar opens with `a approve / c comment / q quit plan`", () => {
     const items = shortcutsFor({ focused: "prompt", multiLine: false, turnRunning: false, mode: "plan", planReview: true })

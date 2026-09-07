@@ -1,32 +1,27 @@
 // @i-harness/tui — G2 (M46a): session slash commands — /new /home /resume
-// /delete /rename /session-info.
-// Backend truth: the embedded session is in-process (mock-first; persistence
-// + coordinator arrival = M38 per the embedded bridge header), so /new and
-// /delete are CONFIRMED app-level resets with honest persistence notes —
-// never a plain no-op, never a fake id on disk.
+// /dashboard /rename /session-info (+ the capability-gated /fork — spec
+// §10.2 "Conditional session": registered, visible only with the "fork"
+// backend capability; the loop derives it from backend.forkSession).
+// M49 Task 14 (spec §10.3): /delete is NOT registered (no durable delete API —
+// the permanent exclusion list) and /new goes through the backend create
+// seam (ctx.createSession) instead of an app-level confirm+reset.
 
 import type { SlashCommand } from "../types.ts"
+import { hasCapability } from "../types.ts"
 import { sessionInfoRows } from "../../../views/light-session-info.ts"
 import { bindTextInput } from "./text-input.ts"
 
 export const sessionCommands: SlashCommand[] = [
   {
     name: "new",
-    description: "Start a new session",
+    description: "Start a new session (backend create)",
+    visible: (ctx) => hasCapability(ctx, "session-create"),
     run(ctx) {
-      ctx.openPanel({
-        kind: "session-info",
-        title: "New session?",
-        rows: [
-          { label: "Start a new session (current in-session state is discarded)" },
-          { label: "Cancel" },
-        ],
-        cursor: 1,
-        onSelect: (i) => {
-          if (i !== 0) { ctx.toast("cancelled"); return }
-          ctx.resetSession()
-        },
-      })
+      if (ctx.createSession === undefined) {
+        ctx.toast("new session: backend create seam absent")
+        return
+      }
+      void ctx.createSession()
     },
   },
   {
@@ -39,38 +34,54 @@ export const sessionCommands: SlashCommand[] = [
   {
     name: "resume",
     description: "Open the session picker",
+    visible: (ctx) => hasCapability(ctx, "session-list"),
     run(ctx) {
       ctx.openSessions()
     },
   },
   {
     // M49 Task 13 (spec §8.3): the local dashboard — the SAME view the Welcome
-    // menu entry and Ctrl+\ use (no remote/team/cost fields, ever). The skip
-    // list's /dashboard entry is REMOVED with it (the M46c /timeline
-    // precedent: a real command replaces the hidden inventory row).
+    // menu entry and Ctrl+\ use (no remote/team/cost fields, ever).
     name: "dashboard",
     description: "Open the local session dashboard",
+    visible: (ctx) => hasCapability(ctx, "dashboard"),
     run(ctx) {
-      ctx.openDashboard?.()
+      if (ctx.dashboard === undefined) {
+        ctx.toast("dashboard: backend projection absent")
+        return
+      }
+      ctx.dashboard()
     },
   },
   {
-    name: "delete",
-    description: "Delete the current session (confirm → welcome)",
+    // "Conditional session" (spec §10.2): the fork capability comes from
+    // backend.forkSession — the production TUI backend has no fork member
+    // (registered; visible only where one exists).
+    name: "fork",
+    description: "Fork the current session (backend fork)",
+    argumentHint: "[title]",
+    visible: (ctx) => hasCapability(ctx, "fork"),
     run(ctx) {
-      ctx.openPanel({
-        kind: "session-info",
-        title: "Delete session?",
-        rows: [
-          { label: "Delete this session" },
-          { label: "Cancel" },
-        ],
-        cursor: 1,
-        onSelect: (i) => {
-          if (i !== 0) { ctx.toast("cancelled"); return }
-          ctx.deleteSession()
-        },
-      })
+      if (ctx.fork === undefined) {
+        ctx.toast("fork: backend fork seam absent")
+        return
+      }
+      const title = ctx.arg.trim()
+      ctx.fork(title === "" ? undefined : title)
+    },
+  },
+  {
+    // M49 Task 14 (spec §10.2 "Conditional session"): the live context-usage
+    // panel — visible only when the backend prices the session context.
+    name: "context",
+    description: "Context usage for this session (local)",
+    visible: (ctx) => hasCapability(ctx, "context"),
+    run(ctx) {
+      if (ctx.openContext === undefined) {
+        ctx.toast("context: backend context seam absent")
+        return
+      }
+      ctx.openContext()
     },
   },
   {

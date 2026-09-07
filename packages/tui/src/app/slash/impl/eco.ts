@@ -1,16 +1,17 @@
 // @i-harness/tui — G2 (M46a): ecosystem slash commands — /skills /mcps /hooks
-// /plugins /marketplace /personas /config-agents (/workflow moved to
-// impl/workflow2.ts — the M46c surface).
-// DATA FROM THE REAL BACKENDS (read-only listings — the editing surfaces are
-// v2 per spec): skills = @i-harness/skills registry (workspace + global scan);
-// hooks = @i-harness/hooks config (9-event map + sha256 per handler);
-// plugins/marketplace = @i-harness/plugin-registry catalog (installed/enabled
-// + market shelf); config-agents = @i-harness/subagent builtin roles;
-// workflow = @i-harness/workflow registry + job store (the M46c surface —
-// see workflow2.ts). mcps = plugin runtime inputs mcpServerConfigs (the
-// per-server config keys — there is NO aggregated status registry in
-// @i-harness/mcp-client; live supervisor states are the session assembly's
-// mount outcomes — see light-mcps.ts).
+// /plugins /marketplace /config-agents (/workflow moved to impl/workflow2.ts —
+// the M46c surface). M49 Task 14 (spec §10.2 "Inventories"): each inventory
+// row distinguishes CONFIGURED / MOUNTED / FAILED / NOT-INSTALLED from the
+// production source; the hollow /personas surface (no preset catalog exists)
+// is NOT registered (the §10.2 inventory has no personas row).
+// Data: skills = @i-harness/skills registry (workspace + global scan); hooks =
+// @i-harness/hooks config (9-event map + sha256 per handler — per-handler
+// validity verdicts); plugins/marketplace = @i-harness/plugin-registry catalog
+// (mounted=installed+enabled, configured=installed, not installed=catalog
+// shelf, failed=conflicts); config-agents = @i-harness/subagent builtin roles;
+// mcps = plugin runtime inputs mcpServerConfigs (the per-server config keys —
+// the TUI host has no MCP supervisor status source, so the rows label the
+// configured state honestly — mount states are NOT fabricated).
 
 import { dirname, join } from "node:path"
 import { resolveHooksConfigPath, loadHooksConfig, HOOK_EVENTS } from "@i-harness/hooks"
@@ -22,7 +23,6 @@ import { skillsRows, SKILLS_EMPTY } from "../../../views/light-skills.ts"
 import { mcpsRows, MCPS_EMPTY } from "../../../views/light-mcps.ts"
 import { hooksRows, HOOKS_EMPTY } from "../../../views/light-hooks.ts"
 import { pluginRows, marketplaceRows, PLUGINS_EMPTY, MARKETPLACE_EMPTY } from "../../../views/light-plugins.ts"
-import { PERSONAS_EMPTY } from "../../../views/light-personas.ts"
 import { configAgentRows, CONFIG_AGENTS_EMPTY } from "../../../views/light-config-agents.ts"
 import type { LightPanelRow } from "../../../views/light-panel.ts"
 
@@ -65,7 +65,7 @@ export const ecoCommands: SlashCommand[] = [
         })
         ctx.openPanel({ kind: "mcps", title: "MCP servers", rows: emptyOr(mcpsRows(servers), MCPS_EMPTY) })
       } catch {
-        ctx.openPanel({ kind: "mcps", title: "MCP servers", rows: [{ label: MCPS_EMPTY.trim() }] })
+        ctx.openPanel({ kind: "mcps", title: "MCP servers", rows: [{ label: "MCP config unavailable (plugin scan failed)" }] })
       }
     },
   },
@@ -85,14 +85,14 @@ export const ecoCommands: SlashCommand[] = [
   },
   {
     name: "plugins",
-    description: "Plugin catalog (installed/enabled)",
+    description: "Plugin catalog (installed/enabled states)",
     run: async (ctx) => {
       try {
         const registry = new PluginRegistry({ root: join(workspaceOf(ctx), ".i-harness", "plugins") })
         const { plugins } = await registry.catalog()
         ctx.openPanel({ kind: "plugins", title: "Plugins", rows: emptyOr(pluginRows(plugins), PLUGINS_EMPTY) })
       } catch (error) {
-        ctx.openPanel({ kind: "plugins", title: "Plugins", rows: [{ label: `plugin catalog: ${String(error)}` }] })
+        ctx.openPanel({ kind: "plugins", title: "Plugins", rows: [{ label: `plugin catalog failed: ${String(error)}` }] })
       }
     },
   },
@@ -110,16 +110,10 @@ export const ecoCommands: SlashCommand[] = [
     },
   },
   {
-    name: "personas",
-    description: "Persona list (presets are config-time — see note)",
-    run: (ctx) => {
-      // Honest: @i-harness/preset has NO list/catalog (presets are JSON text
-      // mounted per session). The REAL in-session persona set is the subagent
-      // role table (/config-agents). The panel says so instead of faking rows.
-      ctx.openPanel({ kind: "personas", title: "Personas", rows: [{ label: PERSONAS_EMPTY.trim() }] })
-    },
-  },
-  {
+    // M49 Task 14: /personas is NOT registered — @i-harness/preset has no
+    // list/catalog surface (presets are JSON text mounted per session) and
+    // spec §10.2's inventory has no personas row; the spec would call the
+    // always-empty row a fixture-only surface.
     name: "config-agents",
     description: "Subagent role table (builtin + registered)",
     run: (ctx) => {

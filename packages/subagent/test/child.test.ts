@@ -223,3 +223,81 @@ describe("spawnChild onSettled seam (M26-D1)", () => {
     expect(settled[0]).toEqual({ finalText: "ok", aborted: false })
   }, 10_000)
 })
+
+// ------------------------------------------------------------------ M49 Task 14 (spec §11): subagent prompt contract
+
+import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
+import { composeSubagentPrompt } from "../src/child.ts"
+
+describe("composeSubagentPrompt (spec §11 — subagent contract)", () => {
+  it("appends the contract AFTER the role prompt (role first, human first note last)", () => {
+    const p = composeSubagentPrompt("You are a worker agent.")
+    expect(p).toContain("You are a worker agent.")
+    expect(p).toContain("Subagent contract")
+    expect(p).toContain("task scope")
+    expect(p).toContain("do not delegate recursively")
+    expect(p).toContain("changed files")
+    expect(p).toContain("tests")
+    expect(p).toContain("result")
+    expect(p).toContain("higher priority")
+    expect(p.indexOf("You are a worker agent.")).toBeLessThan(p.indexOf("Subagent contract"))
+  })
+})
+
+describe("spawnChild — M49 Default prompt carries the subagent contract", () => {
+  /** Real ModelClient double recording every LLMRequest (the child inherits
+   * the parent's client when the role names no model). */
+  function recordingModel(): ModelClient & { requests: LLMRequest[] } {
+    const requests: LLMRequest[] = []
+    return {
+      requests,
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        requests.push(request)
+        yield { type: "text/chunk", text: "child done" }
+        yield { type: "end" }
+      },
+    }
+  }
+
+  it("the child's system prompt = role prompt + subagent contract", async () => {
+    const parentCtx = createContext()
+    const parentReg = createToolRegistry(parentCtx)
+    parentReg.register(makeTool("read"))
+    const parentSession = createSession()
+    const jobs = createJobRegistry()
+    const table = createAgentTable()
+    const roles = createRoleRegistry()
+    for (const r of builtinRoles()) roles.register(r)
+    const model = recordingModel()
+    const { jobId } = await spawnChild({
+      taskName: "helper",
+      message: "do the thing",
+      parentPath: "root",
+      parentRegistry: parentReg,
+      parentSession,
+      parentCtx,
+      role: roles.get("general")!,
+      parentModel: model,
+      providers: createProviderRegistry(),
+      jobs,
+      table,
+      agents: createAgentRegistry(),
+    })
+    for (let i = 0; i < 100 && model.requests.length === 0; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(model.requests.length).toBe(1)
+    const prompt = model.requests[0]!.systemPrompt
+    expect(prompt).toContain("You are a general-purpose coding agent.")
+    expect(prompt).toContain("Subagent contract")
+    expect(prompt).toContain("do not delegate recursively")
+    expect(prompt).toContain("changed files")
+    expect(prompt).toContain("higher priority")
+    expect(prompt.indexOf("You are a general-purpose coding agent.")).toBeLessThan(prompt.indexOf("Subagent contract"))
+    // the run settles normally with the recording model
+    for (let i = 0; i < 200 && jobs.read(jobId)?.status !== "completed"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(jobs.read(jobId)?.status).toBe("completed")
+  }, 15_000)
+})

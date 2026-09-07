@@ -8,7 +8,8 @@
 
 import { createRenderer } from "./renderer.ts"
 import type { Renderer, RendererOptions } from "./renderer.ts"
-import { initSequence, teardownSequence, TeardownGuard } from "./terminal/index.ts"
+import { initSequence, teardownSequence, TeardownGuard, createMouseReportingToggle } from "./terminal/index.ts"
+import type { MouseReportingToggle } from "./terminal/index.ts"
 import { InputParser } from "./input/index.ts"
 import type { InputEvent } from "./input/index.ts"
 import { probeCapabilities } from "./probe/index.ts"
@@ -152,6 +153,10 @@ export function attachInput(opts: AttachInputOptions): InputAttach {
 export { probeCapabilities }
 export { createUnknownCapabilities }
 export type { TerminalCapabilityContext }
+// M49 Task 14: the runtime mouse-capture toggle (spec §9.7) — enable/disable
+// bytes ONLY on transitions; no-mouse terminals stay OFF.
+export { createMouseReportingToggle }
+export type { MouseReportingToggle }
 export { InputParser }
 export type { InputEvent }
 export { WriterPump }

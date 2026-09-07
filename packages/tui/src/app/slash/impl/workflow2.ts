@@ -131,6 +131,7 @@ function requestWorkflowRun(ctx: SlashContext, surf: WorkflowSurface, name: stri
 export const workflowCommands: SlashCommand[] = [
   {
     name: "workflow",
+    aliases: ["workflows"], // spec §10.2 inventory row (/workflows)
     description: "Run/list workflow jobs (run <name> | status [id] | list)",
     argumentHint: "run <name> | status [id] | list",
     run: async (ctx) => {

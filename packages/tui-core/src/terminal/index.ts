@@ -75,3 +75,34 @@ export class TeardownGuard {
     }
   }
 }
+
+/**
+ * Runtime mouse-capture toggle (M49 Task 14, spec §9.7): the TUI may switch
+ * mouse reporting on/off at runtime (Ctrl+R //toggle-mouse-reporting). The
+ * enable/disable byte sequences are emitted ONLY on a transition — an
+ * idempotent set() returns "" (zero bytes, no state change). A terminal
+ * without the mouse capability ignores every attempt and stays OFF.
+ */
+export interface MouseReportingToggle {
+  /** Next transition's bytes ("", when nothing changed / cannot enable). */
+  set(on: boolean): string
+  /** The settled capture state (false for no-mouse terminals, always). */
+  readonly enabled: boolean
+}
+
+export function createMouseReportingToggle(cap: TerminalCapabilityContext): MouseReportingToggle {
+  let on = false
+  return {
+    set(next: boolean): string {
+      // Minimal/unknown-capability terminals stay OFF (spec §9.7: minimal is
+      // never captured) and receive zero bytes.
+      if (!cap.mouse) return ""
+      if (next === on) return ""
+      on = next
+      return next ? MOUSE_ENABLE_SEQ : MOUSE_DISABLE_SEQ
+    },
+    get enabled(): boolean {
+      return on
+    },
+  }
+}

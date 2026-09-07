@@ -12,10 +12,16 @@ export function pluginRows(catalog: CatalogPlugin[]): LightPanelRow[] {
   if (catalog.length === 0) {
     return [{ label: PLUGINS_EMPTY.trim() }]
   }
-  return catalog.map((p) => ({
-    label: p.name,
-    detail: `${p.installed ? (p.enabled ? "enabled" : "installed") : "catalog"} · ${p.marketplace}`,
-  }))
+  return catalog.map((p) => {
+    // M49 Task 14 (spec §10.2): the state vocabulary — MOUNTED (installed and
+    // enabled), CONFIGURED (installed, not enabled), NOT INSTALLED (catalog
+    // shelf only) and FAILED (enable-time command conflicts, D5).
+    const state = p.enabled ? "mounted" : p.installed ? "configured" : "not installed"
+    const failed = (p.conflicts?.length ?? 0) > 0
+      ? ` · failed (${p.conflicts!.length} command conflict${p.conflicts!.length === 1 ? "" : "s"})`
+      : ""
+    return { label: p.name, detail: `${state}${failed} · ${p.marketplace}` }
+  })
 }
 
 /** Marketplace view: the not-yet-installed catalog entries (the market shelf). */
