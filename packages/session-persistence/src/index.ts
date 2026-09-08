@@ -465,8 +465,23 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
         // rewind / messageSeqs references must stay valid) and this is NOT
         // loadOwned's strict invariant check — a non-positional established log
         // still loads.
-        const canonical = repairedTail.map((event, index): SessionEvent =>
-          event.seq === undefined ? { ...event, seq: index } : event)
+        // M51 F1: guardIgnorable() DROPS ignorable events, so a later index can
+        // sit BELOW a defined seq (a dropped mid-log event shifts every later
+        // index down) and a synthetic closer would alias an existing seq for
+        // shadowedSeqs/rewind windows and afterSeq pagination. Anchor synthetic
+        // seqs above the highest DEFINED seq instead: max(index, maxDefined+1+k)
+        // — identical to the bare index for the positional repair shape.
+        let maxDefinedSeq = -1
+        for (const event of repairedTail) {
+          if (event.seq !== undefined && event.seq > maxDefinedSeq) maxDefinedSeq = event.seq
+        }
+        let syntheticCount = 0
+        const canonical = repairedTail.map((event, index): SessionEvent => {
+          if (event.seq !== undefined) return event
+          const seq = Math.max(index, maxDefinedSeq + 1 + syntheticCount)
+          syntheticCount += 1
+          return { ...event, seq }
+        })
         return { session: buildSession(meta, canonical) }
       })
     },
