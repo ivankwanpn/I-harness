@@ -592,6 +592,84 @@ describe("canonical mutations", () => {
     })
   })
 
+  it("removes a legacy-only provider row (not a silent no-op) and survives a settings reload", async () => {
+    const { runtime, settings, settingsPath } = await fixture()
+    // legacy-only document: NO canonical llm row, just the tui.providers pin.
+    writeFileSync(settingsPath, JSON.stringify({
+      llm: { providers: {}, defaultModel: { provider: "", model: "" } },
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "deepseek",
+          providers: {
+            deepseek: { id: "deepseek", baseUrl: "https://legacy.example", apiKeyRef: "DEEPSEEK_API_KEY" },
+          },
+        },
+      },
+    }, null, 2))
+    await settings.load()
+    expect((await runtime.directory()).some((row) => row.id === "deepseek")).toBe(true)
+
+    await runtime.removeProvider("deepseek")
+
+    expect((await runtime.directory()).some((row) => row.id === "deepseek")).toBe(false)
+    // the KEY assertion: reloading must not resurrect the row from the pin.
+    await settings.load()
+    expect((await runtime.directory()).some((row) => row.id === "deepseek")).toBe(false)
+  })
+
+  it("clears a canonical default model aimed at a removed legacy-only provider", async () => {
+    const { runtime, settings, settingsPath } = await fixture()
+    writeFileSync(settingsPath, JSON.stringify({
+      llm: { providers: {}, defaultModel: { provider: "deepseek", model: "deepseek-chat" } },
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "",
+          providers: {
+            deepseek: { id: "deepseek", baseUrl: "https://legacy.example", apiKeyRef: "DEEPSEEK_API_KEY" },
+          },
+        },
+      },
+    }, null, 2))
+    await settings.load()
+    expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "deepseek-chat" })
+
+    await runtime.removeProvider("deepseek")
+
+    expect(settings.get().llm.providers.deepseek).toBeUndefined()
+    expect(settings.get().llm.defaultModel).toEqual({ provider: "", model: "" })
+    await settings.load()
+    expect(settings.get().llm.defaultModel).toEqual({ provider: "", model: "" })
+  })
+
+  it("removes the same-name legacy row when the canonical row is removed (no reload revival)", async () => {
+    const { runtime, settings, settingsPath } = await fixture()
+    writeFileSync(settingsPath, JSON.stringify({
+      llm: {
+        providers: { deepseek: { baseURL: "https://canonical.example", protocol: "openai-completions" } },
+        defaultModel: { provider: "", model: "" },
+      },
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "",
+          providers: { deepseek: { id: "deepseek", baseUrl: "https://legacy.example" } },
+        },
+      },
+    }, null, 2))
+    await settings.load()
+    // canonical fields win per id while both rows exist.
+    expect(settings.get().llm.providers.deepseek?.baseURL).toBe("https://canonical.example")
+
+    await runtime.removeProvider("deepseek")
+
+    expect(settings.get().llm.providers.deepseek).toBeUndefined()
+    await settings.load()
+    expect(settings.get().llm.providers.deepseek).toBeUndefined()
+    expect((await runtime.directory()).some((row) => row.id === "deepseek")).toBe(false)
+  })
+
   it("never promotes the legacy tui.providers pin into the canonical plane (read-pin provenance only)", async () => {
     const { runtime, settings, settingsPath } = await fixture({
       providers: {
