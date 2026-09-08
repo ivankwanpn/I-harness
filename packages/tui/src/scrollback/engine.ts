@@ -51,6 +51,11 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
   /** M43: block index of the LAST rewind marker row (`Rewound to turn {N}`)
    * — the dim-from anchor. -1 = no rewind yet. */
   private rewindMarkerBlock: number = -1
+  /** M52 L1: cumulative NET display rows removed by retain() (suppressed rows
+   * minus the single marker row). Monotonic (retain never re-expands) and
+   * deliberately NOT reset by reset(): the consumer tracks the DELTA, and a
+   * reset shrink re-anchors through the cursor's own shrink path. */
+  private trimmedLineTotal: number = 0
 
   constructor(opts: ScrollbackEngineOptions = {}) {
     this.glyphs = opts.glyphs ?? GLYPHS
@@ -307,7 +312,19 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     const suppressed = this.seg.sumBefore(t) // visible lines [0..t) — marker text
     this.seg.truncate(t, suppressed)
     this.searchNeedsUpdate = true
+    // M52 L1: report the NET display shrink (suppressed rows → 1 marker row)
+    // so the minimal commit cursor can shift by the same amount instead of
+    // re-anchoring past an uncommitted tail (see trimmedLines()).
+    this.trimmedLineTotal += total - (kept + 1)
     return { trimmedBlocks: t - cur }
+  }
+
+  /** M52 L1: cumulative NET display rows removed by retain()'s FRONT trim —
+   * the commit-cursor shift signal (OPTIONAL contract accessor: the minimal
+   * pipeline probes with `?.`). Monotonic; a rewind's TAIL removal is not
+   * reported here (that shrink re-anchors the cursor to the new total). */
+  trimmedLines(): number {
+    return this.trimmedLineTotal
   }
 
   /** Lowest block index that can still receive stream updates (or -1). */

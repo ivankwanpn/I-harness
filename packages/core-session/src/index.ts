@@ -382,6 +382,12 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // tool_result), regardless of how the session log interleaves them.
   let pendingCalls: { id: string; name: string; args: unknown }[] | undefined
   const pendingResults: LLMMessage[] = []
+  // M52/L3: user messages that land while the step's tool-call block is open
+  // (guard-repeat-tool's reminder from agent/post-tool) are buffered and
+  // emitted right AFTER that block — see the user/message branch. Without the
+  // buffer the immediate flush split the step: assistant("",toolCalls) →
+  // tool → user(reminder) → assistant(stepText).
+  const deferredUser: LLMMessage[] = []
   // M51/B2: whether a step/start..step/end window is open. The agent loop
   // appends the step's assistant/message AFTER its tool results but BEFORE
   // step/end, so "the current step's tool block is still open" is exactly
@@ -428,13 +434,22 @@ export function deriveMessages(session: Session): LLMMessage[] {
   for (const ev of session.events) {
     if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
     if (ev.type === "user/message") {
-      flushToolBlock()
       const images = ev.images as ImageInput[] | undefined
-      result.push(
-        images && images.length > 0
-          ? { role: "user", content: [{ type: "text", text: ev.text }, ...images.map((image) => ({ type: "image" as const, image }))] }
-          : { role: "user", content: ev.text },
-      )
+      const message: LLMMessage = images && images.length > 0
+        ? { role: "user", content: [{ type: "text", text: ev.text }, ...images.map((image) => ({ type: "image" as const, image }))] }
+        : { role: "user", content: ev.text }
+      // M52/L3: mid-step while the step's tool-call block is open (the ONLY
+      // in-tree producer is guard-repeat-tool's agent/post-tool reminder):
+      // defer past the block so the step's text still folds into its calls
+      // message (M51/B2) and the reminder follows the results. Every other
+      // user/message position (turn start, the agent/pre-step boundary before
+      // the first tool call, after step/end) keeps the immediate push.
+      if (stepOpen && pendingCalls) {
+        deferredUser.push(message)
+      } else {
+        flushToolBlock()
+        result.push(message)
+      }
     } else if (ev.type === "assistant/message") {
       // M51/B2 (M3 shape): when the step's tool block is still open, the
       // step's text belongs to the SAME assistant message as its tool calls —
@@ -452,6 +467,14 @@ export function deriveMessages(session: Session): LLMMessage[] {
       }
     } else if (ev.type === "step/start") {
       stepOpen = true
+    } else if (ev.type === "turn/start") {
+      // M52/L3: a turn boundary always closes the previous step window. An
+      // aborted/failed turn throws WITHOUT step/end, so the next turn's
+      // user/message would otherwise be deferred into that dangling tool
+      // block (core-agent agent.test.ts "per-call signal aborts the current
+      // turn"). Well-formed turns already end every step before turn/end, so
+      // this reset is a no-op for them.
+      stepOpen = false
     } else if (ev.type === "compaction/summary") {
       flushToolBlock()
       result.push({ role: "user", content: ev.text })
@@ -510,6 +533,12 @@ export function deriveMessages(session: Session): LLMMessage[] {
     if (pendingResults.length > 0) {
       result.push(...pendingResults)
       pendingResults.length = 0
+    }
+    // M52/L3: the block is complete — the deferred mid-step user messages
+    // follow it (they were logged after the results they interleaved with).
+    if (deferredUser.length > 0) {
+      result.push(...deferredUser)
+      deferredUser.length = 0
     }
   }
 }

@@ -361,6 +361,12 @@ export interface ScrollbackEngine {
    * Idempotent + monotonic: mutable/streaming blocks and the sticky-pinned
    * latest user block are never trimmed. Returns newly-trimmed block count. */
   retain?(opts: { maxLines?: number }): { trimmedBlocks: number }
+  /** M52 L1: cumulative NET display rows removed by retain()'s FRONT trim
+   * (suppressed rows minus the single marker row). Monotonic. OPTIONAL — the
+   * minimal commit pipeline shifts its cursor down by the delta so an
+   * uncommitted tail smaller than the trim is never stranded; engines without
+   * the accessor (or without retain) keep the re-anchor behavior. */
+  trimmedLines?(): number
   /** Engine-observed plan-mode flag (plan/mode events), M40 G2 (C13):
    * plan-review detection. OPTIONAL accessor — an engine without the
    * non-contract accessors omits it; the app then falls back to its own

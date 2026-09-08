@@ -14,6 +14,9 @@ import type { RegionLine } from "./contracts.ts"
 export interface CommitEngine {
   viewport(offset: number, height: number): DisplayLine[]
   lineCount(): number
+  /** M52 L1: cumulative NET rows removed by retain()'s FRONT trim (OPTIONAL —
+   * engines without the member never shrink that way). */
+  trimmedLines?(): number
 }
 
 export interface CommitOptions {
@@ -36,6 +39,8 @@ export function displayToRegion(line: DisplayLine): RegionLine {
  */
 export class MinimalCommits {
   private cursor = 0
+  /** M52 L1: last engine trim count folded into `cursor`. */
+  private seenTrimmedLines = 0
   private lastActivityAt = -Infinity
   private readonly now: () => number
   private readonly flushMs: number
@@ -49,12 +54,14 @@ export class MinimalCommits {
   }
 
   /** Rows NOT yet committed (engine cursor → lineCount); advances the
-   * cursor. A line-count shrink (retain/rewind) re-anchors the cursor DOWN to
-   * the new total so the next delta starts at the engine's first new row —
-   * never reset to 0, which would re-emit committed content (print-once). */
+   * cursor. A retain shrink is folded in FIRST (front trim ⇒ cursor shifts by
+   * the trimmed rows); any remaining line-count shrink (rewind) re-anchors the
+   * cursor DOWN to the new total so the next delta starts at the engine's
+   * first new row — never reset to 0, which would re-emit committed content
+   * (print-once). */
   pendingDelta(): RegionLine[] {
-    const total = this.engine.lineCount()
-    if (total < this.cursor) this.cursor = total // shrink (retain/rewind)
+    const total = this.syncTrim()
+    if (total < this.cursor) this.cursor = total // shrink (rewind)
     const start = this.cursor
     const height = total - start
     if (height <= 0) return []
@@ -87,10 +94,26 @@ export class MinimalCommits {
    * waiting for pendingDelta would miss the shrink once total re-passes the
    * stale cursor, resuming mid-block). */
   idleFlushDue(now: number): boolean {
-    const total = this.engine.lineCount()
-    if (total < this.cursor) this.cursor = total // shrink (retain/rewind)
+    const total = this.syncTrim()
+    if (total < this.cursor) this.cursor = total // shrink (rewind)
     if (total <= this.cursor) return false
     return now - this.lastActivityAt >= this.flushMs
+  }
+
+  /** M52 L1: fold the engine's reported FRONT-trim into the cursor. retain
+   * removes LEADING rows, so the cursor (an index into display rows) shifts
+   * down by exactly the removed rows — an uncommitted tail keeps its identity
+   * and still commits. The marker row (new row 0) counts as committed once
+   * anything was, so it is never emitted (print-once, M51 T1 invariant). A
+   * rewind shrink reports nothing here and still re-anchors to the total. */
+  private syncTrim(): number {
+    const trimmed = this.engine.trimmedLines?.() ?? 0
+    if (trimmed > this.seenTrimmedLines) {
+      const shift = trimmed - this.seenTrimmedLines
+      this.seenTrimmedLines = trimmed
+      this.cursor = this.cursor === 0 ? 0 : Math.max(1, this.cursor - shift)
+    }
+    return this.engine.lineCount()
   }
 }
 

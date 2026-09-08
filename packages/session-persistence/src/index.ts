@@ -471,6 +471,15 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
         // shadowedSeqs/rewind windows and afterSeq pagination. Anchor synthetic
         // seqs above the highest DEFINED seq instead: max(index, maxDefined+1+k)
         // — identical to the bare index for the positional repair shape.
+        // M52 L4: UNIQUENESS IS PRIORITIZED OVER MONOTONICITY, deliberately.
+        // A synthetic closer inserted mid-array (its index below a later
+        // DEFINED seq) gets maxDefined+1+k, so the resulting seqs can be
+        // non-monotonic w.r.t. array order. Renumbering DEFINED seqs would
+        // restore monotonicity but break every reference to them (shadowedSeqs,
+        // rewind windows, messageSeqs/afterSeq cursors), so the trade is fixed:
+        // uniqueness (no aliasing for those references) wins, and consumers
+        // must not assume seq === index on a repaired log — loadOwned() is the
+        // strict invariant path that enforces it.
         let maxDefinedSeq = -1
         for (const event of repairedTail) {
           if (event.seq !== undefined && event.seq > maxDefinedSeq) maxDefinedSeq = event.seq

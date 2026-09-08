@@ -346,6 +346,34 @@ describe("M51 T1 — commit cursor re-anchors after an engine shrink", () => {
     expect(commits.pendingDelta()).toEqual([]) // nothing left (print-once)
   })
 
+  it("M52 L1: an uncommitted tail smaller than the trim is NOT stranded", () => {
+    const engine = createScrollbackEngine({ width: 80 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    const seq = { n: 0 }
+    fill2100(engine, seq)
+    expect(engine.lineCount()).toBe(2100)
+    expect(commits.pendingDelta()).toHaveLength(2100) // committed prefix
+
+    // 300 rows stream in WITHOUT a boundary commit (an open assistant block).
+    engine.append({
+      type: "assistant",
+      text: Array.from({ length: 300 }, (_, i) => `U${i}`).join("\n"),
+      seq: seq.n++, ts: 0,
+    })
+    expect(engine.lineCount()).toBe(2400)
+
+    // The resize auto-retain (TuiApp.maybeAutoRetain: >2000 → 1500) fires
+    // while those 300 rows are still uncommitted: 2400 → 1501 (net −899).
+    expect(engine.retain!({ maxLines: 1500 }).trimmedBlocks).toBeGreaterThan(0)
+    expect(engine.lineCount()).toBe(1501)
+
+    // retain trims the LEADING rows, so the cursor shifts down by the same
+    // 899 (2100 → 1201) — the uncommitted tail keeps its identity and is the
+    // only delta. Re-anchoring to the total instead would strand it forever.
+    expect(rowsOf(commits.pendingDelta())).toEqual(Array.from({ length: 300 }, (_, i) => `U${i}`))
+    expect(commits.pendingDelta()).toEqual([]) // nothing left (print-once)
+  })
+
   it("rewind: the cursor re-anchors and the new turn commits from its first row", () => {
     const engine = createScrollbackEngine({ width: 80 })
     const commits = new MinimalCommits(engine, { now: () => 0 })
