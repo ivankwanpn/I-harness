@@ -196,6 +196,46 @@ describe("repairTurnTail through coordinator.load()", () => {
     }
   })
 
+  // M51 F1: load() DROPS `ignorable` events (guardIgnorable without retain),
+  // which shifts every later array index DOWN. Canonicalizing an undefined seq
+  // to its bare index can then land ON a defined seq (a downgrade-read log with
+  // a newer format's ignorable event + a torn tail): the synthetic closer would
+  // alias an existing event for shadowedSeqs/rewind windows and afterSeq
+  // pagination. Synthetic seqs must sit ABOVE every defined seq.
+  it("M51 F1: load() keeps seqs unique when an ignorable event is dropped before tail repair", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-load-ignorable-"))
+    const sessionId = "sess-load-ignorable"
+    try {
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ type: "turn/start", seq: 0 }),
+        JSON.stringify({ type: "step/start", seq: 1 }),
+        JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 2 }),
+        // a newer format's event this build must ignore (the forward-compat marker)
+        JSON.stringify({ type: "future/widget", ignorable: true, seq: 3 }),
+        JSON.stringify({ type: "step/end", seq: 4 }),
+        JSON.stringify({ type: "turn/end", seq: 5 }),
+        JSON.stringify({ type: "turn/start", seq: 6 }),
+        JSON.stringify({ type: "step/start", seq: 7 }),
+        JSON.stringify({ type: "tool/call", callId: "c2", name: "read", args: {}, seq: 8 }),
+        JSON.stringify({ type: "assistant/message", text: "tail", seq: 9 }),
+        "",
+      ].join("\n"), "utf8")
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { session } = await coordinator.load(sessionId)
+      const seqs = session.events.map((event) => event.seq)
+      // the ignorable event is gone; every DEFINED seq survives untouched
+      expect(seqs.slice(0, 9)).toEqual([0, 1, 2, 4, 5, 6, 7, 8, 9])
+      // the synthetic result + closers get FRESH seqs above every defined one —
+      // never the drop-shifted index (which would alias the defined seq 9)
+      expect(seqs).toEqual([0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+      expect(new Set(seqs).size).toBe(seqs.length)
+      expect(session.events.at(-1)?.type).toBe("turn/end")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it("loadOwned durably canonicalizes crash recovery before continuation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ih-repair-owned-"))
     const sessionId = "sess-owned-repair"
