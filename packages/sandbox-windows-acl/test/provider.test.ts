@@ -16,10 +16,17 @@ describe("createWindowsAclSandbox", () => {
     const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "read-only" })
     const confined = provider.confine(["pwsh", "/Command", "x"], readOnly)
     // The argv prefix is the source-launch runner invocation (dsh's dev flow:
-    // [node, --import tsx/esm, <runner entry>, ...]). If a built-entry launch
-    // path is ever adopted, argv[3] becomes the built lib/runner.js — this
-    // assertion (and the /runner\.ts$/ match below) must then be relaxed.
-    expect(confined.argv.slice(0, 4)).toEqual([process.execPath, "--import", "tsx/esm", confined.argv[3]])
+    // [node, --import <absolute tsx loader file URL>, <runner entry>, ...]).
+    // F1 (m55 final review): the loader MUST be an absolute file URL, never the
+    // bare `tsx/esm` specifier — the confined child spawns with cwd = the
+    // assembly workspace (D1), which may lie outside any node_modules tree, and
+    // a cwd-resolved bare specifier dies with ERR_MODULE_NOT_FOUND before the
+    // runner starts. If a built-entry launch path is ever adopted, argv[3]
+    // becomes the built lib/runner.js — this assertion (and the /runner\.ts$/
+    // match below) must then be relaxed.
+    expect(confined.argv[0]).toBe(process.execPath)
+    expect(confined.argv[1]).toBe("--import")
+    expect(confined.argv[2]).toMatch(/^file:\/\/\/.*\/tsx\/dist\/esm\/index\.mjs$/)
     expect(confined.argv[3]).toMatch(/runner\.ts$/)
     expect(confined.argv.slice(4)).toEqual([
       "--workspace", process.cwd(),

@@ -102,7 +102,7 @@ Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-too
 
 ```
 node scripts/build-dist.mjs    # esbuild bundle + native deploy → dist/ (gitignored)
-node scripts/verify-dist.mjs   # smoke gate: --version / tui --help / help must pass
+node scripts/verify-dist.mjs   # gate: layout/manifest checks + --version / tui --help / help + __dist-selfcheck
 ```
 
 `build-dist.mjs` bundles `apps/cli/src/index.ts` with esbuild (platform node,

@@ -65,6 +65,10 @@ pnpm --filter @i-harness/mcp-client typecheck
 
 ---
 
+## D1 追加（`m55-shell`）
+
+整合期間 controller 複現：shell/PTY 工具跑在**進程 cwd** 而非 assembly workspace（`packages/shell/src/index.ts` 的 exec 呼叫未帶 `cwd`），於是 `--workspace` 下的 shell 與 fs 工具在不同樹工作，測試 mock 的 `rm -rf node_modules` 也刪到 vitest 的 cwd。修正：`registerShell`/`registerTerminal` 由 `assembly.ts` 傳入 `opts.workspace` 作為 exec 的 `cwd`（`packages/exec` 的「未指定即繼承父進程」契約不變）；連帶使沙箱子程序以 workspace 為 cwd，源碼模式 ACL runner 的裸 `tsx/esm` specifier 因此解析失敗（`ERR_MODULE_NOT_FOUND`），已於本次 fix wave 改為絕對 loader file URL（`packages/sandbox-windows-acl/src/index.ts`）。完整計畫：`docs/superpowers/plans/2026-09-09-m55-shell-cwd.md`。
+
 ## 整合（controller）
 
 兩條分支完成並各自 review 通過後：合併進 `m55` → `pnpm -r typecheck` + 受影響包測試 + dist/installer 驗證 → 推送（待批准）。

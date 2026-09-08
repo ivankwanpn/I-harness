@@ -25,6 +25,8 @@ What it does (each step cached/skip-if-not-needed):
    `scripts/build-dist.mjs` (idempotent, owned by the dist milestone).
 
    > **DIST layout contract**: `dist/ih.mjs` (bundled ESM CLI, target node 22)
+   > + `dist/runner.mjs` (bundled windows-acl sandbox runner, spawned next to
+   > `ih.mjs` so confinement needs no source checkout and no tsx)
    > + `dist/node_modules/` (externalized native packages). `--version`
    > prints the package version; `tui --help` (and `help`) exit 0.
 
