@@ -17,9 +17,12 @@
 # the scene is therefore paced with the turn IDLE for every sleep and the
 # turn events streamed back-to-back inside one macrotask (anim-tick-proof).
 # The writes ledger is exactly the COMMIT+FRAME discipline, no extras:
-#   writes = 11 = user(commit+frame) + system(commit+frame)
-#                   + tool running(frame) + tool done(frame) + assistant(frame)
-#                   + turn end(commit+frame) + user again(commit+frame)
+#   writes = 10 = user(commit+frame) + system(commit+frame)
+#                   + stream batch f5..f8 (tool running + tool done + assistant
+#                     frames + turn-end commit — the turn-end REGION repaint is
+#                     zero-byte under the M38a gate, so it adds no frame)
+#                   + resize repaint + user again(commit only — its region
+#                     repaint rides in the same commit write)
 #     (no init write at all — the minimal host has no terminal.init; no
 #      teardown write either)
 #
