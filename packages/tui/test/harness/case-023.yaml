@@ -13,14 +13,18 @@
 # (collapsed), Edit block EXPANDED with a 12-row diff (+6/-6); turn 2: user
 # "again", assistant "tail" — 28 display lines, ts ON from the start
 # (local-constructed epochs → the hover swap "18:46:35 | Sep 05" is
-# TZ-honest). The scroll STEP artifacts:
+# TZ-honest). The scroll STEP artifacts (recalibrated for BUG-4: scrollBy's
+# max is the scrollback RECT height — max = 28 - 13 + 1 = 16, not the old
+# full-grid 28 - 24 + 1 = 5):
 #   - the settle: follow view (display top = line 16 — the engine's own
 #     tail pin);
 #   - the wheel: ONE event = ONE offset line (the case-018 math — ept=3,
-#     WindowsTerminal brand): offset 6→4 (clamped by the loop's scrollBy
-#     24-row page: max = lineCount - rows + 1 = 5), THEN the display jumps to
-#     the new offset (the follow-pin released);
-#   - wheel ×4 → the app offset 1 (the row-pin target for the clicks below).
+#     WindowsTerminal brand): follow (offset 16) → wheel-up → offset 15,
+#     THEN the display jumps to the new offset (the follow-pin released);
+#   - wheel ×4 → the app offset 12 (the Edit block at the display top);
+#   - the scrollbar fraction jump (track row 4: frac 1/12 × max 16 →
+#     round(1.33) = 1) → offset 1 (the row-pin target for the clicks below —
+#     the same view the pre-BUG-4 wheel ×4 used to reach).
 # Witnesses (host-side): engine selection → <dir>/selection.json +
 # "selection-changed" (M46c G1: the BOX painting now renders — STEP 5b asserts
 # the real border cells + the ✗ click-clear; the ENGINE set stays the
@@ -32,13 +36,16 @@
 # <3;x;yM = no-button MOTION (hover), <32;x;yM = held-button DRAG motion
 # (b&32), <64;x;yM = wheel-up. Coordinates are 1-based terminal cells
 # (the loop subtracts 1 → 0-based app coords).
-# Byte budget: writes 36 = init(1) + 11 event frames + 3 hover frames +
-# 4 wheel frames + 1 click-down frame + 2 fold frames + 1 expand frame +
-# 6 drag frames + 2 scrollbar frames + 2 permission frames + teardown(1) +
-# M46c G1: +2 (the ✗ click-clear frame + its hover-settle repaint — the click
-# moves the pointer → the settled hovered set flips), the selection box
-# frames reuse the existing change-driven repaints (no extra writes) —
-# (frozen clock → anim-pump repaints are zero-byte; identical frames flush "").
+# Byte budget: writes 38 = init(1) + 11 event frames + 3 hover frames +
+# 4 wheel frames + 2 restore frames (BUG-4 recalibration: the fraction jump
+# back to offset 1 + the hover-detail motion on the restored view — one
+# deliberate repaint each) + 1 click-down frame + 2 fold frames + 1 expand
+# frame + 6 drag frames + 2 scrollbar frames + 2 permission frames +
+# teardown(1) + M46c G1: +2 (the ✗ click-clear frame + its hover-settle
+# repaint — the click moves the pointer → the settled hovered set flips),
+# the selection box frames reuse the existing change-driven repaints (no
+# extra writes) — (frozen clock → anim-pump repaints are zero-byte;
+# identical frames flush "").
 name: case-023-mouse-matrix
 host: test/harness/host-023.ts
 size: [80, 24]
@@ -107,31 +114,60 @@ steps:
       timeoutMs: 5000
   # ── STEP 2: WHEEL — ONE wheel-up event (<64;…M) → one offset line, the
   # follow-pin releases (case-018 math) — the display top jumps to the new
-  # offset (line 4: the Run read tool header).
+  # offset (line 15: the +a3 diff row; BUG-4: follow sits at max = 16).
   - write-pty:
       data: "\x1b[<64;40;12M"
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃  ◆ Run read data.txt                                             6:45 PM"
-        - "  ┃   data-1"
-        - "  ┃   data-2"
-        - "  ┃    …"
-        - "  ┃   data-4"
-        - "  ┃   data-5"
-        - "  ┃   data-6"
-        - "  ┃  ◆ Read notes.md                                                 6:45 PM"
+        - "  ┃   +a3"
+        - "  ┃   +a4"
+        - "  ┃   +a5"
+        - "  ┃   +a6"
+        - "  ┃   -b1"
+        - "  ┃   -b2"
+        - "  ┃   -b3"
+        - "  ┃   -b4"
+        - "  ┃   -b5"
+        - "  ┃   -b6"
+        - "  ┃   ───"
+        - "  ┃   ❯ again                                                        6:46 PM"
+        - "  ┃   tail                                                           6:46 PM"
+      timeoutMs: 5000
+  # wheel ×3 more → offset 12 (the Edit block at the display top). The pointer
+  # stays on the wheel cell (40,12) — its row-band hover rides a diff row
+  # (no ts there; the detail swap proof moves to STEP 2d).
+  - write-pty:
+      data: "\x1b[<64;40;12M\x1b[<64;40;12M\x1b[<64;40;12M"
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
         - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
         - "  ┃   +a1"
         - "  ┃   +a2"
         - "  ┃   +a3"
         - "  ┃   +a4"
+        - "  ┃   +a5"
+        - "  ┃   +a6"
+        - "  ┃   -b1"
+        - "  ┃   -b2"
+        - "  ┃   -b3"
+        - "  ┃   -b4"
+        - "  ┃   -b5"
+        - "  ┃   -b6"
       timeoutMs: 5000
-  # wheel ×3 more → offset 1 (the row-pin target). The pointer sits on the
-  # wheel cell (40,12) — the Read notes row wears its ts DETAIL (the row-band
-  # hover + swap, a second hover proof on the same motion commute).
+  # ── STEP 2c: the scrollbar fraction jump back to offset 1. BUG-4: the
+  # 4-event wheel can no longer reach the top (max is now 16) — the clicks
+  # below are calibrated to the offset-1 view, so the jump restores it.
+  # Track row 4 (1-based): frac = (4-1-2)/(13-1) = 1/12 → round(16/12) = 1.
   - write-pty:
-      data: "\x1b[<64;40;12M\x1b[<64;40;12M\x1b[<64;40;12M"
+      data: "\x1b[<0;78;4M\x1b[<0;78;4m"
+  - await-quiescent: { ms: 300 }
+  # ── STEP 2d: the pointer lands on the Read notes row — its ts wears the
+  # DETAIL (the row-band hover + swap, a second hover proof on the restored
+  # view: the same pin the pre-BUG-4 wheel burst produced).
+  - write-pty:
+      data: "\x1b[<3;40;13M"
   - wait-screen:
       region: { startRow: 2 }
       rows:
@@ -309,6 +345,7 @@ steps:
   - await-marker: { name: teardown-wrote }
   # Hover-settle math: the ✗ click is a pointer move too — the settled
   # hovered set flips (drag-row → ✗ row) → ONE extra repaint frame; the
-  # budget is 34 (M46b) + 2 (✗ clear frame + the hover flip frame).
-  - assert-byte-budget: { writes: 36 }
+  # budget is 34 (M46b) + 2 (✗ clear frame + the hover flip frame) + 2 (the
+  # BUG-4 scrollbar-restore jump + its hover-detail motion).
+  - assert-byte-budget: { writes: 38 }
   - wait-exit: { code: 0 }
