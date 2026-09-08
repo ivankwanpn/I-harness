@@ -43,38 +43,53 @@ describe("isSqliteExperimentalWarning", () => {
 })
 
 describe("suppressSqliteExperimentalWarning", () => {
+  /** A faithful EventEmitter stand-in: `listeners` is the LIVE registration
+   * order (Node's contract — `listeners()` returns the current handlers,
+   * `removeAllListeners` clears them, `removeListener` drops one). Pre-seed a
+   * listener by pushing into the array directly (models Node's bootstrap
+   * warning printer, already installed before the module runs) so the `on`
+   * call count stays "handlers THIS module installed". */
   function fakeProcess() {
     const listeners: Array<(w: Error) => void> = []
-    const captured: Array<(w: Error) => void> = []
     const proc = {
       on: vi.fn((_: string, fn: (w: Error) => void) => {
         listeners.push(fn)
         return proc
       }),
-      listeners: vi.fn(() => [...captured]),
+      listeners: vi.fn(() => [...listeners]),
       removeAllListeners: vi.fn(() => {
-        captured.push(...listeners.splice(0))
+        listeners.length = 0
+        return proc
+      }),
+      removeListener: vi.fn((_: string, fn: (w: Error) => void) => {
+        const i = listeners.indexOf(fn)
+        if (i >= 0) listeners.splice(i, 1)
         return proc
       }),
     }
-    return { proc, listeners, captured }
+    return { proc, listeners }
+  }
+
+  const filterOf = (proc: { on: unknown }, call = 0): ((w: Error) => void) => {
+    const calls = (proc.on as ReturnType<typeof vi.fn>).mock.calls
+    return calls[call]![1] as (w: Error) => void
   }
 
   it("captures the bootstrap printer, drops the sqlite warning, forwards the rest", () => {
-    const { proc, captured } = fakeProcess()
+    const { proc, listeners } = fakeProcess()
     const bootstrap = vi.fn()
-    captured.push(bootstrap) // Node's default printer, pre-captured
+    listeners.push(bootstrap) // Node's default printer, already on the process
 
     const remove1 = suppressSqliteExperimentalWarning({ process: proc as never })
     expect(remove1).toBeTypeOf("function")
     // exactly one filter listener is now installed
     expect(proc.on).toHaveBeenCalledTimes(1)
-    // removeAllListeners captured the pre-existing set (empty here) — the
-    // bootstrap printer above was captured before install by the test
+    // the pre-existing set was captured (Node's bootstrap printer among it)
     expect(proc.removeAllListeners).toHaveBeenCalledTimes(1)
+    expect(listeners).toHaveLength(1) // …and replaced by the filter
 
     // drive the installed filter
-    const filter = (proc.on as ReturnType<typeof vi.fn>).mock.calls[0]![1] as (w: Error) => void
+    const filter = filterOf(proc)
     filter(
       makeWarning(
         "SQLite is an experimental feature and might change at any time",
@@ -86,6 +101,58 @@ describe("suppressSqliteExperimentalWarning", () => {
     filter(other)
     expect(bootstrap).toHaveBeenCalledTimes(1) // forwarded
     expect(bootstrap).toHaveBeenCalledWith(other)
+  })
+
+  it("re-drives captured listeners with `this` bound to the emitter (EventEmitter contract)", () => {
+    const { proc, listeners } = fakeProcess()
+    const seen: unknown[] = []
+    const forwarded: Error[] = []
+    listeners.push(function (this: unknown, w: Error): void {
+      seen.push(this)
+      forwarded.push(w)
+    })
+
+    suppressSqliteExperimentalWarning({ process: proc as never })
+    const other = makeWarning("userland warning", "ExperimentalWarning")
+    filterOf(proc)(other)
+
+    expect(forwarded).toEqual([other]) // the warning IS forwarded
+    // EventEmitter invokes listeners with `this` === the emitter; a
+    // third-party listener that reads `this` must see the process, not
+    // undefined (bare `listener(w)` in strict-mode ESM).
+    expect(seen).toEqual([proc])
+  })
+
+  it("the disposer removes the filter and restores the captured listeners in order; re-install re-filters", () => {
+    const { proc, listeners } = fakeProcess()
+    const a = vi.fn()
+    const b = vi.fn()
+    listeners.push(a, b)
+
+    const remove1 = suppressSqliteExperimentalWarning({ process: proc as never })
+    const filter = filterOf(proc)
+    expect(listeners).toEqual([filter]) // the filter replaced the originals
+
+    remove1()
+    expect(proc.removeListener).toHaveBeenCalledWith("warning", filter)
+    expect(listeners).toEqual([a, b]) // originals back, in their original order
+    // the filter is gone: a sqlite warning now reaches the raw listener
+    const sqlite = makeWarning(
+      "SQLite is an experimental feature and might change at any time",
+      "ExperimentalWarning",
+    )
+    listeners[0]!(sqlite)
+    expect(a).toHaveBeenCalledTimes(1)
+
+    // re-install after a dispose must work (the idempotence guard is cleared)
+    suppressSqliteExperimentalWarning({ process: proc as never })
+    const filter2 = filterOf(proc, (proc.on as ReturnType<typeof vi.fn>).mock.calls.length - 1)
+    filter2(sqlite)
+    expect(a).toHaveBeenCalledTimes(1) // still dropped — filtered once more
+    const other = makeWarning("userland warning", "ExperimentalWarning")
+    filter2(other)
+    expect(a).toHaveBeenCalledTimes(2) // forwarded exactly once…
+    expect(b).toHaveBeenCalledTimes(1) // …to each restored listener
   })
 
   it("is idempotent per process object", () => {

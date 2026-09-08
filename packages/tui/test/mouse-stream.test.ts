@@ -4,7 +4,7 @@
 // while off (the mouse-reporting toggle), and Ctrl+R binds only with the
 // mouseToggleFeature option (pure keys coverage).
 
-import { describe, expect, it, beforeEach } from "vitest"
+import { describe, expect, it, beforeEach, vi } from "vitest"
 import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
 import type { Renderer, TerminalCapabilityContext, InputEvent } from "@i-harness/tui-core"
 import { TuiApp } from "../src/app/loop.ts"
@@ -25,6 +25,15 @@ const cap: TerminalCapabilityContext = {
 const palette = resolvePalette(cap, "groknight")
 
 const make = (cols: number, rows: number): Renderer => createRenderer({ cols, rows, cap })
+
+/** Visible text of one drawn row (reads the committed front frame). */
+const rowText = (renderer: Renderer, y: number): string => {
+  const inner = renderer as unknown as { db: { front: { cells: Array<{ text: string }>; width: number } } }
+  const { cells, width } = inner.db.front
+  let out = ""
+  for (let x = 0; x < width; x++) out += cells[y * width + x].text
+  return out
+}
 
 function stubBackend(): BackendClient {
   const events: TuiEvent[] = []
@@ -105,6 +114,32 @@ describe("TuiApp — M46b G1 mouse path", () => {
     app.feedInput(moveEv(5, 5))
     expect(app.state().scroll.offset).toBe(0) // the stream never saw the event
     expect(app.state().mouse!.last).toEqual({ col: 0, row: 0 })
+  })
+
+  it("toggle-fold target: under follow the top VISIBLE line (scrollback rect), scrolled the stored offset", () => {
+    const app = makeApp()
+    const engine = app.state().engine
+    for (let i = 0; i < 40; i++) engine.append({ type: "user", text: `row-${i}`, seq: i + 1, ts: i })
+    const spy = vi.spyOn(engine, "toggleFoldAt")
+    const total = engine.lineCount()
+    const rectH = layoutAgent({ cols: 46, rows: 24 }, app.state(), {}).scrollback.h
+    // The top VISIBLE line under follow — the same mapping the renderer and the
+    // mouse use (present.ts drawScrollback / mouse.ts scrollOff): the follow
+    // offset is total - rectH + 1, so the top row of the scrollback rect shows
+    // line `total - rectH + 1`. The pre-fix target used the full renderer grid
+    // (buffer.height = 24 vs rect 13) and landed 12 rows above that line.
+    const topVisible = total - rectH + 1
+    expect(topVisible).not.toBe(total - 24) // the old full-grid target
+    // ground truth: the line DRAWN on the scrollback rect's top row
+    app.frame()
+    const layout = layoutAgent({ cols: 46, rows: 24 }, app.state(), {})
+    expect(rowText(r, layout.scrollback.y)).toContain(`row-${topVisible}`)
+    app.dispatch("toggle-fold")
+    expect(spy).toHaveBeenCalledWith(topVisible)
+    // scrolled (not following): the stored offset is used unchanged
+    app.state().scroll = { offset: 7, follow: false }
+    app.dispatch("toggle-fold")
+    expect(spy).toHaveBeenLastCalledWith(7)
   })
 })
 

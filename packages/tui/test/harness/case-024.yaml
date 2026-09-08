@@ -26,7 +26,7 @@ steps:
       timeoutMs: 5000
   - assert-cell-colors:
       cells:
-        # M49 Task 12 added the Dashboard menu row — the prompt (and its
+        # M49 Task 13 added the Dashboard menu row — the prompt (and its
         # accent rail) moved one row down with the hero; the cell assertions
         # follow (the original row 12 predates that change).
         - { row: 13, col: 1, text: " " }

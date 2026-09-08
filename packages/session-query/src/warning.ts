@@ -26,6 +26,8 @@ export interface SuppressProcess {
   on(event: "warning", handler: (w: Error) => void): unknown
   listeners(event: "warning"): Array<(w: Error) => void>
   removeAllListeners(event: "warning"): unknown
+  /** Remove ONE handler — the disposer path (tests only). */
+  removeListener(event: "warning", handler: (w: Error) => void): unknown
 }
 
 /** Options seam — defaults to the global `process`. */
@@ -37,7 +39,10 @@ const suppressed = new WeakSet<object>()
 
 /**
  * Install the once-per-process warning filter. Idempotent. Returns a disposer
- * (tests only; the module side effect never disposes).
+ * (tests only; the module side effect never disposes) that UNINSTALLS it: the
+ * filter handler is removed and the captured listeners are re-added in their
+ * original order, so the process is back to its pre-install wiring. Disposing
+ * clears the idempotence guard — installing again afterwards re-filters.
  *
  * Captures the current `warning` listeners (Node's bootstrap default printer
  * among them), removes them all, and installs a filter that DROPS the
@@ -55,11 +60,20 @@ export function suppressSqliteExperimentalWarning(opts: SuppressOptions = {}): (
   proc.removeAllListeners("warning")
   const handler = (w: Error): void => {
     if (isSqliteExperimentalWarning(w)) return
-    for (const listener of captured) listener(w)
+    // EventEmitter invokes listeners with `this` bound to the emitter — keep
+    // that contract on the re-drive. Node's own printer ignores `this`, but a
+    // third-party listener may rely on it (bare `listener(w)` in strict-mode
+    // ESM would hand it `undefined`).
+    for (const listener of captured) listener.call(proc, w)
   }
   proc.on("warning", handler)
+  let disposed = false
   return () => {
+    if (disposed) return
+    disposed = true
     suppressed.delete(proc)
+    proc.removeListener("warning", handler)
+    for (const listener of captured) proc.on("warning", listener)
   }
 }
 

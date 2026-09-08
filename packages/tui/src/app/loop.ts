@@ -1297,8 +1297,15 @@ export class TuiApp {
         break
       case "toggle-fold": {
         if (this.app.search?.active === true) break
+        // BUG-4 family (m50 final review): under follow the fold targets the
+        // top VISIBLE line — the scrollback rect's follow offset (the mapping
+        // present.ts drawScrollback / mouse.ts scrollOff use), not the full
+        // renderer grid, whose buffer.height is ~11 rows taller and used to
+        // fold a block off-screen above the viewport.
+        // (The +1 is that follow offset's shape: the rect shows lines
+        // [total - rectH + 1, total), the tail window one row short.)
         const y = this.app.scroll.follow
-          ? Math.max(0, this.opts.engine.lineCount() - this.opts.renderer.buffer.height)
+          ? Math.max(0, this.opts.engine.lineCount() - this.scrollViewportHeight() + 1)
           : this.app.scroll.offset
         this.opts.engine.toggleFoldAt(y)
         break
