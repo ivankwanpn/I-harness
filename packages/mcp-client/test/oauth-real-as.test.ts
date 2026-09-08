@@ -11,7 +11,15 @@ import { randomUUID, webcrypto } from "node:crypto"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { z } from "zod"
-import { createConnectedClient, type McpTokenStore } from "../src/index.ts"
+import { createContext } from "@i-harness/core-plugin"
+import { createToolRegistry, type ToolExec } from "@i-harness/core-tools"
+import {
+  createConnectedClient,
+  mountMcpClient,
+  type McpServerConfig,
+  type McpServerStatusEvent,
+  type McpTokenStore,
+} from "../src/index.ts"
 
 const b64url = (buf: Buffer): string => buf.toString("base64url")
 const sha256b64url = async (s: string): Promise<string> =>
@@ -76,6 +84,12 @@ interface RealAs {
   usedCodes: Set<string> // authorization code single-flight: consumed at /token
   issuedTokens: string[]
   tokenCalls: number
+  /** M53 T3: refresh-grant behaviour — "unsupported" (pre-M53 default),
+   * "reject" (the AS refuses the refresh token → invalid_grant) or "rotate"
+   * (issue a fresh access+refresh pair). */
+  refreshMode: "unsupported" | "reject" | "rotate"
+  /** grant_type of every /token call, in order (asserted by the M53 tests). */
+  tokenGrants: string[]
   close(): Promise<void>
 }
 
@@ -92,6 +106,8 @@ async function startRealAs(): Promise<RealAs> {
     usedCodes: new Set(),
     issuedTokens: [],
     tokenCalls: 0,
+    refreshMode: "unsupported",
+    tokenGrants: [],
     close: async () => {},
   }
   const server = createServer(async (req, res) => {
@@ -165,7 +181,27 @@ async function startRealAs(): Promise<RealAs> {
     if (url.pathname === "/token") {
       as.tokenCalls += 1
       const params = new URLSearchParams(await readBody(req))
-      if (params.get("grant_type") !== "authorization_code") {
+      const grantType = params.get("grant_type") ?? ""
+      as.tokenGrants.push(grantType)
+      // M53 T3: the refresh grant is now exercisable (pre-M53 every non-code
+      // grant was refused, so the live refresh path had no test).
+      if (grantType === "refresh_token") {
+        if (as.refreshMode === "reject") {
+          return json(res, 400, { error: "invalid_grant", error_description: "refresh token revoked" })
+        }
+        if (as.refreshMode === "rotate") {
+          const access_token = `tok-real-as-${as.issuedTokens.length + 1}`
+          as.issuedTokens.push(access_token)
+          return json(res, 200, {
+            access_token,
+            token_type: "Bearer",
+            refresh_token: `rt-${access_token}`,
+            expires_in: 3600,
+          }, { "cache-control": "no-store" })
+        }
+        return json(res, 400, { error: "unsupported_grant_type" })
+      }
+      if (grantType !== "authorization_code") {
         return json(res, 400, { error: "unsupported_grant_type" })
       }
       const code = params.get("code") ?? ""
@@ -212,13 +248,31 @@ async function startRealAs(): Promise<RealAs> {
 // Protected resource: GET /resource-metadata (RFC 9728) + 401 Bearer challenge.
 // ---------------------------------------------------------------------------
 
-async function startRealMcpServer(asBase: string): Promise<{ url: string; close(): Promise<void> }> {
-  const mcp = new McpServer({ name: "real-as-mcp", version: "1.0.0" })
-  mcp.registerTool(
-    "real_echo",
-    { description: "echoes the text back", inputSchema: { text: z.string().describe("text to echo") } },
-    async ({ text }) => ({ content: [{ type: "text", text: `echo: ${text}` }] }),
-  )
+/** M53 T3 controls: `revoked` = bearer tokens the resource rejects (mid-session
+ * revocation), `failStatus` = inject a raw HTTP status (generic non-auth
+ * failure). Both default to the pre-M53 behaviour (accept every tok-*, no
+ * injected failure). */
+interface McpFixtureControls {
+  revoked?: Set<string>
+  failStatus?: () => number | undefined
+}
+
+async function startRealMcpServer(
+  asBase: string,
+  controls: McpFixtureControls = {},
+): Promise<{ url: string; close(): Promise<void> }> {
+  // One McpServer instance PER session: a Protocol can only be connected to one
+  // transport at a time, and the M53 recovery test legitimately opens a second
+  // session (the reconnect generation) after the first one is torn down.
+  const newEchoServer = (): McpServer => {
+    const mcp = new McpServer({ name: "real-as-mcp", version: "1.0.0" })
+    mcp.registerTool(
+      "real_echo",
+      { description: "echoes the text back", inputSchema: { text: z.string().describe("text to echo") } },
+      async ({ text }) => ({ content: [{ type: "text", text: `echo: ${text}` }] }),
+    )
+    return mcp
+  }
   const transports = new Map<string, StreamableHTTPServerTransport>()
   let base = ""
   const server = createServer(async (req, res) => {
@@ -232,9 +286,16 @@ async function startRealMcpServer(asBase: string): Promise<{ url: string; close(
       return
     }
     const auth = req.headers.authorization
-    if (auth === undefined || !auth.startsWith("Bearer tok-")) {
+    const bearer = auth !== undefined && auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined
+    if (bearer === undefined || !bearer.startsWith("tok-") || controls.revoked?.has(bearer) === true) {
       res.writeHead(401, { "www-authenticate": `Bearer resource_metadata="${base}/resource-metadata"` })
       res.end()
+      return
+    }
+    const injected = controls.failStatus?.()
+    if (injected !== undefined) {
+      res.writeHead(injected, { "content-type": "text/plain; charset=utf-8" })
+      res.end("injected failure")
       return
     }
     const sidHeader = req.headers["mcp-session-id"]
@@ -255,7 +316,7 @@ async function startRealMcpServer(asBase: string): Promise<{ url: string; close(
         transports.delete(newSid)
       },
     })
-    await mcp.connect(transport)
+    await newEchoServer().connect(transport)
     await transport.handleRequest(req, res)
   })
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
@@ -381,6 +442,149 @@ describe("MCP OAuth real-AS integration (H-3)", () => {
         expect(await again.json()).toMatchObject({ error: "invalid_grant" })
         await client.close()
       } finally {
+        await as.close()
+        await mcp.close()
+      }
+    },
+    60_000,
+  )
+})
+
+// ---------------------------------------------------------------------------
+// M53 T3 (research Option 1): refresh-failure recovery. The SDK's reactive
+// refresh_token grant is live (probe B/G) but a REJECTED refresh used to leave a
+// dead-but-"ready" transport: every call failed `Error: Unauthorized`, the
+// supervisor never reacted, and the printed authorize URL could not be
+// completed (no waitForCallback was pending). The fix routes auth-class request
+// failures into the existing disconnect fan-out + close, so the supervisor
+// reconnects through connectWithAuth (fresh URL + callback wait).
+// ---------------------------------------------------------------------------
+
+describe("MCP OAuth refresh-failure recovery (M53 T3)", () => {
+  it(
+    "a mid-session auth failure tears the generation down → one reconnecting event → fresh authorize URL → callback → tools re-synced",
+    async () => {
+      const as = await startRealAs()
+      const revoked = new Set<string>() // nothing revoked at mount time
+      const mcp = await startRealMcpServer(as.base, { revoked })
+      const callbackPort = await freePort()
+      const expectedRedirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`
+      // the AS enforces redirect_uri registration; pre-seeded client info skips DCR
+      as.registrations.push({ client_id: "ih-real-as-1", redirect_uris: [expectedRedirectUrl], token_endpoint_auth_method: "none" })
+      const entries = new Map<string, unknown>([
+        ["oauth:oauth-recover:client", { client_id: "ih-real-as-1" }],
+        ["oauth:oauth-recover:tokens", { access_token: "tok-seeded-1", refresh_token: "rt-seeded-1", token_type: "Bearer", expires_in: 3600 }],
+      ])
+      const store: McpTokenStore = {
+        get: async (k) => entries.get(k),
+        put: async (k, v) => { entries.set(k, v) },
+      }
+      const ctx = createContext()
+      const tools = createToolRegistry(ctx)
+      const events: McpServerStatusEvent[] = []
+      const redirects: string[] = []
+      const config: McpServerConfig = {
+        transport: "streamable-http",
+        serverName: "oauth-recover",
+        url: mcp.url,
+        auth: {
+          callbackPort,
+          redirectUrl: expectedRedirectUrl,
+          store,
+          authTimeoutMs: 30_000,
+          onRedirect: (u) => redirects.push(u),
+        },
+        reconnect: { enabled: true, initialDelayMs: 20, maxDelayMs: 200, maxRetries: 4 },
+      }
+      const handle = await mountMcpClient({} as never, tools, config, { onStatus: (ev) => events.push(ev) })
+      const exec: ToolExec = {}
+      try {
+        expect(tools.get("mcp__oauth-recover__real_echo")).toBeDefined()
+
+        // mid-session: the live access token is revoked AND the refresh grant
+        // is rejected → the SDK cannot recover reactively.
+        revoked.add("tok-seeded-1")
+        as.refreshMode = "reject"
+        await expect(
+          tools.get("mcp__oauth-recover__real_echo")!.execute({ text: "hi" }, exec),
+        ).rejects.toThrow(/Unauthorized/)
+
+        // exactly ONE reconnect cycle (the double-death guard holds: the
+        // deliberate close fires onclose, but the client notifies once).
+        await waitFor(() => events.some((ev) => ev.state === "reconnecting"))
+        expect(events.filter((ev) => ev.state === "reconnecting")).toHaveLength(1)
+
+        // the supervisor re-entered connectWithAuth: a fresh authorize URL was
+        // printed (redirect #1 came from the failed call) and the callback
+        // server now WAITS for the code (pre-fix the printed URL was dead).
+        await waitFor(() => redirects.length >= 2)
+        await new Promise((r) => setTimeout(r, 100)) // waitForCallback arms right after the redirect
+        const recovered = await fetch(redirects.at(-1)!)
+        expect(recovered.status).toBe(200) // AS 302 → callback server accepted the code
+        expect(await recovered.text()).toContain("授權完成")
+
+        // the SECOND ready = the recovered generation (the first was the mount)
+        await waitFor(() => events.filter((ev) => ev.state === "ready").length >= 2)
+        const echo = tools.get("mcp__oauth-recover__real_echo")
+        expect(echo).toBeDefined()
+        await expect(echo!.execute({ text: "again" }, exec)).resolves.toEqual([{ type: "text", text: "echo: again" }])
+
+        // the rejected refresh grant really ran, then the code exchange recovered
+        expect(as.tokenGrants).toContain("refresh_token")
+        expect(as.tokenGrants).toContain("authorization_code")
+        expect(entries.get("oauth:oauth-recover:tokens")).toMatchObject({ access_token: "tok-real-as-1" })
+      } finally {
+        await handle.unmount()
+        await as.close()
+        await mcp.close()
+      }
+    },
+    60_000,
+  )
+
+  it(
+    "a generic 5xx response does NOT tear the generation down (no disconnect, transport stays usable)",
+    async () => {
+      const as = await startRealAs()
+      const failStatus: { value: number | undefined } = { value: undefined }
+      const mcp = await startRealMcpServer(as.base, { failStatus: () => failStatus.value })
+      const callbackPort = await freePort()
+      const expectedRedirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`
+      as.registrations.push({ client_id: "ih-real-as-1", redirect_uris: [expectedRedirectUrl], token_endpoint_auth_method: "none" })
+      const entries = new Map<string, unknown>([
+        ["oauth:oauth-5xx:client", { client_id: "ih-real-as-1" }],
+        ["oauth:oauth-5xx:tokens", { access_token: "tok-seeded-5xx", refresh_token: "rt-seeded-5xx", token_type: "Bearer", expires_in: 3600 }],
+      ])
+      const store: McpTokenStore = {
+        get: async (k) => entries.get(k),
+        put: async (k, v) => { entries.set(k, v) },
+      }
+      let disconnects = 0
+      let redirects = 0
+      const client = await createConnectedClient({
+        transport: "streamable-http",
+        serverName: "oauth-5xx",
+        url: mcp.url,
+        auth: {
+          callbackPort,
+          redirectUrl: expectedRedirectUrl,
+          store,
+          authTimeoutMs: 5_000,
+          onRedirect: () => { redirects += 1 },
+        },
+      })
+      client.onDisconnect?.(() => { disconnects += 1 })
+      try {
+        failStatus.value = 500
+        await expect(client.callTool("real_echo", { text: "boom" })).rejects.toThrow(/Streamable HTTP error/)
+        // NOT an auth error → no teardown, no interactive re-auth
+        expect(disconnects).toBe(0)
+        expect(redirects).toBe(0)
+        failStatus.value = undefined
+        const ok = await client.callTool("real_echo", { text: "still alive" })
+        expect(ok.content).toEqual([{ type: "text", text: "echo: still alive" }])
+      } finally {
+        await client.close()
         await as.close()
         await mcp.close()
       }

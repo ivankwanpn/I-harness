@@ -72,6 +72,13 @@ const AUTH_RETRY_DELAY_MS = 1_000
 const isUnauthorized = (err: unknown): boolean =>
   err instanceof UnauthorizedError || (err as { code?: unknown }).code === "UnauthorizedError"
 
+// M53 T3 (research Option 1): an auth-class failure on a LIVE request means the
+// SDK's reactive refresh could not recover (revoked/expired refresh token) —
+// the transport stays open but every call keeps failing. ONLY the SDK's own
+// auth error classes qualify; generic 5xx/network errors must never tear a
+// healthy generation down.
+const isAuthError = (err: unknown): boolean => isUnauthorized(err) || err instanceof McpOAuthError
+
 // M26-B1: OAuth 連線迴圈。connect → UnauthorizedError（SDK 已叫過 provider.redirectToAuthorization，
 // 瀏覽器流啟動中）→ 等回調碼 → transport.finishAuth(code) → 重試 connect。超時/3 次仍失敗
 // → McpOAuthError（fail-closed：不省略、不帶傷掛載）。
@@ -136,9 +143,17 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
     // (never overwrites it during connect), so installing it first leaves no
     // window in which an early transport death goes unobserved.
     const disconnectCallbacks: Array<() => void> = []
-    client.onclose = () => {
+    // One death notification per client: the M53 auth teardown below closes the
+    // SDK client itself, which fires onclose — the latch keeps the deliberate
+    // close from notifying twice (the supervisor's generationDown guard also
+    // holds; belt and braces).
+    let disconnectNotified = false
+    const notifyDisconnect = (): void => {
+      if (disconnectNotified) return
+      disconnectNotified = true
       for (const cb of [...disconnectCallbacks]) cb()
     }
+    client.onclose = () => notifyDisconnect()
     // M26-B1b: roots 能力 + 伺服器→客戶端 roots/list 請求（都必須在 connect 前——capabilities
     // 隨 initialize 廣播；request handler 由 Protocol 在 connect 時安裝）。
     client.registerCapabilities({ roots: { listChanged: false } })
@@ -161,24 +176,51 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
       await client.connect(transport)
     }
 
+    // M53 T3: single-flight teardown for auth-class request failures. The
+    // callback server is stopped FIRST so a fixed callbackPort is free before
+    // the supervisor's backoff spawns the next generation (connectWithAuth
+    // rebinds the same port), then the SDK client is closed and observers are
+    // notified — the supervisor then runs generationDown → failCycle →
+    // connectWithAuth, which prints a fresh authorize URL and WAITS for the
+    // callback (the machinery that already works at startup).
+    let closing: Promise<void> | undefined
+    const closeGeneration = (): Promise<void> => {
+      closing ??= (async () => {
+        await oauthServer?.stop().catch(() => {})
+        await client.close().catch(() => {})
+      })()
+      return closing
+    }
+    const guardAuth = async <T>(op: () => Promise<T>): Promise<T> => {
+      try {
+        return await op()
+      } catch (err) {
+        if (isAuthError(err)) {
+          await closeGeneration()
+          notifyDisconnect()
+        }
+        throw err
+      }
+    }
+
     return {
       // Paginated shape (nextCursor) so syncTools can loop on cursor (Task 4).
       async listTools(cursor) {
-        const response = await client.request(
+        const response = await guardAuth(() => client.request(
           { method: "tools/list", params: cursor !== undefined ? { cursor } : {} } as never,
           ListToolsResultSchema,
-        )
+        ))
         return {
           tools: response.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
           ...(response.nextCursor !== undefined ? { nextCursor: response.nextCursor } : {}),
         }
       },
       async callTool(name, args, signal) {
-        const response = await client.request(
+        const response = await guardAuth(() => client.request(
           { method: "tools/call", params: { name, arguments: args } } as never,
           RawCallToolResultSchema,
           { timeout, signal },
-        )
+        ))
         return {
           content: response.content,
           ...(response.isError !== undefined ? { isError: response.isError } : {}),
@@ -186,28 +228,28 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
         }
       },
       async listResources(_server, signal) {
-        const response = await client.request(
+        const response = await guardAuth(() => client.request(
           { method: "resources/list", params: {} } as never,
           ListResourcesResultSchema,
           { timeout, signal },
-        )
+        ))
         return response.resources
       },
       async readResource(_server, uri, signal) {
-        const response = await client.request(
+        const response = await guardAuth(() => client.request(
           { method: "resources/read", params: { uri } } as never,
           ReadResourceResultSchema,
           { timeout, signal },
-        )
+        ))
         return response.contents
       },
       // M26-B1b: optional——既有 fake/mock 陣列零改動（onDisconnect 先例）。
       async listResourceTemplates(signal) {
-        const response = await client.request(
+        const response = await guardAuth(() => client.request(
           { method: "resources/templates/list", params: {} } as never,
           ListResourceTemplatesResultSchema,
           { timeout, signal },
-        )
+        ))
         return response.resourceTemplates
       },
       async close() {

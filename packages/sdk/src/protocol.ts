@@ -85,7 +85,9 @@
  *
  *   initialize       → capabilities gains two more rows:
  *                        "session-cancel": ["1"]
- *                        "session-rewind": ["1"]
+ *                        "session-rewind": ["1"]   (M53: host-gated — the row is
+ *                                                   present only when the host
+ *                                                   wired a rewindFactory)
  *   session/cancel { sessionId } → { cancelled: boolean, reason? }
  *                     The server holds the in-flight submit's AbortController
  *                     per session (session/prompt creates it) and aborts it.

@@ -26,6 +26,7 @@ import {
   defaultEmbeddedFactory,
   mapSessionEvent,
 } from "../src/backend/embedded.ts"
+import { createScrollbackEngine } from "../src/scrollback/engine.ts"
 import type { BackendClient } from "../src/contracts.ts"
 import { unsupportedSessionManagement } from "./backend-stub.ts"
 
@@ -462,6 +463,59 @@ describe("createEmbeddedBackend — the conditional rewind member", () => {
     const events = await resumed.replay(-1)
     expect(events.filter((e) => e.type === "rewind")).toEqual([expect.objectContaining({ targetTurn: 0, mode: "all", anchorSeq: expect.any(Number), seq: expect.any(Number) })])
     await resumed.close()
+
+    // M53 T1 (research G1): a THIRD resume of the SAME session now that the
+    // rewind/point marker is on disk. Pre-fix the durable factory threw
+    // SessionFormatUnsupportedError ("unknown event type 'rewind/point'") and
+    // the session became unloadable; the marker must survive load(), the
+    // journal stay truncated, and the rewound turn stay hidden.
+    const third = await defaultEmbeddedFactory({
+      modelPolicy: "required",
+      workspace,
+      prompt: "",
+      storeRoot,
+      rewindStoreRoot: storeRoot,
+      resumeSessionId: sessionA,
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: {
+          model: createMockClient([
+            { role: "assistant", toolCalls: [{ name: "write", args: { path: "b.txt", text: "new" } }] },
+            { role: "assistant", text: "done" },
+          ]),
+          providerId: "fixture",
+          modelId: "fixture",
+          label: "fixture:fixture",
+        },
+      }),
+    })
+    try {
+      expect(await third.rewind!.points()).toEqual([])
+      const replayed = await third.replay(-1)
+      expect(replayed.filter((e) => e.type === "rewind")).toEqual([
+        expect.objectContaining({ targetTurn: 0, mode: "all", anchorSeq: expect.any(Number), seq: expect.any(Number) }),
+      ])
+      // Replay into a fresh scrollback engine: the marker row is drawn and the
+      // rewound turn is hidden (no user anchors remain).
+      const engine = createScrollbackEngine({ width: 40, showTimestamps: false })
+      for (const ev of replayed) engine.append(ev)
+      expect(engine.turnAnchors?.()).toEqual([])
+      const lines = engine.viewport(0, engine.lineCount()).map((l) => l.runs.map((r) => r.text).join(""))
+      expect(lines.join("\n")).toContain("Rewound to turn 0")
+
+      // ...and the resumed session is still fully rewindable: a new turn lands
+      // on the truncated journal frontier and a SECOND rewind executes.
+      await third.submit("rewrite b")
+      for (let i = 0; i < 250 && (await storeA.readPoints()).length === 0; i++) await new Promise((r) => setTimeout(r, 20))
+      expect(await third.rewind!.points()).toEqual([{ turnIndex: 0, preview: "rewrite b", files: 1 }])
+      expect(await readFile(join(workspace, "b.txt"), "utf-8")).toBe("new")
+      const second = await third.rewind!.execute(0, "all")
+      expect(second).toMatchObject({ target: 0, mode: "all", revertedFiles: 1, truncated: true, eventAppended: true, errors: [] })
+      expect(await readFile(join(workspace, "b.txt"), "utf-8").catch(() => "<gone>")).toBe("<gone>")
+      expect(await storeA.readPoints()).toEqual([])
+    } finally {
+      await third.close()
+    }
 
     const seed = createSessionCoordinator(createJsonlBackend(storeRoot), { lock: { enabled: true, lockRoot: storeRoot } })
     const sessionB = (await seed.create()).id

@@ -122,7 +122,8 @@ describe("createSdkServer", () => {
             "session-history": ["1"],
             "session-list": ["1"],
             "session-cancel": ["1"],
-            "session-rewind": ["1"],
+            // M53 T2: "session-rewind" is host-gated (absent without a
+            // rewindFactory — this default server wires none).
             "session-queue": ["1"],
             "session-tasks": ["1"],
             "session-dashboard": ["1"],
@@ -130,6 +131,39 @@ describe("createSdkServer", () => {
         },
       })
       await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  // M53 T2 (research G4): the "session-rewind" row is host-gated. The TUI gates
+  // its whole rewind surface on this row (remote.ts:1129), so a server without a
+  // rewindFactory must NOT advertise it — pre-fix it did, and every call failed
+  // -32603 "rewind not enabled" behind a visible rewind UI.
+  it("advertises session-rewind only when a rewindFactory is wired", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const bare = createSdkServer(service)
+      const bareReply = await bare.handleLine(encodeFrame(makeRequest(9, "initialize", {})))
+      const bareCaps = ((decodeFrame(bareReply!) as RpcSuccess).result as { capabilities: Record<string, string[]> }).capabilities
+      expect(bareCaps).not.toHaveProperty("session-rewind")
+      // the other unconditional rows are untouched by the gate
+      expect(bareCaps["session-cancel"]).toEqual(["1"])
+      expect(bareCaps["session-queue"]).toEqual(["1"])
+      await bare.close()
+
+      const wired = createSdkServer(service, {
+        rewindFactory: () => ({
+          points: async () => ({ points: [] }),
+          plan: async () => ({ clean: [], conflicts: [], unTracked: [], ops: [] }),
+          execute: async () => ({ revertedFiles: 0, conflicts: [] }),
+        }),
+      })
+      const wiredReply = await wired.handleLine(encodeFrame(makeRequest(10, "initialize", {})))
+      const wiredCaps = ((decodeFrame(wiredReply!) as RpcSuccess).result as { capabilities: Record<string, string[]> }).capabilities
+      expect(wiredCaps["session-rewind"]).toEqual(["1"])
+      await wired.close()
     } finally {
       await service.close()
       await cleanup()

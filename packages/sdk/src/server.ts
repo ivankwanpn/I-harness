@@ -279,9 +279,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             "session-history": ["1"],
             "session-list": ["1"],
             "session-cancel": ["1"],
+            // M53 T2 (G4): session-rewind is HOST-GATED — the wire surface needs
+            // the injected rewindFactory (wired only with a session dir); without
+            // it every call is -32603 "rewind not enabled", so the row is absent
+            // and the client (which gates on the row) shows no rewind UI.
+            ...(opts.rewindFactory !== undefined ? { "session-rewind": ["1"] } : {}),
             // M49 Task 11: the queue projection comes from the SessionService
             // itself (never a host seam) — the row is unconditional.
-            "session-rewind": ["1"],
             "session-queue": ["1"],
             // M49 Task 12: the task projection + cancellation (same service,
             // Serialize-only rows) — unconditional too.
