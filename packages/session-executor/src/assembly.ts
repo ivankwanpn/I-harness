@@ -42,6 +42,7 @@ import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
   mountMcpClient,
   type McpMountHandle,
+  type McpOAuthConfig,
   type McpServerConfig,
   type McpServerStatusEvent,
   type McpTokenStore,
@@ -210,6 +211,17 @@ export interface SessionAssembly {
 export function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown): number {
   return approxTokens(systemPrompt) + approxTokens(JSON.stringify(schemas))
 }
+
+/** M56 T1.5: bind the provider's fail-soft refresh-failure signal to the
+ *  mcp/server-status sink. `state: "ready"` because the failure does NOT change
+ *  the lifecycle — the stored token is kept and the 401/M53 reconnect path owns
+ *  recovery — so the detail rides in the additive `authRefreshFailed` field
+ *  instead of overloading `lastError`. */
+export const bindAuthRefreshStatus =
+  (serverName: string, onStatus: (ev: McpServerStatusEvent) => void) =>
+  (message: string): void => {
+    onStatus({ server: serverName, state: "ready", authRefreshFailed: message })
+  }
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
   // Resolve before mounting resources so a required-but-missing model cannot
@@ -411,12 +423,23 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       put: (k, data) => coordinator.putDocument(key(k), data),
     }
   }
-  const prepareMcpConfig = (cfg: McpServerConfig): McpServerConfig =>
-    cfg.transport === "streamable-http" && cfg.auth !== undefined && cfg.auth.store === undefined && opts.coordinator
-      ? { ...cfg, auth: { ...cfg.auth, store: coordinatorTokenStore(opts.coordinator) } }
-      : cfg
   const mcpStatusHook = (ev: McpServerStatusEvent): void => {
     opts.telemetry?.emit({ type: "mcp/server-status", ts: Date.now(), data: { ...(ev as unknown as Record<string, unknown>) } })
+  }
+  // M56 T1.5: the auth config object flows UNCHANGED through mountMcpClient →
+  // supervisor → deps.connect → createConnectedClient → provider, so binding the
+  // provider's refresh-failure signal here is the whole wiring (no supervisor or
+  // connect signature change). The event is additive (`authRefreshFailed`).
+  const prepareMcpConfig = (cfg: McpServerConfig): McpServerConfig => {
+    if (cfg.transport !== "streamable-http" || cfg.auth === undefined) return cfg
+    const auth: McpOAuthConfig = {
+      ...cfg.auth,
+      onAuthRefreshFailed: bindAuthRefreshStatus(cfg.serverName, mcpStatusHook),
+      ...(cfg.auth.store === undefined && opts.coordinator !== undefined
+        ? { store: coordinatorTokenStore(opts.coordinator) }
+        : {}),
+    }
+    return { ...cfg, auth }
   }
 
   const mcpHandles: McpMountHandle[] = []

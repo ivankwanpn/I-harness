@@ -783,7 +783,7 @@ describe("M56 — expiry-aware single-flight refresh", () => {
   const connectFixture = (
     name: string,
     f: M56Fixture,
-    onRedirect?: (u: string) => void,
+    hooks: { onRedirect?: (u: string) => void; onAuthRefreshFailed?: (m: string) => void } = {},
   ): Promise<Awaited<ReturnType<typeof createConnectedClient>>> =>
     createConnectedClient({
       transport: "streamable-http",
@@ -794,7 +794,7 @@ describe("M56 — expiry-aware single-flight refresh", () => {
         redirectUrl: f.redirectUrl,
         store: f.store,
         authTimeoutMs: 30_000,
-        ...(onRedirect !== undefined ? { onRedirect } : {}),
+        ...hooks,
       },
     })
 
@@ -866,6 +866,11 @@ describe("M56 — expiry-aware single-flight refresh", () => {
       try {
         await quiesce(f.as)
         f.as.tokenGrants.length = 0
+        // Harden the timing: the refresh during the burst now issues a LONG-lived
+        // token, so a caller that arrives after the shared promise settled reads
+        // a fresh token and cannot start a second grant. The burst itself still
+        // starts from the expiring token issued at mount.
+        f.as.tokenExpiresIn = 3600
         const results = await Promise.all(
           Array.from({ length: 8 }, (_, i) => client.callTool("real_echo", { text: `c${i}` })),
         )
@@ -896,7 +901,11 @@ describe("M56 — expiry-aware single-flight refresh", () => {
         tokenExpiresIn: 1,
       })
       const redirects: string[] = []
-      const client = await connectFixture(name, f, (u) => redirects.push(u))
+      const refreshFailures: string[] = []
+      const client = await connectFixture(name, f, {
+        onRedirect: (u) => redirects.push(u),
+        onAuthRefreshFailed: (m) => refreshFailures.push(m),
+      })
       try {
         await quiesce(f.as)
         f.as.tokenGrants.length = 0
@@ -909,6 +918,10 @@ describe("M56 — expiry-aware single-flight refresh", () => {
         // one grant here; the proactive one is strictly additive.
         expect(f.as.tokenGrants.filter((g) => g === "refresh_token").length).toBeGreaterThanOrEqual(2)
         expect(redirects.length).toBeGreaterThanOrEqual(1) // interactive fallback reached, as before
+        // M56 T1.5: the host notification fires with the AS's message (the
+        // assembly binds it to the mcp/server-status sink).
+        expect(refreshFailures.length).toBeGreaterThanOrEqual(1)
+        expect(refreshFailures[0]).toMatch(/refresh token revoked/)
       } finally {
         await client.close()
         await f.as.close()
@@ -933,6 +946,45 @@ describe("M56 — expiry-aware single-flight refresh", () => {
         expect(res.content).toEqual([{ type: "text", text: "echo: hi" }])
         expect(f.as.tokenCalls).toBe(0) // no grant attempted, mount or call
         expect(storedTokens(f, name)).toMatchObject({ access_token: "tok-nort-1" })
+      } finally {
+        await client.close()
+        await f.as.close()
+        await f.mcp.close()
+      }
+    },
+    60_000,
+  )
+
+  it(
+    "(f) a non-protocol refresh failure drops the cached discovery state (fail-soft, session keeps working)",
+    async () => {
+      const name = "oauth-stale-discovery"
+      const deadPort = await freePort() // closed again immediately → fetch ECONNREFUSED
+      const f = await startM56Fixture(name, {
+        tokens: { access_token: "tok-sd-1", refresh_token: "rt-sd-1", token_type: "Bearer", expires_in: 3600 },
+        expiresInPast: true,
+        discovery: true,
+      })
+      // Point the cached AS metadata at a dead token endpoint: the refresh fails
+      // with a network error (NOT an OAuthError) — the "cached discovery may be
+      // stale" signal — so the provider must drop it (fail-soft) and keep going.
+      const discovery = f.entries.get(`oauth:${name}:discovery`) as { authorizationServerMetadata: Record<string, unknown> }
+      discovery.authorizationServerMetadata.token_endpoint = `http://127.0.0.1:${deadPort}/token`
+      const failures: string[] = []
+      const client = await connectFixture(name, f, { onAuthRefreshFailed: (m) => failures.push(m) })
+      try {
+        await quiesce(f.as)
+        f.as.tokenGrants.length = 0
+        const res = await client.callTool("real_echo", { text: "still here" })
+        expect(res.content).toEqual([{ type: "text", text: "echo: still here" }])
+        expect(failures.length).toBeGreaterThanOrEqual(1)
+        // the stale discovery was dropped so the SDK re-discovers on its next auth()
+        expect(f.entries.get(`oauth:${name}:discovery`) ?? null).toBeNull()
+        expect(storedTokens(f, name)).toMatchObject({ access_token: "tok-sd-1" }) // no wipe
+        expect(f.as.tokenGrants).toEqual([]) // the real AS was never reached
+        // discovery is gone → the next request stays passive and still works
+        await client.callTool("real_echo", { text: "again" })
+        expect(f.as.tokenGrants).toEqual([])
       } finally {
         await client.close()
         await f.as.close()

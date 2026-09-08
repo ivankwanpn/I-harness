@@ -27,6 +27,11 @@ export interface McpServerStatusEvent {
   state: McpServerState
   attempts?: number
   lastError?: string
+  /** M56 (additive): a proactive OAuth refresh failed. Fail-soft — the stored
+   *  token is kept and the lifecycle state does NOT change (the 401/M53
+   *  reconnect path owns recovery), so `state` stays what it was and the detail
+   *  rides in this dedicated field rather than overloading `lastError`. */
+  authRefreshFailed?: string
 }
 
 export interface SupervisorDeps {
