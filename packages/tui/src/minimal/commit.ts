@@ -66,7 +66,32 @@ export class MinimalCommits {
     const height = total - start
     if (height <= 0) return []
     this.cursor = total
-    return this.engine.viewport(start, height).map(displayToRegion)
+    return this.readDelta(start, height).map(displayToRegion)
+  }
+
+  /** M54 A1: the delta rows [start, start+height) with the engine's sticky
+   * pin stripped. Once the window starts past the latest user block,
+   * viewport() prepends the collapsed user header (sticky:true rows — COPIES
+   * of rows already committed) and those pinned rows consume the window, so
+   * committing the viewport verbatim would duplicate the user row AND strand
+   * the last `pinned` real rows. Widen the read by the pinned count and drop
+   * the pinned prefix: every real row commits exactly once (print-once). The
+   * loop re-widens only when the pin itself grew with the window (a wrapped
+   * long user block). */
+  private readDelta(start: number, height: number): DisplayLine[] {
+    let window = height
+    for (;;) {
+      const rows = this.engine.viewport(start, window)
+      let pinned = 0
+      while (pinned < rows.length && rows[pinned].sticky === true) pinned++
+      if (pinned === 0) return rows
+      const body = rows.slice(pinned)
+      if (body.length >= height) return body.slice(0, height)
+      // Grow by the larger of the shortfall and the pin itself: the pin can
+      // only grow with the window (it is window-capped), so this converges
+      // fast even for a long wrapped user block.
+      window += Math.max(height - body.length, pinned)
+    }
   }
 
   /** True = a commit is due for this event:
