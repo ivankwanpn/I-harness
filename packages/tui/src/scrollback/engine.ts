@@ -312,21 +312,25 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     const suppressed = this.seg.sumBefore(t) // visible lines [0..t) — marker text
     this.seg.truncate(t, suppressed)
     this.searchNeedsUpdate = true
-    // M52 L1: report the NET display shrink (suppressed rows → 1 marker row)
-    // so the minimal commit cursor can shift by the same amount instead of
-    // re-anchoring past an uncommitted tail (see trimmedLines()). This MUST be
-    // derived from the post-clamp horizon `suppressed`, not the budget walk's
-    // `kept`: the firstMutable/latestUser clamps (:299-300) can pull `t` back,
-    // keeping blocks the walk had counted as trimmed — `total - (kept + 1)`
-    // would over-report and the cursor would re-emit committed rows.
-    this.trimmedLineTotal += suppressed - 1
+    // M52 L1: report the ACTUAL display-total reduction so the minimal commit
+    // cursor shifts by the same amount instead of re-anchoring past an
+    // uncommitted tail (see trimmedLines()). It MUST come from the post-clamp
+    // horizon `suppressed` (the budget walk's `kept` is stale once the clamps
+    // pull `t` back) AND account for the previous marker: total() counts the
+    // marker row but sumBefore() does not, so a FIRST trim nets
+    // `suppressed - 1` (suppressed rows → 1 marker) while a LATER trim also
+    // absorbs the old marker row (net `suppressed`).
+    this.trimmedLineTotal += suppressed - 1 + (cur > 0 ? 1 : 0)
     return { trimmedBlocks: t - cur }
   }
 
-  /** M52 L1: cumulative NET display rows removed by retain()'s FRONT trim —
-   * the commit-cursor shift signal (OPTIONAL contract accessor: the minimal
-   * pipeline probes with `?.`). Monotonic; a rewind's TAIL removal is not
-   * reported here (that shrink re-anchors the cursor to the new total). */
+  /** M52 L1: cumulative reduction of the engine's display TOTAL caused by
+   * retain()'s FRONT trim — the commit-cursor shift signal (OPTIONAL contract
+   * accessor: the minimal pipeline probes with `?.`). A first trim reports
+   * `suppressed - 1` (suppressed rows → 1 marker row); every later trim
+   * reports `suppressed` (the previous marker row is absorbed into the new
+   * one) — see retain(). Monotonic; a rewind's TAIL removal is not reported
+   * here (that shrink re-anchors the cursor to the new total). */
   trimmedLines(): number {
     return this.trimmedLineTotal
   }
