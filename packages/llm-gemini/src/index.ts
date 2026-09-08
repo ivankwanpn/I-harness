@@ -136,8 +136,9 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       // chunks: the first carries the name, the rest carry args objects that
       // may be partial — the docs' canonical accumulation is to store the
       // name and accumulate the args pieces). Emitted just before `end`.
-      // Delimiters: consecutive args-only chunks with the SAME function are
-      // one call; a chunk carrying a NEW name starts the next pending call.
+      // Delimiters: a chunk carrying a name ALWAYS starts a new pending call
+      // (two parallel calls of the same function are distinct calls); args-only
+      // chunks continue the LAST pending call.
       interface PendingCall {
         name: string
         argsJson: string
@@ -152,11 +153,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       const handleFunctionCall = (fc: { name?: string; args?: unknown }): void => {
         if (fc.name !== undefined) {
-          let call = pendingCalls.find((c) => c.name === fc.name)
-          if (call === undefined) {
-            call = { name: fc.name, argsJson: "", rawArgs: [] }
-            pendingCalls.push(call)
-          }
+          // A name always opens a new call — never fold into an existing
+          // same-name pending call (parallel calls would lose their args).
+          const call: PendingCall = { name: fc.name, argsJson: "", rawArgs: [] }
+          pendingCalls.push(call)
           if (fc.args !== undefined) accumulateArgs(call, fc.args)
         } else if (fc.args !== undefined) {
           const call = pendingCalls[pendingCalls.length - 1]

@@ -268,7 +268,7 @@ steps:
   # ── STEP 6: SCROLLBAR DRAG — the LAST scrollback column (x=78 1-based =
   # the app cell 77 = rect.x + rect.w - 1): down = latch + fraction jump
   # (offset 0 at the top row), dragged motion to the middle = proportional
-  # jump (frac 5/12 × max 4 → offset 2), up ends the latch.
+  # jump (frac 5/12 × max 16 → offset 7), up ends the latch.
   - write-pty:
       data: "\x1b[<0;78;3M"
   - wait-screen:

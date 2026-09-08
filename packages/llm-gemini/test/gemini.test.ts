@@ -93,6 +93,44 @@ describe("llm-gemini protocol", () => {
     expect(call).toEqual({ name: "search", args: { q: "x" } })
   })
 
+  it("emits one tool_call per name-carrying chunk (parallel calls of the same function are not folded)", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([
+      { candidates: [{ content: { parts: [
+        { functionCall: { name: "get_weather", args: { city: "A" } } },
+        { functionCall: { name: "get_weather", args: { city: "B" } } },
+      ] } }] },
+    ]))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const calls: { name: string; args: unknown }[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "tool_call") calls.push(ev.call)
+    }
+    expect(calls).toEqual([
+      { name: "get_weather", args: { city: "A" } },
+      { name: "get_weather", args: { city: "B" } },
+    ])
+  })
+
+  it("keeps args-only chunks on the last pending call across several named calls", async () => {
+    const fetchMock = vi.fn(async () => sseResponse([
+      { candidates: [{ content: { parts: [{ functionCall: { name: "alpha", args: { x: 1 } } }] } }] },
+      { candidates: [{ content: { parts: [{ functionCall: { args: { y: 2 } } }] } }] },
+      { candidates: [{ content: { parts: [{ functionCall: { name: "beta", args: { z: 3 } } }] } }] },
+      { candidates: [{ content: { parts: [{ functionCall: { args: { w: 4 } } }] } }] },
+    ]))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const calls: { name: string; args: unknown }[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "tool_call") calls.push(ev.call)
+    }
+    expect(calls).toEqual([
+      { name: "alpha", args: { x: 1, y: 2 } },
+      { name: "beta", args: { z: 3, w: 4 } },
+    ])
+  })
+
   it("translates tool messages to functionResponse with the call name looked up from assistant toolCalls", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
