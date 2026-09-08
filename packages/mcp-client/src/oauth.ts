@@ -1,6 +1,11 @@
 import { randomBytes, webcrypto } from "node:crypto"
-import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
-import type { OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
+import {
+  refreshAuthorization,
+  selectResourceURL,
+  type OAuthClientProvider,
+  type OAuthDiscoveryState,
+} from "@modelcontextprotocol/sdk/client/auth.js"
+import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
 import type { McpOAuthConfig, McpTokenStore } from "./types.ts"
 
 const b64url = (buf: Buffer): string => buf.toString("base64url")
@@ -16,15 +21,24 @@ export async function challengeFor(verifier: string): Promise<string> {
   return b64url(Buffer.from(digest))
 }
 
-/** Store keys：provider 內部的持久化 key（run.ts 反向適配器把它們映射到 coordinator 文件）。 */
-export type OAuthStoreKey = "tokens" | "client" | "verifier" | "state" | "pending-url"
+/** Store keys：provider 內部的持久化 key（run.ts 反向適配器把它們映射到 coordinator 文件）。
+ *  M56 新增兩枚**加性** key：`tokens-expiry`（絕對到期時間，刻意與 tokens 分開——SDK 讀到的
+ *  tokens 值必須仍是合法 OAuthTokens）與 `discovery`（SDK 的 saveDiscoveryState 持久化）。 */
+export type OAuthStoreKey = "tokens" | "tokens-expiry" | "client" | "verifier" | "state" | "pending-url" | "discovery"
 
 export interface OAuthProviderConfig {
   serverName: string
   auth: McpOAuthConfig
   /** 確定端口後（伺服器已 listen）才算得出——由 createConnectedClient 組進。 */
   redirectUrl: string
+  /** M56（加性，可選）：MCP server URL——RFC 8707 resource indicator 的來源，
+   *  經 SDK 的 selectResourceURL 與 SDK 自身刷新路徑同源；缺省 → 刷新不帶 resource。 */
+  serverUrl?: string
 }
+
+/** M56：到期前多久觸發主動刷新（研究報告 §4 的 30-60s 時鐘偏差裕度）。取 60s：
+ *  對 3600s 級 access token 只提前 1.7%，同時覆蓋時鐘偏差與一次請求的網路延遲。 */
+const EXPIRY_SKEW_MS = 60_000
 
 // M26-B1：provider saveCodeVerifier 存了 runtime 記憶體 + store 兩處；本介面把內部
 // 狀態存取與「waitForCallback 等待的那個 state」對齊（SDK 在 oauthFlow 內自己呼叫
@@ -75,7 +89,60 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
   }
   let savedVerifier = "" // runtime 記憶體（跨 waitForCallback 的 finishAuth 提取）
 
-  return {
+  // M56：到期感知 + single-flight。共享 promise 只在 provider 實例內——同一 provider 的
+  // 所有並發呼叫者（SDK 的 _commonHeaders() 每次請求都 await tokens()）合併成一次 grant。
+  let refreshInFlight: Promise<OAuthTokens | undefined> | undefined
+
+  // 顯式 clientId → 靜態 client 先例；缺省讀 store（DCR 回帶）。刷新路徑與 clientInformation() 同源。
+  const loadClientInformation = async (): Promise<OAuthClientInformationMixed | undefined> =>
+    auth.clientId !== undefined ? { client_id: auth.clientId } : get("client")
+
+  /** 主動刷新的前置條件（任一不滿足 → 維持現行被動行為）：絕對到期時間存在且已進入
+   *  skew 窗、有 refresh_token、client 資訊與 discovery 狀態齊備。 */
+  const shouldRefreshProactively = async (current: OAuthTokens): Promise<boolean> => {
+    if (current.refresh_token === undefined) return false
+    const expiresAt = await get<number>("tokens-expiry")
+    if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) return false
+    if (expiresAt - Date.now() > EXPIRY_SKEW_MS) return false
+    if ((await loadClientInformation()) === undefined) return false
+    const discovery = await get<OAuthDiscoveryState>("discovery")
+    return typeof discovery?.authorizationServerUrl === "string" && discovery.authorizationServerUrl.length > 0
+  }
+
+  /** 用 SDK 既有導出 refreshAuthorization 做一次刷新。任何失敗一律 fail-soft：回 undefined，
+   *  呼叫端回傳舊 token，讓既有 401 路徑（與 M53 的重連）接手——不 throw、不清憑證。 */
+  const refreshProactively = async (): Promise<OAuthTokens | undefined> => {
+    try {
+      const current = await get<OAuthTokens>("tokens")
+      if (current === undefined || current.refresh_token === undefined) return undefined
+      // 重讀後若已被其他呼叫者刷新完畢 → 直接回新值，不重複 grant（關閉 TOCTOU 視窗）
+      if (!(await shouldRefreshProactively(current))) return current
+      const discovery = await get<OAuthDiscoveryState>("discovery")
+      if (discovery === undefined) return undefined
+      const clientInformation = await loadClientInformation()
+      if (clientInformation === undefined) return undefined
+      // resource indicator 與 SDK 自身刷新路徑同源（serverUrl 缺省 → 不帶 resource）
+      const resource = config.serverUrl === undefined
+        ? undefined
+        : await selectResourceURL(config.serverUrl, provider, discovery.resourceMetadata)
+      const fresh = await refreshAuthorization(discovery.authorizationServerUrl, {
+        ...(discovery.authorizationServerMetadata !== undefined ? { metadata: discovery.authorizationServerMetadata } : {}),
+        clientInformation,
+        refreshToken: current.refresh_token,
+        ...(resource !== undefined ? { resource } : {}),
+      })
+      await provider.saveTokens(fresh)
+      return fresh
+    } catch (err) {
+      // T1.5 可見性：不新增事件形狀（見報告），走既有 console 通道——主機日誌可見。
+      console.warn(
+        `[i-harness] mcp-server(${serverName}) OAuth: proactive refresh failed (${err instanceof Error ? err.message : String(err)}); keeping the stored token (the 401 path will handle it)`,
+      )
+      return undefined
+    }
+  }
+
+  const provider: IHOAuthClientProvider = {
     get redirectUrl() { return config.redirectUrl },
     get clientMetadata() { return clientMetadata },
     // state() 是單次 flow 的「既存值優先」（opencode 吸收）：SDK 在 oauthFlow 於 401 後呼叫
@@ -93,12 +160,34 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
     async clientInformation() {
       // 顯式 clientId → 靜態 client secrets 先例（opencode：clientInformation 直接回 client_id，
       // SDK 據此省略 DCR）；缺省無 → dynamic registration（store 回帶）。
-      if (auth.clientId !== undefined) return { client_id: auth.clientId }
-      return get("client")
+      return loadClientInformation()
     },
     async saveClientInformation(info) { await put("client", info) },
-    async tokens() { return get<OAuthTokens>("tokens") },
-    async saveTokens(t) { await put("tokens", t) },
+    async tokens() {
+      const current = await get<OAuthTokens>("tokens")
+      if (current === undefined) return undefined
+      // 檢查本身 fail-soft：store 讀取異常 → 照舊回傳現有 token（被動行為不變）
+      let due = false
+      try { due = await shouldRefreshProactively(current) } catch { due = false }
+      if (!due) return current
+      // single-flight：並發呼叫者共用同一枚 promise；失敗由 refreshProactively 吞掉（回舊 token）。
+      refreshInFlight ??= refreshProactively().finally(() => { refreshInFlight = undefined })
+      return (await refreshInFlight) ?? current
+    },
+    async saveTokens(t) {
+      await put("tokens", t)
+      // M56：絕對到期時間另存（不進 tokens 物件——SDK 讀到的必須仍是合法 OAuthTokens）。
+      // expires_in 缺省/非正數 → 清掉舊到期，避免上一組 token 的到期時間殘留。
+      const expiresIn = t.expires_in
+      await put(
+        "tokens-expiry",
+        typeof expiresIn === "number" && Number.isFinite(expiresIn) && expiresIn > 0 ? Date.now() + expiresIn * 1000 : null,
+      )
+    },
+    // M56 T1.2（研究 G5）：持久化 SDK 的 discovery 結果（AS URL + RFC 9728/8414 metadata），
+    // 讓主動刷新（與 SDK 自身的 auth()）不必每次重跑 discovery。
+    async saveDiscoveryState(state) { await put("discovery", state) },
+    async discoveryState() { return get<OAuthDiscoveryState>("discovery") },
     async redirectToAuthorization(authorizationUrl) {
       // headless：不自動開瀏覽器；URL 三路出去——console（人讀）、store（poll）與
       // auth.onRedirect（宿主自動開瀏覽器）。
@@ -111,8 +200,14 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
     async invalidateCredentials(scope) {
       if (scope === "all") await put("state", null)
       if (scope === "client") await put("client", null)
-      if (scope === "tokens" || scope === "all") await put("tokens", null)
+      if (scope === "tokens" || scope === "all") {
+        await put("tokens", null)
+        await put("tokens-expiry", null) // M56：到期時間與 tokens 同生共死
+      }
       if (scope === "verifier" || scope === "all") await put("verifier", null)
+      // SDK 文件：'discovery'/'all' 時清快取，允許 AS 變更後重新 discovery。
+      if (scope === "discovery" || scope === "all") await put("discovery", null)
     },
   }
+  return provider
 }
