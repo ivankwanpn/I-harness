@@ -171,13 +171,26 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     async removeProvider(id) {
       assertProviderId(id)
       const llm = canonicalLlm(options.settings)
-      if (llm.providers[id] === undefined) return
+      if (llm.providers[id] === undefined) {
+        // Legacy-only row: the canonical plane has no entry, but the read
+        // migration re-projects the tui.providers pin on every load — drop
+        // the pin row (the only way the removal sticks across a reload).
+        await options.settings.dropLegacyTuiProvider?.(id)
+        if (llm.defaultModel.provider === id) {
+          await persistLlm({ providers: { ...llm.providers }, defaultModel: { provider: "", model: "" } })
+        }
+        discovered.delete(id)
+        return
+      }
       const nextProviders = { ...llm.providers }
       delete nextProviders[id]
       const defaultModel = llm.defaultModel.provider === id
         ? { provider: "", model: "" }
         : { ...llm.defaultModel }
       await persistLlm({ providers: nextProviders, defaultModel })
+      // The legacy pin may carry the same id (per-id merge: canonical fields
+      // win) — drop it too, or the reload projection resurrects the row.
+      await options.settings.dropLegacyTuiProvider?.(id)
       discovered.delete(id)
     },
 

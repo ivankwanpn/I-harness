@@ -310,6 +310,100 @@ describe("SettingsStore", () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  it("dropLegacyTuiProvider removes one legacy row, persists it, and survives a reload", async () => {
+    const root = await tmpRoot()
+    const file = join(root, "settings.json")
+    await writeFile(file, JSON.stringify({
+      ...LEGACY_FILE,
+      tui: {
+        providers: {
+          version: 1,
+          activeProviderId: "custom",
+          providers: {
+            custom: LEGACY_FILE.tui.providers.providers.custom,
+            other: { id: "other", baseUrl: "https://b.example", apiKeyRef: "OTHER_API_KEY" },
+          },
+        },
+      },
+    }))
+    const store = new SettingsStore({ path: file })
+    await store.load()
+    expect(store.get().llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
+    expect(store.get().llm.providers.other).toBeDefined()
+
+    await store.dropLegacyTuiProvider("custom")
+
+    // the in-memory projection drops the row immediately...
+    expect(store.get().llm.providers.custom).toBeUndefined()
+    expect(store.get().llm.providers.other).toBeDefined()
+    // ...the file loses the legacy row (and keeps the rest)...
+    const persisted = JSON.parse(await readFile(file, "utf8"))
+    expect(persisted.tui.providers.providers.custom).toBeUndefined()
+    expect(persisted.tui.providers.providers.other).toBeDefined()
+    // ...and a reload cannot resurrect it (the pin is gone, not just the view).
+    const reloaded = new SettingsStore({ path: file })
+    await reloaded.load()
+    expect(reloaded.get().llm.providers.custom).toBeUndefined()
+    expect(reloaded.get().llm.providers.other).toBeDefined()
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it("dropLegacyTuiProvider clears the legacy pin when the last row goes", async () => {
+    const root = await tmpRoot()
+    const file = join(root, "settings.json")
+    await writeFile(file, JSON.stringify(LEGACY_FILE))
+    const store = new SettingsStore({ path: file })
+    await store.load()
+
+    await store.dropLegacyTuiProvider("custom")
+
+    expect(store.get().llm.providers).toEqual({})
+    // the empty pin is cleaned up entirely; the rest of the document stays.
+    const persisted = JSON.parse(await readFile(file, "utf8"))
+    expect(persisted.tui.providers).toBeUndefined()
+    // the rest of the document survives (theme "dark" normalizes to grok-night).
+    expect(persisted.theme).toBe("grok-night")
+    const reloaded = new SettingsStore({ path: file })
+    await reloaded.load()
+    expect(reloaded.get().llm.providers).toEqual({})
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it("dropLegacyTuiProvider also unpins a legacy activeProviderId pointing at the dropped row", async () => {
+    const root = await tmpRoot()
+    const file = join(root, "settings.json")
+    await writeFile(file, JSON.stringify(LEGACY_FILE))
+    const store = new SettingsStore({ path: file })
+    await store.load()
+    // the legacy active pin is the default-model fallback while canonical is empty.
+    expect(store.get().llm.defaultModel).toEqual({ provider: "custom", model: "" })
+
+    await store.dropLegacyTuiProvider("custom")
+
+    expect(store.get().llm.defaultModel).toEqual({ provider: "", model: "" })
+    const reloaded = new SettingsStore({ path: file })
+    await reloaded.load()
+    expect(reloaded.get().llm.defaultModel).toEqual({ provider: "", model: "" })
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it("dropLegacyTuiProvider is a no-op for an absent id or a document without a legacy section", async () => {
+    const root = await tmpRoot()
+    const file = join(root, "settings.json")
+    await writeFile(file, JSON.stringify(LEGACY_FILE))
+    const legacy = new SettingsStore({ path: file })
+    await legacy.load()
+    await legacy.dropLegacyTuiProvider("absent")
+    expect(legacy.get().llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
+    expect(JSON.parse(await readFile(file, "utf8")).tui.providers.providers.custom).toBeDefined()
+
+    const fresh = new SettingsStore({ path: join(root, "fresh.json") })
+    await fresh.load()
+    await fresh.dropLegacyTuiProvider("custom")
+    expect(fresh.get().llm.providers).toEqual({})
+    await rm(root, { recursive: true, force: true })
+  })
+
   it("loads defaults when the file is absent (first run)", async () => {
     const root = await tmpRoot()
     const store = new SettingsStore({ path: join(root, "settings.json") })
