@@ -1,3 +1,7 @@
+// BUG-1 (m49 audit): the warning filter MUST evaluate before node:sqlite —
+// this import is hoisted before this module's own node:sqlite import below
+// (ESM evaluates dependencies first).
+import "./warning.ts"
 import { DatabaseSync } from "node:sqlite"
 import type { SessionEvent } from "@i-harness/core-session"
 import { closeFileBackedConnections } from "./file-backed.ts"
@@ -237,3 +241,4 @@ export function createSessionQuery(dbPath: string): SessionQuery {
 // for existing/legacy index files (event_fts + sessions schema).
 export { createFileBackedSessionQuery, SessionQueryError, type FileBackedQueryOptions, type InspectOutcome } from "./file-backed.ts"
 export { createSessionQueryTools } from "./tools.ts"
+export { suppressSqliteExperimentalWarning, isSqliteExperimentalWarning } from "./warning.ts"

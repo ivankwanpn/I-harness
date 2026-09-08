@@ -30,6 +30,9 @@
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { execFileSync } from "node:child_process"
 import { join } from "node:path"
+// BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
+// session-query package itself (module side effect, evaluated before its
+// node:sqlite import) — no explicit wiring needed here.
 import {
   attachInput,
   createRenderer,
