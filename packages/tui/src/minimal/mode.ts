@@ -10,6 +10,8 @@
 // (subcommand included) round-trips through `node ih.mjs …`.
 
 import { spawn as spawnProcess } from "node:child_process"
+import { createRequire } from "node:module"
+import { pathToFileURL } from "node:url"
 
 /** Relaunch spawn (overridable for tests). */
 export type RelaunchSpawn = (argv: string[], mode: "minimal" | "fullscreen") => void
@@ -68,13 +70,39 @@ export function relaunchArgs(mode: "minimal" | "fullscreen", argv: string[]): st
   return out
 }
 
+/** The `--import` loader of a node execArgv array, when present. */
+function execArgvLoader(execArgv: readonly string[]): string | undefined {
+  for (let i = 0; i < execArgv.length; i++) {
+    const a = execArgv[i]
+    if (a === "--import") {
+      const value = execArgv[i + 1]
+      if (value !== undefined) return value
+    } else if (a?.startsWith("--import=")) {
+      return a.slice("--import=".length)
+    }
+  }
+  return undefined
+}
+
+/** The source-mode relaunch loader: the loader THIS process was started with
+ * (the global `ih` shim spawns the CLI with an absolute `--import file://…/
+ * tsx/…`), else tsx resolved from this module to an ABSOLUTE file URL. Never
+ * the bare `tsx` specifier — node resolves that from the SPAWN cwd, and the
+ * relaunch inherits the parent cwd, which for a global-install launch is the
+ * user's project folder (no node_modules → ERR_MODULE_NOT_FOUND). Same defect
+ * class as the ACL runner loader (M55 F1). */
+function sourceLoader(): string {
+  return execArgvLoader(process.execArgv)
+    ?? pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href
+}
+
 /** The relaunch argv (the command is process.execPath): source runs go
  * through the tsx loader; the DIST bundle re-execs itself (I_HARNESS_DIST —
  * build-dist defines it, and argv[1] is the bundle path, so the relaunch is
  * `node ih.mjs <subcommand+flags>`). Exported for the dist self-check. */
 export function defaultRelaunchArgv(argv: string[]): string[] {
   const entry = process.argv[1] ?? "index.ts"
-  return process.env.I_HARNESS_DIST === "1" ? [entry, ...argv] : ["--import", "tsx", entry, ...argv]
+  return process.env.I_HARNESS_DIST === "1" ? [entry, ...argv] : ["--import", sourceLoader(), entry, ...argv]
 }
 
 /** Default spawn: the same thin host under the target mode — the relaunch
