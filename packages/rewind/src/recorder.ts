@@ -87,7 +87,7 @@ export class RewindRecorder {
     this.pending = turn
     // Eager snapshot — this op claims only what preceding ops already wrote.
     const snap = this.snapshot(turn)
-    this.enqueue(() => this.opts.store.writePending(snap))
+    void this.enqueue(() => this.opts.store.writePending(snap))
   }
 
   /**
@@ -122,7 +122,7 @@ export class RewindRecorder {
     // blobs preceding ops already wrote — never a blob still pending in a
     // later op. The LAST op's snapshot still carries the full set.
     const snap = this.snapshot(turn)
-    this.enqueue(async () => {
+    void this.enqueue(async () => {
       if (entry.before !== null) await this.opts.store.writeBlob(entry.before)
       await this.opts.store.writePending(snap)
     })
@@ -193,9 +193,18 @@ export class RewindRecorder {
    * M54 G2: the point for this turn is now in the journal — clear its durable
    * sidecar. Pass the point's anchorSeq so a sidecar that already belongs to a
    * NEWER turn is left alone.
+   *
+   * M54 final-review F1: the clear runs on the SAME serial queue as the
+   * take-time sidecar writes. A bare read+unlink here could interleave with a
+   * queued writePending for a NEWER turn: the read sees the old sidecar, the
+   * newer write lands, then the unlink deletes the NEWER sidecar — a crash
+   * before that turn's next take loses its report (the G2 symptom in a narrow
+   * window). Serialized, the anchorSeq check makes both orderings safe: a
+   * clear queued BEFORE the newer write removes only the old sidecar; one
+   * queued AFTER it sees the newer anchorSeq and leaves it alone.
    */
   async commit(anchorSeq: number): Promise<void> {
-    await this.opts.store.clearPending(anchorSeq)
+    await this.enqueue(() => this.opts.store.clearPending(anchorSeq))
   }
 
   private snapshot(turn: PendingTurn): RewindPendingTurn {
@@ -208,9 +217,14 @@ export class RewindRecorder {
     }
   }
 
-  private enqueue(op: () => Promise<void>): void {
-    this.queue = this.queue.then(op).catch((err) => {
+  /** Append one op to the serial durable-write queue. The returned promise
+   * settles when THIS op has run (errors are reported through
+   * onDurabilityError, never rethrown) — await it to observe the op on disk. */
+  private enqueue(op: () => Promise<void>): Promise<void> {
+    const next = this.queue.then(op).catch((err) => {
       this.onDurabilityError(err)
     })
+    this.queue = next
+    return next
   }
 }

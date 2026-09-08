@@ -8,11 +8,16 @@
 //   written only if missing (idempotent, dedup across turns).
 // - meta.json (M54 G3): the journal's workspace binding — the absolute
 //   workspace root the relative journal paths resolve against. Written on the
-//   first write when a workspace is configured; a journal bound to another
-//   workspace REFUSES every read/plan/execute (REWIND_WORKSPACE_MISMATCH) and
-//   every write, so a resume from another cwd can never restore into the
-//   wrong tree. A pre-M54 journal has no meta.json: unknown workspace, kept
-//   working and adopted by the first workspace that writes.
+//   first write when a workspace is configured. Enforcement lives on the
+//   caller surfaces, NOT on the raw file accessors: RewindService.points/
+//   plan/execute call assertWorkspace() and refuse a foreign journal
+//   (REWIND_WORKSPACE_MISMATCH), and every write path goes through
+//   ensureDir(), which refuses to write when the binding differs — so a resume
+//   from another cwd can never restore into the wrong tree. The raw read
+//   accessors (readPoints/readBlob/readPending/readOrphans) are unguarded by
+//   design and assume the caller already checked; recoverPending() guards
+//   itself (it can unlink). A pre-M54 journal has no meta.json: unknown
+//   workspace, kept working and adopted by the first workspace that writes.
 // - pending.json (M54 G2): the durable sidecar of the turn currently being
 //   recorded — written as the recorder takes pre-images, cleared only once the
 //   turn's point is in the journal. A leftover sidecar after a crash is an
@@ -91,9 +96,12 @@ export interface RewindStoreOptions {
   root: string
   sessionId: string
   /** M54 G3: the absolute workspace this journal is bound to. When set, the
-   * store writes `meta.json` on its first write and refuses to read or write
-   * when the journal is bound to a different workspace. Absent (legacy
-   * construction) → no binding is written and no mismatch is detected. */
+   * store writes `meta.json` on its first write and `ensureDir()` (every write
+   * path) refuses a journal bound elsewhere. The read-side surfaces enforce
+   * the binding themselves via `assertWorkspace()` (RewindService.points/
+   * plan/execute, assembly open); the raw read* accessors are unguarded.
+   * Absent (legacy construction) → no binding is written and no mismatch is
+   * detected. */
   workspace?: string
 }
 
@@ -372,6 +380,15 @@ export class RewindStore {
    * the artifact plan() reports.
    */
   async recoverPending(): Promise<RewindPendingTurn | null> {
+    // M54 final-review F2: recovery can UNLINK (the already-recorded branch
+    // below) and is reachable on the assembly's workspace-mismatch path, so it
+    // must guard the binding itself — the raw read* accessors do not. A
+    // foreign journal is left COMPLETELY untouched (no archive, no unlink);
+    // its owning workspace still recovers it on its next open.
+    if (this.workspace !== undefined) {
+      const meta = await this.readMeta()
+      if (meta !== null && !sameWorkspacePath(meta.workspace, this.workspace)) return null
+    }
     const pending = await this.readPending()
     if (pending === null) return null
     const points = await this.readPoints()
