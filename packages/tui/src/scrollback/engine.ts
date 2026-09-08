@@ -314,8 +314,12 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     this.searchNeedsUpdate = true
     // M52 L1: report the NET display shrink (suppressed rows → 1 marker row)
     // so the minimal commit cursor can shift by the same amount instead of
-    // re-anchoring past an uncommitted tail (see trimmedLines()).
-    this.trimmedLineTotal += total - (kept + 1)
+    // re-anchoring past an uncommitted tail (see trimmedLines()). This MUST be
+    // derived from the post-clamp horizon `suppressed`, not the budget walk's
+    // `kept`: the firstMutable/latestUser clamps (:299-300) can pull `t` back,
+    // keeping blocks the walk had counted as trimmed — `total - (kept + 1)`
+    // would over-report and the cursor would re-emit committed rows.
+    this.trimmedLineTotal += suppressed - 1
     return { trimmedBlocks: t - cur }
   }
 
