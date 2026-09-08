@@ -94,3 +94,22 @@ it("provider: discovery state round-trips through the injected store", async () 
   await provider.invalidateCredentials?.("all")
   expect(await provider.discoveryState!()).toBeUndefined()
 })
+
+// M57 T3: the second (TOCTOU re-read) store read is fail-soft — a store hiccup
+// there must fall back to the token already in hand, not reject (pre-M56 shape).
+it("provider: tokens() keeps the first read when the re-read throws (fail-soft)", async () => {
+  const held = { access_token: "a", token_type: "Bearer" } // no refresh_token → no proactive refresh
+  let reads = 0
+  const flaky: McpTokenStore = {
+    get: async (k) => {
+      if (k !== "oauth:files:tokens") return undefined
+      reads += 1
+      if (reads === 1) return held
+      throw new Error("store offline")
+    },
+    put: async () => {},
+  }
+  const provider = createOAuthClientProvider({ serverName: "files", auth: { store: flaky } as never, redirectUrl: "http://127.0.0.1:1/callback" })
+  await expect(provider.tokens!()).resolves.toEqual(held)
+  expect(reads).toBe(2)
+})

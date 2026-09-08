@@ -44,6 +44,7 @@ import {
   type McpMountHandle,
   type McpOAuthConfig,
   type McpServerConfig,
+  type McpServerState,
   type McpServerStatusEvent,
   type McpTokenStore,
 } from "@i-harness/mcp-client"
@@ -212,15 +213,34 @@ export function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown)
   return approxTokens(systemPrompt) + approxTokens(JSON.stringify(schemas))
 }
 
-/** M56 T1.5: bind the provider's fail-soft refresh-failure signal to the
- *  mcp/server-status sink. `state: "ready"` because the failure does NOT change
- *  the lifecycle — the stored token is kept and the 401/M53 reconnect path owns
- *  recovery — so the detail rides in the additive `authRefreshFailed` field
- *  instead of overloading `lastError`. */
+/** M56 T1.5 + M57 T1/T2: bind the provider's fail-soft refresh-failure signal to
+ *  the mcp/server-status sink. The failure does NOT change the lifecycle — the
+ *  stored token is kept and the 401/M53 reconnect path owns recovery — so the
+ *  detail rides in the additive `authRefreshFailed` field instead of overloading
+ *  `lastError`. `currentState` reports the server's REAL lifecycle state (a
+ *  hardcoded "ready" is only accidentally right); the `"ready"` fallback covers
+ *  only a server that has not emitted any state yet. A host-supplied
+ *  `hostHandler` is COMPOSED (not overwritten): it runs first and its throw is
+ *  swallowed into `onHostError` — a broken host handler must never silence our
+ *  visibility event. */
 export const bindAuthRefreshStatus =
-  (serverName: string, onStatus: (ev: McpServerStatusEvent) => void) =>
+  (
+    serverName: string,
+    onStatus: (ev: McpServerStatusEvent) => void,
+    opts?: {
+      currentState?: () => McpServerState | undefined
+      hostHandler?: (message: string) => void
+      onHostError?: (err: unknown) => void
+    },
+  ) =>
   (message: string): void => {
-    onStatus({ server: serverName, state: "ready", authRefreshFailed: message })
+    try {
+      opts?.hostHandler?.(message)
+    } catch (err) {
+      // The reporter's own throw is swallowed too — emitting the event is the point.
+      try { opts?.onHostError?.(err) } catch { /* reporting must not silence the event */ }
+    }
+    onStatus({ server: serverName, state: opts?.currentState?.() ?? "ready", authRefreshFailed: message })
   }
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
@@ -423,18 +443,33 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       put: (k, data) => coordinator.putDocument(key(k), data),
     }
   }
+  // M57 T1: last emitted lifecycle state per server, so a refresh-failure event
+  // can carry the server's real state. Written by mcpStatusHook (declared first,
+  // and the only writer), read lazily by the binder.
+  const mcpStates = new Map<string, McpServerState>()
   const mcpStatusHook = (ev: McpServerStatusEvent): void => {
+    mcpStates.set(ev.server, ev.state)
     opts.telemetry?.emit({ type: "mcp/server-status", ts: Date.now(), data: { ...(ev as unknown as Record<string, unknown>) } })
   }
   // M56 T1.5: the auth config object flows UNCHANGED through mountMcpClient →
   // supervisor → deps.connect → createConnectedClient → provider, so binding the
   // provider's refresh-failure signal here is the whole wiring (no supervisor or
-  // connect signature change). The event is additive (`authRefreshFailed`).
+  // connect signature change). The event is additive (`authRefreshFailed`); the
+  // telemetry emit stays a no-op when telemetry is off (only the state map is
+  // still fed). M57 T2: a host-supplied handler is forwarded, never clobbered.
   const prepareMcpConfig = (cfg: McpServerConfig): McpServerConfig => {
     if (cfg.transport !== "streamable-http" || cfg.auth === undefined) return cfg
     const auth: McpOAuthConfig = {
       ...cfg.auth,
-      onAuthRefreshFailed: bindAuthRefreshStatus(cfg.serverName, mcpStatusHook),
+      onAuthRefreshFailed: bindAuthRefreshStatus(cfg.serverName, mcpStatusHook, {
+        currentState: () => mcpStates.get(cfg.serverName),
+        ...(cfg.auth.onAuthRefreshFailed !== undefined ? { hostHandler: cfg.auth.onAuthRefreshFailed } : {}),
+        onHostError: (err) => {
+          console.warn(
+            `[i-harness] mcp-server(${cfg.serverName}) OAuth: host onAuthRefreshFailed handler threw (${err instanceof Error ? err.message : String(err)}); visibility event still emitted`,
+          )
+        },
+      }),
       ...(cfg.auth.store === undefined && opts.coordinator !== undefined
         ? { store: coordinatorTokenStore(opts.coordinator) }
         : {}),

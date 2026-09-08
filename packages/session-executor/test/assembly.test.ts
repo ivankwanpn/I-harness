@@ -388,4 +388,62 @@ describe("bindAuthRefreshStatus (M56)", () => {
       { server: "oauth-x", state: "ready", authRefreshFailed: "invalid_grant: refresh token revoked" },
     ])
   })
+
+  // M57 T1: the event must carry the server's REAL lifecycle state — a hardcoded
+  // "ready" is only accidentally right.
+  it("reports the server's real lifecycle state when the caller supplies currentState", () => {
+    const events: McpServerStatusEvent[] = []
+    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
+      currentState: () => "reconnecting",
+    })
+    notify("invalid_grant: refresh token revoked")
+    expect(events).toEqual([
+      { server: "oauth-x", state: "reconnecting", authRefreshFailed: "invalid_grant: refresh token revoked" },
+    ])
+  })
+
+  it("falls back to ready when the server has not emitted any state yet", () => {
+    const events: McpServerStatusEvent[] = []
+    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
+      currentState: () => undefined,
+    })
+    notify("network down")
+    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "network down" }])
+  })
+
+  // M57 T2: a host-supplied onAuthRefreshFailed must be composed, not overwritten —
+  // host first, then our visibility event (a broken host handler must never
+  // silence it).
+  it("calls the host handler first, then still emits the visibility event", () => {
+    const calls: string[] = []
+    const events: McpServerStatusEvent[] = []
+    const notify = bindAuthRefreshStatus(
+      "oauth-x",
+      (ev) => { calls.push("event"); events.push(ev) },
+      { hostHandler: () => { calls.push("host") } },
+    )
+    notify("refresh failed")
+    expect(calls).toEqual(["host", "event"])
+    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
+  })
+
+  it("swallows a throwing host handler, reports it, and still emits the event", () => {
+    const events: McpServerStatusEvent[] = []
+    const errors: unknown[] = []
+    const boom = new Error("host handler exploded")
+    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
+      hostHandler: () => { throw boom },
+      onHostError: (err) => { errors.push(err) },
+    })
+    expect(() => notify("refresh failed")).not.toThrow()
+    expect(errors).toEqual([boom])
+    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
+  })
+
+  it("emits with an opts object that carries no host handler", () => {
+    const events: McpServerStatusEvent[] = []
+    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), { currentState: () => "ready" })
+    notify("refresh failed")
+    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
+  })
 })
