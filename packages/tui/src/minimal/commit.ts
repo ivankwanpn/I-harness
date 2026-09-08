@@ -87,9 +87,12 @@ export class MinimalCommits {
       if (pinned === 0) return rows
       const body = rows.slice(pinned)
       if (body.length >= height) return body.slice(0, height)
-      // Grow by the larger of the shortfall and the pin itself: the pin can
-      // only grow with the window (it is window-capped), so this converges
-      // fast even for a long wrapped user block.
+      // Grow by the larger of the shortfall and the pin itself: the pin is a
+      // fixed-count sticky prefix (the collapsed user header) that CONSUMES
+      // that many rows of the window, so the window must cover height + pinned
+      // to yield `height` real rows. While the window is still shorter than
+      // the pin, `pinned` is the whole window, so the growth doubles and
+      // converges in O(log) reads even for a long wrapped user block.
       window += Math.max(height - body.length, pinned)
     }
   }

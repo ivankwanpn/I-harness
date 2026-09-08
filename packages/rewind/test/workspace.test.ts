@@ -71,6 +71,29 @@ describe("G3 journal workspace binding", () => {
     expect(await new RewindStore({ root, sessionId: "g3", workspace: wsA }).readPoints()).toHaveLength(1)
   })
 
+  // M54 final-review F2: recovery can unlink (the already-recorded branch) and
+  // is reachable on the mismatch path — a foreign journal must be left
+  // completely untouched, not "recovered" by the wrong workspace.
+  it("recoverPending() leaves a foreign journal's stale pending sidecar untouched", async () => {
+    const seed = new RewindStore({ root, sessionId: "g3", workspace: wsA })
+    await seed.appendPoint({ turnIndex: 0, anchorSeq: 0, promptPreview: "A", files: [] }) // binds wsA
+    // crash between appendPoint and clearPending: the sidecar's turn IS recorded
+    await seed.writePending({
+      version: 1,
+      anchorSeq: 0,
+      promptPreview: "A",
+      startedAt: 0,
+      entries: [{ path: "a.txt", blobId: null, isNewFile: true }],
+    })
+    const foreign = new RewindStore({ root, sessionId: "g3", workspace: wsB })
+    expect(await foreign.recoverPending()).toBeNull()
+    expect(await foreign.readOrphans()).toEqual([]) // no archive from the wrong workspace
+    // the owning workspace still sees (and can drop) its own stale sidecar
+    expect(await seed.readPending()).toMatchObject({ anchorSeq: 0 })
+    expect(await seed.recoverPending()).toBeNull() // already recorded → dropped, nothing lost
+    expect(await seed.readPending()).toBeNull()
+  })
+
   it("a legacy journal without meta.json keeps working (unknown workspace, adopted on write)", async () => {
     // pre-M54 store: no workspace option → no meta.json
     const legacy = new RewindStore({ root, sessionId: "legacy" })

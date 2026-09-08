@@ -2,7 +2,7 @@
 // write tool, the event chain (user/message → tool call/result → turn/end)
 // drives the recorder, and the durable point lands in the rewind store; then
 // the engine executes a rewind through the same store.
-import { describe, expect, it, afterEach } from "vitest"
+import { describe, expect, it, afterEach, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -243,22 +243,41 @@ describe("assembly rewind wiring", () => {
     }
   }, 30_000)
 
-  // M54 G3: the journal is bound to its workspace — the session still opens
-  // (the conversation is not the journal) but every rewind op fails closed.
-  it("refuses rewind ops when the journal is bound to another workspace", async () => {
+  // M54 G3 + final-review F3: the journal is bound to its workspace — the
+  // session still opens (the conversation is not the journal) but rewind stays
+  // OFF entirely: no recorder, no fs pre-image sink, assembly.rewind absent
+  // ("not enabled") instead of a permanently dead handle that warns per write.
+  it("leaves rewind off (no recorder, no pre-image sink) when the journal is bound to another workspace", async () => {
     const wsA = mkdtempSync(join(tmpdir(), "i-harness-rewind-bindA-"))
     const wsB = mkdtempSync(join(tmpdir(), "i-harness-rewind-bindB-"))
     const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-bind-store-"))
     cleanup.push(wsA, wsB, storeRoot)
     const seed = new RewindStore({ root: storeRoot, sessionId: "ws-bind-1", workspace: wsA })
     await seed.appendPoint({ turnIndex: 0, anchorSeq: 0, promptPreview: "A", files: [] })
-    const assembly = await createSessionAssembly({ workspace: wsB, sessionId: "ws-bind-1", rewindStoreRoot: storeRoot, modelPolicy: "test-mock" })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const assembly = await createSessionAssembly({
+      workspace: wsB,
+      sessionId: "ws-bind-1",
+      rewindStoreRoot: storeRoot,
+      model: createMockClient([
+        { role: "assistant", toolCalls: [{ name: "write", args: { path: "b.txt", text: "hello" } }] },
+        { role: "assistant", text: "done" },
+      ]),
+    })
     try {
-      expect(assembly.rewind).toBeDefined() // the session itself still opens
-      const svc = new RewindService({ store: assembly.rewind!.store, workspace: wsB })
-      await expect(svc.points()).rejects.toMatchObject({ code: "REWIND_WORKSPACE_MISMATCH" })
-      await expect(svc.plan(0)).rejects.toMatchObject({ code: "REWIND_WORKSPACE_MISMATCH" })
+      expect(assembly.rewind).toBeUndefined() // the session itself still opens
+      // the mismatch warning is kept (never silent)
+      expect(warn.mock.calls.some(([msg]) => String(msg).includes("is bound to workspace"))).toBe(true)
+      await assembly.agent.run("write it")
+      // no pre-image sink: the tool result carries no rewind ref...
+      const toolRes = assembly.session.events.find((e) => e.type === "tool/result") as { output: { preImageRef?: string } }
+      expect(toolRes.output.preImageRef).toBeUndefined()
+      // ...no durability warning was logged for the fs write...
+      expect(warn.mock.calls.some(([msg]) => String(msg).includes("pending-turn persistence failed"))).toBe(false)
+      // ...and the foreign journal never grew
+      expect(await seed.readPoints()).toHaveLength(1)
     } finally {
+      warn.mockRestore()
       await assembly.dispose()
     }
   }, 30_000)

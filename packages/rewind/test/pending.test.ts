@@ -194,4 +194,53 @@ describe("G2 durable pending turn (mid-turn crash)", () => {
     await store.clearPending(1) // the OLD turn's commit must not clear the new sidecar
     expect((await store.readPending())!.anchorSeq).toBe(2)
   })
+
+  // M54 final-review F1: commit(anchorSeq) must not race a queued sidecar write
+  // for the NEXT turn. The dangerous interleaving: the clear's read sees the OLD
+  // sidecar, the newer write lands, then the clear's unlink deletes the NEWER
+  // sidecar — a crash before that turn's next take loses its report (the G2
+  // symptom in a narrow window). The interleaving is made deterministic here:
+  // the clear's read returns the STALE value only after the newer write landed.
+  it("commit() cannot delete a newer turn's sidecar (queued write interleaved)", async () => {
+    const store = newStore()
+    const realReadPending = store.readPending.bind(store)
+    const realWritePending = store.writePending.bind(store)
+    let releaseWrite: () => void = () => {}
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve })
+    let signalStarted: () => void = () => {}
+    const writeStarted = new Promise<void>((resolve) => { signalStarted = resolve })
+    let signalLanded: () => void = () => {}
+    const writeLanded = new Promise<void>((resolve) => { signalLanded = resolve })
+    store.writePending = async (turn) => {
+      if (turn.anchorSeq === 2) {
+        signalStarted()
+        await writeGate // in flight — the newer sidecar has NOT landed yet
+        await realWritePending(turn)
+        signalLanded()
+        return
+      }
+      return realWritePending(turn)
+    }
+    store.readPending = async () => {
+      const value = await realReadPending()
+      if (value !== null && value.anchorSeq === 1) {
+        releaseWrite() // let the newer write land...
+        await writeLanded // ...BEFORE the clear acts on this stale read
+      }
+      return value
+    }
+
+    const rec = new RewindRecorder({ store, workspace })
+    rec.begin(1, "old")
+    rec.take("a.txt", null)
+    await rec.flush()
+    await rec.finalize()
+    rec.begin(2, "new") // queues the newer sidecar write (gated, in flight)
+    await writeStarted
+    const committed = rec.commit(1)
+    releaseWrite() // the newer sidecar lands while commit(1) is in flight
+    await committed
+    await rec.flush()
+    expect(await store.readPending()).toMatchObject({ anchorSeq: 2 })
+  })
 })

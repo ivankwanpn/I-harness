@@ -7,7 +7,7 @@
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, Inbox, subscribe, type Session } from "@i-harness/core-session"
-import { RewindRecorder, RewindStore } from "@i-harness/rewind"
+import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
@@ -115,7 +115,8 @@ export interface AssemblyOptions {
    * finalize, and injects the pre-image sink into the fs write tools. Absent →
    * rewind is entirely off (pre-M42 behavior, zero cost). M54: the store is
    * bound to `workspace` (meta.json) and a turn that crashed mid-flight is
-   * recovered as an honest orphan at creation. */
+   * recovered as an honest orphan at creation; a journal bound to ANOTHER
+   * workspace leaves rewind off entirely (warned, assembly.rewind absent). */
   rewindStoreRoot?: string
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
@@ -190,7 +191,8 @@ export interface SessionAssembly {
   /** Per-server mount outcome of the plugin MCP servers (serverName → success). */
   pluginMcpResults: Map<string, boolean>
   /** M42 G1: rewind engine handle — present only when the host supplied
-   * rewindStoreRoot (with a sessionId). */
+   * rewindStoreRoot (with a sessionId) AND the journal is not bound to another
+   * workspace (M54 G3 mismatch → rewind stays off, "not enabled"). */
   rewind?: RewindAssemblyHandle
   /** Best-effort teardown: reverse-order unmount of mcp/lsp/teams/skills/
    * workflow, terminal dispose, win32 ACL sandbox dispose. NEVER closes the
@@ -265,32 +267,44 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let rewindStore: RewindStore | undefined
   let rewindRecorder: RewindRecorder | undefined
   if (opts.rewindStoreRoot !== undefined && opts.sessionId !== undefined) {
-    rewindStore = new RewindStore({ root: opts.rewindStoreRoot, sessionId: opts.sessionId, workspace: opts.workspace })
+    const store = new RewindStore({ root: opts.rewindStoreRoot, sessionId: opts.sessionId, workspace: opts.workspace })
     // M54 G3: verify the journal's workspace binding. A mismatch must NOT
     // block the session (the conversation is not the rewind journal) — it is
     // warned here and every rewind surface op fails closed
     // (REWIND_WORKSPACE_MISMATCH), so a resume from another cwd can never
     // silently restore into the wrong tree.
+    // M54 final-review F3: on a MISMATCH, rewind is left entirely OFF — no
+    // recorder and no fs pre-image sink (assembly.rewind stays absent, which
+    // the host renders as "not enabled"). A wired recorder could never write
+    // this journal; it would throw and warn on every fs write for a session
+    // whose rewind is permanently dead. Other binding failures (e.g. a corrupt
+    // meta.json) keep the previous behavior: the handle is created and the
+    // surface fails loud per call.
+    let mismatched = false
     try {
-      await rewindStore.assertWorkspace(opts.workspace)
+      await store.assertWorkspace(opts.workspace)
     } catch (err) {
+      mismatched = err instanceof RewindError && err.code === "REWIND_WORKSPACE_MISMATCH"
       console.warn(`[rewind] ${err instanceof Error ? err.message : String(err)}`)
     }
-    // M54 G2: a turn that crashed mid-flight becomes a durable orphan artifact
-    // (never a fabricated point); plan() reports it. Best-effort — a corrupt
-    // sidecar must not stop the session from opening (it stays on disk and
-    // plan() fails loud on it).
-    try {
-      const recovered = await rewindStore.recoverPending()
-      if (recovered !== null) {
-        console.warn(
-          `[rewind] recovered an unfinished turn (anchor seq ${recovered.anchorSeq}, ${recovered.entries.length} file(s)) as an orphan — plan() reports it`,
-        )
+    if (!mismatched) {
+      // M54 G2: a turn that crashed mid-flight becomes a durable orphan
+      // artifact (never a fabricated point); plan() reports it. Best-effort —
+      // a corrupt sidecar must not stop the session from opening (it stays on
+      // disk and plan() fails loud on it).
+      try {
+        const recovered = await store.recoverPending()
+        if (recovered !== null) {
+          console.warn(
+            `[rewind] recovered an unfinished turn (anchor seq ${recovered.anchorSeq}, ${recovered.entries.length} file(s)) as an orphan — plan() reports it`,
+          )
+        }
+      } catch (err) {
+        console.warn(`[rewind] pending-turn recovery failed: ${err instanceof Error ? err.message : String(err)}`)
       }
-    } catch (err) {
-      console.warn(`[rewind] pending-turn recovery failed: ${err instanceof Error ? err.message : String(err)}`)
+      rewindStore = store
+      rewindRecorder = new RewindRecorder({ store, workspace: opts.workspace })
     }
-    rewindRecorder = new RewindRecorder({ store: rewindStore, workspace: opts.workspace })
   }
   const fsToolsDeps = rewindRecorder !== undefined
     ? { workspace: opts.workspace, rewind: { take: (path: string, before: Uint8Array | null) => rewindRecorder.take(path, before) } }
