@@ -40,6 +40,15 @@
 // had_errors: any file op failure (missing blob, disk IO) keeps points.jsonl
 // intact (retry data, spec §3) — the rewind/point event is still appended and
 // the result carries the errors.
+//
+// M54 G3 — workspace binding: points/plan/execute fail closed with
+// REWIND_WORKSPACE_MISMATCH when the journal's meta.json names a different
+// workspace (a pre-M54 journal without meta.json is unknown-workspace and
+// stays usable — adopted by the first workspace that writes).
+//
+// M54 G2 — crashed turns: plan() additionally reports unfinished turns
+// (archived orphans + an un-archived pending sidecar) in `orphanedTurns` and
+// merges their paths into `unTracked`. Nothing is fabricated or auto-restored.
 import { readFile, stat, unlink, writeFile } from "node:fs/promises"
 import { workspaceAbsPath } from "./path.ts"
 import { sha256Hex, type RewindStore } from "./store.ts"
@@ -50,6 +59,7 @@ import type {
   FileOp,
   RewindEvent,
   RewindMode,
+  RewindOrphanedTurn,
   RewindPlan,
   RewindPoint,
   RewindPointSummary,
@@ -113,6 +123,7 @@ export class RewindService {
   }
 
   async points(): Promise<RewindPointSummary[]> {
+    await this.store.assertWorkspace(this.workspace)
     const points = await this.store.readPoints()
     return points.map((p) => ({
       turnIndex: p.turnIndex,
@@ -131,6 +142,7 @@ export class RewindService {
    * list (empty for mode "conversation").
    */
   async plan(targetTurnIndex: number, mode: RewindMode = "all"): Promise<RewindPlan> {
+    await this.store.assertWorkspace(this.workspace)
     const points = await this.store.readPoints()
     const target = this.pointAt(points, targetTurnIndex)
 
@@ -155,6 +167,29 @@ export class RewindService {
       for (const f of later.files) if (!targetPaths.has(f.path)) unTracked.add(f.path)
     }
 
+    // M54 G2: crashed/unfinished turns are never silently dropped. Archived
+    // orphans (recoverPending) AND a leftover sidecar recovery has not seen
+    // are reported — their paths join unTracked (the restore does not cover
+    // them) and the turns themselves appear in orphanedTurns. No op is ever
+    // fabricated for them: restoring a pre-image is a manual decision.
+    const orphanedTurns: RewindOrphanedTurn[] = (await this.store.readOrphans()).map((o) => ({
+      anchorSeq: o.anchorSeq,
+      promptPreview: o.promptPreview,
+      files: o.entries.map((e) => e.path),
+      recoveredAt: o.recoveredAt,
+    }))
+    const unresolved = await this.store.readUnresolvedPending(points)
+    if (unresolved !== null) {
+      orphanedTurns.push({
+        anchorSeq: unresolved.anchorSeq,
+        promptPreview: unresolved.promptPreview,
+        files: unresolved.entries.map((e) => e.path),
+      })
+    }
+    for (const orphan of orphanedTurns) {
+      for (const path of orphan.files) if (!targetPaths.has(path)) unTracked.add(path)
+    }
+
     return {
       target: targetTurnIndex,
       mode,
@@ -162,6 +197,7 @@ export class RewindService {
       conflicts,
       unTracked: [...unTracked].sort(),
       ops: mode === "conversation" ? [] : ops,
+      ...(orphanedTurns.length > 0 ? { orphanedTurns } : {}),
     }
   }
 
@@ -177,6 +213,7 @@ export class RewindService {
     mode: RewindMode,
     hooks: RewindExecuteHooks,
   ): Promise<RewindResult> {
+    await this.store.assertWorkspace(this.workspace)
     const points = await this.store.readPoints()
     const target = this.pointAt(points, targetTurnIndex)
     const plan = await this.plan(targetTurnIndex, mode)
