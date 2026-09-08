@@ -99,16 +99,16 @@ cd apps/cli && pnpm link -g
 
 - 註冊 `i-harness` 與 `ih` 兩個命令名（同一個 bin shim）
 - shim 以**自身安裝的絕對路徑**解析 tsx loader + CLI 入口——任意 cwd 可用；`pnpm link -g`/`npm i -g ./apps/cli` 皆可
-- 要求：Node ≥ 22（源碼直跑無構建產物）
+- 要求：Node ≥ 22.18（源碼直跑無構建產物；`engines.node` 下限——`node:sqlite` 的 `readOnly`）
 
 ### 2. NSIS 自包含安裝器（發布模式）
 
 ```bash
 node scripts/build-installer.mjs   # dist 構建 + Node 運行時下載 + makensis 編譯
-node scripts/verify-installer.mjs  # 17 項安裝驗證（靜默裝 → 雙命令冒煙 → 淨卸載）
+node scripts/verify-installer.mjs  # 19 項安裝驗證（靜默裝 → 雙命令冒煙 + dist 自足 → 淨卸載）
 ```
 
-產物：`build\I-harness-Setup-0.1.0.exe`（**~50MB 自包含**——捆入 Node v22.16.0 運行時、esbuild 單捆 `dist/ih.mjs`、平台原生模塊（node-pty/koffi/ripgrep——平樹 hoisted 部署）；**目標機零前置**）。
+產物：`build\I-harness-Setup-0.1.0.exe`（**~50MB 自包含**——捆入 Node v22.23.2 運行時（滿足 `engines.node ≥ 22.18` 下限）、esbuild 捆 `dist/ih.mjs` + `dist/runner.mjs`、平台原生模塊（node-pty/koffi/ripgrep——平樹 hoisted 部署）；**目標機零前置**）。
 
 安裝器行為（`installer/ih.nsi`，NSIS 3.x/MUI2）：
 
@@ -120,7 +120,7 @@ node scripts/verify-installer.mjs  # 17 項安裝驗證（靜默裝 → 雙命�
 | 卸載器 | 文件/目錄清除 + 註冊表 + PATH 回寫 + 自刪 |
 | 測試模式 | `-test.exe`（`IH_NSIS_TEST` 編譯變體：不寫 PATH/註冊表——供自動化驗證） |
 
-**誠實限制**：dist 包中 `--attach` 的 SDK spawn、Windows-ACL 沙箱 runner 與 minimal `/minimal` 自重啟仍需源碼 + tsx（`I_HARNESS_HOME` 為開發覆蓋）——真機安裝的完整功能集以「純 TUI + 首選會話」為準。
+**dist 自足（M55）**：`--attach` 的 SDK spawn 重入自身 bundle（`node ih.mjs sdk`）、Windows-ACL 沙箱 spawn 同捆的 `dist/runner.mjs`、`/minimal` 自重啟重入自身、minimal 內聯引擎已入 bundle——都不再需要源碼或 tsx。`I_HARNESS_HOME` 僅是**源碼模式**的開發覆蓋（指向非標準路徑的 checkout），dist 不讀它。
 
 ---
 
@@ -168,7 +168,7 @@ apps/
 | `pnpm typecheck` | 全倉 `tsc --noEmit`（0 錯誤） |
 | `pnpm e2e` | 端到端（真實 CLI + 真實工具） |
 | `pnpm verify:store` | pnpm store 完整性（e2e 前建議） |
-| `node scripts/build-installer.mjs && node scripts/verify-installer.mjs` | 打包安裝器 + 17 項安裝驗證 |
+| `node scripts/build-installer.mjs && node scripts/verify-installer.mjs` | 打包安裝器 + 19 項安裝驗證 |
 
 > 已知瑕疵：vitest worker flake（M31 修復——`web-host` 用 forks pool；新包遇到同症狀照搬該配置）。
 

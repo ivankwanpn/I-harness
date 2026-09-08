@@ -461,8 +461,14 @@ const WINDOWS_ACL_RUNNER_FAILURE_EXIT = 127
  */
 const RUNNER_FAILURE_RULES = [{ allowedExitCodes: [WINDOWS_ACL_RUNNER_FAILURE_EXIT], fatalSignatures: ['windows-acl-run: '] }]
 
-/** The runner entry argv prefix: the package source through tsx (development source launch). */
+/** The runner entry argv prefix. Source launch: the package source through
+ * tsx. DIST (build-dist defines I_HARNESS_DIST): the sibling bundle entry
+ * `<out>/runner.mjs`, emitted next to ih.mjs — the sandbox never needs a
+ * source checkout or tsx there. */
 function runnerInvocation(): string[] {
+  if (process.env.I_HARNESS_DIST === '1') {
+    return [process.execPath, fileURLToPath(new URL('./runner.mjs', import.meta.url))]
+  }
   const sourceEntry = fileURLToPath(new URL('./runner.ts', import.meta.url))
   return [process.execPath, '--import', 'tsx/esm', sourceEntry]
 }

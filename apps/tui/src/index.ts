@@ -51,9 +51,11 @@ import {
   createRemoteBackend,
   createScrollbackEngine,
   defaultEmbeddedFactory,
+  defaultRelaunchArgv,
   loadMinimalHost,
   ModeSwitch,
   ProviderController,
+  relaunchArgs,
   sgrFromPalette,
   spawnSdkSubprocess,
   TuiApp,
@@ -394,16 +396,36 @@ export function parseFlags(argv: string[]): TuiFlags {
 
 // ------------------------------------------------------------------ sdk server spawn (M38b G2)
 
-// M45: I_HARNESS_HOME — the dist-layout escape hatch. A bundled host (dist/
-// ih.mjs) computes this path RELATIVE TO THE BUNDLE, which is not the project
-// root anymore; the env override points the SDK spawn (tsx loader + CLI entry)
-// at a real source checkout. ENV wins ONLY when set — source-run unchanged
-// (this file is 3 levels deep; the URL default is still the project root).
+// M45/M55: REPO_ROOT — the source-run SDK spawn's repo root. I_HARNESS_HOME
+// is a DEVELOPMENT-only override for a source checkout in a non-standard
+// place (ENV wins ONLY when set; source-run unchanged — this file is 3 levels
+// deep, the URL default is the project root). DIST no longer needs it: the
+// bundled host re-enters the bundle itself (buildSdkSpawnArgs below).
 const REPO_ROOT = process.env.I_HARNESS_HOME ?? fileURLToPath(new URL("../../../", import.meta.url))
 // Absolute file URL of tsx's loader entry — resolves from ANY cwd (the sdk e2e
 // precedent; the host may be invoked from anywhere).
 const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
 const CLI_ENTRY = join(REPO_ROOT, "apps", "cli", "src", "index.ts")
+
+/** The `--attach` SDK subprocess argv (the command is process.execPath).
+ * SOURCE runs spawn the CLI source through the tsx loader. The DIST bundle
+ * re-enters ITSELF: build-dist defines I_HARNESS_DIST and argv[1] is the
+ * bundle, so `node ih.mjs sdk …` is the same stdio server with no source
+ * checkout and no tsx. Exported for the dist self-check (verify-dist). */
+export function buildSdkSpawnArgs(
+  flags: Pick<TuiFlags, "sessionDir">,
+  dist: boolean = process.env.I_HARNESS_DIST === "1",
+): string[] {
+  return dist
+    ? [process.argv[1] ?? "ih.mjs", ...buildSdkArgs(flags)]
+    : ["--import", TSX_LOADER, CLI_ENTRY, ...buildSdkArgs(flags)]
+}
+
+// Dist self-check surface (apps/cli `__dist-selfcheck`, driven by
+// scripts/verify-dist.mjs): the SDK stdio client + the relaunch argv
+// builders are re-exported so the probe drives the SAME seams the production
+// host uses.
+export { defaultRelaunchArgv, relaunchArgs, spawnSdkSubprocess }
 
 // ------------------------------------------------------------------ stdout
 
@@ -448,6 +470,26 @@ async function loadInlineHost(cols: number, rows: number, sgr?: Record<string, s
     regionRows: () => region.regionRows(),
     resize: (c, r) => region.resize(c, r),
   }
+}
+
+/** Hidden dist self-check (apps/cli `__dist-selfcheck`, driven by
+ * scripts/verify-dist.mjs): load the inline engine through the SAME loader
+ * the startup split uses (loadMinimalHost) and exercise one commit+draw
+ * cycle. Throws with the reason when the engine is unavailable — a silent
+ * fullscreen fallback must never read as success. */
+export async function probeMinimalHost(cols = 80, rows = 24): Promise<string> {
+  const factory = await loadMinimalHost()
+  if (factory === undefined) throw new Error("loadMinimalHost() resolved undefined (inline engine unreachable)")
+  const region = factory({ cols, rows })
+  let bytes = 0
+  const sink = (s: string): void => { bytes += s.length }
+  region.commit([{ runs: [{ text: "dist-minimal-probe", style: "text" }] }], sink)
+  region.drawRegion(sink)
+  const regionRows = region.regionRows()
+  if (bytes === 0 || regionRows === 0) {
+    throw new Error(`inline engine produced no output (bytes=${bytes} regionRows=${regionRows})`)
+  }
+  return `cols=${cols} rows=${rows} regionRows=${regionRows} bytes=${bytes}`
 }
 
 // ------------------------------------------------------------------ startup split (M49 Task 8)
@@ -674,7 +716,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     ? createRemoteBackend({
         client: spawnSdkSubprocess({
           command: process.execPath,
-          args: ["--import", TSX_LOADER, CLI_ENTRY, ...buildSdkArgs(flags)],
+          args: buildSdkSpawnArgs(flags),
           cwd: workspace,
         }),
         sessionId: flags.attach,

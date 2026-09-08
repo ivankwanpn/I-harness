@@ -133,7 +133,7 @@ export { composeRegion } from "./minimal/live-region.ts"
 export type { ComposeRegionOptions, LiveRegionState } from "./minimal/live-region.ts"
 export { MinimalCommits, commitDelta, displayToRegion } from "./minimal/commit.ts"
 export type { CommitEngine, CommitOptions, CommitWriter } from "./minimal/commit.ts"
-export { ModeSwitch, defaultRelaunchSpawn, parseModeArg, relaunchArgs } from "./minimal/mode.ts"
+export { ModeSwitch, defaultRelaunchArgv, defaultRelaunchSpawn, parseModeArg, relaunchArgs } from "./minimal/mode.ts"
 export type { ModeSwitchOptions, RelaunchSpawn } from "./minimal/mode.ts"
 // M49 Task 6: provider/model TUI management — the UI-only provider controller
 // (over provider-runtime + settings + credentials + the live backend), the
@@ -228,14 +228,15 @@ export type MinimalHostFactory = (
   opts?: { cols?: number; rows?: number; sgr?: Record<TextStyle, string> },
 ) => InlineLiveRegion
 
-/** Lazy G1 inline-engine loader — the DYNAMIC import keeps this surface
- * compiling while G1's inline.ts is still in flight; when the module is not
- * there yet it resolves undefined (hosts fall back to fullscreen; a later
- * relaunch picks it up). Resolved through the app's own package dir. */
+/** Lazy G1 inline-engine loader — the LITERAL dynamic import lets esbuild
+ * inline the module into the dist bundle (M55: minimal mode is reachable
+ * from dist; a variable specifier would be left untouched and fail to
+ * resolve relative to the bundle). When the module cannot be loaded it
+ * resolves undefined (hosts fall back to fullscreen; a later relaunch picks
+ * it up). Resolved through the app's own package dir. */
 export async function loadMinimalHost(): Promise<MinimalHostFactory | undefined> {
-  const spec: string = "./minimal/inline.ts"
   try {
-    const mod = (await import(spec)) as { createInlineLiveRegion?: MinimalHostFactory }
+    const mod = (await import("./minimal/inline.ts")) as { createInlineLiveRegion?: MinimalHostFactory }
     return mod.createInlineLiveRegion
   } catch {
     return undefined

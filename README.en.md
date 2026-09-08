@@ -27,7 +27,7 @@ An agent harness (the "back end" of an agent product) that:
 
 ## Requirements
 
-- Node.js >= 22
+- Node.js >= 22.18 (`engines.node` — `node:sqlite`'s `readOnly`)
 - pnpm >= 9
 
 ## Getting started
@@ -66,22 +66,26 @@ no bundle, no dist: the repo stays source-run.
 node scripts/build-installer.mjs    # → build/I-harness-Setup-0.1.0.exe
 ```
 
-- **Self-contained**: bundles the Node v22.16.0 runtime + a single esbuild
-  bundle (`dist/ih.mjs`) + platform native modules (node-pty / koffi /
-  ripgrep via a flat hoisted deploy). ~50 MB of install media; no Node
-  requirement on the target. `I-harness-Setup-0.1.0.exe` (and the `-test.exe`
-  variant that installs user-level without PATH/registry writes).
+- **Self-contained**: bundles the Node v22.23.2 runtime (satisfies the
+  declared `engines.node >= 22.18` floor) + esbuild bundles (`dist/ih.mjs` +
+  `dist/runner.mjs`) + platform native modules (node-pty / koffi / ripgrep
+  via a flat hoisted deploy). ~50 MB of install media; no Node requirement on
+  the target. `I-harness-Setup-0.1.0.exe` (and the `-test.exe` variant that
+  installs user-level without PATH/registry writes).
 - **Installs** to `Program Files\I-harness`, appends PATH (HKLM, with
   `WM_SETTINGCHANGE` broadcast), Start Menu shortcuts, and a full uninstaller
   (registry + PATH cleanup). `i-harness` and `ih` both work in any cmd after
   install.
 - **Verify**: `node scripts/verify-installer.mjs` — silent install → both
-  commands + `--version`/`tui --help` → clean uninstall (currently 17/17
-  de-verified on this machine).
-- Honest dist limits (documented): `--attach` SDK spawn, the Windows-ACL
-  sandbox runner, and minimal-mode `/minimal` relaunch still expect the
-  source + tsx (`I_HARNESS_HOME` is the dev-only override). Version is the
-  single constant `apps/cli/package.json` (0.1.0).
+  commands + `--version`/`tui --help` + the installed dist self-check →
+  clean uninstall (currently 19/19 de-verified on this machine).
+- **Dist is self-sufficient (M55)**: the `--attach` SDK spawn re-enters the
+  bundle (`node ih.mjs sdk`), the Windows-ACL sandbox spawns the bundled
+  `dist/runner.mjs`, `/minimal` relaunches the bundle itself, and the minimal
+  inline engine is inlined — none of them need the source or tsx anymore.
+  `I_HARNESS_HOME` is a **source-mode** dev override only (a non-standard
+  checkout); dist never reads it. Version is the single constant
+  `apps/cli/package.json` (0.1.0).
 
 ## Scripts
 
@@ -102,13 +106,16 @@ node scripts/verify-dist.mjs   # smoke gate: --version / tui --help / help must 
 ```
 
 `build-dist.mjs` bundles `apps/cli/src/index.ts` with esbuild (platform node,
-ESM, node22) into `dist/ih.mjs` and deploys the three NATIVE externals —
-`node-pty`, `koffi`, `@vscode/ripgrep` (+ their platform optionals) into
-`dist/node_modules` from the pinned manifest `installer/dist-package.json`
-(exact versions, build-time drift check). The dist layout is
-`dist/{ih.mjs, model-catalog.json, package.json, README-dist.txt, node_modules/}`
+ESM, node22) into `dist/ih.mjs`, the windows-acl runner into `dist/runner.mjs`,
+and deploys the three NATIVE externals — `node-pty`, `koffi`,
+`@vscode/ripgrep` (+ their platform optionals) into `dist/node_modules` from
+the pinned manifest `installer/dist-package.json` (exact versions, build-time
+drift check). The dist layout is
+`dist/{ih.mjs, runner.mjs, model-catalog.json, package.json, README-dist.txt, node_modules/}`
 and runs with plain `node` — no tsx needed. `verify-dist.mjs` is the gate
-(fails loud on any mismatch). The `Distribution` story (installing the produced
+(fails loud on any mismatch; it also runs the hidden `__dist-selfcheck` so the
+minimal engine, the ACL confinement, the relaunch argv and the SDK re-entry are
+proved from the bundle). The `Distribution` story (installing the produced
 dist) is owned by the packaging milestone.
 
 ## Development status (M1 → M34)

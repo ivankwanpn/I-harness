@@ -3,8 +3,11 @@
 // prompt text `/minimal` or `/fullscreen` spawns the same host with the
 // flipped `--mode` (mode.x → append/replace `--mode` in argv; fullscreen
 // strips it — fullscreen is the default). Process-side: process.execPath +
-// --import tsx + the current entry + the relaunched argv (Windows-safe:
-// execPath is the node binary; argv preserved verbatim).
+// the current entry + the relaunched argv (Windows-safe: execPath is the
+// node binary; argv preserved verbatim). SOURCE runs need the tsx loader
+// (`--import tsx`); the DIST bundle re-execs itself — build-dist defines
+// I_HARNESS_DIST, and argv[1] IS the bundle, so the same argv slice
+// (subcommand included) round-trips through `node ih.mjs …`.
 
 import { spawn as spawnProcess } from "node:child_process"
 
@@ -65,14 +68,21 @@ export function relaunchArgs(mode: "minimal" | "fullscreen", argv: string[]): st
   return out
 }
 
-/** Default spawn: the same thin host under the target mode —
- * `node --import tsx <entry> <relaunched args>` with inherited stdio (the
- * new process takes over the terminal; the old one exits after spawning).
- * On Windows process.execPath is node.exe — execPath + tsx import works
- * identically. */
-export const defaultRelaunchSpawn: RelaunchSpawn = (argv) => {
+/** The relaunch argv (the command is process.execPath): source runs go
+ * through the tsx loader; the DIST bundle re-execs itself (I_HARNESS_DIST —
+ * build-dist defines it, and argv[1] is the bundle path, so the relaunch is
+ * `node ih.mjs <subcommand+flags>`). Exported for the dist self-check. */
+export function defaultRelaunchArgv(argv: string[]): string[] {
   const entry = process.argv[1] ?? "index.ts"
-  const child = spawnProcess(process.execPath, ["--import", "tsx", entry, ...argv], {
+  return process.env.I_HARNESS_DIST === "1" ? [entry, ...argv] : ["--import", "tsx", entry, ...argv]
+}
+
+/** Default spawn: the same thin host under the target mode — the relaunch
+ * argv above with inherited stdio (the new process takes over the terminal;
+ * the old one exits after spawning). On Windows process.execPath is
+ * node.exe. */
+export const defaultRelaunchSpawn: RelaunchSpawn = (argv) => {
+  const child = spawnProcess(process.execPath, defaultRelaunchArgv(argv), {
     stdio: "inherit",
   })
   child.on("error", (err) => {

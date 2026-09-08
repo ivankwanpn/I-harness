@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * M45 G1: verify-dist — the build-dist gate (fails loud).
+ * M45 G1 / M55: verify-dist — the build-dist gate (fails loud).
  *
  *   node scripts/verify-dist.mjs [--out dist]
  *
@@ -8,12 +8,21 @@
  *   (a) node <out>/ih.mjs --version   → stdout "0.1.0", exit 0
  *   (b) node <out>/ih.mjs tui --help  → stdout "usage: tui", exit 0
  *   (c) node <out>/ih.mjs help        → stderr "usage: i-harness", exit 0
+ * M55 self-sufficiency (no source checkout, no tsx):
+ *   (d) hidden `__dist-selfcheck`     → minimal inline engine loads from the
+ *       bundle, the /minimal relaunch argv re-execs the bundle (and that argv
+ *       is EXECUTED here), the --attach SDK spawn handshakes over stdio, and
+ *       the windows-acl seam confines through the bundled runner;
+ *   (e) <out>/runner.mjs              → the windows-acl runner bundle exists,
+ *       honours its exit-127 failure contract, and really confines (child
+ *       exit code mirrored).
  * Every assertion failure prints the full stdout/stderr of the failing
  * command and exits 1 (non-zero) — never settles for a silent pass.
  */
 
 import { spawnSync } from "node:child_process"
-import { existsSync, readdirSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -30,6 +39,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 const OUT = resolve(ROOT, out)
 const IH = join(OUT, "ih.mjs")
+const RUNNER = join(OUT, "runner.mjs")
 const NODES_DIR = join(OUT, "node_modules")
 
 let failed = false
@@ -133,6 +143,80 @@ smoke("(b) tui --help", ["tui", "--help"], (r, detail) => {
 smoke("(c) help", ["help"], (r, detail) => {
   assert(r.stderr.includes("usage: i-harness"), "(c) help prints 'usage: i-harness' (stderr)", detail)
 })
+
+// ------------------------------------------- M55: dist self-sufficiency smoke
+
+/** One real confined spawn through the runner bundle (read-only needs no
+ * DACL grants — token creation + restricted spawn + exit mirroring). */
+function aclRunnerSpawn() {
+  const tmp = mkdtempSync(join(tmpdir(), "ih-verify-dist-acl-"))
+  try {
+    const workspace = join(tmp, "ws")
+    mkdirSync(workspace)
+    return spawnSync(
+      process.execPath,
+      [RUNNER, "--workspace", workspace, "--temp", tmp, "--mode", "read-only", "--", process.execPath, "-e", "process.exit(7)"],
+      { cwd: ROOT, encoding: "utf8", timeout: 120_000 },
+    )
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+// (d) hidden self-check: minimal inline engine + relaunch argv + SDK spawn.
+{
+  const t = Date.now()
+  const r = spawnSync(process.execPath, [IH, "__dist-selfcheck"], { cwd: ROOT, encoding: "utf8", timeout: 120_000 })
+  const detail = `  exit: ${r.status}\n  stdout:\n${r.stdout}\n  stderr:\n${r.stderr}`
+  assert(r.status === 0, `(d) __dist-selfcheck exits 0 ${getDuration(t)}`, detail)
+  assert(r.stdout.includes("minimal-host: ok"), "(d1) minimal inline engine loads from the bundle", detail)
+  assert(r.stdout.includes("sdk-spawn: ok"), "(d3) --attach SDK spawn handshakes over stdio", detail)
+  assert(
+    process.platform !== "win32" || r.stdout.includes("acl-seam: ok"),
+    "(d4) windows-acl seam confines through the bundled runner",
+    detail,
+  )
+
+  const relaunchLine = r.stdout.split(/\r?\n/).find((line) => line.startsWith("relaunch-argv: "))
+  assert(relaunchLine !== undefined, "(d2) self-check prints the /minimal relaunch argv", detail)
+  if (relaunchLine !== undefined) {
+    const argv = JSON.parse(relaunchLine.slice("relaunch-argv: ".length))
+    const shapeOk = Array.isArray(argv) && argv.length > 0 && resolve(String(argv[0])) === IH && !argv.includes("tsx")
+    assert(
+      shapeOk,
+      "(d2) dist relaunch argv re-execs the bundle and drops the tsx loader",
+      `${detail}\n  argv: ${JSON.stringify(argv)}`,
+    )
+    if (shapeOk) {
+      const t2 = Date.now()
+      const relaunch = spawnSync(process.execPath, argv, { cwd: ROOT, encoding: "utf8", timeout: 60_000 })
+      assert(
+        relaunch.status === 0,
+        `(d2) executing that relaunch argv exits 0 ${getDuration(t2)}`,
+        `  exit: ${relaunch.status}\n  stdout:\n${relaunch.stdout}\n  stderr:\n${relaunch.stderr}`,
+      )
+    }
+  }
+}
+
+// (e) the windows-acl runner bundle: present + failure contract + real confine.
+{
+  assert(existsSync(RUNNER), `(e) acl runner bundle present: ${RUNNER}`, `missing ${RUNNER} — build-dist emits it beside ih.mjs`)
+  const t = Date.now()
+  const noArgs = spawnSync(process.execPath, [RUNNER], { cwd: ROOT, encoding: "utf8", timeout: 60_000 })
+  assert(
+    noArgs.status === 127 && noArgs.stderr.includes("windows-acl-run: "),
+    `(e) acl runner failure contract: exit 127 + signature ${getDuration(t)}`,
+    `  exit: ${noArgs.status}\n  stderr:\n${noArgs.stderr}`,
+  )
+  const t2 = Date.now()
+  const confined = aclRunnerSpawn()
+  assert(
+    confined.status === 7,
+    `(e) confined spawn mirrors the child exit code (7) ${getDuration(t2)}`,
+    `  exit: ${confined.status}\n  stdout:\n${confined.stdout}\n  stderr:\n${confined.stderr}`,
+  )
+}
 
 // ---------------------------------------------------------------- verdict
 

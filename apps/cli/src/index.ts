@@ -2,7 +2,10 @@ import { pathToFileURL } from "node:url"
 import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
 import { stat } from "node:fs/promises"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { spawnSync } from "node:child_process"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (module side effect, evaluated before its
 // node:sqlite import) — no explicit wiring needed here.
@@ -132,6 +135,14 @@ export async function main(argv: string[]): Promise<number> {
   if (args[0] === "tui") {
     return Promise.resolve(runTui(parseFlags(args.slice(1))))
   }
+  // Hidden dist self-check (M55 — scripts/verify-dist.mjs drives it): the
+  // surfaces the bundle must serve WITHOUT a source checkout/tsx — the
+  // minimal inline engine, the /minimal relaunch argv, the windows-acl
+  // confinement, the --attach SDK subprocess. Exit 0 only when every probe
+  // passed. Deliberately not in USAGE (a build gate, not a user command).
+  if (args[0] === "__dist-selfcheck") {
+    return runDistSelfcheck()
+  }
   if (args[0] === "--version" || args[0] === "-v") {
     console.log(CLI_VERSION)
     return Promise.resolve(0)
@@ -251,6 +262,89 @@ export async function main(argv: string[]): Promise<number> {
     if (r.error) console.error(r.error)
     return r.exitCode
   })
+}
+
+/** Hidden `__dist-selfcheck` (see the dispatch in main()). Every probe
+ * drives the PRODUCTION seam — the inline engine through loadMinimalHost,
+ * the SDK subprocess through spawnSdkSubprocess + the host's own argv
+ * builder, the windows-acl confinement through createWindowsAclSandbox —
+ * never a parallel re-implementation. The relaunch argv is printed for
+ * verify-dist to EXECUTE (the probe never claims a spawn it did not make).
+ * Exit 0 only when every live probe passed. */
+async function runDistSelfcheck(): Promise<number> {
+  const tuiApp = await import("@i-harness/tui-app")
+  let failed = false
+  const record = (label: string, error: unknown): void => {
+    failed = true
+    console.error(`dist-selfcheck: ${label} FAIL: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  try {
+    console.log(`minimal-host: ok (${await tuiApp.probeMinimalHost()})`)
+  } catch (error) {
+    record("minimal-host", error)
+  }
+  // The REAL /minimal switch argv (relaunchArgs) under the default spawn
+  // (defaultRelaunchArgv) — printed for verify-dist to EXECUTE.
+  const relaunchArgv = tuiApp.defaultRelaunchArgv(tuiApp.relaunchArgs("minimal", ["tui", "--help"]))
+  console.log(`relaunch-argv: ${JSON.stringify(relaunchArgv)}`)
+  // The Windows-ACL sandbox seam: confine() must spawn the DIST runner
+  // bundle and really confine (child exit mirrored). Windows-only surface.
+  if (process.platform === "win32") {
+    try {
+      console.log(`acl-seam: ok (confined child exit=${await probeAclSeam()})`)
+    } catch (error) {
+      record("acl-seam", error)
+    }
+  } else {
+    console.log("acl-seam: skipped (non-win32)")
+  }
+  try {
+    const client = tuiApp.spawnSdkSubprocess({
+      command: process.execPath,
+      args: tuiApp.buildSdkSpawnArgs({ sessionDir: undefined }),
+      cwd: process.cwd(),
+    })
+    try {
+      const info = (await client.request("initialize", {}, 30_000)) as { protocolVersion?: unknown }
+      if (typeof info.protocolVersion !== "number") {
+        throw new Error(`initialize returned no protocolVersion: ${JSON.stringify(info).slice(0, 200)}`)
+      }
+      console.log(`sdk-spawn: ok (protocolVersion=${info.protocolVersion})`)
+    } finally {
+      await client.close().catch(() => undefined)
+    }
+  } catch (error) {
+    record("sdk-spawn", error)
+  }
+  console.log(`dist-selfcheck: ${failed ? "FAIL" : "PASS"}`)
+  return failed ? 1 : 0
+}
+
+/** Confine a child through the REAL windows-acl seam (createWindowsAclSandbox
+ * → confine) and mirror its exit code — proves the BUNDLED seam spawns the
+ * sibling `runner.mjs`, not the source tsx entry. Returns the child exit. */
+async function probeAclSeam(): Promise<number> {
+  const { createWindowsAclSandbox } = await import("@i-harness/sandbox-windows-acl")
+  const workspace = mkdtempSync(join(tmpdir(), "ih-dist-acl-"))
+  try {
+    const provider = createWindowsAclSandbox({ writableDirs: [workspace], mode: "read-only" })
+    try {
+      const confined = provider.confine(
+        [process.execPath, "-e", "process.exit(7)"],
+        { mode: "read-only", workspaceRoot: workspace },
+      )
+      if (process.env.I_HARNESS_DIST === "1" && confined.argv.some((arg) => arg.includes("tsx"))) {
+        throw new Error(`dist confinement still uses tsx: ${JSON.stringify(confined.argv.slice(0, 5))}`)
+      }
+      const result = spawnSync(confined.argv[0]!, confined.argv.slice(1), { stdio: "inherit", timeout: 120_000 })
+      if (result.status !== 7) throw new Error(`confined child exit ${String(result.status)} (expected 7)`)
+      return 7
+    } finally {
+      provider.dispose()
+    }
+  } finally {
+    rmSync(workspace, { recursive: true, force: true })
+  }
 }
 
 /** `i-harness sdk` — the SDK stdio server (R-C4). One NDJSON JSON-RPC line
