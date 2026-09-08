@@ -10,6 +10,7 @@ import { readFile, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { append } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
+import { RewindRecorder } from "@i-harness/rewind"
 import { RewindService } from "@i-harness/rewind"
 import { RewindStore } from "@i-harness/rewind"
 import { createSessionAssembly } from "../src/assembly.ts"
@@ -199,6 +200,66 @@ describe("assembly rewind wiring", () => {
       releaseFirst()
       RewindStore.prototype.appendPoint = originalAppendPoint
       await assembly?.dispose()
+    }
+  }, 30_000)
+
+  // M54 G2: a turn that crashed mid-flight (pre-images on disk, no finalize)
+  // is archived at assembly open and reported honestly by plan().
+  it("recovers a crashed pending turn at assembly open and surfaces it honestly", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "i-harness-rewind-crash-ws-"))
+    const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-crash-store-"))
+    cleanup.push(workspace, storeRoot)
+    await writeFile(join(workspace, "greet.txt"), "v1")
+    // seed on disk (a "previous process"): one completed turn + one crash
+    const seedStore = new RewindStore({ root: storeRoot, sessionId: "crash-1", workspace })
+    const seedRec = new RewindRecorder({ store: seedStore, workspace })
+    seedRec.begin(0, "first")
+    seedRec.take("greet.txt", utf8("v0"))
+    await writeFile(join(workspace, "greet.txt"), "v1")
+    const first = (await seedRec.finalize())!
+    await seedStore.appendPoint(first)
+    await seedRec.commit(first.anchorSeq)
+    seedRec.begin(10, "crash turn")
+    seedRec.take("greet.txt", utf8("v1"))
+    seedRec.take("orphan.txt", null)
+    await seedRec.flush()
+    await writeFile(join(workspace, "greet.txt"), "v2")
+
+    const assembly = await createSessionAssembly({ workspace, sessionId: "crash-1", rewindStoreRoot: storeRoot, modelPolicy: "test-mock" })
+    try {
+      const store = assembly.rewind!.store
+      // archived at open — never a fabricated point
+      expect(await store.readPending()).toBeNull()
+      expect((await store.readPoints()).map((p) => p.turnIndex)).toEqual([0])
+      const orphans = await store.readOrphans()
+      expect(orphans).toHaveLength(1)
+      expect(orphans[0]!.anchorSeq).toBe(10)
+      const svc = new RewindService({ store, workspace })
+      const plan = await svc.plan(0)
+      expect(plan.unTracked).toEqual(["orphan.txt"])
+      expect(plan.orphanedTurns?.[0]).toMatchObject({ anchorSeq: 10, files: ["greet.txt", "orphan.txt"] })
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  // M54 G3: the journal is bound to its workspace — the session still opens
+  // (the conversation is not the journal) but every rewind op fails closed.
+  it("refuses rewind ops when the journal is bound to another workspace", async () => {
+    const wsA = mkdtempSync(join(tmpdir(), "i-harness-rewind-bindA-"))
+    const wsB = mkdtempSync(join(tmpdir(), "i-harness-rewind-bindB-"))
+    const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-bind-store-"))
+    cleanup.push(wsA, wsB, storeRoot)
+    const seed = new RewindStore({ root: storeRoot, sessionId: "ws-bind-1", workspace: wsA })
+    await seed.appendPoint({ turnIndex: 0, anchorSeq: 0, promptPreview: "A", files: [] })
+    const assembly = await createSessionAssembly({ workspace: wsB, sessionId: "ws-bind-1", rewindStoreRoot: storeRoot, modelPolicy: "test-mock" })
+    try {
+      expect(assembly.rewind).toBeDefined() // the session itself still opens
+      const svc = new RewindService({ store: assembly.rewind!.store, workspace: wsB })
+      await expect(svc.points()).rejects.toMatchObject({ code: "REWIND_WORKSPACE_MISMATCH" })
+      await expect(svc.plan(0)).rejects.toMatchObject({ code: "REWIND_WORKSPACE_MISMATCH" })
+    } finally {
+      await assembly.dispose()
     }
   }, 30_000)
 })
