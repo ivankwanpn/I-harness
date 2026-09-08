@@ -139,6 +139,63 @@ describe("session log", () => {
     expect(() => assertVersion(s, 2)).toThrow(/version/i)
   })
 
+  it("M51/B2: folds a step's text into its tool-call message (M3 shape)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "read a.txt" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_1", name: "read", args: { path: "a.txt" } })
+    append(s, { type: "tool/result", callId: "call_1", name: "read", output: { content: "a" } })
+    // The agent loop appends the step's narration AFTER the tool results
+    // (core-agent appends assistant/message at the step tail, before step/end).
+    append(s, { type: "assistant/message", text: "Let me read the file first." })
+    append(s, { type: "step/end" })
+    append(s, { type: "step/start" })
+    append(s, { type: "assistant/message", text: "Done." })
+    append(s, { type: "step/end" })
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "read a.txt" },
+      // ONE assistant message carrying both the narration and the calls —
+      // not assistant("",toolCalls) -> tool -> assistant(narration).
+      { role: "assistant", content: "Let me read the file first.", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+      { role: "tool", toolCallId: "call_1", content: '{"content":"a"}' },
+      { role: "assistant", content: "Done." },
+    ])
+  })
+
+  it("M51/B2: keeps the M10a assistant(toolCalls) -> tool(result) adjacency after the fold", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "read a.txt" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_1", name: "read", args: { path: "a.txt" } })
+    append(s, { type: "tool/result", callId: "call_1", name: "read", output: { content: "a" } })
+    append(s, { type: "assistant/message", text: "Let me read the file first." })
+    append(s, { type: "step/end" })
+    const msgs = deriveMessages(s)
+    const callsAt = msgs.findIndex((m) => m.role === "assistant" && (m.toolCalls?.length ?? 0) > 0)
+    expect(callsAt).toBe(1)
+    expect(msgs[callsAt]).toEqual({ role: "assistant", content: "Let me read the file first.", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] })
+    // M10a §96: the tool result must be IMMEDIATELY after its call message.
+    expect(msgs[callsAt + 1]).toEqual({ role: "tool", toolCallId: "call_1", content: '{"content":"a"}' })
+    // and the narration must not also appear as a standalone assistant message
+    expect(msgs.filter((m) => m.role === "assistant" && m.content === "Let me read the file first.")).toHaveLength(1)
+  })
+
+  it("M51/B2: does not fold an assistant/message outside the step's tool block", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "task" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_1", name: "read", args: {} })
+    append(s, { type: "tool/result", callId: "call_1", name: "read", output: { content: "a" } })
+    append(s, { type: "step/end" })
+    append(s, { type: "assistant/message", text: "done" })
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "task" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }] },
+      { role: "tool", toolCallId: "call_1", content: '{"content":"a"}' },
+      { role: "assistant", content: "done" },
+    ])
+  })
+
   it("keeps tool blocks separate across steps (per-turn folding)", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "task" })

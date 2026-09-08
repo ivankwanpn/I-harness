@@ -84,10 +84,12 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
             return { role: "user", content: [{ type: "tool_result", tool_use_id: m.toolCallId, content: m.content }] }
           }
           if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-            return {
-              role: "assistant",
-              content: m.toolCalls.map((c) => ({ type: "tool_use", id: c.id, name: c.name, input: c.args })),
-            }
+            // M51/B2: a folded step message carries the step's text AND its
+            // tool calls — emit the text block before the tool_use blocks
+            // (dropping it made the model's pre-tool narration vanish).
+            const content: unknown[] = m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []
+            for (const c of m.toolCalls) content.push({ type: "tool_use", id: c.id, name: c.name, input: c.args })
+            return { role: "assistant", content }
           }
           return { role: m.role, content: toAnthropicContent(m.content) }
         }),

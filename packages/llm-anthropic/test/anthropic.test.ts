@@ -64,6 +64,33 @@ describe("llm-anthropic protocol", () => {
     await it.return?.()
   })
 
+  it("M51/B2: emits a text block before tool_use when the assistant message carries both", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const request: LLMRequest = {
+      messages: [
+        { role: "user", content: "read a.txt" },
+        { role: "assistant", content: "Let me read the file first.", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
+      ],
+      tools: [],
+      systemPrompt: "sys",
+    }
+    const it = client.stream(request)[Symbol.asyncIterator]()
+    await it.next()
+    const [, init] = fetchMock.mock.calls[0]!
+    const body = JSON.parse(init.body as string)
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Let me read the file first." },
+        { type: "tool_use", id: "call_1", name: "read", input: { path: "a.txt" } },
+      ],
+    })
+    await it.return?.()
+  })
+
   it("accumulates input_json_delta into tool args", async () => {
     const sse = [
       `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "write", input: {} } })}`,
