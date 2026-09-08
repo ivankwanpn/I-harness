@@ -4,13 +4,16 @@
 //       the production minimal path, no tui-core terminal (no alt screen);
 //   (b) the REAL @xterm/headless normal buffer is the print-once ledger:
 //       committed rows sit in the terminal's own buffer in chronological
-//       order with the live region bottom-pinned; byte-budget writes=11 =
-//       init has no write at all + 7 events (4 commits + 7 frames) + the
-//       post-resize commit pair — NO replay and NO anim-pump repaint
-//       (every sleep runs while the turn is idle — anim writes would inflate
-//       the count and the frozen clock cannot suppress them: loop.frameMinimal
-//       has no identical-frame suppression, a G2 reality this case paces
-//       around; see host-015.ts header);
+//       order with the live region bottom-pinned; byte-budget writes=10 =
+//       4 commits (user · system · turn-end · again) + 5 region frames
+//       (user · system · tool running · tool done · assistant) + 1 resize
+//       repaint — the turn-end repaint is zero-byte under the M38a gate, the
+//       "again" repaint rides in its commit write, and there is NO init write
+//       — NO replay and NO anim-pump repaint (every sleep runs while the turn
+//       is idle — anim writes would inflate the count and the frozen clock
+//       cannot suppress them: loop.frameMinimal has no identical-frame
+//       suppression, a G2 reality this case paces around; see host-015.ts
+//       header);
 //   (c) resizing during a live region (46x24→34x18 via the fs app-resize
 //       channel — the ConPTY master resize is unobservable to the child in
 //       this pairing, see host-015.ts) + one more commit: the region re-places

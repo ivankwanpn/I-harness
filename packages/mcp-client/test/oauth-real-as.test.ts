@@ -58,6 +58,23 @@ const waitFor = async (cond: () => boolean, ms = 5000): Promise<void> => {
   throw new Error("waitFor timed out")
 }
 
+/** M55: poll the callback URL until the server has ARMED its waitForCallback
+ * (the arm happens right after the authorize URL is printed — a fixed sleep
+ * was both slow and racy). An unarmed handler answers 400 and consumes
+ * nothing; the armed one accepts the code and answers 200. */
+const fetchCallbackAccepted = async (url: string, ms = 5000): Promise<Response> => {
+  const deadline = Date.now() + ms
+  for (;;) {
+    const res = await fetch(url)
+    if (res.status === 200) return res
+    await res.text().catch(() => {}) // drain: free the keep-alive socket
+    if (Date.now() > deadline) {
+      throw new Error(`callback server never accepted the code (last status ${res.status})`)
+    }
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Real authorization server — node:http, zero deps. Enforces at every step
 // (400 + OAuth error JSON on violation; nothing is accepted "as given").
@@ -86,8 +103,10 @@ interface RealAs {
   tokenCalls: number
   /** M53 T3: refresh-grant behaviour — "unsupported" (pre-M53 default),
    * "reject" (the AS refuses the refresh token → invalid_grant) or "rotate"
-   * (issue a fresh access+refresh pair). */
-  refreshMode: "unsupported" | "reject" | "rotate"
+   * (issue a fresh access+refresh pair). M55 adds "server-error": a 500 that
+   * the SDK maps to ServerError — swallowed by its auth loop (falls through to
+   * an interactive redirect) WITHOUT invalidating the stored credentials. */
+  refreshMode: "unsupported" | "reject" | "rotate" | "server-error"
   /** grant_type of every /token call, in order (asserted by the M53 tests). */
   tokenGrants: string[]
   close(): Promise<void>
@@ -188,6 +207,9 @@ async function startRealAs(): Promise<RealAs> {
       if (grantType === "refresh_token") {
         if (as.refreshMode === "reject") {
           return json(res, 400, { error: "invalid_grant", error_description: "refresh token revoked" })
+        }
+        if (as.refreshMode === "server-error") {
+          return json(res, 500, { error: "server_error", error_description: "injected refresh failure" })
         }
         if (as.refreshMode === "rotate") {
           const access_token = `tok-real-as-${as.issuedTokens.length + 1}`
@@ -496,7 +518,7 @@ describe("MCP OAuth refresh-failure recovery (M53 T3)", () => {
         },
         reconnect: { enabled: true, initialDelayMs: 20, maxDelayMs: 200, maxRetries: 4 },
       }
-      const handle = await mountMcpClient({} as never, tools, config, { onStatus: (ev) => events.push(ev) })
+      const handle = await mountMcpClient(ctx, tools, config, { onStatus: (ev) => events.push(ev) })
       const exec: ToolExec = {}
       try {
         expect(tools.get("mcp__oauth-recover__real_echo")).toBeDefined()
@@ -518,8 +540,7 @@ describe("MCP OAuth refresh-failure recovery (M53 T3)", () => {
         // printed (redirect #1 came from the failed call) and the callback
         // server now WAITS for the code (pre-fix the printed URL was dead).
         await waitFor(() => redirects.length >= 2)
-        await new Promise((r) => setTimeout(r, 100)) // waitForCallback arms right after the redirect
-        const recovered = await fetch(redirects.at(-1)!)
+        const recovered = await fetchCallbackAccepted(redirects.at(-1)!)
         expect(recovered.status).toBe(200) // AS 302 → callback server accepted the code
         expect(await recovered.text()).toContain("授權完成")
 
@@ -583,6 +604,73 @@ describe("MCP OAuth refresh-failure recovery (M53 T3)", () => {
         failStatus.value = undefined
         const ok = await client.callTool("real_echo", { text: "still alive" })
         expect(ok.content).toEqual([{ type: "text", text: "echo: still alive" }])
+      } finally {
+        await client.close()
+        await as.close()
+        await mcp.close()
+      }
+    },
+    60_000,
+  )
+})
+
+// ---------------------------------------------------------------------------
+// M55: the M53 T3 teardown must be gated on an OBSERVER. With reconnect off
+// (and no onDisconnect registered) nobody can rebuild the generation, so
+// closeGeneration() used to close the SDK client permanently — the auth error
+// surfaced once and every later call died on a dead client. One-shot mounts
+// keep the pre-M53 behavior: surface the error, leave the client alone.
+// ---------------------------------------------------------------------------
+
+describe("M55 — auth teardown is gated on a disconnect observer", () => {
+  it(
+    "no-reconnect mount: an auth failure surfaces the error but does NOT permanently close the client",
+    async () => {
+      const as = await startRealAs()
+      const revoked = new Set<string>()
+      const mcp = await startRealMcpServer(as.base, { revoked })
+      const callbackPort = await freePort()
+      const expectedRedirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`
+      as.registrations.push({ client_id: "ih-real-as-1", redirect_uris: [expectedRedirectUrl], token_endpoint_auth_method: "none" })
+      const entries = new Map<string, unknown>([
+        ["oauth:oauth-norc:client", { client_id: "ih-real-as-1" }],
+        ["oauth:oauth-norc:tokens", { access_token: "tok-norc-1", refresh_token: "rt-norc-1", token_type: "Bearer", expires_in: 3600 }],
+      ])
+      const store: McpTokenStore = {
+        get: async (k) => entries.get(k),
+        put: async (k, v) => { entries.set(k, v) },
+      }
+      const client = await createConnectedClient({
+        transport: "streamable-http",
+        serverName: "oauth-norc",
+        url: mcp.url,
+        auth: {
+          callbackPort,
+          redirectUrl: expectedRedirectUrl,
+          store,
+          authTimeoutMs: 5_000,
+        },
+        // NO reconnect config AND no onDisconnect registration: the one-shot
+        // mount shape (nobody can rebuild a dead generation).
+      })
+      try {
+        const before = await client.callTool("real_echo", { text: "before" })
+        expect(before.content).toEqual([{ type: "text", text: "echo: before" }])
+
+        // Mid-session: the live token is revoked AND the refresh grant fails
+        // with a 500 (ServerError — the SDK swallows it, prints an interactive
+        // authorize URL and throws UnauthorizedError without invalidating the
+        // stored credentials).
+        revoked.add("tok-norc-1")
+        as.refreshMode = "server-error"
+        await expect(client.callTool("real_echo", { text: "boom" })).rejects.toThrow(/Unauthorized/)
+
+        // M55: the error SURFACED and the client was NOT closed — un-revoking
+        // the same token keeps the SAME transport usable. Pre-fix guardAuth
+        // closed the SDK client here and this call died on it ("Not connected").
+        revoked.clear()
+        const after = await client.callTool("real_echo", { text: "after" })
+        expect(after.content).toEqual([{ type: "text", text: "echo: after" }])
       } finally {
         await client.close()
         await as.close()
