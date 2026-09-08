@@ -382,6 +382,12 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // tool_result), regardless of how the session log interleaves them.
   let pendingCalls: { id: string; name: string; args: unknown }[] | undefined
   const pendingResults: LLMMessage[] = []
+  // M51/B2: whether a step/start..step/end window is open. The agent loop
+  // appends the step's assistant/message AFTER its tool results but BEFORE
+  // step/end, so "the current step's tool block is still open" is exactly
+  // `stepOpen && pendingCalls !== undefined` (core-agent appends step/start
+  // unconditionally at the top of every step).
+  let stepOpen = false
   // M11 compaction shadow pre-pass: collect every seq a compaction/summary
   // replaced on the surface so the render pass skips them. The raw log keeps
   // all events; only this projection shrinks.
@@ -430,8 +436,22 @@ export function deriveMessages(session: Session): LLMMessage[] {
           : { role: "user", content: ev.text },
       )
     } else if (ev.type === "assistant/message") {
-      flushToolBlock()
-      result.push({ role: "assistant", content: ev.text })
+      // M51/B2 (M3 shape): when the step's tool block is still open, the
+      // step's text belongs to the SAME assistant message as its tool calls —
+      // `assistant(text + toolCalls)` — not a separate message after the
+      // results (which made the model read its pre-tool narration as
+      // post-tool commentary). The results follow the folded message, so the
+      // M10a `assistant(toolCalls) -> tool(result)` adjacency is preserved.
+      // A message outside an open step (e.g. a step-less log, or the final
+      // answer after step/end) keeps the pre-fold behavior: its own message.
+      if (stepOpen && pendingCalls) {
+        flushToolBlock(ev.text)
+      } else {
+        flushToolBlock()
+        result.push({ role: "assistant", content: ev.text })
+      }
+    } else if (ev.type === "step/start") {
+      stepOpen = true
     } else if (ev.type === "compaction/summary") {
       flushToolBlock()
       result.push({ role: "user", content: ev.text })
@@ -463,6 +483,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
       // unit; flushing at step/end keeps per-turn tool blocks separate so the
       // log never folds across steps into consecutive user/tool-result runs
       // (which would violate Anthropic's Messages API role alternation).
+      stepOpen = false
       flushToolBlock()
     }
     // assistant/chunk events carry no model-visible text; skipped entirely
@@ -479,9 +500,11 @@ export function deriveMessages(session: Session): LLMMessage[] {
     return false
   }
 
-  function flushToolBlock() {
+  // `content` is the folded step text (M51/B2); every no-text caller passes
+  // nothing and gets the historical `content: ""` message byte-for-byte.
+  function flushToolBlock(content = "") {
     if (pendingCalls) {
-      result.push({ role: "assistant", content: "", toolCalls: pendingCalls })
+      result.push({ role: "assistant", content, toolCalls: pendingCalls })
       pendingCalls = undefined
     }
     if (pendingResults.length > 0) {

@@ -79,12 +79,16 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
             }
             // assistant
             if (m.toolCalls && m.toolCalls.length > 0) {
-              return m.toolCalls.map((c) => ({
+              const calls = m.toolCalls.map((c) => ({
                 type: "function_call",
                 call_id: c.id,
                 name: c.name,
                 arguments: JSON.stringify(c.args),
               }))
+              // M51/B2: a folded step message carries the step's text AND its
+              // tool calls — emit the assistant text item before the
+              // function_call items (dropping it lost the narration).
+              return m.content.trim() !== "" ? [{ role: "assistant", content: m.content }, ...calls] : calls
             }
             return { role: "assistant", content: m.content }
           })
