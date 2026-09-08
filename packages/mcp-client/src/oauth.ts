@@ -188,7 +188,17 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
         due = false
       }
       // 另一呼叫者的刷新可能剛好在上面兩次讀取之間落地——重讀一次，避免回舊 token。
-      if (!due) return (await get<OAuthTokens>("tokens")) ?? current
+      // M57 T3：重讀本身 fail-soft——store 異常時回手上這枚（與上方到期檢查同款措辭）。
+      if (!due) {
+        try {
+          return (await get<OAuthTokens>("tokens")) ?? current
+        } catch (err) {
+          console.warn(
+            `[i-harness] mcp-server(${serverName}) OAuth: token re-read failed (${err instanceof Error ? err.message : String(err)}); keeping the stored token`,
+          )
+          return current
+        }
+      }
       // single-flight：並發呼叫者共用同一枚 promise；失敗由 refreshProactively 吞掉（回舊 token）。
       refreshInFlight ??= refreshProactively().finally(() => { refreshInFlight = undefined })
       return (await refreshInFlight) ?? current
