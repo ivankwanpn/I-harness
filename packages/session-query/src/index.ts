@@ -10,6 +10,10 @@ export interface SearchHit {
   sessionId: string
   seq: number
   eventType: SessionEvent["type"]
+  /** M51 B4: INDEX-REBUILD time (epoch ms), NOT the event's time. The JSONL
+   * log carries no per-event timestamp, so the file-backed index can only
+   * record when it (re)derived the row — an unchanged row gets a NEW value on
+   * every re-index. Do not use it for recency/ordering. */
   time?: number
   snippet: string
   bm25: number

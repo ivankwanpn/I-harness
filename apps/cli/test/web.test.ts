@@ -267,6 +267,87 @@ describe("web composition (R-C1)", () => {
     expect(sessionContextWindow(opts)).toBeUndefined()
   })
 
+  // M51 P1: the user settings row is the TOP tier of the unified chain and is
+  // profile-INDEPENDENT — an empty registry (the web amendment's normal shape:
+  // every provider is settings-managed) must not short-circuit it.
+  it("P1: sessionContextWindow consults the user settings row with an EMPTY registry", async () => {
+    const opts = options(process.cwd()) // providerRegistry = createProviderRegistry() (empty)
+    const settings = opts.settings!
+    await settings.set({
+      llm: {
+        ...settings.get().llm,
+        defaultModel: { provider: "deepseek", model: "deepseek-chat" },
+        providers: { deepseek: { models: [{ id: "deepseek-chat", contextWindow: 65_536 }] } },
+      },
+    })
+    expect(resolveModelSpec(opts)).toEqual({ spec: "deepseek:deepseek-chat", source: "default" })
+    // the identical user row resolves the same value with or without a profile
+    expect(sessionContextWindow(opts)).toBe(65_536)
+    expect(sessionContextWindow(opts, {
+      formatVersion: 1, sessionId: "s", createdAt: "",
+      modelSelection: { provider: "deepseek", model: "deepseek-chat" },
+    })).toBe(65_536)
+  })
+
+  // M51 P1 (caller): createWebServer's contextWindowFor closure must resolve
+  // through the settings/registry it RESOLVED, not the raw opts — the CLI
+  // composition passes neither. Proven end-to-end on the legacy path (explicit
+  // `model` ⇒ no modelBindingFor) via the registered get_context_remaining.
+  it("P1: the web closure sees the RESOLVED settings (no opts.settings, empty registry)", async () => {
+    const configDir = mkdtempSync(join(tmpdir(), "ih-web-p1-config-"))
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-p1-ws-"))
+    const seeded = new SettingsStore({ configDir })
+    await seeded.set({
+      llm: {
+        ...seeded.get().llm,
+        defaultModel: { provider: "deepseek", model: "deepseek-chat" },
+        providers: { deepseek: { models: [{ id: "deepseek-chat", contextWindow: 65_536 }] } },
+      },
+    })
+    const seed = createSessionCoordinator(createJsonlBackend(workspace))
+    try {
+      await seed.create({ sessionId: "p1" })
+    } finally {
+      await seed.close()
+    }
+    const script: MockStep[] = [
+      { role: "assistant", toolCalls: [{ name: "get_context_remaining", args: {} }] },
+      { role: "assistant", text: "done" },
+    ]
+    let callIdx = 0
+    const model: ModelClient = {
+      async *stream(req) {
+        const step = script[callIdx]!
+        callIdx = (callIdx + 1) % script.length
+        yield* createMockClient([step]).stream(req)
+      },
+    }
+    const prevConfigDir = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = configDir // SettingsStore default-path resolution
+    let server: Awaited<ReturnType<typeof createWebServer>> | undefined
+    try {
+      server = await createWebServer({
+        port: 0,
+        workspace,
+        credentials: createCredentialStore(join(configDir, "credentials.json")),
+        model,
+        // no settings, no providerRegistry: both are resolved inside createWebServer
+      })
+      await server.executor.submit("p1", "window?", new AbortController().signal)
+      const assembly = await server.executor.assemblyFor("p1")
+      const result = [...assembly.session.events].reverse().find(
+        (e) => e.type === "tool/result" && (e as { name?: string }).name === "get_context_remaining",
+      ) as { output?: { window?: number } } | undefined
+      expect(result?.output?.window).toBe(65_536)
+    } finally {
+      if (prevConfigDir === undefined) delete process.env.IH_CONFIG_DIR
+      else process.env.IH_CONFIG_DIR = prevConfigDir
+      await server?.close()
+      rmSync(workspace, { recursive: true, force: true })
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  }, 60_000)
+
   it("M31 T3: per-session context window — two sessions report their own get_context_remaining windows", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "ih-web-m31-per-session-"))
     const seed = createSessionCoordinator(createJsonlBackend(workspace))

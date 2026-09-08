@@ -1,4 +1,4 @@
-import type { Plugin, PluginContext } from "@i-harness/core-plugin"
+import { markCascadeRedispatch, type Plugin, type PluginContext } from "@i-harness/core-plugin"
 import type { ToolExec } from "@i-harness/core-tools"
 import { TOOL_TIMEOUT } from "@i-harness/guard-timeout"
 
@@ -96,6 +96,10 @@ export function createRetryGuard(_ctx: PluginContext, config?: RetryConfig): Plu
             // monotonic guards, and post-execute. Approval was already granted
             // for the original dispatch and only the FINAL (post-retry) result
             // should reach post-execute, so each attempt must not re-run them.
+            // M51 B1: mark the re-dispatch frame so once-per-logical-call
+            // cascade handlers (hooks pre/post-tool) skip their own run — the
+            // frame that already ran the pair owns the single one.
+            markCascadeRedispatch(d)
             result = await ctx.cascade("tools/execute", d, () => d.tool.execute(d.args, d.exec))
           }
           return result

@@ -12,6 +12,8 @@
   "devDependencies": {
     "@i-harness/core-agent": "workspace:*",
     "@i-harness/core-session": "workspace:*",
+    "@i-harness/guard-retry": "workspace:*",
+    "@i-harness/guard-timeout": "workspace:*",
     "@i-harness/llm-mock": "workspace:*"
   }
 }

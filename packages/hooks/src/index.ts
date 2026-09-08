@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import type { PluginContext } from "@i-harness/core-plugin"
+import { isCascadeRedispatch, type PluginContext } from "@i-harness/core-plugin"
 import type { ToolCall, ToolDecision } from "@i-harness/core-tools"
 import type {
   HandlerMatcher,
@@ -282,6 +282,12 @@ export async function createHookRegistry(
   // 1+2. pre-tool / post-tool around the real tool body (tools/execute cascade).
   ctx.onCascade("tools/execute", async (input, next) => {
     const call = input as { name: string; args: unknown }
+    // M51 B1: a guard-retry RE-DISPATCH frame already had its pre-tool run
+    // (approval/args are unchanged) and the frame that ran the pair owns the
+    // single post-tool — skip this frame's pair so one logical call sees
+    // exactly one pre-tool and one post-tool regardless of retry count and
+    // mount order. The re-dispatch still enters the cascade (timeout re-arms).
+    if (isCascadeRedispatch(input)) return next()
     await runHandlers(
       registry,
       "pre-tool",
