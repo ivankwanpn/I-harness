@@ -1899,9 +1899,22 @@ export class TuiApp {
     this.refreshShortcuts()
   }
 
+  /** The scrollback-rect height — the REAL viewport for scroll math. The
+   * renderer grid also contains the status/prompt/turn rows, so using
+   * buffer.height directly caps the max offset `rectH` rows too early and
+   * makes the history tail unreachable (BUG-4, m49 audit; the mouse
+   * scrollbar already used the rect). */
+  private scrollViewportHeight(): number {
+    return layoutAgent(
+      { cols: this.opts.renderer.buffer.width, rows: this.opts.renderer.buffer.height },
+      this.app,
+      { compact: this.opts.compact },
+    ).scrollback.h
+  }
+
   private scrollBy(dy: number): void {
     const total = this.opts.engine.lineCount()
-    const page = this.opts.renderer.buffer.height
+    const page = this.scrollViewportHeight()
     const max = Math.max(0, total - page + 1)
     // M40 G2 (C11): follow-aware base — while following, the effective offset
     // is the tail (max); an offset above it would jump to the TOP of history
@@ -1966,7 +1979,10 @@ export class TuiApp {
   }
 
   private pageStep(): number {
-    return Math.max(1, Math.floor(this.opts.renderer.buffer.height / 2))
+    // BUG-4: half the scrollback rect (the real viewport), not half the
+    // renderer grid — with the grid value the page step overshot the window
+    // by the status/prompt rows.
+    return Math.max(1, Math.floor(this.scrollViewportHeight() / 2))
   }
 
   submitPrompt(): void {
