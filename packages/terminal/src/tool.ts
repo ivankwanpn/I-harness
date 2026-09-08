@@ -2,7 +2,13 @@ import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { createTerminalService, filterConptyNoise, type TerminalService, type TerminalSignalName } from "./service.ts"
 
-export interface TerminalToolDeps { service: TerminalService }
+export interface TerminalToolDeps {
+  service: TerminalService
+  // D1 (m55): the default cwd for terminal_open/process_spawn — the assembly
+  // workspace. An explicit args.cwd from the model still wins; absent (both)
+  // → no cwd field, so node-pty keeps its own contract (inherit the parent).
+  cwd?: string
+}
 
 /**
  * M27-H-2 error-path guard: node-pty's win32 ConPTY agent noise ("Error:
@@ -51,10 +57,11 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
         required: ["command"],
       },
       execute: async (args: { command: string; args?: string[]; cwd?: string; cols?: number; rows?: number }, exec: ToolExec) => {
+        const cwd = args.cwd ?? deps.cwd
         const spec = {
           command: args.command,
           ...(args.args !== undefined ? { args: args.args } : {}),
-          ...(args.cwd !== undefined ? { cwd: args.cwd } : {}),
+          ...(cwd !== undefined ? { cwd } : {}),
           ...(args.cols !== undefined ? { cols: args.cols } : {}),
           ...(args.rows !== undefined ? { rows: args.rows } : {}),
         }
@@ -124,11 +131,13 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
         properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } }, cwd: { type: "string" }, env: { type: "object" } },
         required: ["command"],
       },
-      execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string> }, exec: ToolExec) =>
-        service.open(
-          { command: args.command, ...(args.args !== undefined ? { args: args.args } : {}), ...(args.cwd !== undefined ? { cwd: args.cwd } : {}), ...(args.env !== undefined ? { env: args.env } : {}) },
+      execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string> }, exec: ToolExec) => {
+        const cwd = args.cwd ?? deps.cwd
+        return service.open(
+          { command: args.command, ...(args.args !== undefined ? { args: args.args } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(args.env !== undefined ? { env: args.env } : {}) },
           { sessionId: exec.sessionId },
-        ),
+        )
+      },
     },
     {
       name: "process_kill",
@@ -152,9 +161,15 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
 }
 
 export interface TerminalMountHandle { dispose(): void }
-export function registerTerminal(ctx: PluginContext, tools: { register(t: Tool): void }): TerminalMountHandle {
+export function registerTerminal(
+  ctx: PluginContext,
+  tools: { register(t: Tool): void },
+  /** D1 (m55): assembly workspace — the default cwd for every PTY. */
+  opts?: { cwd?: string },
+): TerminalMountHandle {
   const service = createTerminalService()
   ctx.services.register("terminal/service", service)
-  for (const tool of [...createTerminalTools({ service }), ...createProcessTools({ service })]) tools.register(tool)
+  const deps: TerminalToolDeps = { service, ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}) }
+  for (const tool of [...createTerminalTools(deps), ...createProcessTools(deps)]) tools.register(tool)
   return { dispose: () => service.dispose() }
 }

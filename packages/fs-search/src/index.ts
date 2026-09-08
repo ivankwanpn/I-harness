@@ -1,3 +1,4 @@
+import { isAbsolute, resolve } from "node:path"
 import type { ExecService } from "@i-harness/exec"
 import type { Tool } from "@i-harness/core-tools"
 
@@ -20,6 +21,10 @@ export function resolveRgPath(): Promise<string> {
 
 export interface FsSearchToolDeps {
   exec: ExecService
+  // D1 (m55): the assembly workspace — rg's cwd, so an omitted (or relative)
+  // search path resolves against the workspace like every other fs tool.
+  // Absent → no cwd field, so exec keeps its own contract (process cwd).
+  workspace?: string
 }
 
 export interface GlobResult {
@@ -70,8 +75,16 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
         ]
         // Run with cwd inside the search root so rg emits paths relative to it;
         // an absolute search root would otherwise yield absolute paths. With no
-        // path arg, cwd is left unset (the process cwd) and "." searches it.
-        const result = await deps.exec.run({ argv: [rgPath, ...parts], ...(args.path !== undefined ? { cwd: args.path } : {}) })
+        // path arg the workspace is the search root (D1: an assembly workspace
+        // is where the fs tools resolve too); a relative path arg resolves
+        // against it. No workspace configured → cwd stays unset (exec contract:
+        // the process cwd).
+        const searchRoot = args.path === undefined
+          ? deps.workspace
+          : deps.workspace !== undefined && !isAbsolute(args.path)
+            ? resolve(deps.workspace, args.path)
+            : args.path
+        const result = await deps.exec.run({ argv: [rgPath, ...parts], ...(searchRoot !== undefined ? { cwd: searchRoot } : {}) })
         // rg exits 1 with empty stdout when nothing matches — a normal empty result.
         // Any other non-zero exit (2+ = rg error, -1 = spawn failure) is a genuine
         // failure: surface it as an error note instead of a silent empty success.
@@ -116,7 +129,9 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
         const parts = ["--json", `--regexp=${args.pattern}`]
         if (args.include !== undefined) parts.push(`--glob=${args.include}`)
         parts.push("--", args.path ?? ".")
-        const result = await deps.exec.run({ argv: [rgPath, ...parts] })
+        // D1: run rg in the assembly workspace so "." and relative path args
+        // resolve there (fs-tool parity); absent → exec's own process cwd.
+        const result = await deps.exec.run({ argv: [rgPath, ...parts], ...(deps.workspace !== undefined ? { cwd: deps.workspace } : {}) })
         // rg exits 1 with no match lines when nothing matches — a normal empty
         // result. Any other non-zero exit (2+ = rg error, -1 = spawn failure) is
         // a genuine failure: surface it as an error note, not empty success.

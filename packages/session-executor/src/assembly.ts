@@ -226,7 +226,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // ── execution environment + policy ─────────────────────────────────────────
   // Same sequence as runHeadless: terminal first (registerTerminal may be
   // reclaimed via the handle in dispose), then shell+plaintext, web, fs.
-  const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools)
+  // D1 (m55): every exec-spawning tool gets the assembly workspace as its
+  // default cwd — the fs tools already resolve against it (LSP too, below);
+  // without this the shell/PTY ran in the PROCESS cwd, a different tree.
+  const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, { cwd: opts.workspace })
   const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
   // M16w final review (win32 composition): the sandbox-local wrapper returns a
   // bare SandboxProvider and DROPS the backend's dispose(), so this compose
@@ -254,6 +257,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
+    cwd: opts.workspace,
     ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
     ...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}),
   })
@@ -336,7 +340,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     ...(opts.skills?.extraDirs !== undefined ? { extraDirs: opts.skills.extraDirs } : {}),
   })
   const execService = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createFsSearchTools({ exec: execService })) tools.register(tool)
+  for (const tool of createFsSearchTools({ exec: execService, workspace: opts.workspace })) tools.register(tool)
   if (opts.sessionQuery) {
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
   }

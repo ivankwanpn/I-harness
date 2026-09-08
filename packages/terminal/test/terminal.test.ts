@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { createTerminalService, type TerminalService } from "../src/service.ts"
-import { createTerminalTools } from "../src/tool.ts"
+import { createTerminalTools, createProcessTools } from "../src/tool.ts"
 
 // 注意：Win32 上 node -e 引數含 `'\n'` 轉義序列會被解析器 reject（本機 node 24.15 實測），
 // 統統改用 String.fromCharCode(10) 產生 LF——零轉義、跨工具鏈穩定。
@@ -92,6 +92,35 @@ it("dispose: closes every terminal and pending waitExited reject", async () => {
   svc.dispose()
   await expect(w).rejects.toThrow(/disposed/)
   expect(svc.list()).toEqual([])
+})
+
+it("D1: terminal_open/process_spawn default cwd to the configured workspace; explicit args.cwd wins", async () => {
+  const specs: Array<Record<string, unknown>> = []
+  const spy = {
+    open: (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      return { id: "t1", pid: 1, cols: 80, rows: 24 }
+    },
+  } as unknown as TerminalService
+  const openTool = createTerminalTools({ service: spy, cwd: "/ws" }).find((t) => t.name === "terminal_open")!
+  const spawnTool = createProcessTools({ service: spy, cwd: "/ws" }).find((t) => t.name === "process_spawn")!
+  await openTool.execute({ command: "bash" }, {})
+  await openTool.execute({ command: "bash", cwd: "/explicit" }, {})
+  await spawnTool.execute({ command: "bash" }, {})
+  expect(specs.map((s) => s.cwd)).toEqual(["/ws", "/explicit", "/ws"])
+})
+
+it("D1: no workspace cwd → no cwd field (the PTY inherits the process cwd)", async () => {
+  const specs: Array<Record<string, unknown>> = []
+  const spy = {
+    open: (spec: Record<string, unknown>) => {
+      specs.push(spec)
+      return { id: "t1", pid: 1, cols: 80, rows: 24 }
+    },
+  } as unknown as TerminalService
+  const openTool = createTerminalTools({ service: spy }).find((t) => t.name === "terminal_open")!
+  await openTool.execute({ command: "bash" }, {})
+  expect(specs[0]!.cwd).toBeUndefined()
 })
 
 it("tools: six terminal tools registered with exact names and forward args to the service", async () => {

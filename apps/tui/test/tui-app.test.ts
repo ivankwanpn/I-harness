@@ -555,7 +555,7 @@ describe("tui production interaction bridges (M49 Task 10)", () => {
       approveAll: false,
       modelPolicy: "test-mock",
       mockScript: [
-        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf node_modules" } }] },
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf probe-dir" } }] },
         { role: "assistant", text: "done" },
       ],
     })
@@ -577,7 +577,7 @@ describe("tui production interaction bridges (M49 Task 10)", () => {
     const host = await createExecutableHost({
       approveAll: false,
       mockScript: [
-        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf node_modules && echo bridge-ran" } }] },
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf probe-dir && echo bridge-ran" } }] },
         { role: "assistant", text: "done" },
       ],
     })
@@ -608,7 +608,7 @@ describe("tui production interaction bridges (M49 Task 10)", () => {
     const host = await createExecutableHost({
       approveAll: false,
       mockScript: [
-        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf node_modules && echo pumped-ok" } }] },
+        { role: "assistant", toolCalls: [{ name: "bash", args: { command: "rm -rf probe-dir && echo pumped-ok" } }] },
         { role: "assistant", text: "done" },
       ],
     })

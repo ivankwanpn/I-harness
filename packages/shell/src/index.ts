@@ -92,6 +92,10 @@ export interface ShellToolDeps {
   exec: ExecService
   timeoutMs?: number // declared on bash/pwsh tools; drives guard-timeout
   retention?: ShellRetentionOptions
+  // D1 (m55): the working directory for every shell execution — the assembly
+  // workspace. Absent → no cwd field, so exec keeps its own contract (the
+  // child inherits the parent process cwd).
+  cwd?: string
   // M16 final-review (C1): when set, every bash/pwsh execution carries this
   // policy so exec confines at spawn. Absent → no sandbox field (passthrough,
   // pre-M16 behavior).
@@ -177,10 +181,10 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
       const argv = ["bash", "-c", args.command]
       if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
       return retainedRunResult(result, "bash-stdout")
     },
   }
@@ -197,10 +201,10 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
       const argv = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
       if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
       return retainedRunResult(result, "pwsh-stdout")
     },
   }
@@ -215,9 +219,11 @@ export function registerShell(
     retention?: ShellRetentionOptions
     sandbox?: import("@i-harness/sandbox").SandboxProvider
     sandboxPolicy?: import("@i-harness/sandbox").SandboxExecutionPolicy
+    /** D1 (m55): assembly workspace — the default cwd for bash/pwsh. */
+    cwd?: string
   },
 ): void {
   registerExec(ctx, { sandbox: opts?.sandbox })
   const exec = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention, sandboxPolicy: opts?.sandboxPolicy })) registry.register(tool)
+  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention, sandboxPolicy: opts?.sandboxPolicy, ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}) })) registry.register(tool)
 }
