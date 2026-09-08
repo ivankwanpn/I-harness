@@ -14,7 +14,10 @@
 //
 // M54 G2 durability: take() is synchronous, so the durable side is a serial
 // queue — each take enqueues `writeBlob(pre-image)` then `writePending(sidecar)`
-// (blob first: the sidecar must never reference a missing pre-image). A crash
+// (blob first: the sidecar must never reference a missing pre-image). Each op
+// snapshots the entry list EAGERLY, before it is queued: a lazy snapshot would
+// let an early op's sidecar name entries whose blobs are still pending in
+// LATER ops (a false durability claim if the process dies in between). A crash
 // between the file write and the queue draining can still lose the last
 // in-flight entries; everything already flushed survives as the pending
 // sidecar. finalize() awaits the queue; the sidecar is cleared only by
@@ -82,7 +85,9 @@ export class RewindRecorder {
     if (this.pending !== null) return
     const turn: PendingTurn = { anchorSeq, promptPreview, startedAt: Date.now(), entries: new Map() }
     this.pending = turn
-    this.enqueue(() => this.opts.store.writePending(this.snapshot(turn)))
+    // Eager snapshot — this op claims only what preceding ops already wrote.
+    const snap = this.snapshot(turn)
+    this.enqueue(() => this.opts.store.writePending(snap))
   }
 
   /**
@@ -113,9 +118,13 @@ export class RewindRecorder {
     const entry: PendingEntry = { path, before: beforeBytes, blobId, isNewFile: beforeBytes === null }
     this.pending.entries.set(path, entry)
     const turn = this.pending
+    // Eager snapshot (M54 review): this op's sidecar names only entries whose
+    // blobs preceding ops already wrote — never a blob still pending in a
+    // later op. The LAST op's snapshot still carries the full set.
+    const snap = this.snapshot(turn)
     this.enqueue(async () => {
       if (entry.before !== null) await this.opts.store.writeBlob(entry.before)
-      await this.opts.store.writePending(this.snapshot(turn))
+      await this.opts.store.writePending(snap)
     })
     return { blobId, isNewFile: entry.isNewFile }
   }

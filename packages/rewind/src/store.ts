@@ -303,6 +303,10 @@ export class RewindStore {
       const written: RewindWorkspaceMeta = { version: 1, workspace: resolve(this.workspace) }
       await writeFileAtomic(this.metaFile, JSON.stringify(written) + "\n")
       this.metaCache = written
+      // The one irreversible decision (a pre-M54 journal has no binding) is
+      // never silent: the adoption is reported so a wrong-cwd first write is
+      // at least visible in the host log.
+      console.warn(`[rewind] bound pre-M54 journal ${this.dir} to workspace ${written.workspace} (no meta.json existed)`)
       return
     }
     if (this.workspace !== undefined && !sameWorkspacePath(meta.workspace, this.workspace)) {
@@ -419,6 +423,9 @@ export class RewindStore {
     return recorded.some((p) => p.anchorSeq === pending.anchorSeq) ? null : pending
   }
 
+  /** Add one orphan line. LOGICALLY append-only (records are never removed or
+   * rewritten), but implemented as an atomic read-modify-write rewrite of the
+   * whole file — a plain append could tear a line and corrupt the archive. */
   private async appendOrphan(orphan: RewindOrphanRecord): Promise<void> {
     const orphans = await this.readOrphans()
     orphans.push(orphan)

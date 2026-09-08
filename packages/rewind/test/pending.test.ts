@@ -74,6 +74,37 @@ describe("G2 durable pending turn (mid-turn crash)", () => {
     expect(pending!.entries).toEqual([{ path: "a.txt", blobId: sha256Hex(utf8("first")), isNewFile: false }])
   })
 
+  it("a sidecar never references a blob that is not yet on disk (eager snapshot)", async () => {
+    const store = newStore()
+    const realWriteBlob = store.writeBlob.bind(store)
+    const realWritePending = store.writePending.bind(store)
+    let releaseFirstBlob: () => void = () => {}
+    const firstBlobGate = new Promise<void>((resolve) => { releaseFirstBlob = resolve })
+    let blobCalls = 0
+    const overClaimed: string[] = []
+    store.writeBlob = async (bytes: Uint8Array): Promise<string> => {
+      blobCalls += 1
+      if (blobCalls === 1) await firstBlobGate // the first pre-image write is slow
+      return realWriteBlob(bytes)
+    }
+    store.writePending = async (turn) => {
+      // invariant: every claimed blobId must already be durable AT WRITE TIME
+      for (const e of turn.entries) {
+        if (e.blobId !== null && !(await store.hasBlob(e.blobId))) overClaimed.push(e.path)
+      }
+      return realWritePending(turn)
+    }
+    const rec = new RewindRecorder({ store, workspace })
+    rec.begin(0, "x")
+    rec.take("a.txt", utf8("A"))
+    rec.take("b.txt", utf8("B")) // lands while take("a.txt")'s writeBlob is still awaiting
+    releaseFirstBlob()
+    await rec.flush()
+    expect(overClaimed).toEqual([])
+    // the FINAL sidecar still carries the full set (the last op's snapshot)
+    expect((await store.readPending())!.entries.map((e) => e.path)).toEqual(["a.txt", "b.txt"])
+  })
+
   it("recoverPending() archives the crashed turn as an orphan (no fabricated point)", async () => {
     await seedCrashedTurn()
     const store = newStore() // reopen: the crashed process's objects are gone
