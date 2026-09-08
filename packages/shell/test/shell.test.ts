@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { resolveShell, getArgv, createShellTools, registerShell } from "../src/index.ts"
 import type { ExecService, ExecCommand } from "@i-harness/exec"
 import type { Tool } from "@i-harness/core-tools"
-import { createContext } from "@i-harness/core-plugin"
+import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
 
 describe("resolveShell", () => {
@@ -169,6 +169,51 @@ describe("createShellTools", () => {
     expect(captured!.abortSignal).toBeUndefined()
   })
 
+  // D1 (m55-shell): the assembly workspace is the default working directory
+  // for every shell execution — foreground AND background. Absent cwd → the
+  // field is omitted entirely so exec keeps its own contract (inherit the
+  // parent process cwd).
+  it("D1: forwards the configured workspace cwd into run + runBackground for both tools", async () => {
+    const foreground: ExecCommand[] = []
+    const background: ExecCommand[] = []
+    const recordingExec: ExecService = {
+      run: async (cmd) => {
+        foreground.push(cmd)
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: (cmd) => {
+        background.push(cmd)
+        return { jobId: "bash-1" }
+      },
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const [bash, pwsh] = createShellTools({ exec: recordingExec, cwd: "/ws" })
+    await bash.execute({ command: "pwd" }, {})
+    await pwsh.execute({ command: "pwd" }, {})
+    await bash.execute({ command: "pwd", background: true }, {})
+    expect(foreground.map((c) => c.cwd)).toEqual(["/ws", "/ws"])
+    expect(background[0]!.cwd).toBe("/ws")
+  })
+
+  it("D1: no cwd configured → no cwd field (exec inherits the parent process cwd)", async () => {
+    const foreground: ExecCommand[] = []
+    const recordingExec: ExecService = {
+      run: async (cmd) => {
+        foreground.push(cmd)
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: () => ({ jobId: "bash-1" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const [bash] = createShellTools({ exec: recordingExec })
+    await bash.execute({ command: "pwd" }, {})
+    expect(foreground[0]!.cwd).toBeUndefined()
+  })
+
   // M16 final-review C1(a): the load-bearing fix — the CLI previously composed
   // the provider via registerShell({ sandbox }) but NEVER attached a policy to
   // a command, so every bash/pwsh run was unconfined. Pin that execute() now
@@ -232,6 +277,27 @@ describe("registerShell", () => {
     registerShell(ctx, { register: (t) => tools.push(t) }, { timeoutMs: 7000 })
     expect(tools.find((t) => t.name === "bash")?.timeoutMs).toBe(7000)
     expect(tools.find((t) => t.name === "pwsh")?.timeoutMs).toBe(7000)
+  })
+
+  it("D1: passes cwd through to the registered tools", async () => {
+    const captured: ExecCommand[] = []
+    const spyExec: ExecService = {
+      run: async (cmd) => {
+        captured.push(cmd)
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: () => ({ jobId: "none" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    // registerShell builds its own exec service; the fake ctx hands the tool
+    // closure the spy instead so the forwarded command is observable.
+    const ctx = { services: { register: () => {}, get: () => spyExec } } as unknown as PluginContext
+    const tools: Tool[] = []
+    registerShell(ctx, { register: (t) => tools.push(t) }, { cwd: "/ws" })
+    await tools.find((t) => t.name === "bash")!.execute({ command: "pwd" }, {} as never)
+    expect(captured[0]!.cwd).toBe("/ws")
   })
 })
 
