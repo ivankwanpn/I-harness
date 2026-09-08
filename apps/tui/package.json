@@ -16,6 +16,7 @@
     "@i-harness/provider": "workspace:*",
     "@i-harness/provider-runtime": "workspace:*",
     "@i-harness/session-executor": "workspace:*",
+    "@i-harness/session-query": "workspace:^",
     "@i-harness/settings": "workspace:*",
     "@i-harness/shell": "workspace:*",
     "@i-harness/tui": "workspace:*",

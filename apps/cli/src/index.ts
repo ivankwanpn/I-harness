@@ -3,6 +3,9 @@ import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
+// BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
+// session-query package itself (module side effect, evaluated before its
+// node:sqlite import) — no explicit wiring needed here.
 import { ndJsonStream } from "@agentclientprotocol/sdk"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"

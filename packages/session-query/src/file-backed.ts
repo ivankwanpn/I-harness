@@ -2,6 +2,11 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { readFile, readdir, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
+// BUG-1 (m49 audit): the warning filter MUST evaluate before node:sqlite —
+// importing this module first guarantees it (ESM evaluates dependencies
+// before the importing module body).
+import { suppressSqliteExperimentalWarning } from "./warning.ts"
+suppressSqliteExperimentalWarning()
 import { DatabaseSync } from "node:sqlite"
 import { CURRENT_FORMAT_VERSION, deriveSearchText, type SessionEvent } from "@i-harness/core-session"
 import type { LineageNode, LineageOptions, SearchHit, SearchOptions, SessionQuery } from "./index.ts"

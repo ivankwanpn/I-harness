@@ -32,6 +32,9 @@ import { createInstructionsSection } from "@i-harness/instructions"
 import { PLAN_MODE_SYSTEM_PROMPT, ensurePlanModeTool } from "@i-harness/plan-mode"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
+// BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
+// session-query package itself (a module side effect that evaluates before
+// its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { registerSkills } from "@i-harness/skills"
