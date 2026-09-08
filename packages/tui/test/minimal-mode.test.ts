@@ -480,6 +480,52 @@ describe("M51 T1 — commit cursor re-anchors after an engine shrink", () => {
   })
 })
 
+// --------------------------------------------------- 2c. M54 A1 sticky-pin commit
+
+describe("M54 A1 — the sticky latest-user pin is never committed", () => {
+  const rowsOf = (delta: RegionLine[]): string[] =>
+    delta.map((l) => l.runs.map((r) => r.text).join(""))
+
+  it("commits the real rows (system, assistant tail) — no duplicate user row, no stranded tail", () => {
+    const engine = createScrollbackEngine({ width: 80 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    let seq = 0
+
+    engine.append({ type: "user", text: "GO", seq: seq++, ts: 0 })
+    expect(rowsOf(commits.pendingDelta())).toEqual(["❯ GO"])
+
+    // Once the commit window starts past the user block, viewport() pins the
+    // collapsed user header on top of the window (sticky:true). The raw window
+    // would be a COPY of an already-committed row plus one fewer real row.
+    engine.append({ type: "system", text: "ctx", seq: seq++, ts: 0 })
+    expect(engine.viewport(1, 1).map((l) => l.sticky === true)).toEqual([true])
+    expect(rowsOf(commits.pendingDelta())).toEqual(["ctx"]) // NOT ["❯ GO"]
+
+    // Same with a taller window: the pin is stripped and the window widened so
+    // the LAST row (A2) is still committed.
+    engine.append({ type: "assistant", text: "A0\nA1\nA2", seq: seq++, ts: 0 })
+    engine.append({ type: "turn", phase: "end", seq: seq++, ts: 0 })
+    expect(engine.viewport(2, 3).map((l) => l.sticky === true)).toEqual([true, false, false])
+    const rows = rowsOf(commits.pendingDelta())
+    expect(rows).toEqual(["A0", "A1", "A2"])
+    expect(rows).not.toContain("❯ GO") // no already-committed row re-emitted
+    expect(commits.pendingDelta()).toEqual([]) // print-once: nothing left
+  })
+
+  it("keeps the pin when the window starts BEFORE the latest user block (no false strip)", () => {
+    const engine = createScrollbackEngine({ width: 80 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    let seq = 0
+    engine.append({ type: "user", text: "GO", seq: seq++, ts: 0 })
+    engine.append({ type: "assistant", text: "A0\nA1", seq: seq++, ts: 0 })
+    // The whole delta is still above the pin point: rows are committed verbatim,
+    // including the user row itself (it is NOT sticky in this window).
+    expect(engine.viewport(0, 3).map((l) => l.sticky === true)).toEqual([false, false, false])
+    expect(rowsOf(commits.pendingDelta())).toEqual(["❯ GO", "A0", "A1"])
+    expect(commits.pendingDelta()).toEqual([])
+  })
+})
+
 // ------------------------------------------------------------------ 3. mode switching
 
 describe("relaunchArgs / parseModeArg — same-session relaunch (spec §1)", () => {

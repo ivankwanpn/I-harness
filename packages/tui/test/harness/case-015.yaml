@@ -85,11 +85,16 @@ steps:
         - ""
         - ""
         - ""
+        # M54 A1: the committed rows are now the ENGINE's rows in order — the
+        # sticky latest-user pin is stripped from the delta (it used to commit
+        # "❯ hello" twice and strand the assistant row). Row COUNT/baseY
+        # unchanged (still 29 rows / baseY 5): the same 5 rows commit, only
+        # their content is corrected (user · system · tool×2 · assistant).
         - "❯ hello"
-        - "❯ hello"
-        - "❯ hello"
+        - "context: workspace ok"
         - "◆  Run read data.txt"
         - "data.txt exists"
+        - "It says hello."
         - ""
         - ""
         - ""
