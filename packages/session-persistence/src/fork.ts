@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, rewindCuts, type SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "./index.ts"
 
 export interface ForkSessionOptions {
@@ -94,5 +94,50 @@ export function completedTurnPrefix(
 
   let cut = boundaryIndex + 1
   while (cut < events.length && events[cut]!.type !== "turn/start") cut++
-  return events.slice(0, cut)
+  const prefix = events.slice(0, cut)
+
+  // M54 A3 (research G5): apply the SAME hidden-region semantics deriveMessages
+  // uses on the source (core-session `rewindCuts`): a rewind/point marker hides
+  // every event whose seq falls in [anchorSeq, markerSeq). The fork seed must
+  // match what the model sees — pre-fix the prefix copied the hidden turns AND
+  // the marker into the child, resurrecting turns the source no longer shows.
+  //
+  // Marker decision (a): DROP the rewind/point markers. The child never had the
+  // rewound turns, so a copied marker would assert a cut window over a region
+  // the child's own log never contained — a phantom cut. `rewindCuts(child)`
+  // must be [] (nothing to hide), not a window pointing at unrelated child
+  // events once the child's own log is renumbered/appended to.
+  //
+  // The child is a FRESH session, so its log must satisfy loadOwned's
+  // seq === index invariant: the kept events are renumbered 0..n-1 and the seq
+  // references the projection reads (compaction summary/reset shadow sets and
+  // session/title messageSeqs) are remapped into the child's coordinates — refs
+  // into the dropped region disappear with the events they named.
+  const cuts = rewindCuts({ formatVersion: CURRENT_FORMAT_VERSION, events: [...events] })
+  const carriesMarker = prefix.some((event) => event.type === "rewind/point")
+  if (cuts.length === 0 && !carriesMarker) return prefix
+  const isHidden = (seq: number | undefined): boolean =>
+    seq !== undefined && cuts.some((window) => window.cutFrom <= seq && seq < window.markerSeq)
+  const kept = prefix.filter((event) => event.type !== "rewind/point" && !isHidden(event.seq))
+  if (kept.length === prefix.length) return prefix
+  const renumbered = new Map<number, number>()
+  for (const [index, event] of kept.entries()) {
+    if (event.seq !== undefined) renumbered.set(event.seq, index)
+  }
+  return kept.map((event, index) => remapSeedEvent(event, index, renumbered))
+}
+
+// M54 A3: renumber one seed event into the child's coordinates, remapping the
+// seq references the projection consumes. A reference into a dropped (hidden)
+// region has no child-side target and is dropped with it.
+function remapSeedEvent(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
+  const remap = (seqs: number[]): number[] =>
+    seqs.flatMap((seq) => {
+      const mapped = renumbered.get(seq)
+      return mapped === undefined ? [] : [mapped]
+    })
+  if (event.type === "compaction/summary") return { ...event, seq: index, shadowedSeqs: remap(event.shadowedSeqs) }
+  if (event.type === "compaction/reset") return { ...event, seq: index, removedSeqs: remap(event.removedSeqs ?? []) }
+  if (event.type === "session/title") return { ...event, seq: index, messageSeqs: remap(event.messageSeqs) }
+  return { ...event, seq: index }
 }
