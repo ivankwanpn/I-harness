@@ -11,13 +11,16 @@
 //   first write when a workspace is configured. Enforcement lives on the
 //   caller surfaces, NOT on the raw file accessors: RewindService.points/
 //   plan/execute call assertWorkspace() and refuse a foreign journal
-//   (REWIND_WORKSPACE_MISMATCH), and every write path goes through
-//   ensureDir(), which refuses to write when the binding differs — so a resume
-//   from another cwd can never restore into the wrong tree. The raw read
-//   accessors (readPoints/readBlob/readPending/readOrphans) are unguarded by
-//   design and assume the caller already checked; recoverPending() guards
-//   itself (it can unlink). A pre-M54 journal has no meta.json: unknown
-//   workspace, kept working and adopted by the first workspace that writes.
+//   (REWIND_WORKSPACE_MISMATCH), and the JOURNAL-writing paths (writePoints/
+//   writeBlob/writePending/appendOrphan) go through ensureDir(), which refuses
+//   to write when the binding differs — so a resume from another cwd can never
+//   restore into the wrong tree. Not every path is guarded, though: the raw
+//   reads (readPoints/readBlob/hasBlob/readMeta/readPending/readOrphans/
+//   readUnresolvedPending) are unguarded by design and assume the caller
+//   already checked, and the direct-unlink writes (clearPending/removeBlob)
+//   skip ensureDir() entirely; recoverPending() guards itself (it can unlink).
+//   A pre-M54 journal has no meta.json: unknown workspace, kept working and
+//   adopted by the first workspace that writes.
 // - pending.json (M54 G2): the durable sidecar of the turn currently being
 //   recorded — written as the recorder takes pre-images, cleared only once the
 //   turn's point is in the journal. A leftover sidecar after a crash is an

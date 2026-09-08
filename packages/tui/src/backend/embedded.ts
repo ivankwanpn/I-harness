@@ -799,7 +799,9 @@ function buildRewindMember(
   const svcFor = async (): Promise<{ svc: RewindService; session: Session }> => {
     const assembly = await ensureAssembly()
     if (assembly.rewind === undefined) {
-      throw new Error("rewind not enabled on this session (assembled without rewindStoreRoot)")
+      throw new Error(
+        "rewind not enabled on this session (the assembly has no rewind handle — no rewindStoreRoot was wired, or the journal is bound to another workspace)",
+      )
     }
     return { svc: new RewindService({ store: assembly.rewind.store, workspace }), session: assembly.session }
   }

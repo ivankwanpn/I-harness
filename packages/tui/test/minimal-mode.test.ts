@@ -526,6 +526,61 @@ describe("M54 A1 — the sticky latest-user pin is never committed", () => {
   })
 })
 
+// --------------------------------------------------- 2d. M55 readDelta guard
+
+describe("M55 — readDelta widening: multi-row pin + defensive termination", () => {
+  const rowsOf = (delta: RegionLine[]): string[] =>
+    delta.map((l) => l.runs.map((r) => r.text).join(""))
+
+  it("a MULTI-ROW sticky pin (wrapped user block) widens over several reads — the real row commits, nothing duplicates", () => {
+    const engine = createScrollbackEngine({ width: 24 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    let seq = 0
+    const long = "W".repeat(160)
+    engine.append({ type: "user", text: long, seq: seq++, ts: 0 })
+    const userRows = engine.lineCount()
+    // The collapsed user header wraps over several display rows at this width,
+    // so the pin is MULTI-ROW — the widening loop must run several rounds.
+    expect(userRows).toBeGreaterThan(3)
+    // The user block itself commits once, in full (all wrapped rows).
+    expect(rowsOf(commits.pendingDelta())).toHaveLength(userRows)
+    expect(commits.pendingDelta()).toEqual([])
+
+    // The next row starts PAST the user block: viewport() pins the whole
+    // multi-row collapsed header (all sticky) and the pin consumes the window.
+    engine.append({ type: "system", text: "ctx", seq: seq++, ts: 0 })
+    expect(engine.viewport(userRows, 1).map((l) => l.sticky === true)).toEqual([true])
+    const delta = rowsOf(commits.pendingDelta())
+    expect(delta).toEqual(["ctx"]) // widened read returns the real row, pin stripped
+    expect(delta.join("\n")).not.toContain("W") // no already-committed pin row re-emitted
+    expect(commits.pendingDelta()).toEqual([]) // print-once: nothing left
+  })
+
+  it("a contract-violating engine whose viewport never grows terminates (no hang)", () => {
+    // A broken engine: viewport() ignores the requested height and always
+    // returns the SAME sticky-pinned window — the widening loop would spin
+    // forever. The read counter turns the pre-guard failure into a fast,
+    // deterministic error instead of a vitest timeout.
+    const rows: DisplayLine[] = [
+      { runs: [{ text: "❯ GO", style: "text" }], blockIndex: 0, sticky: true },
+      { runs: [{ text: "A0", style: "text" }], blockIndex: 1 },
+    ]
+    let reads = 0
+    const engine = {
+      viewport: (): DisplayLine[] => {
+        reads += 1
+        if (reads > 25) throw new Error("readDelta did not terminate (viewport read 25x)")
+        return rows
+      },
+      lineCount: () => 2,
+    }
+    const commits = new MinimalCommits(engine)
+    // Best effort: the real (non-sticky) rows read so far, never a hang.
+    expect(rowsOf(commits.pendingDelta())).toEqual(["A0"])
+    expect(reads).toBe(2) // the guard stops on the first non-growing read
+  })
+})
+
 // ------------------------------------------------------------------ 3. mode switching
 
 describe("relaunchArgs / parseModeArg — same-session relaunch (spec §1)", () => {
