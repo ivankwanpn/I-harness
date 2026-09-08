@@ -316,7 +316,14 @@ describe("M51 B1: retry re-dispatch runs the hook pair exactly once", () => {
   interface BashLike { stdout: string; exitCode: number }
 
   // A tool that times out once (waits for the abort signal) then succeeds.
-  function flakyTimeoutTool(attempts: number[]): Tool<{ x: number }, BashLike> {
+  // M52 L2: also records each attempt's exec.abortSignal — the timeout guard
+  // swaps in a FRESH controller per cascade frame, so a retry that re-enters
+  // the cascade arms a new (non-aborted) signal; a bare tool.execute reuses
+  // the restored upstream (here: undefined).
+  function flakyTimeoutTool(
+    attempts: number[],
+    signals: Array<AbortSignal | undefined>,
+  ): Tool<{ x: number }, BashLike> {
     return {
       name: "flaky",
       description: "",
@@ -324,8 +331,9 @@ describe("M51 B1: retry re-dispatch runs the hook pair exactly once", () => {
       timeoutMs: 30,
       execute: async (_args, exec) => {
         attempts.push(1)
-        const signal = exec.abortSignal!
+        signals.push(exec.abortSignal)
         if (attempts.length <= 1) {
+          const signal = exec.abortSignal ?? new AbortController().signal
           await new Promise<void>((resolve) => {
             if (signal.aborted) resolve()
             else signal.addEventListener("abort", () => resolve(), { once: true })
@@ -363,6 +371,12 @@ process.stdout.write(deny ? JSON.stringify({ block: true, reason: "stateful gate
     mode: "allow" | "deny-second"
     order: "hooks-outer" | "retry-outer"
     attempts: number[]
+    // M52 L2: per-attempt exec.abortSignal (fresh controller ⇔ cascade re-entry).
+    signals: Array<AbortSignal | undefined>
+    // M52 L2: one push per tools/execute cascade ENTRY. A retry that re-enters
+    // the cascade (so the timeout guard re-arms) pushes once per attempt; a
+    // retry that calls tool.execute directly never pushes the second frame.
+    cascadeFrames: number[]
   }): Promise<ReturnType<typeof createToolRegistry>> {
     const script = await counterHandler(opts.dir, opts.counter, opts.mode)
     const sha = await sha256File(script)
@@ -371,8 +385,14 @@ process.stdout.write(deny ? JSON.stringify({ block: true, reason: "stateful gate
       { id: "post", event: "post-tool", type: "command", command: { cmd: process.execPath, args: [script] }, trust: { script, sha256: sha } },
     ])
     const ctx = createContext()
+    // M52 L2: spy cascade handler — counts cascade entries independent of the
+    // retry guard's own re-dispatch bookkeeping.
+    ctx.onCascade("tools/execute", async (_input, next) => {
+      opts.cascadeFrames.push(1)
+      return next()
+    })
     const registry = createToolRegistry(ctx)
-    registry.register(flakyTimeoutTool(opts.attempts))
+    registry.register(flakyTimeoutTool(opts.attempts, opts.signals))
     const retry = (): void => ctx.mount(createRetryGuard(ctx, { maxRetries: 2, initialDelayMs: 1, maxDelayMs: 5 }))
     if (opts.order === "hooks-outer") {
       await createHookRegistry(ctx, { configPath, configDir: opts.dir })
@@ -390,12 +410,23 @@ process.stdout.write(deny ? JSON.stringify({ block: true, reason: "stateful gate
       const dir = await tmpDir()
       const counter = join(dir, "counter.txt")
       const attempts: number[] = []
-      const registry = await setupRetryHooks({ dir, counter, mode: "allow", order, attempts })
+      const signals: Array<AbortSignal | undefined> = []
+      const cascadeFrames: number[] = []
+      const registry = await setupRetryHooks({ dir, counter, mode: "allow", order, attempts, signals, cascadeFrames })
       const result = await registry.execute({ name: "flaky", args: { x: 1 } })
       expect((result.output as BashLike).stdout).toBe("success")
-      // the retry re-entered the cascade (a fresh timeout guard armed the
-      // second attempt) — the fix must not replace this with tool.execute.
+      // M52 L2: attempts=2 alone does not pin the re-dispatch path — a retry
+      // that called tool.execute directly would also run the body twice. Pin
+      // the cascade RE-ENTRY: the spy sees one frame per attempt, and the
+      // second attempt's abortSignal is the timeout guard's freshly armed
+      // controller (attempt 1's was aborted by the timeout).
       expect(attempts.length).toBe(2)
+      expect(cascadeFrames).toHaveLength(2)
+      expect(signals).toHaveLength(2)
+      expect(signals[0]?.aborted).toBe(true)
+      expect(signals[1]).toBeDefined()
+      expect(signals[1]?.aborted).toBe(false)
+      expect(signals[1]).not.toBe(signals[0])
       expect(counterLines(counter).filter((l) => l === "pre-tool")).toHaveLength(1)
       expect(counterLines(counter).filter((l) => l === "post-tool")).toHaveLength(1)
     })
@@ -404,7 +435,9 @@ process.stdout.write(deny ? JSON.stringify({ block: true, reason: "stateful gate
       const dir = await tmpDir()
       const counter = join(dir, "counter.txt")
       const attempts: number[] = []
-      const registry = await setupRetryHooks({ dir, counter, mode: "deny-second", order, attempts })
+      const signals: Array<AbortSignal | undefined> = []
+      const cascadeFrames: number[] = []
+      const registry = await setupRetryHooks({ dir, counter, mode: "deny-second", order, attempts, signals, cascadeFrames })
       const result = await registry.execute({ name: "flaky", args: { x: 1 } })
       expect((result.output as BashLike).stdout).toBe("success")
       expect(attempts.length).toBe(2)

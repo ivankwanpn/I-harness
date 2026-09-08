@@ -196,6 +196,89 @@ describe("session log", () => {
     ])
   })
 
+  it("M52/L3: a mid-step user message does not split the step (text still folds into its calls)", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "task" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_1", name: "bash", args: { command: "x" } })
+    append(s, { type: "tool/result", callId: "call_1", name: "bash", output: { stdout: "x" } })
+    // guard-repeat-tool appends its reminder from agent/post-tool: after the
+    // result, before the step tail's assistant/message.
+    append(s, {
+      type: "user/message",
+      text: "Heads-up: tool \"bash\" has now been called 3 consecutive times",
+      source: { kind: "plugin", plugin: "guard-repeat-tool" },
+    })
+    append(s, { type: "assistant/message", text: "Running it once more." })
+    append(s, { type: "step/end" })
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "task" },
+      // the step's text still folds into its calls message (M51/B2) — the
+      // reminder must not force assistant("",toolCalls) + a trailing text.
+      { role: "assistant", content: "Running it once more.", toolCalls: [{ id: "call_1", name: "bash", args: { command: "x" } }] },
+      { role: "tool", toolCallId: "call_1", content: '{"stdout":"x"}' },
+      { role: "user", content: "Heads-up: tool \"bash\" has now been called 3 consecutive times" },
+    ])
+  })
+
+  it("M52/L3: a text-less step keeps the reminder after its tool result", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "task" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_1", name: "bash", args: { command: "x" } })
+    append(s, { type: "tool/result", callId: "call_1", name: "bash", output: { stdout: "x" } })
+    append(s, { type: "user/message", text: "reminder", source: { kind: "plugin", plugin: "guard-repeat-tool" } })
+    append(s, { type: "step/end" })
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "task" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "bash", args: { command: "x" } }] },
+      { role: "tool", toolCallId: "call_1", content: '{"stdout":"x"}' },
+      { role: "user", content: "reminder" },
+    ])
+  })
+
+  it("M52/L3: a turn boundary closes a dangling step (aborted turn) — no cross-turn deferral", () => {
+    const s = createSession()
+    // Turn 1 aborts mid-tool-block: the loop throws, so no assistant/message
+    // and no step/end ever land (core-agent abort path).
+    append(s, { type: "user/message", text: "do it" })
+    append(s, { type: "step/start" })
+    append(s, { type: "tool/call", callId: "call_1", name: "abort", args: {} })
+    append(s, { type: "tool/result", callId: "call_1", name: "abort", output: {} })
+    // Turn 2 (followup) — the new user/message flushes the dangling block in
+    // place instead of being deferred into it.
+    append(s, { type: "turn/start" })
+    append(s, { type: "user/message", text: "continue" })
+    append(s, { type: "step/start" })
+    append(s, { type: "assistant/message", text: "ok" })
+    append(s, { type: "step/end" })
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "do it" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "abort", args: {} }] },
+      { role: "tool", toolCallId: "call_1", content: "{}" },
+      { role: "user", content: "continue" },
+      { role: "assistant", content: "ok" },
+    ])
+  })
+
+  it("M52/L3: a user message before the step's first tool call stays put", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "task" })
+    append(s, { type: "step/start" })
+    // agent/pre-step plugins append here (after step/start, before tool/call).
+    append(s, { type: "user/message", text: "steer" })
+    append(s, { type: "tool/call", callId: "call_1", name: "bash", args: { command: "x" } })
+    append(s, { type: "tool/result", callId: "call_1", name: "bash", output: { stdout: "x" } })
+    append(s, { type: "assistant/message", text: "ok" })
+    append(s, { type: "step/end" })
+    expect(deriveMessages(s)).toEqual([
+      { role: "user", content: "task" },
+      { role: "user", content: "steer" },
+      { role: "assistant", content: "ok", toolCalls: [{ id: "call_1", name: "bash", args: { command: "x" } }] },
+      { role: "tool", toolCallId: "call_1", content: '{"stdout":"x"}' },
+    ])
+  })
+
   it("keeps tool blocks separate across steps (per-turn folding)", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "task" })
