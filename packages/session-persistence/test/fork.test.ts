@@ -142,6 +142,10 @@ describe("forkSession", () => {
   // the source's model surface (deriveMessages via rewindCuts). The fork seed
   // must match that surface: pre-fix the prefix copied the hidden turn AND the
   // marker into the child, resurrecting turns the source no longer shows.
+  // PRODUCTION ANCHORING: the rewind engine anchors at the hidden turn's FIRST
+  // user/message (rewind/src/types.ts:29-31, assembly.ts:320-323 first-wins),
+  // and core-agent appends turn/start immediately before it (core-agent
+  // index.ts:180-182) — so the raw window excludes the hidden turn's turn/start.
   it("excludes rewind-hidden turns and the rewind marker from the child seed", async () => {
     const { coordinator, cleanup } = await fixture()
     try {
@@ -151,16 +155,18 @@ describe("forkSession", () => {
       append(log, { type: "user/message", text: "one" })                          // 1
       append(log, { type: "assistant/message", text: "answer one" })              // 2
       append(log, { type: "turn/end" })                                           // 3
-      append(log, { type: "turn/start" })                                         // 4 hidden
-      append(log, { type: "user/message", text: "hidden two" })                   // 5 hidden
+      append(log, { type: "turn/start" })                                         // 4 hidden turn start
+      append(log, { type: "user/message", text: "hidden two" })                   // 5 ANCHOR
       append(log, { type: "assistant/message", text: "hidden answer two" })       // 6 hidden
       append(log, { type: "turn/end" })                                           // 7 hidden
-      append(log, { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 4, mode: "all", fileOps: [] }) // 8
+      append(log, { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 5, mode: "all", fileOps: [] }) // 8
       append(log, { type: "turn/start" })                                         // 9
       append(log, { type: "user/message", text: "three" })                        // 10
       append(log, { type: "assistant/message", text: "answer three" })            // 11
       append(log, { type: "turn/end" })                                           // 12
       await coordinator.append("source", log.events)
+      expect(rewindCuts((await coordinator.load("source")).session))
+        .toEqual([{ cutFrom: 5, markerSeq: 8 }])
 
       const result = await forkSession(coordinator, "source")
       expect(result.seedLength).toBe(8)
@@ -182,7 +188,7 @@ describe("forkSession", () => {
 
       // atSeq inside the hidden turn still resolves to the visible prefix:
       // the boundary is the hidden turn's own end, which the cut then drops.
-      const atHidden = await forkSession(coordinator, "source", { atSeq: 5 })
+      const atHidden = await forkSession(coordinator, "source", { atSeq: 6 })
       expect(atHidden.seedLength).toBe(4)
       expect((await coordinator.load(atHidden.sessionId)).session.events.map((event) => event.seq))
         .toEqual([0, 1, 2, 3])
@@ -191,31 +197,78 @@ describe("forkSession", () => {
     }
   })
 
-  it("renumbers the seed and remaps seq references when a cut drops events", () => {
+  it("does not leave an orphan turn/start when the hidden turn is the log tail", async () => {
+    const { coordinator, cleanup } = await fixture()
+    try {
+      await coordinator.create({ sessionId: "source" })
+      const log = createSession()
+      append(log, { type: "turn/start" })                                     // 0
+      append(log, { type: "user/message", text: "one" })                       // 1
+      append(log, { type: "assistant/message", text: "answer one" })           // 2
+      append(log, { type: "turn/end" })                                        // 3
+      append(log, { type: "turn/start" })                                      // 4 hidden turn start
+      append(log, { type: "user/message", text: "hidden two" })                // 5 ANCHOR
+      append(log, { type: "assistant/message", text: "hidden answer two" })    // 6 hidden
+      append(log, { type: "turn/end" })                                        // 7 hidden
+      append(log, { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 5, mode: "all", fileOps: [] }) // 8
+      await coordinator.append("source", log.events)
+
+      const result = await forkSession(coordinator, "source")
+      expect(result.seedLength).toBe(4)
+      const child = (await coordinator.load(result.sessionId)).session
+      // No orphan trailing turn/start (which repairTurnTail would close with a
+      // synthetic turn/end, rewriting the child's file on the next loadOwned).
+      expect(child.events.map((event) => event.type))
+        .toEqual(["turn/start", "user/message", "assistant/message", "turn/end"])
+      expect(child.events.map((event) => event.seq)).toEqual([0, 1, 2, 3])
+      expect((await coordinator.loadOwned(result.sessionId)).session.events
+        .map((event) => event.type))
+        .toEqual(["turn/start", "user/message", "assistant/message", "turn/end"])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it("keeps compaction markers (shadowing survives) and remaps seq references", () => {
     const events: SessionEvent[] = [
       { type: "turn/start", seq: 0 },
       { type: "user/message", text: "one", seq: 1 },
       { type: "assistant/message", text: "answer one", seq: 2 },
       { type: "turn/end", seq: 3 },
-      { type: "turn/start", seq: 4 },                                    // hidden
-      { type: "user/message", text: "hidden two", seq: 5 },              // hidden
-      { type: "compaction/summary", text: "sum", shadowedSeqs: [5], seq: 6 }, // hidden
-      { type: "turn/end", seq: 7 },                                      // hidden
-      { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 4, mode: "all", fileOps: [], seq: 8 },
-      { type: "session/title", title: "T", messageSeqs: [1, 5], source: "provider", seq: 9 },
-      { type: "turn/start", seq: 10 },
-      { type: "user/message", text: "three", seq: 11 },
-      { type: "compaction/reset", removedSeqs: [5, 11], seq: 12 },
-      { type: "turn/end", seq: 13 },
+      { type: "turn/start", seq: 4 },                                                   // hidden turn start
+      { type: "user/message", text: "hidden two", seq: 5 },                             // ANCHOR
+      { type: "compaction/summary", text: "in-window sum", shadowedSeqs: [1], seq: 6 }, // IN-WINDOW: kept
+      { type: "assistant/message", text: "hidden answer two", seq: 7 },
+      { type: "turn/end", seq: 8 },
+      { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 5, mode: "all", fileOps: [], seq: 9 },
+      { type: "session/title", title: "T", messageSeqs: [1, 5], source: "provider", seq: 10 },
+      { type: "compaction/summary", text: "kept sum", shadowedSeqs: [2, 5], seq: 11 },
+      { type: "turn/start", seq: 12 },
+      { type: "user/message", text: "three", seq: 13 },
+      { type: "compaction/reset", removedSeqs: [5, 13], seq: 14 },
+      { type: "turn/end", seq: 15 },
     ]
     const prefix = completedTurnPrefix(events, "source", undefined)
-    expect(prefix.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+    expect(prefix.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     expect(prefix.map((event) => event.type)).toEqual([
       "turn/start", "user/message", "assistant/message", "turn/end",
-      "session/title", "turn/start", "user/message", "compaction/reset", "turn/end",
+      "compaction/summary", "session/title", "compaction/summary",
+      "turn/start", "user/message", "compaction/reset", "turn/end",
     ])
+    // An in-window compaction marker is NOT dropped: its shadow set still
+    // covers kept seqs (a rewind never un-shadows compaction's removed seqs).
+    expect((prefix[4] as { shadowedSeqs: number[] }).shadowedSeqs).toEqual([1])
     // refs into the dropped region are dropped; refs to kept events shift.
-    expect((prefix[4] as { messageSeqs: number[] }).messageSeqs).toEqual([1])
-    expect((prefix[7] as { removedSeqs: number[] }).removedSeqs).toEqual([6])
+    expect((prefix[5] as { messageSeqs: number[] }).messageSeqs).toEqual([1])
+    expect((prefix[6] as { shadowedSeqs: number[] }).shadowedSeqs).toEqual([2])
+    expect((prefix[9] as { removedSeqs: number[] }).removedSeqs).toEqual([8])
+
+    // A marker anchored at the turn/start itself (not emitted by the engine,
+    // but a valid rewindCuts input) must not extend back into the PREVIOUS
+    // turn — both anchor shapes drop the same hidden turn.
+    const atTurnStart = events.map((event) =>
+      event.type === "rewind/point" ? { ...event, anchorSeq: 4 } : event)
+    expect(completedTurnPrefix(atTurnStart, "source", undefined).map((event) => event.seq))
+      .toEqual(prefix.map((event) => event.seq))
   })
 })
