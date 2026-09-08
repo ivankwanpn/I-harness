@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
+import { existsSync, readFileSync } from "node:fs"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
+import { createRetryGuard } from "@i-harness/guard-retry"
+import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import {
   HookBlockedError,
   HookConfigError,
@@ -302,4 +305,110 @@ describe("hooks end-to-end (agent + hooks + tools)", () => {
     const result = await agent.run("do it")
     expect(result.finalText).toBe("Report: read done")
   })
+})
+
+// M51 B1: guard-retry RE-DISPATCHES through the tools/execute cascade, so the
+// hooks cascade handler used to run its pre/post-tool pair once per attempt.
+// The contract is exactly one pair per logical call, independent of retry
+// count and mount order — while the retry still re-enters the cascade (the
+// timeout guard must re-arm; a direct tool.execute would break that).
+describe("M51 B1: retry re-dispatch runs the hook pair exactly once", () => {
+  interface BashLike { stdout: string; exitCode: number }
+
+  // A tool that times out once (waits for the abort signal) then succeeds.
+  function flakyTimeoutTool(attempts: number[]): Tool<{ x: number }, BashLike> {
+    return {
+      name: "flaky",
+      description: "",
+      inputSchema: { type: "object", properties: { x: { type: "number" } }, required: ["x"] },
+      timeoutMs: 30,
+      execute: async (_args, exec) => {
+        attempts.push(1)
+        const signal = exec.abortSignal!
+        if (attempts.length <= 1) {
+          await new Promise<void>((resolve) => {
+            if (signal.aborted) resolve()
+            else signal.addEventListener("abort", () => resolve(), { once: true })
+          })
+          return { stdout: "partial", exitCode: -1 }
+        }
+        return { stdout: "success", exitCode: 0 }
+      },
+    }
+  }
+
+  /** A handler that appends IH_HOOK_EVENT to a counter file; "deny-second"
+   * blocks every pre-tool invocation after the first (a stateful gate). */
+  async function counterHandler(dir: string, counter: string, mode: "allow" | "deny-second"): Promise<string> {
+    return writeHandler(dir, "counter.cjs", `
+const fs = require("fs")
+const counter = ${JSON.stringify(counter)}
+const event = process.env.IH_HOOK_EVENT
+const seen = fs.existsSync(counter) ? fs.readFileSync(counter, "utf8").split("\\n").filter(Boolean) : []
+fs.appendFileSync(counter, event + "\\n")
+const deny = ${JSON.stringify(mode)} === "deny-second" && event === "pre-tool" && seen.filter((l) => l === "pre-tool").length >= 1
+process.stdout.write(deny ? JSON.stringify({ block: true, reason: "stateful gate: already allowed once" }) : "{}")
+`)
+  }
+
+  function counterLines(counter: string): string[] {
+    return existsSync(counter) ? readFileSync(counter, "utf8").split("\n").filter((l) => l !== "") : []
+  }
+
+  // Registration order = cascade order (first-registered OUTERMOST); the
+  // timeout guard is always innermost so retry observes the TOOL_TIMEOUT.
+  async function setupRetryHooks(opts: {
+    dir: string
+    counter: string
+    mode: "allow" | "deny-second"
+    order: "hooks-outer" | "retry-outer"
+    attempts: number[]
+  }): Promise<ReturnType<typeof createToolRegistry>> {
+    const script = await counterHandler(opts.dir, opts.counter, opts.mode)
+    const sha = await sha256File(script)
+    const configPath = await configWith(opts.dir, [
+      { id: "pre", event: "pre-tool", type: "command", command: { cmd: process.execPath, args: [script] }, trust: { script, sha256: sha } },
+      { id: "post", event: "post-tool", type: "command", command: { cmd: process.execPath, args: [script] }, trust: { script, sha256: sha } },
+    ])
+    const ctx = createContext()
+    const registry = createToolRegistry(ctx)
+    registry.register(flakyTimeoutTool(opts.attempts))
+    const retry = (): void => ctx.mount(createRetryGuard(ctx, { maxRetries: 2, initialDelayMs: 1, maxDelayMs: 5 }))
+    if (opts.order === "hooks-outer") {
+      await createHookRegistry(ctx, { configPath, configDir: opts.dir })
+      retry()
+    } else {
+      retry()
+      await createHookRegistry(ctx, { configPath, configDir: opts.dir })
+    }
+    ctx.mount(createTimeoutGuard(ctx))
+    return registry
+  }
+
+  for (const order of ["hooks-outer", "retry-outer"] as const) {
+    it(`pre-tool/post-tool run exactly once across a retry (${order})`, async () => {
+      const dir = await tmpDir()
+      const counter = join(dir, "counter.txt")
+      const attempts: number[] = []
+      const registry = await setupRetryHooks({ dir, counter, mode: "allow", order, attempts })
+      const result = await registry.execute({ name: "flaky", args: { x: 1 } })
+      expect((result.output as BashLike).stdout).toBe("success")
+      // the retry re-entered the cascade (a fresh timeout guard armed the
+      // second attempt) — the fix must not replace this with tool.execute.
+      expect(attempts.length).toBe(2)
+      expect(counterLines(counter).filter((l) => l === "pre-tool")).toHaveLength(1)
+      expect(counterLines(counter).filter((l) => l === "post-tool")).toHaveLength(1)
+    })
+
+    it(`a stateful pre-tool gate is not re-run by the retry (${order})`, async () => {
+      const dir = await tmpDir()
+      const counter = join(dir, "counter.txt")
+      const attempts: number[] = []
+      const registry = await setupRetryHooks({ dir, counter, mode: "deny-second", order, attempts })
+      const result = await registry.execute({ name: "flaky", args: { x: 1 } })
+      expect((result.output as BashLike).stdout).toBe("success")
+      expect(attempts.length).toBe(2)
+      expect(counterLines(counter).filter((l) => l === "pre-tool")).toHaveLength(1)
+    })
+  }
 })

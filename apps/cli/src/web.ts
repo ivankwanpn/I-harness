@@ -355,17 +355,19 @@ function appendCommandEvents(executor: SessionService, sessionId: string, name: 
  * (user settings model row > profile.modelContexts[modelId] >
  * profile.contextWindow > undefined). Resolved against the SESSION tier
  * (meta.modelSelection) when present — the web path registers per session.
- * Unknown (unconfigured / no registry entry) → undefined → get_context_remaining
- * fails closed (not registered). */
+ * M51 P1: the user row is the TOP tier and is profile-INDEPENDENT — with no
+ * registry entry (the web amendment's normal settings-managed shape) the row
+ * still resolves; only a spec with neither profile nor user row is unknown →
+ * undefined → get_context_remaining fails closed (not registered). */
 export function sessionContextWindow(opts: WebServerOptions, meta?: SessionMeta): number | undefined {
   const { spec } = resolveModelSpec(opts, meta)
   if (spec === "") return undefined
   const [providerName, modelId] = spec.split(":")
-  const profile = opts.providerRegistry?.get(providerName)
-  if (profile === undefined) return undefined
   const userModel = opts.settings
     ?.get().llm.providers[providerName]?.models
     ?.find((m) => m.id === modelId)
+  const profile = opts.providerRegistry?.get(providerName)
+  if (profile === undefined) return userModel?.contextWindow
   return resolveEffectiveModelContext({ profile, modelId, userModel })?.contextWindow
 }
 
@@ -447,7 +449,10 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     // M31 T3: per-session window knowledge — resolved at each assembly build
     // from the session's modelSelection through the unified chain (M27-R-A8
     // value was the static default chain; per-session selection now wins).
-    contextWindowFor: (_sessionId, meta) => sessionContextWindow(opts, meta),
+    // M51 P1: resolve through THIS composition's settings/registry — the raw
+    // opts may omit both (the CLI web path does), which would silently skip the
+    // user settings row.
+    contextWindowFor: (_sessionId, meta) => sessionContextWindow({ ...opts, settings, providerRegistry }, meta),
     // M32 T3: per-session reasoning effort — session.meta.modelSelection
     // .reasoningEffort (a string passthrough; type-cast to the effort union —
     // the adapter's translateReasoning owns the wire vocabulary, and an

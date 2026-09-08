@@ -150,6 +150,52 @@ describe("repairTurnTail through coordinator.load()", () => {
     }
   })
 
+  // M51 B5: load() and loadOwned() disagreed on the repaired shape — load()
+  // returned [0,1,2,undefined,undefined,undefined] while loadOwned() returned
+  // [0..5]. load() must canonicalize UNDEFINED seqs to the array index in
+  // memory (web-host pagination folds undefined seqs to 0 and drops the tail).
+  it("M51 B5: load() canonicalizes undefined seqs to the array index", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-load-seq-"))
+    const sessionId = "sess-load-seq"
+    try {
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ type: "turn/start", seq: 0 }),
+        JSON.stringify({ type: "step/start", seq: 1 }),
+        JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: { cmd: "echo hi" }, seq: 2 }),
+        "",
+      ].join("\n"), "utf8")
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { session } = await coordinator.load(sessionId)
+      expect(session.events.map((event) => event.seq)).toEqual(session.events.map((_, index) => index))
+      expect(session.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // The fix must NOT adopt loadOwned()'s strict invariant: a non-positional
+  // ESTABLISHED sequence (referenced by shadowedSeqs) still loads, and DEFINED
+  // seqs are never renumbered.
+  it("M51 B5: load() never renumbers DEFINED seqs (non-positional log still loads)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-load-nonpos-"))
+    const sessionId = "sess-load-nonpos"
+    try {
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ type: "user/message", text: "hidden", seq: 0 }),
+        JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
+        "",
+      ].join("\n"), "utf8")
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const { session } = await coordinator.load(sessionId)
+      expect(session.events.map((event) => event.seq)).toEqual([0, 20])
+      expect((session.events[1] as { shadowedSeqs?: number[] }).shadowedSeqs).toEqual([0])
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it("loadOwned durably canonicalizes crash recovery before continuation", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ih-repair-owned-"))
     const sessionId = "sess-owned-repair"

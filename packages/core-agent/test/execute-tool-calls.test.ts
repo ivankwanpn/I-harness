@@ -146,6 +146,63 @@ describe("executeToolCalls scheduler", () => {
     expect(aborted[0]).toMatchObject({ callId: "c1" })
   })
 
+  // M51 B3: the abort drain used to stall the head-of-line cursor on the
+  // failed slot, so a sibling that had ALREADY settled successfully never got
+  // a tool/result (the next turn then projected a tool_use with no
+  // tool_result). The abort path fills the failed slot synthetically so the
+  // cursor advances and the settled sibling commits its REAL output.
+  it("M51 B3: abort commits a settled sibling's real result by filling the failed slot", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const ac = new AbortController()
+    const postTool: { name: string; output: unknown }[] = []
+    const postExecute: { name: string; output: unknown }[] = []
+    ctx.on("agent/post-tool", (payload) => { postTool.push(payload as { name: string; output: unknown }) })
+    ctx.on("tools/post-execute", (payload) => { postExecute.push(payload as { name: string; output: unknown }) })
+    tools.register({
+      name: "failingTool",
+      description: "fails after the sibling settled",
+      inputSchema: {},
+      isConcurrencySafe: true,
+      execute: async () => {
+        await new Promise((r) => setTimeout(r, 40)) // the sibling settles first
+        ac.abort()
+        throw new Error("aborted by signal")
+      },
+    })
+    tools.register({
+      name: "okTool",
+      description: "settles before the abort",
+      inputSchema: {},
+      isConcurrencySafe: true,
+      execute: async () => {
+        await new Promise((r) => setTimeout(r, 5))
+        return { ok: "real-sibling-output" }
+      },
+    })
+    await expect(
+      executeToolCalls(ctx, session, tools, [
+        { callId: "c1", name: "failingTool", args: {} },
+        { callId: "c2", name: "okTool", args: {} },
+      ], { maxParallel: 2, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+    const results = session.events.filter((e) => e.type === "tool/result") as {
+      callId: string
+      name: string
+      output: unknown
+    }[]
+    // model order: the synthetic failure for c1 advances the cursor, c2's real
+    // settled output commits — no orphaned tool/call remains.
+    expect(results.map((r) => r.callId)).toEqual(["c1", "c2"])
+    expect(results[1]!.output).toEqual({ ok: "real-sibling-output" })
+    expect(results[0]!.output).toMatchObject({ error: "aborted by signal" })
+    // the synthetic fill must NOT run finalize (tools/post-execute) and must
+    // NOT emit agent/post-tool (M10a: post-tool only for completed dispatches).
+    expect(postExecute).toEqual([{ name: "okTool", output: { ok: "real-sibling-output" } }])
+    expect(postTool).toEqual([])
+  })
+
   it("runs the staged finalize (post-execute) seam on the parallel path in model order", async () => {
     const ctx = createContext()
     const session = createSession()

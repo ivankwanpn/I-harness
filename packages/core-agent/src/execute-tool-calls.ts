@@ -46,7 +46,10 @@ export interface ExecuteToolCallsOptions {
 // rethrow the first error — NO fabricated results for unstarted calls.
 // Abort: stop starting, drain started (commit what settled in model order),
 // synthesize TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls,
-// then throw "agent aborted". Abort dominates a coincident failure.
+// then throw "agent aborted". Abort dominates a coincident failure. M51 B3:
+// a STARTED slot whose dispatch failed also gets a synthetic failure fill
+// (no finalize / no agent/post-tool) so an already-settled sibling commits
+// its REAL result instead of being orphaned behind the failed slot.
 export async function executeToolCalls(
   ctx: PluginContext,
   session: Session,
@@ -55,7 +58,12 @@ export async function executeToolCalls(
   opts: ExecuteToolCallsOptions,
 ): Promise<void> {
   interface Slot { name: string; callId: string; prepared: PreparedCall; output: unknown }
-  const slots: (Slot | undefined)[] = batch.map(() => undefined)
+  // M51 B3: the abort path fills a STARTED slot whose dispatch never produced
+  // an output (it threw) with a synthetic failure. It deliberately carries no
+  // PreparedCall — the commit lane appends it WITHOUT running finalize
+  // (tools/post-execute) or agent/post-tool (M10a ordering ruling).
+  interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true }
+  const slots: ((Slot | SyntheticSlot) | undefined)[] = batch.map(() => undefined)
   const inFlight = new Map<number, Promise<number>>()
   let startedUpTo = 0 // next batch index that has NOT started (never-started boundary)
   let committed = 0
@@ -69,6 +77,14 @@ export async function executeToolCalls(
       const slot = slots[committed]
       if (slot === undefined) break
       const call = batch[committed]!
+      if ("synthetic" in slot) {
+        // M51 B3: an abort fill whose output is already decided — append only,
+        // so the head-of-line cursor advances in model order without running
+        // finalize (tools/post-execute) or agent/post-tool.
+        append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: slot.output })
+        committed += 1
+        continue
+      }
       // finalize runs in the ordered commit lane (post-execute + wrap) — the
       // parallel path must not skip the staged post-execute seam.
       const finalized = await tools.finalize(slot.prepared, slot.output)
@@ -173,6 +189,20 @@ export async function executeToolCalls(
     // or the "agent aborted" throw — the turn is aborting regardless. The
     // NON-abort path keeps its throw (it flows into `firstError` via the outer
     // try → drain + rethrow, which is the correct throw-fails-turn behavior).
+    // M51 B3: every STARTED slot that produced no output failed; leaving it
+    // undefined stalled the head-of-line cursor forever, so a sibling that had
+    // already settled successfully never got a tool/result. Fill each with a
+    // synthetic failure (the first error's message) so the cursor advances and
+    // the settled siblings commit their REAL outputs in model order. Abort
+    // path ONLY — the non-abort failure path still discards (M13).
+    const failureMessage = firstError instanceof Error
+      ? firstError.message
+      : firstError === undefined ? "tool call aborted before dispatch" : String(firstError)
+    for (let i = committed; i < startedUpTo; i += 1) {
+      if (slots[i] !== undefined) continue
+      const call = batch[i]!
+      slots[i] = { name: call.name, callId: call.callId, synthetic: true, output: { error: failureMessage } }
+    }
     try {
       await commitReady()
     } catch {

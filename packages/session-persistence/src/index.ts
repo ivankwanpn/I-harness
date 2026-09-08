@@ -459,7 +459,15 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
         const guarded = guardIgnorable(events)
         const migrated = await migrate(version, guarded)
         const repairedTail = repairTurnTail(migrated)
-        return { session: buildSession(meta, repairedTail) }
+        // M51 B5: canonicalize UNDEFINED seqs to their array index (in-memory
+        // only — load() stays read-only) so load() agrees with loadOwned() for
+        // the repair shape. DEFINED seqs are never renumbered (shadowedSeqs /
+        // rewind / messageSeqs references must stay valid) and this is NOT
+        // loadOwned's strict invariant check — a non-positional established log
+        // still loads.
+        const canonical = repairedTail.map((event, index): SessionEvent =>
+          event.seq === undefined ? { ...event, seq: index } : event)
+        return { session: buildSession(meta, canonical) }
       })
     },
     async loadOwned(sessionId) {
