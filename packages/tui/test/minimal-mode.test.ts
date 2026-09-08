@@ -374,6 +374,44 @@ describe("M51 T1 — commit cursor re-anchors after an engine shrink", () => {
     expect(commits.pendingDelta()).toEqual([]) // nothing left (print-once)
   })
 
+  it("M52 L1: a clamp that stops the trim short reports the NET shrink (no re-emitted rows)", () => {
+    const engine = createScrollbackEngine({ width: 80 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    const seq = { n: 0 }
+    fill2100(engine, seq) // 7 closed 300-row assistant blocks
+    // A RUNNING tool block is mutable, so retain()'s horizon clamps back to it
+    // even though the budget walk wanted to stop at the tail — the trim keeps
+    // [tool, assistant, user, tail], and `kept` (the walk's count) no longer
+    // describes what actually stays.
+    engine.append({ type: "tool", callId: "t1", name: "bash", kind: "execute", status: "running", seq: seq.n++, ts: 0 })
+    engine.append({
+      type: "assistant",
+      text: Array.from({ length: 100 }, (_, i) => `MID-${i}`).join("\n"),
+      seq: seq.n++, ts: 0,
+    })
+    expect(engine.lineCount()).toBe(2201)
+    expect(commits.pendingDelta()).toHaveLength(2201) // committed through MID-99
+
+    engine.append({ type: "user", text: "GO", seq: seq.n++, ts: 0 })
+    engine.append({
+      type: "assistant",
+      text: Array.from({ length: 1600 }, (_, i) => `BIG-${i}`).join("\n"),
+      seq: seq.n++, ts: 0,
+    })
+    expect(engine.lineCount()).toBe(3802)
+    expect(engine.retain!({ maxLines: 1500 }).trimmedBlocks).toBeGreaterThan(0)
+    expect(engine.lineCount()).toBe(1703) // net −2099 (NOT the walk's −2201)
+
+    // The committed prefix maps to display rows [0, 102): marker + the running
+    // tool row + MID-0..MID-99. Cursor 2201 → 102; reporting the walk's `kept`
+    // would over-state the shrink by 102, drop the cursor to the max(1, …)
+    // floor and re-emit the tool + MID rows (print-once violation).
+    const rows = rowsOf(commits.pendingDelta())
+    expect(rows).toEqual(["❯ GO", ...Array.from({ length: 1600 }, (_, i) => `BIG-${i}`)])
+    expect(rows.some((r) => r.includes("MID-"))).toBe(false)
+    expect(commits.pendingDelta()).toEqual([]) // nothing left
+  })
+
   it("rewind: the cursor re-anchors and the new turn commits from its first row", () => {
     const engine = createScrollbackEngine({ width: 80 })
     const commits = new MinimalCommits(engine, { now: () => 0 })
