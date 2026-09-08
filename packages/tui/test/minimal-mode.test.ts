@@ -412,6 +412,51 @@ describe("M51 T1 — commit cursor re-anchors after an engine shrink", () => {
     expect(commits.pendingDelta()).toEqual([]) // nothing left
   })
 
+  it("M52 L1: a SECOND retain (previous marker) reports the true net shrink — first tail row not dropped", () => {
+    // The marker row is part of the display total but NOT of sumBefore(): with
+    // a previous retain (cur > 0) the net shrink is `suppressed` (the old
+    // marker is absorbed), not `suppressed - 1`. This is the normal path —
+    // maybeAutoRetain re-fires on every resize once the session is trimmed.
+    const engine = createScrollbackEngine({ width: 80 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    const seq = { n: 0 }
+    fill2100(engine, seq)
+    expect(commits.pendingDelta()).toHaveLength(2100) // committed
+    expect(engine.retain!({ maxLines: 1500 }).trimmedBlocks).toBe(3) // retain #1 (cur = 0)
+    expect(engine.lineCount()).toBe(1501) // marker + blocks 3..13
+    expect(commits.idleFlushDue(1000)).toBe(false) // cursor = 1501 (fully committed)
+
+    // Grow past the budget again: 7 more closed 300-row blocks → 3601.
+    for (let b = 7; b < 14; b++) {
+      const text = Array.from({ length: 300 }, (_, i) => `S${b}-${i}`).join("\n")
+      engine.append({ type: "assistant", text, seq: seq.n++, ts: 0 })
+      engine.append({ type: "turn", phase: "end", seq: seq.n++, ts: 0 })
+    }
+    expect(engine.lineCount()).toBe(3601)
+    expect(commits.pendingDelta()).toHaveLength(2100) // committed → cursor 3601
+
+    // The uncommitted tail: an OPEN assistant block (200 rows).
+    engine.append({
+      type: "assistant",
+      text: Array.from({ length: 200 }, (_, i) => `T1-${i}`).join("\n"),
+      seq: seq.n++, ts: 0,
+    })
+    expect(engine.lineCount()).toBe(3801)
+
+    // retain #2 (cur = 3): blocks 3..18 (2400 rows) collapse into the marker —
+    // 3801 → 1401, an ACTUAL shrink of 2400 == suppressed (the previous marker
+    // is absorbed, so it is NOT `suppressed - 1`).
+    expect(engine.retain!({ maxLines: 1500 }).trimmedBlocks).toBe(16)
+    expect(engine.lineCount()).toBe(1401)
+
+    // Cursor 3601 → 1201 (marker + blocks 19..27). Reporting `suppressed - 1`
+    // would start at 1202 and silently DROP the first uncommitted row.
+    const rows = rowsOf(commits.pendingDelta())
+    expect(rows[0]).toBe("T1-0")
+    expect(rows).toEqual(Array.from({ length: 200 }, (_, i) => `T1-${i}`))
+    expect(commits.pendingDelta()).toEqual([]) // nothing left
+  })
+
   it("rewind: the cursor re-anchors and the new turn commits from its first row", () => {
     const engine = createScrollbackEngine({ width: 80 })
     const commits = new MinimalCommits(engine, { now: () => 0 })

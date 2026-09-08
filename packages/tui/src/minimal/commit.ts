@@ -14,8 +14,8 @@ import type { RegionLine } from "./contracts.ts"
 export interface CommitEngine {
   viewport(offset: number, height: number): DisplayLine[]
   lineCount(): number
-  /** M52 L1: cumulative NET rows removed by retain()'s FRONT trim (OPTIONAL —
-   * engines without the member never shrink that way). */
+  /** M52 L1: cumulative reduction of the display TOTAL from retain()'s FRONT
+   * trim (OPTIONAL — engines without the member never shrink that way). */
   trimmedLines?(): number
 }
 
