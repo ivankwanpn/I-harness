@@ -51,10 +51,13 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
   /** M43: block index of the LAST rewind marker row (`Rewound to turn {N}`)
    * — the dim-from anchor. -1 = no rewind yet. */
   private rewindMarkerBlock: number = -1
-  /** M52 L1: cumulative NET display rows removed by retain() (suppressed rows
-   * minus the single marker row). Monotonic (retain never re-expands) and
-   * deliberately NOT reset by reset(): the consumer tracks the DELTA, and a
-   * reset shrink re-anchors through the cursor's own shrink path. */
+  /** M52 L1: cumulative reduction of the engine's display TOTAL caused by
+   * retain()'s front trim — the trimmedLines() signal. A FIRST trim reports
+   * `suppressed - 1` (suppressed rows → 1 marker row); every LATER trim also
+   * absorbs the previous marker row (net `suppressed`) — see retain(). Monotonic
+   * (retain never re-expands) and deliberately NOT reset by reset(): the
+   * consumer tracks the DELTA, and a reset shrink re-anchors through the
+   * cursor's own shrink path. */
   private trimmedLineTotal: number = 0
 
   constructor(opts: ScrollbackEngineOptions = {}) {

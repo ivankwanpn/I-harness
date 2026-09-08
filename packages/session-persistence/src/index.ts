@@ -212,6 +212,13 @@ registerEventType("subagent/end")
 registerEventType("reasoning")
 registerEventType("command/run")
 registerEventType("command/done")
+// M42: the rewind engine's durable conversation marker (core-session union
+// member, `packages/core-session/src/index.ts:128`). M53 G1: without this the
+// load gate refuses every session that has had a rewind applied — TUI resume,
+// CLI headless --resume, --attach (session/history) and fork all fail with
+// SessionFormatUnsupportedError. NOT `ignorable: true`: load() drops ignorable
+// events, which would silently resurrect the rewound turns (probe D2).
+registerEventType("rewind/point")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
