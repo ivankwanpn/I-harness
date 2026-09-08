@@ -7,6 +7,7 @@ export type RewindErrorCode =
   | "REWIND_BLOB_MISSING" // referenced pre-image blob does not exist in the store
   | "REWIND_STORE_CORRUPT" // points.jsonl parse failure (malformed line)
   | "REWIND_TARGET_INVALID" // plan/execute target turn index out of range
+  | "REWIND_WORKSPACE_MISMATCH" // journal bound to another workspace (meta.json)
   | "REWIND_INVALID" // anything else structurally wrong (sessionId, blob id, truncate count)
 
 export class RewindError extends Error {

@@ -34,6 +34,70 @@ export interface RewindPoint {
   files: RewindFileRecord[]
 }
 
+/**
+ * M54 G2: one pre-image captured while a turn is still in flight.
+ */
+export interface RewindPendingEntry {
+  /** Workspace-relative normalized key (same shape as RewindFileRecord.path). */
+  path: string
+  /** sha256 of the pre-image; null when the file did not exist (new file). */
+  blobId: string | null
+  isNewFile: boolean
+}
+
+/**
+ * M54 G2: the durable sidecar of a turn that is still being recorded
+ * (`rewind/<sessionId>/pending.json`). Written as the recorder takes
+ * pre-images (blob first, then this record) and cleared only once the turn's
+ * point is in the journal. A leftover sidecar after a crash is an UNFINISHED
+ * turn: recovery archives it as an orphan — it is never fabricated into a
+ * point and its pre-images are never auto-restored.
+ */
+export interface RewindPendingTurn {
+  version: 1
+  anchorSeq: number
+  promptPreview: string
+  /** Epoch ms of begin() — informational. */
+  startedAt: number
+  entries: RewindPendingEntry[]
+}
+
+/**
+ * M54 G2: a leftover pending turn archived by recoverPending() into
+ * `rewind/<sessionId>/orphaned.jsonl` (logically append-only — repeated
+ * crashes each keep their own record; the file is rewritten atomically and
+ * never truncated).
+ */
+export interface RewindOrphanRecord extends RewindPendingTurn {
+  /** Epoch ms when recovery archived it. */
+  recoveredAt: number
+}
+
+/**
+ * M54 G2: the plan-facing view of a crashed/unfinished turn. `files` are the
+ * paths it touched; the pre-image blobs may still be in the store for a
+ * MANUAL restore — the engine never applies them itself.
+ */
+export interface RewindOrphanedTurn {
+  anchorSeq: number
+  promptPreview: string
+  files: string[]
+  /** Absent when the sidecar is still in place (recovery has not run yet). */
+  recoveredAt?: number
+}
+
+/**
+ * M54 G3: `rewind/<sessionId>/meta.json` — the journal's workspace binding.
+ * Written on the store's first write when a workspace is configured; a
+ * pre-M54 journal without it stays readable (unknown workspace) and is
+ * adopted by the first workspace that writes.
+ */
+export interface RewindWorkspaceMeta {
+  version: 1
+  /** Absolute workspace root the journal's relative paths resolve against. */
+  workspace: string
+}
+
 export type RewindMode = "all" | "files" | "conversation"
 
 /** One file operation execute() would perform (or performed). */
@@ -76,6 +140,11 @@ export interface RewindPlan {
   conflicts: ConflictOp[]
   unTracked: string[]
   ops: FileOp[]
+  /** M54 G2: crashed/unfinished turns the journal still knows about (durable
+   * pending sidecars + archived orphans). Their paths are also merged into
+   * `unTracked`; no op is ever fabricated for them (honest, manual-only
+   * recovery). Absent when there is nothing to report. */
+  orphanedTurns?: RewindOrphanedTurn[]
 }
 
 export interface RewindPointSummary {

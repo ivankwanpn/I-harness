@@ -113,7 +113,9 @@ export interface AssemblyOptions {
    * which keys the storage dir `rewind/<sessionId>/`) the assembly creates the
    * RewindStore + RewindRecorder, subscribes user/message → begin / turn/end →
    * finalize, and injects the pre-image sink into the fs write tools. Absent →
-   * rewind is entirely off (pre-M42 behavior, zero cost). */
+   * rewind is entirely off (pre-M42 behavior, zero cost). M54: the store is
+   * bound to `workspace` (meta.json) and a turn that crashed mid-flight is
+   * recovered as an honest orphan at creation. */
   rewindStoreRoot?: string
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
@@ -263,7 +265,31 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let rewindStore: RewindStore | undefined
   let rewindRecorder: RewindRecorder | undefined
   if (opts.rewindStoreRoot !== undefined && opts.sessionId !== undefined) {
-    rewindStore = new RewindStore({ root: opts.rewindStoreRoot, sessionId: opts.sessionId })
+    rewindStore = new RewindStore({ root: opts.rewindStoreRoot, sessionId: opts.sessionId, workspace: opts.workspace })
+    // M54 G3: verify the journal's workspace binding. A mismatch must NOT
+    // block the session (the conversation is not the rewind journal) — it is
+    // warned here and every rewind surface op fails closed
+    // (REWIND_WORKSPACE_MISMATCH), so a resume from another cwd can never
+    // silently restore into the wrong tree.
+    try {
+      await rewindStore.assertWorkspace(opts.workspace)
+    } catch (err) {
+      console.warn(`[rewind] ${err instanceof Error ? err.message : String(err)}`)
+    }
+    // M54 G2: a turn that crashed mid-flight becomes a durable orphan artifact
+    // (never a fabricated point); plan() reports it. Best-effort — a corrupt
+    // sidecar must not stop the session from opening (it stays on disk and
+    // plan() fails loud on it).
+    try {
+      const recovered = await rewindStore.recoverPending()
+      if (recovered !== null) {
+        console.warn(
+          `[rewind] recovered an unfinished turn (anchor seq ${recovered.anchorSeq}, ${recovered.entries.length} file(s)) as an orphan — plan() reports it`,
+        )
+      }
+    } catch (err) {
+      console.warn(`[rewind] pending-turn recovery failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
     rewindRecorder = new RewindRecorder({ store: rewindStore, workspace: opts.workspace })
   }
   const fsToolsDeps = rewindRecorder !== undefined
@@ -332,6 +358,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // journal frontier while this chain owns the append slot.
           const committed = { ...point, turnIndex: (await store.readPoints()).length }
           await store.appendPoint(committed)
+          // M54 G2: only now is the turn durable — clear its pending sidecar
+          // (a crash in between is recognised by recoverPending via the point).
+          await recorder.commit(committed.anchorSeq)
         }).catch((err) => {
           console.warn(`[rewind] point append failed: ${err instanceof Error ? err.message : String(err)}`)
         })
