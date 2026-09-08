@@ -22,6 +22,9 @@ export interface McpOAuthConfig {
   authTimeoutMs?: number
   /** 授權 URL 就緒回調（宿主可自動開瀏覽器；headless 預設只 console.info）。 */
   onRedirect?: (url: string) => void
+  /** M56 T1.5：主動刷新失敗（fail-soft——憑證保留、改走 401 路徑）的宿主通知。
+   *  host-injected 函數先例同 onRedirect；assembly 把它接到 mcp/server-status sink。 */
+  onAuthRefreshFailed?: (message: string) => void
 }
 export interface McpTokenStore {
   get(key: string): Promise<unknown | undefined>

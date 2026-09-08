@@ -5,6 +5,7 @@ import {
   type OAuthClientProvider,
   type OAuthDiscoveryState,
 } from "@modelcontextprotocol/sdk/client/auth.js"
+import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js"
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
 import type { McpOAuthConfig, McpTokenStore } from "./types.ts"
 
@@ -109,6 +110,9 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
     return typeof discovery?.authorizationServerUrl === "string" && discovery.authorizationServerUrl.length > 0
   }
 
+  // M56：連續失敗計數——快取的 discovery 可能是錯的（AS 搬家、resource 路徑變更）。
+  let consecutiveRefreshFailures = 0
+
   /** 用 SDK 既有導出 refreshAuthorization 做一次刷新。任何失敗一律 fail-soft：回 undefined，
    *  呼叫端回傳舊 token，讓既有 401 路徑（與 M53 的重連）接手——不 throw、不清憑證。 */
   const refreshProactively = async (): Promise<OAuthTokens | undefined> => {
@@ -132,12 +136,21 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
         ...(resource !== undefined ? { resource } : {}),
       })
       await provider.saveTokens(fresh)
+      consecutiveRefreshFailures = 0
       return fresh
     } catch (err) {
-      // T1.5 可見性：不新增事件形狀（見報告），走既有 console 通道——主機日誌可見。
+      consecutiveRefreshFailures += 1
+      // 非 OAuth 協議錯誤（網路/解析/resource 不匹配）或連續失敗 2 次 → 丟掉快取的
+      // discovery，讓 SDK 的 auth() 重新 discovery（否則一個搬走的 AS 會永遠卡在舊 metadata）。
+      if (!(err instanceof OAuthError) || consecutiveRefreshFailures >= 2) {
+        try { await provider.invalidateCredentials?.("discovery") } catch { /* fail-soft：清不掉也不影響 */ }
+      }
+      const message = err instanceof Error ? err.message : String(err)
       console.warn(
-        `[i-harness] mcp-server(${serverName}) OAuth: proactive refresh failed (${err instanceof Error ? err.message : String(err)}); keeping the stored token (the 401 path will handle it)`,
+        `[i-harness] mcp-server(${serverName}) OAuth: proactive refresh failed (${message}); keeping the stored token (the 401 path will handle it)`,
       )
+      // M56 T1.5：宿主通知（assembly 把它接到 mcp/server-status sink）；回調拋錯不得破壞 fail-soft。
+      try { auth.onAuthRefreshFailed?.(message) } catch { /* 宿主回調拋錯不影響 fail-soft */ }
       return undefined
     }
   }
@@ -166,10 +179,16 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
     async tokens() {
       const current = await get<OAuthTokens>("tokens")
       if (current === undefined) return undefined
-      // 檢查本身 fail-soft：store 讀取異常 → 照舊回傳現有 token（被動行為不變）
+      // 檢查本身 fail-soft：store 讀取異常 → 照舊回傳現有 token（被動行為不變），但不靜默。
       let due = false
-      try { due = await shouldRefreshProactively(current) } catch { due = false }
-      if (!due) return current
+      try { due = await shouldRefreshProactively(current) } catch (err) {
+        console.warn(
+          `[i-harness] mcp-server(${serverName}) OAuth: expiry check failed (${err instanceof Error ? err.message : String(err)}); keeping the stored token`,
+        )
+        due = false
+      }
+      // 另一呼叫者的刷新可能剛好在上面兩次讀取之間落地——重讀一次，避免回舊 token。
+      if (!due) return (await get<OAuthTokens>("tokens")) ?? current
       // single-flight：並發呼叫者共用同一枚 promise；失敗由 refreshProactively 吞掉（回舊 token）。
       refreshInFlight ??= refreshProactively().finally(() => { refreshInFlight = undefined })
       return (await refreshInFlight) ?? current

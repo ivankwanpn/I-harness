@@ -15,7 +15,9 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
+import type { McpServerStatusEvent } from "@i-harness/mcp-client"
 import {
+  bindAuthRefreshStatus,
   createSessionAssembly,
   estimateAssemblyOverhead,
   ModelUnavailableError,
@@ -372,4 +374,18 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
       await assembly.dispose()
     }
   }, 30_000)
+})
+
+// M56 T1.5: the provider's fail-soft refresh-failure signal is bound to the
+// mcp/server-status sink as an ADDITIVE event field — the lifecycle state does
+// not change (the stored token is kept; the 401/M53 path owns recovery).
+describe("bindAuthRefreshStatus (M56)", () => {
+  it("emits an additive authRefreshFailed event, leaving the lifecycle state untouched", () => {
+    const events: McpServerStatusEvent[] = []
+    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev))
+    notify("invalid_grant: refresh token revoked")
+    expect(events).toEqual([
+      { server: "oauth-x", state: "ready", authRefreshFailed: "invalid_grant: refresh token revoked" },
+    ])
+  })
 })
