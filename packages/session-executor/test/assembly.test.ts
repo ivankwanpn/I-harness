@@ -446,4 +446,33 @@ describe("bindAuthRefreshStatus (M56)", () => {
     notify("refresh failed")
     expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
   })
+
+  // M57 fix-wave F2: a throwing state reader is the one remaining hole in the
+  // fail-soft story — it must degrade to the "ready" fallback, not silence the
+  // event.
+  it("degrades to ready when currentState itself throws", () => {
+    const events: McpServerStatusEvent[] = []
+    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
+      currentState: () => { throw new Error("boom") },
+    })
+    expect(() => notify("refresh failed")).not.toThrow()
+    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
+  })
+
+  // M57 fix-wave F3: an `async` host handler rejects on a microtask — neither the
+  // sync try/catch here nor the provider's own guard can see it, so it must be
+  // routed to onHostError instead of escaping as an unhandledRejection.
+  it("routes a rejecting async host handler to onHostError without losing the event", async () => {
+    const events: McpServerStatusEvent[] = []
+    const errors: unknown[] = []
+    const boom = new Error("async host handler exploded")
+    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
+      hostHandler: async () => { throw boom },
+      onHostError: (err) => { errors.push(err) },
+    })
+    notify("refresh failed")
+    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(errors).toEqual([boom])
+  })
 })

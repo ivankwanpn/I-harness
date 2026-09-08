@@ -229,18 +229,31 @@ export const bindAuthRefreshStatus =
     onStatus: (ev: McpServerStatusEvent) => void,
     opts?: {
       currentState?: () => McpServerState | undefined
-      hostHandler?: (message: string) => void
+      /** Prefer a synchronous handler; a returned thenable that rejects is routed
+       *  to `onHostError` rather than escaping as an unhandledRejection. */
+      hostHandler?: (message: string) => unknown
       onHostError?: (err: unknown) => void
     },
   ) =>
   (message: string): void => {
     try {
-      opts?.hostHandler?.(message)
+      const result = opts?.hostHandler?.(message)
+      // An `async` handler rejects on a microtask — invisible to this try/catch
+      // (and to the provider's own guard); attach a rejection handler so it can
+      // never surface as a process-level unhandledRejection.
+      if (typeof (result as PromiseLike<unknown> | undefined)?.then === "function") {
+        void Promise.resolve(result).catch((err) => {
+          try { opts?.onHostError?.(err) } catch { /* reporting must not silence the event */ }
+        })
+      }
     } catch (err) {
       // The reporter's own throw is swallowed too — emitting the event is the point.
       try { opts?.onHostError?.(err) } catch { /* reporting must not silence the event */ }
     }
-    onStatus({ server: serverName, state: opts?.currentState?.() ?? "ready", authRefreshFailed: message })
+    // A throwing state reader must not silence the event either — degrade to the fallback.
+    let state: McpServerState | undefined
+    try { state = opts?.currentState?.() } catch { /* fall through to "ready" */ }
+    onStatus({ server: serverName, state: state ?? "ready", authRefreshFailed: message })
   }
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
@@ -454,9 +467,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // M56 T1.5: the auth config object flows UNCHANGED through mountMcpClient →
   // supervisor → deps.connect → createConnectedClient → provider, so binding the
   // provider's refresh-failure signal here is the whole wiring (no supervisor or
-  // connect signature change). The event is additive (`authRefreshFailed`); the
-  // telemetry emit stays a no-op when telemetry is off (only the state map is
-  // still fed). M57 T2: a host-supplied handler is forwarded, never clobbered.
+  // connect signature change). The event is additive (`authRefreshFailed`).
+  // M57 T1/T2: with telemetry ON, mcpStatusHook is the supervisor's onStatus, so
+  // the map's first write is the supervisor's "connecting" and the binder's
+  // "ready" fallback is unreachable; with telemetry OFF the hook is never
+  // registered as onStatus, so the map is fed ONLY by refresh-failure events
+  // themselves — every event then reports the "ready" fallback (the emit is a
+  // no-op without telemetry). A host-supplied handler is forwarded, never clobbered.
   const prepareMcpConfig = (cfg: McpServerConfig): McpServerConfig => {
     if (cfg.transport !== "streamable-http" || cfg.auth === undefined) return cfg
     const auth: McpOAuthConfig = {
