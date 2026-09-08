@@ -1,7 +1,9 @@
 // packages/rewind/src/index.ts — M42 rewind engine (G1): backend snapshot /
 // rollback. Storage layout `rewind/<sessionId>/{points.jsonl, blobs/<sha256>}`
 // (spec §1), the fs-write-channel recorder (spec §2) and the embedded
-// points/plan/execute service (spec §3).
+// points/plan/execute service (spec §3). M54 adds two additive sidecars to the
+// same dir: meta.json (G3 workspace binding) and pending.json/orphaned.jsonl
+// (G2 durable mid-turn crash recovery).
 export { RewindError, type RewindErrorCode } from "./error.ts"
 export { normalizeRelPath, workspaceAbsPath } from "./path.ts"
 export { RewindStore, sha256Hex, type RewindStoreOptions } from "./store.ts"
@@ -20,8 +22,13 @@ export type {
   RewindExecuteError,
   RewindFileRecord,
   RewindMode,
+  RewindOrphanedTurn,
+  RewindOrphanRecord,
+  RewindPendingEntry,
+  RewindPendingTurn,
   RewindPlan,
   RewindPoint,
   RewindPointSummary,
   RewindResult,
+  RewindWorkspaceMeta,
 } from "./types.ts"
