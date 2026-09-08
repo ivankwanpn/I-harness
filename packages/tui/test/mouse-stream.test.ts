@@ -8,6 +8,7 @@ import { describe, expect, it, beforeEach } from "vitest"
 import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
 import type { Renderer, TerminalCapabilityContext, InputEvent } from "@i-harness/tui-core"
 import { TuiApp } from "../src/app/loop.ts"
+import { layoutAgent } from "../src/views/agent.ts"
 import { createScrollbackEngine } from "../src/index.ts"
 import type { BackendClient, TuiEvent } from "../src/index.ts"
 import { dispatchKey } from "../src/app/keys.ts"
@@ -72,14 +73,20 @@ describe("TuiApp — M46b G1 mouse path", () => {
   it("one wheel event scrolls ONE line (stream pricing, follow-aware)", () => {
     const app = makeApp()
     const engine = app.state().engine
-    // 30 lines in a 24-row renderer: the follow clamp max = 30-24+1 = 7 —
-    // enough room for the stream's 1-line deltas to land.
+    // BUG-4 (m49 audit): the scroll clamp is the scrollback RECT height, not
+    // the renderer grid — compute the max the same way scrollBy does.
     for (let i = 0; i < 30; i++) engine.append({ type: "user", text: `row-${i}`, seq: i + 1, ts: i })
+    const rectH = layoutAgent(
+      { cols: 46, rows: 24 },
+      app.state(),
+      {},
+    ).scrollback.h
+    const max = 30 - rectH + 1
     app.feedInput(wheelEv("wheel-down"))
-    expect(app.state().scroll.offset).toBe(7) // follow → clamp max, then clamped
+    expect(app.state().scroll.offset).toBe(max) // follow → clamp max (rect-based), then clamped
     expect(app.state().scroll.follow).toBe(false)
     app.feedInput(wheelEv("wheel-up"))
-    expect(app.state().scroll.offset).toBe(6)
+    expect(app.state().scroll.offset).toBe(max - 1)
   })
 
   it("Moved motion updates the last pointer (app-space 1-based → 0-based)", () => {
