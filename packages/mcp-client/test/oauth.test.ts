@@ -56,3 +56,41 @@ it("provider: redirectToAuthorization remembers the URL (headless console flow)"
   await provider.redirectToAuthorization(new URL("http://auth.example/authorize?x=1"))
   expect(store.get("oauth:files:pending-url")).toBe("http://auth.example/authorize?x=1")
 })
+
+// M56 T1.1: `expires_in` becomes an absolute expiry, persisted OUT-OF-BAND so the
+// value the SDK reads back through tokens() stays exactly an OAuthTokens object.
+it("provider: saveTokens records an absolute expiry under a separate store key", async () => {
+  const store = new Map<string, unknown>()
+  const mem: McpTokenStore = { get: async (k) => store.get(k), put: async (k, v) => { store.set(k, v) } }
+  const provider = createOAuthClientProvider({ serverName: "files", auth: { store: mem } as never, redirectUrl: "http://127.0.0.1:1/callback" })
+  const before = Date.now()
+  await provider.saveTokens({ access_token: "a", token_type: "Bearer", refresh_token: "r", expires_in: 60 } as never)
+  const expiry = store.get("oauth:files:tokens-expiry")
+  expect(typeof expiry).toBe("number")
+  expect(expiry as number).toBeGreaterThanOrEqual(before + 60_000)
+  expect(expiry as number).toBeLessThanOrEqual(Date.now() + 60_000)
+  // SDK-facing shape untouched: no expiresAt smuggled into the tokens object.
+  expect(await provider.tokens()).toEqual({ access_token: "a", token_type: "Bearer", refresh_token: "r", expires_in: 60 })
+  // a token set WITHOUT expires_in clears any previously recorded expiry
+  await provider.saveTokens({ access_token: "b", token_type: "Bearer" } as never)
+  expect(store.get("oauth:files:tokens-expiry")).toBeNull()
+})
+
+// M56 T1.2 (research G5): the SDK's saveDiscoveryState/discoveryState hooks are
+// implemented so a refresh can reuse the AS metadata instead of re-running
+// RFC 9728 + RFC 8414 discovery (and so a discovery hiccup cannot abort it).
+it("provider: discovery state round-trips through the injected store", async () => {
+  const store = new Map<string, unknown>()
+  const mem: McpTokenStore = { get: async (k) => store.get(k), put: async (k, v) => { store.set(k, v) } }
+  const provider = createOAuthClientProvider({ serverName: "files", auth: { store: mem } as never, redirectUrl: "http://127.0.0.1:1/callback" })
+  const state = {
+    authorizationServerUrl: "http://as.example",
+    resourceMetadataUrl: "http://mcp.example/.well-known/oauth-protected-resource",
+    authorizationServerMetadata: { issuer: "http://as.example", token_endpoint: "http://as.example/token" },
+  }
+  await provider.saveDiscoveryState!(state as never)
+  expect(await provider.discoveryState!()).toEqual(state)
+  // invalidateCredentials("all") drops it again (the SDK's documented re-discovery path)
+  await provider.invalidateCredentials?.("all")
+  expect(await provider.discoveryState!()).toBeUndefined()
+})

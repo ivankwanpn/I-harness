@@ -130,6 +130,9 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
       serverName: config.serverName,
       auth: config.auth,
       redirectUrl: redirectUrl,
+      // M56: RFC 8707 resource indicator source for the proactive refresh path
+      // (same origin as the SDK's own refresh: selectResourceURL(serverUrl, …)).
+      serverUrl: config.url,
     })
   }
   try {

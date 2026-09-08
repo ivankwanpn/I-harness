@@ -105,8 +105,15 @@ interface RealAs {
    * "reject" (the AS refuses the refresh token → invalid_grant) or "rotate"
    * (issue a fresh access+refresh pair). M55 adds "server-error": a 500 that
    * the SDK maps to ServerError — swallowed by its auth loop (falls through to
-   * an interactive redirect) WITHOUT invalidating the stored credentials. */
-  refreshMode: "unsupported" | "reject" | "rotate" | "server-error"
+   * an interactive redirect) WITHOUT invalidating the stored credentials.
+   * M56 adds "rotate-strict": rotation that single-uses the presented refresh
+   * token (a concurrent duplicate grant → invalid_grant) — the probe-E race. */
+  refreshMode: "unsupported" | "reject" | "rotate" | "rotate-strict" | "server-error"
+  /** M56: refresh tokens already presented in "rotate-strict" mode. */
+  usedRefreshTokens: Set<string>
+  /** M56: expires_in carried by every issued token (default 3600). Tests that
+   * need an immediately-expiring access token set it to 1. */
+  tokenExpiresIn: number
   /** grant_type of every /token call, in order (asserted by the M53 tests). */
   tokenGrants: string[]
   close(): Promise<void>
@@ -126,6 +133,8 @@ async function startRealAs(): Promise<RealAs> {
     issuedTokens: [],
     tokenCalls: 0,
     refreshMode: "unsupported",
+    usedRefreshTokens: new Set(),
+    tokenExpiresIn: 3600,
     tokenGrants: [],
     close: async () => {},
   }
@@ -211,14 +220,22 @@ async function startRealAs(): Promise<RealAs> {
         if (as.refreshMode === "server-error") {
           return json(res, 500, { error: "server_error", error_description: "injected refresh failure" })
         }
-        if (as.refreshMode === "rotate") {
+        if (as.refreshMode === "rotate" || as.refreshMode === "rotate-strict") {
+          const presented = params.get("refresh_token") ?? ""
+          // M56 strict rotation: a refresh token is single-use — a concurrent
+          // duplicate grant (the probe-E race) is refused instead of silently
+          // minting two live token sets.
+          if (as.refreshMode === "rotate-strict" && as.usedRefreshTokens.has(presented)) {
+            return json(res, 400, { error: "invalid_grant", error_description: "refresh token already rotated" })
+          }
+          as.usedRefreshTokens.add(presented)
           const access_token = `tok-real-as-${as.issuedTokens.length + 1}`
           as.issuedTokens.push(access_token)
           return json(res, 200, {
             access_token,
             token_type: "Bearer",
             refresh_token: `rt-${access_token}`,
-            expires_in: 3600,
+            expires_in: as.tokenExpiresIn,
           }, { "cache-control": "no-store" })
         }
         return json(res, 400, { error: "unsupported_grant_type" })
@@ -249,7 +266,7 @@ async function startRealAs(): Promise<RealAs> {
         access_token,
         token_type: "Bearer",
         refresh_token: `rt-${access_token}`,
-        expires_in: 3600,
+        expires_in: as.tokenExpiresIn,
       }, { "cache-control": "no-store" })
     }
     return json(res, 404, { error: "not_found" })
@@ -282,7 +299,7 @@ interface McpFixtureControls {
 async function startRealMcpServer(
   asBase: string,
   controls: McpFixtureControls = {},
-): Promise<{ url: string; close(): Promise<void> }> {
+): Promise<{ url: string; close(): Promise<void>; challenges(): number }> {
   // One McpServer instance PER session: a Protocol can only be connected to one
   // transport at a time, and the M53 recovery test legitimately opens a second
   // session (the reconnect generation) after the first one is torn down.
@@ -296,6 +313,7 @@ async function startRealMcpServer(
     return mcp
   }
   const transports = new Map<string, StreamableHTTPServerTransport>()
+  let challenges = 0
   let base = ""
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1:0")
@@ -310,6 +328,7 @@ async function startRealMcpServer(
     const auth = req.headers.authorization
     const bearer = auth !== undefined && auth.startsWith("Bearer ") ? auth.slice("Bearer ".length) : undefined
     if (bearer === undefined || !bearer.startsWith("tok-") || controls.revoked?.has(bearer) === true) {
+      challenges += 1 // M56: 401 challenges — proves a refresh happened BEFORE any reactive auth
       res.writeHead(401, { "www-authenticate": `Bearer resource_metadata="${base}/resource-metadata"` })
       res.end()
       return
@@ -346,6 +365,7 @@ async function startRealMcpServer(
   base = `http://127.0.0.1:${addr.port}`
   return {
     url: `${base}/mcp`,
+    challenges: () => challenges,
     close: () =>
       new Promise<void>((r) => {
         server.closeAllConnections()
@@ -675,6 +695,271 @@ describe("M55 — auth teardown is gated on a disconnect observer", () => {
         await client.close()
         await as.close()
         await mcp.close()
+      }
+    },
+    60_000,
+  )
+})
+
+// ---------------------------------------------------------------------------
+// M56 (research Option 2): expiry-aware, single-flight refresh in the provider.
+//   G4: `expires_in` was never turned into an absolute expiry, so the only
+//       refresh signal was a server 401.
+//   G1: every concurrent 401 ran its own refresh grant; with rotation the loser
+//       wiped the winner's token set (research probe E).
+// The fix: saveTokens records an absolute expiry OUT-OF-BAND (store key
+// `tokens-expiry` — the SDK-facing OAuthTokens shape is untouched) and the
+// provider's tokens() choke point (awaited by the SDK before EVERY request)
+// coalesces concurrent callers onto one shared refresh promise, using the
+// SDK's exported refreshAuthorization + the discovery state persisted through
+// the saveDiscoveryState/discoveryState hooks. Every failure fails soft to the
+// stored token so the existing 401 / M53-reconnect path still owns recovery.
+// ---------------------------------------------------------------------------
+
+describe("M56 — expiry-aware single-flight refresh", () => {
+  /** Discovery state as the SDK persists it via saveDiscoveryState: RFC 9728
+   * resource metadata + RFC 8414 AS metadata. Seeding it models a provider that
+   * already ran one auth flow in a previous session (the G5 persistence the
+   * proactive refresh needs). */
+  const discoveryStateFor = (asBase: string, mcpUrl: string): unknown => ({
+    authorizationServerUrl: asBase,
+    authorizationServerMetadata: {
+      issuer: asBase,
+      authorization_endpoint: `${asBase}/authorize`,
+      token_endpoint: `${asBase}/token`,
+      registration_endpoint: `${asBase}/register`,
+      response_types_supported: ["code"],
+      code_challenge_methods_supported: ["S256"],
+      grant_types_supported: ["authorization_code", "refresh_token"],
+      token_endpoint_auth_methods_supported: ["none"],
+    },
+    resourceMetadata: { resource: mcpUrl, authorization_servers: [asBase] },
+  })
+
+  interface M56Fixture {
+    as: RealAs
+    mcp: Awaited<ReturnType<typeof startRealMcpServer>>
+    revoked: Set<string>
+    entries: Map<string, unknown>
+    store: McpTokenStore
+    callbackPort: number
+    redirectUrl: string
+  }
+
+  const startM56Fixture = async (
+    name: string,
+    seed: {
+      tokens: Record<string, unknown>
+      /** Seed the out-of-band absolute expiry in the past (already inside the skew). */
+      expiresInPast?: boolean
+      /** Seed the persisted discovery state (needed for a proactive refresh). */
+      discovery?: boolean
+      refreshMode?: RealAs["refreshMode"]
+      /** expires_in on every issued token — 1 makes the next request expiring. */
+      tokenExpiresIn?: number
+    },
+  ): Promise<M56Fixture> => {
+    const as = await startRealAs()
+    as.refreshMode = seed.refreshMode ?? "rotate"
+    as.tokenExpiresIn = seed.tokenExpiresIn ?? 3600
+    const revoked = new Set<string>()
+    const mcp = await startRealMcpServer(as.base, { revoked })
+    const callbackPort = await freePort()
+    const redirectUrl = `http://127.0.0.1:${callbackPort}/oauth/callback`
+    as.registrations.push({ client_id: "ih-real-as-1", redirect_uris: [redirectUrl], token_endpoint_auth_method: "none" })
+    const entries = new Map<string, unknown>([
+      [`oauth:${name}:client`, { client_id: "ih-real-as-1" }],
+      [`oauth:${name}:tokens`, seed.tokens],
+      ...(seed.expiresInPast === true ? [[`oauth:${name}:tokens-expiry`, Date.now() - 1_000] as const] : []),
+      ...(seed.discovery === true ? [[`oauth:${name}:discovery`, discoveryStateFor(as.base, mcp.url)] as const] : []),
+    ])
+    const store: McpTokenStore = {
+      get: async (k) => entries.get(k),
+      put: async (k, v) => { entries.set(k, v) },
+    }
+    return { as, mcp, revoked, entries, store, callbackPort, redirectUrl }
+  }
+
+  const connectFixture = (
+    name: string,
+    f: M56Fixture,
+    onRedirect?: (u: string) => void,
+  ): Promise<Awaited<ReturnType<typeof createConnectedClient>>> =>
+    createConnectedClient({
+      transport: "streamable-http",
+      serverName: name,
+      url: f.mcp.url,
+      auth: {
+        callbackPort: f.callbackPort,
+        redirectUrl: f.redirectUrl,
+        store: f.store,
+        authTimeoutMs: 30_000,
+        ...(onRedirect !== undefined ? { onRedirect } : {}),
+      },
+    })
+
+  /** Wait until the AS token endpoint has been quiet for 30ms — the SDK sends
+   * the initialized notification fire-and-forget, so the mount's last proactive
+   * refresh can land just after connect() resolves. */
+  const quiesce = async (as: RealAs): Promise<void> => {
+    let last = -1
+    while (last !== as.tokenCalls) {
+      last = as.tokenCalls
+      await new Promise((r) => setTimeout(r, 30))
+    }
+  }
+
+  const storedTokens = (f: M56Fixture, name: string): Record<string, unknown> =>
+    f.entries.get(`oauth:${name}:tokens`) as Record<string, unknown>
+
+  it(
+    "(a) an expiring token is refreshed proactively — the request never sees a 401",
+    async () => {
+      const name = "oauth-proactive"
+      const f = await startM56Fixture(name, {
+        tokens: { access_token: "tok-proactive-1", refresh_token: "rt-proactive-1", token_type: "Bearer", expires_in: 3600 },
+        expiresInPast: true,
+        discovery: true,
+        tokenExpiresIn: 1, // every issued token is immediately inside the skew window
+      })
+      const client = await connectFixture(name, f)
+      try {
+        await quiesce(f.as) // mount-side refreshes done; measure only the next request
+        f.as.tokenGrants.length = 0
+        const before = storedTokens(f, name).access_token
+        const res = await client.callTool("real_echo", { text: "hi" })
+        expect(res.content).toEqual([{ type: "text", text: "echo: hi" }])
+        // exactly ONE refresh grant, issued before the request: no 401 was ever
+        // served, so this cannot be the SDK's reactive path.
+        expect(f.as.tokenGrants).toEqual(["refresh_token"])
+        expect(f.mcp.challenges()).toBe(0)
+        const after = storedTokens(f, name)
+        expect(after.access_token).not.toBe(before)
+        expect(after.access_token).toBe(f.as.issuedTokens.at(-1))
+        // the value the SDK reads back is still exactly an OAuthTokens object
+        expect(after).not.toHaveProperty("expiresAt")
+        // ...while the absolute expiry lives in its own additive store key
+        const expiry = f.entries.get(`oauth:${name}:tokens-expiry`)
+        expect(typeof expiry).toBe("number")
+        expect(expiry as number).toBeGreaterThan(Date.now())
+      } finally {
+        await client.close()
+        await f.as.close()
+        await f.mcp.close()
+      }
+    },
+    60_000,
+  )
+
+  it(
+    "(b) N concurrent requests coalesce onto ONE refresh grant (single-flight)",
+    async () => {
+      const name = "oauth-singleflight"
+      const f = await startM56Fixture(name, {
+        tokens: { access_token: "tok-sf-1", refresh_token: "rt-sf-1", token_type: "Bearer", expires_in: 3600 },
+        expiresInPast: true,
+        discovery: true,
+        refreshMode: "rotate-strict", // a duplicate concurrent grant would be rejected
+        tokenExpiresIn: 1,
+      })
+      const client = await connectFixture(name, f)
+      try {
+        await quiesce(f.as)
+        f.as.tokenGrants.length = 0
+        const results = await Promise.all(
+          Array.from({ length: 8 }, (_, i) => client.callTool("real_echo", { text: `c${i}` })),
+        )
+        expect(results.map((r) => r.content)).toEqual(
+          Array.from({ length: 8 }, (_, i) => [{ type: "text", text: `echo: c${i}` }]),
+        )
+        // eight concurrent callers, ONE refresh_token grant (probe-E race closed).
+        // Under strict rotation a second grant would also have failed a caller.
+        expect(f.as.tokenGrants).toEqual(["refresh_token"])
+        expect(f.mcp.challenges()).toBe(0)
+      } finally {
+        await client.close()
+        await f.as.close()
+        await f.mcp.close()
+      }
+    },
+    60_000,
+  )
+
+  it(
+    "(c) a rejected refresh fails soft to the stored token — the 401 path still owns recovery",
+    async () => {
+      const name = "oauth-failsoft"
+      const f = await startM56Fixture(name, {
+        tokens: { access_token: "tok-fs-1", refresh_token: "rt-fs-1", token_type: "Bearer", expires_in: 3600 },
+        expiresInPast: true,
+        discovery: true,
+        tokenExpiresIn: 1,
+      })
+      const redirects: string[] = []
+      const client = await connectFixture(name, f, (u) => redirects.push(u))
+      try {
+        await quiesce(f.as)
+        f.as.tokenGrants.length = 0
+        // mid-session: the live token is revoked AND the AS now refuses refreshes
+        f.revoked.add(storedTokens(f, name).access_token as string)
+        f.as.refreshMode = "reject"
+        await expect(client.callTool("real_echo", { text: "boom" })).rejects.toThrow(/Unauthorized/)
+        // the proactive attempt failed SOFT (no throw, no wipe) and the stale
+        // token still walked the SDK's reactive path — pre-M56 there was exactly
+        // one grant here; the proactive one is strictly additive.
+        expect(f.as.tokenGrants.filter((g) => g === "refresh_token").length).toBeGreaterThanOrEqual(2)
+        expect(redirects.length).toBeGreaterThanOrEqual(1) // interactive fallback reached, as before
+      } finally {
+        await client.close()
+        await f.as.close()
+        await f.mcp.close()
+      }
+    },
+    60_000,
+  )
+
+  it(
+    "(d) a token without a refresh_token is never refreshed proactively",
+    async () => {
+      const name = "oauth-nort"
+      const f = await startM56Fixture(name, {
+        tokens: { access_token: "tok-nort-1", token_type: "Bearer", expires_in: 1 },
+        expiresInPast: true,
+        discovery: true,
+      })
+      const client = await connectFixture(name, f)
+      try {
+        const res = await client.callTool("real_echo", { text: "hi" })
+        expect(res.content).toEqual([{ type: "text", text: "echo: hi" }])
+        expect(f.as.tokenCalls).toBe(0) // no grant attempted, mount or call
+        expect(storedTokens(f, name)).toMatchObject({ access_token: "tok-nort-1" })
+      } finally {
+        await client.close()
+        await f.as.close()
+        await f.mcp.close()
+      }
+    },
+    60_000,
+  )
+
+  it(
+    "(e) a token without expires_in keeps the passive (reactive) behaviour",
+    async () => {
+      const name = "oauth-noexp"
+      const f = await startM56Fixture(name, {
+        tokens: { access_token: "tok-noexp-1", refresh_token: "rt-noexp-1", token_type: "Bearer" },
+        discovery: true,
+      })
+      const client = await connectFixture(name, f)
+      try {
+        const res = await client.callTool("real_echo", { text: "hi" })
+        expect(res.content).toEqual([{ type: "text", text: "echo: hi" }])
+        expect(f.as.tokenCalls).toBe(0) // no expiry recorded → no proactive refresh
+        expect(storedTokens(f, name)).toMatchObject({ access_token: "tok-noexp-1" })
+      } finally {
+        await client.close()
+        await f.as.close()
+        await f.mcp.close()
       }
     },
     60_000,
