@@ -1522,6 +1522,18 @@ describe("M16 CLI sandbox wiring", () => {
       expect(result.exitCode).toBe(0)
       expect(result.error ?? "").not.toContain("sandbox")
       expect(result.finalText).toBe("done")
+      // F5 (m55 final review): run-completion alone tolerated the F1
+      // runner-launch failure (the bare `tsx/esm` loader resolved from the
+      // workspace cwd → the confined command never ran, yet the run completed).
+      // The runner-failure signatures must be absent; the confined shell may
+      // still legitimately fail on this host, so no success is required.
+      const bash = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash") as
+        | { output: { exitCode?: number; stdout?: string; stderr?: string } }
+        | undefined
+      expect(bash).toBeDefined()
+      const bashText = `${bash?.output.stdout ?? ""}\n${bash?.output.stderr ?? ""}`
+      expect(bashText).not.toContain("ERR_MODULE_NOT_FOUND")
+      expect(bashText).not.toContain("windows-acl-run: ")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

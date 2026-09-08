@@ -41,9 +41,10 @@
  */
 
 import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { SandboxUnavailableError, type ConfinedArgv, type SandboxPolicy, type SandboxProvider } from '@i-harness/sandbox'
 import { grantWrite, revokeWrite } from './acl.ts'
@@ -470,7 +471,14 @@ function runnerInvocation(): string[] {
     return [process.execPath, fileURLToPath(new URL('./runner.mjs', import.meta.url))]
   }
   const sourceEntry = fileURLToPath(new URL('./runner.ts', import.meta.url))
-  return [process.execPath, '--import', 'tsx/esm', sourceEntry]
+  // The tsx loader is named by an ABSOLUTE file URL resolved from THIS module,
+  // never the bare `tsx/esm` specifier: the confined child spawns with
+  // cwd = the assembly workspace (D1), which may sit outside any node_modules
+  // tree — a cwd-resolved bare specifier then dies with ERR_MODULE_NOT_FOUND
+  // and the confined command never runs. Resolution here is deliberate: the
+  // spawn cwd must stay the workspace, only the loader specifier changes.
+  const loader = pathToFileURL(createRequire(import.meta.url).resolve('tsx/esm')).href
+  return [process.execPath, '--import', loader, sourceEntry]
 }
 
 /**

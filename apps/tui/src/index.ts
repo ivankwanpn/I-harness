@@ -29,7 +29,7 @@
 
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { execFileSync } from "node:child_process"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (module side effect, evaluated before its
 // node:sqlite import) — no explicit wiring needed here.
@@ -416,8 +416,11 @@ export function buildSdkSpawnArgs(
   flags: Pick<TuiFlags, "sessionDir">,
   dist: boolean = process.env.I_HARNESS_DIST === "1",
 ): string[] {
+  // F4 (m55 final review): argv[1] may be RELATIVE (`node dist/ih.mjs …`);
+  // the SDK child inherits a different --workspace as its cwd, where the
+  // relative name does not resolve. Absolutize against THIS process's cwd.
   return dist
-    ? [process.argv[1] ?? "ih.mjs", ...buildSdkArgs(flags)]
+    ? [resolve(process.argv[1] ?? "ih.mjs"), ...buildSdkArgs(flags)]
     : ["--import", TSX_LOADER, CLI_ENTRY, ...buildSdkArgs(flags)]
 }
 

@@ -22,8 +22,10 @@ import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { join } from "node:path"
 import { runHeadless } from "../apps/cli/src/run.ts"
+import type { ExecService } from "../packages/exec/src/index.ts"
 import { createLocalSandbox } from "../packages/sandbox-local/src/index.ts"
 import { createWindowsAclSandbox } from "../packages/sandbox-windows-acl/src/index.ts"
+import { createSessionAssembly } from "../packages/session-executor/src/index.ts"
 import { makeWorkspace, removeWorkspace } from "./helpers.ts"
 
 describe.skipIf(process.platform !== "win32")("e2e sandbox (win32 ACL fabric)", () => {
@@ -47,11 +49,54 @@ describe.skipIf(process.platform !== "win32")("e2e sandbox (win32 ACL fabric)", 
       expect(result.error ?? "").not.toContain("sandbox")
       expect(result.finalText).toBe("done")
       const bash = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash") as
-        | { output: { exitCode?: number } }
+        | { output: { exitCode?: number; stdout?: string; stderr?: string } }
         | undefined
       expect(bash).toBeDefined()
       expect(typeof bash?.output.exitCode).toBe("number")
+      // F5 (m55 final review): a numeric exit code alone tolerated the F1
+      // runner-launch failure (the confined command never ran; the tsx loader
+      // died with ERR_MODULE_NOT_FOUND). Host-tolerant still — the confined
+      // shell may legitimately fail here (git-bash MSYS E_ACCESSDENIED) — but
+      // the RUNNER-FAILURE signatures must be absent.
+      const bashText = `${bash?.output.stdout ?? ""}\n${bash?.output.stderr ?? ""}`
+      expect(bashText).not.toContain("ERR_MODULE_NOT_FOUND")
+      expect(bashText).not.toContain("windows-acl-run: ")
     } finally {
+      removeWorkspace(dir)
+    }
+  }, 60_000)
+
+  // F1 (m55 final review): D1 made every exec-spawning tool spawn with
+  // cwd = the ASSEMBLY WORKSPACE. For a session whose workspace sits outside
+  // the repo tree, a source-mode runner launch that names the loader by the
+  // bare `tsx/esm` specifier resolves it from that cwd and dies with
+  // ERR_MODULE_NOT_FOUND — the confined command never runs (fail-closed, but
+  // silently). This drives the REAL assembly (createSessionAssembly →
+  // registerShell → the exec/service carrying the windows-acl provider) and a
+  // confined `node` child: git-bash cannot start under the restricted token on
+  // this host, node can, and node is enough to prove the runner LAUNCHED.
+  it("a confined child runs from a workspace OUTSIDE the repo (D1 cwd + absolute loader)", async () => {
+    const dir = makeWorkspace("i-harness-e2e-sbx-cwd-")
+    let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+    try {
+      assembly = await createSessionAssembly({
+        workspace: dir,
+        sessionId: "e2e-sbx-cwd",
+        modelPolicy: "test-mock",
+        sandbox: "workspace-write",
+      })
+      const exec = assembly.ctx.services.get<ExecService>("exec/service")
+      const result = await exec.run({
+        argv: [process.execPath, "-e", "console.log('confined-ok')"],
+        cwd: dir, // D1: the assembly workspace, outside the repo tree
+        sandbox: { mode: "workspace-write", workspaceRoot: dir },
+      })
+      expect(result.stderr, result.stdout).not.toContain("ERR_MODULE_NOT_FOUND")
+      expect(result.stderr).not.toContain("windows-acl-run: ")
+      expect(result.exitCode, `stdout: ${result.stdout}; stderr: ${result.stderr}`).toBe(0)
+      expect(result.stdout).toContain("confined-ok")
+    } finally {
+      await assembly?.dispose()
       removeWorkspace(dir)
     }
   }, 60_000)
