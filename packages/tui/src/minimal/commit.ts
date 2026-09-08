@@ -77,9 +77,11 @@ export class MinimalCommits {
    * the last `pinned` real rows. Widen the read by the pinned count and drop
    * the pinned prefix: every real row commits exactly once (print-once). The
    * loop re-widens only when the pin itself grew with the window (a wrapped
-   * long user block). */
+   * long user block) and stops on the first non-growing read (M55 defensive
+   * guard — a contract-violating engine must never hang the loop). */
   private readDelta(start: number, height: number): DisplayLine[] {
     let window = height
+    let lastRows = -1
     for (;;) {
       const rows = this.engine.viewport(start, window)
       let pinned = 0
@@ -87,6 +89,12 @@ export class MinimalCommits {
       if (pinned === 0) return rows
       const body = rows.slice(pinned)
       if (body.length >= height) return body.slice(0, height)
+      // M55 defensive termination: a contract-conforming viewport grows with
+      // the window, but an engine that ignores `height` would return the same
+      // rows forever. Stop on the first non-growing read and commit the real
+      // rows read so far (best effort — never hang the loop).
+      if (rows.length <= lastRows) return body
+      lastRows = rows.length
       // Grow by the larger of the shortfall and the pin itself: the pin is a
       // fixed-count sticky prefix (the collapsed user header) that CONSUMES
       // that many rows of the window, so the window must cover height + pinned

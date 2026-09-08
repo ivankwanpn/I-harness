@@ -196,8 +196,16 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
         return await op()
       } catch (err) {
         if (isAuthError(err)) {
-          await closeGeneration()
-          notifyDisconnect()
+          // M55: the teardown is only useful when someone OBSERVES it — the
+          // reconnect supervisor registers onDisconnect (and only then can
+          // rebuild the generation). A one-shot mount (no reconnect config,
+          // no observer) must keep the pre-M53 behavior: surface the auth
+          // error and leave the client alive; closing it here would kill the
+          // transport permanently with nothing able to replace it.
+          if (disconnectCallbacks.length > 0 || config.reconnect?.enabled === true) {
+            await closeGeneration()
+            notifyDisconnect()
+          }
         }
         throw err
       }
