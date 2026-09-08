@@ -144,6 +144,48 @@ describe("MarkdownCheckpointer", () => {
     cp.push("x\n\n")
     expect(cp.finish()).toEqual([])
   })
+
+  /* M51 T2 — a heading/table can still GROW while its source line is open. */
+
+  it("M51 T2: a heading split across pushes stays the open tail until terminated", () => {
+    const cp = new MarkdownCheckpointer()
+    const a = cp.push("## Ti")
+    expect(a.closed).toEqual([]) // "## Ti" + "tle" is still one heading
+    expect(a.tail?.kind).toBe("heading")
+    const b = cp.push("tle\n\n")
+    const rows = partsToRows([...a.closed, ...b.closed, ...cp.finish()])
+    const whole = partsToRows(renderMarkdown("## Title\n\n", true))
+    expect(rows.map(txt)).toEqual(whole.map(txt))
+    expect(rows.map(txt)).toEqual(["Title"])
+  })
+
+  it("M51 T2: a table streaming row by row loses no rows", () => {
+    const cp = new MarkdownCheckpointer()
+    const p1 = cp.push("| a | b |\n|---|")
+    const p2 = cp.push("---|\n")
+    const p3 = cp.push("| x | y |\n")
+    const p4 = cp.push("| p | q |\n")
+    expect([...p2.closed, ...p3.closed, ...p4.closed]).toEqual([]) // still open
+    const rows = partsToRows([
+      ...p1.closed, ...p2.closed, ...p3.closed, ...p4.closed, ...cp.finish(),
+    ])
+    const whole = partsToRows(
+      renderMarkdown("| a | b |\n|---|---|\n| x | y |\n| p | q |\n", true),
+    )
+    expect(rows.map(txt)).toEqual(whole.map(txt))
+    expect(rows.map(txt)).toEqual(["│ a │ b │", "├───┼───┤", "│ x │ y │", "│ p │ q │"])
+  })
+
+  it("M51 T2: a terminated heading / table still flushes as closed (behavior unchanged)", () => {
+    const h = new MarkdownCheckpointer()
+    const hp = h.push("## Title\n\nbody")
+    expect(hp.closed.map((p) => p.kind)).toEqual(["heading", "blank"])
+    expect(hp.tail?.kind).toBe("paragraph")
+    const t = new MarkdownCheckpointer()
+    const tp = t.push("| a | b |\n|---|---|\n| x | y |\n\nafter")
+    expect(tp.closed.map((p) => p.kind)).toEqual(["table", "blank"])
+    expect(tp.tail?.kind).toBe("paragraph")
+  })
 })
 
 /* ---------------------------------------------------------------- regression */

@@ -300,6 +300,75 @@ describe("MinimalCommits — print-once delta cursor", () => {
   })
 })
 
+// ------------------------------------------------------------------ 2b. M51 T1 shrink re-anchor
+
+describe("M51 T1 — commit cursor re-anchors after an engine shrink", () => {
+  const rowsOf = (delta: RegionLine[]): string[] =>
+    delta.map((l) => l.runs.map((r) => r.text).join(""))
+
+  /** 7 finished assistant blocks × 300 rows = 2100 rows over 14 blocks (≤16,
+   * so the Fenwick never grows — this pins the cursor defect alone). */
+  const fill2100 = (engine: ReturnType<typeof createScrollbackEngine>, seq: { n: number }): void => {
+    for (let b = 0; b < 7; b++) {
+      const text = Array.from({ length: 300 }, (_, i) => `S${b}-${i}`).join("\n")
+      engine.append({ type: "assistant", text, seq: seq.n++, ts: 0 })
+      engine.append({ type: "turn", phase: "end", seq: seq.n++, ts: 0 })
+    }
+  }
+
+  it("retain(): the first row after the shrink commits — never a mid-block resume", () => {
+    const engine = createScrollbackEngine({ width: 80 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    const seq = { n: 0 }
+    fill2100(engine, seq)
+    expect(engine.lineCount()).toBe(2100)
+    expect(commits.pendingDelta()).toHaveLength(2100) // fully committed
+
+    expect(engine.retain!({ maxLines: 1500 }).trimmedBlocks).toBeGreaterThan(0)
+    expect(engine.lineCount()).toBe(1501) // kept tail + marker
+    // The anim pump observes the shrink before new content arrives: re-anchor
+    // the cursor, flush nothing (print-once).
+    expect(commits.idleFlushDue(1000)).toBe(false)
+
+    engine.append({ type: "user", text: "NEW-TURN", seq: seq.n++, ts: 0 })
+    engine.append({
+      type: "assistant",
+      text: Array.from({ length: 610 }, (_, i) => `NEW-${i}`).join("\n"),
+      seq: seq.n++, ts: 0,
+    })
+    const rows = rowsOf(commits.pendingDelta())
+    // the new turn's FIRST row through its last — never a mid-block resume
+    expect(rows).toEqual([
+      "❯ NEW-TURN",
+      ...Array.from({ length: 610 }, (_, i) => `NEW-${i}`),
+    ])
+    expect(rows).not.toContain("S6-0") // retained prefix is never re-emitted
+    expect(commits.pendingDelta()).toEqual([]) // nothing left (print-once)
+  })
+
+  it("rewind: the cursor re-anchors and the new turn commits from its first row", () => {
+    const engine = createScrollbackEngine({ width: 80 })
+    const commits = new MinimalCommits(engine, { now: () => 0 })
+    let seq = 0
+    for (let i = 0; i < 10; i++) {
+      engine.append({ type: "user", text: `u${i}-0\nu${i}-1\nu${i}-2`, seq: seq++, ts: 0 })
+    }
+    expect(engine.lineCount()).toBe(30)
+    expect(commits.pendingDelta()).toHaveLength(30)
+
+    engine.append({ type: "rewind", targetTurn: 3, anchorSeq: 5, mode: "all", seq: seq++, ts: 0 })
+    expect(engine.lineCount()).toBe(16) // 5 kept blocks × 3 rows + the marker
+    expect(commits.idleFlushDue(1000)).toBe(false) // shrink → re-anchor, no flush
+
+    engine.append({ type: "user", text: "R-NEW", seq: seq++, ts: 0 })
+    engine.append({ type: "assistant", text: "R0\nR1\nR2\nR3\nR4", seq: seq++, ts: 0 })
+    expect(rowsOf(commits.pendingDelta())).toEqual([
+      "❯ R-NEW", "R0", "R1", "R2", "R3", "R4",
+    ])
+    expect(commits.pendingDelta()).toEqual([])
+  })
+})
+
 // ------------------------------------------------------------------ 3. mode switching
 
 describe("relaunchArgs / parseModeArg — same-session relaunch (spec §1)", () => {
