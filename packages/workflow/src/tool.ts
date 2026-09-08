@@ -143,8 +143,12 @@ export interface WorkflowMountConfig {
 // workflow_run/workflow_list tools. Returns the handle so a host (or the
 // plugin form, once one exists) can reclaim the tools.
 export function registerWorkflow(ctx: PluginContext, tools: ToolRegistry, config: WorkflowMountConfig): WorkflowMountHandle {
+  // D1 (m55): the mount workspace is ALSO the default step cwd — a step
+  // without its own cwd must run where the fs/shell tools resolve, not in the
+  // process cwd. Absent workspace → registry falls back to process.cwd() and
+  // the executor leaves step cwd unset (exec's own contract).
   const registry = createWorkflowRegistry({ workspace: config.workspace ?? process.cwd() })
-  const executor = createWorkflowExecutor({ exec: config.exec })
+  const executor = createWorkflowExecutor({ exec: config.exec, ...(config.workspace !== undefined ? { cwd: config.workspace } : {}) })
   ctx.services.register(workflowExecutorServiceName, executor)
   const runTool = createWorkflowRunTool({ registry, executor })
   const listTool = createWorkflowListTool({ registry })

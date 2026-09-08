@@ -193,8 +193,9 @@ describe("createShellTools", () => {
     await bash.execute({ command: "pwd" }, {})
     await pwsh.execute({ command: "pwd" }, {})
     await bash.execute({ command: "pwd", background: true }, {})
+    await pwsh.execute({ command: "pwd", background: true }, {})
     expect(foreground.map((c) => c.cwd)).toEqual(["/ws", "/ws"])
-    expect(background[0]!.cwd).toBe("/ws")
+    expect(background.map((c) => c.cwd)).toEqual(["/ws", "/ws"])
   })
 
   it("D1: no cwd configured → no cwd field (exec inherits the parent process cwd)", async () => {

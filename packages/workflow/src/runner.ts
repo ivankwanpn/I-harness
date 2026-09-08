@@ -152,9 +152,13 @@ function appendRaw(job: WorkflowJobEntry, text: string): void {
   job.stdout += text.endsWith("\n") ? text : text + "\n"
 }
 
-function stepCommand(step: WorkflowStep, values: Record<string, string>): ExecCommand {
+function stepCommand(step: WorkflowStep, values: Record<string, string>, defaultCwd?: string): ExecCommand {
   const cmd: ExecCommand = { argv: getArgv(interpolate(step.command, values)), abortSignal: undefined }
-  if (step.cwd !== undefined) cmd.cwd = interpolate(step.cwd, values)
+  // D1 (m55): an unset step cwd falls back to the executor's default (the
+  // assembly workspace) — an unset-cwd step must not operate on the process
+  // cwd tree. Absent default → no cwd field (exec's own contract).
+  const cwd = step.cwd !== undefined ? interpolate(step.cwd, values) : defaultCwd
+  if (cwd !== undefined) cmd.cwd = cwd
   if (step.env !== undefined) {
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(step.env)) env[k] = interpolate(v, values)
@@ -176,6 +180,9 @@ export function runWorkflowIn(
   // tool's exec context) — the per-session task projection attributes rows by
   // it. Undefined = non-session starter (panel/standalone).
   owner?: string,
+  // D1 (m55): default cwd for steps that do not declare one — the mount's
+  // workspace. Absent → exec's own contract (process cwd).
+  defaultCwd?: string,
 ): WorkflowRunHandle {
   const values = resolveParams(def, params)
   const job = store.createJob(owner)
@@ -206,7 +213,7 @@ export function runWorkflowIn(
       for (let attempt = 1; attempt <= attempts; attempt++) {
         appendLine(job, `[step ${i + 1}/${total} ${step.name}] started`)
         try {
-          const cmd = stepCommand(step, values)
+          const cmd = stepCommand(step, values, defaultCwd)
           cmd.abortSignal = controller.signal
           result = await exec.run(cmd)
         } catch (e) {
@@ -260,8 +267,8 @@ export function runWorkflowIn(
 // store, so jobs started this way are queryable via any executor's
 // getOutput/listJobs/killJob. `owner` attributes the run (the per-session
 // projection filters on it).
-export function runWorkflow(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService, owner?: string): WorkflowRunHandle {
-  return runWorkflowIn(def, params ?? {}, exec, sharedJobs, owner)
+export function runWorkflow(def: WorkflowDefinition, params: Record<string, string>, exec: ExecService, owner?: string, defaultCwd?: string): WorkflowRunHandle {
+  return runWorkflowIn(def, params ?? {}, exec, sharedJobs, owner, defaultCwd)
 }
 
 // Executor facade — the object Task 3's subagent job_* third layer consumes
@@ -278,13 +285,15 @@ export interface WorkflowExecutorDeps {
   exec: ExecService
   // Inject an isolated store (tests); default = the shared run-level store.
   jobs?: WorkflowJobStore
+  // D1 (m55): default cwd for steps without one — the mount's workspace.
+  cwd?: string
 }
 
 export function createWorkflowExecutor(deps: WorkflowExecutorDeps): WorkflowExecutor {
   const jobs = deps.jobs ?? sharedJobs
   return {
     runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowRunHandle {
-      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner)
+      return runWorkflowIn(def, params ?? {}, deps.exec, jobs, owner, deps.cwd)
     },
     getOutput(jobId: string): BackgroundJobView {
       return jobs.view(jobId)
