@@ -268,6 +268,25 @@ describe("runWorkflow execution semantics", () => {
     expect(calls[0]).toMatchObject({ argv: ["tool", "run"], cwd: "sub", env: { NODE_ENV: "production" }, timeoutMs: 1234 })
     expect(executor.getOutput(jobId).stdout).toContain("out-of-tool")
   })
+
+  // D1 (m55-shell): a step WITHOUT cwd must not fall through to the process
+  // cwd — the executor's default (the assembly workspace) applies; an explicit
+  // step.cwd still wins. Absent default → no cwd field (exec's own contract).
+  it("D1: a step without cwd runs in the executor's default cwd; step.cwd still wins", async () => {
+    const { exec, calls } = mockExec()
+    const executor = createWorkflowExecutor({ exec, jobs: createWorkflowJobStore(), cwd: "/ws" })
+    executor.runWorkflow(def({ steps: [{ name: "a", command: "npm test" }, { name: "b", command: "tool run", cwd: "sub" }] }))
+    await settle()
+    expect(calls.map((c) => c.cwd)).toEqual(["/ws", "sub"])
+  })
+
+  it("D1: no default cwd → no cwd field (exec's own contract: the process cwd)", async () => {
+    const { exec, calls } = mockExec()
+    const executor = createWorkflowExecutor({ exec, jobs: createWorkflowJobStore() })
+    executor.runWorkflow(def({ steps: [{ name: "a", command: "npm test" }] }))
+    await settle()
+    expect(calls[0]!.cwd).toBeUndefined()
+  })
 })
 
 describe("single-job executor (job_* third-layer contract)", () => {
@@ -357,6 +376,20 @@ describe("tools (workflow_run / workflow_list)", () => {
         { name: "deploy", description: "Ship it", whenToUse: "on release", params: { env: { default: "staging" } }, steps: 2 },
       ])
       await expect(tools.get(workflowRunName)!.execute({ name: "nope" }, {})).rejects.toThrowError(/unknown workflow/)
+    } finally { cleanup() }
+  })
+
+  // D1 (m55-shell): the mount workspace is the registry root AND the default
+  // step cwd — an unset-cwd step must run in the assembly workspace.
+  it("D1: registerWorkflow defaults a step without cwd to the mount workspace", async () => {
+    const { ws, cleanup } = setupWorkspace({ "quick.yml": "description: quick\nsteps:\n  - name: a\n    command: echo a\n" })
+    const { exec, calls } = mockExec()
+    try {
+      const ctx = createContext()
+      const tools = createToolRegistry(ctx)
+      registerWorkflow(ctx, tools, { workspace: ws, exec })
+      await tools.get(workflowRunName)!.execute({ name: "quick", wait: true }, {})
+      expect(calls[0]!.cwd).toBe(ws)
     } finally { cleanup() }
   })
 })

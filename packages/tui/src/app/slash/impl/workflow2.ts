@@ -277,8 +277,10 @@ function createLocalExecService(): {
  * <workspace>/workflow/*.yml) + executor (one background job per run in the
  * process-shared store — real local spawns through the shim above). */
 export function createDefaultWorkflowSurface(workspace?: string): WorkflowSurface {
+  // D1 (m55): the surface's workspace is also the default step cwd (an unset
+  // step cwd must not fall through to the process cwd).
   const registry = createWorkflowRegistry({ workspace: workspace ?? process.cwd() })
-  const executor = createWorkflowExecutor({ exec: createLocalExecService() })
+  const executor = createWorkflowExecutor({ exec: createLocalExecService(), ...(workspace !== undefined ? { cwd: workspace } : {}) })
   const toEntry = (d: WorkflowDefinition): WorkflowListEntry => ({
     name: d.name,
     description: d.description,

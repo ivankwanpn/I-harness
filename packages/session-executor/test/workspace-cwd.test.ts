@@ -4,7 +4,7 @@
 // `glob` with no path searched the vitest cwd — while the fs tools resolved
 // against the workspace.
 import { describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecService, type ExecService } from "@i-harness/exec"
@@ -153,6 +153,45 @@ describe("D1: assembly tools run in the assembly workspace", () => {
       await waitFor(() => stripAnsi(terminals.read(id, { sessionId: "s1" }).data).trim().length > 0)
       const data = stripAnsi(terminals.read(id, { sessionId: "s1" }).data)
       expect(fwd(data.trim())).toBe(fwd(workspace))
+    } finally {
+      await assembly.dispose()
+      rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it("workflow_run steps without cwd run in the assembly workspace", async () => {
+    const workspace = mkdtempSync(join(tmpdir(), "ih-ws-wf-"))
+    mkdirSync(join(workspace, "workflow"), { recursive: true })
+    // The step command is tokenized (no shell), so spawn node directly with a
+    // script that prints its cwd. Forward slashes: getArgv eats backslashes.
+    const nodePath = process.execPath.replace(/\\/g, "/")
+    writeFileSync(
+      join(workspace, "workflow", "cwd-probe.yml"),
+      [
+        "name: cwd-probe",
+        "description: print the step cwd",
+        "steps:",
+        "  - name: pwd",
+        `    command: '"${nodePath}" -e process.stdout.write(process.cwd())'`,
+        "",
+      ].join("\n"),
+    )
+    const assembly = await createSessionAssembly({
+      workspace,
+      sessionId: "s1",
+      approveAll: true,
+      modelPolicy: "test-mock",
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "workflow_run", args: { name: "cwd-probe", wait: true } }] },
+        { role: "assistant", text: "done" },
+      ],
+    })
+    try {
+      await assembly.agent.run("go")
+      const result = toolResults(assembly).find((r) => r.name === "workflow_run")!
+      const output = result.output as { output?: string; status?: string }
+      expect(output.status).toBe("completed")
+      expect(fwd(output.output ?? "")).toContain(fwd(workspace))
     } finally {
       await assembly.dispose()
       rmSync(workspace, { recursive: true, force: true })
