@@ -585,6 +585,59 @@ describe("M49 Task 10 — typed tool blocks (args/result/progress)", () => {
   })
 })
 
+describe("M51 F0 — Fenwick growth keeps prefix sums live", () => {
+  it("lineCount() after every append equals the appended row count (growth at block 17)", () => {
+    const e = eng({ width: 80 })
+    for (let i = 0; i < 20; i++) {
+      e.append(usr(`row-${i}`, i, 0))
+      expect(e.lineCount()).toBe(i + 1)
+    }
+  })
+
+  it("viewport/lineBlock map every row after the tree grew", () => {
+    const e = eng({ width: 80 })
+    const N = 20
+    // interleaved reads: the tree grows while earlier counts are already flushed
+    for (let i = 0; i < N; i++) {
+      e.append(usr(`row-${i}`, i, 0))
+      expect(e.lineCount()).toBe(i + 1)
+    }
+    expect(e.lineCount()).toBe(N)
+    expect(texts(e.viewport(0, N))).toEqual(
+      Array.from({ length: N }, (_, i) => `❯ row-${i}`),
+    )
+    // mid/tail windows resolve to their own blocks (select + sumBefore)
+    expect(texts(e.viewport(16, 3))).toEqual(["❯ row-16", "❯ row-17", "❯ row-18"])
+    expect(e.lineBlock(19)?.title).toBe("User")
+    expect(e.lineBlock(16)?.title).toBe("User")
+  })
+
+  it("retain() after growth trims to the marker + the kept tail", () => {
+    const e = eng({ width: 80 })
+    for (let i = 0; i < 20; i++) {
+      e.append(usr(`row-${i}`, i, 0))
+      e.lineCount() // interleaved flush (the frame loop reads every append)
+    }
+    expect(e.retain!({ maxLines: 5 }).trimmedBlocks).toBe(15)
+    expect(e.lineCount()).toBe(6) // marker + 5 kept rows
+    expect(texts(e.viewport(0, 6))).toEqual([
+      "  … earlier 15 lines",
+      "❯ row-15", "❯ row-16", "❯ row-17", "❯ row-18", "❯ row-19",
+    ])
+  })
+
+  it("rewind (resetAll) after growth rebuilds a correct index", () => {
+    const e = eng({ width: 80 })
+    for (let i = 0; i < 20; i++) e.append(usr(`row-${i}`, i, 0))
+    e.append({ type: "rewind", targetTurn: 3, anchorSeq: 10, mode: "all", seq: 100, ts: 0 })
+    expect(e.lineCount()).toBe(11) // 10 kept rows + the marker
+    expect(texts(e.viewport(0, 11))).toEqual([
+      ...Array.from({ length: 10 }, (_, i) => `❯ row-${i}`),
+      "Rewound to turn 3",
+    ])
+  })
+})
+
 describe("M49 Task 10 review F1 — secret-keyed result never renders through the block body", () => {
   it("a mapped secret-carrying result stays masked on the scrollback (the output string is the mapper's redacted text)", () => {
     const e = eng({ width: 80 })

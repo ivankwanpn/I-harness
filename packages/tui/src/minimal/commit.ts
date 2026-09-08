@@ -49,12 +49,14 @@ export class MinimalCommits {
   }
 
   /** Rows NOT yet committed (engine cursor → lineCount); advances the
-   * cursor. Line-count shrink (folding) clamps — committed content is never
-   * unwritten (the print-once red line). */
+   * cursor. A line-count shrink (retain/rewind) re-anchors the cursor DOWN to
+   * the new total so the next delta starts at the engine's first new row —
+   * never reset to 0, which would re-emit committed content (print-once). */
   pendingDelta(): RegionLine[] {
     const total = this.engine.lineCount()
-    const start = Math.min(this.cursor, total)
-    const height = Math.max(0, total - start)
+    if (total < this.cursor) this.cursor = total // shrink (retain/rewind)
+    const start = this.cursor
+    const height = total - start
     if (height <= 0) return []
     this.cursor = total
     return this.engine.viewport(start, height).map(displayToRegion)
@@ -80,9 +82,14 @@ export class MinimalCommits {
 
   /** Idle tail-flush: an uncommitted delta older than the threshold (a long
    * assistant stream with no block close). The loop ticks this from its
-   * 30fps pump; when true, flush via pendingDelta()+commitDelta. */
+   * 30fps pump; when true, flush via pendingDelta()+commitDelta. A shrink is
+   * re-anchored here too (the pump is the only observer between boundaries —
+   * waiting for pendingDelta would miss the shrink once total re-passes the
+   * stale cursor, resuming mid-block). */
   idleFlushDue(now: number): boolean {
-    if (this.engine.lineCount() <= this.cursor) return false
+    const total = this.engine.lineCount()
+    if (total < this.cursor) this.cursor = total // shrink (retain/rewind)
+    if (total <= this.cursor) return false
     return now - this.lastActivityAt >= this.flushMs
   }
 }

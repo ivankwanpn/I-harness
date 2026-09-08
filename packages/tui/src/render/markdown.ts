@@ -146,11 +146,17 @@ export class MarkdownCheckpointer {
     const last = parts[parts.length - 1]
     if (last === undefined) return 0
     switch (last.kind) {
-      case "heading":
       case "hr":
-      case "table":
       case "code-close":
-        return parts.length // self-closed structure
+        return parts.length // genuinely terminal (structure cannot re-lex)
+      case "heading":
+        // A heading can still grow while its source line is unterminated:
+        // "## Ti" + "tle" is one heading. Only a newline proves closure.
+        return this.buffer.endsWith("\n") ? parts.length : parts.length - 1
+      case "table":
+        // A table can still grow while rows keep arriving — emit it only once
+        // a non-table part follows (or finish()).
+        return parts.length - 1
       default:
         return parts.length - 1 // paragraph/list/blockquote/blank/code-open tail
     }

@@ -156,12 +156,21 @@ class Fenwick {
   ensure(capacity: number): void {
     if (capacity <= this.size()) return
     const next = Math.max(16, capacity * 2)
-    const nbit = new Array<number>(next + 1).fill(0)
-    for (let i = 1; i < this.bit.length; i++) nbit[i] = this.bit[i]
-    this.bit = nbit
     const npts = new Array<number>(next).fill(0)
     for (let i = 0; i < Math.min(this.points.length, npts.length); i++) npts[i] = this.points[i]
     this.points = npts
+    // M51 F0: REBUILD the tree from `points` — copying the old `bit` is wrong.
+    // pushBlock only marks dirty; the real set/add lands in the lazy flush, so
+    // the pre-growth deltas sit in nodes ≤ oldSize while the new nodes above it
+    // (e.g. bit[32] over points[0..31]) never received them. Growth doubles, so
+    // this O(n) rebuild is amortized O(1) per append; the O(dirty) flush is
+    // untouched.
+    this.bit = new Array<number>(next + 1).fill(0)
+    for (let i = 0; i < next; i++) {
+      const v = this.points[i]
+      if (v === 0) continue
+      for (let j = i + 1; j <= next; j += j & -j) this.bit[j] += v
+    }
   }
 
   add(pos: number, delta: number): void {
