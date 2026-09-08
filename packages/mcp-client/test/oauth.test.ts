@@ -38,7 +38,7 @@ it("provider: state() is single-flight per flow (SDK calls it during oauthFlow â
   expect(s1).toMatch(/^[A-Za-z0-9_-]{43}$/)
   expect(await provider.state!()).toBe(s1)
   await provider.saveCodeVerifier("verifier-abc")
-  expect(provider.codeVerifier()).resolves.toBe("verifier-abc")
+  await expect(provider.codeVerifier()).resolves.toBe("verifier-abc")
 })
 
 it("provider: statically configured clientId short-circuits dynamic registration (hidden via clientInformation)", async () => {
