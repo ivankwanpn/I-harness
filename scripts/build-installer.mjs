@@ -19,7 +19,7 @@
 //
 // Env overrides:
 //   IH_APP_VERSION   version string (default: package.json version)
-//   IH_NODE_VERSION  bundled node runtime version (default 22.16.0)
+//   IH_NODE_VERSION  bundled node runtime version (default: see below)
 //   IH_MAKENSIS      absolute path to makensis.exe
 //   --dist-dir <dir> override the app payload source (CI / smoke hook; the
 //                    payload must satisfy the same dist contract)
@@ -37,7 +37,13 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
 const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
 const APP_VERSION = process.env.IH_APP_VERSION ?? pkg.version ?? "0.1.0"
-const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? "22.16.0"
+// M55 version pin: the SHIPPED runtime must satisfy the DECLARED engines floor
+// (package.json engines.node >= 22.18 — required by node:sqlite's readOnly,
+// packages/session-query/src/index.ts:90). 22.23.2 is the latest 22.x LTS
+// (Jod) as of the pin; its NODE_MODULE_VERSION is 127 — the same ABI as the
+// previous 22.16.0 pin, so the native prebuilds (node-pty/koffi) still load.
+// Keep in sync with scripts/verify-installer.mjs (NODE_RUNTIME_VERSION).
+const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? "22.23.2"
 const NODE_ZIP_URL = `https://nodejs.org/dist/v${NODE_RUNTIME_VERSION}/node-v${NODE_RUNTIME_VERSION}-win-x64.zip`
 const NSIS_VERSION = process.env.IH_NSIS_VERSION ?? "3.11"
 const NSIS_ZIP_URL =
@@ -191,11 +197,25 @@ async function extractZip(zipPath, destDir) {
   console.log(`extracted ${relative(repoRoot, zipPath)} via PowerShell Expand-Archive`)
 }
 
+/** The version a cached runtime reports ("" when it cannot be run). */
+function cachedNodeVersion(nodeExe) {
+  const r = spawnSync(nodeExe, ["--version"], { encoding: "utf8" })
+  return r.status === 0 ? r.stdout.trim() : ""
+}
+
 async function ensureNodeRuntime() {
   const nodeExe = join(runtimeDir, "node.exe")
   if (existsSync(nodeExe)) {
-    console.log(`runtime cached: node v${NODE_RUNTIME_VERSION} at ${relative(repoRoot, nodeExe)}`)
-    return runtimeDir
+    const cached = cachedNodeVersion(nodeExe)
+    if (cached === `v${NODE_RUNTIME_VERSION}`) {
+      console.log(`runtime cached: node v${NODE_RUNTIME_VERSION} at ${relative(repoRoot, nodeExe)}`)
+      return runtimeDir
+    }
+    // M55: a stale cache must never ship a runtime that violates the pin
+    // (the old code returned early on ANY cached node.exe, so bumping
+    // IH_NODE_VERSION alone silently kept the old runtime).
+    console.log(`runtime cache mismatch: ${cached || "unreadable"} != v${NODE_RUNTIME_VERSION} — re-staging`)
+    rmSync(runtimeDir, { recursive: true, force: true })
   }
   const zipPath = join(downloadsDir, `node-v${NODE_RUNTIME_VERSION}-win-x64.zip`)
   console.log(`fetching official node zip: ${NODE_ZIP_URL}`)

@@ -35,7 +35,9 @@ import { spawn, spawnSync } from "node:child_process"
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const pkg = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"))
 const APP_VERSION = process.env.IH_APP_VERSION ?? pkg.version ?? "0.1.0"
-const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? "22.16.0"
+// M55: keep in sync with scripts/build-installer.mjs (NODE_RUNTIME_VERSION) —
+// this asserts the INSTALLED node.exe reports exactly this version.
+const NODE_RUNTIME_VERSION = process.env.IH_NODE_VERSION ?? "22.23.2"
 
 const buildDir = join(repoRoot, "build")
 const stagingDir = join(repoRoot, "installer", "staging")
@@ -178,6 +180,15 @@ async function main() {
   assert("ih.cmd --version prints version", v2.out.includes(APP_VERSION), v2.out.trim().slice(0, 120))
   const tuiHelp = await verifyLauncher("ih.cmd", ["tui", "--help"], "ih.cmd tui --help")
   assert("ih.cmd tui --help exits 0 (usage)", tuiHelp.code === 0, tuiHelp.out.trim().slice(0, 120))
+  // M55: the BUNDLED runtime must run the self-sufficient dist surfaces
+  // (minimal inline engine + ACL seam + SDK re-entry + relaunch argv) — the
+  // pin is only real if the shipped node.exe executes them.
+  const selfcheck = await verifyLauncher("ih.cmd", ["__dist-selfcheck"], "ih.cmd __dist-selfcheck")
+  assert(
+    "installed bundle self-sufficient (minimal + ACL + SDK) under the bundled node",
+    selfcheck.code === 0 && selfcheck.out.includes("dist-selfcheck: PASS"),
+    selfcheck.out.trim().slice(0, 300)
+  )
   const nodeV = await verifyLauncher("node\\node.exe", ["--version"], "bundled node.exe --version")
   assert(
     "bundled node.exe reports runtime version",

@@ -5,9 +5,11 @@
  *   node scripts/build-dist.mjs [--out dist]
  *
  * 1. esbuild bundle — apps/cli/src/index.ts  →  <out>/ih.mjs
- *    (platform node, format esm, target node22; the workspace TS graph is
- *    inlined; the three NATIVES are marked external because their native
- *    binaries cannot live inside the bundle: node-pty, koffi,
+ *    AND packages/sandbox-windows-acl/src/runner.ts → <out>/runner.mjs (the
+ *    confinement runner as a sibling bundle — the sandbox seam re-enters it
+ *    in dist; platform node, format esm, target node22; the workspace TS
+ *    graph is inlined; the three NATIVES are marked external because their
+ *    native binaries cannot live inside the bundle: node-pty, koffi,
  *    @vscode/ripgrep. They resolve from <out>/node_modules at runtime.)
  * 2. native deploy — the manifest at installer/dist-package.json pins the
  *    EXACT native versions (with a build-time check against the pnpm store:
@@ -20,8 +22,9 @@
  *    of the selected package (the bundle already inlines the workspace TS,
  *    so shipping all of it again would double the payload — this installs
  *    only the pinned externals instead, which is what the dist needs).
- * 3. layout — <out>/{ih.mjs + emitted assets, package.json, node_modules/,
- *    README-dist.txt}. The gate is scripts/verify-dist.mjs (fails loud).
+ * 3. layout — <out>/{ih.mjs, runner.mjs + emitted assets, package.json,
+ *    node_modules/, README-dist.txt}. The gate is scripts/verify-dist.mjs
+ *    (fails loud).
  */
 
 import { build } from "esbuild"
@@ -35,6 +38,7 @@ import { fileURLToPath } from "node:url"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const CLI_ENTRY = join(ROOT, "apps", "cli", "src", "index.ts")
+const RUNNER_ENTRY = join(ROOT, "packages", "sandbox-windows-acl", "src", "runner.ts")
 const MANIFEST_PATH = join(ROOT, "installer", "dist-package.json")
 const NATIVES = ["node-pty", "koffi", "@vscode/ripgrep"]
 const EXTERNALS = [...NATIVES]
@@ -113,16 +117,25 @@ log(`out dir: ${OUT}`)
 
 // ---------------------------------------------------------------- 1. bundle
 
-{
+/**
+ * Bundle one entry point with the shared options. Two entries are emitted:
+ *   ih.mjs     — the CLI/TUI (the whole workspace inlined);
+ *   runner.mjs — the windows-acl confinement runner as a SIBLING bundle:
+ *                packages/sandbox-windows-acl spawns it in dist
+ *                (I_HARNESS_DIST branch of runnerInvocation), so the sandbox
+ *                needs no source checkout and no tsx there. The runner has
+ *                its own entry guard, so `node runner.mjs` self-executes.
+ */
+async function bundleEntry(entry, outfile, label) {
   const t = Date.now()
   try {
     const result = await build({
-      entryPoints: [CLI_ENTRY],
+      entryPoints: [entry],
       bundle: true,
       platform: "node",
       format: "esm",
       target: TARGET_NODE,
-      outfile: join(OUT, "ih.mjs"),
+      outfile,
       external: EXTERNALS,
       logLevel: "info",
       absWorkingDir: ROOT,
@@ -146,11 +159,14 @@ log(`out dir: ${OUT}`)
         js: 'import { createRequire as __bannerCreateRequire } from "node:module";\nconst require = __bannerCreateRequire(import.meta.url);',
       },
     })
-    log(`esbuild bundle: ${join(OUT, "ih.mjs")} (${timing(t)}) ${result.warnings.length} warnings`)
+    log(`esbuild bundle (${label}): ${outfile} (${timing(t)}) ${result.warnings.length} warnings`)
   } catch (err) {
-    fail(`esbuild bundle failed: ${err instanceof Error ? err.message : String(err)}`)
+    fail(`esbuild bundle (${label}) failed: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
+
+await bundleEntry(CLI_ENTRY, join(OUT, "ih.mjs"), "cli")
+await bundleEntry(RUNNER_ENTRY, join(OUT, "runner.mjs"), "acl runner")
 
 // ---------------------------------------------------------------- 2. natives
 
@@ -204,15 +220,19 @@ log(`out dir: ${OUT}`)
     copyFileSync(a.from, a.to)
   }
   // drift scan: any OTHER static file-URL the bundle emits that is not
-  // resolvable against the out dir is a spawn-time asset (tsx-launched
-  // subprocess entries) — inform loudly, the init-gate is unaffected.
+  // resolvable against the out dir is a spawn-time asset — inform loudly.
+  // `./runner.ts` is the SOURCE branch of runnerInvocation (tsx); dist takes
+  // the `./runner.mjs` sibling-bundle branch, so it is not a missing asset.
   const bundleText = readFileSync(join(OUT, "ih.mjs"), "utf8")
   const staticUrls = [...bundleText.matchAll(/new URL\("((?:\.\.?\/)[^")]+)", import\.meta\.url\)/g)].map((m) => m[1])
-  const unhandled = staticUrls.filter((p) => !p.startsWith("../../../") && !existsSync(join(OUT, p)))
+  const SOURCE_ONLY_SPAWN_ENTRIES = new Set(["./runner.ts"])
+  const unhandled = staticUrls.filter(
+    (p) => !p.startsWith("../../../") && !SOURCE_ONLY_SPAWN_ENTRIES.has(p) && !existsSync(join(OUT, p)),
+  )
   if (unhandled.length > 0) {
     log(
       `warn: static file-URL(s) in the bundle with no dist artifact: ${unhandled.join(", ")} — ` +
-        "they are tsx-hosted subprocess entries (see README-dist.txt: I_HARNESS_HOME / spawn caveats).",
+        "spawn-time assets must ship next to the bundle (see README-dist.txt).",
     )
   }
   log(`runtime assets: ${assetFiles.map((a) => a.to).join(", ")} copied`)
@@ -237,10 +257,12 @@ writeFileSync(
 writeFileSync(
   join(OUT, "README-dist.txt"),
   [
-    "i-harness — M45 build-dist bundle",
+    "i-harness — M45/M55 build-dist bundle",
     "",
     "Layout:",
     "  ih.mjs            the esbuild bundle (whole CLI/TUI workspace inlined)",
+    "  runner.mjs        the windows-acl confinement runner (sibling bundle; the",
+    "                    sandbox seam spawns it in dist — no source checkout, no tsx)",
     "  node_modules/     the NATIVE externals (node-pty, koffi, @vscode/ripgrep)",
     "  package.json      dist manifest (same dependency pins as installer/dist-package.json)",
     "  model-catalog.json  runtime asset — read as new URL(\"./model-catalog.json\", import.meta.url)",
@@ -259,11 +281,14 @@ writeFileSync(
     "they resolve from ./node_modules at runtime. No tsx is needed — everything else",
     "is inlined (including the G1 minimal inline engine).",
     "",
-    "I_HARNESS_HOME=<path> : the environment override for the repo-relative spawns.",
-    "Unset is fine for the command surface; ONLY `tui --attach` (spawns `i-harness sdk`",
-    "via the tsx loader + apps/cli source) and the Windows-ACL sandbox runner (spawns",
-    "node --import tsx/esm on a source .ts entry) need a full source checkout — point",
-    "I_HARNESS_HOME at one to use those two surfaces from the bundle.",
+    "The bundle is SELF-SUFFICIENT (M55) — no source checkout and no tsx:",
+    "  - `tui --attach` spawns the SDK stdio server by re-entering this bundle",
+    "    (`node ih.mjs sdk …`);",
+    "  - the Windows-ACL sandbox spawns ./runner.mjs next to this bundle;",
+    "  - /minimal and /fullscreen relaunch this bundle with the flipped --mode;",
+    "  - minimal mode loads the inline engine from the bundle (no fallback).",
+    "I_HARNESS_HOME is a DEVELOPMENT-only override for SOURCE runs (a non-standard",
+    "checkout for the source SDK spawn); dist ignores it.",
     "",
     "Rebuild/verify (from the monorepo):",
     "  node scripts/build-dist.mjs && node scripts/verify-dist.mjs",

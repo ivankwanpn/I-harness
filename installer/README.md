@@ -29,9 +29,10 @@ What it does (each step cached/skip-if-not-needed):
    > prints the package version; `tui --help` (and `help`) exit 0.
 
 2. **Node runtime** — ensures `build/node-win-x64/node.exe`; downloads
-   `https://nodejs.org/dist/v22.16.0/node-v22.16.0-win-x64.zip`
+   `https://nodejs.org/dist/v22.23.2/node-v22.23.2-win-x64.zip`
    (override: `IH_NODE_VERSION`) and ships only `node.exe` + `*.dll` + `LICENSE`
-   (npm is stripped).
+   (npm is stripped). The pin must satisfy the root `engines.node >= 22.18`
+   floor; a stale cached runtime (a different version) is re-staged.
 3. **Staging** — copies payload → `installer/staging/dist`, runtime →
    `installer/staging/node`, writes `installer/staging/i-harness.cmd` and
    `ih.cmd` (`installer/staging/` is **gitignored** — it is a build artifact:
