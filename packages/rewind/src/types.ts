@@ -64,8 +64,9 @@ export interface RewindPendingTurn {
 
 /**
  * M54 G2: a leftover pending turn archived by recoverPending() into
- * `rewind/<sessionId>/orphaned.jsonl` (append-only — repeated crashes each
- * keep their own record).
+ * `rewind/<sessionId>/orphaned.jsonl` (logically append-only — repeated
+ * crashes each keep their own record; the file is rewritten atomically and
+ * never truncated).
  */
 export interface RewindOrphanRecord extends RewindPendingTurn {
   /** Epoch ms when recovery archived it. */
