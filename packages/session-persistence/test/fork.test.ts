@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
+import { append, createSession, rewindCuts, type SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   SessionForkUnavailableError,
@@ -135,5 +136,86 @@ describe("forkSession", () => {
     } finally {
       await cleanup()
     }
+  })
+
+  // M54 A3 (research G5): a rewind/point marker hides [anchorSeq, markerSeq) on
+  // the source's model surface (deriveMessages via rewindCuts). The fork seed
+  // must match that surface: pre-fix the prefix copied the hidden turn AND the
+  // marker into the child, resurrecting turns the source no longer shows.
+  it("excludes rewind-hidden turns and the rewind marker from the child seed", async () => {
+    const { coordinator, cleanup } = await fixture()
+    try {
+      await coordinator.create({ sessionId: "source", workspaceId: "ws-source" })
+      const log = createSession()
+      append(log, { type: "turn/start" })                                        // 0
+      append(log, { type: "user/message", text: "one" })                          // 1
+      append(log, { type: "assistant/message", text: "answer one" })              // 2
+      append(log, { type: "turn/end" })                                           // 3
+      append(log, { type: "turn/start" })                                         // 4 hidden
+      append(log, { type: "user/message", text: "hidden two" })                   // 5 hidden
+      append(log, { type: "assistant/message", text: "hidden answer two" })       // 6 hidden
+      append(log, { type: "turn/end" })                                           // 7 hidden
+      append(log, { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 4, mode: "all", fileOps: [] }) // 8
+      append(log, { type: "turn/start" })                                         // 9
+      append(log, { type: "user/message", text: "three" })                        // 10
+      append(log, { type: "assistant/message", text: "answer three" })            // 11
+      append(log, { type: "turn/end" })                                           // 12
+      await coordinator.append("source", log.events)
+
+      const result = await forkSession(coordinator, "source")
+      expect(result.seedLength).toBe(8)
+      const child = (await coordinator.load(result.sessionId)).session
+      expect(child.events.map((event) => event.type)).toEqual([
+        "turn/start", "user/message", "assistant/message", "turn/end",
+        "turn/start", "user/message", "assistant/message", "turn/end",
+      ])
+      expect(child.events
+        .filter((event) => event.type === "user/message" || event.type === "assistant/message")
+        .map((event) => (event as { text: string }).text))
+        .toEqual(["one", "answer one", "three", "answer three"])
+      // The child is a fresh session: seq === index (loadOwned's invariant) and
+      // no phantom rewind cut of its own (the child never had those turns).
+      expect(child.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+      expect(rewindCuts(child)).toEqual([])
+      const owned = await coordinator.loadOwned(result.sessionId)
+      expect(owned.session.events).toHaveLength(8)
+
+      // atSeq inside the hidden turn still resolves to the visible prefix:
+      // the boundary is the hidden turn's own end, which the cut then drops.
+      const atHidden = await forkSession(coordinator, "source", { atSeq: 5 })
+      expect(atHidden.seedLength).toBe(4)
+      expect((await coordinator.load(atHidden.sessionId)).session.events.map((event) => event.seq))
+        .toEqual([0, 1, 2, 3])
+    } finally {
+      await cleanup()
+    }
+  })
+
+  it("renumbers the seed and remaps seq references when a cut drops events", () => {
+    const events: SessionEvent[] = [
+      { type: "turn/start", seq: 0 },
+      { type: "user/message", text: "one", seq: 1 },
+      { type: "assistant/message", text: "answer one", seq: 2 },
+      { type: "turn/end", seq: 3 },
+      { type: "turn/start", seq: 4 },                                    // hidden
+      { type: "user/message", text: "hidden two", seq: 5 },              // hidden
+      { type: "compaction/summary", text: "sum", shadowedSeqs: [5], seq: 6 }, // hidden
+      { type: "turn/end", seq: 7 },                                      // hidden
+      { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 4, mode: "all", fileOps: [], seq: 8 },
+      { type: "session/title", title: "T", messageSeqs: [1, 5], source: "provider", seq: 9 },
+      { type: "turn/start", seq: 10 },
+      { type: "user/message", text: "three", seq: 11 },
+      { type: "compaction/reset", removedSeqs: [5, 11], seq: 12 },
+      { type: "turn/end", seq: 13 },
+    ]
+    const prefix = completedTurnPrefix(events, "source", undefined)
+    expect(prefix.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+    expect(prefix.map((event) => event.type)).toEqual([
+      "turn/start", "user/message", "assistant/message", "turn/end",
+      "session/title", "turn/start", "user/message", "compaction/reset", "turn/end",
+    ])
+    // refs into the dropped region are dropped; refs to kept events shift.
+    expect((prefix[4] as { messageSeqs: number[] }).messageSeqs).toEqual([1])
+    expect((prefix[7] as { removedSeqs: number[] }).removedSeqs).toEqual([6])
   })
 })
