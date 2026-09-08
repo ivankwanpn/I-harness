@@ -15,7 +15,7 @@ import type { InlineHost } from "../src/app/loop.ts"
 import { composeRegion } from "../src/minimal/live-region.ts"
 import type { LiveRegionState } from "../src/minimal/live-region.ts"
 import { MinimalCommits, commitDelta } from "../src/minimal/commit.ts"
-import { ModeSwitch, parseModeArg, relaunchArgs } from "../src/minimal/mode.ts"
+import { defaultRelaunchArgv, ModeSwitch, parseModeArg, relaunchArgs } from "../src/minimal/mode.ts"
 import { createInlineLiveRegion, InlineLiveRegionImpl, sgrFromPalette } from "../src/minimal/inline.ts"
 import { dispatchKey } from "../src/app/keys.ts"
 import type { Kbd, KeymapState } from "../src/app/keys.ts"
@@ -605,6 +605,45 @@ describe("relaunchArgs / parseModeArg — same-session relaunch (spec §1)", () 
     expect(parseModeArg(["--mode", "minimal"])).toBe("minimal")
     expect(parseModeArg(["--mode=fullscreen"])).toBe("fullscreen")
     expect(parseModeArg([])).toBe(undefined)
+  })
+})
+
+describe("defaultRelaunchArgv — absolute source loader; dist re-execs the bundle", () => {
+  const realExecArgv = process.execArgv
+  const realDist = process.env.I_HARNESS_DIST
+  afterEach(() => {
+    process.execArgv = realExecArgv
+    if (realDist === undefined) delete process.env.I_HARNESS_DIST
+    else process.env.I_HARNESS_DIST = realDist
+  })
+
+  // F6 (m55 follow-up, same defect class as F1): the bare `tsx` specifier is
+  // resolved by node from the SPAWN cwd. The relaunch inherits the parent cwd
+  // (a global-install launch runs in the user's project folder), so a bare
+  // loader fails there. The argv assertion is the pin — a full relaunch spawns
+  // a real TUI host and is not exercisable in a unit test (the harness case-015
+  // / dist self-check cover the real spawn).
+  it("reuses the parent's absolute --import loader when present (global ih shim)", () => {
+    const loader = "file:///C:/global-install/node_modules/tsx/dist/loader.mjs"
+    process.execArgv = ["--conditions", "node", "--import", loader, "--conditions", "development"]
+    const argv = defaultRelaunchArgv(["--workspace", "w", "--mode", "minimal"])
+    expect(argv.slice(0, 2)).toEqual(["--import", loader])
+    expect(argv.slice(2)).toEqual([process.argv[1] ?? "index.ts", "--workspace", "w", "--mode", "minimal"])
+  })
+
+  it("resolves tsx to an ABSOLUTE file URL when the parent carries no loader (never bare tsx)", () => {
+    process.execArgv = ["--conditions", "node", "--conditions", "development"]
+    const argv = defaultRelaunchArgv(["--workspace", "w"])
+    expect(argv[0]).toBe("--import")
+    expect(argv[1]).toMatch(/^file:\/\/\/.*\/tsx\/dist\/loader\.mjs$/)
+    expect(argv[1]).not.toBe("tsx")
+  })
+
+  it("DIST re-execs the bundle with NO loader (branch unchanged)", () => {
+    process.env.I_HARNESS_DIST = "1"
+    process.execArgv = ["--import", "file:///C:/global-install/node_modules/tsx/dist/loader.mjs"]
+    const argv = defaultRelaunchArgv(["--workspace", "w"])
+    expect(argv).toEqual([process.argv[1] ?? "index.ts", "--workspace", "w"])
   })
 })
 
