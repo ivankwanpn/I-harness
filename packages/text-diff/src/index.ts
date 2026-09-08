@@ -78,12 +78,13 @@ export function createTextDiff(path: string, before: string, after: string, opti
 
 // Bounded head/tail windows: never let oversized input block the turn.
 // Windows are INDEX-ALIGNED: both sides share the same head positions
-// [0..N) and end-anchored tail positions, and each pair always has EQUAL
-// lengths — a window of one side is never diffed against a longer window of
-// the other (that fabricates deletions/additions from positional skew).
-// The tail pair is diffed only when its absolute positions overlap;
-// otherwise the two windows compare unrelated regions and every line would
-// be fabricated as changed (e.g. a pure append above the window size).
+// [0..N), and the tail pair compares the same ABSOLUTE positions on both
+// sides over the union of the two end-anchored windows. A window of one side
+// is never diffed against a positionally skewed window of the other (that
+// fabricates deletions/additions from the skew). The tail pair is diffed
+// only when its absolute positions overlap; otherwise the two windows
+// compare unrelated regions and every line would be fabricated as changed
+// (e.g. a pure append above the window size).
 function windowedDiff(path: string, before: string, after: string, context: number): TextDiff {
   const bRows = before.split("\n")
   const aRows = after.split("\n")
@@ -105,22 +106,31 @@ function windowedDiff(path: string, before: string, after: string, context: numb
   )
 
   // Tail pair: end-anchored — the last min(tailB, tailA) rows of each side,
-  // where a side's tail never overlaps its own head window.
+  // where a side's tail never overlaps its own head window. The pair is only
+  // compared when the two windows' ABSOLUTE ranges overlap; the comparison
+  // then runs over the union of those ranges at the SAME absolute positions
+  // on both sides, clamped so it never re-diffs rows the head pair already
+  // covered. Position-aligned comparison keeps a pure append/truncation from
+  // fabricating deletions/additions: the size delta shows up as the surplus
+  // rows at the end of the longer side, not as boundary skew (equal-length
+  // end-anchored windows shifted by the delta turned the before-only prefix
+  // into phantom deletions).
   const m = Math.min(tailWindow(bRows).length, tailWindow(aRows).length)
   if (m > 0) {
     const bStart = bRows.length - m
     const aStart = aRows.length - m
     const overlaps = bStart < aStart + m && aStart < bStart + m
     if (overlaps) {
+      const start = Math.max(Math.min(bStart, aStart), headLen)
       parts.push(
         diffTexts({
           path,
-          oldStr: bRows.slice(bStart).join("\n"),
-          newStr: aRows.slice(aStart).join("\n"),
+          oldStr: bRows.slice(start).join("\n"),
+          newStr: aRows.slice(start).join("\n"),
           context,
           truncated: true,
-          oldOffset: bStart,
-          newOffset: aStart,
+          oldOffset: start,
+          newOffset: start,
         }),
       )
     }

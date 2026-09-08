@@ -91,16 +91,45 @@ describe("createTextDiff", () => {
   })
 
   it("still reports a real tail append when the windows overlap", () => {
-    const before = Array.from({ length: 60_000 }, (_, i) => `L${i}`).join("\n")
-    const after = before + "\n" + Array.from({ length: 500 }, (_, i) => `E${i}`).join("\n")
+    const before = Array.from({ length: 60_000 }, (_, i) => `L${i}`).join("\n") + "\n"
+    const after = before + Array.from({ length: 500 }, (_, i) => `E${i}`).join("\n") + "\n"
     const diff = createTextDiff("a.txt", before, after)
     expect(diff.truncated).toBe(true)
-    expect(diff.added).toBeGreaterThanOrEqual(500)
+    expect(diff.added).toBe(500)
     // the append lines are reported as real additions (end-anchored windows
-    // still show content that lies inside the overlap); skew at the window
-    // boundary is bounded by the append size, far below full-window fabrication
+    // still show content that lies inside the overlap); a pure append has no
+    // before-only content, so no deletion may be fabricated at the boundary
     expect(diff.hunks.some((h) => h.lines.some((l) => l.kind === "add" && l.text.startsWith("E")))).toBe(true)
-    expect(diff.deleted).toBeLessThanOrEqual(1000)
+    expect(diff.deleted).toBe(0)
+  })
+
+  it("reports a small pure append as additions only (no phantom deletions)", () => {
+    const before = Array.from({ length: 60_000 }, (_, i) => `L${i}`).join("\n") + "\n"
+    const after = before + Array.from({ length: 10 }, (_, i) => `E${i}`).join("\n") + "\n"
+    const diff = createTextDiff("a.txt", before, after)
+    expect(diff.truncated).toBe(true)
+    expect(diff.added).toBe(10)
+    expect(diff.deleted).toBe(0)
+  })
+
+  it("reports a pure truncation as deletions only (no phantom additions)", () => {
+    const before = Array.from({ length: 60_000 }, (_, i) => `L${i}`).join("\n") + "\n"
+    const after = Array.from({ length: 59_990 }, (_, i) => `L${i}`).join("\n") + "\n"
+    const diff = createTextDiff("a.txt", before, after)
+    expect(diff.truncated).toBe(true)
+    expect(diff.added).toBe(0)
+    expect(diff.deleted).toBe(10)
+  })
+
+  it("still reports a real modification inside the tail window", () => {
+    const before = Array.from({ length: 60_000 }, (_, i) => `L${i}`).join("\n") + "\n"
+    const after = before.replace("L55000\n", "X\n").replace("L55001\n", "X\n").replace("L55002\n", "X\n")
+    const diff = createTextDiff("a.txt", before, after)
+    expect(diff.truncated).toBe(true)
+    expect(diff.added).toBe(3)
+    expect(diff.deleted).toBe(3)
+    const deleted = diff.hunks.flatMap((h) => h.lines).filter((l) => l.kind === "delete")
+    expect(deleted.map((l) => l.oldLine)).toEqual([55_001, 55_002, 55_003])
   })
 
   it("splits merged hunks without losing markers or line numbers", () => {
