@@ -20,6 +20,24 @@ describe("llm-anthropic protocol", () => {
     await it.return?.()
   })
 
+  it("M60 G: a case-variant configured auth header is dropped — exactly one x-api-key", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({
+      apiKey: "k",
+      baseUrl: "https://api.test",
+      model: "m",
+      headers: { "x-opencode-session": "sess-1", "X-Api-Key": "WRONG" },
+    })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const headers = (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+    expect(Object.keys(headers).filter((key) => key.toLowerCase() === "x-api-key")).toEqual(["x-api-key"])
+    expect(headers["x-api-key"]).toBe("k")
+    expect(headers["x-opencode-session"]).toBe("sess-1")
+    await it.return?.()
+  })
+
   it("maps a mocked SSE response to LLMStreamEvents", async () => {
     const sse = [
       `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "hel" } })}`,

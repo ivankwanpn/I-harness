@@ -27,6 +27,24 @@ describe("llm-openai protocol", () => {
     await it.return?.()
   })
 
+  it("M60 G: a case-variant configured `authorization` is dropped — exactly one auth header", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({
+      apiKey: "k",
+      baseUrl: "https://api.test",
+      model: "m",
+      headers: { "x-opencode-session": "sess-1", authorization: "Bearer WRONG" },
+    })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const headers = (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+    expect(Object.keys(headers).filter((key) => key.toLowerCase() === "authorization")).toEqual(["Authorization"])
+    expect(headers.Authorization).toBe("Bearer k")
+    expect(headers["x-opencode-session"]).toBe("sess-1")
+    await it.return?.()
+  })
+
   it("maps a mocked SSE response to LLMStreamEvents", async () => {
     const sse = [
       `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "hel" })}`,

@@ -221,4 +221,22 @@ describe("M32 reasoning effort (openai-family Chat Completions)", () => {
     expect(headers.Authorization).toBe("Bearer k")
     await it.return?.()
   })
+
+  it("M60 G: a case-variant configured `authorization` is dropped — exactly one auth header", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({
+      apiKey: "k",
+      baseUrl: "https://api.test",
+      model: "m",
+      headers: { "x-opencode-session": "sess-1", authorization: "Bearer WRONG" },
+    })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const headers = (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+    expect(Object.keys(headers).filter((key) => key.toLowerCase() === "authorization")).toEqual(["Authorization"])
+    expect(headers.Authorization).toBe("Bearer k")
+    expect(headers["x-opencode-session"]).toBe("sess-1")
+    await it.return?.()
+  })
 })
