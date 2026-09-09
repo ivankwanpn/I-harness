@@ -91,6 +91,42 @@ describe("mapSessionEvent", () => {
     expect(toolResultIsError(null)).toBe(false)
   })
 
+  it("M60 D: a non-zero execute exitCode is never silent success — body carries `exit N`, status is error", () => {
+    const state = createEventMapState()
+    // The exact defect: {stdout:"",stderr:"",exitCode:1} used to map to
+    // status "done" with an EMPTY body — a failed command read as success.
+    const failed = mapSessionEvent({
+      type: "tool/result",
+      callId: "c9",
+      name: "bash",
+      output: { stdout: "", stderr: "", exitCode: 1 },
+      seq: 20,
+    } as never, state)!
+    expect(failed).toMatchObject({ type: "tool", callId: "c9", status: "error" })
+    const failedText = failed.type === "tool" ? failed.output : ""
+    expect(failedText).toContain("exit 1")
+    // the RAW envelope stays available (the block viewer's raw view)
+    expect(failed.type === "tool" ? failed.result : undefined).toEqual({ stdout: "", stderr: "", exitCode: 1 })
+
+    // output + non-zero exit: the stream stays AND the exit is marked
+    const withOut = mapSessionEvent({
+      type: "tool/result",
+      callId: "c10",
+      name: "bash",
+      output: { stdout: "boom\n", stderr: "err", exitCode: 2 },
+      seq: 21,
+    } as never, state)!
+    const withOutText = withOut.type === "tool" ? withOut.output : ""
+    expect(withOut).toMatchObject({ type: "tool", status: "error" })
+    expect(withOutText).toContain("boom")
+    expect(withOutText).toContain("exit 2")
+
+    // exit 0 / absent stays success; a bare non-zero exit is an error
+    expect(toolResultIsError({ stdout: "", stderr: "", exitCode: 0 })).toBe(false)
+    expect(toolResultIsError({ stdout: "ok" })).toBe(false)
+    expect(toolResultIsError({ exitCode: 1 })).toBe(true)
+  })
+
   it("tool/result: secret-keyed fields are masked in the presentation string; the raw result stays intact (review F1)", () => {
     const state = createEventMapState()
     // A NON-execute tool: execute results render their stdout/stderr stream

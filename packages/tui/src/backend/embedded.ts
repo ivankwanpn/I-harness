@@ -100,11 +100,20 @@ function stringifyOutput(output: unknown): string {
   }
 }
 
+/** M60 D: the shell envelope's exit code — only a finite number counts (the
+ * engine's own shape; a string is not treated as one). */
+function exitCodeOf(r: Record<string, unknown>): number | undefined {
+  const code = r.exitCode
+  return typeof code === "number" && Number.isFinite(code) ? code : undefined
+}
+
 /** M59 grok parity: an execute tool's result renders its human-readable
  * stream, not the `{ stdout, stderr, exitCode }` JSON envelope (grok's
  * expanded block shows the raw command output). Only the shell-tool shape
  * opts in — anything without a string `stdout` member keeps the faithful
- * stringified payload. `output` must already be redacted by the caller. */
+ * stringified payload. `output` must already be redacted by the caller.
+ * M60 D: a non-zero exit is appended as `exit N` — with empty stdout AND
+ * stderr the body used to be "" (an invisible failure). */
 function executeOutputText(output: unknown): string | undefined {
   if (output === null || typeof output !== "object" || Array.isArray(output)) return undefined
   const r = output as Record<string, unknown>
@@ -112,6 +121,8 @@ function executeOutputText(output: unknown): string | undefined {
   const parts: string[] = []
   if (r.stdout !== "") parts.push(r.stdout)
   if (typeof r.stderr === "string" && r.stderr !== "") parts.push(r.stderr)
+  const exit = exitCodeOf(r)
+  if (exit !== undefined && exit !== 0) parts.push(`exit ${exit}`)
   return parts.join("\n")
 }
 
@@ -144,14 +155,19 @@ function structuredChangeText(output: unknown): string | undefined {
 
 /** Heuristic error output detection for tool/result (M37a):
  * - an object with a truthy `error` field (engine synthetic abort result and
- *   fs error results look exactly like this), or
+ *   fs error results look exactly like this),
+ * - an object with a non-zero numeric `exitCode` (M60 D: a failed shell
+ *   command — possibly with an empty stream — is not success), or
  * - a string starting with "Error"/"error" (e.g. "Error: ...").
  * Everything else is a normal done result. */
 export function toolResultIsError(output: unknown): boolean {
   if (output === null || output === undefined) return false
   if (typeof output === "object" && !Array.isArray(output)) {
-    const err = (output as Record<string, unknown>).error
+    const o = output as Record<string, unknown>
+    const err = o.error
     if (err !== undefined && err !== null && err !== "") return true
+    const exit = exitCodeOf(o)
+    if (exit !== undefined && exit !== 0) return true
   }
   const text = typeof output === "string" ? output : JSON.stringify(output) ?? ""
   return /^(error|fail(ed)?)\b[\s:"'{\[]/i.test(text.trimStart())
