@@ -89,6 +89,8 @@ node scripts/build-installer.mjs    # → build\I-harness-Setup-0.1.0.exe
 
 ## 分發與打包
 
+> **前置**：Node ≥ 22.18 與 **pnpm ≥ 10**。倉庫的 `pnpm-workspace.yaml` 用 pnpm-10 語法（`allowBuilds` / `ignoreWorkspaceCycles`）；且 dist 的原生部署要求 pnpm 10 的 hoisted linker——**pnpm 9 會靜默漏裝平台原生包**（`@koromix/koffi-win32-x64`、`@vscode/ripgrep-win32-x64`），產物啟動即失敗。`build-dist` 現在對 pnpm < 10 fail-loud（M59 修復）。
+
 **兩種「安裝」途徑，產權一致**（同一 shim 啟動器）：
 
 ### 1. 全局鏈接（開發/源碼模式）
