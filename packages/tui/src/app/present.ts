@@ -912,6 +912,20 @@ export function present(
         app.overlay.draw(overlayRect, view, palette, glyphs)
       } else if (app.sessions !== undefined) {
         renderSessionPicker(overlayRect, app.sessions, view, palette, glyphs)
+      } else if (app.historyPanel !== undefined) {
+        renderHistoryPanel(overlayRect, app.historyPanel, view, palette, glyphs)
+      } else if (app.lightPanel !== undefined) {
+        renderLightPanel(overlayRect, app.lightPanel, view, palette, glyphs)
+      } else if (app.fileSearch !== undefined) {
+        renderFileSearch(overlayRect, app.fileSearch, view, palette, glyphs)
+      } else if (app.completion !== undefined) {
+        renderCompletionDropdown(overlayRect, app.completion, view, palette, glyphs)
+      } else if (app.slash !== undefined) {
+        // M59: the Welcome prompt accepts text (the editor runs before the
+        // keymap), so typing `/` sets app.slash here too — but this branch
+        // returned without drawing it, leaving the command list invisible
+        // until a session existed. Mirror the agent screen's dropdown family.
+        renderSlashDropdown(overlayRect, app.slash, view, palette, glyphs)
       }
     }
     if (opts.hud !== undefined && area.cols >= 12) {

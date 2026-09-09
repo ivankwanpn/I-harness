@@ -467,4 +467,43 @@ describe("TuiApp model picker — discovery wiring", () => {
     await waitFor(() => discover.mock.calls.length === 2)
     expect(discover).toHaveBeenCalledTimes(2)
   })
+
+  it("M59: typing `/` on Welcome renders the slash command list", async () => {
+    const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
+    const { app, renderer } = testApp(backend, await providerController())
+    await app.initialize({ renderWelcomeBeforeModel: true })
+
+    app.feedInput({ type: "key", code: "char", key: "/", ctrl: false, alt: false, shift: false })
+    await waitFor(() => app.state().slash !== undefined)
+    expect(app.state().slash!.entries.length).toBeGreaterThan(0)
+    app.frame()
+    // the command list is DRAWN on the Welcome screen (the branch used to
+    // return before the dropdown family, leaving `/` invisible until a
+    // session existed). The visible window is the first SLASH_MAX_ROWS
+    // entries, so assert the first one.
+    const first = app.state().slash!.entries[0]!.command
+    expect(frontText(renderer)).toContain(`/${first}`)
+  })
+
+  it("M59: closing the settings modal refreshes a stale Welcome model state", async () => {
+    let modelState: BackendModelState = { status: "unconfigured", reason: "No model configured" }
+    const backend = recordingBackend({ status: "unconfigured", reason: "No model configured" })
+    backend.modelState = async () => modelState
+    const { app } = testApp(backend, await providerController())
+    await app.initialize({ renderWelcomeBeforeModel: true })
+    expect(app.state().welcome?.modelState.status).toBe("unconfigured")
+
+    // Enter on the unconfigured Welcome prompt opens Models & Providers
+    app.state().prompt.text = "hello"
+    app.state().prompt.cursor = 5
+    app.feedInput(enterKey())
+    await waitFor(() => (app.state().overlay as { kind?: string } | undefined)?.kind === "settings")
+
+    // the wizard persists a provider/model → the backend now resolves ready
+    modelState = { status: "ready", providerId: "opencode go", modelId: "glm-5.3-flash", label: "opencode go:glm-5.3-flash" }
+    app.feedInput(escapeKey())
+    app.feedInput(escapeKey())
+    await waitFor(() => app.state().welcome?.modelState.status === "ready")
+    expect(app.state().welcome?.modelState).toMatchObject({ label: "opencode go:glm-5.3-flash" })
+  })
 })
