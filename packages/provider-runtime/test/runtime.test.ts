@@ -437,6 +437,38 @@ describe("auth and discovery", () => {
     })
   })
 
+  it("M60 E: discoverModels forwards the route's configured headers to the built-in probe", async () => {
+    const gwFetch = vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: "gw-model" }] }), { status: 200 }),
+    )
+    vi.stubGlobal("fetch", gwFetch)
+    const { runtime } = await fixture({
+      providers: {
+        custom: {
+          baseURL: "https://gateway.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "CUSTOM_API_KEY",
+          // the documented use case: a gateway requiring a session header
+          headers: { "x-opencode-session": "sess-9" },
+        },
+      },
+      credentials: { CUSTOM_API_KEY: "k" },
+      registry(registry) {
+        registry.register({
+          name: "custom",
+          displayName: "Custom",
+          protocol: "openai-compatible",
+        })
+      },
+    })
+
+    await expect(runtime.discoverModels("custom", { force: true })).resolves.toEqual([{ id: "gw-model" }])
+    expect(gwFetch).toHaveBeenCalledWith("https://gateway.example/v1/models", {
+      headers: { "x-opencode-session": "sess-9", Authorization: "Bearer k" },
+      signal: expect.any(AbortSignal),
+    })
+  })
+
   it("allows Bedrock ambient auth and reports manual-only discovery", async () => {
     const probe = vi.fn(async () => [{ id: "should-not-run" }])
     const { runtime, builds } = await fixture({
