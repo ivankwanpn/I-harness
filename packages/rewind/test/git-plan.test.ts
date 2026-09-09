@@ -139,4 +139,23 @@ describe("plan().unseen (R-B4 A, real git repo)", () => {
     const plan = await bare.plan(1)
     expect(plan.unseen).toBeUndefined()
   })
+
+  it("M60 F: an injected probe that rejects stays fail-soft — plan() resolves with no unseen", async () => {
+    // The built-in probe is fail-soft, but the seam is host-injected: a probe
+    // that throws must not break plan() (the documented contract is evidence
+    // only, never a hard dependency).
+    writeFileSync(join(workspace, "shell.txt"), "s")
+    const failing = new RewindService({
+      store,
+      workspace,
+      gitProbe: {
+        changes: async () => {
+          throw new Error("probe exploded")
+        },
+      },
+    })
+    const plan = await failing.plan(1)
+    expect(plan.unseen).toBeUndefined()
+    expect(plan.target).toBe(1)
+  })
 })
