@@ -705,7 +705,12 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // assembly (the wire is v0 — the SDK subprocess owns its own host; its
   // approvals/fail-closed semantics are the CLI's, not ours — honest gap).
   const bridgeSubscriptions = new Set<(assembly: SessionAssembly) => void>()
-  const bridge = createApprovalBridge(createBridgeService(bridgeSubscriptions))
+  // M59: approveAll and the bridge answerer are MUTUALLY EXCLUSIVE — an
+  // assembly created with approveAll already registers `approval/answerer`,
+  // and a second registration throws "duplicate service registration" during
+  // session creation (the default install: guardian off → approveAll on).
+  const approveAll = !tuiPrefs.guardian || tuiPrefs.alwaysApprove
+  const bridge = createApprovalBridge(createBridgeService(bridgeSubscriptions), { approvals: !approveAll })
 
   // Backend (M38b G2): `--attach <sessionId>` → the REMOTE SDK backend — spawn
   // `i-harness sdk` (the CLI's stdio JSON-RPC server) and
@@ -738,7 +743,7 @@ export async function runTui(flags: TuiFlags): Promise<number> {
         // without a bridge fails closed — the bridge is G1's createApprovalBridge;
         // the default factory never attaches one, so guardian stays the
         // durable knob + the honest "asks" semantics at the ask surface).
-        approveAll: !tuiPrefs.guardian || tuiPrefs.alwaysApprove,
+        approveAll,
         // M49 Task 10: every production assembly gets the bridge answerers
         // (the bridge attach — fail-closed when the UI cannot surface).
         onAssembly: (assembly: SessionAssembly) => { for (const hook of bridgeSubscriptions) hook(assembly) },
