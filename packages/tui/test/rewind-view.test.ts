@@ -60,6 +60,7 @@ const baseState = (partial: Partial<RewindState> = {}): RewindState => ({
   cursor: 0,
   cleanPaths: [],
   conflicts: [],
+  unseen: [],
   ...partial,
 })
 
@@ -165,6 +166,48 @@ describe("renderRewind — §3.9 phase goldens", () => {
       "! x0.txt (modified)", "! x1.txt (modified)", "! x2.txt (modified)",
       "! x3.txt (modified)", "! x4.txt (modified)", "+1 more",
     ])
+  })
+
+  it("M58 unseen rows follow the conflicts (cap 5 + `+N more`)", () => {
+    const unseen = Array.from({ length: 6 }, (_, i) => ({
+      path: `u${i}.txt`,
+      kind: (i === 0 ? "untracked" : "modified") as "untracked" | "modified",
+    }))
+    const rows = rewindConfirmRows(baseState({
+      phase: "confirm",
+      points: [{ turnIndex: 0, preview: "w", files: 2 }],
+      selectedTurn: 0,
+      mode: "all",
+      cleanPaths: ["src/a.txt"],
+      conflicts: [{ path: "z.txt", kind: "modified" }],
+      unseen,
+    }))
+    expect(rows).toEqual([
+      "src/a.txt",
+      "! z.txt (modified)",
+      "? u0.txt (unseen: untracked)",
+      "? u1.txt (unseen: modified)",
+      "? u2.txt (unseen: modified)",
+      "? u3.txt (unseen: modified)",
+      "? u4.txt (unseen: modified)",
+      "+1 more",
+    ])
+  })
+
+  it("M58 unseen rows are drawn but never counted in the `(N files)` title", () => {
+    const r = make(80, 24)
+    drawRewind(r, baseState({
+      phase: "confirm",
+      points: [{ turnIndex: 0, preview: "Write hello", files: 1 }],
+      selectedTurn: 0,
+      mode: "all",
+      cleanPaths: ["src/a.txt"],
+      unseen: [{ path: "shell.txt", kind: "untracked" }],
+    }), 100)
+    expect(rowText(r, 2)).toContain('(1 files)') // unseen NOT counted
+    expect(rowText(r, 3)).toContain("src/a.txt")
+    expect(rowText(r, 4)).toContain("? shell.txt (unseen: untracked)")
+    expect(rowText(r, 5)).toContain("y (●) Confirm rewind")
   })
 
   it("executing: `Rewinding...`", () => {

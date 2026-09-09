@@ -3577,7 +3577,7 @@ export class TuiApp {
   private openRewind(): void {
     if (this.opts.backend.rewind === undefined) return
     this.armedRewind = false
-    const state: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [] }
+    const state: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [], unseen: [] }
     this.app.dimFrom = this.opts.engine.rewindAnchor?.()
     this.app.overlay = bindRewindOverlay(state, {
       backend: this.opts.backend,

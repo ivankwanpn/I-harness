@@ -26,7 +26,7 @@
 // §3.9 labels; the actions are distinct tokens).
 
 import type { GlyphSet, Palette } from "@i-harness/tui-core"
-import type { ConflictOp, ConflictType, RewindMode, RewindPointSummary } from "@i-harness/rewind"
+import type { ConflictOp, ConflictType, RewindMode, RewindPointSummary, UnseenChange } from "@i-harness/rewind"
 import type { Rect, Style, ViewDraw } from "./agent.ts"
 import type { KeyLike } from "./permission.ts"
 
@@ -52,6 +52,10 @@ export interface RewindState {
   cleanPaths: string[]
   /** plan.conflicts (confirm rows — `! {path} ({kind})` warning). */
   conflicts: ConflictOp[]
+  /** M58 R-B4 A: plan.unseen — disk changes the journal cannot explain (shell/
+   * external writes; the rewind never touches them). Confirm rows —
+   * `? {path} (unseen: {kind})`, informational. */
+  unseen: UnseenChange[]
   /** Error message (phase "error"). */
   error?: string
 }
@@ -114,7 +118,9 @@ export function filesDisabled(state: RewindState): boolean {
 }
 
 /** §3.9 confirm rows: clean capped at 5 + `+N more`, conflicts capped at 5 +
- * `+N more` (their own caps per category; a category at/under cap lists all). */
+ * `+N more` (their own caps per category; a category at/under cap lists all).
+ * M58 R-B4 A appends the `unseen` rows (git-observed changes the journal
+ * cannot explain — informational; the rewind never touches them), same cap. */
 export function rewindConfirmRows(state: RewindState): string[] {
   const rows = [...state.cleanPaths]
   if (rows.length > REWIND_CONFLICT_CAP) {
@@ -126,7 +132,12 @@ export function rewindConfirmRows(state: RewindState): string[] {
     conflicts.length = REWIND_CONFLICT_CAP
     conflicts.push(`+${state.conflicts.length - REWIND_CONFLICT_CAP} more`)
   }
-  return [...rows, ...conflicts]
+  const unseen = state.unseen.map((u) => `? ${u.path} (unseen: ${u.kind})`)
+  if (unseen.length > REWIND_CONFLICT_CAP) {
+    unseen.length = REWIND_CONFLICT_CAP
+    unseen.push(`+${state.unseen.length - REWIND_CONFLICT_CAP} more`)
+  }
+  return [...rows, ...conflicts, ...unseen]
 }
 
 // ------------------------------------------------------------------ keys
@@ -346,6 +357,18 @@ export function renderRewind(
       if (state.conflicts.length > REWIND_CONFLICT_CAP) {
         if (y <= y1) row(draw, x0, y, `+${state.conflicts.length - REWIND_CONFLICT_CAP} more`,
           withBg(draw.color(palette.warning), false), limitX)
+        y++
+      }
+      // M58 R-B4 A: the unseen rows (informational — never restored).
+      for (const u of state.unseen.slice(0, REWIND_CONFLICT_CAP)) {
+        if (y > y1) return
+        row(draw, x0, y, `? ${u.path} (unseen: ${u.kind})`,
+          withBg(draw.color(palette.grayDim), false), limitX)
+        y++
+      }
+      if (state.unseen.length > REWIND_CONFLICT_CAP) {
+        if (y <= y1) row(draw, x0, y, `+${state.unseen.length - REWIND_CONFLICT_CAP} more`,
+          withBg(draw.color(palette.grayDim), false), limitX)
         y++
       }
       const rows: Array<[string, string]> = [["y", REWIND_CONFIRM_Y], ["Bksp", REWIND_CONFIRM_BACK]]

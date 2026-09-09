@@ -114,7 +114,7 @@ function fakeBackend(opts: {
       },
     },
   }
-  const state: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [] }
+  const state: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [], unseen: [] }
   return { client, state, calls }
 }
 
@@ -245,7 +245,7 @@ describe("bindRewindOverlay — phase machine", () => {
     failing.client.rewind!.points = async () => {
       throw new Error("journal corrupt")
     }
-    const st: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [] }
+    const st: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [], unseen: [] }
     let closed = 0
     const seam = bindRewindOverlay(st, { backend: failing.client, onClose: () => { closed++ } })
     await sleepMicro()
@@ -259,7 +259,7 @@ describe("bindRewindOverlay — phase machine", () => {
     p.client.rewind!.plan = async () => {
       throw new Error("plan blown up")
     }
-    const pState: RewindState = { phase: "loading", points: [], cursor: 1, cleanPaths: [], conflicts: [] }
+    const pState: RewindState = { phase: "loading", points: [], cursor: 1, cleanPaths: [], conflicts: [], unseen: [] }
     const pSeam = bindRewindOverlay(pState, { backend: p.client })
     await sleepMicro()
     pSeam.act!("overlay-select")
@@ -273,7 +273,7 @@ describe("bindRewindOverlay — phase machine", () => {
     e.client.rewind!.execute = async () => {
       throw new Error("disk write failed")
     }
-    const eState: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [] }
+    const eState: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [], unseen: [] }
     const eSeam = bindRewindOverlay(eState, { backend: e.client })
     await sleepMicro()
     eSeam.act!("overlay-select")
@@ -288,7 +288,7 @@ describe("bindRewindOverlay — phase machine", () => {
   it("backend without a rewind member → bind error phase (honest, sync)", () => {
     const bare = fakeBackend()
     delete bare.client.rewind
-    const st: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [] }
+    const st: RewindState = { phase: "loading", points: [], cursor: 0, cleanPaths: [], conflicts: [], unseen: [] }
     bindRewindOverlay(st, { backend: bare.client })
     expect(st.phase).toBe("error") // no async hop — the gate is local
     expect(st.error).toContain("rewind is not enabled")
