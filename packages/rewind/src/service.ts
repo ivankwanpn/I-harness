@@ -229,7 +229,14 @@ export class RewindService {
     unTracked: Set<string>,
   ): Promise<UnseenChange[]> {
     if (this.gitProbe === undefined) return []
-    const changes = await this.gitProbe.changes()
+    // M60 F: the seam is HOST-INJECTED — a probe that throws must stay
+    // fail-soft like the built-in one (evidence only, never a hard dependency).
+    let changes: UnseenChange[]
+    try {
+      changes = await this.gitProbe.changes()
+    } catch {
+      return []
+    }
     if (changes.length === 0) return []
     const covered = new Set<string>([...targetPaths, ...unTracked])
     // Latest recorded afterHash per path, across ALL points (points are in
