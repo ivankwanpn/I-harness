@@ -130,6 +130,7 @@ node scripts/verify-installer.mjs  # 19 項安裝驗證（靜默裝 → 雙命�
 
 - **五協議一等**：openai-responses / openai-compatible（含 DeepSeek）/ anthropic / gemini（原生）/ bedrock（AWS Converse）+ mock
 - **設置在 TUI**：`/provider` 添加（ID/Base URL/API Key 遮罩，≥註冊只存 **refs**——明文永不入設置）→ `/model` 選擇 → 目錄動態發現（`/v1/models` 候選鏈 + probe-apply 落定），每次選擇持久化進 settings
+- **自訂請求標頭（M59）**：`llm.providers.<route>.headers`——網關要求的固定標頭（例：OpenCode Zen 的 `x-opencode-session`）。settings 平面直填（嚮導暫無此欄位；重新保存 provider 不會清掉它），適配器自身標頭（Authorization 等）優先
 - **思考強度**：6 檔（off/low/medium/high/xhigh/max）× 四協議翻譯表（世代規則）
 - 每會話窗口/輸出上限解析鏈：settings `userModel` > modelContexts > profile > `model-catalog.json` > undefined
 
