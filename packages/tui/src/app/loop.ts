@@ -1164,10 +1164,13 @@ export class TuiApp {
     this.app.engine.setWidth(cols)
     this.inlineHost?.resize(cols, rows)
     this.maybeAutoRetain()
-    // M59: repaint NOW. maybeAutoRetain only requests a frame when it trims;
-    // otherwise the layout kept the OLD geometry until the next input/event,
-    // so a resize looked broken (grok reflows immediately).
-    this.requestFrame()
+    // M59: fullscreen must repaint NOW — the relay only resizes, and
+    // maybeAutoRetain requests a frame only when it trims, so the layout kept
+    // the OLD geometry until the next input/event (grok reflows immediately).
+    // Minimal's inline host forces its own full region repaint on resize
+    // (lastPaintSig reset) and its print-once byte budget forbids the extra
+    // frame here (case-015).
+    if (this.inlineHost === undefined) this.requestFrame()
   }
 
   /**
