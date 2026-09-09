@@ -9,6 +9,9 @@ export interface OpenAIConfig {
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
   inputModalities?: ("text" | "image")[]
+  /** M59: literal extra request headers (gateway-required). The adapter's own
+   * headers win on collision. */
+  headers?: Record<string, string>
 }
 
 function toInputContent(content: string | LLMContentPart[]): unknown {
@@ -101,7 +104,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       }
       const response = await fetch(`${baseUrl}/v1/responses`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+        headers: { ...(config.headers ?? {}), "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
         body: JSON.stringify(body),
       })
       if (!response.ok || !response.body) {

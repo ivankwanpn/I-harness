@@ -137,6 +137,10 @@ const providerConfigFields: Record<string, FieldSpec> = {
   modelsURL: { type: "string" },
   displayName: { type: "string" },
   protocol: { type: "enum", enum: [...PROVIDER_PROTOCOLS] },
+  // M59: literal extra request headers (gateways needing a custom header,
+  // e.g. OpenCode Zen's x-opencode-session). A property-style object: dynamic
+  // keys, string values.
+  headers: { type: "object", items: { type: "string" } },
   models: { type: "array", items: { type: "object", fields: MODEL_FIELDS, required: ["id"] } },
 }
 

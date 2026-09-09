@@ -29,6 +29,10 @@ export interface ProviderProfile {
   contextWindow?: number                // M15: default window (tokens) for this provider
   maxContextWindow?: number             // M15: absolute ceiling; budget-enforcement hook (no enforcement in M15)
   modelContexts?: Record<string, ProviderModelContext> // M15: per-model overrides
+  /** M59: literal extra request headers (gateways requiring a custom header —
+   * e.g. OpenCode Zen's `x-opencode-session`). Merged into every adapter's
+   * request headers; secrets belong in apiKey/apiKeyEnv, not here. */
+  headers?: Record<string, string>
   retryPolicy?: RetryPolicyConfig       // M20: retry settings; absent = no retries (validated at registration)
 }
 
@@ -668,15 +672,16 @@ function validateRetryPolicy(policy: RetryPolicyConfig | undefined): void {
 // falling back to "gpt-4o". Unknown protocols error here, and bad models
 // error at the model end.
 function buildClient(profile: ProviderProfile, model: string, extra?: Record<string, unknown>): ModelClient {
+  const headers = profile.headers
   switch (profile.protocol) {
     case "openai-responses":
-      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities })
+      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "openai-compatible":
-      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities })
+      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "anthropic-messages":
-      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities })
+      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "gemini":
-      return createGeminiClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities })
+      return createGeminiClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "bedrock":
       // No apiKey — the AWS credential chain (env / ~/.aws/credentials /
       // IMDS) resolves at the SDK client; region defaults from the env in the
@@ -715,6 +720,8 @@ export interface WireClientConfig {
   model: string
   options?: Record<string, unknown>
   inputModalities?: ("text" | "image")[]
+  /** M59: literal extra request headers merged into every request. */
+  headers?: Record<string, string>
 }
 
 /** Build the adapter client for a RESOLVED wire protocol; undefined for an

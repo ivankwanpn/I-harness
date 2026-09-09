@@ -8,6 +8,9 @@ export interface GeminiConfig {
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping.
   inputModalities?: ("text" | "image")[]
+  /** M59: literal extra request headers (gateway-required). The adapter's own
+   * headers win on collision. */
+  headers?: Record<string, string>
 }
 
 // One data: line's payloads (anthropic/llm-openai-compatible shape).
@@ -122,7 +125,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       const response = await fetch(`${baseUrl}/v1beta/models/${encodeURIComponent(config.model)}:streamGenerateContent?alt=sse`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
+        headers: { ...(config.headers ?? {}), "Content-Type": "application/json", "x-goog-api-key": config.apiKey },
         body: JSON.stringify(body),
       })
       if (!response.ok || !response.body) {
