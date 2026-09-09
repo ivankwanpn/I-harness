@@ -3291,7 +3291,14 @@ export class TuiApp {
       registry,
       controller: createSettingsController(registry.definitions(), ctx),
       ctx,
-      onClose: () => this.closeModal(),
+      onClose: () => {
+        this.closeModal()
+        // M59: the settings modal is where a provider/model gets configured —
+        // re-resolve so the Welcome gate (and the status row) stop showing the
+        // stale "No model configured" until the next Enter. Resolution reads
+        // settings + credentials only (no network).
+        if (this.app.welcome !== undefined) void this.refreshWelcomeModelState()
+      },
     })
     this.app.overlay = modelsAndProviders
       ? {
