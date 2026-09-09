@@ -60,15 +60,20 @@
 Name "${APP_NAME} ${APP_VERSION}"
 
 !ifdef IH_NSIS_TEST
-  ; test build: user-level execution so a verify run needs no elevation
+  ; test build: user-level execution so a verify run needs no elevation --
+  ; and a USER-WRITABLE default dir: an unelevated process cannot write
+  ; $PROGRAMFILES64, so double-clicking the test build died with
+  ; "Error opening file for writing: C:\Program Files\I-harness\i-harness.cmd"
+  ; (only the verify harness's explicit /D=<temp> worked).
   OutFile "..\build\I-harness-Setup-${APP_VERSION}-test.exe"
   RequestExecutionLevel user
+  InstallDir "$LOCALAPPDATA\${APP_DIR_NAME}"
 !else
   OutFile "..\build\I-harness-Setup-${APP_VERSION}.exe"
   RequestExecutionLevel admin
+  InstallDir "$PROGRAMFILES64\${APP_DIR_NAME}"
 !endif
 
-InstallDir "$PROGRAMFILES64\${APP_DIR_NAME}"
 !ifndef IH_NSIS_TEST
   ; normal build only: remember the last install location (read-only for tests)
   InstallDirRegKey HKLM "${REG_KEY_APP}" "InstallDir"
