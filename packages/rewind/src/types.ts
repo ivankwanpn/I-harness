@@ -100,6 +100,22 @@ export interface RewindWorkspaceMeta {
 
 export type RewindMode = "all" | "files" | "conversation"
 
+/** M58 R-B4 A: the honest kinds of a git-observed change the journal cannot
+ * explain. `??` → untracked; any `D` → deleted; everything else → modified. */
+export type UnseenChangeKind = "modified" | "untracked" | "deleted"
+
+/**
+ * M58 R-B4 A: one disk change observed by the read-only git probe that the
+ * journal cannot explain (never recorded, or changed after the recorder last
+ * saw it). Listed only — NEVER turned into a file op (the engine does not
+ * restore what it never captured).
+ */
+export interface UnseenChange {
+  /** Workspace-relative normalized key (same key space as RewindFileRecord.path). */
+  path: string
+  kind: UnseenChangeKind
+}
+
 /** One file operation execute() would perform (or performed). */
 export interface FileOp {
   path: string
@@ -145,6 +161,12 @@ export interface RewindPlan {
    * `unTracked`; no op is ever fabricated for them (honest, manual-only
    * recovery). Absent when there is nothing to report. */
   orphanedTurns?: RewindOrphanedTurn[]
+  /** M58 R-B4 A: git-observed changes the journal cannot explain (shell /
+   * external-editor / other-process writes the recorder never saw, or a
+   * recorded path changed after the recorder last observed it). Read-only
+   * evidence — these paths are NEVER in `ops`. Absent when the workspace is
+   * not a git work tree, git is unavailable, or there is nothing to report. */
+  unseen?: UnseenChange[]
 }
 
 export interface RewindPointSummary {

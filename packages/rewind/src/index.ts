@@ -8,6 +8,7 @@ export { RewindError, type RewindErrorCode } from "./error.ts"
 export { normalizeRelPath, workspaceAbsPath } from "./path.ts"
 export { RewindStore, sha256Hex, type RewindStoreOptions } from "./store.ts"
 export { RewindRecorder, type RewindRecorderOptions, type RewindTakeResult } from "./recorder.ts"
+export { createGitProbe, createGitProbeForStore, type GitExec, type GitExecOptions, type GitProbe, type GitProbeOptions } from "./git-probe.ts"
 export {
   RewindService,
   type RewindServiceOptions,
@@ -31,4 +32,6 @@ export type {
   RewindPointSummary,
   RewindResult,
   RewindWorkspaceMeta,
+  UnseenChange,
+  UnseenChangeKind,
 } from "./types.ts"

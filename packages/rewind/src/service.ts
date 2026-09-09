@@ -53,6 +53,7 @@ import { readFile, stat, unlink, writeFile } from "node:fs/promises"
 import { workspaceAbsPath } from "./path.ts"
 import { sha256Hex, type RewindStore } from "./store.ts"
 import { RewindError } from "./error.ts"
+import type { GitProbe } from "./git-probe.ts"
 import type {
   ConflictOp,
   ConflictType,
@@ -64,12 +65,17 @@ import type {
   RewindPoint,
   RewindPointSummary,
   RewindResult,
+  UnseenChange,
 } from "./types.ts"
 
 export interface RewindServiceOptions {
   store: RewindStore
   /** Workspace root the journal paths resolve against (plan/execute disk side). */
   workspace: string
+  /** M58 R-B4 A: read-only git observation for plan().unseen. Absent ⇒ the
+   * engine stays journal-only (byte-identical pre-M58 behavior; the product
+   * call sites inject a createGitProbe()). */
+  gitProbe?: GitProbe
 }
 
 export interface RewindExecuteHooks {
@@ -116,10 +122,12 @@ function classify(record: RewindPoint["files"][number], current: string | null):
 export class RewindService {
   private readonly store: RewindStore
   private readonly workspace: string
+  private readonly gitProbe: GitProbe | undefined
 
   constructor(opts: RewindServiceOptions) {
     this.store = opts.store
     this.workspace = opts.workspace
+    this.gitProbe = opts.gitProbe
   }
 
   async points(): Promise<RewindPointSummary[]> {
@@ -190,6 +198,18 @@ export class RewindService {
       for (const path of orphan.files) if (!targetPaths.has(path)) unTracked.add(path)
     }
 
+    // M58 R-B4 A: git-observed changes the journal cannot explain. The probe
+    // is read-only and fail-soft ([] on any error); every path it reports is
+    // then filtered against what the journal DOES explain:
+    //   - covered by this plan (target set / unTracked incl. orphans) → skip;
+    //   - recorded in an earlier turn → compare the current disk hash with the
+    //     LATEST recorded afterHash for that path: equal means "the recorder's
+    //     own uncommitted work, unchanged since" → skip; different (or a
+    //     recorded deletion that is present again) → unseen.
+    // Nothing here ever becomes a file op: the engine does not restore what it
+    // never captured.
+    const unseen = await this.collectUnseen(points, targetPaths, unTracked)
+
     return {
       target: targetTurnIndex,
       mode,
@@ -198,7 +218,36 @@ export class RewindService {
       unTracked: [...unTracked].sort(),
       ops: mode === "conversation" ? [] : ops,
       ...(orphanedTurns.length > 0 ? { orphanedTurns } : {}),
+      ...(unseen.length > 0 ? { unseen } : {}),
     }
+  }
+
+  /** M58 R-B4 A: the plan() unseen list (see the call site for the rules). */
+  private async collectUnseen(
+    points: RewindPoint[],
+    targetPaths: Set<string>,
+    unTracked: Set<string>,
+  ): Promise<UnseenChange[]> {
+    if (this.gitProbe === undefined) return []
+    const changes = await this.gitProbe.changes()
+    if (changes.length === 0) return []
+    const covered = new Set<string>([...targetPaths, ...unTracked])
+    // Latest recorded afterHash per path, across ALL points (points are in
+    // turn order, so later assignments win).
+    const lastAfter = new Map<string, string | undefined>()
+    for (const point of points) for (const f of point.files) lastAfter.set(f.path, f.afterHash)
+    const out: UnseenChange[] = []
+    for (const change of changes) {
+      if (covered.has(change.path)) continue
+      if (lastAfter.has(change.path)) {
+        const recorded = lastAfter.get(change.path)
+        const current = await diskHash(this.workspace, change.path)
+        if (recorded !== undefined && current === recorded) continue
+        if (recorded === undefined && current === null) continue
+      }
+      out.push(change)
+    }
+    return out.sort((a, b) => a.path.localeCompare(b.path))
   }
 
   /**
