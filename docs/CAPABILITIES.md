@@ -126,5 +126,5 @@
 
 ## 九、明確邊界
 - **不做**：PTC/run_code、workflow worker、provider 註冊表化、插件執行
-- **遠期/觀望**：R-A10 memories、rollover、執行策略深化、R-B4 git undo（M27+）、分享/webhook/身份/外部進程子代理、macOS 沙箱
-- **零缺口確認**（相較五源審計五區清單）：除 R-B4 外全部落地或明確關閉/遠期
+- **遠期/觀望**：R-A10 memories、rollover、執行策略深化、R-B4 git undo **B 案**（checkpoint 引擎；A 案 M58 已落地：`plan().unseen` 唯讀 git 對照）、分享/webhook/身份/外部進程子代理、macOS 沙箱
+- **零缺口確認**（相較五源審計五區清單）：除 R-B4 B 案外全部落地或明確關閉/遠期
