@@ -5,8 +5,7 @@
 # (the wheel's public binder) + marker "overlay-p1" + a frame — the modal is
 # drawn by the REAL present() overlay path (prompt-slot precedence §2.1) and
 # the test's keys go through the REAL loop dispatch + seam act adapters:
-#   j  → overlay-nav-prev (cursor 0 → clamp 0 — no visible change)
-#   k  → overlay-nav-next → cursor 1 → `2 (●)`
+#   j  → overlay-nav-next (M61: j is DOWN) → cursor 1 → `2 (●)`
 #   1  → overlay-accept index 0 → Always allow → onDecision
 #        {surfaceId:"p1", verdict:"always", approved:true, index:0,
 #         scope:"command", feedback:""} → <markerDir>/answered →
@@ -15,8 +14,8 @@
 # Modal rows pinned from the actual renderer grid (46x24 → the prompt slot
 # band y12..y20 — M59: the slot grows to the overlay's own content height, 9
 # rows here: title + detail + gap + 5 option rows + scope footer). Byte
-# budget: init + modal frame + k frame + modal-gone frame + teardown = 5
-# writes (j's clamped no-op frame is identical → "").
+# budget: init + modal frame + j frame + modal-gone frame + teardown = 5
+# writes.
 name: case-013-permission-overlay
 host: test/harness/host-013.ts
 size: [46, 24]
@@ -35,9 +34,8 @@ steps:
         - "  ┃ 3 (○) Yes, proceed"
         - "  ┃ 4 (○) No, I trust it"
         - "  ┃ 5 (○) No, reject (type to add feedback)"
-  # j → nav-prev at cursor 0 (clamped, no visible change), k → nav-next → row 2
+  # M61: j is DOWN → row 2 (cursor 0 clamped up is a no-op)
   - write-pty: { data: "j" }
-  - write-pty: { data: "k" }
   - wait-screen:
       timeoutMs: 8000
       region: { startRow: 15 }

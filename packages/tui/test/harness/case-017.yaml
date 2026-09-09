@@ -16,8 +16,8 @@
 #      value:"Apple" } → bridge answerQuestion resolves → modal closes.
 #   3. /BTW — "/btw why" + Enter → real submit → the fake backend drives the
 #      btw pane answering (⠋ Answering…) → done (body pin) → host closes it.
-#   4. SESSION PICKER — Ctrl-S → listSessions (3 sessions) → j (clamp) / k
-#      (cursor 1) → Enter → record-open.json { sessionId:"s-2" } → picker closes.
+#   4. SESSION PICKER — Ctrl-S → listSessions (3 sessions) → j (M61: DOWN →
+#      cursor 1) → Enter → record-open.json { sessionId:"s-2" } → picker closes.
 #   5. HISTORY — CSI Up (2-entry history, empty prompt) → panel pin → lone Esc
 #      (40ms drain) → dismiss → request-exit gate → teardown → 0.
 #
@@ -133,7 +133,6 @@ steps:
         - "  │ID  s-1Updated just nowTurns 3          │"
         - "  ╰────────────────────────────────────────╯"
   - write-pty: { data: "j" }
-  - write-pty: { data: "k" }
   - wait-screen:
       timeoutMs: 8000
       region: { startRow: 13 }
@@ -184,7 +183,7 @@ steps:
   #   · f4 question modal · f5 modal gone · f6-f13 "/btw why" (8 chars)
   #   · f14 btw asking (the M46a registry /btw command's dispatch frame)
   #   · f15 btw answering · f16 btw done · f17 btw closed · f18 picker open
-  #   · f19 k-nav cursor · f20 picker closed+opened record · f21 history panel
+  #   · f19 j-nav cursor · f20 picker closed+opened record · f21 history panel
   #   · f22 history dismissed
   - assert-byte-budget: { writes: 24 }
   - wait-exit: { code: 0 }

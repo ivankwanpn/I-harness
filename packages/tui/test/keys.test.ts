@@ -197,8 +197,8 @@ describe("dispatchKey — overlay routing (spec §4)", () => {
 
   it("picker keys: j/k nav, y copy, e/E expand, Space toggle, /,i search, f filter", () => {
     const st = promptState({ overlay: "sessions" })
-    expect(dispatchKey(digit("j"), st)).toBe("overlay-nav-prev")
-    expect(dispatchKey(digit("k"), st)).toBe("overlay-nav-next")
+    expect(dispatchKey(digit("j"), st)).toBe("overlay-nav-next")
+    expect(dispatchKey(digit("k"), st)).toBe("overlay-nav-prev")
     expect(dispatchKey(digit("y"), st)).toBe("overlay-copy")
     expect(dispatchKey(digit("e"), st)).toBe("overlay-expand")
     expect(dispatchKey(digit("E"), st)).toBe("overlay-collapse")
@@ -208,6 +208,31 @@ describe("dispatchKey — overlay routing (spec §4)", () => {
     expect(dispatchKey(digit("f"), st)).toBe("overlay-filter")
     // same keys on the permission overlay: search/filter don't apply
     expect(dispatchKey(digit("f"), promptState({ overlay: "permission" }))).toBe("none")
+  })
+
+  it("M61: j/k are vim/grok — j is DOWN, k is UP — on every overlay", () => {
+    for (const kind of ["sessions", "permission", "dropdown", "settings", "rewind"] as const) {
+      const st = promptState({ overlay: kind })
+      expect(dispatchKey(letter("j"), st), `${kind} j`).toBe("overlay-nav-next")
+      expect(dispatchKey(letter("k"), st), `${kind} k`).toBe("overlay-nav-prev")
+    }
+  })
+
+  it("M61: the settings-only keys are gated to the settings overlay", () => {
+    const s = promptState({ overlay: "settings" })
+    expect(dispatchKey(letter("d"), s)).toBe("overlay-reset")
+    expect(dispatchKey(letter("g"), s)).toBe("overlay-top")
+    expect(dispatchKey(letter("G"), s)).toBe("overlay-bottom")
+    expect(dispatchKey(letter("/"), s)).toBe("overlay-search")
+    expect(dispatchKey(kbd({ code: "F2" }), s)).toBe("overlay-close")
+    // every other overlay keeps them inert (no regression)
+    for (const kind of ["permission", "sessions", "dropdown", "rewind"] as const) {
+      const st = promptState({ overlay: kind })
+      expect(dispatchKey(letter("d"), st), kind).toBe("none")
+      expect(dispatchKey(letter("g"), st), kind).toBe("none")
+      expect(dispatchKey(letter("G"), st), kind).toBe("none")
+      expect(dispatchKey(kbd({ code: "F2" }), st), kind).toBe("none")
+    }
   })
 
   it("permission ←/→ scope; question [ ] prev/next; Ctrl-P/Ctrl-N dropdown nav", () => {

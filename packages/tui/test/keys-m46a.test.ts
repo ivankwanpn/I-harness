@@ -46,7 +46,10 @@ describe("dispatchKey — M46a G1 provider/model bindings", () => {
 
   it("an open overlay preempts the bindings (the seam's own keys win)", () => {
     const f2 = kbd({ code: "F2", key: "F2" })
-    expect(dispatchKey(f2, promptState({ overlay: "settings" }))).toBe("none")
+    // M61: F2 on the settings overlay is the overlay's OWN close key (never
+    // falls through to open-settings); on every other overlay it stays inert.
+    expect(dispatchKey(f2, promptState({ overlay: "settings" }))).toBe("overlay-close")
+    expect(dispatchKey(f2, promptState({ overlay: "permission" }))).toBe("none")
     const ctrlM = kbd({ code: "char", key: "m", ctrl: true })
     expect(dispatchKey(ctrlM, promptState({ overlay: "model-picker" }))).toBe("none")
   })
