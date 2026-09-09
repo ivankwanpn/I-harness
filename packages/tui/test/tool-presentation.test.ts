@@ -275,7 +275,11 @@ describe("typed tool presentation through the real scrollback (red-green step 2)
       callId: "b1", name: "bash", kind: "execute", status: "done", seq: 2,
       args: { command: "echo hi" }, result: { stdout: "done" }, output: "done",
     }))
+    // M59 grok parity: the finished block collapses to the header row; the
+    // replaced body shows on expand (never the stale streamed line).
     expect(renderLines(engine)).toContain("Run echo hi")
+    expect(renderLines(engine)).not.toContain("o1")
+    engine.toggleExpandAll()
     expect(renderLines(engine)).toContain("done")
     expect(renderLines(engine)).not.toContain("o1")
   })

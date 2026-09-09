@@ -9,22 +9,21 @@
 #
 # Scene (80x24, one deterministic run, frozen clock 44444): a scripted
 # two-turn stream — turn 1: user "hello", assistant "two lines\nthird line",
-# tool done "Run read data.txt" (execute, excerpt), tool done "Read notes.md"
+# execute "Run read data.txt" RUNNING (the excerpt stays on screen — M59: a
+# FINISHED execute block collapses to its header), read "Read notes.md"
 # (collapsed), Edit block EXPANDED with a 12-row diff (+6/-6); turn 2: user
 # "again", assistant "tail" — 28 display lines, ts ON from the start
 # (local-constructed epochs → the hover swap "18:46:35 | Sep 05" is
-# TZ-honest). The scroll STEP artifacts (recalibrated for BUG-4: scrollBy's
-# max is the scrollback RECT height — max = 28 - 13 + 1 = 16, not the old
-# full-grid 28 - 24 + 1 = 5):
-#   - the settle: follow view (display top = line 16 — the engine's own
+# TZ-honest). The scroll STEP artifacts (M59: the composer is 3 rows, so the
+# scrollback region is 16 rows and scrollBy's max = 28 - 16 + 1 = 13):
+#   - the settle: follow view (display top = line 13 — the engine's own
 #     tail pin);
-#   - the wheel: ONE event = ONE offset line (the case-018 math — ept=3,
-#     WindowsTerminal brand): follow (offset 16) → wheel-up → offset 15,
-#     THEN the display jumps to the new offset (the follow-pin released);
-#   - wheel ×4 → the app offset 12 (the Edit block at the display top);
-#   - the scrollbar fraction jump (track row 4: frac 1/12 × max 16 →
-#     round(1.33) = 1) → offset 1 (the row-pin target for the clicks below —
-#     the same view the pre-BUG-4 wheel ×4 used to reach).
+#   - the wheel: the stream's coast keeps applying lines after the event (the
+#     frozen clock never fires the 80ms gap finalize), so the assertions pin
+#     the views the coast passes through / settles on;
+#   - wheel ×4 → the app offset 9 (data-5 at the display top);
+#   - the scrollbar fraction jump (track row 4: frac 1/15 × max 13 →
+#     round(0.87) = 1) → offset 1 (the row-pin target for the clicks below).
 # Witnesses (host-side): engine selection → <dir>/selection.json +
 # "selection-changed" (M46c G1: the BOX painting now renders — STEP 5b asserts
 # the real border cells + the ✗ click-clear; the ENGINE set stays the
@@ -58,6 +57,9 @@ steps:
   - wait-screen:
       region: { startRow: 2 }
       rows:
+        - "  ┃   +a1"
+        - "  ┃   +a2"
+        - "  ┃   +a3"
         - "  ┃   +a4"
         - "  ┃   +a5"
         - "  ┃   +a6"
@@ -76,7 +78,7 @@ steps:
   # bg; the again row shows the SHORT ts form.
   - assert-cell-colors:
       cells:
-        - { row: 6, col: 7, text: "b" }
+        - { row: 9, col: 7, text: "b" }
       timeoutMs: 3000
   # ── STEP 1a: HOVER — no-button motion <3;20;8M → the row band blends the
   # bgHover (#2c2c2c) on the tool body row (the un-hovered neighbor rows keep
@@ -89,11 +91,12 @@ steps:
         - { row: 6, col: 8, bg: "#2c2c2c" }
       timeoutMs: 4000
   # ── STEP 1b: TIMESTAMP SWAP — hover the user row → its right-aligned ts
-  # reads the %H:%M:%S | %b %d detail form.
+  # reads the %H:%M:%S | %b %d detail form. (M59: the settled view starts 3
+  # rows lower — the user row sits at row 15, pointer row 16.)
   - write-pty:
-      data: "\x1b[<3;20;13M"
+      data: "\x1b[<3;20;16M"
   - wait-screen:
-      region: { startRow: 11 }
+      region: { startRow: 14 }
       rows:
         - "  ┃   ───"
         - "  ┃   ❯ again                                              18:46:35 | Sep 05"
@@ -103,9 +106,9 @@ steps:
   # ── STEP 1c: motion to an empty area (the pad column — no hit area) → the
   # ts returns to the short form.
   - write-pty:
-      data: "\x1b[<3;5;13M"
+      data: "\x1b[<3;5;16M"
   - wait-screen:
-      region: { startRow: 11 }
+      region: { startRow: 14 }
       rows:
         - "  ┃   ───"
         - "  ┃   ❯ again                                                        6:46 PM"
@@ -114,31 +117,9 @@ steps:
       timeoutMs: 5000
   # ── STEP 2: WHEEL — ONE wheel-up event (<64;…M) → one offset line, the
   # follow-pin releases (case-018 math) — the display top jumps to the new
-  # offset (line 15: the +a3 diff row; BUG-4: follow sits at max = 16).
+  # offset (line 12: the Edit header; M59: follow sits at max = 13).
   - write-pty:
       data: "\x1b[<64;40;12M"
-  - wait-screen:
-      region: { startRow: 2 }
-      rows:
-        - "  ┃   +a3"
-        - "  ┃   +a4"
-        - "  ┃   +a5"
-        - "  ┃   +a6"
-        - "  ┃   -b1"
-        - "  ┃   -b2"
-        - "  ┃   -b3"
-        - "  ┃   -b4"
-        - "  ┃   -b5"
-        - "  ┃   -b6"
-        - "  ┃   ───"
-        - "  ┃   ❯ again                                                        6:46 PM"
-        - "  ┃   tail                                                           6:46 PM"
-      timeoutMs: 5000
-  # wheel ×3 more → offset 12 (the Edit block at the display top). The pointer
-  # stays on the wheel cell (40,12) — its row-band hover rides a diff row
-  # (no ts there; the detail swap proof moves to STEP 2d).
-  - write-pty:
-      data: "\x1b[<64;40;12M\x1b[<64;40;12M\x1b[<64;40;12M"
   - wait-screen:
       region: { startRow: 2 }
       rows:
@@ -156,10 +137,35 @@ steps:
         - "  ┃   -b5"
         - "  ┃   -b6"
       timeoutMs: 5000
-  # ── STEP 2c: the scrollbar fraction jump back to offset 1. BUG-4: the
-  # 4-event wheel can no longer reach the top (max is now 16) — the clicks
-  # below are calibrated to the offset-1 view, so the jump restores it.
-  # Track row 4 (1-based): frac = (4-1-2)/(13-1) = 1/12 → round(16/12) = 1.
+  # wheel ×3 more → offset 9 (the data-5 row at the display top). The pointer
+  # stays on the wheel cell (40,12) — its row-band hover rides a diff row
+  # (no ts there; the detail swap proof moves to STEP 2d).
+  - write-pty:
+      data: "\x1b[<64;40;12M\x1b[<64;40;12M\x1b[<64;40;12M"
+  - wait-screen:
+      region: { startRow: 2 }
+      rows:
+        - "  ┃   data-5"
+        - "  ┃   data-6"
+        - "  ┃  ◆ Read notes.md                                                 6:45 PM"
+        - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
+        - "  ┃   +a1"
+        - "  ┃   +a2"
+        - "  ┃   +a3"
+        - "  ┃   +a4"
+        - "  ┃   +a5"
+        - "  ┃   +a6"
+        - "  ┃   -b1"
+        - "  ┃   -b2"
+        - "  ┃   -b3"
+        - "  ┃   -b4"
+        - "  ┃   -b5"
+        - "  ┃   -b6"
+      timeoutMs: 5000
+  # ── STEP 2c: the scrollbar fraction jump back to offset 1. M59: max is 13
+  # (28 − 16 + 1) — the clicks below are calibrated to the offset-1 view, so
+  # the jump restores it. Track row 4 (1-based): frac = (3-2)/(16-1) = 1/15 →
+  # round(13/15) = 1.
   - write-pty:
       data: "\x1b[<0;78;4M\x1b[<0;78;4m"
   - await-quiescent: { ms: 300 }
@@ -267,8 +273,8 @@ steps:
       timeoutMs: 5000
   # ── STEP 6: SCROLLBAR DRAG — the LAST scrollback column (x=78 1-based =
   # the app cell 77 = rect.x + rect.w - 1): down = latch + fraction jump
-  # (offset 0 at the top row), dragged motion to the middle = proportional
-  # jump (frac 5/12 × max 16 → offset 7), up ends the latch.
+  # (offset 0 at the top row), dragged motion to row 11 (frac (10-2)/(16-1) =
+  # 8/15 × max 13 → offset 7), up ends the latch.
   - write-pty:
       data: "\x1b[<0;78;3M"
   - wait-screen:
@@ -289,7 +295,7 @@ steps:
         - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
       timeoutMs: 5000
   - write-pty:
-      data: "\x1b[<32;78;8M\x1b[<0;78;8m"
+      data: "\x1b[<32;78;11M\x1b[<0;78;11m"
   - wait-screen:
       region: { startRow: 2 }
       rows:
@@ -314,9 +320,11 @@ steps:
   - request-marker: { name: req-overlay }
   - await-marker: { name: overlay-p1 }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 12 }
       rows:
         - "  ┃ echo hi"
+        - "  ┃ running bash: echo hi"
+        - "  ┃"
         - "  ┃ 1 (●) Always allow: command"
         - "  ┃ 2 (○) Never allow: command"
         - "  ┃ 3 (○) Yes, proceed"
@@ -324,19 +332,16 @@ steps:
         - "  ┃ 5 (○) No, reject (type to add feedback)"
       timeoutMs: 8000
   - write-pty:
-      data: "\x1b[<0;20;17M\x1b[<0;20;17m\x1b[<0;20;17M\x1b[<0;20;17m"
+      data: "\x1b[<0;20;16M\x1b[<0;20;16m\x1b[<0;20;16M\x1b[<0;20;16m"
   - await-marker: { name: answered }
   - assert-file: { name: "decision.json", contains: "\"verdict\":\"always\"" }
   - assert-file: { name: "decision.json", contains: "\"approved\":true" }
   - assert-file: { name: "decision.json", contains: "\"surfaceId\":\"p1\"" }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭─────────────────────────────────────────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                                                          │"
-        - " ┃│                                                                          │"
-        - " ┃│                                                                          │"
-        - " ┃│                                                                          │"
         - " ┃╰ unconfigured─────────────────────────────────────────────────────────────╯"
       timeoutMs: 8000
   # ── close: glyph integrity + the byte budget + exit 0.
@@ -346,6 +351,7 @@ steps:
   # Hover-settle math: the ✗ click is a pointer move too — the settled
   # hovered set flips (drag-row → ✗ row) → ONE extra repaint frame; the
   # budget is 34 (M46b) + 2 (✗ clear frame + the hover flip frame) + 2 (the
-  # BUG-4 scrollbar-restore jump + its hover-detail motion).
-  - assert-byte-budget: { writes: 38 }
+  # BUG-4 scrollbar-restore jump + its hover-detail motion) + 1 (M59: the
+  # scroll-stream coast settles one frame later after the wheel burst).
+  - assert-byte-budget: { writes: 39 }
   - wait-exit: { code: 0 }

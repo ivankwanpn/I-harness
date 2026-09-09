@@ -58,7 +58,7 @@ steps:
   # stop routing (typing wins — documented plan-review discipline).
   - write-pty: { data: "c" }
   - wait-screen:
-      region: { startRow: 16 }
+      region: { startRow: 19 }
       rows:
         - " ┃│❯ comment:                              │"
       timeoutMs: 3000

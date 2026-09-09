@@ -104,14 +104,19 @@ const cap: TerminalCapabilityContext = {
 /** Deterministic event script — THE scene (spec case-011): user "hello",
  * runtime-context system line, tool running "Run read data.txt", tool done
  * with output, assistant "It says hello.", turn end. `read data.txt` is an
- * EXECUTE tool (folding.ts: execute tools always render an output excerpt,
- * so running→done is a visible change). case-014 splits the same stream
- * around one turn-end → resize → assistant → turn-end sequence. */
+ * EXECUTE tool (folding.ts: a RUNNING execute streams the excerpt, a finished
+ * one collapses to its header row — M59 grok parity), so running→done is a
+ * visible change. case-014 splits the same stream around one turn-end →
+ * resize → assistant → turn-end sequence. */
 function sceneEvents(scene: string): TuiEvent[] {
   const evs: TuiEvent[] = [
     { type: "user", text: "hello", seq: 1, ts: 0 },
     { type: "system", text: "context: workspace i-harness-main", seq: 2, ts: 100 },
-    { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "running", summary: "read data.txt", seq: 3, ts: 200 },
+    // The running event streams a partial output (the excerpt renders while
+    // running); the done event carries the same text but the finished block
+    // collapses to its header — M59 grok parity. Without the running output
+    // the two frames would be byte-identical and the frame markers would skip.
+    { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "running", output: "data.txt exists", summary: "read data.txt", seq: 3, ts: 200 },
     { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "done", output: "data.txt exists", summary: "read data.txt", seq: 4, ts: 300 },
     { type: "assistant", text: "It says hello.", seq: 5, ts: 400 },
     { type: "turn", phase: "end", seq: 6, ts: 500 },

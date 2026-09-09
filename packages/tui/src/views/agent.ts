@@ -82,6 +82,9 @@ export interface AgentViewState {
   paneData?: PaneState
   /** Open dropdown/picker overlay above the prompt; rows = panel height. */
   dropdown?: { kind: "slash" | "completion" | "file-search" | "history" | "sessions" | "light"; rows: number }
+  /** M59: an open prompt-slot overlay's minimum content height (structural
+   * mirror of OverlaySeam.minRows — importing present.ts here would cycle). */
+  overlay?: { minRows?(width: number): number }
 }
 
 /** Pane/overlay state shared by layoutAgent + present (spec §2.1 rows 3-8/7).
@@ -134,10 +137,13 @@ export const DEFAULT_ROWS_PAD = 1
 /** Scrollback entry chrome per spec §3.1: [accent 1][pad 2][content][pad 2]. */
 export const SCROLLBACK_RAIL_W = 1
 export const SCROLLBACK_PAD_W = 2
-/** Prompt area padding: border rows (2) + info row (1) + symmetric vpad. */
-export function promptHeightOf(promptLines: number, compact: boolean, rows: number): number {
-  const vpad = compact ? 0 : 1
-  const desired = promptLines + 3 + 2 * vpad
+/** Prompt box height: top border + the wrapped text lines + the bottom
+ * border carrying the info row. M59 grok parity: grok's composer is exactly
+ * THREE rows for a one-line input (its vpad_top row IS the top border), while
+ * the old `promptLines + 3 + 2*vpad` reserved two blank padding rows and read
+ * as a 6-row box next to grok's 3. */
+export function promptHeightOf(promptLines: number, rows: number): number {
+  const desired = promptLines + 2
   const cap = Math.max(3, Math.floor(rows / 2))
   return Math.min(cap, desired)
 }
@@ -198,11 +204,15 @@ export function layoutAgent(
   const shortcutsH = constrained ? 0 : 1
   const shortcuts: Rect = { x: innerX, y: innerBot - shortcutsH, w: innerW, h: shortcutsH }
 
-  // Prompt area — chrome box: top border + wrapped text lines + info row +
-  // bottom border, plus a symmetric vpad; never more than rows/2.
+  // Prompt area — chrome box: top border + wrapped text lines + bottom border
+  // (which embeds the info row); never more than rows/2. An open prompt-slot
+  // overlay (permission/question/cancel-turn) declares its own content height
+  // and grows the slot — the composer's 3 rows cannot hold a permission list.
   const contentW = Math.max(1, innerW - 4) // borders (2) + prefix/indent (2)
   const promptLines = Math.max(1, wrapPrompt(state.prompt.text, contentW).length)
-  const promptH = promptHeightOf(promptLines, denseVertical, area.rows)
+  const promptCap = Math.max(3, Math.floor(area.rows / 2))
+  const overlayMin = Math.min(promptCap, state.overlay?.minRows?.(innerW) ?? 0)
+  const promptH = Math.max(promptHeightOf(promptLines, area.rows), overlayMin)
   const promptGap = denseVertical ? 0 : 1
   const promptY = shortcuts.y - promptGap - promptH
   const prompt: Rect = { x: innerX, y: promptY, w: innerW, h: promptH }

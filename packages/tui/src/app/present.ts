@@ -236,6 +236,11 @@ export interface OverlaySeam {
   // router never re-implements modal packing. Absent → the modal is not
   // clickable (rows unknown).
   rowYs?(ctx: Rect): number[]
+  /** M59: the overlay's own CONTENT height at this width (title + detail +
+   * rows + footer). The prompt slot is 3 rows for the composer (grok parity)
+   * — far less than a permission list needs — so the layout grows the slot to
+   * this while the overlay is open. Absent → the composer height stands. */
+  minRows?(width: number): number
   /** Question freeform tail row y (click → focus the freeform input). */
   freeformY?(ctx: Rect): number | undefined
   /** Move the interactive cursor to a row (mouse single-click — the binder
@@ -912,6 +917,20 @@ export function present(
         app.overlay.draw(overlayRect, view, palette, glyphs)
       } else if (app.sessions !== undefined) {
         renderSessionPicker(overlayRect, app.sessions, view, palette, glyphs)
+      } else if (app.historyPanel !== undefined) {
+        renderHistoryPanel(overlayRect, app.historyPanel, view, palette, glyphs)
+      } else if (app.lightPanel !== undefined) {
+        renderLightPanel(overlayRect, app.lightPanel, view, palette, glyphs)
+      } else if (app.fileSearch !== undefined) {
+        renderFileSearch(overlayRect, app.fileSearch, view, palette, glyphs)
+      } else if (app.completion !== undefined) {
+        renderCompletionDropdown(overlayRect, app.completion, view, palette, glyphs)
+      } else if (app.slash !== undefined) {
+        // M59: the Welcome prompt accepts text (the editor runs before the
+        // keymap), so typing `/` sets app.slash here too — but this branch
+        // returned without drawing it, leaving the command list invisible
+        // until a session existed. Mirror the agent screen's dropdown family.
+        renderSlashDropdown(overlayRect, app.slash, view, palette, glyphs)
       }
     }
     if (opts.hud !== undefined && area.cols >= 12) {

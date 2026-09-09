@@ -9,6 +9,9 @@ export interface AnthropicConfig {
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
   inputModalities?: ("text" | "image")[]
+  /** M59: literal extra request headers (gateway-required). The adapter's own
+   * headers win on collision. */
+  headers?: Record<string, string>
 }
 
 // Shape LLM content parts into Anthropic Messages content blocks. String
@@ -101,7 +104,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       }
       const response = await fetch(`${baseUrl}/v1/messages`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-api-key": config.apiKey, "anthropic-version": "2023-06-01" },
+        headers: { ...(config.headers ?? {}), "Content-Type": "application/json", "x-api-key": config.apiKey, "anthropic-version": "2023-06-01" },
         body: JSON.stringify(body),
       })
       if (!response.ok || !response.body) {

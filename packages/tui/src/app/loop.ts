@@ -423,6 +423,10 @@ export class TuiApp {
   private palette: Palette
   /** M46b G2: the clipboard injection layer (options ?? system clipboard). */
   private readonly clipboard: Clipboard
+  /** M59: the LIVE busy-Enter mode (Enter while a turn runs) — seeded from the
+   * persisted setting, flippable from the settings modal's `follow-up
+   * behavior` row (the pre-M59 knob was construction-only). */
+  private busyEnterMode: BusyEnter
   /** M49 Task 10: THE one-active-modal input owner. While a modal is open,
    * every key routes here FIRST (owning input before panes→prompt→scrollback);
    * closing clears app.modal through the onClose wiring below. */
@@ -486,6 +490,7 @@ export class TuiApp {
     this.uiMode = opts.mode ?? "fullscreen"
     this.palette = opts.palette
     this.clipboard = opts.clipboard ?? defaultClipboard()
+    this.busyEnterMode = opts.busyEnter ?? "queue"
     // M49 Task 10: the modal input owner — onClose clears the state + repaint.
     this.modalOwner = new ModalOwner({
       onClose: () => {
@@ -839,11 +844,33 @@ export class TuiApp {
     return this.app.scroll.follow ? Math.max(0, total - rect.h + 1) : Math.max(0, this.app.scroll.offset)
   }
 
+  /** M59: the first tool block at or BELOW `line` within the scrollback
+   * window (the block viewer's fallback anchor — see openBlockViewerAt). */
+  private firstToolAtOrAfter(line: number): ToolViewInfo | undefined {
+    const total = this.opts.engine.lineCount()
+    if (total === 0) return undefined
+    const rect = layoutAgent(
+      { cols: this.opts.renderer.buffer.width, rows: this.opts.renderer.buffer.height },
+      this.app,
+      { compact: this.opts.compact },
+    ).scrollback
+    const end = Math.min(total - 1, line + Math.max(0, rect.h - 1))
+    for (let l = line + 1; l <= end; l++) {
+      const info = this.opts.engine.toolAt?.(l)
+      if (info !== undefined) return info as ToolViewInfo
+    }
+    return undefined
+  }
+
   /** Open THE block viewer (the typed tool presentation over the engine block
    * at `line`) — the one active modal union; the modal becomes the input
-   * owner; the copy adapter is the checked path (failures render the error). */
+   * owner; the copy adapter is the checked path (failures render the error).
+   * M59: when the anchor line is not itself a tool block (the settled follow
+   * view starts on the turn separator `───` / the user row), walk DOWN to the
+   * first tool block inside the visible window — Enter opens the tool block
+   * the user is looking at instead of toasting. */
   private openBlockViewerAt(line: number): void {
-    const info = this.opts.engine.toolAt?.(line)
+    const info = this.opts.engine.toolAt?.(line) ?? this.firstToolAtOrAfter(line)
     if (info === undefined) {
       this.toast("block viewer: no tool block at the cursor")
       return
@@ -1045,6 +1072,18 @@ export class TuiApp {
     return this.app
   }
 
+  /** M59: flip the busy-Enter mode LIVE (the settings modal's `follow-up
+   * behavior` row — the persisted setting is applied through this so no
+   * restart is needed; the row's label is `Applies immediately`). */
+  setBusyEnter(mode: BusyEnter): void {
+    this.busyEnterMode = mode
+  }
+
+  /** The current busy-Enter mode (the settings row's read side). */
+  busyEnter(): BusyEnter {
+    return this.busyEnterMode
+  }
+
   /** M46b G1: the input injection seam — feeds one InputEvent through the same
    * path pumpInput uses (onInput). Tests drive mouse events deterministically
    * without a TTY; hosts never need it (attachInput owns the queue). */
@@ -1164,6 +1203,13 @@ export class TuiApp {
     this.app.engine.setWidth(cols)
     this.inlineHost?.resize(cols, rows)
     this.maybeAutoRetain()
+    // M59: fullscreen must repaint NOW — the relay only resizes, and
+    // maybeAutoRetain requests a frame only when it trims, so the layout kept
+    // the OLD geometry until the next input/event (grok reflows immediately).
+    // Minimal's inline host forces its own full region repaint on resize
+    // (lastPaintSig reset) and its print-once byte budget forbids the extra
+    // frame here (case-015).
+    if (this.inlineHost === undefined) this.requestFrame()
   }
 
   /**
@@ -1359,11 +1405,17 @@ export class TuiApp {
         break
       }
       case "cancel-turn": {
+        // M59 (grok parity): a running turn is cancelled FIRST — Esc stops the
+        // answer and leaves the draft (and the quit arm) untouched. The draft
+        // clear / quit-arm ladder only applies while idle.
+        if (this.app.turn !== undefined) {
+          void this.opts.backend.cancel()
+          break
+        }
         if (this.app.prompt.text.trim().length > 0) {
           this.clearPrompt() // Ctrl-C / Esc on a non-empty draft clears it
           break
         }
-        if (this.app.turn !== undefined) void this.opts.backend.cancel()
         this.armedQuit = true
         this.toast("Press again to quit")
         break
@@ -2032,7 +2084,7 @@ export class TuiApp {
     // M49 Task 7: busy Enter — the persisted `busyEnter` setting chooses
     // STEER (interrupt the running turn with the text) or QUEUE (the plain
     // submit — the backend runs it after the current turn; default).
-    if (this.app.turn !== undefined && (this.opts.busyEnter ?? "queue") === "steer") {
+    if (this.app.turn !== undefined && this.busyEnterMode === "steer") {
       this.app.history.push(this.app.prompt.text)
       this.app.historyIndex = this.app.history.length
       this.clearPrompt()
@@ -3267,6 +3319,8 @@ export class TuiApp {
       applyAutoApprove: (on) => {
         this.app.autoApprove = on
       },
+      // M59: the follow-up behavior row — live busy-Enter flip.
+      applyBusyEnter: (mode) => this.setBusyEnter(mode),
       onOpenProviders: () => {
         // The dedicated Models & Providers master/detail flow.
         this.closeModal()
@@ -3291,7 +3345,14 @@ export class TuiApp {
       registry,
       controller: createSettingsController(registry.definitions(), ctx),
       ctx,
-      onClose: () => this.closeModal(),
+      onClose: () => {
+        this.closeModal()
+        // M59: the settings modal is where a provider/model gets configured —
+        // re-resolve so the Welcome gate (and the status row) stop showing the
+        // stale "No model configured" until the next Enter. Resolution reads
+        // settings + credentials only (no network).
+        if (this.app.welcome !== undefined) void this.refreshWelcomeModelState()
+      },
     })
     this.app.overlay = modelsAndProviders
       ? {

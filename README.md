@@ -89,6 +89,8 @@ node scripts/build-installer.mjs    # → build\I-harness-Setup-0.1.0.exe
 
 ## 分發與打包
 
+> **前置**：Node ≥ 22.18 與 **pnpm ≥ 10**。倉庫的 `pnpm-workspace.yaml` 用 pnpm-10 語法（`allowBuilds` / `ignoreWorkspaceCycles`）；且 dist 的原生部署要求 pnpm 10 的 hoisted linker——**pnpm 9 會靜默漏裝平台原生包**（`@koromix/koffi-win32-x64`、`@vscode/ripgrep-win32-x64`），產物啟動即失敗。`build-dist` 現在對 pnpm < 10 fail-loud（M59 修復）。
+
 **兩種「安裝」途徑，產權一致**（同一 shim 啟動器）：
 
 ### 1. 全局鏈接（開發/源碼模式）
@@ -118,7 +120,7 @@ node scripts/verify-installer.mjs  # 19 項安裝驗證（靜默裝 → 雙命�
 | PATH | HKLM 追加（僅當不含；段級精確匹配），`WM_SETTINGCHANGE` 廣播 |
 | 開始選單 | `I-harness` / `ih` 快捷方式 + README |
 | 卸載器 | 文件/目錄清除 + 註冊表 + PATH 回寫 + 自刪 |
-| 測試模式 | `-test.exe`（`IH_NSIS_TEST` 編譯變體：不寫 PATH/註冊表——供自動化驗證） |
+| 測試模式 | `-test.exe`（`IH_NSIS_TEST` 編譯變體：不寫 PATH/註冊表、**預設裝到 `%LOCALAPPDATA%\I-harness`**——用戶級可寫；原 `Program Files` 預設在未提權下寫不進去，雙擊即報 `Error opening file for writing`） |
 
 **dist 自足（M55）**：`--attach` 的 SDK spawn 重入自身 bundle（`node ih.mjs sdk`）、Windows-ACL 沙箱 spawn 同捆的 `dist/runner.mjs`、`/minimal` 自重啟重入自身、minimal 內聯引擎已入 bundle——都不再需要源碼或 tsx。`I_HARNESS_HOME` 僅是**源碼模式**的開發覆蓋（指向非標準路徑的 checkout），dist 不讀它。
 
@@ -128,6 +130,7 @@ node scripts/verify-installer.mjs  # 19 項安裝驗證（靜默裝 → 雙命�
 
 - **五協議一等**：openai-responses / openai-compatible（含 DeepSeek）/ anthropic / gemini（原生）/ bedrock（AWS Converse）+ mock
 - **設置在 TUI**：`/provider` 添加（ID/Base URL/API Key 遮罩，≥註冊只存 **refs**——明文永不入設置）→ `/model` 選擇 → 目錄動態發現（`/v1/models` 候選鏈 + probe-apply 落定），每次選擇持久化進 settings
+- **自訂請求標頭（M59）**：`llm.providers.<route>.headers`——網關要求的固定標頭（例：OpenCode Zen 的 `x-opencode-session`）。settings 平面直填（嚮導暫無此欄位；重新保存 provider 不會清掉它），適配器自身標頭（Authorization 等）優先
 - **思考強度**：6 檔（off/low/medium/high/xhigh/max）× 四協議翻譯表（世代規則）
 - 每會話窗口/輸出上限解析鏈：settings `userModel` > modelContexts > profile > `model-catalog.json` > undefined
 

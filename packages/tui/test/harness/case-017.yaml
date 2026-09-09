@@ -32,9 +32,13 @@ steps:
   - await-marker: { name: overlay-p1 }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 10 }
       rows:
         - "  ┃ rm -rf node_modules"
+        - "  ┃ dangerous command requires approval: rm"
+        - "  ┃  -rf node_modules"
+        - "  ┃ rm -rf node_modules"
+        - "  ┃"
         - "  ┃ 1 (●) Always allow: rm -rf node_modules"
         - "  ┃ 2 (○) Never allow: rm -rf node_modules"
         - "  ┃ 3 (○) Yes, proceed"
@@ -44,7 +48,7 @@ steps:
   - write-pty: { data: "dont trust" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 20 }
+      region: { startRow: 19 }
       rows:
         - "  ┃ 5 (○) ❯ dont trust"
   # 5 → No, reject → decision + bridge resolution + modal gone
@@ -56,21 +60,20 @@ steps:
   - await-marker: { name: approval-no }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
         - " ┃╰ unconfigured───────────────────────────╯"
   # ---- interaction 2: question modal (same bridge) -------------------------
   - await-marker: { name: overlay-q1 }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 13 }
       rows:
         - "  ┃ Pick a fruit"
+        - "  ┃ choose one"
+        - "  ┃"
         - "  ┃ 1 (○) Apple"
         - "  ┃ 2 (●) Banana"
   - write-pty: { data: "1" }
@@ -80,39 +83,36 @@ steps:
   - assert-file: { name: "decision-2.json", contains: '"value":"Apple"' }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
         - " ┃╰ unconfigured───────────────────────────╯"
   # ---- interaction 3: /btw -------------------------------------------------
   - write-pty: { data: "/btw why" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 16 }
+      region: { startRow: 19 }
       rows:
         - " ┃│❯ /btw why                              │"
   - write-pty: { data: "\r" }
   - await-marker: { name: btw-submitted }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 2 }
+      region: { startRow: 5 }
       rows:
         - "  ╭ /btw why ──────────────────────↑↓  [Esc]"
         - "  │ ⠋ Answering…                           │"
   - await-marker: { name: btw-done }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 2 }
+      region: { startRow: 5 }
       rows:
         - "  ╭ /btw why ──────────────────────↑↓  [Esc]"
         - "  │ the files are already committed        │"
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 2 }
+      region: { startRow: 5 }
       rows:
         - ""
         - ""
@@ -123,7 +123,7 @@ steps:
   - write-pty: { data: "\x1bOR" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 8 }
+      region: { startRow: 11 }
       rows:
         - "  ╭ sessions ──────────────────────────────╮"
         - "  │ sessions                               │"
@@ -136,7 +136,7 @@ steps:
   - write-pty: { data: "k" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 10 }
+      region: { startRow: 13 }
       rows:
         - "  │  build a game                 just now │"
         - "  │❯ debug tokens                 just now │"
@@ -145,7 +145,7 @@ steps:
   - assert-file: { name: "record-open.json", contains: '"sessionId":"s-2"' }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 8 }
+      region: { startRow: 11 }
       rows:
         - ""
         - ""
@@ -158,7 +158,7 @@ steps:
   - write-pty: { data: "\x1b[A" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 11 }
+      region: { startRow: 14 }
       rows:
         - "  ╭ history ──────────────────────────────2╮"
         - "  │❯ build a game                          │"
@@ -167,7 +167,7 @@ steps:
   - write-pty: { data: "\x1b" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 11 }
+      region: { startRow: 14 }
       rows:
         - ""
         - ""

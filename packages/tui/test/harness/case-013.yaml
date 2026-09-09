@@ -13,9 +13,10 @@
 #        onClose clears the overlay (modal gone frame)
 #
 # Modal rows pinned from the actual renderer grid (46x24 → the prompt slot
-# band y15..y20; the detail is capped at 0 rows at this height — title + 5
-# rows fill the band). Byte budget: init + modal frame + k frame + modal-gone
-# frame + teardown = 5 writes (j's clamped no-op frame is identical → "").
+# band y12..y20 — M59: the slot grows to the overlay's own content height, 9
+# rows here: title + detail + gap + 5 option rows + scope footer). Byte
+# budget: init + modal frame + k frame + modal-gone frame + teardown = 5
+# writes (j's clamped no-op frame is identical → "").
 name: case-013-permission-overlay
 host: test/harness/host-013.ts
 size: [46, 24]
@@ -24,9 +25,11 @@ steps:
   - await-marker: { name: overlay-p1 }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 12 }
       rows:
         - "  ┃ echo hi"
+        - "  ┃ running bash: echo hi"
+        - "  ┃"
         - "  ┃ 1 (●) Always allow: command"
         - "  ┃ 2 (○) Never allow: command"
         - "  ┃ 3 (○) Yes, proceed"
@@ -37,7 +40,7 @@ steps:
   - write-pty: { data: "k" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 16 }
+      region: { startRow: 15 }
       rows:
         - "  ┃ 1 (○) Always allow: command"
         - "  ┃ 2 (●) Never allow: command"
@@ -50,13 +53,10 @@ steps:
   - assert-file: { name: "decision.json", contains: '"verdict":"always"' }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
         - " ┃╰ unconfigured───────────────────────────╯"
   - assert-glyph-integrity: {}
   - await-marker: { name: teardown-wrote }

@@ -6,7 +6,10 @@ export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
     | { type: "step/start"; seq?: number }
-    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; images?: ImageInput[] }
+    // `internal: true` = model-visible but NOT a user-facing turn (runtime-
+    // context snapshots, guard nudges): the projection keeps it, the TUI
+    // scrollback skips it. Additive — old logs simply never carry it.
+    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[] }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }

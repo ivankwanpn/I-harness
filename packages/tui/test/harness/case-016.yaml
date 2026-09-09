@@ -50,7 +50,7 @@ steps:
         - "  ┃   "
         - "  ┃   "
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
   # frame-3: chunk 2 "Para two " — the OPEN paragraph tail row appears
@@ -91,7 +91,7 @@ steps:
         - "  ┃   "
         - "  ┃   print(1)"
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
   - assert-cell-colors:
@@ -142,17 +142,14 @@ steps:
         - "  ┃   print(1)"
         - "  ┃   Last para."
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
       rows:
         - ""
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
         - " ┃╰ unconfigured───────────────────────────╯"
         - ""
         - "  Enter: submit  │  Ctrl+Enter: interject  │"

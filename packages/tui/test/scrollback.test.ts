@@ -111,7 +111,7 @@ describe("basic sequence", () => {
     expect(texts(e.viewport(0, 1))).toEqual(["hello world"])
   })
 
-  it("tool status transitions: truncated stream → done replace", () => {
+  it("tool status transitions: truncated stream → done collapses to the header", () => {
     const e = eng()
     e.append(toolEv({ callId: "b1", name: "bash", kind: "execute", status: "running", summary: "node b.js", output: "o1\n", seq: 1, ts: 0 }))
     expect(e.lineCount()).toBe(2) // header + 1 output line
@@ -123,8 +123,13 @@ describe("basic sequence", () => {
       " Run node b.js",
       "o1", "o2", " …", "o5", "o6", "o7",
     ])
+    // M59 grok parity: a FINISHED tool block collapses to its header row alone
+    // (grok's DisplayMode::Collapsed renders no body) — expanding still shows
+    // the replaced output.
     e.append(toolEv({ callId: "b1", name: "bash", kind: "execute", status: "done", summary: "node b.js", output: "done1\ndone2", seq: 3, ts: 0 }))
-    expect(e.lineCount()).toBe(3)
+    expect(e.lineCount()).toBe(1)
+    expect(texts(e.viewport(0, 10))).toEqual([" Run node b.js"])
+    e.toggleExpandAll()
     expect(texts(e.viewport(0, 10))).toEqual([" Run node b.js", "done1", "done2"])
   })
 
@@ -643,11 +648,14 @@ describe("M49 Task 10 review F1 — secret-keyed result never renders through th
     const e = eng({ width: 80 })
     // the mapper-choke-point contract: `output` carries the REDACTED string;
     // the engine renders it verbatim → the body must never show the value.
+    // M59: the body only renders once the block is expanded (collapsed tool
+    // blocks are header-only, grok parity).
     e.append({
       type: "tool", callId: "m1", name: "bash", kind: "execute", status: "done", seq: 1, ts: 0,
       result: { stdout: "ok", token: "sc-123" },
       output: '{\n  "stdout": "ok",\n  "token": "***"\n}',
     })
+    e.toggleExpandAll()
     const text = texts(e.viewport(0, 10)).join("\n")
     expect(text).toContain('"token": "***"')
     expect(text).not.toContain("sc-123")

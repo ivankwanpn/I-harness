@@ -24,13 +24,26 @@ export interface CliRun {
 // Run the REAL CLI as a real process: `node --import <tsx> apps/cli/src/index.ts run ...`
 // The CLI has NO --workspace flag — workspace = spawn cwd (index.ts hard-codes
 // `workspace: process.cwd()`), so `cwd` IS the workspace.
-export function runCli(args: string[], cwd: string): CliRun {
-  const res = spawnSync(process.execPath, ["--import", TSX_LOADER, CLI_ENTRY, ...args], {
-    cwd,
-    encoding: "utf8",
-    timeout: 60_000,
-  })
-  return { status: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" }
+//
+// HERMETIC CONFIG HOME (M59): the CLI resolves its settings/credentials from
+// IH_CONFIG_DIR (default `~/.i-harness`). Without isolation a developer machine
+// that has a provider configured makes the "no configured model" gate start a
+// real turn instead of exiting 1 — the suite must not depend on the
+// developer's own settings. Each call gets a fresh empty config dir unless the
+// caller overrides it.
+export function runCli(args: string[], cwd: string, opts: { env?: NodeJS.ProcessEnv } = {}): CliRun {
+  const configDir = mkdtempSync(join(tmpdir(), "i-harness-e2e-config-"))
+  try {
+    const res = spawnSync(process.execPath, ["--import", TSX_LOADER, CLI_ENTRY, ...args], {
+      cwd,
+      encoding: "utf8",
+      timeout: 60_000,
+      env: { ...process.env, IH_CONFIG_DIR: configDir, ...opts.env },
+    })
+    return { status: res.status ?? -1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" }
+  } finally {
+    rmSync(configDir, { recursive: true, force: true })
+  }
 }
 
 export function makeWorkspace(prefix: string): string {

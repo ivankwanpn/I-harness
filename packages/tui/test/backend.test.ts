@@ -93,10 +93,13 @@ describe("mapSessionEvent", () => {
 
   it("tool/result: secret-keyed fields are masked in the presentation string; the raw result stays intact (review F1)", () => {
     const state = createEventMapState()
+    // A NON-execute tool: execute results render their stdout/stderr stream
+    // (M59 grok parity), so the JSON-envelope redaction contract is exercised
+    // through the generic path.
     const done = mapSessionEvent({
       type: "tool/result",
       callId: "m1",
-      name: "bash",
+      name: "custom_tool",
       output: { stdout: "ok", token: "sc-123", headers: { authorization: "Bearer sc-456" }, keep: "fine" },
       seq: 5,
     } as never, state)!
@@ -426,14 +429,14 @@ describe("embedded backend", () => {
     await consumer
 
     // the real one-step turn: [admitted, promoted, step/start, step/end]
-    // skipped; runtime-context injects a user/message at the step pre-seam,
-    // then turn/start, user/message, [runtime user], assistant/message, turn/end
+    // skipped; runtime-context injects an INTERNAL user/message at the step
+    // pre-seam (M59: model-visible, never a TuiEvent — the seq still advances),
+    // then turn/start, user/message, assistant/message, turn/end
     expect(collected.map((e) => `${e.type}:${e.seq}`)).toEqual([
-      "turn:2", "user:3", "user:5", "assistant:6", "turn:8",
+      "turn:2", "user:3", "assistant:6", "turn:8",
     ])
     expect(collected[1]).toMatchObject({ type: "user", text: "kick it off" })
-    expect(collected[2]).toMatchObject({ type: "user", seq: 5 }) // runtime context
-    expect(collected[3]).toMatchObject({ type: "assistant", text: "Hello 世界" })
+    expect(collected[2]).toMatchObject({ type: "assistant", text: "Hello 世界" })
 
     const replayed = await backend.replay(-1)
     expect(replayed.map((e) => `${e.type}:${e.seq}`)).toEqual(collected.map((e) => `${e.type}:${e.seq}`))

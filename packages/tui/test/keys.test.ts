@@ -81,8 +81,10 @@ describe("dispatchKey — prompt focus: Enter & friends", () => {
     expect(dispatchKey(ctrlC, promptState({ armedQuit: true }))).toBe("quit-arm1")
   })
 
-  it("Esc: non-empty → cancel-turn (loop clears draft); empty → quit-arm1, then quit when armed", () => {
+  it("Esc: running turn → cancel-turn (stop the answer); idle: non-empty → clear draft; empty → quit-arm1/quit", () => {
     const esc = kbd({ code: "Esc", key: "Esc" })
+    // M59: a RUNNING turn owns Esc — stop the answer, keep the draft
+    expect(dispatchKey(esc, promptState({ turnRunning: true, promptText: "draft" }))).toBe("cancel-turn")
     expect(dispatchKey(esc, promptState({ promptText: "draft" }))).toBe("cancel-turn")
     expect(dispatchKey(esc, promptState())).toBe("quit-arm1")
     expect(dispatchKey(esc, promptState({ armedQuit: true }))).toBe("quit")
