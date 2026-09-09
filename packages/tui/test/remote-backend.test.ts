@@ -960,6 +960,52 @@ describe("createRemoteBackend (wire v1.1: capability-row cancel + rewind)", () =
     await backend.close()
   })
 
+  it("rewind plan: the additive wire `unseen` maps entry-validated; absent → absent", async () => {
+    const client = fakeWireClient()
+    client.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-rewind": ["1"] } }
+      if (method === "session/rewind/plan") {
+        return {
+          clean: [],
+          conflicts: [],
+          unTracked: [],
+          ops: [],
+          unseen: [
+            { path: "shell.txt", kind: "untracked" },
+            { path: "edited.txt", kind: "modified" },
+            { path: "gone.txt", kind: "deleted" },
+            { path: "bad.txt", kind: "renamed" }, // unknown kind → skipped
+            { path: 42, kind: "modified" }, // non-string path → skipped
+            null,
+          ],
+        }
+      }
+      return { ok: true }
+    })
+    const backend = createRemoteBackend({ client, sessionId: "s1" })
+    await waitFor(() => backend.rewind !== undefined, 1000)
+    const plan = await backend.rewind!.plan(0, "all")
+    expect(plan.unseen).toEqual([
+      { path: "shell.txt", kind: "untracked" },
+      { path: "edited.txt", kind: "modified" },
+      { path: "gone.txt", kind: "deleted" },
+    ])
+    await backend.close()
+
+    // additive shape: a plan response WITHOUT `unseen` keeps the member absent
+    const bare = fakeWireClient()
+    bare.setHandler((method) => {
+      if (method === "initialize") return { protocolVersion: 2, capabilities: { "session-rewind": ["1"] } }
+      if (method === "session/rewind/plan") return { clean: [], conflicts: [], unTracked: [], ops: [] }
+      return { ok: true }
+    })
+    const bareBackend = createRemoteBackend({ client: bare, sessionId: "s1" })
+    await waitFor(() => bareBackend.rewind !== undefined, 1000)
+    const barePlan = await bareBackend.rewind!.plan(0, "all")
+    expect("unseen" in barePlan).toBe(false)
+    await bareBackend.close()
+  })
+
   it("rewind list entries: malformed rows are skipped, never fabricated", async () => {
     const client = fakeWireClient()
     client.setHandler((method) => {

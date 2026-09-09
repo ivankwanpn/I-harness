@@ -47,9 +47,11 @@
 //                                           rewind-row GATED)
 //   session/rewind/plan { sessionId, target, mode }
 //                                         → { clean, conflicts, unTracked,
-//                                           ops } (wire v1.1, same gate —
-//                                           target/mode echo back from the
-//                                           request into the mapped RewindPlan)
+//                                           ops, unseen? } (wire v1.1, same
+//                                           gate — target/mode echo back from
+//                                           the request into the mapped
+//                                           RewindPlan; `unseen` is the M58
+//                                           additive git-evidence list)
 //   session/rewind/execute { sessionId, target, mode }
 //                                         → { revertedFiles, conflicts,
 //                                           error? } (wire v1.1, same gate;
@@ -133,6 +135,7 @@ import type {
   RewindPlan,
   RewindPointSummary,
   RewindResult,
+  UnseenChange,
 } from "@i-harness/rewind"
 import { createEventMapState, mapSessionEvent, type EventMapState } from "./embedded.ts"
 import type { AgentTaskView, BackendClient, BackendModelState, DashboardSessionResult, DashboardSessionRow, SessionQueueItem, SessionSummary, TuiEvent } from "../contracts.ts"
@@ -541,6 +544,18 @@ function conflictOpEntries(raw: unknown): ConflictOp[] {
   return raw.filter(isConflictOpEntry)
 }
 
+/** M60 B: one wire `unseen` row ({ path, kind } — the M58 additive plan
+ * member). Entry-validated like every other plan list: a malformed row is
+ * skipped, never fabricated. */
+function isUnseenEntry(e: unknown): e is UnseenChange {
+  if (e === null || typeof e !== "object") return false
+  const o = e as { path?: unknown; kind?: unknown }
+  return (
+    typeof o.path === "string"
+    && (o.kind === "modified" || o.kind === "untracked" || o.kind === "deleted")
+  )
+}
+
 function parseRewindPoints(result: unknown): RewindPointSummary[] {
   if (result === null || typeof result !== "object") {
     throw new SdkWireError(-32603, "malformed session/rewind/points response: result is not an object")
@@ -563,7 +578,7 @@ function parseRewindPlan(result: unknown, target: number, mode: RewindMode): Rew
   if (result === null || typeof result !== "object") {
     throw new SdkWireError(-32603, "malformed session/rewind/plan response: result is not an object")
   }
-  const r = result as { clean?: unknown; conflicts?: unknown; unTracked?: unknown; ops?: unknown }
+  const r = result as { clean?: unknown; conflicts?: unknown; unTracked?: unknown; ops?: unknown; unseen?: unknown }
   if (!Array.isArray(r.clean) || !Array.isArray(r.conflicts) || !Array.isArray(r.unTracked) || !Array.isArray(r.ops)) {
     throw new SdkWireError(-32603, "malformed session/rewind/plan response: required arrays missing or malformed")
   }
@@ -574,6 +589,10 @@ function parseRewindPlan(result: unknown, target: number, mode: RewindMode): Rew
     conflicts: conflictOpEntries(r.conflicts),
     unTracked: r.unTracked.filter((s): s is string => typeof s === "string" && s !== ""),
     ops: fileOpEntries(r.ops),
+    // M60 B: the M58 additive `unseen` list — absent stays absent (the wire
+    // omits it when the workspace is not a git work tree / git is unavailable
+    // / nothing to report); malformed rows are skipped.
+    ...(Array.isArray(r.unseen) ? { unseen: r.unseen.filter(isUnseenEntry) } : {}),
   }
 }
 
