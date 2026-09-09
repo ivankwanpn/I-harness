@@ -182,4 +182,18 @@ describe("plan().unseen (R-B4 A, real git repo)", () => {
     expect(plan.unseen).toBeUndefined()
     expect(plan.target).toBe(1)
   })
+
+  it("M60: an injected probe that resolves a non-array stays fail-soft too", async () => {
+    // The declared type forbids it, but the seam is JavaScript-injectable — a
+    // host probe resolving undefined/null must not break plan() either.
+    writeFileSync(join(workspace, "shell.txt"), "s")
+    const bogus = new RewindService({
+      store,
+      workspace,
+      gitProbe: { changes: async () => undefined as never },
+    })
+    const plan = await bogus.plan(1)
+    expect(plan.unseen).toBeUndefined()
+    expect(plan.target).toBe(1)
+  })
 })

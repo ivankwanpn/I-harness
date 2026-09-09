@@ -237,6 +237,9 @@ export class RewindService {
     } catch {
       return []
     }
+    // The declared type forbids a non-array, but the seam is JavaScript-
+    // injectable: treat any malformed resolution as "no evidence".
+    if (!Array.isArray(changes)) return []
     if (changes.length === 0) return []
     const covered = new Set<string>([...targetPaths, ...unTracked])
     // Latest recorded afterHash per path, across ALL points (points are in
