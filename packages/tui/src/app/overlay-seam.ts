@@ -166,7 +166,7 @@ function rewindMinRows(state: RewindState): number {
     case "picker": return 1 + Math.max(1, state.points.length)
     case "cancel-offer": return 4
     case "mode-select": return 4
-    case "confirm": return 1 + capped(state.cleanPaths.length) + capped(state.conflicts.length) + 2
+    case "confirm": return 1 + capped(state.cleanPaths.length) + capped(state.conflicts.length) + capped(state.unseen.length) + 2
   }
 }
 

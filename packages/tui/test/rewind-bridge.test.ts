@@ -16,7 +16,10 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { RewindMode, RewindPlan, RewindPointSummary, RewindResult } from "@i-harness/rewind"
 import { createSessionAssembly, type SessionService } from "@i-harness/session-executor"
+import { createRenderer, createUnknownCapabilities, GLYPHS, resolvePalette } from "@i-harness/tui-core"
+import type { Renderer, TerminalCapabilityContext } from "@i-harness/tui-core"
 import { bindRewindOverlay, isRewindOverlay } from "../src/app/overlay-seam.ts"
+import { makeDraw } from "../src/app/present.ts"
 import type { RewindState } from "../src/views/rewind.ts"
 import { dispatchKey } from "../src/app/keys.ts"
 import type { Kbd, KeymapState } from "../src/app/keys.ts"
@@ -301,6 +304,54 @@ describe("bindRewindOverlay — phase machine", () => {
     expect((seam as { kind: string }).kind).toBe("rewind")
     // non-rewind seams hop past the probe
     expect(isRewindOverlay({ kind: "permission", draw: () => {} })).toBe(false)
+  })
+})
+
+// ------------------------------------------------------------------ minRows vs render (M60 A)
+
+const seamCap: TerminalCapabilityContext = { ...createUnknownCapabilities(), colorLevel: "truecolor", dark: true }
+const seamPalette = resolvePalette(seamCap, "groknight")
+
+/** Visible text of one drawn row (reads the committed front frame). */
+const seamRowText = (r: Renderer, y: number): string => {
+  const inner = r as unknown as { db: { front: { cells: Array<{ text: string }>; width: number } } }
+  const { cells, width } = inner.db.front
+  let out = ""
+  for (let x = 0; x < width; x++) out += cells[y * width + x].text
+  return out
+}
+
+describe("bindRewindOverlay — confirm minRows vs what renderRewind draws (M60 A)", () => {
+  it("the declared height fits the unseen rows AND the y/Bksp footer", async () => {
+    // The seam's minRows is the prompt-slot height the layout grants; the
+    // renderer must fit its whole panel (title + rows + footer) inside it.
+    const plan: RewindPlan = {
+      target: 0,
+      mode: "all",
+      clean: [{ path: "src/a.txt", kind: "restore-blob", blobId: "b" }],
+      conflicts: [],
+      unTracked: [],
+      ops: [],
+      unseen: [{ path: "shell.txt", kind: "untracked" }],
+    }
+    const { client, state } = fakeBackend({ plan })
+    const seam = bindRewindOverlay(state, { backend: client })
+    await sleepMicro()
+    seam.act!("overlay-select")
+    seam.act!("rewind-a")
+    await sleepMicro()
+    expect(state.phase).toBe("confirm")
+    expect(state.unseen).toEqual([{ path: "shell.txt", kind: "untracked" }])
+
+    const h = seam.minRows!(80)
+    const r = createRenderer({ cols: 80, rows: 24, cap: seamCap })
+    seam.draw({ x: 0, y: 0, w: 80, h }, makeDraw(r.buffer, seamPalette), seamPalette, GLYPHS)
+    r.commit()
+    r.flush(() => {})
+    const text = Array.from({ length: h }, (_, y) => seamRowText(r, y)).join("\n")
+    expect(text).toContain("? shell.txt (unseen: untracked)")
+    expect(text).toContain("y (●) Confirm rewind")
+    expect(text).toContain("Bksp (○) Back")
   })
 })
 
