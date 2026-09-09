@@ -39,18 +39,18 @@ steps:
   - write-pty: { data: "\x13" }
   - assert-cell-colors:
       cells:
-        - { row: 16, col: 3, text: "❯ Build anything" }
+        - { row: 19, col: 3, text: "❯ Build anything" }
       timeoutMs: 3000
   - write-pty: { data: "greeting" }
   - write-pty: { data: "\x13" }
   - assert-cell-colors:
       cells:
-        - { row: 16, col: 3, text: "❯ s1 draft" }
+        - { row: 19, col: 3, text: "❯ s1 draft" }
       timeoutMs: 3000
   - write-pty: { data: "\x13" }
   - assert-cell-colors:
       cells:
-        - { row: 16, col: 3, text: "❯ greeting" }
+        - { row: 19, col: 3, text: "❯ greeting" }
       timeoutMs: 3000
   - write-pty: { data: "\r" }
   - await-quiescent: { ms: 200 }
@@ -60,8 +60,8 @@ steps:
   - write-pty: { data: "\r" }
   - assert-cell-colors:
       cells:
-        - { row: 11, col: 1, text: "╭ history" }
-        - { row: 12, col: 1, text: "│❯ greeting" }
+        - { row: 14, col: 1, text: "╭ history" }
+        - { row: 15, col: 1, text: "│❯ greeting" }
       timeoutMs: 3000
   - write-pty: { data: "\x1b" }
   - await-quiescent: { ms: 200 }
@@ -91,8 +91,8 @@ steps:
   - await-quiescent: { ms: 200 }
   - assert-cell-colors:
       cells:
-        - { row: 15, col: 10, fg: "#767676" }
-        - { row: 15, col: 10, text: "─" }
+        - { row: 18, col: 10, fg: "#767676" }
+        - { row: 18, col: 10, text: "─" }
       timeoutMs: 3000
   # ── phase F: /find — the search bar.
   - write-pty: { data: "/find" }
@@ -100,12 +100,12 @@ steps:
   - write-pty: { data: "\r" }
   - assert-cell-colors:
       cells:
-        - { row: 16, col: 3, text: "❯ Build anything" }
+        - { row: 19, col: 3, text: "❯ Build anything" }
       timeoutMs: 3000
   - write-pty: { data: "hi" }
   - assert-cell-colors:
       cells:
-        - { row: 16, col: 3, text: "❯ hi" }
+        - { row: 19, col: 3, text: "❯ hi" }
       timeoutMs: 3000
   - write-pty: { data: "\r" }
   - await-quiescent: { ms: 200 }
@@ -119,8 +119,8 @@ steps:
   - write-pty: { data: "\r" }
   - assert-cell-colors:
       cells:
-        - { row: 12, col: 2, text: "╭ Skills" }
-        - { row: 13, col: 2, text: "│❯ hello" }
+        - { row: 15, col: 2, text: "╭ Skills" }
+        - { row: 16, col: 2, text: "│❯ hello" }
       timeoutMs: 3000
   - write-pty: { data: "\x1b" }
   - await-quiescent: { ms: 200 }
@@ -130,8 +130,8 @@ steps:
   - write-pty: { data: "\r" }
   - assert-cell-colors:
       cells:
-        - { row: 9, col: 2, text: "╭ Usage" }
-        - { row: 10, col: 2, text: "│❯ context used" }
+        - { row: 12, col: 2, text: "╭ Usage" }
+        - { row: 13, col: 2, text: "│❯ context used" }
       timeoutMs: 3000
   - write-pty: { data: "\x1b" }
   - await-quiescent: { ms: 200 }

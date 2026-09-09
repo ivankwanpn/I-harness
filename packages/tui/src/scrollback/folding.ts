@@ -357,9 +357,11 @@ function toolFold(b: ToolBlock, full: StyledRun[][], state: FoldState, glyphs: G
   }
   if (state === "expanded") return full
   const head = b.toolKind === "edit" ? editCollapsedHeader(b, hdr, glyphs) : hdr
-  let sel: StyledRun[][]
-  if (b.toolKind === "execute" || state === "truncated") sel = excerpt(body)
-  else sel = []
+  // grok parity (M59): a COLLAPSED tool block is the header row ALONE — grok's
+  // DisplayMode::Collapsed renders no body at all for a finished tool call
+  // (`◆ Run pwd`, not `◆ Run pwd` + the JSON envelope). Only the running
+  // "truncated" state still streams the first2/…/last3 excerpt.
+  const sel: StyledRun[][] = state === "truncated" ? excerpt(body) : []
   return errRow !== undefined ? [head, ...sel, errRow] : [head, ...sel]
 }
 

@@ -35,54 +35,54 @@ steps:
   - await-quiescent: { ms: 200 }
   - assert-cell-colors:
       cells:
-        - { row: 22, col: 5, text: "abc" }
+        - { row: 25, col: 5, text: "abc" }
       timeoutMs: 5000
-  - wait-cursor: { col: 9, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 9, row: 26, timeoutMs: 5000 }
   # ---- Step 2: a movement (Ctrl+A home) breaks the burst, then the CJK +
   # emoji burst is INSERTED at position 0 (one undo record of its own).
   - write-pty:
       data: "\x01" # Ctrl+A = line start (breaks the "abc" burst)
-  - wait-cursor: { col: 6, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 6, row: 26, timeoutMs: 5000 }
   - write-pty:
       data: " 你好🙂"
   - await-quiescent: { ms: 200 }
   - assert-cell-colors:
       cells:
-        - { row: 22, col: 5, text: " 你好🙂abc" }
+        - { row: 25, col: 5, text: " 你好🙂abc" }
       timeoutMs: 5000
-  - wait-cursor: { col: 13, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 13, row: 26, timeoutMs: 5000 }
   # ---- Step 3: UNDO the second burst (one record → "abc", caret at 0) and
   # REDO it.
   - write-pty:
       data: "\x1a" # Ctrl+Z
   - await-quiescent: { ms: 150 }
-  - wait-cursor: { col: 6, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 6, row: 26, timeoutMs: 5000 }
   - assert-cell-colors:
       cells:
-        - { row: 22, col: 5, text: "abc" }
+        - { row: 25, col: 5, text: "abc" }
       timeoutMs: 5000
   - write-pty:
       data: "\x19" # Ctrl+Y
   - await-quiescent: { ms: 150 }
-  - wait-cursor: { col: 13, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 13, row: 26, timeoutMs: 5000 }
   - assert-cell-colors:
       cells:
-        - { row: 22, col: 5, text: " 你好🙂abc" }
+        - { row: 25, col: 5, text: " 你好🙂abc" }
       timeoutMs: 5000
   # ---- Step 4: line home/end + ONE grapheme Left (the caret at the end
   # steps by cluster — the emoji is its own cluster).
   - write-pty:
       data: "\x01" # Ctrl+A = line start
-  - wait-cursor: { col: 6, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 6, row: 26, timeoutMs: 5000 }
   - write-pty:
       data: "\x05" # Ctrl+E = line end
-  - wait-cursor: { col: 16, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 16, row: 26, timeoutMs: 5000 }
   - write-pty:
       data: "\x1b[D" # Left — ONE grapheme (past "c")
-  - wait-cursor: { col: 15, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 15, row: 26, timeoutMs: 5000 }
   - write-pty:
       data: "\x1b[C" # Right — ONE grapheme (back over "c")
-  - wait-cursor: { col: 16, row: 23, timeoutMs: 5000 }
+  - wait-cursor: { col: 16, row: 26, timeoutMs: 5000 }
   # WORD move (Ctrl/Alt+Left — spec §6.2): the MODIFIED-arrow CSI cannot
   # survive this harness's input path — the ConPTY/console re-encodes the mod
   # parameter ([5D / [3D / [1;5D all arrive mod-less or dropped, and the lone
@@ -93,7 +93,7 @@ steps:
   # paint re-asserts the caret at the new geometry.
   - app-resize: { cols: 60, rows: 20 }
   - await-quiescent: { ms: 300 }
-  - wait-cursor: { col: 16, row: 13, timeoutMs: 5000 }
+  - wait-cursor: { col: 16, row: 16, timeoutMs: 5000 }
   # ---- Step 6: F3 → the sessions modal (cursor HIDDEN — the byte stream
   # carries \x1b[?25l); Esc dismisses → the caret returns (\x1b[?25h + the
   # MoveTo back).
@@ -102,12 +102,12 @@ steps:
   - await-quiescent: { ms: 300 }
   - assert-cell-colors:
       cells:
-        - { row: 7, col: 4, text: "sessions" }
+        - { row: 10, col: 4, text: "sessions" }
       timeoutMs: 5000
   - write-pty:
       data: "\x1b" # Esc — dismiss
   - await-quiescent: { ms: 300 }
-  - wait-cursor: { col: 16, row: 13, timeoutMs: 5000 }
+  - wait-cursor: { col: 16, row: 16, timeoutMs: 5000 }
   # ---- close: glyph integrity + the byte budget + exit 0.
   - assert-glyph-integrity: {}
   - request-marker: { name: request-exit }

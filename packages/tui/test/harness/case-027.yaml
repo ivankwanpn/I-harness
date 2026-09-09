@@ -24,7 +24,9 @@ steps:
   # ── the running subagent (real spawn over the production key path).
   - write-pty: { data: "spawn a helper" }
   - write-pty: { data: "\r" }
-  - await-marker: { name: spawn-running, timeoutMs: 60000 }
+  # 90s: the REAL spawn assembles a nested session — under full-suite load the
+  # model/tool handshake can take tens of seconds.
+  - await-marker: { name: spawn-running, timeoutMs: 90000 }
   # ── the queued prompt.
   - write-pty: { data: "second" }
   - write-pty: { data: "\r" }
@@ -116,18 +118,19 @@ steps:
   - write-pty: { data: "\x1b[59:5;1u" }
   - assert-cell-colors:
       cells:
-        - { row: 17, col: 0, text: "#2 second" }
-        - { row: 17, col: 90, text: "[cancel]" }
+        - { row: 20, col: 0, text: "#2 second" }
+        - { row: 20, col: 90, text: "[cancel]" }
       timeoutMs: 5000
-  # ── mouse [cancel] on the queued row (SGR 1006: press+release at 95,18).
-  - write-pty: { data: "\x1b[<0;95;18M\x1b[<0;95;18m" }
+  # ── mouse [cancel] on the queued row (SGR 1006: press+release at 95,21 —
+  # M59: the queue pane sits 3 rows lower with the 3-row composer).
+  - write-pty: { data: "\x1b[<0;95;21M\x1b[<0;95;21m" }
   - await-marker: { name: queue-cancelled, timeoutMs: 30000 }
   - await-quiescent: { ms: 300 }
   # ── the queued row is gone; the RUNNING row stays (the pane never claims
   # "empty" while a prompt is running — the row order/shrink is the proof).
   - assert-cell-colors:
       cells:
-        - { row: 17, col: 2, text: "#1 spawn a helper" }
+        - { row: 20, col: 2, text: "#1 spawn a helper" }
       timeoutMs: 5000
   # ── tasks pane: Ctrl+G → the REAL task groups: "Subagents 1" (the running
   # subagent row) + "Background 1" (the helper job) — each with [✗].

@@ -72,6 +72,8 @@ export function createRepeatToolGuard(_ctx: PluginContext, config: RepeatToolCon
             type: "user/message",
             text,
             source: { kind: "plugin", plugin: "guard-repeat-tool" },
+            // M59: an internal nudge to the model — not a user turn in the TUI.
+            internal: true,
           })
         }
       })

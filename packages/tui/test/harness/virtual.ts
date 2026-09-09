@@ -124,6 +124,17 @@ export class VirtualTerminal {
     return rows
   }
 
+  /** Numbered right-trimmed rows of the ACTIVE buffer — the failure diagnostic
+   * a golden mismatch needs (an expected/got pair alone does not show what the
+   * surrounding screen actually is). */
+  screenDump(): string {
+    const lines: string[] = []
+    for (let y = 0; y < this.rows; y++) {
+      lines.push(`${String(y).padStart(2)}|${this.rowText(y).replace(/\s+$/, "")}`)
+    }
+    return lines.join("\n")
+  }
+
   // --- minimal-mode additions (M38a G3): the NORMAL buffer asserts — minimal
   // mode never enters the alt screen, so the committed print-once content and
   // the live region live in buffer.normal (scrollback + screen). Mirror

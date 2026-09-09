@@ -34,21 +34,8 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
-  # frame-3: tool running — turn row on (46x24 still)
+  # frame-3: tool running — turn row on (46x24 still); the streamed excerpt renders
   - await-marker: { name: frame-3 }
-  - wait-screen:
-      region: { startRow: 1 }
-      rows:
-        - "  ⎇  ~/workspace"
-        - "  ┃   ❯ hello"
-        - "  ┃   context: workspace ok"
-        - "  ┃  ◆ Run read data.txt"
-  - wait-screen:
-      region: { startRow: 13 }
-      rows:
-        - "  ⠼ Responding…  0:00 0s  [stop]"
-  # frame-4: tool done with output
-  - await-marker: { name: frame-4 }
   - wait-screen:
       region: { startRow: 1 }
       rows:
@@ -58,7 +45,21 @@ steps:
         - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  # frame-4: tool done — collapsed to the header row (M59 grok parity)
+  - await-marker: { name: frame-4 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   context: workspace ok"
+        - "  ┃  ◆ Run read data.txt"
+        - ""
+  - wait-screen:
+      region: { startRow: 16 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
   # frame-5: turn end — idle before the resize window; the host re-grids at
@@ -72,9 +73,9 @@ steps:
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
         - "  ┃  ◆ Run read data.txt"
-        - "  ┃   data.txt exists"
+        - ""
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
       rows:
         - ""
   - assert-glyph-integrity: {}
@@ -94,15 +95,15 @@ steps:
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
         - "  ┃  ◆ Run read data.txt"
-        - "  ┃   data.txt exists"
         - "  ┃   It says hello."
+        - ""
+        - ""
+        - ""
+        - ""
         - "  ⠼ Responding…  0:00 0s  [stop]"
         - ""
         - " ┃╭───────────────────untitled─╮"
         - " ┃│❯ Build anything            │"
-        - " ┃│                            │"
-        - " ┃│                            │"
-        - " ┃│                            │"
         - " ┃╰ unconfigured───────────────╯"
         - ""
         - "  Enter: submit  │  Ctrl+Enter:"
@@ -118,8 +119,18 @@ steps:
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace ok"
         - "  ┃  ◆ Run read data.txt"
-        - "  ┃   data.txt exists"
         - "  ┃   It says hello."
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - ""
+        - " ┃╭───────────────────untitled─╮"
+        - " ┃│❯ Build anything            │"
+        - " ┃╰ unconfigured───────────────╯"
+        - ""
+        - "  Enter: submit  │  Ctrl+Enter:"
         - ""
   - assert-glyph-integrity: {}
   - await-marker: { name: teardown-wrote }

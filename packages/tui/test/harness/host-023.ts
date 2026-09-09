@@ -156,7 +156,10 @@ async function* mainEvents(): AsyncIterable<TuiEvent> {
     { type: "turn", phase: "start", seq: 1, ts: T0 },
     { type: "user", text: "hello", seq: 2, ts: T0 },
     { type: "assistant", text: "two lines\nthird line", seq: 3, ts: T0 + 1000 },
-    { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "done", output: "data-1\ndata-2\ndata-3\ndata-4\ndata-5\ndata-6", summary: "read data.txt", seq: 4, ts: T0 + 2000 },
+    // M59: status "running" keeps the execute block's streaming EXCERPT on
+    // screen (a FINISHED execute block collapses to its header row, grok
+    // parity — the scene needs the 7 body rows for the scroll/drag matrix).
+    { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "running", output: "data-1\ndata-2\ndata-3\ndata-4\ndata-5\ndata-6", summary: "read data.txt", seq: 4, ts: T0 + 2000 },
     { type: "tool", callId: "n1", name: "notes.md", kind: "read", status: "done", output: "note-1\nnote-2\nnote-3", summary: "notes.md", seq: 5, ts: T0 + 3000 },
     { type: "tool", callId: "e1", name: "patch.txt", kind: "edit", status: "done", output: "+a1\n+a2\n+a3\n+a4\n+a5\n+a6\n-b1\n-b2\n-b3\n-b4\n-b5\n-b6", summary: "patch.txt", seq: 6, ts: T0 + 4000 },
     { type: "turn", phase: "end", seq: 7, ts: T0 + 5000 },

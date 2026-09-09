@@ -136,7 +136,10 @@ function sceneEvents015(): TuiEvent[] {
   return [
     { type: "user", text: "hello", seq: 1, ts: 0 },
     { type: "system", text: "context: workspace ok", seq: 2, ts: 100 },
-    { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "running", summary: "read data.txt", seq: 3, ts: 200 },
+    // The running event streams the excerpt (M59: a FINISHED execute block
+    // collapses to its header — without the running output the running and
+    // done frames would be byte-identical and the frame markers would skip).
+    { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "running", output: "data.txt exists", summary: "read data.txt", seq: 3, ts: 200 },
     { type: "tool", callId: "r1", name: "read data.txt", kind: "execute", status: "done", output: "data.txt exists", summary: "read data.txt", seq: 4, ts: 300 },
     { type: "assistant", text: "It says hello.", seq: 5, ts: 400 },
     { type: "turn", phase: "end", seq: 6, ts: 500 },
