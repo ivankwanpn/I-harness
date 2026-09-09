@@ -17,7 +17,10 @@ import {
   pasteLabel,
   pasteLineCount,
   promptCursorAtCell,
+  promptCursorCell,
+  renderPrompt,
 } from "../src/views/prompt.ts"
+import { makeDraw } from "../src/app/present.ts"
 
 const cap: TerminalCapabilityContext = {
   ...createUnknownCapabilities(),
@@ -122,6 +125,32 @@ describe("TuiApp — paste pipeline (M46c G2)", () => {
     app.dispatch("submit")
     expect(app.state().prompt.text).toBe("")
     expect(app.state().prompt.pasteStash).toEqual([])
+  })
+
+  it("M60 C: a chip never eats the only text row — the layout grows and the caret sits on a content row", () => {
+    const app = makeApp()
+    app.feedInput(pasteEv("alpha\nbeta\ngamma\ndelta\nomega"))
+    // One typed line + one chip: the DEFAULT 3-row composer would put the chip
+    // on the only content row (text invisible, caret on the info border).
+    const p = app.state().prompt
+    p.text = "hello world"
+    p.cursor = 6
+    const rect = layoutAgent({ cols: 100, rows: 24 }, { ...app.state(), dropdown: undefined }, { compact: false }).prompt
+    const r = make(100, 24)
+    renderPrompt(rect, p, makeDraw(r.buffer, palette), palette, GLYPHS)
+    r.commit()
+    r.flush(() => {})
+    const inner = r as unknown as { db: { front: { cells: Array<{ text: string }>; width: number } } }
+    const line = (y: number): string => {
+      let out = ""
+      for (let x = 0; x < inner.db.front.width; x++) out += inner.db.front.cells[y * inner.db.front.width + x].text
+      return out
+    }
+    expect(line(rect.y + 1)).toContain("[Pasted: 5 lines]") // the chip row
+    expect(line(rect.y + 2)).toContain("hello world") // ...and the text is still drawn
+    const caret = promptCursorCell(rect, p)
+    expect(caret.y).toBeGreaterThan(rect.y) // not the top border
+    expect(caret.y).toBeLessThan(rect.y + rect.h - 1) // not the info border
   })
 
   it("double-click on the chip → the atom is expanded in place (source stays, chip released)", () => {

@@ -4,7 +4,7 @@
 // Frame constants follow the spec's outer Block chrome: padding h_left=2,
 // h_right=2, top=1, bottom=1 default; compact = vpad 0, hpad 1.
 
-import { wrapPrompt } from "./prompt.ts"
+import { pasteChipRowsWanted, wrapPrompt } from "./prompt.ts"
 import type { ScrollbackEngine, TextStyle, TodoItem } from "../contracts.ts"
 import type { StatusState } from "./status.ts"
 import type { PromptState } from "./prompt.ts"
@@ -141,9 +141,11 @@ export const SCROLLBACK_PAD_W = 2
  * border carrying the info row. M59 grok parity: grok's composer is exactly
  * THREE rows for a one-line input (its vpad_top row IS the top border), while
  * the old `promptLines + 3 + 2*vpad` reserved two blank padding rows and read
- * as a 6-row box next to grok's 3. */
-export function promptHeightOf(promptLines: number, rows: number): number {
-  const desired = promptLines + 2
+ * as a 6-row box next to grok's 3. M60 C: `chipRows` (the paste-stash chips
+ * rendered above the text) grows the box too — the renderer reserves one text
+ * row, so a chip may never consume the only content row. */
+export function promptHeightOf(promptLines: number, rows: number, chipRows = 0): number {
+  const desired = promptLines + 2 + chipRows
   const cap = Math.max(3, Math.floor(rows / 2))
   return Math.min(cap, desired)
 }
@@ -212,7 +214,10 @@ export function layoutAgent(
   const promptLines = Math.max(1, wrapPrompt(state.prompt.text, contentW).length)
   const promptCap = Math.max(3, Math.floor(area.rows / 2))
   const overlayMin = Math.min(promptCap, state.overlay?.minRows?.(innerW) ?? 0)
-  const promptH = Math.max(promptHeightOf(promptLines, area.rows), overlayMin)
+  // M60 C: paste-stash chips ride ABOVE the text and grow the box (the
+  // renderer reserves one text row inside the granted height).
+  const chipRows = pasteChipRowsWanted(state.prompt)
+  const promptH = Math.max(promptHeightOf(promptLines, area.rows, chipRows), overlayMin)
   const promptGap = denseVertical ? 0 : 1
   const promptY = shortcuts.y - promptGap - promptH
   const prompt: Rect = { x: innerX, y: promptY, w: innerW, h: promptH }

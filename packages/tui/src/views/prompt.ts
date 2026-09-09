@@ -148,11 +148,19 @@ export function wrapLinesWithOffsets(text: string, width: number): WrappedLine[]
   return out
 }
 
-/** Number of paste-stash chip rows rendered at the TOP of the content area
- * (same clamp as renderPrompt: at most height-2 rows). */
+/** Number of paste-stash chip rows rendered at the TOP of the content area.
+ * M60 C: at most height-3 rows — one content row is RESERVED for the prompt
+ * text, so a chip can never consume the only text row (the layout grows the
+ * slot by `pasteChipRowsWanted` so all chips still show at normal heights). */
 export function pasteChipRowCount(ctx: Rect, state: PromptState): number {
   const stash = state.pasteStash ?? []
-  return Math.min(stash.length, Math.max(0, ctx.h - 2))
+  return Math.min(stash.length, Math.max(0, ctx.h - 3))
+}
+
+/** M60 C: the chip rows the layout should grow the prompt slot by (the
+ * renderer clamps to the granted height — see promptHeightOf). */
+export function pasteChipRowsWanted(state: PromptState): number {
+  return (state.pasteStash ?? []).length
 }
 
 /** The pasteStash index of the chip row under `row` (a chip row is ENTIRELY
