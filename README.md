@@ -214,7 +214,7 @@ apps/
 ## 邊界與遠期
 
 - **明確不做**：PTC/run_code、plugin 代碼執行、默認提供商、dashboard/leader 多進程、grok 賬戶登錄/賬單/共享/刪除面、remote/session 刪除、跨機器 dashboard 同步、account OAuth 綁定
-- **明確限制**：未配置 store root 的 TUI 仍是 ephemeral fallback；Rewind 不涵蓋 shell/外部編輯器等未經 recorder 的變更；PTY 時間窗採樣仍不可靠；dashboard 為**本地機器**面（durable session store + 真實 backend 投影——無跨機同步）；Bedrock ambient 認證（無 API key 環境即用；OAuth-account 類型為未來擴展邊界，本期未實作）；發現機制 = **手動添加 + 明確 discovery（probe）**——入門教程/自動爬取不支持
+- **明確限制**：未配置 store root 的 TUI 仍是 ephemeral fallback；Rewind **不還原** shell/外部編輯器等未經 recorder 的變更（M58 起以 `plan().unseen` 唯讀列出，永不進 `ops`）；PTY 時間窗採樣仍不可靠；dashboard 為**本地機器**面（durable session store + 真實 backend 投影——無跨機同步）；Bedrock ambient 認證（無 API key 環境即用；OAuth-account 類型為未來擴展邊界，本期未實作）；發現機制 = **手動添加 + 明確 discovery（probe）**——入門教程/自動爬取不支持
 - **遠期隊列**：web/desktop 面（排在很後面）、mermaid PNG 評估、Rewind 冷啟動恢復、MCP OAuth 實線刷新、macOS 沙箱、R-B4 git undo **B 案**（checkpoint 引擎——A 案 M58 已落地：`plan().unseen` 唯讀 git 對照）、記憶（R-A10）、provider OAuth 賬號綁定
 - 每個「後端沒有」的功能在 TUI 一律**誠實降級**（toast + 記錄），不捏造
 
