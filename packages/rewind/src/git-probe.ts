@@ -174,16 +174,25 @@ export function createGitProbe(opts: GitProbeOptions): GitProbe {
  * M58 R-B4 A: the product wiring — a probe bound to the store's own directory.
  * The rewind journal may live inside the workspace (e.g. `--session-dir .`);
  * its own files must never be reported as "unseen changes", so the store dir
- * is excluded when it resolves inside the workspace.
+ * is excluded when it resolves inside the workspace. M60 H: the SESSION store
+ * root (`store.storeRoot` — the session JSONL/lock files' directory) is
+ * excluded too when it is a PROPER descendant of the workspace; a store root
+ * equal to the workspace is never excluded (that would hide every real
+ * change).
  */
 export function createGitProbeForStore(
-  store: { readonly pointsFile: string },
+  store: { readonly pointsFile: string; readonly storeRoot?: string },
   workspace: string,
   opts: { timeoutMs?: number; exec?: GitExec } = {},
 ): GitProbe {
-  const rewindDir = dirname(store.pointsFile)
-  const rel = relative(workspace, rewindDir)
-  const excludePrefixes =
-    rel !== "" && !rel.startsWith("..") && !isAbsolute(rel) ? [rel] : []
+  const excludePrefixes: string[] = []
+  const excludeInside = (dir: string | undefined): void => {
+    if (dir === undefined || dir === "") return
+    const rel = relative(workspace, dir)
+    // "" = the workspace itself; ".."/absolute = outside — neither is excluded.
+    if (rel !== "" && !rel.startsWith("..") && !isAbsolute(rel)) excludePrefixes.push(rel)
+  }
+  excludeInside(dirname(store.pointsFile))
+  excludeInside(store.storeRoot)
   return createGitProbe({ workspace, excludePrefixes, ...opts })
 }

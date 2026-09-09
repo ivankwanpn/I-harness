@@ -131,6 +131,40 @@ describe("createGitProbeForStore", () => {
     expect(await probe.changes()).toEqual([{ path: "keep.txt", kind: "untracked" }])
   })
 
+  it("M60 H: also excludes the session store root (its JSONL/lock files) when it is a proper descendant", async () => {
+    const { exec } = fakeExec({
+      status: {
+        stdout: z(
+          "?? .sessions/s.jsonl",
+          "?? .sessions/s.lock",
+          "?? .sessions/rewind/s/points.jsonl",
+          "?? keep.txt",
+        ),
+      },
+    })
+    const probe = createGitProbeForStore(
+      { pointsFile: "/ws/.sessions/rewind/s/points.jsonl", storeRoot: "/ws/.sessions" },
+      "/ws",
+      { exec },
+    )
+    expect(await probe.changes()).toEqual([{ path: "keep.txt", kind: "untracked" }])
+  })
+
+  it("M60 H: a store root EQUAL to the workspace excludes nothing (never the whole workspace)", async () => {
+    const { exec } = fakeExec({
+      status: { stdout: z("?? s.jsonl", "?? keep.txt", "?? rewind/s/points.jsonl") },
+    })
+    const probe = createGitProbeForStore(
+      { pointsFile: "/ws/rewind/s/points.jsonl", storeRoot: "/ws" },
+      "/ws",
+      { exec },
+    )
+    expect(await probe.changes()).toEqual([
+      { path: "s.jsonl", kind: "untracked" },
+      { path: "keep.txt", kind: "untracked" },
+    ])
+  })
+
   it("adds no exclusion when the store lives outside the workspace", async () => {
     const { exec, calls } = fakeExec({
       status: { stdout: z("?? keep.txt") },

@@ -110,6 +110,7 @@ export interface RewindStoreOptions {
 
 export class RewindStore {
   private readonly dir: string
+  private readonly root: string
   private readonly workspace: string | undefined
   /** Cached meta.json read; `undefined` = not read yet, `null` = absent. */
   private metaCache: RewindWorkspaceMeta | null | undefined
@@ -117,7 +118,15 @@ export class RewindStore {
   constructor(opts: RewindStoreOptions) {
     assertSessionKey(opts.sessionId)
     this.dir = join(opts.root, "rewind", opts.sessionId)
+    this.root = opts.root
     this.workspace = opts.workspace
+  }
+
+  /** M60 H: the SESSION store root (the parent of the rewind layout) — the
+   * directory that also holds the session's own JSONL/lock files. The git
+   * probe excludes it when it lives inside the workspace. */
+  get storeRoot(): string {
+    return this.root
   }
 
   /** Absolute points.jsonl path (tests / host tooling may read it). */
