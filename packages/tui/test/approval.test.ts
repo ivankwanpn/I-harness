@@ -157,6 +157,29 @@ describe("createApprovalBridge — approval seam", () => {
     await bridge.answerApproval(surface.id, { approved: false })
     await expect(p).resolves.toBe(false)
   })
+
+  it("M59: approvals:false skips the answerer (an approveAll assembly owns it) but still provides questions", async () => {
+    // (a) the real conflict: an assembly created with approveAll already
+    // registered approval/answerer — the default bridge would re-register it
+    // and kill session creation.
+    const conflicting = fakeService()
+    conflicting.ctx.services.register("approval/answerer", async () => true)
+    expect(() => createApprovalBridge(conflicting)).toThrow(/duplicate service registration/)
+
+    // (b) the app's fix: approvals:false leaves the assembly's own answerer in
+    // place and attaches only the question provider.
+    const service = fakeService()
+    service.ctx.services.register("approval/answerer", async () => true)
+    const bridge = createApprovalBridge(service, { approvals: false })
+    await expect(answererOf(service.ctx)(req())).resolves.toBe(true) // untouched
+
+    const provider = providerOf(service.ctx)
+    const answer = provider.ask({ id: "q1", prompt: "pick one", options: ["a", "b"] })
+    const qit = bridge.questions()[Symbol.asyncIterator]()
+    const q = (await qit.next()).value
+    await bridge.answerQuestion(q.id, { value: "a" })
+    await expect(answer).resolves.toBe("a")
+  })
 })
 
 describe("createApprovalBridge — question seam", () => {
