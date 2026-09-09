@@ -15,19 +15,31 @@ export interface ResolvedShell {
 // Detection is a synchronous PATH scan (bash.exe / bash). POSIX: bash.
 export function resolveShell(): ResolvedShell {
   if (process.platform === "win32") {
-    const bashOnPath =
-      process.env.PATH?.split(";").some((p) => {
-        if (!p) return false
-        try {
-          return existsSync(join(p, "bash.exe")) || existsSync(join(p, "bash"))
-        } catch {
-          return false
-        }
-      }) ?? false
-    if (bashOnPath) return { name: "bash", argv: ["bash", "-c"] }
+    if (bashAvailable()) return { name: "bash", argv: ["bash", "-c"] }
     return { name: "pwsh", argv: [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] }
   }
   return { name: "bash", argv: ["bash", "-c"] }
+}
+
+/** M59: is `bash` resolvable on this host? The bash TOOL must never silently
+ * run another shell — but a bare spawn-fail (exitCode -1, EMPTY stdout AND
+ * stderr) left the model flailing across bash / pwsh / terminal_open on a
+ * Windows box without Git Bash. The tool now answers legibly instead. */
+export function bashAvailable(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return true
+  return (
+    env.PATH?.split(";").some((p) => {
+      if (!p) return false
+      try {
+        return existsSync(join(p, "bash.exe")) || existsSync(join(p, "bash"))
+      } catch {
+        return false
+      }
+    }) ?? false
+  )
 }
 
 /**
@@ -212,6 +224,17 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
     // executing PowerShell.
     execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
+      // M59: legible failure instead of a silent spawn-fail (-1 with empty
+      // output) — the model can then pick the pwsh tool immediately.
+      if (!bashAvailable()) {
+        return {
+          stdout: "",
+          stderr:
+            "bash is not installed on this host (no bash.exe on PATH). " +
+            "Use the pwsh tool for shell commands instead.",
+          exitCode: -1,
+        }
+      }
       const argv = ["bash", "-c", args.command]
       if (args.background === true) {
         const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })

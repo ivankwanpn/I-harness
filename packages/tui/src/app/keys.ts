@@ -194,6 +194,9 @@ export function dispatchKey(ev: Kbd, state: KeymapState): AppAction {
     return state.multiLine ? "newline" : "submit"
   }
   if (ev.code === "Esc") {
+    // M59 (grok parity): a RUNNING turn owns Esc — stop the answer. Draft
+    // clearing / rewind arming / quit arming apply only when idle.
+    if (state.turnRunning === true) return "cancel-turn"
     if (state.promptText.length > 0) return "cancel-turn" // loop clears the draft
     // M43 (spec §4): empty prompt + ≥1 turn → Esc-Esc arms/opens the rewind
     // picker. The rewind gate takes precedence over the quit arm (Ctrl+Q/
