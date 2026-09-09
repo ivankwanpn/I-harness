@@ -31,6 +31,24 @@ describe("llm-gemini protocol", () => {
     await it.return?.()
   })
 
+  it("M60 G: a case-variant configured api-key header is dropped — exactly one x-goog-api-key", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({
+      apiKey: "k",
+      baseUrl: "https://api.example",
+      model: "m",
+      headers: { "x-opencode-session": "sess-1", "X-Goog-Api-Key": "WRONG" },
+    })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const headers = (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+    expect(Object.keys(headers).filter((key) => key.toLowerCase() === "x-goog-api-key")).toEqual(["x-goog-api-key"])
+    expect(headers["x-goog-api-key"]).toBe("k")
+    expect(headers["x-opencode-session"]).toBe("sess-1")
+    await it.return?.()
+  })
+
   it("omits systemInstruction/tools when empty and passes options through", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)

@@ -14,6 +14,24 @@ export interface AnthropicConfig {
   headers?: Record<string, string>
 }
 
+/** M60 G: configured headers merged UNDER the adapter's own request headers.
+ * Configured names are lower-cased and any that collide (case-insensitively)
+ * with an adapter-owned name are DROPPED — Fetch combines `Authorization` and
+ * `authorization` into one comma-joined value, so a case-variant duplicate
+ * would corrupt the auth header. */
+function mergeConfiguredHeaders(
+  configured: Record<string, string> | undefined,
+  owned: Record<string, string>,
+): Record<string, string> {
+  const taken = new Set(Object.keys(owned).map((key) => key.toLowerCase()))
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(configured ?? {})) {
+    const lower = key.toLowerCase()
+    if (!taken.has(lower)) out[lower] = value
+  }
+  return { ...out, ...owned }
+}
+
 // Shape LLM content parts into Anthropic Messages content blocks. String
 // content stays the legacy string (byte-identical). Tool results are NOT
 // passed through here (Anthropic does not accept image blocks inside
@@ -104,7 +122,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       }
       const response = await fetch(`${baseUrl}/v1/messages`, {
         method: "POST",
-        headers: { ...(config.headers ?? {}), "Content-Type": "application/json", "x-api-key": config.apiKey, "anthropic-version": "2023-06-01" },
+        headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", "x-api-key": config.apiKey, "anthropic-version": "2023-06-01" }),
         body: JSON.stringify(body),
       })
       if (!response.ok || !response.body) {
