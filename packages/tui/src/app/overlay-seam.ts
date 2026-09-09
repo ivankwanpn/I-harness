@@ -529,6 +529,8 @@ export function bindRewindOverlay(
       (plan) => {
         state.cleanPaths = plan.clean.map((op) => op.path)
         state.conflicts = plan.conflicts
+        // M58 R-B4 A: the read-only git evidence (absent ⇒ []).
+        state.unseen = plan.unseen ?? []
         state.cursor = 0
         state.phase = "confirm"
       },
