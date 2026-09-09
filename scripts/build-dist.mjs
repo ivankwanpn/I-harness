@@ -110,6 +110,30 @@ for (const name of NATIVES) {
   log(`native pin ok: ${name}@${resolved}`)
 }
 
+// ------------------------------------------------------ pnpm >= 10 guard
+//
+// The native deploy below installs with `nodeLinker: hoisted` and REQUIRES a
+// flat node_modules holding each dependency's optional PLATFORM package
+// (@koromix/koffi-win32-x64, @vscode/ripgrep-win32-x64) at the top level —
+// koffi/ripgrep resolve them by relative/require.resolve lookups. pnpm 9's
+// hoisted linker silently omits those optional packages (the payload then
+// boot-fails: "Cannot find the native Koffi module"), and the repo's workspace
+// config (allowBuilds / ignoreWorkspaceCycles) is pnpm-10 syntax anyway.
+// Fail loud BEFORE bundling so nobody ships a broken payload.
+{
+  const v = spawnSync("pnpm", ["--version"], { encoding: "utf8", shell: process.platform === "win32" })
+  const raw = (v.stdout ?? "").trim()
+  const major = Number.parseInt(raw.split(".")[0] ?? "", 10)
+  if (!Number.isInteger(major) || major < 10) {
+    fail(
+      `pnpm >= 10 is required for the native deploy (found ${raw === "" ? "no pnpm on PATH" : `pnpm ${raw}`}) — ` +
+        `pnpm 9's hoisted linker omits a dependency's optional platform packages (@koromix/koffi-*, @vscode/ripgrep-*), ` +
+        `so the dist would boot-fail on koffi. Upgrade (e.g. \`npm i -g pnpm@10\`) and re-run.`,
+    )
+  }
+  log(`pnpm ${raw} ok (>= 10 required for the native deploy)`)
+}
+
 // ---------------------------------------------------------------- fresh out
 
 rmSync(OUT, { recursive: true, force: true })
@@ -183,9 +207,13 @@ await bundleEntry(RUNNER_ENTRY, join(OUT, "runner.mjs"), "acl runner")
     // level of node_modules (pnpm's default isolated layout nests them under
     // .pnpm/<pkg>@<ver>/node_modules, which is invisible to those lookups).
     writeFileSync(join(scratch, "package.json"), JSON.stringify(manifest, null, 2))
+    // `packages: ["."]` is REQUIRED: pnpm ≥9 rejects a pnpm-workspace.yaml
+    // without a non-empty `packages` field ("packages field missing or empty"),
+    // which made every --prod native deploy fail (and, before the installer
+    // fix, silently produced a payload with no node_modules at all).
     writeFileSync(
       join(scratch, "pnpm-workspace.yaml"),
-      "nodeLinker: hoisted\nallowBuilds:\n  node-pty: true\n  koffi: true\n",
+      'packages:\n  - "."\nnodeLinker: hoisted\nallowBuilds:\n  node-pty: true\n  koffi: true\n',
     )
     log(`native install: pnpm install --prod in ${scratch}`)
     const r = spawnSync("pnpm", ["install", "--prod"], {

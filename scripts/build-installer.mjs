@@ -99,7 +99,14 @@ async function ensureDist() {
     )
   }
   console.log(`payload missing (${relative(repoRoot, distDir)}/ih.mjs) — running scripts/build-dist.mjs (idempotent)`)
-  await runAsync(process.execPath, [buildDist], { stdio: "inherit" })
+  const dist = await runAsync(process.execPath, [buildDist], { stdio: "inherit" })
+  // A non-zero exit means the payload is INCOMPLETE (esbuild writes ih.mjs
+  // before the native --prod deploy, so an existence check alone would let a
+  // broken installer ship — the m59 bug: the deploy failed and the installer
+  // was still built from a dist/ with no node_modules).
+  if (dist.code !== 0) {
+    fail(`scripts/build-dist.mjs exited ${dist.code} — the dist payload is incomplete (see the build-dist output above)`)
+  }
   if (!existsSync(join(distDir, "ih.mjs"))) {
     fail(`build-dist.mjs finished but ${relative(repoRoot, distDir)}/ih.mjs is still missing`)
   }
