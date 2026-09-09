@@ -421,7 +421,9 @@ function providerView(
     ...(user?.apiKeyEnv !== undefined
       ? { apiKeyEnv: user.apiKeyEnv }
       : template?.apiKeyEnv !== undefined ? { apiKeyEnv: template.apiKeyEnv } : {}),
-    // M59: user headers override the template's per-key.
+    // M59: the user header MAP replaces the template's whole map when set
+    // (not a per-key merge — a user map wins wholesale; the adapter/probe then
+    // keeps its own auth keys on top).
     ...(user?.headers !== undefined
       ? { headers: user.headers }
       : template?.headers !== undefined ? { headers: template.headers } : {}),

@@ -102,7 +102,8 @@
  *                     files }] }
  *   session/rewind/plan { sessionId, target, mode? }
  *                      → { clean: [{ path, op }], conflicts: [{ path, kind }],
- *                          unTracked: [string], ops: [{ path, op }] }
+ *                          unTracked: [string], ops: [{ path, op }],
+ *                          unseen?: [{ path, kind }] }  (M58 additive)
  *   session/rewind/execute { sessionId, target, mode? }
  *                      → { revertedFiles: number, conflicts: [{ path, kind }],
  *                          error? }

@@ -15,16 +15,16 @@
 | **1. 輸入框 6 行 → 3 行** | `packages/tui/src/views/agent.ts`（`promptHeightOf`）、`views/prompt.ts`（`ctx.h - 3` → `- 2`，5 處） | 與 grok 完全同構：`╭─╮` / `❯ …` / `╰─ model ─╯`。舊公式 `promptLines + 3 + 2*vpad` 多留了兩列空白。 |
 | **2. 工具完成只留標題列** | `packages/tui/src/scrollback/folding.ts`（`toolFold`） | collapsed execute 不再吐 body（grok `DisplayMode::Collapsed` 只畫 header）；**running** 仍串流 excerpt，展開（`e`/`E`）看全文。另在 `backend/embedded.ts` 加 `executeOutputText()`：shell 結果展開時顯示 stdout/stderr，不是 JSON envelope。 |
 | **3. runtime-context 不進對話** | `packages/core-session/src/index.ts`（`user/message` 加 `internal?: true`）、`packages/runtime-context/src/index.ts`、`packages/guard-repeat-tool/src/index.ts`、`packages/tui/src/backend/embedded.ts`（`mapSessionEvent` + `peekTail` 過濾） | 模型仍看得到（投影不動），TUI 不再把它當使用者訊息印出。**加法式 schema 變更**（`fromJSONL` 不驗證，舊 log 相容）。 |
-| **4. 覆蓋層槽位高度（真 bug）** | `packages/tui/src/app/overlay-seam.ts`（`minRows`）、`views/agent.ts`（`state.overlay.minRows`）、`app/present.ts`（型別） | 輸入框縮到 3 行後，permission/question/cancel-turn/rewind **畫不下**（行會被靜默丟棄）。現在各 seam 自報內容高度：permission/question 用**自己的 row-walk**（`fitRows` 二分搜尋）保證每個選項都可見，再加上 renderer 真正會畫的 detail/description 行數；rewind 依 phase 給高度。**附帶效果**：權限框的 detail 與問題框的 description 現在會顯示（先前被擠掉）。 |
+| **4. 覆蓋層槽位高度（真 bug）** | `packages/tui/src/app/overlay-seam.ts`（`minRows`）、`views/agent.ts`（`state.overlay.minRows`）、`app/present.ts`（型別） | 輸入框縮到 3 行後，permission/question/cancel-turn/rewind **畫不下**（行會被靜默丟棄）。現在各 seam 自報內容高度：permission/question 用**自己的 row-walk**（`fitRows` 二分搜尋）保證每個選項都可見，再加上 renderer 真正會畫的 detail/description 行數；rewind 依 phase 給高度。**附帶效果**：權限框的 detail 與問題框的 description 現在會顯示（先前被擠掉）。**更正（M60 審查）**：rewind 的 `confirm` 分支當時漏算 `unseen` 行，面板仍過矮、底部 `y (●) Confirm`/`Bksp (○) Back` 被裁——「每個選項都可見」對 rewind confirm 不成立，M60 修 A 已補 `capped(unseen.length)`。 |
 | **5. Follow-up behavior 列** | `views/settings.ts`、`app/loop.ts`（`setBusyEnter`/`busyEnter`） | 設定後端**本來就有**（`settings.busyEnter: "interrupt" \| "wait"`，apps/tui 映射成 steer/queue），只是沒在 modal 露出。新列顯示 grok 的 **Queue/Steer** 名稱、持久化仍用 dsh 詞彙、**即時生效**（不必重啟）。 |
-| **6. Harness golden 全面重釘** | `packages/tui/test/harness/**`（13 個 yaml + 5 個 host + referee/virtual） | 見 §3。 |
+| **6. Harness golden 全面重釘** | `packages/tui/test/harness/**`（m59 改動 17 個 yaml + 5 個 host + referee/virtual） | 見 §3。 |
 
 ## 2. 驗證（實跑）
 
 | 命令 | 結果 |
 |---|---|
-| `pnpm --filter @i-harness/tui test` | **70 files / 761 passed**（含 harness 18 檔 21 測） |
-| `pnpm --filter @i-harness/tui typecheck` | clean |
+| `pnpm --filter @i-harness/tui test` | **70 files / 761 passed**（含 harness 18 檔 21 測）。**全套並行的真實情況**：case-027 `spawn-running` 在本套件自身的並行負載下會 90s 逾時（單獨跑 ~4.5s 綠，見 §3.8）；761 是當時那一次的實跑，不是「任何時刻全套必綠」。M60 整合後重跑結果見 M60 交接。 |
+| `pnpm --filter @i-harness/tui typecheck` | **m59 上實際是紅的**：`busyEnter` 被設為 `SettingsSnapshot` 必填卻沒同步更新唯一全量 literal helper（`packages/tui/test/settings-mouse.test.ts`），vitest 不做型別檢查所以 761 測照綠。M60 控制器的 `a33a646` 修復後才 clean。 |
 | `pnpm --filter @i-harness/core-session test` | 12 files / 91 passed |
 | `pnpm --filter @i-harness/runtime-context test` | 5 passed |
 | `pnpm --filter @i-harness/guard-repeat-tool test` | 8 passed |
