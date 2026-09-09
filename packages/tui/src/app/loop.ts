@@ -1164,6 +1164,10 @@ export class TuiApp {
     this.app.engine.setWidth(cols)
     this.inlineHost?.resize(cols, rows)
     this.maybeAutoRetain()
+    // M59: repaint NOW. maybeAutoRetain only requests a frame when it trims;
+    // otherwise the layout kept the OLD geometry until the next input/event,
+    // so a resize looked broken (grok reflows immediately).
+    this.requestFrame()
   }
 
   /**
@@ -1359,11 +1363,17 @@ export class TuiApp {
         break
       }
       case "cancel-turn": {
+        // M59 (grok parity): a running turn is cancelled FIRST — Esc stops the
+        // answer and leaves the draft (and the quit arm) untouched. The draft
+        // clear / quit-arm ladder only applies while idle.
+        if (this.app.turn !== undefined) {
+          void this.opts.backend.cancel()
+          break
+        }
         if (this.app.prompt.text.trim().length > 0) {
           this.clearPrompt() // Ctrl-C / Esc on a non-empty draft clears it
           break
         }
-        if (this.app.turn !== undefined) void this.opts.backend.cancel()
         this.armedQuit = true
         this.toast("Press again to quit")
         break

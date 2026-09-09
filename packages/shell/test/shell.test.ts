@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { resolveShell, resolvePwshExe, getArgv, createShellTools, registerShell } from "../src/index.ts"
+import { resolveShell, resolvePwshExe, bashAvailable, getArgv, createShellTools, registerShell } from "../src/index.ts"
 import type { ExecService, ExecCommand } from "@i-harness/exec"
 import type { Tool } from "@i-harness/core-tools"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
@@ -37,6 +37,44 @@ describe("resolvePwshExe (M59)", () => {
     const exe = resolvePwshExe({ PATH: "", SystemRoot: process.env.SystemRoot ?? "C:\\Windows" }, "win32")
     expect(exe.toLowerCase()).toContain("powershell.exe")
     expect(existsSync(exe)).toBe(true)
+  })
+})
+
+describe("bashAvailable (M59)", () => {
+  it("non-Windows assumes bash", () => {
+    expect(bashAvailable({ PATH: "" }, "linux")).toBe(true)
+  })
+
+  it.skipIf(process.platform !== "win32")("detects bash(.exe) on PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-bash-"))
+    try {
+      expect(bashAvailable({ PATH: "" }, "win32")).toBe(false)
+      writeFileSync(join(dir, "bash.exe"), "")
+      expect(bashAvailable({ PATH: dir }, "win32")).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform !== "win32")("the bash tool answers legibly when bash is absent (no silent -1)", async () => {
+    const spyExec: ExecService = {
+      run: async () => ({ stdout: "ran", stderr: "", exitCode: 0, timedOut: false }),
+      runBackground: () => ({ jobId: "none" }),
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+    const prev = process.env.PATH
+    process.env.PATH = ""
+    try {
+      const [bash] = createShellTools({ exec: spyExec })
+      const res = (await bash!.execute({ command: "pwd" }, {})) as { stdout: string; stderr?: string; exitCode?: number }
+      expect(res.exitCode).toBe(-1)
+      expect(res.stderr).toContain("bash is not installed")
+      expect(res.stderr).toContain("pwsh")
+    } finally {
+      process.env.PATH = prev
+    }
   })
 })
 
