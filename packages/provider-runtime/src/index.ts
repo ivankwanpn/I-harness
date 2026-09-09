@@ -261,6 +261,9 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
           : view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
         apiKey,
         protocol: view.protocol,
+        // M60 E: the route's configured headers (a gateway may require one for
+        // discovery too) — the probe's own auth keys still win.
+        ...(view.headers !== undefined ? { headers: view.headers } : {}),
       })
       discoveryOptions.signal?.throwIfAborted()
 

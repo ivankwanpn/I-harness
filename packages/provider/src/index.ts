@@ -203,6 +203,10 @@ export interface ProbeRequest {
   modelsURL?: string
   apiKey?: string
   protocol?: string
+  /** M60 E: literal extra request headers the route configures (a gateway
+   * requiring e.g. `x-opencode-session`). The adapter's own auth headers win
+   * on collision — see createBuiltinProbe. */
+  headers?: Record<string, string>
 }
 
 export type Probe = (req: ProbeRequest) => Promise<ModelDescriptor[]>
@@ -505,6 +509,23 @@ function probeBaseURL(req: ProbeRequest, profile: ProviderProfile | undefined): 
   return validateProbeURL(base, "baseURL").replace(/\/+$/, "")
 }
 
+/** M60 E: configured headers + the adapter's auth headers, adapter-owned
+ * names winning. The drop is CASE-INSENSITIVE: Fetch combines `Authorization`
+ * and `authorization` into one comma-joined value, so an exact-key spread
+ * would leave a case-variant duplicate alive. */
+function mergeProbeHeaders(
+  configured: Record<string, string> | undefined,
+  auth: Record<string, string>,
+): Record<string, string> {
+  if (configured === undefined) return auth
+  const owned = new Set(Object.keys(auth).map((key) => key.toLowerCase()))
+  const out: Record<string, string> = {}
+  for (const [key, value] of Object.entries(configured)) {
+    if (!owned.has(key.toLowerCase())) out[key] = value
+  }
+  return { ...out, ...auth }
+}
+
 /** Validate an explicit full models endpoint without rewriting it. */
 function probeModelsURL(req: ProbeRequest): string | undefined {
   const modelsURL = req.modelsURL
@@ -539,7 +560,10 @@ function createBuiltinProbe(resolveProfile: () => ProviderProfile | undefined): 
     }
     const protocol = req.protocol ?? "openai-completions"
     const apiKey = req.apiKey ?? profile?.apiKey
-    const headers = probeAuthHeaders(protocol, apiKey)
+    // M60 E: the route's configured headers ride along; the adapter's own auth
+    // keys (Authorization / x-api-key / x-goog-api-key / anthropic-version)
+    // win on collision — the caller never overrides the wire's auth shape.
+    const headers = mergeProbeHeaders(req.headers, probeAuthHeaders(protocol, apiKey))
     const failures: string[] = []
     const candidates = modelsURL !== undefined ? [modelsURL] : probeCandidatePaths(baseURL!)
     for (const url of candidates) {

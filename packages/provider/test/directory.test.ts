@@ -89,6 +89,25 @@ describe("probeModels", () => {
     })
   })
 
+  it("M60 E: ProbeRequest.headers reach the probe request; adapter-owned auth keys win", async () => {
+    const probeFetch = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "m" }] }), { status: 200 }))
+    vi.stubGlobal("fetch", probeFetch)
+    const reg = createProviderRegistry()
+    reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
+    await reg.probeModels("openai-compatible", {
+      baseURL: "https://gateway.example",
+      apiKey: "sk-1",
+      // the documented gateway case + an attempt to override the adapter's own
+      // Authorization (must lose — the adapter owns the auth key; the
+      // case-variant is the same key to Fetch, so it must go too)
+      headers: { "x-opencode-session": "sess-42", Authorization: "Bearer user-supplied", authorization: "Bearer lower-supplied" },
+    })
+    expect(probeFetch).toHaveBeenCalledWith("https://gateway.example/v1/models", {
+      headers: { "x-opencode-session": "sess-42", Authorization: "Bearer sk-1" },
+      signal: expect.any(AbortSignal),
+    })
+  })
+
   it("falls back to the profile's static catalog when no probe is registered (deepseek), without any fetch", async () => {
     vi.stubGlobal("fetch", fetchMock)
     const reg = createProviderRegistry()
