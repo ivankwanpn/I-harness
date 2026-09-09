@@ -183,6 +183,21 @@ describe("normalizeSettings", () => {
     expect(out.llm.defaultModel.model).toBe("deepseek-chat")
   })
 
+  it("M59: provider headers normalize — non-empty string pairs kept, junk dropped", () => {
+    const out = normalizeSettings({
+      llm: {
+        providers: {
+          zen: {
+            baseURL: "https://opencode.ai/zen/go",
+            headers: { "x-opencode-session": "sess-1", "": "dropped", "x-empty": "", "x-num": 7 },
+          },
+        },
+        defaultModel: { provider: "zen", model: "glm-5.3-flash" },
+      },
+    })
+    expect(out.llm.providers.zen.headers).toEqual({ "x-opencode-session": "sess-1" })
+  })
+
   it("DISTINCT provider ids: a legacy row and a canonical row coexist (no clobber across planes)", () => {
     const out = normalizeSettings({
       llm: {

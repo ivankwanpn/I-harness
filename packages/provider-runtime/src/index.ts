@@ -87,6 +87,8 @@ interface ProviderView {
   baseURL?: string
   modelsURL?: string
   apiKeyEnv?: string
+  /** M59: literal extra request headers (user config wins over the template). */
+  headers?: Record<string, string>
   models: ModelDescriptor[]
   defaultModel?: string
 }
@@ -416,6 +418,10 @@ function providerView(
     ...(user?.apiKeyEnv !== undefined
       ? { apiKeyEnv: user.apiKeyEnv }
       : template?.apiKeyEnv !== undefined ? { apiKeyEnv: template.apiKeyEnv } : {}),
+    // M59: user headers override the template's per-key.
+    ...(user?.headers !== undefined
+      ? { headers: user.headers }
+      : template?.headers !== undefined ? { headers: template.headers } : {}),
     models,
     ...(template?.defaultModel !== undefined ? { defaultModel: template.defaultModel } : {}),
   }
@@ -431,6 +437,7 @@ function runtimeProfile(view: ProviderView, apiKey: string | undefined): Provide
     protocol: adapterProtocol(view.protocol),
     ...(view.baseURL !== undefined ? { baseUrl: view.baseURL } : {}),
     ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
+    ...(view.headers !== undefined ? { headers: view.headers } : {}),
     models: view.models.map((model) => model.id),
     ...(apiKey !== undefined ? { apiKey } : {}),
   }
