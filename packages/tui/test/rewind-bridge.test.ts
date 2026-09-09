@@ -387,12 +387,12 @@ describe("dispatchKey — rewind overlay/escape routing", () => {
     expect(dispatchKey(letter("f"), s)).toBe("rewind-f")
     expect(dispatchKey(kbd({ code: "Backspace", key: "Backspace" }), s)).toBe("rewind-back")
     expect(dispatchKey(kbd({ code: "Esc", key: "Esc" }), s)).toBe("overlay-dismiss")
-    expect(dispatchKey(letter("j"), s)).toBe("overlay-nav-prev")
+    expect(dispatchKey(letter("j"), s)).toBe("overlay-nav-next")
     expect(dispatchKey(kbd({ code: "Up", key: "ArrowUp" }), s)).toBe("overlay-nav-prev")
     expect(dispatchKey(kbd({ code: "Enter", key: "Enter" }), s)).toBe("overlay-select")
     // no digit accept on rewind rows; generic letters keep their old meaning
     expect(dispatchKey(letter("1"), s)).toBe("none")
-    expect(dispatchKey(letter("k"), s)).toBe("overlay-nav-next")
+    expect(dispatchKey(letter("k"), s)).toBe("overlay-nav-prev")
   })
 
   it("empty-prompt Esc: rewind arm (toastable) → armed second opens; quit arm fallback", () => {

@@ -39,6 +39,9 @@ export type AppAction =
   | "overlay-expand" | "overlay-collapse"            // e / E (Ctrl-F on permission)
   | "overlay-toggle"                 // Space
   | "overlay-tab" | "overlay-tab-back"               // Tab / Shift-Tab
+  | "overlay-reset"                  // M61 d (settings): reset the row to its default
+  | "overlay-top" | "overlay-bottom" // M61 g / G (settings): first / last row
+  | "overlay-close"                  // M61 F2 (settings): close (Esc keeps search-exit)
   | "overlay-search"                 // / i (history/sessions)
   | "overlay-filter"                 // f (history/sessions)
   | "overlay-range-left" | "overlay-range-right"     // ←/→ permission scope
@@ -321,6 +324,7 @@ export function overlayKeys(ev: Kbd, kind: OverlayKind): AppAction {
     case "Right": return kind === "permission" ? "overlay-range-right" : "overlay-expand"
     case "Tab": return isShiftTab(ev) ? "overlay-tab-back" : "overlay-tab"
     case "ShiftTab": return "overlay-tab-back"
+    case "F2": return kind === "settings" ? "overlay-close" : "none"
     // M43: Bksp = the rewind Back (§3.9 confirm `Bksp Back` / mode-select back).
     case "Backspace": return kind === "rewind" ? "rewind-back" : "none"
   }
@@ -349,15 +353,18 @@ export function overlayKeys(ev: Kbd, kind: OverlayKind): AppAction {
       }
     }
     switch (ev.key) {
-      case "j": return "overlay-nav-prev"
-      case "k": return "overlay-nav-next"
+      case "j": return "overlay-nav-next"   // M61: vim/grok — j is DOWN
+      case "k": return "overlay-nav-prev"   // M61: k is UP
       case "y": return "overlay-copy"
       case "e": return "overlay-expand"
       case "E": return "overlay-collapse"
       case " ": return "overlay-toggle"
+      case "d": return kind === "settings" ? "overlay-reset" : "none"
+      case "g": return kind === "settings" ? "overlay-top" : "none"
+      case "G": return kind === "settings" ? "overlay-bottom" : "none"
       case "/":
       case "i":
-        return kind === "history" || kind === "sessions" ? "overlay-search" : "none"
+        return kind === "history" || kind === "sessions" || kind === "settings" ? "overlay-search" : "none"
       case "f":
         return kind === "history" || kind === "sessions" ? "overlay-filter" : "none"
       case "]": return kind === "question" ? "overlay-question-next" : "none"
