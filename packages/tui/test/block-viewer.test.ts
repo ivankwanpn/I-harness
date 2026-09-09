@@ -150,7 +150,9 @@ describe("createBlockViewer — rendered/raw, search, scroll, selection, copy", 
     const mapped = mapSessionEvent({
       type: "tool/result",
       callId: "m1",
-      name: "bash",
+      // M59: a non-execute tool — execute results render their stdout stream,
+      // so the JSON-envelope redaction path is the generic one.
+      name: "custom_tool",
       output: { stdout: "out", token: "sc-view-1", headers: { authorization: "Bearer sc-view-2" } },
       seq: 5,
     }, createEventMapState()) as TuiToolEvent

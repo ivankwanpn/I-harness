@@ -46,7 +46,7 @@ steps:
   - await-quiescent: { ms: 200 }
   - write-pty: { data: "\x1b" }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - "  ┃ Rewind to which turn?"
         - "  ┃ · write · 1 files"
@@ -55,7 +55,7 @@ steps:
   # Enter → the first picker row = turn 1 (store index 0) → ModeSelect.
   - write-pty: { data: "\r" }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 17 }
       rows:
         - "  ┃ What do you want to rewind?"
         - "  ┃ a (●) Both conversation and file changes"
@@ -66,7 +66,7 @@ steps:
   # MODIFIED conflict row — turn 2 moved the disk after turn 1 ended).
   - write-pty: { data: "a" }
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 17 }
       rows:
         - '  ┃ Rewind file changes and conversation to "write"? (1 files)'
         - "  ┃ ! src/data.txt (modified)"

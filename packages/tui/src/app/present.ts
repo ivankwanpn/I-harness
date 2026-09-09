@@ -236,6 +236,11 @@ export interface OverlaySeam {
   // router never re-implements modal packing. Absent → the modal is not
   // clickable (rows unknown).
   rowYs?(ctx: Rect): number[]
+  /** M59: the overlay's own CONTENT height at this width (title + detail +
+   * rows + footer). The prompt slot is 3 rows for the composer (grok parity)
+   * — far less than a permission list needs — so the layout grows the slot to
+   * this while the overlay is open. Absent → the composer height stands. */
+  minRows?(width: number): number
   /** Question freeform tail row y (click → focus the freeform input). */
   freeformY?(ctx: Rect): number | undefined
   /** Move the interactive cursor to a row (mouse single-click — the binder

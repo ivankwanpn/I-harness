@@ -242,17 +242,22 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           const timeoutMs = Number(args["timeoutMs"] ?? 2500)
           const deadline = Date.now() + timeoutMs
           let firstErrors: string[] = []
+          let firstDump = ""
           for (;;) {
             await virtual.drained()
             const errors = assertRowsMatch(virtual, rows, startRow)
             if (errors.length === 0) break
-            if (firstErrors.length === 0) firstErrors = errors
+            if (firstErrors.length === 0) {
+              firstErrors = errors
+              firstDump = virtual.screenDump()
+            }
             if (Date.now() >= deadline) {
               return {
                 ok: false,
                 error:
                   `step ${i} (wait-screen): rows never matched within ${timeoutMs}ms: ` +
-                  `${errors.slice(0, 2).join("; ")} // FIRST poll was: ${firstErrors.slice(0, 2).join("; ")}`,
+                  `${errors.slice(0, 2).join("; ")} // FIRST poll was: ${firstErrors.slice(0, 2).join("; ")}\n` +
+                  `--- screen at first poll ---\n${firstDump}\n--- screen now ---\n${virtual.screenDump()}`,
               }
             }
             await sleep(50)
@@ -303,11 +308,13 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
             }
           }
           if (errors.length > 0) {
+            const dump: string[] = []
+            for (let j = 0; j < len; j++) dump.push(`${j}|${virtual.normalLine(j)}`)
             return {
               ok: false,
               error:
                 `step ${i} (assert-scrollback): ${errors.slice(0, 3).join("; ")}` +
-                ` (len=${len}, baseY=${virtual.normalBaseY()})`,
+                ` (len=${len}, baseY=${virtual.normalBaseY()})\n--- normal buffer ---\n${dump.join("\n")}`,
             }
           }
           break
@@ -324,17 +331,22 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
           const timeoutMs = Number(args["timeoutMs"] ?? 2500)
           const deadline = Date.now() + timeoutMs
           let firstErrors: string[] = []
+          let firstDump = ""
           for (;;) {
             await virtual.drained()
             const errors = cellColorErrors(virtual, cells)
             if (errors.length === 0) break
-            if (firstErrors.length === 0) firstErrors = errors
+            if (firstErrors.length === 0) {
+              firstErrors = errors
+              firstDump = virtual.screenDump()
+            }
             if (Date.now() >= deadline) {
               return {
                 ok: false,
                 error:
                   `step ${i} (assert-cell-colors): cells never matched within ${timeoutMs}ms: ` +
-                  `${errors.slice(0, 3).join("; ")} // FIRST poll was: ${firstErrors.slice(0, 3).join("; ")}`,
+                  `${errors.slice(0, 3).join("; ")} // FIRST poll was: ${firstErrors.slice(0, 3).join("; ")}\n` +
+                  `--- screen at first poll ---\n${firstDump}`,
               }
             }
             await sleep(50)
@@ -540,6 +552,11 @@ export async function runScenario(scene: Scene, ctx: SceneCtx): Promise<SceneRes
       }
     } catch (e) {
       return { ok: false, error: `step ${i} (${name}): ${String(e)}` }
+    }
+    if (process.env["IH_HARNESS_TRACE"] === "1") {
+      await virtual.drained()
+      // eslint-disable-next-line no-console
+      console.log(`--- step ${i} ${name} @${Date.now() % 100000} ---\n${virtual.screenDump()}`)
     }
   }
 

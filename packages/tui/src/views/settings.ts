@@ -88,6 +88,8 @@ export interface SettingsSnapshot {
   mouseKeepTextSelection: SettingsKeepTextSelection
   mouseWordSeparators: string
   mouseReportingToggle: boolean
+  /** M59: Enter-while-busy behavior (dsh settings.busyEnter). */
+  busyEnter: Settings["busyEnter"]
 }
 
 /** Snapshot from the real settings store (the modal's view of truth — never
@@ -117,6 +119,7 @@ export function settingsSnapshot(
     mouseKeepTextSelection: prefs.keepTextSelection,
     mouseWordSeparators: prefs.wordSeparators,
     mouseReportingToggle: prefs.mouseReportingToggle,
+    busyEnter: raw.busyEnter,
   }
 }
 
@@ -183,7 +186,11 @@ export function settingsKnobRows(category: SettingsCategory, snap: SettingsSnaps
         },
       ]
     case "Sessions":
-      return [{ label: "compact-mode", value: `${snap.transcriptMode === "compact" ? ON : OFF} · ${NEW_SESSIONS_LABEL}`, kind: "toggle" }]
+      return [
+        { label: "compact-mode", value: `${snap.transcriptMode === "compact" ? ON : OFF} · ${NEW_SESSIONS_LABEL}`, kind: "toggle" },
+        // M59 (grok parity): the live follow-up behavior row.
+        { label: "follow-up behavior", value: snap.busyEnter === "interrupt" ? "Steer" : "Queue", kind: "cycle" },
+      ]
     case "Editor & Input":
     case "Integrations":
     case "Advanced":
@@ -299,6 +306,8 @@ export interface TuiSettingsHost {
   applyTimestamps?(on: boolean): void
   applyCompact?(on: boolean): void
   applyAutoApprove?(on: boolean): void
+  /** M59: the follow-up behavior row applies LIVE (the loop's busy-Enter mode). */
+  applyBusyEnter?(mode: "queue" | "steer"): void
   /** The dedicated Models & Providers master/detail flow. */
   onOpenProviders?(): void
   /** The model picker (Ctrl+M//model share the same picker). */
@@ -428,6 +437,24 @@ export function tuiSettingsDefinitions(host: TuiSettingsHost): TuiSettingDefinit
       commit: async (ctx, value) => {
         await ctx.settings.set({ transcriptMode: value === true ? "compact" : "normal" })
       },
+    },
+    {
+      // M59: grok parity — the "Follow-up behavior" row (dsh's
+      // settings.busyEnter). The persisted vocabulary stays interrupt/wait;
+      // the row shows grok's Queue/Steer names and applies LIVE (no restart).
+      key: "follow-up-behavior",
+      category: "Sessions",
+      label: "follow-up behavior",
+      description: "Enter while a turn is running: Queue holds the message until the turn finishes; Steer injects it mid-turn",
+      valueKind: { kind: "enum", values: ["wait", "interrupt"] },
+      visible: () => true,
+      read: (ctx) => ctx.settings.get().busyEnter,
+      display: (ctx) => (ctx.settings.get().busyEnter === "interrupt" ? "Steer" : "Queue"),
+      commit: async (ctx, value) => {
+        const current = ctx.settings.get()
+        await ctx.settings.set({ ...current, busyEnter: value === "interrupt" ? "interrupt" : "wait" })
+      },
+      liveApply: (value) => host.applyBusyEnter?.(value === "interrupt" ? "steer" : "queue"),
     },
     // ---- Safety
     {

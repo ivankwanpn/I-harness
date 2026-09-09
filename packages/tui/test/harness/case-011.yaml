@@ -40,21 +40,8 @@ steps:
         - "  ⎇  ~/workspace"
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
-  # frame-3: tool running (turn row appears)
+  # frame-3: tool running (turn row appears; the streamed excerpt renders)
   - await-marker: { name: frame-3 }
-  - wait-screen:
-      region: { startRow: 1 }
-      rows:
-        - "  ⎇  ~/workspace"
-        - "  ┃   ❯ hello"
-        - "  ┃   context: workspace i-harness-main"
-        - "  ┃  ◆ Run read data.txt"
-  - wait-screen:
-      region: { startRow: 13 }
-      rows:
-        - "  ⠼ Responding…  0:00 0s  [stop]"
-  # frame-4: tool done with output (execute tools always render the excerpt)
-  - await-marker: { name: frame-4 }
   - wait-screen:
       region: { startRow: 1 }
       rows:
@@ -64,7 +51,24 @@ steps:
         - "  ┃  ◆ Run read data.txt"
         - "  ┃   data.txt exists"
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
+      rows:
+        - "  ⠼ Responding…  0:00 0s  [stop]"
+  # frame-4: tool done — the block collapses to its header row (M59 grok
+  # parity: a finished tool block renders no body; the running frame above
+  # still streamed the excerpt). The empty row-5 pin is what makes this frame
+  # DISTINGUISHABLE from frame-3 (excerpt) and frame-5 (assistant text).
+  - await-marker: { name: frame-4 }
+  - wait-screen:
+      region: { startRow: 1 }
+      rows:
+        - "  ⎇  ~/workspace"
+        - "  ┃   ❯ hello"
+        - "  ┃   context: workspace i-harness-main"
+        - "  ┃  ◆ Run read data.txt"
+        - ""
+  - wait-screen:
+      region: { startRow: 16 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
   - assert-glyph-integrity: {}
@@ -77,10 +81,9 @@ steps:
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
         - "  ┃  ◆ Run read data.txt"
-        - "  ┃   data.txt exists"
         - "  ┃   It says hello."
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
   # frame-6: turn end — turn row hides; final full-chrome check
@@ -92,20 +95,16 @@ steps:
         - "  ┃   ❯ hello"
         - "  ┃   context: workspace i-harness-main"
         - "  ┃  ◆ Run read data.txt"
-        - "  ┃   data.txt exists"
         - "  ┃   It says hello."
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
       rows:
         - ""
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
         - " ┃╰ unconfigured───────────────────────────╯"
         - ""
         - "  Enter: submit  │  Ctrl+Enter: interject  │"

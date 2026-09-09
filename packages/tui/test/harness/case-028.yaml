@@ -69,20 +69,20 @@ steps:
   - write-pty: { data: "\r" }
   - await-marker: { name: turn-settled, timeoutMs: 60000 }
   - assert-glyph-integrity: {}
-  # ── the tool viewer: Tab (focus scrollback) → Enter (the block at the
-  # viewport's first visible line — the follow anchor sits inside the bash
-  # block: the 120-line output pushed the anchor into the tool's body).
+  # ── the tool viewer: Tab (focus scrollback) → Enter. M59: a FINISHED
+  # execute block renders its header only, so the follow window is short and
+  # the viewer opens the FIRST tool block on screen — the Read block.
   - write-pty: { data: "\t" }
   - write-pty: { data: "\r" }
   - assert-cell-colors:
       cells:
-        - { row: 0, col: 1, text: "Block Run cat " }
+        - { row: 0, col: 1, text: "Block Read data.txt" }
       timeoutMs: 10000
   - assert-cell-colors:
       cells:
-        - { row: 1, col: 5, text: "Run cat " }
+        - { row: 1, col: 5, text: "Read data.txt" }
         - { row: 2, col: 5, text: "{" }
-        - { row: 3, col: 7, text: '"stdout": "line 1: alpha' }
+        - { row: 3, col: 7, text: '"content": "line 1: alpha' }
       timeoutMs: 10000
   # ── the modal owns input: typed chars do NOT reach the prompt (the modal
   # is the input owner — the rows stay).
@@ -90,25 +90,28 @@ steps:
   - await-quiescent: { ms: 200 }
   - assert-cell-colors:
       cells:
-        - { row: 1, col: 5, text: "Run cat " }
+        - { row: 1, col: 5, text: "Read data.txt" }
       timeoutMs: 5000
-  # ── Esc closes the modal (input unwinds to the agent surface — the
-  # follow window's top row is the context row of the settled turn); the
-  # Tab re-focuses the prompt (the scrollback focus was the viewer's).
+  # ── Esc closes the modal (input unwinds to the scrollback focus); the Tab
+  # re-focuses the prompt (settle first — the focus change must land before
+  # the typed command).
   - write-pty: { data: "\x1b" }
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃   ❯ Current runtime context: none. Earlier runtime-context snapshots no longer apply."
+        - "  ┃   ───"
+        - "  ┃   ❯ case 028"
+        - "  ┃  ◆ Read data.txt"
       timeoutMs: 10000
   - write-pty: { data: "\t" }
+  - await-quiescent: { ms: 200 }
   # ── the settings modal (slash): typed chars stay consumed (modal input
   # precedence vs the prompt); Esc unwinds category → categories → close.
   - write-pty: { data: "\x1b[47:1usettings" }
   - write-pty: { data: "\r" }
   - write-pty: { data: "\r" }
   - wait-screen:
-      region: { startRow: 21 }
+      region: { startRow: 24 }
       rows:
         - "  ┃ Settings"
         - "  ┃ ● Models & Providers"
@@ -117,7 +120,7 @@ steps:
   - write-pty: { data: "zz" }
   - await-quiescent: { ms: 200 }
   - wait-screen:
-      region: { startRow: 21 }
+      region: { startRow: 24 }
       rows:
         - "  ┃ Settings"
         - "  ┃ ● Models & Providers"
@@ -128,7 +131,7 @@ steps:
   - write-pty: { data: "\x1b[B" }
   - write-pty: { data: "\r" }
   - wait-screen:
-      region: { startRow: 21 }
+      region: { startRow: 24 }
       rows:
         - "  ┃ Settings"
         - "  ┃ ● theme  auto"
@@ -139,7 +142,7 @@ steps:
   - write-pty: { data: "\r" } # → rose-pine-moon
   - write-pty: { data: "\r" } # → oscura-midnight
   - wait-screen:
-      region: { startRow: 21 }
+      region: { startRow: 24 }
       rows:
         - "  ┃ Settings"
         - "  ┃ ● theme  oscura-midnight"
@@ -155,7 +158,9 @@ steps:
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃   ❯ Current runtime context: none. Earlier runtime-context snapshots no longer apply."
+        - "  ┃   ───"
+        - "  ┃   ❯ case 028"
+        - "  ┃  ◆ Read data.txt"
       timeoutMs: 10000
   # ── the mouse capture toggle: Ctrl+R off → disable bytes + toast; Ctrl+R
   # on → enable bytes + toast (the byte sets ride the test's stream assert;
@@ -190,7 +195,7 @@ steps:
   - request-marker: { name: open-pane-queue }
   - assert-cell-colors:
       cells:
-        - { row: 19, col: 2, text: "Queue is empty." }
+        - { row: 22, col: 2, text: "Queue is empty." }
       timeoutMs: 10000
   - request-marker: { name: close-pane-queue }
   # ── the tasks pane (same dispatch — toggle-tasks-pane): the honest empty
@@ -223,9 +228,9 @@ steps:
   - request-marker: { name: open-help-panel }
   - assert-cell-colors:
       cells:
-        - { row: 9, col: 4, text: "Help" }
-        - { row: 11, col: 5, text: "/new" }
-        - { row: 12, col: 5, text: "/home" }
+        - { row: 12, col: 4, text: "Help" }
+        - { row: 14, col: 5, text: "/new" }
+        - { row: 15, col: 5, text: "/home" }
       timeoutMs: 10000
   - await-quiescent: { ms: 300 }
   - request-marker: { name: close-help-panel }

@@ -51,6 +51,10 @@ export function createRuntimeContext(session: Session): RuntimeContextService {
       type: "user/message",
       text: snapshot,
       source: { kind: "plugin", plugin: RUNTIME_CONTEXT_SOURCE_PLUGIN },
+      // M59: model-visible context, never a user-facing turn — the TUI
+      // scrollback must not print `Current runtime context: none…` as if the
+      // user had typed it (grok shows no such row either).
+      internal: true,
     })
     retained = snapshot
   }
