@@ -120,7 +120,7 @@ node scripts/verify-installer.mjs  # 19 項安裝驗證（靜默裝 → 雙命�
 | PATH | HKLM 追加（僅當不含；段級精確匹配），`WM_SETTINGCHANGE` 廣播 |
 | 開始選單 | `I-harness` / `ih` 快捷方式 + README |
 | 卸載器 | 文件/目錄清除 + 註冊表 + PATH 回寫 + 自刪 |
-| 測試模式 | `-test.exe`（`IH_NSIS_TEST` 編譯變體：不寫 PATH/註冊表——供自動化驗證） |
+| 測試模式 | `-test.exe`（`IH_NSIS_TEST` 編譯變體：不寫 PATH/註冊表、**預設裝到 `%LOCALAPPDATA%\I-harness`**——用戶級可寫；原 `Program Files` 預設在未提權下寫不進去，雙擊即報 `Error opening file for writing`） |
 
 **dist 自足（M55）**：`--attach` 的 SDK spawn 重入自身 bundle（`node ih.mjs sdk`）、Windows-ACL 沙箱 spawn 同捆的 `dist/runner.mjs`、`/minimal` 自重啟重入自身、minimal 內聯引擎已入 bundle——都不再需要源碼或 tsx。`I_HARNESS_HOME` 僅是**源碼模式**的開發覆蓋（指向非標準路徑的 checkout），dist 不讀它。
 
