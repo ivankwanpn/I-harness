@@ -84,9 +84,10 @@ function seedA(): ScrollbackEngine {
   return e
 }
 
-/** Seed B: two turns (anchors at line 0 and line 10) — the timeline golden
- * scene (user hello / assistant 2 / execute collapsed 7 / user again /
- * assistant tail = 12 display lines at 80 cols). */
+/** Seed B: two turns (anchors at line 0 and line 4) — the timeline golden
+ * scene (user hello / assistant 2 / execute collapsed to its header row (M59:
+ * a finished tool block renders header-only) / user again / assistant tail =
+ * 6 display lines at 80 cols). */
 function seedB(): ScrollbackEngine {
   const e = createScrollbackEngine({ width: 80 })
   push(e, { type: "user", text: "hello", ts: 100 })
@@ -100,8 +101,8 @@ function seedB(): ScrollbackEngine {
   return e
 }
 
-/** Seed C: seedB + an expanded 13-row edit block (25 lines) — the CLIP
- * goldens need a scene taller than the 13-row viewport. */
+/** Seed C: seedB + an expanded 13-row edit block (19 lines) — the CLIP
+ * goldens need a scene taller than the 16-row viewport. */
 function seedC(): ScrollbackEngine {
   const e = seedB()
   push(e, {
@@ -111,15 +112,15 @@ function seedC(): ScrollbackEngine {
   return e
 }
 
-/** Seed D: three turns (anchors at line 0 / 10 / 19 + a filler execute) —
- * the chevron clicks need an anchor BEYOND the 13-row default viewport so
- * `next` is reachable at offset 0 (at off 0 the active = the LAST anchor
- * the viewport bottom covers = turn 2 at line 10). */
+/** Seed D: three turns (anchors at line 0 / 4 / 19 + a 13-row edit filler) —
+ * the chevron clicks need an anchor BEYOND the 16-row default viewport so
+ * `next` is reachable at offset 0 (at off 0 the active = the LAST anchor the
+ * viewport bottom covers = turn 2 at line 4). */
 function seedD(): ScrollbackEngine {
   const e = seedB()
   push(e, {
-    type: "tool", callId: "r2", name: "run y", kind: "execute", status: "done",
-    output: "x-1\nx-2\nx-3\nx-4\nx-5\nx-6", summary: "run y", ts: 600,
+    type: "tool", callId: "r2", name: "patch.txt", kind: "edit", status: "done",
+    output: "+x1\n+x2\n+x3\n+x4\n+x5\n+x6\n-y1\n-y2\n-y3\n-y4\n-y5\n-y6", summary: "patch.txt", ts: 600,
   })
   push(e, { type: "user", text: "third", ts: 700 })
   push(e, { type: "assistant", text: "t3", ts: 800 })
@@ -196,12 +197,12 @@ describe("selection borders (M46c G1) — the overlay draw pass", () => {
   it("clip-bottom: the span runs off the viewport bottom → the last row reads ┆", () => {
     const e = seedC()
     const app = baseState(e, { scroll: { offset: 0, follow: false } })
-    e.setSelection(1, 99) // engine clamps to line 24; the span reaches the view edge
+    e.setSelection(1, 99) // engine clamps to line 18; the span reaches the view edge
     const r = make(80, 24)
     draw(app, r)
-    // bottom visible row = 14 (off 0, h 13 → lines 0..12; b clamped 24).
-    expect(cellAt(r, 4, 14).text).toBe("┆")
-    expect(cellAt(r, 76, 14).text).toBe("┆")
+    // bottom visible row = 17 (off 0, h 16 → lines 0..15; b clamped 18).
+    expect(cellAt(r, 4, 17).text).toBe("┆")
+    expect(cellAt(r, 76, 17).text).toBe("┆")
     // the top (not clipped) keeps the corner + ✗.
     expect(cellAt(r, 4, 3).text).toBe("┌")
     expect(cellAt(r, 76, 3).text).toBe("✗")
@@ -253,19 +254,19 @@ describe("timeline rail (M46c G1)", () => {
   })
 
   it("draws ▴/▾ chevrons + the active `━━` tick + idle ` ─` for the other turn", () => {
-    const e = seedB() // anchors line 0 (hello) + line 10 (again); off 0; h 13
+    const e = seedB() // anchors line 0 (hello) + line 4 (again); off 0; h 16
     const app = baseState(e, { showTimeline: true })
     const r = make(80, 24)
     draw(app, r)
     expect(cellAt(r, 76, 2).text).toBe("▴") // top end (prev exists: active=1)
     expect(cellAt(r, 77, 2).text).toBe(" ")
-    expect(cellAt(r, 76, 12).text).toBe("━") // active tick (turn 2 = viewport bottom)
-    expect(cellAt(r, 77, 12).text).toBe("━")
-    expect(cellAt(r, 76, 14).text).toBe("▾") // bottom end (next: none → still drawn)
-    // the second turn's tick is OFFSCREEN (line 0 < off) — idle ticks: an
-    // invisible anchor draws nothing. The 76/77 columns elsewhere stay blank.
-    expect(cellAt(r, 76, 6).text).toBe(" ")
-    expect(cellAt(r, 77, 6).text).toBe(" ")
+    expect(cellAt(r, 76, 6).text).toBe("━") // active tick (turn 2 at anchor line 4)
+    expect(cellAt(r, 77, 6).text).toBe("━")
+    expect(cellAt(r, 76, 17).text).toBe("▾") // bottom end (next: none → still drawn)
+    // the first turn's tick lands on the top chevron row (atCross → skipped,
+    // the chevron keeps the cells). The 76/77 columns elsewhere stay blank.
+    expect(cellAt(r, 76, 10).text).toBe(" ")
+    expect(cellAt(r, 77, 10).text).toBe(" ")
   })
 
   it("hover over a tick: ⟵ idles then the hover state flips it to `──` + the popup card", () => {
@@ -274,17 +275,17 @@ describe("timeline rail (M46c G1)", () => {
     app.mouse = { enabled: true, last: { col: 0, row: 0 }, hovered: new Set(), engine: new HoverEngine() }
     const r = make(80, 24)
     draw(app, r) // frame 1: registers the areas, settles (0,0) → no hover
-    // Move the pointer over the ACTIVE tick row (col 76, row 12).
-    app.mouse = { ...app.mouse, last: { col: 76, row: 12 } }
+    // Move the pointer over the ACTIVE tick row (col 76, row 6).
+    app.mouse = { ...app.mouse, last: { col: 76, row: 6 } }
     draw(app, r) // frame 2: registers + settles the NEW hovered set
     draw(app, r) // frame 3: the settled tl-tick-1 flips the glyph + popup
-    expect(cellAt(r, 76, 12).text).toBe("─")
-    expect(cellAt(r, 77, 12).text).toBe("─")
+    expect(cellAt(r, 76, 6).text).toBe("─")
+    expect(cellAt(r, 77, 6).text).toBe("─")
     // The popup card: 21 cols flush left of the rail at the tick row: the
     // preview "again" right-aligned (col 71..75), the card pad at 55.
-    expect(cellAt(r, 55, 12).text).toBe(" ")
-    expect(cellAt(r, 75, 12).text).toBe("n")
-    expect(cellAt(r, 71, 12).text).toBe("a")
+    expect(cellAt(r, 55, 6).text).toBe(" ")
+    expect(cellAt(r, 75, 6).text).toBe("n")
+    expect(cellAt(r, 71, 6).text).toBe("a")
     expect(app.mouse.hovered.has("tl-tick-1")).toBe(true)
   })
 
@@ -358,12 +359,12 @@ describe("timeline mouse routing (M46c G1)", () => {
 
   it("tick click jumps to the anchor line via the /jump goTo seam", () => {
     const r = hookRig(true)
-    click(r, 76, 12) // the active tick row (anchor line 10)
-    expect(r.jumps).toEqual([10])
+    click(r, 76, 6) // the active tick row (anchor line 4)
+    expect(r.jumps).toEqual([4])
   })
 
   it("top chevron = previous turn; bottom = next (relative to the active view)", () => {
-    const e = seedD() // anchors 0/10/20: at off 0 (h 13) the active = turn 2
+    const e = seedD() // anchors 0/4/19: at off 0 (h 16) the active = turn 2
     const app = baseState(e, { showTimeline: true })
     const jumps: number[] = []
     const router = new MouseRouter({
@@ -380,11 +381,11 @@ describe("timeline mouse routing (M46c G1)", () => {
     r.app.scroll = { offset: 0, follow: false } // pin the viewport at the top
     click(r, 76, 2) // ▴ → previous turn (anchor line 0)
     expect(r.jumps).toEqual([0])
-    click(r, 76, 14) // ▾ → the NEXT turn (anchor line 19)
+    click(r, 76, 17) // ▾ → the NEXT turn (anchor line 19)
     expect(r.jumps).toEqual([0, 19])
     // at the LAST turn (scrolled to the tail) the ▾ is a no-op — no jump.
     r.app.scroll = { offset: 24, follow: false }
-    click(r, 76, 14)
+    click(r, 76, 17)
     expect(r.jumps).toEqual([0, 19])
   })
 
@@ -429,7 +430,7 @@ describe("engine.turnAnchors (M46c G1) — O(turns) accessor", () => {
     const anchors = anchorsOf(e)
     expect(anchors).toEqual([
       { lineIndex: 0, preview: "hello" },
-      { lineIndex: 10, preview: "again" }, // 1+2+7 display lines before the user
+      { lineIndex: 4, preview: "again" }, // 1+2+1 display lines before the user
     ])
   })
 

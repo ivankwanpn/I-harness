@@ -166,8 +166,20 @@ function createOutQueue<T>(): { push(item: T): void; stream(): AsyncIterable<T> 
   }
 }
 
-/** Wire the interaction seams onto every assembly ctx (idempotent). */
-export function createApprovalBridge(service: ApprovalBridgeService): ApprovalBridge {
+/** Wire the interaction seams onto every assembly ctx (idempotent).
+ *
+ * M59: `options.approvals` (default true) controls the approval answerer.
+ * An assembly created with `approveAll` ALREADY registered its own
+ * `approval/answerer`; attaching a second one throws "duplicate service
+ * registration" and kills session creation (the default TUI: guardian off →
+ * approveAll on → the bridge must NOT re-register). The question provider has
+ * no such conflict — the assembly registers the TOOL, the bridge the provider. */
+export interface ApprovalBridgeOptions {
+  approvals?: boolean
+}
+
+export function createApprovalBridge(service: ApprovalBridgeService, options: ApprovalBridgeOptions = {}): ApprovalBridge {
+  const registerApprovals = options.approvals ?? true
   const attachedCtxs = new Set<unknown>()
   const approvals = createOutQueue<PermissionSurface>()
   const questions = createOutQueue<QuestionQuestion>()
@@ -178,21 +190,23 @@ export function createApprovalBridge(service: ApprovalBridgeService): ApprovalBr
     if (attachedCtxs.has(ctx)) return
     attachedCtxs.add(ctx)
 
-    // Approval: register the pending entry BEFORE emit (a synchronous answer
-    // inside the emit callback must find it — web-host lesson).
-    registerApprovalAnswerer(ctx, async (req: ApprovalRequest) => {
-      const id = randomUUID()
-      approvals.push(approvalSurfaceOf(req, id))
-      const approved = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => {
-          pendingApprovals.delete(id)
-          resolve(false) // fail-closed: unanswered never approves (audit F05-5)
-        }, APPROVAL_TIMEOUT_MS)
-        timer.unref()
-        pendingApprovals.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value) }, timer })
+    if (registerApprovals) {
+      // Approval: register the pending entry BEFORE emit (a synchronous answer
+      // inside the emit callback must find it — web-host lesson).
+      registerApprovalAnswerer(ctx, async (req: ApprovalRequest) => {
+        const id = randomUUID()
+        approvals.push(approvalSurfaceOf(req, id))
+        const approved = await new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => {
+            pendingApprovals.delete(id)
+            resolve(false) // fail-closed: unanswered never approves (audit F05-5)
+          }, APPROVAL_TIMEOUT_MS)
+          timer.unref()
+          pendingApprovals.set(id, { resolve: (value) => { clearTimeout(timer); resolve(value) }, timer })
+        })
+        return { approved }
       })
-      return { approved }
-    })
+    }
 
     // Question: REJECT on timeout — an unanswered question has no safe default
     // (web-host parity).

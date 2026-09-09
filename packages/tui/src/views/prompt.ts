@@ -149,10 +149,10 @@ export function wrapLinesWithOffsets(text: string, width: number): WrappedLine[]
 }
 
 /** Number of paste-stash chip rows rendered at the TOP of the content area
- * (same clamp as renderPrompt: at most height-3 rows). */
+ * (same clamp as renderPrompt: at most height-2 rows). */
 export function pasteChipRowCount(ctx: Rect, state: PromptState): number {
   const stash = state.pasteStash ?? []
-  return Math.min(stash.length, Math.max(0, ctx.h - 3))
+  return Math.min(stash.length, Math.max(0, ctx.h - 2))
 }
 
 /** The pasteStash index of the chip row under `row` (a chip row is ENTIRELY
@@ -177,7 +177,7 @@ export function promptLineAtRow(ctx: Rect, text: string, row: number, chipRows =
   if (shownIdx < 0) return undefined // chip row — no text line
   const contentW = Math.max(1, ctx.w - 4)
   const lines = wrapLinesWithOffsets(text, contentW)
-  const innerRows = Math.max(1, ctx.h - 3 - chipRows)
+  const innerRows = Math.max(1, ctx.h - 2 - chipRows)
   const firstShown = Math.max(0, lines.length - innerRows)
   return lines[Math.min(firstShown + shownIdx, lines.length - 1)]
 }
@@ -197,7 +197,7 @@ export function promptCursorAtCell(ctx: Rect, state: PromptState, col: number, r
   if (shownIdx < 0) return state.cursor // chip hint row: keep the cursor (no jump)
   const contentW = Math.max(1, ctx.w - 4)
   const lines = wrapLinesWithOffsets(state.text, contentW)
-  const innerRows = Math.max(1, ctx.h - 3 - chipRows)
+  const innerRows = Math.max(1, ctx.h - 2 - chipRows)
   const firstShown = Math.max(0, lines.length - innerRows)
   const line = lines[Math.min(firstShown + shownIdx, lines.length - 1)]!
   const textStart = ctx.x + 1 + (shownIdx === 0 ? PROMPT_PREFIX_W : 2)
@@ -263,7 +263,7 @@ function lineColumnWidth(lineText: string, local: number): number {
 export function promptCursorCell(ctx: Rect, state: PromptState): CursorTarget {
   const contentW = Math.max(1, ctx.w - 4)
   const chipRows = pasteChipRowCount(ctx, state)
-  const textRows = Math.max(1, ctx.h - 3 - chipRows)
+  const textRows = Math.max(1, ctx.h - 2 - chipRows)
   const x0 = ctx.x
   if (state.text.length === 0) {
     // Empty prompt: the caret sits on the placeholder start (`❯ ` prefix).
@@ -345,7 +345,7 @@ export function renderPrompt(
   const contentW = Math.max(1, ctx.w - 4)
   const stash = state.pasteStash ?? []
   const chipRows = pasteChipRowCount(ctx, state)
-  const textRows = Math.max(1, ctx.h - 3 - chipRows)
+  const textRows = Math.max(1, ctx.h - 2 - chipRows)
   const lines = state.text.length === 0
     ? [PROMPT_PLACEHOLDER]
     : wrapPrompt(state.text, contentW)

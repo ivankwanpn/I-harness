@@ -196,6 +196,9 @@ export class ProviderController {
       ...(current?.displayName !== undefined && draft.displayName === undefined ? { displayName: current.displayName } : {}),
       ...(current?.modelsURL !== undefined && draft.modelsURL === undefined ? { modelsURL: current.modelsURL } : {}),
       ...(current?.models !== undefined ? { models: current.models.map((model) => ({ ...model })) } : {}),
+      // M59: extra headers are settings-plane only (no wizard field) — a
+      // re-save must not drop them.
+      ...(current?.headers !== undefined ? { headers: { ...current.headers } } : {}),
     }
     await this.runtimeInner.upsertProvider(id, config)
     if (draft.apiKey !== undefined && draft.apiKey !== "") {

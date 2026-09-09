@@ -244,17 +244,22 @@ async function main(): Promise<void> {
   let firedSettle = false
   const watcher = setInterval(() => {
     const text = tailText()
-    const resultJson = '"stdout": "resolved-shell'
-    if (!firedRun && text.includes("Run sleep 1; echo resolved-shell") && !text.includes(resultJson)) {
+    const runHeader = text.includes("Run sleep 1; echo resolved-shell")
+    const assistantDone = /(^|\n)done(\n|$)/.test(text)
+    if (!firedRun && runHeader && !assistantDone) {
       firedRun = true
       marker("bash-running")
     }
-    if (!firedDone && text.includes(resultJson)) {
+    // M59: a FINISHED tool block renders its header only (grok parity) — the
+    // result JSON is no longer on screen, so "the result landed" is proven by
+    // the final assistant row instead of the JSON text.
+    if (!firedDone && assistantDone) {
       firedDone = true
       marker("bash-done")
     }
-    if (!firedSettle && text.includes(resultJson) && /(^|\n)done(\n|$)/.test(text)) {
-      // the final assistant block ("done") is on screen — turn settled.
+    if (!firedSettle && firedDone && runHeader && app.state().turn === undefined) {
+      // the turn row is gone (turn/end processed) and the final assistant row
+      // is on screen — the settled frame.
       firedSettle = true
       marker("settle")
     }

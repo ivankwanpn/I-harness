@@ -39,7 +39,7 @@ steps:
         - "  ┃   ❯ hello"
         - "  ┃   hi there"
   - wait-screen:
-      region: { startRow: 13 }
+      region: { startRow: 16 }
       rows:
         - "  ⠼ Responding…  0:00 0s  [stop]"
   - await-marker: { name: frame-3 }
@@ -50,13 +50,10 @@ steps:
         - "  ┃   ❯ hello"
         - "  ┃   hi there"
   - wait-screen:
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
-        - " ┃│                                        │"
         - " ┃╰ unconfigured───────────────────────────╯"
         - ""
         - "  Enter: submit  │  Ctrl+Enter: interject  │"
@@ -65,7 +62,7 @@ steps:
   - write-pty: { data: "hi" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 16 }
+      region: { startRow: 19 }
       rows:
         - " ┃│❯ hi                                    │"
   # Enter → submit("hi") → prompt clears (frame 6); batch 2 (frames 7-8):
@@ -81,7 +78,7 @@ steps:
   - await-marker: { name: turned-2 }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"
@@ -89,7 +86,7 @@ steps:
   - write-pty: { data: "\x1b[A" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 12 }
+      region: { startRow: 15 }
       rows:
         - "  ╭ history ──────────────────────────────1╮"
         - "  │❯ hi                                    │"
@@ -98,12 +95,12 @@ steps:
   - write-pty: { data: "\x1b" }
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 12 }
+      region: { startRow: 15 }
       rows:
         - ""
   - wait-screen:
       timeoutMs: 8000
-      region: { startRow: 15 }
+      region: { startRow: 18 }
       rows:
         - " ┃╭───────────────────────────────untitled─╮"
         - " ┃│❯ Build anything                        │"

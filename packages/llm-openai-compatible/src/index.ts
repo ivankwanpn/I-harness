@@ -9,6 +9,9 @@ export interface OpenAICompatibleConfig {
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
   inputModalities?: ("text" | "image")[]
+  /** M59: literal extra request headers (gateway-required, e.g. OpenCode
+   * Zen's x-opencode-session). The adapter's own headers win on collision. */
+  headers?: Record<string, string>
 }
 
 // Shape LLM content parts into the Chat Completions `content` array. String
@@ -88,7 +91,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       }
       const response = await fetch(`${baseUrl}/v1/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
+        headers: { ...(config.headers ?? {}), "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` },
         body: JSON.stringify(body),
       })
       if (!response.ok || !response.body) {

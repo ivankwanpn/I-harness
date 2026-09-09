@@ -117,6 +117,10 @@ export interface SettingsProviderConfig {
   protocol?: SettingsProviderProtocol
   /** Model rows (objects since T1; string entries soft-upgrade at normalize). */
   models?: SettingsModel[]
+  /** M59: literal extra request headers for this route (e.g. a gateway's
+   * session/tenant header). Keys and values are non-empty strings; secrets
+   * belong in `apiKeyEnv`, not here. */
+  headers?: Record<string, string>
 }
 
 /** The section-level default model (resolution chain in Task 5:
@@ -464,9 +468,22 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   if (isNonEmptyString(raw.displayName)) out.displayName = raw.displayName
   const models = normalizeModels(raw.models)
   if (models !== undefined) out.models = models
+  const headers = normalizeProviderHeaders(raw.headers)
+  if (headers !== undefined) out.headers = headers
   if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
   if (Object.keys(out).length === 0) return null
   return out
+}
+
+/** M59: extra request headers — dynamic string keys, non-empty string values;
+ * anything else degrades per entry (no throw, D5 no-migration). */
+function normalizeProviderHeaders(raw: unknown): Record<string, string> | undefined {
+  if (!isRecord(raw)) return undefined
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(raw)) {
+    if (name !== "" && isNonEmptyString(value)) out[name] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
 }
 
 /** Appended llm section defaulting: partial/corrupt input degrades per field,

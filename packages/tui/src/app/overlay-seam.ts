@@ -43,7 +43,7 @@ import { renderQuestion } from "../views/question.ts"
 import type { CancelTurnState } from "../views/cancel-turn.ts"
 import { CANCEL_OPTIONS, renderCancelTurn } from "../views/cancel-turn.ts"
 import type { RewindState } from "../views/rewind.ts"
-import { filesDisabled, renderRewind } from "../views/rewind.ts"
+import { filesDisabled, renderRewind, REWIND_CONFLICT_CAP } from "../views/rewind.ts"
 import { wrapPrompt } from "../views/prompt.ts"
 
 // ---- M46b G2 (mouse click semantics): row-layout replay. The renderers pack
@@ -109,6 +109,67 @@ function cancelTurnRowYs(ctx: Rect): number[] {
   return out
 }
 
+// ---- M59: content heights (the prompt slot grows to hold an open overlay).
+// The composer is 3 rows (grok parity); these derive the height from the
+// BINDER'S OWN row walk (the same mirror the mouse router uses) instead of
+// re-deriving each renderer's packing arithmetic — no drift possible.
+
+/** The smallest content height at which `rowsAt(h)` places `count` rows. */
+function fitRows(count: number, rowsAt: (h: number) => number[]): number {
+  let lo = 1
+  let hi = 64
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1
+    if (rowsAt(mid).length >= count) hi = mid
+    else lo = mid + 1
+  }
+  return lo
+}
+
+/** Permission: every option row + the detail rows the renderer will DRAW.
+ * The renderer reserves the gap + footer inside the same height (its
+ * detailMax), so the detail needs `rows + footerH + 3` rows on top of its
+ * own — a smaller height would silently drop it. */
+function permissionMinRows(surf: PermissionSurface, width: number): number {
+  const rows = permissionRowCount(surf)
+  const fit = fitRows(rows, (h) => permissionRowYs({ x: 0, y: 0, w: width, h }, surf))
+  if (surf.detail === undefined || surf.detail.length === 0) return fit
+  const detail = wrapPrompt(surf.detail, Math.max(1, width - 3)).length
+  const footerH = surf.scopes.length > 1 ? 1 : 0
+  return Math.max(fit, detail + rows + footerH + 3)
+}
+
+/** Question: every option row + the description rows the renderer will DRAW
+ * (cap 5; same reservation rule as permission). */
+function questionMinRows(q: QuestionQuestion, width: number): number {
+  const fit = fitRows(q.options.length, (h) => questionRowYs({ x: 0, y: 0, w: width, h }, q).ys)
+  if (q.description === undefined || q.description.length === 0) return fit
+  const desc = Math.min(5, wrapPrompt(q.description, Math.max(1, width - 3)).length)
+  return Math.max(fit, desc + q.options.length + (q.freeform ? 1 : 0) + 4)
+}
+
+/** Cancel-turn: every option row. */
+function cancelTurnMinRows(): number {
+  return fitRows(CANCEL_OPTIONS.length, (h) => cancelTurnRowYs({ x: 0, y: 0, w: 80, h }))
+}
+
+/** Rewind: the phase's own content height (title + rows — renderRewind packs
+ * them with no gaps; the conflict lists cap at REWIND_CONFLICT_CAP + a
+ * "+N more" row). */
+function rewindMinRows(state: RewindState): number {
+  const capped = (n: number): number => Math.min(n, REWIND_CONFLICT_CAP) + (n > REWIND_CONFLICT_CAP ? 1 : 0)
+  switch (state.phase) {
+    case "loading":
+    case "planning":
+    case "executing": return 1
+    case "error": return 3
+    case "picker": return 1 + Math.max(1, state.points.length)
+    case "cancel-offer": return 4
+    case "mode-select": return 4
+    case "confirm": return 1 + capped(state.cleanPaths.length) + capped(state.conflicts.length) + 2
+  }
+}
+
 // ------------------------------------------------------------------ share
 
 /** Render the seam: the ctx handed in by present() IS the prompt-slot rect
@@ -130,6 +191,9 @@ export function overlaySeam(
     freeformY?: (ctx: Rect) => number | undefined
     setCursor?: (index: number) => void
     multi?: boolean
+    /** M59: the overlay's own content height at this width (the prompt slot
+     * grows to hold it — see OverlaySeam.minRows). */
+    minRows?: (width: number) => number
   },
 ): OverlaySeam {
   return {
@@ -141,6 +205,7 @@ export function overlaySeam(
     ...(mouse?.freeformY === undefined ? {} : { freeformY: mouse.freeformY }),
     ...(mouse?.setCursor === undefined ? {} : { setCursor: mouse.setCursor }),
     ...(mouse?.multi === undefined ? {} : { multi: mouse.multi }),
+    ...(mouse?.minRows === undefined ? {} : { minRows: mouse.minRows }),
   }
 }
 
@@ -252,6 +317,7 @@ export function bindPermissionOverlay(
     // M46b G2 (mouse click semantics): row layout replay (see the helper).
     rowYs: (ctx) => permissionRowYs(ctx, surf),
     setCursor: (i) => { state.cursor = Math.max(0, Math.min(permissionRowCount(surf) - 1, i)) },
+    minRows: (width) => permissionMinRows(surf, width),
   })
 }
 
@@ -354,6 +420,7 @@ export function bindQuestionOverlay(
     freeformY: (ctx) => questionRowYs(ctx, q).freeformY,
     setCursor: (i) => { state.cursor = Math.max(0, Math.min(Math.max(0, q.options.length - 1), i)) },
     multi: q.multi,
+    minRows: (width) => questionMinRows(q, width),
   })
 }
 
@@ -403,6 +470,7 @@ export function bindCancelTurnOverlay(
     // M46b G2 (mouse click semantics): row layout replay (see the helper).
     rowYs: (ctx) => cancelTurnRowYs(ctx),
     setCursor: (i) => { state.cursor = Math.max(0, Math.min(CANCEL_OPTIONS.length - 1, i)) },
+    minRows: () => cancelTurnMinRows(),
   })
 }
 
@@ -600,6 +668,7 @@ export function bindRewindOverlay(
     // dispatch key — see isRewindOverlay + keys.ts OverlayKind "rewind".
     kind: "rewind" as unknown as OverlaySeam["kind"],
     draw: (ctx, view, palette, glyphs) => renderRewind(ctx, state, view, palette, glyphs),
+    minRows: () => rewindMinRows(state),
     act: (action: AppAction) => {
       if (typeof action !== "string") return // digits: rewind has no digit rows
       switch (action) {

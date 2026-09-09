@@ -100,6 +100,21 @@ function stringifyOutput(output: unknown): string {
   }
 }
 
+/** M59 grok parity: an execute tool's result renders its human-readable
+ * stream, not the `{ stdout, stderr, exitCode }` JSON envelope (grok's
+ * expanded block shows the raw command output). Only the shell-tool shape
+ * opts in — anything without a string `stdout` member keeps the faithful
+ * stringified payload. `output` must already be redacted by the caller. */
+function executeOutputText(output: unknown): string | undefined {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) return undefined
+  const r = output as Record<string, unknown>
+  if (typeof r.stdout !== "string") return undefined
+  const parts: string[] = []
+  if (r.stdout !== "") parts.push(r.stdout)
+  if (typeof r.stderr === "string" && r.stderr !== "") parts.push(r.stderr)
+  return parts.join("\n")
+}
+
 /** M49 Task 10: when the tool/result's STRUCTURED payload supplies an fs
  * change (change: TextDiff / changes: TextDiff[] — edit/write/apply_patch)
  * the presentation string IS its unified diff; a rawPatch string (apply_patch
@@ -150,8 +165,15 @@ export function toolResultIsError(output: unknown): boolean {
 export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEvent | undefined {
   const ts = Date.now()
   switch (ev.type) {
-    case "user/message":
-      return { type: "user", text: ev.text, seq: eventSeq(ev, state), ts }
+    case "user/message": {
+      const seq = eventSeq(ev, state)
+      // M59: internal plugin messages (runtime-context snapshots, guard
+      // nudges) are model-visible but not user turns — the scrollback must not
+      // print them as if the user typed them. The seq still advances so the
+      // replay cursor never rewinds over them.
+      if (ev.internal === true) return undefined
+      return { type: "user", text: ev.text, seq, ts }
+    }
     case "assistant/chunk":
       state.chunksSinceAssistant = true
       return { type: "assistant", text: ev.text, seq: eventSeq(ev, state), ts }
@@ -179,6 +201,7 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
       }
     case "tool/result": {
       const seq = eventSeq(ev, state)
+      const kind = toolKindOf(ev.name)
       const error = toolResultIsError(ev.output)
       // M49 Task 10: the structured fs change renders AS its unified diff;
       // everything else keeps the faithful stringified payload — but ONLY
@@ -187,12 +210,17 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
       // render verbatim through the scrollback body and the viewer's text
       // body). `result` always carries the RAW structured payload (the typed
       // surface — the raw view re-redacts at its own boundary).
-      const text = structuredChangeText(ev.output) ?? stringifyOutput(redactToolPayload(ev.output))
+      // M59: execute results prefer the plain stdout/stderr stream over the
+      // JSON envelope (grok shows the raw command output).
+      const redacted = redactToolPayload(ev.output)
+      const text = structuredChangeText(ev.output)
+        ?? (kind === "execute" ? executeOutputText(redacted) : undefined)
+        ?? stringifyOutput(redacted)
       return {
         type: "tool",
         callId: ev.callId,
         name: ev.name,
-        kind: toolKindOf(ev.name),
+        kind,
         status: error ? "error" : "done",
         output: text,
         result: ev.output,
@@ -718,7 +746,7 @@ export function createEmbeddedBackend(opts: EmbeddedOptions): BackendClient {
       if (live === undefined) throw new Error(`session not live: ${targetSessionId}`)
       const lines: string[] = []
       for (const ev of live.events.slice(-30)) {
-        if (ev.type === "user/message") lines.push(`❯ ${ev.text}`)
+        if (ev.type === "user/message") { if (ev.internal !== true) lines.push(`❯ ${ev.text}`) }
         else if (ev.type === "assistant/message") lines.push(`Assistant: ${ev.text.slice(0, 80)}`)
         else if (ev.type === "tool/result") lines.push(`… ${ev.name} done`)
       }

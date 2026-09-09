@@ -57,6 +57,7 @@ function modal(overrides: Partial<{
   applyTimestamps: (on: boolean) => void
   applyCompact: (on: boolean) => void
   applyAutoApprove: (on: boolean) => void
+  applyBusyEnter: (mode: "queue" | "steer") => void
   onOpenProviders: () => void
   onOpenPicker: () => void
 }> = {}) {
@@ -210,6 +211,29 @@ describe("settings modal — binder nav + registry-driven writes", () => {
     seam.act!("overlay-select") // guardian row
     await new Promise((r) => setTimeout(r, 10))
     expect(settings.get().tui.prefs.guardian).toBe(true)
+  })
+
+  // M59 (grok parity): the follow-up behavior row — persisted as dsh's
+  // busyEnter vocabulary (wait/interrupt) but DISPLAYED as grok's
+  // Queue/Steer, and applied LIVE through the host closure.
+  it("follow-up behavior: Queue ↔ Steer cycles, persists busyEnter, live-applies", async () => {
+    const live: string[] = []
+    const h = modal({ applyBusyEnter: (mode) => live.push(mode) })
+    const { settings, seam, state } = h
+    // Sessions = index 3 (Models & Providers, Appearance, Scrollback & Mouse).
+    for (let i = 0; i < 3; i++) seam.act!("overlay-nav-next")
+    seam.act!("overlay-select")
+    expect(state.category).toBe("Sessions")
+    seam.act!("overlay-nav-next") // compact-mode → follow-up behavior
+    seam.act!("overlay-select")
+    await new Promise((r) => setTimeout(r, 10))
+    // default interrupt (Steer) → next = wait (Queue)
+    expect(settings.get().busyEnter).toBe("wait")
+    expect(live).toEqual(["queue"])
+    // and the row content reads grok's names.
+    const snap = settingsSnapshot(h.context.settings, { defaultModel: { provider: "", model: "" }, defaultProviderName: "" })
+    expect(settingsKnobRows("Sessions", snap).map((r) => r.label)).toEqual(["compact-mode", "follow-up behavior"])
+    expect(settingsKnobRows("Sessions", snap)[1]!.value).toBe("Queue")
   })
 
   it("the Models & Providers rows launch the dedicated flows (provider master/detail + picker)", async () => {

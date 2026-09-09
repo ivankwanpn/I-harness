@@ -204,4 +204,21 @@ describe("M32 reasoning effort (openai-family Chat Completions)", () => {
     const [, init2] = fetchMock.mock.calls[1]!
     expect((JSON.parse(init2.body as string) as Record<string, unknown>).reasoning_effort).toBeUndefined()
   })
+
+  it("M59: merges config.headers into the request (adapter headers win on collision)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({
+      apiKey: "k",
+      baseUrl: "https://api.test",
+      model: "m",
+      headers: { "x-opencode-session": "sess-1", Authorization: "Bearer WRONG" },
+    })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const headers = (fetchMock.mock.calls[0]![1] as RequestInit).headers as Record<string, string>
+    expect(headers["x-opencode-session"]).toBe("sess-1")
+    expect(headers.Authorization).toBe("Bearer k")
+    await it.return?.()
+  })
 })

@@ -186,12 +186,13 @@ describe("present — prompt chrome (spec §3.2)", () => {
     present(state, r, palette, GLYPHS, {})
     r.flush(() => {})
 
-    // Layout: pads 2/1; prompt box 76 wide at x=2, lines=1 → height 6, top at y=15.
-    const top = rowText(r, 15)
+    // Layout: pads 2/1; prompt box 76 wide at x=2, lines=1 → height 3 (M59
+    // grok parity: top border + the one text row + the info border), top y=18.
+    const top = rowText(r, 18)
     expect(top.slice(2, 4)).toBe("╭─")
     expect(top.slice(76, 78)).toBe("─╮")
     expect(top.slice(73, 76)).toBe("sup") // title right-aligned inside the border
-    const rail = rowText(r, 16)
+    const rail = rowText(r, 19)
     expect(rail[1]).toBe("┃") // accent rail left of the box
     expect(rail[2]).toBe("│") // side border
     expect(rail).toContain("❯ Build anything")
@@ -391,7 +392,7 @@ describe("present — turn status row (spec §3.4)", () => {
     }
     present(state, r, palette, GLYPHS, {})
     r.flush(() => {})
-    const row = rowText(r, 13) // turn row sits above the prompt gap
+    const row = rowText(r, 16) // turn row sits above the prompt gap (prompt top y=18)
     expect(row.slice(2, 3)).toBe("⠋")
     expect(row).toContain("Thinking…")
     expect(row).toContain("0:03")

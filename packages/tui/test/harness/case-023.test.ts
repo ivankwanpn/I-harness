@@ -104,20 +104,20 @@ test(
         { "assert-cell-colors": {
             cells: [
               { row: 2, col: 76, text: "▴" },
-              { row: 12, col: 76, text: "━" },
-              { row: 12, col: 77, text: "━" },
-              { row: 14, col: 76, text: "▾" },
+              { row: 15, col: 76, text: "━" },
+              { row: 15, col: 77, text: "━" },
+              { row: 17, col: 76, text: "▾" },
             ],
             timeoutMs: 4000,
           } },
         // ── hover the active tick → ── + the popup card (preview "again"
         // right-aligned in the 21-col card flush to the rail).
-        { "write-pty": { data: "\x1b[<3;77;13M" } },
+        { "write-pty": { data: "\x1b[<3;77;16M" } },
         { "assert-cell-colors": {
             cells: [
-              { row: 12, col: 76, text: "─" },
-              { row: 12, col: 75, text: "n" },
-              { row: 12, col: 71, text: "a" },
+              { row: 15, col: 76, text: "─" },
+              { row: 15, col: 75, text: "n" },
+              { row: 15, col: 71, text: "a" },
             ],
             timeoutMs: 4000,
           } },
@@ -126,7 +126,7 @@ test(
         { "write-pty": { data: "\r" } },
         { "write-pty": { data: "\r" } },
         { "await-quiescent": { ms: 200 } },
-        { "assert-cell-colors": { cells: [{ row: 12, col: 76, text: " " }], timeoutMs: 4000 } },
+        { "assert-cell-colors": { cells: [{ row: 15, col: 76, text: " " }], timeoutMs: 4000 } },
         // ── /timeline ON → the rail back (the pointer moved away first —
         // the hover would otherwise hold the tick at `──`).
         { "write-pty": { data: "/timeline" } },
@@ -134,7 +134,7 @@ test(
         { "write-pty": { data: "\r" } },
         { "await-quiescent": { ms: 200 } },
         { "write-pty": { data: "\x1b[<3;75;20M" } },
-        { "assert-cell-colors": { cells: [{ row: 12, col: 76, text: "━" }], timeoutMs: 4000 } },
+        { "assert-cell-colors": { cells: [{ row: 15, col: 76, text: "━" }], timeoutMs: 4000 } },
         // ── the ▴ chevron (1-based col 77, row 3) → jump to the previous
         // turn anchor (line 0 — the "hello" viewport at the top). Anchored
         // cells (the rows carry ts + the rail — full-string pins would need

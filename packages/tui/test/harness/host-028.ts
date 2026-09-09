@@ -478,7 +478,10 @@ async function main(): Promise<void> {
   let firedSettle = false
   const watcher = setInterval(() => {
     const text = tailText()
-    if (!firedSettle && text.includes(`"exitCode":`) && /(^|\n)done(\n|$)/.test(text)) {
+    // M59: a FINISHED execute block renders its header only (grok parity) —
+    // the result JSON is no longer on screen, so "the turn settled" is proven
+    // by the final assistant row + the tool header.
+    if (!firedSettle && text.includes("Run cat ") && /(^|\n)done(\n|$)/.test(text)) {
       firedSettle = true
       marker("turn-settled")
     }

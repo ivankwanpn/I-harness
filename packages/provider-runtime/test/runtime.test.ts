@@ -259,6 +259,24 @@ describe("model resolution", () => {
     })
   })
 
+  it("M59: provider headers reach the built client's profile", async () => {
+    const f = await fixture({
+      providers: {
+        zen: {
+          baseURL: "https://opencode.ai/zen/go",
+          protocol: "openai-completions",
+          apiKeyEnv: "ZEN_KEY",
+          models: [{ id: "glm-5.3-flash" }],
+          headers: { "x-opencode-session": "sess-1" },
+        },
+      },
+      defaultModel: { provider: "zen", model: "glm-5.3-flash" },
+      credentials: { ZEN_KEY: "k" },
+    })
+    await expect(f.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(f.builds[0]?.profile.headers).toEqual({ "x-opencode-session": "sess-1" })
+  })
+
   it("returns discriminated unconfigured and invalid states without building a client", async () => {
     const empty = await fixture()
     await expect(empty.runtime.resolveModel({})).resolves.toEqual({

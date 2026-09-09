@@ -255,6 +255,14 @@ export class ProbeClient {
       : env.TMUX !== undefined ? "tmux"
       : "none"
     const modern = colorLevel === "truecolor" || colorLevel === "ansi256"
+    // M59: mouse capture tracks SGR-mouse support, NOT color depth. Windows
+    // Terminal (WT_SESSION) supports it at any color level; with the old
+    // `mouse: modern` rule a Windows PowerShell session (TERM unset → ansi16)
+    // got NO capture — clicks were dead while the wheel still appeared to
+    // work (the terminal translates it to arrow keys when reporting is off).
+    // The legacy console (no WT_SESSION, not xterm) keeps mouse off.
+    const windowsTerminal = env.WT_SESSION !== undefined
+    const mouse = modern || windowsTerminal
     const legacyConsole =
       (process.platform === "win32" && env.WT_SESSION === undefined && !term.startsWith("xterm"))
       || brand === "unknown"
@@ -262,7 +270,7 @@ export class ProbeClient {
       colorLevel,
       dark: this.dark ?? true,
       kitty: this.kitty,
-      mouse: modern,
+      mouse,
       bracketedPaste: modern,
       focusEvents: modern,
       synchronizedOutput: modern,

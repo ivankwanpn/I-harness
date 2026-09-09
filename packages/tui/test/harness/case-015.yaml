@@ -71,7 +71,7 @@ steps:
   # bottom-pinned (pads + tail + status + prompt at rows 19..28).
   - await-quiescent: { ms: 300 }
   - assert-scrollback:
-      baseY: 5
+      baseY: 4
       from: 0
       lines:
         - ""
@@ -88,23 +88,20 @@ steps:
         - ""
         - ""
         - ""
-        # M54 A1: the committed rows are now the ENGINE's rows in order — the
-        # sticky latest-user pin is stripped from the delta (it used to commit
-        # "❯ hello" twice and strand the assistant row). Row COUNT/baseY
-        # unchanged (still 29 rows / baseY 5): the same 5 rows commit, only
-        # their content is corrected (user · system · tool×2 · assistant).
+        # M54 A1: the committed rows are the ENGINE's rows in order.
+        # M59: the finished execute block collapses to its header (no
+        # "data.txt exists" row) — 28 rows / baseY 4.
         - "❯ hello"
         - "context: workspace ok"
         - "◆  Run read data.txt"
-        - "data.txt exists"
         - "It says hello."
         - ""
         - ""
         - ""
+        - ""
         - "❯ hello"
         - "context: workspace ok"
         - "◆  Run read data.txt"
-        - "data.txt exists"
         - "It says hello."
         - "unconfigured"
         - "❯"
@@ -116,11 +113,12 @@ steps:
   # region frame follows).
   - await-marker: { name: frame-10 }
   # POST-RESIZE pin: the reflowed tail — the region at the NEW bottom (rows
-  # 50..59 of 60: pads + 6-row tail + status + prompt) + baseY=42 (the reflow
-  # made the preserved buffer deterministic).
+  # 50..58 of 59: pads + tail + status + prompt) + baseY=41 (the reflow made
+  # the preserved buffer deterministic; M59: one row fewer — the finished
+  # execute block renders its header only).
   - await-quiescent: { ms: 300 }
   - assert-scrollback:
-      baseY: 42
+      baseY: 41
       from: 50
       lines:
         - ""
@@ -128,7 +126,6 @@ steps:
         - "❯ hello"
         - "context: workspace ok"
         - "◆  Run read data.txt"
-        - "data.txt exists"
         - "It says hello."
         - "❯ again"
         - "unconfigured"
