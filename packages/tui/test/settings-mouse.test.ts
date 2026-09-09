@@ -38,6 +38,10 @@ const snap = (over: Partial<SettingsSnapshot> = {}): SettingsSnapshot => ({
   mouseKeepTextSelection: "flash",
   mouseWordSeparators: SETTINGS_DEFAULT_WORD_SEPARATORS,
   mouseReportingToggle: false,
+  // M60: SettingsSnapshot gained a required busyEnter in M59; the helper was
+  // not updated, so `@i-harness/tui` typecheck was red on m59. Use the
+  // settings default (packages/settings/src/index.ts).
+  busyEnter: "interrupt",
   ...over,
 })
 
