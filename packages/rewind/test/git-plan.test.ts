@@ -7,7 +7,7 @@ import { execFileSync } from "node:child_process"
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createGitProbe, RewindService, RewindStore, sha256Hex } from "../src/index.ts"
+import { createGitProbe, createGitProbeForStore, RewindService, RewindStore, sha256Hex } from "../src/index.ts"
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
 const H = (s: string) => sha256Hex(utf8(s))
@@ -138,6 +138,30 @@ describe("plan().unseen (R-B4 A, real git repo)", () => {
     const bare = new RewindService({ store, workspace })
     const plan = await bare.plan(1)
     expect(plan.unseen).toBeUndefined()
+  })
+
+  it("M60 H: a session store root inside the workspace never lists its own JSONL/lock files", async () => {
+    // --session-dir .sessions (inside the workspace): the store's own files are
+    // not "unseen changes". The rewind dir was already excluded; the SESSION
+    // store root (the JSONL + lock files) was not.
+    const sessionRoot = join(workspace, ".sessions")
+    mkdirSync(sessionRoot, { recursive: true })
+    const innerStore = new RewindStore({ root: sessionRoot, sessionId: "s2" })
+    await innerStore.appendPoint({ turnIndex: 0, anchorSeq: 0, promptPreview: "t", files: [] })
+    writeFileSync(join(sessionRoot, "s2.jsonl"), "{}\n")
+    writeFileSync(join(sessionRoot, "s2.lock"), "")
+    const innerService = new RewindService({
+      store: innerStore,
+      workspace,
+      gitProbe: createGitProbeForStore(innerStore, workspace),
+    })
+    const plan = await innerService.plan(0)
+    // The store's own files are gone; the workspace's real dirty files stay.
+    expect(plan.unseen).toEqual([
+      { path: "agent.txt", kind: "untracked" },
+      { path: "later.txt", kind: "untracked" },
+      { path: "target.txt", kind: "untracked" },
+    ])
   })
 
   it("M60 F: an injected probe that rejects stays fail-soft — plan() resolves with no unseen", async () => {
