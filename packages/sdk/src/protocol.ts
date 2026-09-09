@@ -415,16 +415,28 @@ export interface RewindPointsResponse {
   points: RewindPointRowWire[]
 }
 
+/** M58 R-B4 A (additive, no version bump): one git-observed change the journal
+ * cannot explain — a shell/external write the recorder never saw, or a
+ * recorded path changed after the recorder last observed it. Evidence only;
+ * never restored. */
+export interface RewindUnseenChangeWire {
+  path: string
+  kind: "modified" | "untracked" | "deleted"
+}
+
 /** M41b v1.1: session/rewind/plan response — the lazy two-phase dry run
  * (engine semantics: clean = still-restorable-delta files, conflicts =
  * externally diverged but still executed, unTracked = recorded-later paths the
  * restore does not cover, ops = the executable file-op list — empty for a
- * "conversation" mode plan). */
+ * "conversation" mode plan). M58 adds `unseen` additively (absent when the
+ * workspace is not a git work tree, git is unavailable, or there is nothing
+ * to report). */
 export interface RewindPlanResponse {
   clean: RewindFileOpWire[]
   conflicts: RewindConflictOpWire[]
   unTracked: string[]
   ops: RewindFileOpWire[]
+  unseen?: RewindUnseenChangeWire[]
 }
 
 /** M41b v1.1: session/rewind/execute response — the rewind/point conversation
