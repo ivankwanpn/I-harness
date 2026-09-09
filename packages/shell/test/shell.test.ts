@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest"
-import { resolveShell, getArgv, createShellTools, registerShell } from "../src/index.ts"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { resolveShell, resolvePwshExe, getArgv, createShellTools, registerShell } from "../src/index.ts"
 import type { ExecService, ExecCommand } from "@i-harness/exec"
 import type { Tool } from "@i-harness/core-tools"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
@@ -10,6 +13,30 @@ describe("resolveShell", () => {
     const shell = resolveShell()
     expect(["bash", "pwsh"]).toContain(shell.name)
     expect(shell.argv.length).toBeGreaterThan(0)
+  })
+})
+
+describe("resolvePwshExe (M59)", () => {
+  it("non-Windows keeps pwsh", () => {
+    expect(resolvePwshExe({ PATH: "" }, "linux")).toBe("pwsh")
+  })
+
+  it.skipIf(process.platform !== "win32")("prefers pwsh when it is on PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-pwsh-"))
+    try {
+      writeFileSync(join(dir, "pwsh.exe"), "")
+      expect(resolvePwshExe({ PATH: dir, SystemRoot: "C:\\Windows" }, "win32")).toBe("pwsh")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform !== "win32")("falls back to Windows PowerShell 5.1 when pwsh is absent", () => {
+    // Hardcoding `pwsh` spawn-failed (exitCode -1, empty output) on machines
+    // without PowerShell 7 — powershell.exe ships with every supported Windows.
+    const exe = resolvePwshExe({ PATH: "", SystemRoot: process.env.SystemRoot ?? "C:\\Windows" }, "win32")
+    expect(exe.toLowerCase()).toContain("powershell.exe")
+    expect(existsSync(exe)).toBe(true)
   })
 })
 
@@ -85,7 +112,9 @@ describe("createShellTools", () => {
     }
     const [, pwsh] = createShellTools({ exec: spyExec })
     await pwsh.execute({ command: "Get-Date" }, {})
-    expect(captured).toEqual(["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-Date"])
+    // M59: the executable is RESOLVED (pwsh on PATH, else Windows PowerShell
+    // 5.1) — hardcoding "pwsh" spawn-failed on machines without PowerShell 7.
+    expect(captured).toEqual([resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-Date"])
   })
 
   it("bash tool with background:true returns a job id immediately", async () => {

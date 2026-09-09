@@ -25,9 +25,42 @@ export function resolveShell(): ResolvedShell {
         }
       }) ?? false
     if (bashOnPath) return { name: "bash", argv: ["bash", "-c"] }
-    return { name: "pwsh", argv: ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] }
+    return { name: "pwsh", argv: [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] }
   }
   return { name: "bash", argv: ["bash", "-c"] }
+}
+
+/**
+ * M59: the PowerShell executable the `pwsh` tool spawns.
+ *
+ * PowerShell 7 (`pwsh`) when it is on PATH; otherwise Windows PowerShell 5.1
+ * — `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`, which ships
+ * with every supported Windows. Hardcoding `pwsh` made the tool spawn-fail
+ * (exitCode -1, EMPTY stdout AND stderr) on machines without PS7 — the model
+ * saw a silent failure and flailed across pwd / Get-Location / terminal_open.
+ * Both editions accept the same -NoLogo -NoProfile -NonInteractive -Command.
+ *
+ * The env/platform parameters exist for tests (both are read once, defaulting
+ * to the process values).
+ */
+export function resolvePwshExe(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== "win32") return "pwsh"
+  const onPath = (exe: string): boolean =>
+    env.PATH?.split(";").some((p) => {
+      if (!p) return false
+      try {
+        return existsSync(join(p, exe))
+      } catch {
+        return false
+      }
+    }) ?? false
+  if (onPath("pwsh.exe")) return "pwsh"
+  const root = env.SystemRoot ?? env.windir ?? "C:\\Windows"
+  const windowsPowerShell = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+  return existsSync(windowsPowerShell) ? windowsPowerShell : "powershell"
 }
 
 // Minimal shell-quote parser: splits on whitespace, honors single/double
@@ -199,7 +232,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
     execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
-      const argv = ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
+      const argv = [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
       if (args.background === true) {
         const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
         return { job_id: jobId }
