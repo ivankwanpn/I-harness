@@ -20,7 +20,7 @@ import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/sess
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import type { SessionAssembly, SessionServiceOptions } from "@i-harness/session-executor"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
-import { RewindService } from "@i-harness/rewind"
+import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
@@ -399,7 +399,12 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const rewindFor = (sessionId: string) => {
     const assembly = liveAssemblies.get(sessionId)
     if (assembly === undefined || assembly.rewind === undefined) return undefined
-    const svc = new RewindService({ store: assembly.rewind.store, workspace: workspaceRoot })
+    const svc = new RewindService({
+      store: assembly.rewind.store,
+      workspace: workspaceRoot,
+      // M58 R-B4 A: read-only git cross-check for plan().unseen.
+      gitProbe: createGitProbeForStore(assembly.rewind.store, workspaceRoot),
+    })
     return {
       points: async () => ({
         points: (await svc.points()).map((p) => ({ turnIndex: p.turnIndex, preview: p.preview, files: p.files })),
@@ -412,6 +417,8 @@ async function runSdkCommand(args: string[]): Promise<number> {
           conflicts: plan.conflicts,
           unTracked: plan.unTracked,
           ops: plan.ops.map((f) => ({ path: f.path, op: f.kind })),
+          // M58 R-B4 A: the read-only git evidence rides the wire additively.
+          ...(plan.unseen !== undefined ? { unseen: plan.unseen } : {}),
         }
       },
       execute: async (target: number, mode: "all" | "files" | "conversation", hooks: { appendEvent: (ev: unknown) => void }) => {

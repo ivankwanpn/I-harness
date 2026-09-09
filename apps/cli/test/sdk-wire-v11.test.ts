@@ -7,6 +7,7 @@
 // file, so the durable rewind fixture is written by THIS test via
 // @i-harness/rewind's RewindStore — the same store root the CLI wires).
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
+import { execFileSync } from "node:child_process"
 import { createServer } from "node:http"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -181,6 +182,18 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       // workspace fixture: a file the seeded rewind point "created" in turn 0
       const aPath = join(workspace, "a.txt")
       writeFileSync(aPath, "hello")
+      // M58 R-B4 A: a git work tree so plan().unseen has something to observe
+      // (the recorder never sees the shell writes added below).
+      const git = (...args: string[]): void => {
+        execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", ...args], {
+          cwd: workspace,
+          stdio: "ignore",
+        })
+      }
+      writeFileSync(join(workspace, "base.txt"), "v1")
+      git("init", "-q")
+      git("add", "-A")
+      git("commit", "-q", "-m", "base")
       // the durable rewind fixture — the same store layout the CLI wires
       // (rewindStoreRoot = the session dir → <dir>/rewind/<sessionId>/…)
       const store = new RewindStore({ root: sessionDir, sessionId: "sdk-w11" })
@@ -238,12 +251,20 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
 
         // plan: the seeded point's file is on the disk still matching its
         // afterHash → clean (delete-added restore); conversation mode → no ops
+        // M58 R-B4 A: shell/external changes the recorder never saw → unseen
+        // (base.txt modified after commit; shell.txt untracked).
+        writeFileSync(join(workspace, "base.txt"), "v2")
+        writeFileSync(join(workspace, "shell.txt"), "s")
         const plan = await client.rewindPlan("sdk-w11", 0, "conversation")
         expect<RewindPlanResponse>(plan).toMatchObject({
           clean: [{ path: "a.txt", op: "delete-added" }],
           conflicts: [],
           unTracked: [],
           ops: [],
+          unseen: [
+            { path: "base.txt", kind: "modified" },
+            { path: "shell.txt", kind: "untracked" },
+          ],
         })
 
         // execute (files mode): deletes the created file + appends the

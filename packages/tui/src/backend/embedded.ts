@@ -40,7 +40,7 @@
 //    malformed/external events only).
 import { randomUUID } from "node:crypto"
 import { append, createSession, subscribe, type AdmittedInput, type Session, type SessionEvent } from "@i-harness/core-session"
-import { RewindService } from "@i-harness/rewind"
+import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { renderUnifiedDiff, type TextDiff } from "@i-harness/text-diff"
 import { applyTitle, normalizeTitle } from "@i-harness/session-title"
 // M49 Task 10: the redaction seam (spec §7.3) — the MAPPER is the UI boundary
@@ -803,7 +803,15 @@ function buildRewindMember(
         "rewind not enabled on this session (the assembly has no rewind handle — no rewindStoreRoot was wired, or the journal is bound to another workspace)",
       )
     }
-    return { svc: new RewindService({ store: assembly.rewind.store, workspace }), session: assembly.session }
+    return {
+      svc: new RewindService({
+        store: assembly.rewind.store,
+        workspace,
+        // M58 R-B4 A: read-only git cross-check for plan().unseen.
+        gitProbe: createGitProbeForStore(assembly.rewind.store, workspace),
+      }),
+      session: assembly.session,
+    }
   }
   return {
     async points() {
