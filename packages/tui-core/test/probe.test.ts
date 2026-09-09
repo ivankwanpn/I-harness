@@ -140,6 +140,18 @@ describe("ProbeClient", () => {
     expect(legacy.cap.bracketedPaste).toBe(false)
   })
 
+  it("M59: mouse capture follows SGR-mouse support, not color depth (Windows Terminal at ansi16)", async () => {
+    // Windows PowerShell in Windows Terminal: TERM unset → ansi16, but WT
+    // fully supports SGR mouse. The old `mouse: modern` rule left clicks dead
+    // (only wheel "worked" via the terminal's arrow-key translation).
+    const wt = await probeWith({ WT_SESSION: "abc" }, ALL_REPLIES("xterm-378"))
+    expect(wt.cap.colorLevel).toBe("ansi16")
+    expect(wt.cap.mouse).toBe(true)
+    // a genuinely legacy console (no WT_SESSION, not xterm) stays off
+    const legacy = await probeWith({ TERM: "ansi" }, ALL_REPLIES("xterm-378"))
+    expect(legacy.cap.mouse).toBe(false)
+  })
+
   it("never throws: total timeout resolves with per-field defaults", async () => {
     vi.useFakeTimers()
     const stream = mockStream()
