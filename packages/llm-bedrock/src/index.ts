@@ -151,7 +151,12 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
           ? { additionalModelRequestFields: { ...(config.options ?? {}), ...(reasoning ?? {}) } as ConverseStreamCommandInput["additionalModelRequestFields"] }
           : {}),
       }
-      const output = await client.send(new ConverseStreamCommand(body))
+      // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
+      // kill a parked Converse call, not wait for the first event.
+      const output = await client.send(
+        new ConverseStreamCommand(body),
+        request.signal !== undefined ? { abortSignal: request.signal } : {},
+      )
       // Tool-use accumulation per content block (the ConverseStream wire):
       // a toolUse delta carries the args as one JSON string split across
       // deltas; the stop event completes the block, and the args are parsed

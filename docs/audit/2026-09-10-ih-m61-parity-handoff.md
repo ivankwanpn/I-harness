@@ -17,8 +17,9 @@
 | `b9c4e59` | `fix(m61)`: picker 隱藏從未使用的 session |
 | `e4e1e30` | `fix(m61)`: **installer 出貨舊 bundle** + 圖片從未到模型 + base64 進 prompt |
 | `66c121a` | `fix(m61)`: fs 工具失敗改為「回傳」而非拋出（使用者裁定 A 案） |
+| `0c90a65` | `fix(m61)`: cancel 真的能停掉 parked request；函式庫 console 不再打穿畫面 |
 
-## 0. 使用者回報的三件事（本輪追加，全部已修）
+## 0. 使用者回報的問題（本輪追加，全部已修）
 
 ### 0a. 「畫面渲染有問題」＝ installer 一直出貨**舊 bundle**
 - `scripts/build-installer.mjs` 第 1 步原本是「`dist/ih.mjs` 存在就沿用」→ 第一次建置之後**每次打包都用同一份舊 bundle**。使用者 11:43 裝的那版，程式碼其實是 **09-09 14:53** 的（`C:\Program Files\I-harness\dist\ih.mjs` 時間戳可證、`grep "Worked for"` = 0）——所以他看到 JSON envelope、runtime-context 列、6 行輸入框，全部是 m59 之前的行為。
@@ -38,7 +39,20 @@
 - 使用者裁定 **A**：`FsToolError` 與一般 errno（ENOENT/EACCES/EISDIR/…）由 `read`/`write`/`edit`/`list_dir`/`apply_patch`/`read_image` **回傳** `{ error, code }`；真正的程式錯誤（TypeError…）仍照舊拋出、回合失敗。TUI 把這個形狀渲染成訊息（`ENOENT: … (ENOENT)`）而不是 JSON。
 - 新增端到端測試（`session-executor`）：讀不存在的檔案 → 模型看得到 ENOENT 結果、有 turn/end、回合繼續。
 
-### 0e. 「Resume 顯示 no sessions」
+### 0f. 畫面被函式庫的 `console.warn` 打穿（「改完之後有bug」）
+- 症狀：`[rewind] bound pre-M54 journal C:\Users\…\sessions\rewind\… to workspace … (no meta.json existed)` **出現在輸入框裡面**（貼在游標位置）。
+- 根因：`packages/rewind/src/store.ts:329` 的 `console.warn`，在 TUI 持有終端時直接寫 stdout → 落在 caret 上。觸發條件是**本輪新增的預設持久化**（`rewindStoreRoot` 現在一律有值，rewind journal 第一次被綁定）。
+- 修法：`captureConsoleForTui()`（`apps/tui`）在 TUI 執行期間把 `console.log/info/warn/debug/error` 改寫到 `<config home>/logs/tui.log`，teardown 還原。刻意不去追 49 個函式庫 console 呼叫點——宿主統一接管才是不會再犯的做法。
+- 參數：純 CLI（`i-harness run`）不受影響（只有 `runTui` 裝這個攔截）。
+
+### 0g. 「2 分鐘了還不停下來」＝ cancel 殺不掉 parked request
+- 根因：agent loop 只在**收到事件後**檢查 `aborted`，而 `LLMRequest` **完全沒有 signal** → provider 若卡在沒有回應的 socket 上，Esc/[stop] 取消不了（embedded backend 標頭第 4 點早就把這列為待補的 M38 seam）。
+- 修法：`LLMRequest.signal`（llm-seam）→ core-agent 從 turn 的 AbortController 帶入 → 四個 fetch adapter（openai / openai-compatible / anthropic / gemini）把 signal 交給 transport，bedrock 走 SDK 的 `{ abortSignal }`。
+- 附帶：使用者主動停止不再被報成失敗——[stop]/Esc 會 toast「Stopped」，abort 的 rejection 不再顯示 `submit failed: agent aborted`。
+- 驗證：新增測試（session-executor）——parked request 在 abort 後 ~160ms 結束（修前會永遠停在那）；adapter 端斷言 signal 真的進到 fetch。
+
+
+### 0h. 「Resume 顯示 no sessions」
 - 不是新 bug：使用者先前的對話跑在**舊版**（沒有 store root＝ephemeral），**從來沒有寫進磁碟**，救不回來。修好後（`c0f2aca`）首次啟動會建立 `~/.i-harness/sessions/`；`listSessions` 現在只列真的跑過回合的 session，所以「開過沒用」的空殼不會出現。
 - 驗證：`~/.i-harness/sessions/` 建於 12:33（新版首次啟動），內含 3 個 94-byte 空殼（開過沒用）→ 被 `visibleSessions` 正確濾掉。
 
@@ -76,8 +90,8 @@
 | 命令 | 結果 |
 |---|---|
 | `pnpm --filter @i-harness/tui test` | 71 files / **771 passed**（含 harness 18 檔 21 測） |
-| `pnpm --filter @i-harness/provider-runtime test` | 20 passed |
-| `pnpm --filter @i-harness/tui-app test` | 30 passed |
+| `pnpm --filter @i-harness/provider-runtime test` | 21 passed（含 inputModalities） · `settings` 65 · `fs` 60 · `attachment` 9 · `session-executor` 66 · `llm-openai-compatible` 14 |
+| `pnpm --filter @i-harness/tui-app test` | 31 passed |
 | `pnpm -r typecheck` | 全部 Done（exit 0） |
 | `pnpm -r test` | exit 0 |
 | `pnpm e2e` | 5 files / 12 passed |
@@ -96,7 +110,7 @@
 - **§4a settings 對齊**（grok 單一捲動面板 + `/ to search`）**仍未動**——這是使用者在 §4b 之前原本點名的項目。落點與注意事項見 M60 交接 §6。
 - **case-027 並行 flake**：全套並行時 `spawn-running` 會逾時（單獨跑 5.2s 綠）；本輪再次複現後已把該 marker 的預算提到 150s，屬倉庫既有 PTY/spawn flake，不是回歸。
 - **`promptCap = floor(rows/2)`** 仍會在小視窗裁掉大型覆蓋層（M60 §5 已記，非本輪引入）。
-- installer 本輪已重建（`build/I-harness-Setup-0.1.0{,-test}.exe`）。
+- installer 每輪都已重建（最後 12:5x 版）；**注意 `build-installer` 現在一律重建 dist**，再也不會出貨舊 bundle。
 
 ## 5. 注意事項
 
