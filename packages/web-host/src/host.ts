@@ -102,7 +102,7 @@ import {
   type MessageFeedbackPutRequest,
 } from "@i-harness/feedback"
 import type { SessionService } from "@i-harness/session-executor"
-import type { AuthContext } from "./auth.ts"
+import { hostAllowed, originAllowed, type AuthContext } from "./auth.ts"
 import { WebSocketMuxServer } from "./mux.ts"
 import { renderSessionsPage } from "./ui.ts"
 import { paginateEvents } from "./pagination.ts"
@@ -663,19 +663,23 @@ export function createWebHost(opts: WebHostOptions): WebHost {
   }
 
   // Returns true when the request MAY proceed; false when it was answered.
-  // The DNS-rebind fence runs FIRST — a bad Host/Origin fails before any auth
-  // check; OPTIONS answers the CORS preflight (allow-list = loopback origins,
-  // already fence-verified); then cookie-or-token auth.
+  // The DNS-rebind fence runs FIRST and UNCONDITIONALLY — it is not an auth
+  // feature. It used to sit behind `if (auth === undefined) return true`, so a
+  // bare `i-harness web` (no --launch-token) accepted ANY Host/Origin; a page
+  // the user merely VISITED could then fire cross-origin requests at the agent
+  // (a rebound hostname reaches loopback too — the loopback BIND is not a
+  // fence). Auth is the separate, opt-in duty that follows.
+  //   OPTIONS answers the CORS preflight (allow-list = loopback origins,
+  // already fence-verified); then cookie-or-token auth when configured.
   function guardAndAuth(req: IncomingMessage, res: ServerResponse): boolean {
-    if (auth === undefined) return true
     const url = new URL(req.url ?? "/", "http://localhost")
-    if (!auth.hostAllowed(req.headers.host)) {
+    if (!hostAllowed(req.headers.host)) {
       res.writeHead(403, { "content-type": "application/json" })
       res.end(JSON.stringify({ error: "forbidden host" }))
       return false
     }
     const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined
-    if (!auth.originAllowed(origin)) {
+    if (!originAllowed(origin)) {
       res.writeHead(403, { "content-type": "application/json" })
       res.end(JSON.stringify({ error: "forbidden origin" }))
       return false
@@ -691,6 +695,7 @@ export function createWebHost(opts: WebHostOptions): WebHost {
       res.end()
       return false
     }
+    if (auth === undefined) return true
     const cookie = parseCookieHeader(req.headers.cookie)
     if (auth.verifySession(cookie[auth.cookieName()])) return true
     const token = url.searchParams.get("token")
@@ -702,10 +707,18 @@ export function createWebHost(opts: WebHostOptions): WebHost {
 
   server.on("upgrade", (req, socket, head) => {
     if (req.url !== "/api/mux") { socket.destroy(); return }
-    // R-C3: fence + auth BEFORE upgrade; the query token is allowed (WS
-    // clients/curl).
+    // R-C3 fence + auth BEFORE upgrade. The fence (Host loopback, Origin
+    // loopback) runs UNCONDITIONALLY — it is not an auth feature. It used to
+    // live inside `if (auth !== undefined)`, so a bare `i-harness web` (no
+    // --launch-token) accepted an upgrade from ANY Origin; browsers do not
+    // apply CORS to WebSocket frames, so a page the user merely VISITED could
+    // open the mux and send `command` prompts (the agent runs tools) or read a
+    // session stream. Auth is the separate, opt-in duty that follows.
+    if (!hostAllowed(req.headers.host) || !originAllowed(req.headers.origin)) {
+      socket.destroy()
+      return
+    }
     if (auth !== undefined) {
-      if (!auth.hostAllowed(req.headers.host)) { socket.destroy(); return }
       const url = new URL(req.url, "http://localhost")
       const cookie = parseCookieHeader(req.headers.cookie)
       const token = url.searchParams.get("token")

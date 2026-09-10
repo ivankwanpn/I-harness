@@ -191,11 +191,97 @@ TUI 不再投資後改推 CLI。第一個補的缺口：**durable store 沒有�
   40ms vs 5ms 的餘裕，滿載時會反轉。並發這件事由 `maxConcurrent === 2` + 兩個 body 都結算就已證明，
   故改為不依賴時鐘（**真正的契約「commit 順序 = 模型順序」仍釘在 `resultsOf` 那條**）。
 
-- **仍未解**：`case-027` 的 `spawn-running` 在**全套並行**下仍可能 150s 起不來。`packages/tui` 自己已
-  `maxWorkers: 2`，但 `pnpm -r` 會讓 70 個 package 同時跑，18 個真 PTY 檔跟整個 workspace 搶機器。
-  這是**超額訂閱**，不是 bug：要不就給它更大的預算，要不就把 PTY harness 當成獨立序列閘門跑。
+- **仍未解**：`case-027` 的 `spawn-running` 逾時。**先更正一個說法**：驗收輪一度觀察到
+  `pnpm -r --workspace-concurrency=1` 全綠，就下了「序列化即可」的結論——**那是單次樣本，不成立**。
+  後續複驗：**序列跑也紅**（同樣 step 3、同樣 150s）；**單獨跑穩定綠（~5.2s）**。所以它與**任何**
+  非單獨執行的負載耦合，不是只跟「70 個 package 並行」耦合。
+  另需更正 marker 的命名直覺：`spawn-running` **不是真的 spawn**，而是 host-027 的 watcher 看到
+  mock 模型驅動的任務 `root/helper` 進入 `status === "running"`（`modelPolicy: "required"`、
+  provider `mock`）——所以「真實嵌套 spawn 太慢」的說法對這個 marker 並不精確，實際是
+  **mock 步進機在搶機器時推不到那個狀態**。
+  結論：這是一條**只有在單獨執行時才可靠**的測試。要嘛用實測支撐去調預算，要嘛把它放進
+  獨立的單檔閘門（其餘 PTY 檔照常跑）。在還沒做這件事之前，**不要把它算進「全套綠」的判準**。
+  （本輪已讓它的失敗訊息可診斷：不再是無資訊的 "Test timed out"，而是指名 step 3 與那個 marker。）
+
+## 5e. 安全性修復：web 的 Host/Origin 柵欄不再取決於 auth
+
+**發現（驗收輪，同一天）**：`web-host` 的柵欄（DNS-rebind 的 Host 檢查、CORS 的 Origin 檢查）原本
+**整段包在 `if (auth !== undefined)` 裡**，而 `apps/cli/src/web.ts:485` 是
+`const auth = opts.auth === undefined ? undefined : createAuth({...})` —— 也就是**裸跑 `i-harness web`
+（沒有 `--launch-token`／`--hmac-secret`）時 auth 是 undefined，柵欄整個被跳過**。實測（修前）：
+
+```
+WS  /api/mux  foreign Origin https://evil.example   -> UPGRADED，而且收得到 frames
+WS  /api/mux  rebound Host   evil.example           -> UPGRADED
+POST /api/sessions  Origin: https://evil.example    -> 200
+```
+
+**為什麼這比它看起來嚴重**：HTTP 那側還有救（不送 ACAO → 外站 JS 讀不到回應），但
+**瀏覽器不對 WebSocket 套 CORS**，所以對 mux 而言 Origin 檢查**就是唯一的柵欄**。外站頁面因此可以
+送 `command` = **替使用者對 agent 注入 prompt**（agent 有工具、`workspace-write`），也能開 `session`
+stream **讀回對話**。而 `127.0.0.1` 的 bind **不是**柵欄——DNS rebind 一樣打得到 loopback。
+觸發窗口是「使用者正在跑 `i-harness web` 又去逛別的網站」；一旦頁面接上 prompt UI 就會變成可即時觸發，
+所以排在那一步之前修。
+
+**修法**：把柵欄與授權**解耦**。`hostAllowed`/`originAllowed` 從 `createAuth` 內部抽成 `auth.ts` 的
+**exported free functions**（`AuthContext` 的同名方法改為 delegate，語意不變），host.ts 的
+`guardAndAuth` 與 mux `upgrade` handler 都改成**無條件先跑柵欄**，`auth` 只管後面的授權。
+`originAllowed(undefined) === true` 的既有語意保留（無 Origin = 非瀏覽器客戶端，交由 Host 柵欄管）。
+
+**驗證**（修後，真 server）：
+
+| 請求 | 結果 |
+|---|---|
+| WS rebound `Host: evil.example` | socket hang up（拒） |
+| WS foreign `Origin: https://evil.example` | socket hang up（拒） |
+| WS 正常 loopback Host / Origin | UPGRADED |
+| WS 無 Origin（CLI/SDK） | UPGRADED |
+| HTTP rebound Host / foreign Origin | **403** / **403** |
+| HTTP 一般 curl / loopback Origin / `/` / health | 200 / 200 / 200 / 200 |
+
+新 regression 測試（`host-routes.test.ts`）**同時**釘住 foreign Origin、rebound Host **與** loopback
+負控制；已用突變測試證明它會抓到（把柵欄塞回 `if (auth !== undefined)` → `expected 'upgraded' not to be 'upgraded'`）。
+
+**教訓（方法論）**：`ws` 客戶端**從不送 Origin**，所以既有的 upgrade 測試結構上看不到這個洞；
+而 Node 內建 `WebSocket` 會**靜默忽略**自訂的 `Host` 標頭——用它測 rebind 會得到假的 UPGRADED。
+測這類柵欄要用 `node:http` 的**原始 handshake**，才能真的控制送出什麼。
+
+### 5f. 獨立複驗（verifier pass，同日；作者／驗證者分離）
+
+對**無 auth** 的真 server（`PORT=4391 node --import tsx apps/cli/src/index.ts web`，未帶 `--launch-token`）用 `node:http` 原始 handshake 重跑：
+
+| 請求（auth-less） | 修**後** | 修**前**（同一支 probe，把柵欄塞回去的突變版） |
+|---|---|---|
+| WS `Host: evil.example` | 拒（ECONNRESET） | **UPGRADED 101** |
+| WS `Origin: https://evil.example` | 拒（ECONNRESET） | **UPGRADED 101** |
+| WS loopback（有 Origin / 無 Origin） | **101 UPGRADED** | 101 UPGRADED |
+| HTTP rebound Host / foreign Origin | **403 / 403** | **200 / 200** |
+| HTTP loopback Host+Origin | 200 | 200 |
+
+- **突變測試在活 server 層**（不只是單元測試）：同一支 probe 對修前行為**全紅**，所以這些拒絕是**判別性的**，不是「拒絕一切」也不是別的原因造成的。loopback 正控制同時證明 socket 路徑本身是通的。
+- **影響面到 frame 層（不只到 upgrade）**：在修前行為的 server 上，用 `ws` 帶 `origin: "https://evil.example"` 連 `/api/mux` 並送
+  `{"type":"open","streamId":"s1","endpoint":"session","payload":{"sessionId":"<真實 id>"}}` → **連上了，而且收到 `{"type":"ready","streamId":"s1"}`**：
+  外站頁面**真的訂閱到真實 session 的事件流**（同時間 `/api/sessions` 回 **19 筆**真實 session）。修後同一支 probe：**NOT OPEN、0 frames**。
+  寫入面（`endpoint: "command"` + `payload.prompt`，`host.ts:576`）走**同一個 dispatch、沒有第二道閘**——這條**刻意沒有**對真 session 實跑（會動到使用者的資料與模型額度），是依程式路徑判定的。
+- **更正 §5e 的一句**：「HTTP 那側還有救（不送 ACAO → 外站 JS 讀不到回應）」只對 **foreign Origin** 成立。**DNS rebind 下攻擊頁與 API 是同源**（都是 `evil.example:PORT`），
+  CORS 根本不會介入——所以 **Host 柵欄是讀取面的全部防線**，rebound Host 那格（修前 200）比原描述嚴重。
+- **覆蓋缺口（本輪補上）**：原 regression test 只釘 **WS upgrade**，`guardAndAuth` 的 **HTTP 半邊沒有測試**。已補
+  `host-routes.test.ts` → 「HTTP fence rejects a rebound Host and a foreign Origin — even with NO auth configured」（含 loopback 與**無 Origin** 兩個正控制），
+  並以突變證明它會紅（`- 403` / `+ 200`）。web-host **163 passed**（原 162）。
+- **產品面無回歸**：修後用**真實瀏覽器**（Playwright）開 `http://localhost:4391/`（auth-less）——清單列出 **19 筆**真實 session、點列載入
+  `/api/sessions/:id/events` **200** 並渲染出 transcript（`─── turn` / `❯ Reply with exactly the word: PONG` / `PONG`）。`localhost` 本來就在 `LOOPBACK_HOSTS` 內，常見開法不受影響；
+  唯一 console 錯誤是 `/favicon.ico` **404**（既有、純外觀）。
+- **一個 probe 假象（記下來免得下次誤判）**：`node:http` 的 client 在沒給 Host 時會**自動補上** `Host: 127.0.0.1:port`，所以「送不出 Host 標頭」那一列其實等於 loopback 正控制（得 200 是對的）。
+  要真的測無 Host 得走 raw socket。
 
 ## 6. 注意事項
 - 分支 `m61` 疊在 `main`（M60 尖端）之上；**不要**直接 push 到 `main`。
-- 使用者機器：`~/.i-harness/settings.json`（`busyEnter: "interrupt"` = Steer）；`deepseek` route 目前是 **protocol `openai-completions` + baseURL `https://api.deepseek.com/anthropic` + model `deepseek-flash`** 的**不匹配組合**（`/anthropic` 那條路是 Anthropic 格式），實測會讓請求停在半路。能跑的是 `opencode go`（`https://opencode.ai/zen/go` + `openai-completions`）+ `glm-5.3-flash`。
+- 使用者機器：`~/.i-harness/settings.json`（`busyEnter: "interrupt"` = Steer）。**§6 原文的
+  「deepseek 是不匹配的無效組合」已在同日修正**：`baseURL` 是 Anthropic 格式（`/anthropic`），把
+  `protocol` 由 `openai-completions` 改成 **`anthropic-messages`** 後，以真實預設 route 實測
+  200 + `assistant/message: "PONG"` 落盤（修前 404）。`opencode go`（`https://opencode.ai/zen/go` +
+  `openai-completions`）仍是另一條可跑的路。
+- `~/.i-harness/credentials.json` 的 `refs` 存的是**明文 secret**（不是環境變數參照，是「env 變數名 →
+  真 key」的值）；設計如此（`process.env > file`、env shadow 時拒寫、暫存 0600）。驗收輪不慎把內容
+  印進了 session log，**建議輪換該檔內的 key**。
 - grok 源碼在 `D:\grok-build-main`；`[Click here to Upgrade]` 是 grok 自己的訂閲推廣，**不對齊**。
