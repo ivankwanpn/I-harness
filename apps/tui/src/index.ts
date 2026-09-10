@@ -9,9 +9,10 @@
 //                [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>]
 //                [--session-dir <dir>]
 //
-// M48 embedded mode supports durable JSONL sessions through --session-dir;
-// --resume restores the selected session and keeps subsequent turns durable.
-// Without --session-dir, the embedded session remains intentionally ephemeral.
+// M48 embedded mode supports durable JSONL sessions; M61 makes that the
+// DEFAULT root (`$IH_CONFIG_DIR`/`~/.i-harness` + `/sessions`), so every
+// launch persists and `--resume`/F3 can bring a conversation back.
+// `--session-dir <dir>` overrides the root.
 //   - M38b G2: --model now carries a REAL INFO-LINE label (the loop renders it
 //     in the prompt chrome + status row; M49 the production model resolution
 //     is the canonical provider runtime — required-model policy). --attach
@@ -30,6 +31,7 @@
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { execFileSync } from "node:child_process"
 import { join, resolve } from "node:path"
+import { homedir } from "node:os"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (module side effect, evaluated before its
 // node:sqlite import) — no explicit wiring needed here.
@@ -109,16 +111,32 @@ export interface TuiFlags {
 }
 
 export function buildSdkArgs(flags: Pick<TuiFlags, "sessionDir">): string[] {
-  return ["sdk", ...(flags.sessionDir !== undefined ? ["--session-dir", flags.sessionDir] : [])]
+  // M61: `--attach` must reach the SAME durable store the TUI uses — the
+  // default root is passed through when no explicit --session-dir was given
+  // (otherwise the spawned SDK server owns an empty store and the attach
+  // fails to find its session).
+  return ["sdk", "--session-dir", flags.sessionDir ?? resolveSessionDir()]
+}
+
+/** M61: the DURABLE session-store root. An explicit `--session-dir` wins;
+ * otherwise the config home's `sessions/` (the same `$IH_CONFIG_DIR` /
+ * `~/.i-harness` convention the settings document uses). Before this the TUI
+ * only persisted when `--session-dir` was passed — a bare launch ran the
+ * embedded factory's EPHEMERAL session, so the session picker listed nothing
+ * and `--resume`/F3 could never bring a conversation back. */
+export function resolveSessionDir(configDir?: string): string {
+  const home = configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
+  return join(home, "sessions")
 }
 
 export function buildEmbeddedSessionOptions(flags: Pick<TuiFlags, "sessionDir" | "resume" | "prompt">): { prompt: string; storeRoot?: string; rewindStoreRoot?: string; resumeSessionId?: string } {
-  if (flags.resume !== undefined && flags.sessionDir === undefined) {
-    throw new Error("--resume requires --session-dir")
-  }
+  // M61: durable by DEFAULT — an explicit --session-dir overrides the config
+  // home's sessions/ root (the resume/session-picker premise).
+  const storeRoot = flags.sessionDir ?? resolveSessionDir()
   return {
     prompt: flags.resume === undefined ? flags.prompt ?? "" : "",
-    ...(flags.sessionDir !== undefined ? { storeRoot: flags.sessionDir, rewindStoreRoot: flags.sessionDir } : {}),
+    storeRoot,
+    rewindStoreRoot: storeRoot,
     ...(flags.resume !== undefined ? { resumeSessionId: flags.resume } : {}),
   }
 }
@@ -662,9 +680,6 @@ function persistScreenMode(settings: SettingsStoreSurface, mode: "minimal" | "fu
 // ------------------------------------------------------------------ main
 
 export async function runTui(flags: TuiFlags): Promise<number> {
-  if (flags.resume !== undefined && flags.sessionDir === undefined) {
-    throw new Error("--resume requires --session-dir")
-  }
   // M37a Windows fix (same as the M36 PTY harness): ConPTY converts the wire
   // stream with the console output codepage unless the console is UTF-8 —
   // multibyte TUI glyphs (❯ ◆ ⠼ …) would be mangled on a legacy codepage.

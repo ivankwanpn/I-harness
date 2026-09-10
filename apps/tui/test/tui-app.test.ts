@@ -18,6 +18,7 @@ import { createSessionService } from "@i-harness/session-executor"
 import {
   buildEmbeddedSessionOptions,
   buildSdkArgs,
+  resolveSessionDir,
   createExecutableApp,
   createExecutableHost,
   createExecutableTui,
@@ -245,7 +246,8 @@ describe("tui flag parser", () => {
           client: model,
           providerId: "fixture",
           modelId: "discovered-model",
-          label: "fixture:discovered-model",
+          // M59 grok parity: the human label (displayName · model id).
+          label: "Fixture Provider · discovered-model",
         },
       })
       expect(settings.getSectionMutationBase("llm")).toEqual({
@@ -325,15 +327,20 @@ describe("tui flag parser", () => {
     expect(buildEmbeddedSessionOptions({ sessionDir: "C:\\sessions", resume: "s-123", prompt: "kickoff" })).toEqual({ prompt: "", storeRoot: "C:\\sessions", rewindStoreRoot: "C:\\sessions", resumeSessionId: "s-123" })
   })
 
-  it("rejects resume without a durable session directory", () => {
-    expect(() => buildEmbeddedSessionOptions({ resume: "s-123", prompt: "" })).toThrow(
-      "--resume requires --session-dir",
-    )
+  it("defaults the durable root to the config home's sessions/ (M61)", () => {
+    // M61: a bare launch persists — the ephemeral default made the session
+    // picker empty and `--resume` impossible without `--session-dir`.
+    const opts = buildEmbeddedSessionOptions({ resume: "s-123", prompt: "" })
+    expect(opts.prompt).toBe("")
+    expect(opts.resumeSessionId).toBe("s-123")
+    expect(opts.storeRoot).toBe(resolveSessionDir())
+    expect(opts.rewindStoreRoot).toBe(resolveSessionDir())
+    expect(resolveSessionDir("/cfg")).toBe(join("/cfg", "sessions"))
   })
 
-  it("passes the durable root to the attached SDK and preserves ephemeral attach args", () => {
+  it("passes the durable root to the attached SDK (M61: the default root when unspecified)", () => {
     expect(buildSdkArgs({ sessionDir: "C:\\sessions" })).toEqual(["sdk", "--session-dir", "C:\\sessions"])
-    expect(buildSdkArgs({ sessionDir: undefined })).toEqual(["sdk"])
+    expect(buildSdkArgs({ sessionDir: undefined })).toEqual(["sdk", "--session-dir", resolveSessionDir()])
   })
 
   it("awaits backend close before teardown and shares concurrent shutdowns", async () => {
