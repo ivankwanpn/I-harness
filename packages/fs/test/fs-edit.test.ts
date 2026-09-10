@@ -9,6 +9,15 @@ let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "i-harness-edit-")) })
 const tool = () => createFsTools({ workspace: dir }).find((t) => t.name === "edit")!
 
+/** M61: an fs failure is RETURNED, not thrown — a throwing tool body fails the
+ * whole turn (core-agent M13/M25) and the call gets no result at all. */
+async function failureOf(p: Promise<unknown>): Promise<{ error: string; code: string }> {
+  const out = (await p) as { error?: string; code?: string }
+  expect(out.error, "expected a returned failure, got " + JSON.stringify(out)).toBeTypeOf("string")
+  expect(out.code).toBeTypeOf("string")
+  return out as { error: string; code: string }
+}
+
 describe("edit tool", () => {
   it("replaces single occurrence and returns replacements", async () => {
     await writeFile(join(dir, "a.txt"), "foo bar baz")
@@ -17,22 +26,27 @@ describe("edit tool", () => {
     expect(out.replacements).toBe(1)
     expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("foo QUX baz")
   })
-  it("rejects ambiguous (multiple, no replace_all)", async () => {
+  it("returns a failure for an ambiguous match (multiple, no replace_all)", async () => {
     await writeFile(join(dir, "a.txt"), "x y x")
-    await expect(tool().execute({ path: "a.txt", old_string: "x", new_string: "z" }, {})).rejects.toThrow(/ambiguous/i)
+    const fail = await failureOf(tool().execute({ path: "a.txt", old_string: "x", new_string: "z" }, {}))
+    expect(fail.code).toBe("FS_AMBIGUOUS_EDIT")
+    expect(fail.error).toMatch(/ambiguous/i)
   })
   it("replace_all replaces all", async () => {
     await writeFile(join(dir, "a.txt"), "x y x")
     const out = (await tool().execute({ path: "a.txt", old_string: "x", new_string: "z", replace_all: true }, {})) as { replacements: number }
     expect(out.replacements).toBe(2)
   })
-  it("rejects not_found", async () => {
+  it("returns a failure when old_string is not found", async () => {
     await writeFile(join(dir, "a.txt"), "abc")
-    await expect(tool().execute({ path: "a.txt", old_string: "zzz", new_string: "x" }, {})).rejects.toThrow(/not found/i)
+    const fail = await failureOf(tool().execute({ path: "a.txt", old_string: "zzz", new_string: "x" }, {}))
+    expect(fail.code).toBe("FS_EDIT_NOT_FOUND")
+    expect(fail.error).toMatch(/not found/i)
   })
-  it("rejects old === new (no-op)", async () => {
+  it("returns a failure for old === new (no-op)", async () => {
     await writeFile(join(dir, "a.txt"), "abc")
-    await expect(tool().execute({ path: "a.txt", old_string: "a", new_string: "a" }, {})).rejects.toThrow()
+    const fail = await failureOf(tool().execute({ path: "a.txt", old_string: "a", new_string: "a" }, {}))
+    expect(fail.code).toBe("FS_AMBIGUOUS_EDIT")
   })
   it("preserves CRLF when editing CRLF file", async () => {
     await writeFile(join(dir, "a.txt"), "a\r\nb\r\nc")
@@ -48,12 +62,18 @@ describe("edit tool", () => {
     // 變更檔（mtime 變化）
     await new Promise((r) => setTimeout(r, 20))
     await writeFile(join(dir, "a.txt"), "new content")
-    await expect(tool().execute({ path: "a.txt", old_string: "old", new_string: "NEW", observedMtimeMs: observed }, {})).rejects.toThrow(/changed|stale/i)
+    const fail = await failureOf(tool().execute({ path: "a.txt", old_string: "old", new_string: "NEW", observedMtimeMs: observed }, {}))
+    expect(fail.code).toBe("FS_STALE_VERSION")
+    expect(fail.error).toMatch(/changed|stale/i)
   })
-  it("rejects empty old_string (with and without replace_all), file unchanged", async () => {
+  it("returns a failure for an empty old_string (with and without replace_all), file unchanged", async () => {
     await writeFile(join(dir, "a.txt"), "abc")
-    await expect(tool().execute({ path: "a.txt", old_string: "", new_string: "X" }, {})).rejects.toThrow(/empty|ambiguous/i)
-    await expect(tool().execute({ path: "a.txt", old_string: "", new_string: "X", replace_all: true }, {})).rejects.toThrow(/empty|ambiguous/i)
+    const one = await failureOf(tool().execute({ path: "a.txt", old_string: "", new_string: "X" }, {}))
+    const all = await failureOf(tool().execute({ path: "a.txt", old_string: "", new_string: "X", replace_all: true }, {}))
+    for (const fail of [one, all]) {
+      expect(fail.code).toBe("FS_AMBIGUOUS_EDIT")
+      expect(fail.error).toMatch(/empty|ambiguous/i)
+    }
     expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("abc")
   })
 })

@@ -1,14 +1,15 @@
 import { readFile, writeFile, readdir } from "node:fs/promises"
 import { resolve, relative, isAbsolute } from "node:path"
 import type { Tool } from "@i-harness/core-tools"
+import type { FsToolFailure } from "./error.ts"
 import { createTextDiff, type TextDiff } from "@i-harness/text-diff"
-import { FsToolError } from "./error.ts"
+import { FsToolError, softFail } from "./error.ts"
 import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit } from "./text.ts"
 import { parsePatch, applyPatch, type RewindCapture } from "./patch.ts"
 
-export { FsToolError, type FsToolErrorCode } from "./error.ts"
+export { FsToolError, softFail, type FsToolErrorCode, type FsToolFailure } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
 export { assertSnapshotFresh, type FileSnapshot } from "./version.ts"
 export type { RewindCapture } from "./patch.ts"
@@ -89,20 +90,20 @@ function decodeUtf8Safely(bytes: Uint8Array): string | undefined {
 }
 
 export function createFsTools(deps: FsToolDeps): Tool[] {
-  const read: Tool<{ path: string }, { content: string }> = {
+  const read: Tool<{ path: string }, { content: string } | FsToolFailure> = {
     name: "read",
     description: "read a file",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
-    execute: async ({ path }) => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") }),
+    execute: async ({ path }) => softFail(async () => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") })),
   }
-  const write: Tool<{ path: string; text: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff }> = {
+  const write: Tool<{ path: string; text: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } | FsToolFailure> = {
     name: "write",
     description: "write a file",
     inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" } }, required: ["path", "text"] },
     isReadOnly: false,
-    execute: async ({ path, text }) => {
+    execute: async ({ path, text }) => softFail(async () => {
       // M42 rewind: writeFileAtomic OVERWRITES without reading — when rewind
       // is wired, do one extra read (ENOENT ⇒ new file); otherwise zero cost.
       const target = resolvePath(deps.workspace, path)
@@ -120,17 +121,17 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         if (beforeText !== undefined) out.change = createTextDiff(path, beforeText, text)
       }
       return out
-    },
+    }),
   }
-  const list_dir: Tool<{ path: string }, { entries: string[] }> = {
+  const list_dir: Tool<{ path: string }, { entries: string[] } | FsToolFailure> = {
     name: "list_dir",
     description: "list a directory",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
-    execute: async ({ path }) => ({ entries: await readdir(resolvePath(deps.workspace, path)) }),
+    execute: async ({ path }) => softFail(async () => ({ entries: await readdir(resolvePath(deps.workspace, path)) })),
   }
-  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean }> = {
+  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean } | FsToolFailure> = {
     name: "edit",
     description: "edit a file by literal string replacement (single occurrence unless replace_all)",
     inputSchema: {
@@ -145,7 +146,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       required: ["path", "old_string", "new_string"],
     },
     isReadOnly: false,
-    execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs }) => {
+    execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs }) => softFail(async () => {
       const target = resolvePath(deps.workspace, path)
       if (old_string === "") throw new FsToolError("FS_AMBIGUOUS_EDIT", "ambiguous: old_string must not be empty")
       const { stat, readFile } = await import("node:fs/promises")
@@ -199,14 +200,14 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         ...(preImageRef !== undefined ? { preImageRef } : {}),
         ...(deps.rewind !== undefined ? { isNewFile: false } : {}),
       }
-    },
+    }),
   }
-  const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string }> = {
+  const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } | FsToolFailure> = {
     name: "apply_patch",
     description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update + @@ context)",
     inputSchema: { type: "object", properties: { patch_content: { type: "string" } }, required: ["patch_content"] },
     isReadOnly: false,
-    execute: async ({ patch_content }) => {
+    execute: async ({ patch_content }) => softFail(async () => {
       // CRLF 正規化：patch 內容若帶 \r，parsePatch 會把 \r 當行內容 → replace 誤報
       // FS_EDIT_NOT_FOUND、純 add 寫入字面 \r。先統一成 LF 再解析。
       const hunks = parsePatch(normalizeLineEndings(patch_content))
@@ -224,7 +225,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       else if (applied.length > 1 && withChange.length === applied.length) result.changes = withChange.map((entry) => entry.change!)
       if (withChange.length < applied.length) result.rawPatch = patch_content
       return result
-    },
+    }),
   }
   return [read, edit, write, apply_patch, list_dir]
 }

@@ -83,7 +83,9 @@ describe("mapSessionEvent", () => {
       type: "tool", callId: "c1", status: "done", output: '{\n  "content": "out"\n}', result: { content: "out" }, seq: 5,
     })
     expect(mapSessionEvent({ type: "tool/result", callId: "c1", name: "bash", output: { error: "boom" }, seq: 6 } as never, state)).toMatchObject({
-      type: "tool", status: "error", error: '{\n  "error": "boom"\n}', seq: 6,
+      // M61: a returned failure renders as its message (the fs tools' soft
+      // failure shape), not as a JSON blob.
+      type: "tool", status: "error", error: "boom", seq: 6,
     })
     expect(toolResultIsError({ error: "boom" })).toBe(true)
     expect(toolResultIsError("Error: nope")).toBe(true)
