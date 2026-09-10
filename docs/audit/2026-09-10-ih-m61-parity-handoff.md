@@ -138,7 +138,9 @@ TUI 不再投資後改推 CLI。第一個補的缺口：**durable store 沒有�
 
 ## 5c. web：`/` 唯讀頁（R-C0/R-C1 其實早就做完了）
 
-凍結後查證：**R-C0（engine-owned 組合）與 R-C1（路由面）早已交付**——`apps/cli/src/web.ts` 是 567 行的 thin composition（檔頭明寫 1,598 行膠水未重造）、`packages/web-host` 有 23+ 路由 matcher + 16 個測試檔、`GET /api/sessions/:id/events`（beforeSeq 反向分頁）與 WS mux 都在。所以「web 架構重寫」沒有內容可做。
+凍結後查證：**R-C0（engine-owned 組合）與 R-C1（路由面）早已交付**——`apps/cli/src/web.ts` 實測 **567 行**、`packages/web-host` 有 23+ 路由 matcher + 16 個測試檔、`GET /api/sessions/:id/events`（beforeSeq 反向分頁）與 WS mux 都在。所以「web 架構重寫」沒有內容可做。
+
+> 註記（驗收輪更正）：web.ts 檔頭那句「The branch's 1,598-line glue (web.ts + live-agent.ts) is NOT recreated」指的是**分支歷史**裡被廢棄的膠水——本 repo 根本沒有 `live-agent.ts`（`git ls-files` 為空），所以 1,598 這個數字**在此無法核對**。它只是「沒有重造」的說明，不是現況量測；判斷 R-C0 是否完成要看可驗的東西（web.ts 行數、路由 matcher、測試檔、assembly 是否來自 session-executor）。
 
 真正缺的只有 **UI**：`/` 回 404（M26 明確延後 static serving）。本輪補上最小切片：
 
