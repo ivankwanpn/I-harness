@@ -124,6 +124,9 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         method: "POST",
         headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` }),
         body: JSON.stringify(body),
+        // M61: the caller's abort signal reaches the transport — cancel must
+        // kill a parked request, not wait for the first event.
+        ...(request.signal !== undefined ? { signal: request.signal } : {}),
       })
       if (!response.ok || !response.body) {
         yield { type: "error", error: new Error(`openai request failed: ${response.status} ${await response.text()}`) }

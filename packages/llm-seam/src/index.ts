@@ -213,6 +213,12 @@ export interface LLMRequest {
   model?: string
   /** M32: per-request reasoning effort; undefined → do not send (provider default). */
   reasoningEffort?: ReasoningEffort
+  /** M61: the turn's abort signal — adapters hand it to their transport
+   * (fetch/`abortSignal`) so CANCEL actually kills a parked request. Without
+   * it a provider that never yields could not be interrupted: the agent loop
+   * only checks `aborted` AFTER an event arrives, so a hung request left the
+   * turn spinning until the socket died. Undefined → no signal (unchanged). */
+  signal?: AbortSignal
 }
 
 export interface ModelClient {

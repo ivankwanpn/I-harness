@@ -388,6 +388,9 @@ export class TuiApp {
   private startupP: Promise<void> | undefined
   private welcomeActionP: Promise<void> | undefined
   private armedQuit = false
+  /** M61: the current turn was stopped BY THE USER (Esc/Ctrl-C/[stop]) — the
+   * submit promise's abort rejection must not surface as a failure. */
+  private userCancelled = false
   /** M43: the empty-Esc rewind arming arm (spec §4: Esc 空+≥1 turn → rewind
    * picker on the second press; distinct from armedQuit — Ctrl+Q/Ctrl+C own
    * that). */
@@ -1418,7 +1421,12 @@ export class TuiApp {
         // answer and leaves the draft (and the quit arm) untouched. The draft
         // clear / quit-arm ladder only applies while idle.
         if (this.app.turn !== undefined) {
+          // M61: a user-initiated stop is not a failure — the submit promise
+          // rejects with "agent aborted" when the abort lands, and the catch
+          // below must not dress that up as "submit failed".
+          this.userCancelled = true
           void this.opts.backend.cancel()
+          this.toast("Stopped")
           break
         }
         if (this.app.prompt.text.trim().length > 0) {
@@ -2211,7 +2219,16 @@ export class TuiApp {
     this.app.historyIndex = this.app.history.length
     this.clearPrompt()
     void this.opts.backend.submit(text).catch((error: unknown) => {
-      this.toast(`submit failed: ${error instanceof Error ? error.message : String(error)}`)
+      // M61: a user-initiated stop rejects with the abort — the "Stopped" toast
+      // already told that story; never dress it as a failure. The message test
+      // also covers the other stop paths (the rewind overlay's "cancel turn
+      // and rewind", a cancelled abort from the host).
+      const message = error instanceof Error ? error.message : String(error)
+      if (this.userCancelled || /abort/i.test(message)) {
+        this.userCancelled = false
+        return
+      }
+      this.toast(`submit failed: ${message}`)
     })
   }
 

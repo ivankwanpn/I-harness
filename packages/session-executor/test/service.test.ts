@@ -387,6 +387,45 @@ describe("createSessionService", () => {
     expect(again.hasAssembly("s1")).toBe(true)
   }, 60_000)
 
+  it("M61: aborting a submit kills a PARKED model request (the signal reaches the client)", async () => {
+    // The reported "it never stops": the agent loop only checks `aborted` when
+    // an event ARRIVES, so a provider parked on a silent socket kept the turn
+    // spinning for minutes. The request now carries the turn's signal (the
+    // adapters hand it to fetch), so cancel settles immediately.
+    let sawSignal = false
+    const parked: ModelClient = {
+      async *stream(request) {
+        sawSignal = request.signal !== undefined
+        await new Promise<void>((_resolve, reject) => {
+          const s = request.signal
+          if (s === undefined) return // pre-M61: parks forever
+          if (s.aborted) return reject(new Error("aborted"))
+          s.addEventListener("abort", () => reject(new Error("aborted")), { once: true })
+        })
+        yield { type: "end" }
+      },
+    }
+    const service = createSessionService({
+      workspace: mkdtempSync(join(tmpdir(), "ih-parked-")),
+      approveAll: true,
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model: parked, providerId: "fixture", modelId: "parked", label: "fixture:parked" },
+      }),
+    })
+    const ac = new AbortController()
+    const settled = service.submit("s1", "hang", ac.signal).then(
+      () => "resolved",
+      (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+    )
+    await new Promise((r) => setTimeout(r, 150))
+    ac.abort()
+    await expect(settled).resolves.toBe("rejected: aborted")
+    expect(sawSignal).toBe(true)
+    await service.close().catch(() => {})
+  }, 20_000)
+
   it("M61: a failing fs tool is a model-visible result and the turn CONTINUES", async () => {
     // The reported bug: `read_image` on a missing file threw, a throwing tool
     // body fails the whole turn (core-agent M13/M25) — no tool/result, no

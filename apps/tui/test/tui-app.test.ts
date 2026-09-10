@@ -18,6 +18,7 @@ import { createSessionService } from "@i-harness/session-executor"
 import {
   buildEmbeddedSessionOptions,
   buildSdkArgs,
+  captureConsoleForTui,
   resolveSessionDir,
   visibleSessions,
   createExecutableApp,
@@ -326,6 +327,29 @@ describe("tui flag parser", () => {
 
   it("builds durable resume options without an initial kickoff", () => {
     expect(buildEmbeddedSessionOptions({ sessionDir: "C:\\sessions", resume: "s-123", prompt: "kickoff" })).toEqual({ prompt: "", storeRoot: "C:\\sessions", rewindStoreRoot: "C:\\sessions", resumeSessionId: "s-123" })
+  })
+
+  it("M61: captureConsoleForTui diverts console writes to the log and restores", () => {
+    // The reported corruption: the rewind journal's `console.warn` landed AT
+    // THE CARET — inside the prompt box — because the TUI owns the terminal.
+    const dir = mkdtempSync(join(tmpdir(), "ih-console-"))
+    const logPath = join(dir, "logs", "tui.log")
+    const realWarn = console.warn
+    const realError = console.error
+    const restore = captureConsoleForTui(logPath)
+    try {
+      console.warn("[rewind] bound pre-M54 journal X")
+      console.error(new Error("boom"))
+    } finally {
+      restore()
+    }
+    expect(console.warn).toBe(realWarn)
+    expect(console.error).toBe(realError)
+    const text = readFileSync(logPath, "utf8")
+    expect(text).toContain("[warn] [rewind] bound pre-M54 journal X")
+    expect(text).toContain("[error]")
+    expect(text).toContain("boom")
+    rmSync(dir, { recursive: true, force: true })
   })
 
   it("M61: the picker hides never-used sessions (undefined turn count is kept)", () => {
