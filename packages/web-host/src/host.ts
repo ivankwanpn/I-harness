@@ -29,6 +29,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { createHash } from "node:crypto"
 import { realpath, stat } from "node:fs/promises"
+import { realpathSync } from "node:fs"
 import type { Duplex } from "node:stream"
 import {
   append,
@@ -241,13 +242,32 @@ function forwardModelsError(res: ServerResponse, error: unknown): boolean {
   return false
 }
 
+/** M62: the note returned by POST /api/sessions when the caller's `cwd` differs
+ * from the workspace the server actually EXECUTES in.
+ *
+ * The server is workspace-scoped: its own directory roots the assembly's
+ * runtime-context, the shell's default cwd and the sandbox's writable root
+ * (`WebServerOptions.workspace`, which apps/cli passes as process.cwd()). An
+ * accepted `cwd` is recorded into the workspace registry for GROUPING — it never
+ * moves execution. Measured: server in A, session created with cwd B, a relative
+ * `Set-Content -Path 'relative-probe.txt'` landed in A.
+ *
+ * A field rather than a rejection because accepting-and-recording a cwd is a
+ * deliberate feature (workspaces-routes.test.ts pins it); this makes the
+ * divergence visible to a client instead of leaving the trap silent. Both inputs
+ * are already canonicalized by the caller. `undefined` = same workspace. */
+function workspaceWarningFor(canonicalCwd: string, execWorkspace: string): string {
+  return `cwd "${canonicalCwd}" is recorded for grouping only: this server executes every session in its own `
+    + `workspace "${execWorkspace}" (files, shell cwd and the sandbox writable root all use it). `
+    + `Start the server in the workspace you want, or run one server per workspace.`
+}
+
 /** Shape-guard for POST /api/settings/mutate ops: an array of
  * {op: "set"|"unset", path: non-empty string[], value?}. Section-schema
  * validation itself is mutateSection's job (SettingsValidationError → 400);
  * this only separates client bugs (wrong JSON shape → 400 settings-mutate-invalid)
  * from well-formed ops that violate the schema. `undefined` = invalid. */
-function parseSectionOps(raw: unknown): SectionOp[] | undefined {
-  if (!Array.isArray(raw)) return undefined
+function parseSectionOps(raw: unknown): SectionOp[] | undefined {  if (!Array.isArray(raw)) return undefined
   const ops: SectionOp[] = []
   for (const entry of raw) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return undefined
@@ -329,6 +349,20 @@ export interface WebHostOptions {
    */
   attachments?: ImageAttachmentStore
   context?: PluginContext
+  /**
+   * M62: the workspace this server EXECUTES in — the same path the embedder gave
+   * `createSessionService`, which roots the assembly's runtime-context, the
+   * shell's default cwd and the sandbox writable root.
+   *
+   * The host is workspace-scoped by design: `POST /api/sessions { cwd }` is
+   * recorded into the workspace registry for GROUPING and never moves execution.
+   * Supplying this lets the created-session response SAY SO when the two differ
+   * instead of leaving the caller to discover it (measured: server in one
+   * directory, session created with `cwd` in another, and a relative
+   * `Set-Content` landed in the server's directory). Absent → the field is
+   * omitted from that response (no claim is made).
+   */
+  workspace?: string
   /**
    * Approval bridge behind the mux `approval` endpoint + `{type:"approval"}`
    * client messages. The embedder constructs it over the PluginContext its
@@ -477,6 +511,14 @@ interface LiveEntry {
 }
 
 export function createWebHost(opts: WebHostOptions): WebHost {
+  // M62: the workspace this server EXECUTES in, canonicalized once for the
+  // POST /api/sessions comparison (best-effort: a host may name a directory that
+  // does not exist yet, in which case the raw value is compared).
+  const execWorkspaceCanonical: string = (() => {
+    const w = opts.workspace
+    if (w === undefined) return ""
+    try { return realpathSync(w) } catch { return w }
+  })()
   const coordinator: SessionCoordinator | undefined = opts.coordinator
   const executor = opts.executor
   const auth = opts.auth
@@ -1140,6 +1182,10 @@ export function createWebHost(opts: WebHostOptions): WebHost {
       // the only membership source at list time) — same treatment as cwd.
       delete meta.workspaceId
       let attachedWorkspaceId: string | undefined
+      // M62: the canonicalized cwd the caller named, kept apart from the
+      // workspaceId it resolves to — the created-session warning compares it
+      // against the workspace this server executes in.
+      let canonicalCwd: string | undefined
       if (workspaceRegistry !== undefined) {
         if (typeof body.workspaceId === "string" && body.workspaceId !== "") {
           // Explicit workspace → must exist (404 otherwise), then attach.
@@ -1170,6 +1216,7 @@ export function createWebHost(opts: WebHostOptions): WebHost {
           const { workspace } = await workspaceRegistry.create(canonical)
           meta.workspaceId = workspace.workspaceId
           attachedWorkspaceId = workspace.workspaceId
+          canonicalCwd = canonical
         }
         // workspaceRegistry absent → cwd/workspaceId ignored (backward
         // compatible: pre-3.1 embedders behave exactly as before).
@@ -1183,8 +1230,21 @@ export function createWebHost(opts: WebHostOptions): WebHost {
       if (attachedWorkspaceId !== undefined) {
         await workspaceRegistry!.attachSession(attachedWorkspaceId, id)
       }
+      // M62: an accepted `cwd` is recorded for GROUPING only — the executor runs
+      // every session in the SERVER's workspace, so a cwd that differs from it
+      // does NOT move the session's files, shell cwd or sandbox root. That gap
+      // was measured, not theorised: with the server started in one directory and
+      // a session created with `cwd` pointing at another, a relative
+      // `Set-Content` (which the shell resolves against the session workspace)
+      // landed in the SERVER's directory. Silently accepting the difference is
+      // the trap; rejecting it would break the auto-record feature (pinned by
+      // workspaces-routes.test.ts), so the response says so instead.
+      const warning = attachedWorkspaceId !== undefined && canonicalCwd !== undefined
+        && execWorkspaceCanonical !== "" && canonicalCwd !== execWorkspaceCanonical
+        ? workspaceWarningFor(canonicalCwd, execWorkspaceCanonical)
+        : undefined
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ id }))
+      res.end(JSON.stringify({ id, ...(warning !== undefined ? { workspaceWarning: warning } : {}) }))
       return
     }
     // ── Task 3.2: session management (rename / fork / archive + list meta) ──

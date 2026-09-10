@@ -518,6 +518,11 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
     port: listenPort,
     executor,
     coordinator,
+    // M62: the workspace the executor actually runs in — lets the created-session
+    // response warn when a caller's `cwd` names a different directory (see
+    // WebHostOptions.workspace: this server is workspace-scoped, and a session's
+    // cwd is grouping metadata only).
+    workspace: opts.workspace,
     // M29: the search/lineage HTTP routes now serve out of the box — the
     // file-backed index over the workspace's jsonl store (409 "not enabled"
     // only for embedders that never provide a seam).
