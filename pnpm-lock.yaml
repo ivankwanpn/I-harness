@@ -212,6 +212,9 @@ importers:
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../../packages/session-executor
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../../packages/session-persistence
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../../packages/settings

@@ -31,7 +31,6 @@
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { execFileSync } from "node:child_process"
 import { join, resolve } from "node:path"
-import { homedir } from "node:os"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (module side effect, evaluated before its
 // node:sqlite import) — no explicit wiring needed here.
@@ -75,6 +74,7 @@ import type {
   TuiAppOptions,
 } from "@i-harness/tui"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
+import { resolveHarnessHome, resolveSessionStoreRoot } from "@i-harness/session-persistence"
 import type { SessionAssembly } from "@i-harness/session-executor"
 // M49 Task 13: the status-line command runner — the REAL exec service + the
 // canonical shell resolution (the same path the engine's bash tool takes).
@@ -135,8 +135,9 @@ export function visibleSessions(rows: SessionSummary[]): SessionSummary[] {
  * embedded factory's EPHEMERAL session, so the session picker listed nothing
  * and `--resume`/F3 could never bring a conversation back. */
 export function resolveSessionDir(configDir?: string): string {
-  const home = configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
-  return join(home, "sessions")
+  // M61: the ONE default root (shared with the CLI) — see
+  // resolveSessionStoreRoot in @i-harness/session-persistence.
+  return resolveSessionStoreRoot(configDir !== undefined ? { configDir } : {})
 }
 
 /** M61: while the TUI owns the terminal, a library's stray console write lands
@@ -178,8 +179,7 @@ export function captureConsoleForTui(logPath: string): () => void {
 
 /** `<config home>/logs/tui.log` — where the captured console lines land. */
 export function resolveTuiLogPath(configDir?: string): string {
-  const home = configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
-  return join(home, "logs", "tui.log")
+  return join(resolveHarnessHome(configDir), "logs", "tui.log")
 }
 
 export function buildEmbeddedSessionOptions(flags: Pick<TuiFlags, "sessionDir" | "resume" | "prompt">): { prompt: string; storeRoot?: string; rewindStoreRoot?: string; resumeSessionId?: string } {

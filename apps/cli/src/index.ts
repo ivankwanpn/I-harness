@@ -1,7 +1,6 @@
 import { pathToFileURL } from "node:url"
 import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
-import { stat } from "node:fs/promises"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -29,12 +28,14 @@ import type { WebServerOptions } from "./web.ts"
 import { parseFlags, runTui } from "@i-harness/tui-app"
 import { CLI_VERSION } from "./web.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
+import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 
 const USAGE =
-  "usage: i-harness [<run|web|sdk|acp|tui> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
+  "usage: i-harness [<run|web|sdk|acp|tui|sessions> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
   "  tui [--prompt <text>] [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>] [--attach <id>] [--minimal|--fullscreen] |\n" +
   "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] |\n" +
-  "  web [--port N] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve]"
+  "  web [--port N] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
+  "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N]"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -123,6 +124,11 @@ export async function main(argv: string[]): Promise<number> {
   // stderr. `i-harness sdk [--session-dir DIR]`
   if (args[0] === "sdk") {
     return runSdkCommand(args)
+  }
+  // M61: the durable session store's CLI face — list what the TUI persisted
+  // and print a transcript of one session (read-only; shares the TUI root).
+  if (args[0] === "sessions") {
+    return runSessionsCommand(args)
   }
   // R-C7 acp subcommand: official-ACP (v1) stdio server over the SessionService.
   // Same stdout discipline as `sdk` — ONLY ACP NDJSON frames on stdout.
@@ -464,55 +470,24 @@ async function runSdkCommand(args: string[]): Promise<number> {
     // Present only with --session-dir (the assembly-side rewindStoreRoot chain
     // above); without it, every rewind method answers "rewind not enabled".
     ...(storeRoot !== undefined ? { rewindFactory: rewindFor } : {}),
-    // M41a v1: session/list source — the store listing, web-host mirror
-    // (coordinator.list() + header-only profile per row, settled per row so a
-    // single corrupt/missing file never fails the whole list; the row is still
-    // SERVED with just the id and the failure is loud on stderr). M41b v1.1:
-    // rows are enriched — updatedAt (artifact mtime, createdAt fallback) +
-    // turnCount (turn/start count from a full-log read — both per-row settled).
+    // M41a v1: session/list source — the store listing. M61: the ONE listing
+    // implementation (shared with `i-harness sessions`) — a single corrupt or
+    // missing file settles to a labelled row instead of failing the list, and
+    // the failure is loud on stderr (stdout carries protocol frames only).
     listSessions:
       coordinator === undefined
         ? undefined
         : async () => {
-            const ids = await coordinator.list()
-            const profiles = await Promise.allSettled(ids.map((id) => coordinator.profile(id)))
-            const sessions: SessionListEntry[] = []
-            for (let index = 0; index < ids.length; index++) {
-              const id = ids[index]!
-              const profile = profiles[index]!
-              if (profile.status === "rejected") {
-                console.error(`[i-harness sdk] session list: profile for "${id}" failed: ${String(profile.reason)}`)
-                sessions.push({ id })
-                continue
-              }
-              const meta = profile.value.meta
-              const row: SessionListEntry = { id, ...(meta.title !== undefined ? { title: meta.title } : {}) }
-              // updatedAt — the artifact mtime (SessionEvents carry no
-              // timestamp; SessionMeta has only createdAt — M37b store-listing
-              // convention), createdAt ISO as the fallback. (`storeRoot` is
-              // defined whenever this source is wired — see the dirIdx guard
-              // above; the closure's coordinator presence implies it.)
-              const updatedAt = await stat(join(storeRoot!, `${id}.jsonl`))
-                .then((s) => s.mtimeMs)
-                .catch(() => undefined)
-              if (updatedAt !== undefined) {
-                row.updatedAt = updatedAt
-              } else {
-                const parsed = Date.parse(meta.createdAt)
-                if (!Number.isNaN(parsed)) row.updatedAt = parsed
-              }
-              // turnCount — full-log read (turn/start events); a failing load
-              // keeps the row honest without the count (loud on stderr).
-              try {
-                const { session } = await coordinator.load(id)
-                row.turnCount = session.events.filter((ev) => ev.type === "turn/start").length
-              } catch (error) {
-                console.error(
-                  `[i-harness sdk] session list: load for "${id}" failed: ${error instanceof Error ? error.message : String(error)}`,
-                )
-              }
-              sessions.push(row)
+            const rows = await listStoredSessions(coordinator, storeRoot!)
+            for (const row of rows) {
+              if (row.problem !== undefined) console.error(`[i-harness sdk] session list: "${row.id}": ${row.problem}`)
             }
+            const sessions: SessionListEntry[] = rows.map((row) => ({
+              id: row.id,
+              ...(row.title !== undefined ? { title: row.title } : {}),
+              ...(row.updatedAt !== undefined ? { updatedAt: row.updatedAt } : {}),
+              ...(row.turnCount !== undefined ? { turnCount: row.turnCount } : {}),
+            }))
             return { sessions }
           },
     onWrite: (message) => process.stdout.write(encodeFrame(message)),

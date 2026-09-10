@@ -114,15 +114,27 @@
 
 ## 5. 裁定：TUI 凍結（2026-09-10）
 
-使用者裁定「**TUI 放著不再投資**」：程式碼與分支保留，但**停止**外觀對齊（§4a settings 面板、§4b 未竟項）與後續 TUI 打磨；之後的推進改走 CLI / web / 其他方向。本輪所有 TUI 修復（m59 起）仍然有效並已合併在 `m61`。
+使用者裁定「**TUI 放著不再投資**」：程式碼與分支保留，但**停止**外觀對齊（§4a settings 面板、§4b 未竟項）與後續 TUI 打磨；之後的推進改走 CLI / web / 其他方向。本輪所有 TUI 修復（m59 起）仍然有效並保留在 `m61`。
 
-凍結時的最後狀態：`m61` = `f87a303`，installer 13:09 版，`verify-installer` PASS，全 workspace typecheck 0 錯。
+凍結時的最後狀態：`m61`，installer 13:09 版，`verify-installer` PASS，全 workspace typecheck 0 錯。
 
 已知未竟（凍結後不再處理）：
 - §4a settings 單一捲動面板、§4b 剩餘外觀項。
 - `promptCap = floor(rows/2)` 在小視窗裁掉大型覆蓋層。
 - **模型請求無逾時**：provider 不回應時回合會一直等（Esc 現在取消得掉，但不會自動收斂）——若要恢復 TUI 工作，這是第一順位。
 - case-027 全套並行的 spawn flake（已把預算提到 150s）。
+
+## 5b. 凍結後的第一件 CLI 工作：`i-harness sessions`
+
+TUI 不再投資後改推 CLI。第一個補的缺口：**durable store 沒有任何 TUI 之外的讀取面**——`--resume` 要一個使用者無從得知的 id，headless 也看不出對話有沒有留下來（使用者今天就撞到「Resume 顯示 no sessions」）。
+
+- `i-harness sessions [list] [--session-dir DIR] [--json]`
+- `i-harness sessions show <id> [--last N]`
+- root 預設 = `<harness home>/sessions`（與 TUI 同一個；`--session-dir` 可覆蓋）；新增共用解析器 `resolveSessionStoreRoot()`/`resolveHarnessHome()`（`@i-harness/session-persistence`），`apps/tui` 的 `resolveSessionDir` 也改用它——兩邊不會再各自發明路徑。
+- 唯讀：**不取 ownership、不寫入**（別的 process 正在用的 session 照樣列得出來，只是列上寫的是 header 的事實）。單一壞檔只讓那一列帶 `problem`，不使整份列表失敗。
+- `show` 的 transcript：`─── turn` / `❯ prompt` / `◆ tool args` / `→ result` / assistant 文字；**internal 的 runtime-context 訊息不入 transcript**。
+- `sdk` 的 `session/list` 改用同一個 listing 實作（原本 45 行內嵌邏輯刪掉）。
+- 測試：`apps/cli/test/sessions.test.ts` 12 例（解析、空 store、壞檔、排序、transcript 尾巴、exit code）。
 
 ## 6. 注意事項
 - 分支 `m61` 疊在 `main`（M60 尖端）之上；**不要**直接 push 到 `main`。
