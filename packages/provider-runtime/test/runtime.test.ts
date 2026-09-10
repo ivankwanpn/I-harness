@@ -223,7 +223,9 @@ describe("model resolution", () => {
         client,
         providerId: "deepseek",
         modelId: "override-model",
-        label: "deepseek:override-model",
+        // M59 grok parity: the label is the HUMAN form (provider displayName ·
+        // model id) — the status row wears it instead of the route-scoped id.
+        label: "Private DeepSeek · override-model",
       },
     })
     await expect(runtime.resolveModel({

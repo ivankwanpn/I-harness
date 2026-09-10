@@ -45,6 +45,9 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
   private searchLines: string[] = []
   private searchNeedsUpdate = false
   private lastSeq: number = -1
+  /** M59 grok parity ("Worked for X"): the running turn's start ts (set at
+   * turn/start, consumed at turn/end — no open turn = undefined). */
+  private lastTurnStartTs: number | undefined
   /** state-only (no scrollback entry — reserved for the app header). */
   private sessionTitle: string = ""
   private planMode: boolean = false
@@ -94,7 +97,19 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
       case "thinking": this.appendThinking(ev); break
       case "tool": this.appendTool(ev); break
       case "turn":
-        if (ev.phase === "end") this.closeOpenBlocks(ev.ts)
+        if (ev.phase === "end") {
+          this.closeOpenBlocks(ev.ts)
+          // M59 grok parity ("Worked for X"): duration = end − the OPEN turn's
+          // start ts (the most recent turn/start block; unpaired ends carry
+          // no marker).
+          const elapsedMs = this.lastTurnStartTs !== undefined && ev.ts > this.lastTurnStartTs
+            ? ev.ts - this.lastTurnStartTs
+            : undefined
+          this.lastTurnStartTs = undefined
+          this.pushBlock(makeTurnBlock(ev, elapsedMs))
+          break
+        }
+        this.lastTurnStartTs = ev.ts
         this.pushBlock(makeTurnBlock(ev))
         break
       case "compaction":
@@ -125,6 +140,7 @@ export class ScrollbackEngineImpl implements ScrollbackEngine {
     this.searchLines = []
     this.searchNeedsUpdate = false
     this.lastSeq = -1
+    this.lastTurnStartTs = undefined
     this.sessionTitle = ""
     this.planMode = false
     this.rewindMarkerBlock = -1

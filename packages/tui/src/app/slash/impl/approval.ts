@@ -9,13 +9,24 @@
 import type { SlashCommand } from "../types.ts"
 import { hasCapability } from "../types.ts"
 
+/** M59: the ONE stance flip — /always-approve and /auto both drive the
+ * runtime seam (the same flip the third Shift+Tab stop performs). */
+function applyStance(ctx: Parameters<SlashCommand["run"]>[0], on: boolean): void {
+  if (ctx.setAlwaysApprove === undefined) {
+    ctx.toast("always-approve: live guardian capability not wired")
+    return
+  }
+  ctx.setAlwaysApprove(on)
+  ctx.toast(`always-approve: ${on ? "on" : "off"}`)
+}
+
 export const approvalCommands: SlashCommand[] = [
   {
     name: "always-approve",
     description: "Always-approve (live guardian capability)",
     visible: (ctx) => hasCapability(ctx, "guardian"),
     run(ctx) {
-      ctx.toast("always-approve: live guardian capability not wired")
+      applyStance(ctx, true)
     },
   },
   {
@@ -23,7 +34,7 @@ export const approvalCommands: SlashCommand[] = [
     description: "Always-approve toggle (live guardian capability)",
     visible: (ctx) => hasCapability(ctx, "guardian"),
     run(ctx) {
-      ctx.toast("always-approve: live guardian capability not wired")
+      applyStance(ctx, true)
     },
   },
 ]

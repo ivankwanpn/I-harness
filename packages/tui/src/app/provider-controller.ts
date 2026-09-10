@@ -91,7 +91,7 @@ export class ProviderController {
   private readonly runtimeInner: ProviderRuntime
   private readonly settings: SettingsStoreSurface
   private readonly backend: ProviderControllerBackend | undefined
-  private readonly sessionId: string | undefined
+  private sessionId: string | undefined
   private readonly inner: ProviderControllerState
 
   constructor(options: ProviderControllerOptions) {
@@ -105,6 +105,15 @@ export class ProviderController {
       defaultModel: { provider: "", model: "" },
       discovery: { status: "idle" },
     }
+  }
+
+  /** M59: track the ACTIVE session (the loop's session/open events) — the
+   * host constructs the controller before any session opens, so the
+   * constructor-time `sessionId` only covers `--attach`/`--resume`. Without
+   * this, /effort and /model act on llm.defaultModel instead of the live
+   * session's per-session selection. */
+  setSessionId(sessionId: string | undefined): void {
+    this.sessionId = sessionId
   }
 
   /** The state the views read (one stable object — the methods mutate it). */
@@ -140,6 +149,24 @@ export class ProviderController {
     const dm = this.settings.get().llm.defaultModel
     this.inner.defaultModel = { ...dm }
     return this.inner.defaultModel
+  }
+
+  /** M59: the session's own model selection (the backend's model-state probe
+   * — per-session `meta.modelSelection` when one exists, the durable default
+   * otherwise). `/effort` uses this as the selection base so the write lands
+   * on the CURRENT session's model, not whatever default the store holds. */
+  async activeSessionModel(): Promise<{ provider: string; model: string } | undefined> {
+    if (this.backend?.modelState === undefined || this.sessionId === undefined) return undefined
+    const st = await this.backend.modelState()
+    if (
+      typeof st === "object" && st !== null && (st as { status?: unknown }).status === "ready"
+      && typeof (st as { providerId?: unknown }).providerId === "string"
+      && typeof (st as { modelId?: unknown }).modelId === "string"
+    ) {
+      return { provider: (st as { providerId: string }).providerId, model: (st as { modelId: string }).modelId }
+    }
+    const dm = this.defaultModel()
+    return dm.provider !== "" && dm.model !== "" ? { provider: dm.provider, model: dm.model } : undefined
   }
 
   /**

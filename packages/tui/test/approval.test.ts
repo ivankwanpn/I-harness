@@ -244,6 +244,8 @@ describe("attachApproval — BackendClient extension (contracts.ts untouched)", 
     }
     const bridge: ApprovalBridge = {
       approvals: async function* () {}, // never yields (no bridge events)
+      setAlwaysApprove: () => {},
+      alwaysApprove: () => false,
       answerApproval: async () => { calls.push("answerApproval") },
       questions: async function* () {},
       answerQuestion: async () => { calls.push("answerQuestion") },

@@ -845,6 +845,11 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     providerController,
     workspace,
     ...(attach !== undefined ? { input } : {}),
+    // M59: the runtime Always-Approve stance (the Shift+Tab third stop and
+    // /always-approve //auto) — toggles the approval bridge's bypass. Only
+    // meaningful when the bridge owns the answerer (guardian mode); an
+    // approveAll assembly never asks, so the seam is left unwired there.
+    ...(approveAll ? {} : { setAlwaysApprove: (on: boolean) => { bridge.setAlwaysApprove(on) } }),
     // M49 Task 8: "Minimal uses the active semantic palette for ANSI output" —
     // the inline host paints with the palette-derived SGR (quantized).
     minimalSgr: screenMode === "minimal" ? sgrFromPalette(palette, cap) : undefined,

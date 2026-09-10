@@ -147,6 +147,10 @@ export interface SlashContext {
   quitApp(): void
   /** /effort — the settings reasoningEffort surface (the six-level contract). */
   effort?(level: string): void
+  /** M59: /always-approve + /auto — the runtime permission stance (the same
+   * flip the third Shift+Tab stop performs). Absent → the honest not-wired
+   * toast. */
+  setAlwaysApprove?(on: boolean): void
   /** M46b G1: the mouse-reporting-toggle feature gate (settings knob / env
    * forced) — true exposes /toggle-mouse-reporting (visible + executable);
    * false keeps it hidden and inert (feature setting per spec §10.1). */

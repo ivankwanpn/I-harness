@@ -113,6 +113,9 @@ export interface ApprovalBridgeService {
 export interface ApprovalBridge {
   /** 16ms-batched live permission surfaces (§3.7). Stays open per session. */
   approvals(): AsyncIterable<PermissionSurface>
+  /** M59: the runtime Always-Approve toggle (the third cycle-mode stop). */
+  setAlwaysApprove(on: boolean): void
+  alwaysApprove(): boolean
   /** Resolve a pending approval. Unknown/stale id → no-op (the fail-closed
    * timeout already decided). `opts.scope` / `opts.feedback` are host-side
    * records — the seam is boolean-only (see module header). */
@@ -180,6 +183,13 @@ export interface ApprovalBridgeOptions {
 
 export function createApprovalBridge(service: ApprovalBridgeService, options: ApprovalBridgeOptions = {}): ApprovalBridge {
   const registerApprovals = options.approvals ?? true
+  /**
+   * M59 grok parity (Always-Approve mode): a RUNTIME bypass — when `on`, the
+   * answerer resolves `approved: true` WITHOUT emitting a surface (the turn
+   * proceeds; nothing parks). The loop flips this on the `cycle-mode` third
+   * stop; the durable `tui.prefs.alwaysApprove` remains the construction
+   * default (apps/tui only reads it at boot). */
+  let bypass = false
   const attachedCtxs = new Set<unknown>()
   const approvals = createOutQueue<PermissionSurface>()
   const questions = createOutQueue<QuestionQuestion>()
@@ -194,6 +204,7 @@ export function createApprovalBridge(service: ApprovalBridgeService, options: Ap
       // Approval: register the pending entry BEFORE emit (a synchronous answer
       // inside the emit callback must find it — web-host lesson).
       registerApprovalAnswerer(ctx, async (req: ApprovalRequest) => {
+        if (bypass) return { approved: true } // M59: always-approve runtime mode
         const id = randomUUID()
         approvals.push(approvalSurfaceOf(req, id))
         const approved = await new Promise<boolean>((resolve) => {
@@ -234,6 +245,13 @@ export function createApprovalBridge(service: ApprovalBridgeService, options: Ap
 
   return {
     approvals: () => approvals.stream(),
+    /** M59: the runtime Always-Approve toggle (the third cycle-mode stop). */
+    setAlwaysApprove(on: boolean): void {
+      bypass = on
+    },
+    alwaysApprove(): boolean {
+      return bypass
+    },
     async answerApproval(surfaceId, decision, opts) {
       const pending = pendingApprovals.get(surfaceId)
       if (pending === undefined) return // stale/timeout — already fail-closed

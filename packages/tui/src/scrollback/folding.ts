@@ -52,7 +52,14 @@ export function blockRows(b: Block, glyphs: GlyphSet, width?: number): StyledRun
     case "todo": return todoRows(b, glyphs)
     case "goal": return goalRows(b, glyphs)
     case "turn":
-      return b.phase === "start" ? [multiline("───", "dim")] : []
+      // M59 grok parity: start = the `───` separator; end = the `Worked for X`
+      // wrist note (grok's SessionEvent::TurnCompleted marker — no elapsed %
+      // no marker, an unpaired engine end stays silent).
+      return b.phase === "start"
+        ? [multiline("───", "dim")]
+        : b.elapsedMs !== undefined
+          ? [multiline(`Worked for ${formatTurnElapsed(b.elapsedMs)}`, "dim")]
+          : []
     case "compaction":
       return [multiline(b.phase === "start" ? "─── compacting ───" : "─── compaction done ───", "dim")]
   }
@@ -127,15 +134,22 @@ function thinkingRows(b: ThinkingBlock, _glyphs: GlyphSet): StyledRun[][] {
 
 function thinkingHeader(b: ThinkingBlock): string {
   if (!b.finished || b.endTs === undefined) return "Thinking…"
-  return `Thought for ${formatDuration(b.endTs - b.ts)}`
+  return `Thought for ${formatTurnElapsed(b.endTs - b.ts)}`
 }
 
-function formatDuration(ms: number): string {
-  const sec = Math.max(0, ms) / 1000
-  if (sec < 60) return `${sec.toFixed(1)}s`
-  const m = Math.floor(sec / 60)
-  const s = Math.floor(sec % 60)
-  return `${m}m ${s}s`
+/** M59 grok parity: the "Worked for X" / "Thought for X" duration vocabulary —
+ * <10s one decimal, <60s whole seconds, then `1m25s` / `1h5m` (grok's
+ * pager-render format_duration; the old `${m}m ${s}s` had a stray space). */
+export function formatTurnElapsed(ms: number): string {
+  const max = Math.max(0, ms)
+  const rawSec = max / 1000
+  if (rawSec < 10) return `${rawSec.toFixed(1)}s`
+  if (rawSec < 60) return `${Math.floor(rawSec)}s`
+  const mins = Math.floor(rawSec / 60)
+  const secs = Math.floor(rawSec % 60)
+  if (mins < 60) return `${mins}m${secs}s`
+  const hours = Math.floor(mins / 60)
+  return `${hours}h${mins % 60}m`
 }
 
 function todoRows(b: TodoBlock, glyphs: GlyphSet): StyledRun[][] {
@@ -483,7 +497,10 @@ export function blockTitle(b: Block): string {
     case "system": return "System"
     case "todo": return "Todo"
     case "goal": return `Goal${b.label !== undefined ? " · " + b.label : ""}`
-    case "turn": return "Turn"
+    case "thinking": return thinkingHeader(b)
+    // the header join strips the leading space; a turn-end block reads the
+    // Worked-for note (M59).
+    case "turn": return b.phase === "end" && b.elapsedMs !== undefined ? `Worked for ${formatTurnElapsed(b.elapsedMs)}` : "Turn"
     case "compaction": return "Compaction"
   }
 }
