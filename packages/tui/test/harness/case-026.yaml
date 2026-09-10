@@ -28,13 +28,12 @@ steps:
   # ── the SETTLED frame (follow view): typed headers, the structured change's
   # delta, the expanded hunk lines — the bash result is COLLAPSED to its header
   # (M59 grok parity: a finished tool block renders no body), and the runtime-
-  # context snapshot is internal (never a user row). The follow window starts
-  # at the user row (-alpha scrolled above the fold — the engine test pins the
-  # full -old/+new pair instead).
+  # context snapshot is internal (never a user row). M59 also adds the
+  # turn-end `Worked for X` row BELOW the window's last pinned row (its
+  # duration is real fs/shell latency — deliberately not pinned).
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃   ───"
         - "  ┃   ❯ case 026"
         - "  ┃  ◆ Read data.txt"
         - "  ┃  ◆ Edit data.txt (+1/-1)"
@@ -99,8 +98,10 @@ steps:
   - write-pty: { data: "\x1b" }
   - await-quiescent: { ms: 200 }
   - wait-screen:
-      region: { startRow: 5 }
+      region: { startRow: 2 }
       rows:
+        - "  ┃   ❯ case 026"
+        - "  ┃  ◆ Read data.txt"
         - "  ┃  ◆ Edit data.txt (+1/-1)"
       timeoutMs: 5000
   - request-marker: { name: request-exit }

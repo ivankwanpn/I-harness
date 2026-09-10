@@ -381,7 +381,12 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
             client,
             providerId,
             modelId,
-            label: `${providerId}:${modelId}`,
+            // M59 grok parity: the status row wears a HUMAN label —
+            // "OpenCode Go · glm-5.3-flash" (provider displayName · model id);
+            // the route-scoped `provider:model` string remains the fallback.
+            label: view.displayName === "" || view.displayName === providerId
+              ? `${providerId}:${modelId}`
+              : `${view.displayName} · ${modelId}`,
             ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
             ...(contextWindow !== undefined ? { contextWindow } : {}),
           },

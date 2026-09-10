@@ -60,7 +60,11 @@ import type { ActiveModal } from "../views/modal.ts"
  * Superset of AgentViewState (extra fields: history, focused, toasts, panes). */
 export interface TuiAppState {
   title: string
-  mode: "normal" | "plan"
+  /** M59 grok parity: the three-stop Shift+Tab rotation (normal → plan →
+   * always-approve). `"normal" | "plan"` remain the engine-facing modes;
+   * always-approve is the permission stance (the loop's approval-bridge
+   * bypass) while the engine mode stays normal. */
+  mode: "normal" | "plan" | "always-approve"
   engine: ScrollbackEngine
   prompt: PromptState
   promptCursor: number

@@ -69,7 +69,7 @@ export interface ViewDraw {
 export interface AgentViewState {
   title: string
   engine: ScrollbackEngine
-  mode: "normal" | "plan"
+  mode: "normal" | "plan" | "always-approve"
   status: StatusState
   prompt: PromptState
   turn: TurnState | undefined

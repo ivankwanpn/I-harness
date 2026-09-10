@@ -57,8 +57,6 @@ steps:
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃   +a1"
-        - "  ┃   +a2"
         - "  ┃   +a3"
         - "  ┃   +a4"
         - "  ┃   +a5"
@@ -69,10 +67,11 @@ steps:
         - "  ┃   -b4"
         - "  ┃   -b5"
         - "  ┃   -b6"
+        - "  ┃   Worked for 5.0s"
         - "  ┃   ───"
         - "  ┃   ❯ again                                                        6:46 PM"
         - "  ┃   tail                                                           6:46 PM"
-        - ""
+        - "  ┃   Worked for 5.0s"
       timeoutMs: 5000
   # Baseline: the -b2 diff row (a tool-body row, non-markdown) carries NO hover
   # bg; the again row shows the SHORT ts form.
@@ -91,40 +90,41 @@ steps:
         - { row: 6, col: 8, bg: "#2c2c2c" }
       timeoutMs: 4000
   # ── STEP 1b: TIMESTAMP SWAP — hover the user row → its right-aligned ts
-  # reads the %H:%M:%S | %b %d detail form. (M59: the settled view starts 3
-  # rows lower — the user row sits at row 15, pointer row 16.)
+  # reads the %H:%M:%S | %b %d detail form. (M59: the turn-end rows grew the
+  # scene — the user row sits at row 14, pointer row 15.)
   - write-pty:
-      data: "\x1b[<3;20;16M"
+      data: "\x1b[<3;20;15M"
   - wait-screen:
-      region: { startRow: 14 }
+      region: { startRow: 13 }
       rows:
         - "  ┃   ───"
         - "  ┃   ❯ again                                              18:46:35 | Sep 05"
         - "  ┃   tail                                                           6:46 PM"
+        - "  ┃   Worked for 5.0s"
         - ""
       timeoutMs: 5000
   # ── STEP 1c: motion to an empty area (the pad column — no hit area) → the
   # ts returns to the short form.
   - write-pty:
-      data: "\x1b[<3;5;16M"
+      data: "\x1b[<3;5;15M"
   - wait-screen:
-      region: { startRow: 14 }
+      region: { startRow: 13 }
       rows:
         - "  ┃   ───"
         - "  ┃   ❯ again                                                        6:46 PM"
         - "  ┃   tail                                                           6:46 PM"
+        - "  ┃   Worked for 5.0s"
         - ""
       timeoutMs: 5000
   # ── STEP 2: WHEEL — ONE wheel-up event (<64;…M) → one offset line, the
-  # follow-pin releases (case-018 math) — the display top jumps to the new
-  # offset (line 12: the Edit header; M59: follow sits at max = 13).
+  # follow-pin releases (case-018 math). M59: the scene grew by the two
+  # turn-end `Worked for` rows, so follow sits at max = 15 (30 − 16 + 1) and
+  # one wheel-up lands at offset 14 → the window top is the +a2 diff row.
   - write-pty:
       data: "\x1b[<64;40;12M"
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
-        - "  ┃   +a1"
         - "  ┃   +a2"
         - "  ┃   +a3"
         - "  ┃   +a4"
@@ -136,17 +136,20 @@ steps:
         - "  ┃   -b4"
         - "  ┃   -b5"
         - "  ┃   -b6"
+        - "  ┃   Worked for 5.0s"
+        - "  ┃   ───"
+        - "  ┃   ❯ again                                                        6:46 PM"
+        - "  ┃   tail                                                           6:46 PM"
+        - "  ┃   Worked for 5.0s"
       timeoutMs: 5000
-  # wheel ×3 more → offset 9 (the data-5 row at the display top). The pointer
-  # stays on the wheel cell (40,12) — its row-band hover rides a diff row
-  # (no ts there; the detail swap proof moves to STEP 2d).
+  # wheel ×3 more → offset 11 (the Read notes row at the display top). The
+  # pointer stays on the wheel cell (40,12) — its row-band hover rides a diff
+  # row (no ts there; the detail swap proof moves to STEP 2d).
   - write-pty:
       data: "\x1b[<64;40;12M\x1b[<64;40;12M\x1b[<64;40;12M"
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃   data-5"
-        - "  ┃   data-6"
         - "  ┃  ◆ Read notes.md                                                 6:45 PM"
         - "  ┃  ◆ Edit patch.txt                                                6:45 PM"
         - "  ┃   +a1"
@@ -161,6 +164,7 @@ steps:
         - "  ┃   -b4"
         - "  ┃   -b5"
         - "  ┃   -b6"
+        - "  ┃   Worked for 5.0s"
       timeoutMs: 5000
   # ── STEP 2c: the scrollbar fraction jump back to offset 1. M59: max is 13
   # (28 − 16 + 1) — the clicks below are calibrated to the offset-1 view, so
@@ -210,6 +214,7 @@ steps:
       rows:
         - "  ┃  ◆ Read notes.md                                                 6:45 PM"
         - "  ┃  ❙ Edit patch.txt (+6/-6)                              18:45:36 | Sep 05"
+        - "  ┃   Worked for 5.0s"
         - "  ┃   ───"
       timeoutMs: 5000
   # ── STEP 4b: double-click a DIFFERENT cell on the same header row (the
@@ -299,7 +304,6 @@ steps:
   - wait-screen:
       region: { startRow: 2 }
       rows:
-        - "  ┃    …"
         - "  ┃   data-4"
         - "  ┃   data-5"
         - "  ┃   data-6"

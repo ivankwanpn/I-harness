@@ -429,7 +429,7 @@ export interface ShortcutStateFor {
   focused: "prompt" | "scrollback"
   multiLine: boolean
   turnRunning: boolean
-  mode: "normal" | "plan"
+  mode: "normal" | "plan" | "always-approve"
   /** M40 G2 (C13): plan review active — plan mode on AND the last assistant
    * block is the plan (the loop's detection); the bar shows the plan actions
    * FIRST (`a approve / c comment / q quit plan`). */

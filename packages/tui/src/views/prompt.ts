@@ -27,6 +27,9 @@ export interface PromptState {
   focused: boolean
   model: string
   plan: boolean
+  /** M59 grok parity: the third Shift+Tab stop — the info line wears
+   * ` · always-approve` (grok's `auto`/`always-approve` flag slot). */
+  alwaysApprove?: boolean
   title: string
   /** M46c G2: pasted-source chips (optional/additive — the loop seeds it and
    * clears it on submit; absent = no chips. The chip rows render at the TOP of
@@ -333,6 +336,10 @@ export function renderPrompt(
   if (state.plan) {
     ix = view.text(ix, y1, " · ", dim)
     ix = view.text(ix, y1, "plan", view.color(palette.accentPlan))
+  }
+  if (state.alwaysApprove === true) {
+    ix = view.text(ix, y1, " · ", dim)
+    ix = view.text(ix, y1, "always-approve", view.color(palette.warning))
   }
   if (state.multiLine) {
     const ml = "multiline"

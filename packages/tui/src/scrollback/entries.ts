@@ -79,6 +79,9 @@ export interface GoalBlock extends BlockBase {
 export interface TurnBlock extends BlockBase {
   kind: "turn"
   phase: "start" | "end"
+  /** M59 grok parity ("Worked for X"): the turn durationMs the engine derives
+   * at the END event (start ts → end ts; undefined on the start block). */
+  elapsedMs?: number
 }
 
 export interface CompactionBlock extends BlockBase {
@@ -168,8 +171,11 @@ export function makeGoalBlock(ev: Extract<TuiEvent, { type: "goal" }>): GoalBloc
   return { kind: "goal", label: ev.label, state: ev.state, seq: ev.seq, ts: ev.ts }
 }
 
-export function makeTurnBlock(ev: Extract<TuiEvent, { type: "turn" }>): TurnBlock {
-  return { kind: "turn", phase: ev.phase, seq: ev.seq, ts: ev.ts }
+export function makeTurnBlock(ev: Extract<TuiEvent, { type: "turn" }>, elapsedMs?: number): TurnBlock {
+  return {
+    kind: "turn", phase: ev.phase, seq: ev.seq, ts: ev.ts,
+    ...(elapsedMs !== undefined ? { elapsedMs } : {}),
+  }
 }
 
 export function makeCompactionBlock(

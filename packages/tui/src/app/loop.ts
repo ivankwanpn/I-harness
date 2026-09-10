@@ -202,6 +202,10 @@ export interface TuiAppOptions {
    * "queue" submits (the backend runs it after the current turn). Host-
    * resolved durable knob; default queue (the pre-M49 submit behavior). */
   busyEnter?: BusyEnter
+  /** M59: the runtime Always-Approve seam (the third Shift+Tab stop) — the
+   * host toggles its approval stance. Absent → the stop stays honest
+   * ("not wired — approvals still ask"). */
+  setAlwaysApprove?: (on: boolean) => void
   /** M49 Task 8 (review r1): the persisted theme — seeds app.theme so the
    * runtime state matches the palette the host resolved. Without it the state
    * starts "auto" even on a concrete persisted theme, bare /theme would anchor
@@ -275,6 +279,9 @@ export interface InlineHost {
 }
 
 const ANIM_MS = 33 // 30fps pump
+/** M59: the mid-turn context-probe floor — the probe walks the live log, so a
+ * per-chunk refresh would be O(n²) over a session (see refreshContext). */
+const CONTEXT_REFRESH_MIN_MS = 500
 
 /** M49 Task 10: last path segment (the line-viewer toasts label the file). */
 function basenameOf(file: string): string {
@@ -392,6 +399,8 @@ export class TuiApp {
   private inlineHost: InlineHost | undefined
   private inlineResolved = false
   private commits: MinimalCommits | undefined
+  /** M59: the mid-turn context-refresh throttle clock (see refreshContext). */
+  private lastContextRefreshAt = 0
   /** In-flight backend.context() probe (M38b G2) — never two concurrent
    * refreshes; the promise itself is the guard. */
   private contextProbe: Promise<void> | undefined
@@ -1189,7 +1198,7 @@ export class TuiApp {
     this.runP = Promise.all([this.pumpInput(), this.pumpBackend()])
     // Real-value refresh (M38b G2): the initial context/queue snapshots land
     // before the first frame — afterwards they ride the turn boundaries.
-    this.refreshContext()
+    this.refreshContext(true)
     this.refreshQueue()
     // M49 Task 13: the status line's first recompute (tasks/model/queue…).
     this.refreshStatusLine()
@@ -1426,11 +1435,27 @@ export class TuiApp {
         break
       }
       case "cycle-mode": {
-        // Normal → Plan → Always-Approve; M37a cycles the first two.
-        this.app.mode = this.app.mode === "normal" ? "plan" : "normal"
-        this.app.status.plan = this.app.mode === "plan"
-        this.app.prompt.plan = this.app.mode === "plan"
-        this.toast(`Switched to mode: ${this.app.mode.toLowerCase()}`)
+        // M59 grok parity: THREE stops — normal → plan → always-approve →
+        // normal (grok's permission-mode rotation). Plan drives the engine's
+        // log-only mode; always-approve flips the approval stance at runtime
+        // (the host seam; without it the stop is honest about not being wired).
+        const wasAlwaysApprove = this.app.mode === "always-approve"
+        const next = this.app.mode === "normal" ? "plan"
+          : this.app.mode === "plan" ? "always-approve"
+            : "normal"
+        this.app.mode = next
+        this.app.status.plan = next === "plan"
+        this.app.prompt.plan = next === "plan"
+        this.app.prompt.alwaysApprove = next === "always-approve"
+        // Only touch the host stance when it actually CHANGES (normal↔plan
+        // leaves it alone — no redundant bridge writes per keypress).
+        if (next === "always-approve") this.opts.setAlwaysApprove?.(true)
+        else if (wasAlwaysApprove) this.opts.setAlwaysApprove?.(false)
+        this.toast(
+          next === "always-approve" && this.opts.setAlwaysApprove === undefined
+            ? "Switched to mode: always approve (not wired — approvals still ask)"
+            : `Switched to mode: ${next.replace("-", " ")}`,
+        )
         this.refreshShortcuts()
         break
       }
@@ -1851,19 +1876,24 @@ export class TuiApp {
         else this.app.turn = undefined // finish() → row hides (spec §7)
         // Real-value refresh at the turn boundary (M38b G2): context usage and
         // the queued-turn count — the status chip renders only what exists.
-        this.refreshContext()
+        this.refreshContext(true)
         this.refreshQueue()
         break
       case "thinking": {
         const t = this.ensureTurn(now)
         t.phase = "thinking"
         this.phaseStartedAt = now
+        // M59: same live-token rule — a reasoning-only turn still climbs.
+        this.refreshContext()
         break
       }
       case "assistant": {
         const t = this.ensureTurn(now)
         t.phase = "responding"
         this.phaseStartedAt = now
+        // M59 grok parity: the token counter climbs DURING the turn (the
+        // context chip is the same probe — the estimator walks the live log).
+        this.refreshContext()
         break
       }
       case "tool": {
@@ -2120,6 +2150,10 @@ export class TuiApp {
 
   private activateAgent(sessionId: string): void {
     this.currentSessionId = sessionId
+    // M59: the provider controller tracks the active session — /effort and
+    // /model go through setSessionModel (per-session selection) instead of
+    // acting on the durable llm.defaultModel behind the user's back.
+    this.opts.providerController?.setSessionId(sessionId)
     this.app.view = { kind: "agent", sessionId }
     this.app.screen = this.uiMode === "minimal" ? "minimal" : "agent"
     this.app.prompt.title = this.app.title
@@ -2456,7 +2490,10 @@ export class TuiApp {
         await this.armLiveProbe()
         return doctorRows(this.cap)
       },
-      effort: (level) => this.effort(level),
+      effort: (level) => { void this.effort(level) },
+      // M59: the runtime permission stance (/always-approve, /auto) — the
+      // same seam the third Shift+Tab stop drives.
+      setAlwaysApprove: (on) => this.setAlwaysApproveStance(on),
       mouseReportingToggle: this.mouseToggleFeature(),
       // M46c G2: the /workflow surface + the text-input seam (workflow run
       // params line — the existing bindTextInput overlay under a ctx call).
@@ -2926,7 +2963,7 @@ export class TuiApp {
     this.commits = undefined
     this.refreshShortcuts()
     this.refreshDropdowns()
-    this.refreshContext()
+    this.refreshContext(true)
     this.refreshQueue()
   }
 
@@ -2965,8 +3002,11 @@ export class TuiApp {
   /** /effort — the REAL settings write (llm.defaultModel.reasoningEffort via
    * the provider controller's settings surface); the interactive six-level
    * picker is the settings modal's Models & Providers flow. No arg → report
-   * the current effort. */
-  private effort(level: string): void {
+   * the current effort. M59: with an ACTIVE session the write goes through
+   * the backend's setSessionModel (per-session selection, grok parity —
+   * /effort re-efforts the CURRENT model without re-picking it); idle or
+   * session-less hosts keep the durable llm.defaultModel write. */
+  private async effort(level: string): Promise<void> {
     const controller = this.providerController()
     if (controller === undefined) {
       this.toast("effort: settings host store not wired")
@@ -2978,6 +3018,24 @@ export class TuiApp {
       return
     }
     const lv = level.trim()
+    // M59: an ACTIVE session takes the selection path — the per-session
+    // meta.modelSelection carries the effort (the assembly rebind is idle-only;
+    // busy sessions throw, which surfaces as the honest toast below). The
+    // model/provider comes from the session's own selection when one is known
+    // (the model-state probe), llm.defaultModel otherwise.
+    if (this.currentSessionId !== undefined) {
+      const sel = await controller.activeSessionModel().catch(() => undefined)
+      if (sel === undefined) {
+        this.toast("effort: no model configured")
+        return
+      }
+      void controller.selectModel(sel.model, lv)
+        .then(
+          () => this.toast(`effort: ${lv}`),
+          (error: unknown) => this.toast(`effort failed: ${error instanceof Error ? error.message : String(error)}`),
+        )
+      return
+    }
     const surface = controller.settingsSurface()
     const cur = surface.get()
     void surface
@@ -3075,6 +3133,20 @@ export class TuiApp {
   /** The provider controller (host option else undefined). */
   private providerController(): ProviderController | undefined {
     return this.opts.providerController
+  }
+
+  /** M59: flip the runtime Always-Approve stance (the Shift+Tab third stop
+   * and the /always-approve //auto commands share this one path) — the host
+   * seam toggles the approval bridge; the app state follows for the info
+   * line + the mode label. */
+  private setAlwaysApproveStance(on: boolean): void {
+    this.opts.setAlwaysApprove?.(on)
+    this.app.mode = on ? "always-approve" : "normal"
+    this.app.prompt.alwaysApprove = on
+    this.app.status.plan = false
+    this.app.prompt.plan = false
+    this.refreshShortcuts()
+    this.requestFrame()
   }
 
   /** The G1 slash-text interception: "/provider [variant]", "/model [name]",
@@ -3862,9 +3934,15 @@ export class TuiApp {
    * backend without the member never probes (the chip stays hidden); a probe
    * resolving undefined leaves the previous values untouched. Never concurrent
    * (the owning promise is the guard). */
-  private refreshContext(): void {
+  private refreshContext(force = false): void {
     const probe = this.opts.backend.context
     if (probe === undefined || this.contextProbe !== undefined) return
+    // M59: the MID-TURN refresh is throttled — the probe walks the live log
+    // (activeTokens(deriveMessages)), so a per-chunk call would be O(n²) over
+    // a session. One probe per 500ms keeps the climbing count while bounding
+    // the work; the turn-boundary/startup calls pass force and always run.
+    if (!force && this.nowMs() - this.lastContextRefreshAt < CONTEXT_REFRESH_MIN_MS) return
+    this.lastContextRefreshAt = this.nowMs()
     const generation = this.sessionGeneration
     let pending!: Promise<void>
     pending = probe()
@@ -3878,7 +3956,7 @@ export class TuiApp {
       .finally(() => {
         if (this.contextProbe !== pending) return
         this.contextProbe = undefined
-        if (generation !== this.sessionGeneration) this.refreshContext()
+        if (generation !== this.sessionGeneration) this.refreshContext(true)
       })
     this.contextProbe = pending
   }
