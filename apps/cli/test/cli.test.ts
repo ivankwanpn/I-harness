@@ -442,8 +442,43 @@ describe("CLI main + entry guard", () => {
     }
   })
 
-  it("runs main when the CLI module is executed as the entry point", async () => {
-    // spawn a real node process so the module-level entry guard fires:
+  // A headless run is EPHEMERAL unless --session-dir names a store, so
+  // `--resume` used to be parsed only inside that branch and was otherwise
+  // silently dropped: the run proceeded as a fresh conversation and exited 0.
+  // Measured before the fix: with a store, telemetry's session/start carries the
+  // restored sessionId; without one the field is absent entirely. That is the
+  // worst failure shape (the caller believes context was restored), so the
+  // combination is now refused before any model work happens.
+  it("--resume without --session-dir is refused, not silently ignored", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const code = await main(["node", "i-harness", "run", "hello", "--resume", "sess-abc"])
+      expect(code).toBe(1)
+      expect(err).toHaveBeenCalledWith(expect.stringContaining("--resume requires --session-dir"))
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it("negative control: --resume WITH --session-dir is not refused by that guard", async () => {
+    // The guard sits before every other stage (model resolution included), so a
+    // no-store run can be distinguished from a with-store one by its message
+    // alone: the store case fails later, for an unrelated reason.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    const log = vi.spyOn(console, "log").mockImplementation(() => {})
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-resume-guard-"))
+    try {
+      await main(["node", "i-harness", "run", "hello", "--resume", "sess-abc", "--session-dir", dir])
+      const messages = err.mock.calls.map((c) => String(c[0]))
+      expect(messages.join("\n")).not.toContain("--resume requires --session-dir")
+    } finally {
+      err.mockRestore()
+      log.mockRestore()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("runs main when the CLI module is executed as the entry point", async () => {    // spawn a real node process so the module-level entry guard fires:
     // `node --import tsx apps/cli/src/index.ts run "hello"` must print and exit 0.
     const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
     const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url))

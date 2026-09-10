@@ -176,6 +176,19 @@ export async function main(argv: string[]): Promise<number> {
   const sessionDirIdx = args.indexOf("--session-dir")
   const resumeIdx = args.indexOf("--resume")
 
+  // `--resume` without a store used to be a SILENT no-op: the id was parsed
+  // only inside the `--session-dir` branch below, so the flag was ignored and
+  // the run proceeded as a FRESH conversation with exit 0 — the worst shape of
+  // failure, because the caller believes the earlier context was restored.
+  // Measured: with a store the telemetry's session/start carries the restored
+  // `sessionId`; without one the field is absent entirely. A run is ephemeral
+  // by design (no store root means no jsonl, no ownership lease), so resuming
+  // simply has nothing to resume FROM — say so instead of pretending.
+  if (resumeIdx !== -1 && sessionDirIdx === -1) {
+    console.error("--resume requires --session-dir DIR (headless runs are ephemeral without a store)")
+    return Promise.resolve(1)
+  }
+
   // persistence wiring (M29: JSONL-only — locked under the store root).
   let coordinator: SessionCoordinator | undefined
   let sessionId: string | undefined
