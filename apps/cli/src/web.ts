@@ -19,6 +19,7 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { MockStep } from "@i-harness/llm-mock"
+import type { SandboxMode } from "@i-harness/sandbox"
 import {
   createSessionService,
   type ReasoningEffort,
@@ -130,6 +131,20 @@ export interface WebServerOptions {
    * at `<workspace>/.i-harness/plugins` — the host's /api/plugins routes serve
    * over it (catalog + runtime views + source/install/enable mutations). */
   pluginRegistry?: { registry: PluginRegistry; root: string }
+  /** M62: the sandbox mode every session on this server runs under. Absent →
+   * `settings.sandboxMode` is used — the value the web `/sandbox` command and
+   * the TUI's settings write, which SETTINGS_DEFAULTS sets to
+   * "workspace-write".
+   *
+   * The measured bug this closes: the web path passed NO sandbox at all, so a
+   * shell command sent through the page could write outside the workspace while
+   * settings.json said "workspace-write" — and nothing in the repo read that
+   * setting, which made `/sandbox` a false assurance (see
+   * docs/audit/2026-09-10-m62-web-sandbox-not-wired.md). Pass
+   * "danger-full-access" to opt an embedder out explicitly; tests that need an
+   * unconfined temp workspace should do exactly that rather than rely on the
+   * old accidental default. */
+  sandbox?: SandboxMode
   /** Auth: enable by passing EITHER (a missing half is randomized at start). */
   auth?: { launchToken?: string; hmacSecret?: string }
   /** Print the login URL (with the launch token) at startup. */
@@ -441,10 +456,23 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
   // query derives the search/lineage surface out of the box (reconcile-on-
   // search, :memory: index per process).
   const sessionQuery = createFileBackedSessionQuery({ storeRoot })
+  // M62: resolve the sandbox ONCE, before the service is built. Two things this
+  // guards, both measured:
+  //  - the web path used to pass NO sandbox at all, so a shell command sent
+  //    through the page wrote outside the workspace while settings.json said
+  //    "workspace-write";
+  //  - `settings.get()` on an UNLOADED SettingsStore answers the DEFAULTS, not
+  //    the file, so taking the value after the `??` above would silently ignore
+  //    the operator's setting for any embedder that hands in a fresh store.
+  //    Loading here makes "not loaded" mean "the file's value", which is what
+  //    the caller expects (load() is idempotent).
+  await settings.load()
+  const sandboxMode: SandboxMode = opts.sandbox ?? settings.get().sandboxMode
   const executor = createSessionService({
     workspace: opts.workspace,
     coordinator,
     modelPolicy: opts.mockScript !== undefined ? "test-mock" : "required",
+    sandbox: sandboxMode,
     ...(opts.model !== undefined ? { model: opts.model } : {}),
     ...(opts.mockScript !== undefined ? { mockScript: opts.mockScript } : {}),
     ...(opts.model === undefined && opts.mockScript === undefined

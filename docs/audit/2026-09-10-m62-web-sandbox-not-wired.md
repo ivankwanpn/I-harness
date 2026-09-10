@@ -58,19 +58,47 @@ Set-Content -Path '<root>\outside.txt' -Value ESCAPED
 
 **兩道防線在 web 路徑上等於都沒有。**
 
-## 5. 我沒有動手，以及為什麼
+## 5. 已修（同日，使用者裁定後）
 
-修法本身不複雜（讓 `createWebServer` 從 settings 讀 `sandboxMode` 並傳給 `createSessionService`，需要它把 `sandbox` 轉發給 assembly），但**這不是純機械修改**，有三個必須先裁定的點：
+按 §5 原本建議的最小那一半落地：
 
-1. **來源與優先序**：`settings.sandboxMode` 成為真源之後，與 `run.ts` 既有的 `opts.sandbox`、以及 TUI 的 `guardian`/sandbox 控制面板如何排序？（TUI 目前用自己的路徑，不動它才不會踩到凍結區。）
-2. **預設值**：`SETTINGS_DEFAULTS.sandboxMode` 是 `"workspace-write"`。一旦它開始生效，**所有 embedder 的預設行為會從「無沙箱」變成「受限」**——包括既有的 web 測試（`withHost` 傳自己的 `SettingsStore`，預設即 `workspace-write`，而工作目錄是 temp，寫入會被 ACL 擋），**預期會有一批測試需要明確 pin `danger-full-access`**。這是可預期的遷移成本，但要有意識地做。
-3. **範圍**：要不要同時讓 `--sandbox` 這種命令列旗標存在（目前 `run` 只能由程式化呼叫端給 `opts.sandbox`，沒有 CLI 旗標）。
+| 改動 | 位置 |
+|---|---|
+| `WebServerOptions.sandbox?: SandboxMode`（明確覆寫） | `apps/cli/src/web.ts` |
+| 未給時讀 `settings.sandboxMode`，**進入服務前先 `await settings.load()`** | 同上 |
+| 傳給 `createSessionService({ sandbox })` → `SessionServiceOptions extends AssemblyOptions` 既有欄位直接流到 assembly | 同上（欄位本來就有，只是沒人傳） |
 
-**我的建議**（等你一句話就能做）：先做最小且安全的那一半——
-- `WebServerOptions.sandbox?: SandboxMode`（明確覆寫，給測試與 embedder）；
-- 未給時**從 settings 讀**（讓 `/sandbox` 變成真的有效，也讓使用者的 `"workspace-write"` 生效）；
-- `createSessionService` 轉發 `sandbox` 給 assembly（`SessionServiceOptions extends AssemblyOptions`，加一個欄位即可）；
-- 既有的 web 測試明確 pin `sandbox: "danger-full-access"`，讓「不受限」變成**測試裡寫明的**而不是巧合；
-- 加一條 regression：**settings 說 `workspace-write` 時，經由 web 送出的外殼指令寫不到 workspace 外**——也就是這份量測的 green 版。
+**回歸測試**（`apps/cli/test/web.test.ts`）：`settings.sandboxMode = "workspace-write"` 時，經由 mux 送出的外殼指令**寫不到** workspace 外；並且斷言工具**真的跑了且被拒**（`exitCode != 0` 且 stderr 帶 denied/unauthorized），所以是「受限」而不是「回合因別的原因失敗」。
 
-**沒有做的**：我沒有擅自改，因為第 2 點的預設值變更會改變所有 embedder 的行為，那是你的產品決定。我也**沒有**把 `sandboxMode` 接進 TUI（凍結區）。
+**判別性證明（突變測試）**：把 `sandbox:` 這一行整個拿掉 → 紅在
+
+```
+AssertionError: a shell command escaped the workspace: expected true to be false
+```
+
+也就是**真的逃逸了**。加回去 → 綠。
+
+### 5b. 過程中踩到的兩個坑（都值得記住）
+
+**(1) `SettingsStore.get()` 在 `load()` 之前回的是「預設值」，不是檔案的值。** 實測：
+
+```
+new SettingsStore({configDir}).get().sandboxMode          → "workspace-write"   ← 預設
+(await load()) 之後 .get().sandboxMode                    → "read-only"         ← 檔案
+```
+
+**後果有兩層**：對產品而言，任何嵌入者若交進一個沒 load 的 store，`??` 會**靜默忽略操作者的設定**——所以這一版在解析前主動 `await settings.load()`（load 是冪等的）。對測試而言更陰險：我的第一版回歸測試交的正是**沒 load 的 store**，於是它靠**預設值**通過，**根本沒碰到那個設定**，突變體因此存活。**測試綠了但不是因為它想驗的東西成立**——這是我這輪第二次遇到「測試通過的理由是錯的」（第一次是 outside 路徑落在 Windows 本來就拒絕的 temp 根）。
+
+**(2) `outside` 的路徑必須由測試自己擁有。** 第一版把待寫檔指向 `$env:TEMP` 根目錄，那個位置**純 Windows 就會拒絕寫入**（實測：不經 I-harness 的 `powershell.exe` 對 sibling 目錄可寫、對 temp 根不可寫）。於是「沒逃逸」是作業系統的功勞，不是沙箱的。改成 `mkdtempSync` 之下、與 workspace 同層的 `outside/` 目錄之後才具判別性。
+
+## 6. 仍未做（刻意）
+
+- **`--sandbox` 命令列旗標**：`run` 仍只能由程式化呼叫端給 `opts.sandbox`。
+- **TUI**：沒動（凍結區）。TUI 有自己的沙箱路徑。
+- **預設值語意**：`SETTINGS_DEFAULTS.sandboxMode` 是 `"workspace-write"`，所以 web 從「實質無沙箱」變成「預設受限」是**行為變更**（這是修復的本體）。既有測試全綠，因為它們的暫存 workspace 本來就在可寫根內。
+
+## 7. 這次裁定留下的優先序（給下一個人）
+
+1. **`settings.sandboxMode` 現在對 web 是活的**；`run` 那條路仍以 `opts.sandbox`（程式化）為準，未與設定串接。要不要讓它也讀設定、要不要有 `--sandbox` 旗標，仍未定。
+2. **TUI 不在這條鏈上**（凍結區）。它有自己的沙箱路徑；`/sandbox` 這個 web 指令與 TUI 的設定現在寫的是**同一個** `settings.sandboxMode`，而 TUI 是否消費它**未查**。
+
