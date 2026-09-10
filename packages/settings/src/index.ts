@@ -93,6 +93,32 @@ export interface SettingsModel {
    * G1 mapping of this value onto `maxContextWindow` is removed). A per-model
    * override in the unified resolution chain; never a request default. */
   maxTokens?: number
+  /** M61: content types this MODEL accepts — the per-model override of the
+   * route's declaration (see SettingsProviderConfig.inputModalities). */
+  inputModalities?: SettingsInputModality[]
+}
+
+/** M61: a route's/model's accepted content types. The M14 negative-capability
+ * rule is the default: ABSENT = text-only, and image parts are projected to a
+ * deterministic text placeholder before the request leaves the adapter. Until
+ * this field existed NOTHING in the product could set `inputModalities`, so
+ * every provider — including the multimodal ones — was text-only and
+ * `read_image` could never deliver a real picture to a model. */
+export type SettingsInputModality = "text" | "image"
+
+const INPUT_MODALITIES: readonly SettingsInputModality[] = ["text", "image"]
+
+/** Keep only the known modality names, in declaration order, deduped; an empty
+ * or malformed value degrades to `undefined` (= text-only), never a throw. */
+export function normalizeInputModalities(raw: unknown): SettingsInputModality[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: SettingsInputModality[] = []
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue
+    const value = entry as SettingsInputModality
+    if (INPUT_MODALITIES.includes(value) && !out.includes(value)) out.push(value)
+  }
+  return out.length > 0 ? out : undefined
 }
 
 /** User override for one provider route (llm.providers.<route>): the API key
@@ -121,6 +147,9 @@ export interface SettingsProviderConfig {
    * session/tenant header). Keys and values are non-empty strings; secrets
    * belong in `apiKeyEnv`, not here. */
   headers?: Record<string, string>
+  /** M61: content types this ROUTE accepts — the fallback when the selected
+   * model entry does not declare its own. Absent = text-only (M14). */
+  inputModalities?: SettingsInputModality[]
 }
 
 /** The section-level default model (resolution chain in Task 5:
@@ -439,6 +468,8 @@ function normalizeModels(raw: unknown): SettingsModel[] | undefined {
       if (isNonEmptyString(entry.name)) model.name = entry.name
       if (isPositiveInteger(entry.contextWindow)) model.contextWindow = entry.contextWindow
       if (isPositiveInteger(entry.maxTokens)) model.maxTokens = entry.maxTokens
+      const modalities = normalizeInputModalities(entry.inputModalities)
+      if (modalities !== undefined) model.inputModalities = modalities
       models.push(model)
     }
   }
@@ -470,6 +501,8 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   if (models !== undefined) out.models = models
   const headers = normalizeProviderHeaders(raw.headers)
   if (headers !== undefined) out.headers = headers
+  const modalities = normalizeInputModalities(raw.inputModalities)
+  if (modalities !== undefined) out.inputModalities = modalities
   if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
   if (Object.keys(out).length === 0) return null
   return out

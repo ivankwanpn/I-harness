@@ -17,6 +17,7 @@ import {
 import {
   resolveProviderProtocol,
   type SettingsDefaultModel,
+  type SettingsInputModality,
   type SettingsLlm,
   type SettingsModel,
   type SettingsProviderConfig,
@@ -89,6 +90,9 @@ interface ProviderView {
   apiKeyEnv?: string
   /** M59: literal extra request headers (user config wins over the template). */
   headers?: Record<string, string>
+  /** M61: the ROUTE's declared content types (user config wins over the
+   * template; a model entry may narrow/override it — see resolveModel). */
+  inputModalities?: SettingsInputModality[]
   models: ModelDescriptor[]
   defaultModel?: string
 }
@@ -365,8 +369,8 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         }
       }
 
-      const profile = runtimeProfile(view, apiKey)
       const userModel = view.user?.models?.find((model) => model.id === modelId)
+      const profile = runtimeProfile(view, apiKey, userModel?.inputModalities)
       const contextWindow = resolveEffectiveModelContext({
         profile,
         modelId,
@@ -432,14 +436,26 @@ function providerView(
     ...(user?.headers !== undefined
       ? { headers: user.headers }
       : template?.headers !== undefined ? { headers: template.headers } : {}),
+    // M61: content types — a USER declaration wins over the built-in template
+    // (absent on both = text-only, the M14 negative capability).
+    ...(user?.inputModalities !== undefined
+      ? { inputModalities: user.inputModalities }
+      : template?.inputModalities !== undefined ? { inputModalities: template.inputModalities } : {}),
     models,
     ...(template?.defaultModel !== undefined ? { defaultModel: template.defaultModel } : {}),
   }
 }
 
-function runtimeProfile(view: ProviderView, apiKey: string | undefined): ProviderProfile {
+function runtimeProfile(
+  view: ProviderView,
+  apiKey: string | undefined,
+  modelModalities?: SettingsInputModality[],
+): ProviderProfile {
   const template = { ...(view.template ?? {}) }
   delete template.apiKey
+  // M61: the MODEL entry narrows/overrides the route's declaration; absent on
+  // both → no field (text-only, the M14 negative capability).
+  const modalities = modelModalities ?? view.inputModalities
   return {
     ...template,
     name: view.id,
@@ -448,6 +464,7 @@ function runtimeProfile(view: ProviderView, apiKey: string | undefined): Provide
     ...(view.baseURL !== undefined ? { baseUrl: view.baseURL } : {}),
     ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
     ...(view.headers !== undefined ? { headers: view.headers } : {}),
+    ...(modalities !== undefined ? { inputModalities: modalities } : {}),
     models: view.models.map((model) => model.id),
     ...(apiKey !== undefined ? { apiKey } : {}),
   }

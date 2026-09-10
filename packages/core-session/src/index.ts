@@ -490,7 +490,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
       // M33: a pruned callId is projected as its substitute — the raw output
       // stays durably in the log; only the model-visible text narrows.
       const record = pruned.get(ev.callId)
-      pendingResults.push({ role: "tool", toolCallId: ev.callId, content: record !== undefined ? renderPruneSubstitute(record) : JSON.stringify(ev.output) })
+      pendingResults.push({ role: "tool", toolCallId: ev.callId, content: record !== undefined ? renderPruneSubstitute(record) : toolResultText(ev.output) })
       // Defensive (M14 spec §8): persisted logs bypass append validation (CLI
       // resume merges via events.push; fromJSONL does not validate), so a
       // truthy non-array `output.images` must NOT throw — treat the output as
@@ -620,6 +620,28 @@ export function deriveSessionTitle(session: Session): SessionTitleView | null {
     view = { title: ev.title, messageSeqs: ev.messageSeqs, source: ev.source, eventSeq: ev.seq ?? 0 }
   }
   return view
+}
+
+/** M61: the MODEL-VISIBLE text of a tool result. An output carrying images
+ * keeps them OUT of the text — the base64 rides the follow-up user message as
+ * real image parts, so stringifying the envelope put megabytes of base64 in
+ * front of the model as text too (a 1 MB image ≈ 1.4 M chars of prompt). The
+ * shape mirrors deriveSearchText's rule: objects lose `images` (described by
+ * the short descriptor instead), arrays and primitives stringify as-is. */
+function toolResultText(output: unknown): string {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) {
+    return JSON.stringify(output) ?? String(output)
+  }
+  const record = output as Record<string, unknown>
+  const images = record["images"]
+  // Only a REAL image array is stripped — a malformed `images` member stays
+  // part of the faithful payload (the M14 defensive rule for persisted logs).
+  if (!Array.isArray(images) || images.length === 0) return JSON.stringify(output) ?? String(output)
+  const { images: _images, ...rest } = record
+  const hasRest = Object.keys(rest).length > 0
+  const restText = hasRest ? (JSON.stringify(rest) ?? String(rest)) : ""
+  const descriptor = imageDescriptor(images as ImageInput[])
+  return hasRest ? restText + descriptor : descriptor.trimStart()
 }
 
 function imageDescriptor(images: ImageInput[] | undefined): string {

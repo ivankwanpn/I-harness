@@ -390,6 +390,28 @@ describe("provider protocol + models objects (Task 1)", () => {
     expect(stripped("https://x.com")).toBe("https://x.com")
   })
 
+  it("M61: inputModalities normalizes per route AND per model; junk degrades to text-only", () => {
+    const provider = normalizeSettings({
+      llm: {
+        providers: {
+          p: {
+            inputModalities: ["text", "image"],
+            models: [
+              { id: "a", inputModalities: ["image", "image", "audio", 7] },
+              { id: "b", inputModalities: "image" },
+              { id: "c" },
+            ],
+          },
+        },
+      },
+    }).llm.providers.p
+    expect(provider?.inputModalities).toEqual(["text", "image"])
+    // per-model: known names kept once, unknown dropped; a non-array vanishes
+    expect(provider?.models).toEqual([{ id: "a", inputModalities: ["image"] }, { id: "b" }, { id: "c" }])
+    // absent everywhere → no field at all (the M14 text-only default)
+    expect(normalizeSettings({ llm: { providers: { q: { baseURL: "https://x" } } } }).llm.providers.q?.inputModalities).toBeUndefined()
+  })
+
   it("protocol is a closed three-value enum at mutate: unknown value fails loud, valid accepted", async () => {
     const { store, root } = await newStore()
     await expect(

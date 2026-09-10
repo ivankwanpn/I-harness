@@ -528,7 +528,12 @@ describe("M14 multimodal", () => {
     append(s, { type: "step/end" })
     const msgs = deriveMessages(s)
     const results = msgs.filter((m) => m.role === "user" || m.role === "tool")
-    expect(results.some((m) => m.role === "tool" && m.content === '{"ok":true,"images":[{"mediaType":"image/png","dataBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}]}')).toBe(true)
+    // M61: the tool text keeps the NON-image members only — the base64 rides
+    // the image part below, never the text (it used to be stringified whole).
+    const toolMsg = results.find((m) => m.role === "tool")!
+    expect(toolMsg.content).toContain('{"ok":true}')
+    expect(toolMsg.content).toContain("image: unnamed")
+    expect(toolMsg.content).not.toContain(PNG)
     const synthetic = results.find((m) => m.role === "user" && Array.isArray(m.content) && m.content.length === 2)! as { content: { type: string; text?: string; image?: unknown }[] }
     expect(synthetic.content[0]).toEqual({ type: "text", text: "Attached image(s) from tool result:" })
     expect(synthetic.content[1]).toMatchObject({ type: "image", image: { mediaType: "image/png" } })
