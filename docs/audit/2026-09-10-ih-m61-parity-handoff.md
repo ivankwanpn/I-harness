@@ -3,7 +3,7 @@
 日期：2026-09-10 · 分支 `m61`（自 `main` @ `86d6f34` = M60 尖端）
 前一份：`docs/audit/2026-09-09-ih-m60-integration-handoff.md`
 
-**一句話**：§4b 的其餘六項外觀對齊全部落地（`Worked for X`、即時 token、模型顯示名、Always-Approve 第三檔、`/effort` 即時作用、時間戳已確認），並修好使用者回報的 **resume 失效**（TUI 預設根本不持久化）。
+**一句話**：§4b 的其餘六項外觀對齊全部落地（`Worked for X`、即時 token、模型顯示名、Always-Approve 第三檔、`/effort` 即時作用、時間戳已確認），並修好使用者回報的 **resume 失效**（TUI 預設根本不持久化）。**本輪結束時使用者裁定 TUI 凍結（不再投資），見 §5。**
 
 ---
 
@@ -112,8 +112,19 @@
 - **`promptCap = floor(rows/2)`** 仍會在小視窗裁掉大型覆蓋層（M60 §5 已記，非本輪引入）。
 - installer 每輪都已重建（最後 12:5x 版）；**注意 `build-installer` 現在一律重建 dist**，再也不會出貨舊 bundle。
 
-## 5. 注意事項
+## 5. 裁定：TUI 凍結（2026-09-10）
 
+使用者裁定「**TUI 放著不再投資**」：程式碼與分支保留，但**停止**外觀對齊（§4a settings 面板、§4b 未竟項）與後續 TUI 打磨；之後的推進改走 CLI / web / 其他方向。本輪所有 TUI 修復（m59 起）仍然有效並已合併在 `m61`。
+
+凍結時的最後狀態：`m61` = `f87a303`，installer 13:09 版，`verify-installer` PASS，全 workspace typecheck 0 錯。
+
+已知未竟（凍結後不再處理）：
+- §4a settings 單一捲動面板、§4b 剩餘外觀項。
+- `promptCap = floor(rows/2)` 在小視窗裁掉大型覆蓋層。
+- **模型請求無逾時**：provider 不回應時回合會一直等（Esc 現在取消得掉，但不會自動收斂）——若要恢復 TUI 工作，這是第一順位。
+- case-027 全套並行的 spawn flake（已把預算提到 150s）。
+
+## 6. 注意事項
 - 分支 `m61` 疊在 `main`（M60 尖端）之上；**不要**直接 push 到 `main`。
-- 使用者機器：`~/.i-harness/settings.json`（opencode go 供應商，`busyEnter: "interrupt"` = Steer）。修復後首次啟動會建立 `~/.i-harness/sessions/`。
+- 使用者機器：`~/.i-harness/settings.json`（`busyEnter: "interrupt"` = Steer）；`deepseek` route 目前是 **protocol `openai-completions` + baseURL `https://api.deepseek.com/anthropic` + model `deepseek-flash`** 的**不匹配組合**（`/anthropic` 那條路是 Anthropic 格式），實測會讓請求停在半路。能跑的是 `opencode go`（`https://opencode.ai/zen/go` + `openai-completions`）+ `glm-5.3-flash`。
 - grok 源碼在 `D:\grok-build-main`；`[Click here to Upgrade]` 是 grok 自己的訂閲推廣，**不對齊**。
