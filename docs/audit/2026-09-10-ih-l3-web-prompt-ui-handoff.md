@@ -77,7 +77,13 @@
 
 > **環境事實（本輪排障結論，值得記下）**：這台機器先前**跑不了** Playwright——DSH 內有 `playwright@1.61.1`，但它要瀏覽器 revision **1228**，而快取裡只有 **1217**（另一個較舊的 Playwright 用的）。補下載後可用：`chromium-1228`（Chrome for Testing 149.0.7827.55）與 `chromium_headless_shell-1228` 裝在 `%LOCALAPPDATA%\ms-playwright`。驅動方式是**從 DSH 的安裝位置 import**（`file:///D:/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/.../playwright`），所以 **I-harness 的 `package.json` / `pnpm-lock.yaml` 零改動**。
 
-**仍然沒有涵蓋的**（下一輪候選）：**approval / question 卡片的真迴路**。`packages/web-host/test/host-routes.test.ts` 的 `withHost` 固定 `approveAll: true`（執行器永遠不問），唯一帶 `approvalBridge` 的測試是**手工掛 answerer**、不是由真的工具請求驅動。所以「工具被擋 → 卡片彈出 → 按下才執行」這條路目前**只有合成 frame 的證據**（`ui-page.test.ts`），沒有真迴路。
+> **後續（同日晚）：改用 DSH plugin，上面那個臨時做法已淘汰。** 裝了 [`dsh-browser-playwright`](https://github.com/ChenyuHeee/dsh-browser-playwright)（`dsh plugin --profile web add dsh-browser-playwright` → 0.1.1），它把 **17 個 `browser_*` 工具**＋`ctx.browser` seam 掛進 profile，比我手寫 Playwright 腳本好得多（a11y 快照 + 穩定 ref、每 session 一個 browser context、截圖存附件）。實測可用。
+> - **它需要 chromium revision 1243**（自帶 `playwright-core@1.63.0`），跟我下載的 1228 不是同一個——但**不需要下載**：它 `AUTO_CHANNELS = ['chromium','chrome','msedge','edge']` 會自動探測，本機已有 Chrome 與 Edge。
+> - **載入需要重啟 `dsh web`**：bundle 清單在 loader 啟動時組成，`dsh.profile.bundles` 的新增**不會**隨新 session 生效（`patchReload: 'live'` 只管 `cordis.patch.yml` 的熱重載）。**這裡我先前判斷錯過一次**（以為開新 session 就夠）。
+> - 它宣告的 peer 範圍 `@deepseek-ai/dsh-llm`/`dsh-tools` `>=0.1.0-rc.2 <0.1.0-rc.7` 與本地 DSH **`0.1.5-rc.1` 不符**，但 `dsh --profile web --dump-config` 顯示三個 row（`browser` / `browser-playwright` / `browser-tool`）**確實進了 composed tree**，且實跑 `browser_navigate` 成功——**版本落差沒有擋住載入**（至少目前沒有）。
+> - 驗證指令：`pnpm dsh --profile web --dump-config`（**不會**啟動 server，是查「這個 profile 到底載了什麼」的正規方法）。
+
+**仍然沒有涵蓋的**（下一輪候選）：**approval / question 卡片的真迴路**。`packages/web-host/test/host-routes.test.ts` 的 `withHost` 固定 `approveAll: true`（執行器永遠不問），唯一帶 `approvalBridge` 的測試是**手工掛 answerer**、不是由真的工具請求驅動。所以「工具被擋 → 卡片彈出 → 按下才執行」這條路目前**只有合成 frame 的證據**（`ui-page.test.ts`），沒有真迴路。**現在有 `browser_*` 工具可以直接從瀏覽器那一端驗它了。**
 
 ## 5. 已知邊界 / 殘留
 
