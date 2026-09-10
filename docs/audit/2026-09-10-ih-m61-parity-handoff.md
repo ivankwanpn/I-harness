@@ -1,9 +1,11 @@
-# M61 交接：grok 外觀對齊第二批 + resume 修復
+# M61 交接：TUI 外觀對齊收尾 → TUI 凍結 → CLI/web 轉向
 
-日期：2026-09-10 · 分支 `m61`（自 `main` @ `86d6f34` = M60 尖端）
+日期：2026-09-10 · 分支 `m61`（自 `main` @ `86d6f34` = M60 尖端）· 最後 commit `2a36965`
 前一份：`docs/audit/2026-09-09-ih-m60-integration-handoff.md`
 
-**一句話**：§4b 的其餘六項外觀對齊全部落地（`Worked for X`、即時 token、模型顯示名、Always-Approve 第三檔、`/effort` 即時作用、時間戳已確認），並修好使用者回報的 **resume 失效**（TUI 預設根本不持久化）。**本輪結束時使用者裁定 TUI 凍結（不再投資），見 §5。**
+**一句話**：上半場把 §4b 的其餘六項外觀對齊做完，並修好使用者回報的 **resume 失效**；使用者隨即裁定 **TUI 凍結（不再投資）**（§5）；下半場轉向 **CLI / web** —— `i-harness sessions`（§5b）、`/` 唯讀頁（§5c）、驗收輪抓到的 events 500（§5d），以及一項安全性修復：**web 的 Host/Origin 柵欄原本取決於 auth，裸跑 `i-harness web` 時整段被跳過**（§5e/§5f）。
+
+> **接手請從 §7 看起**（現況、下一步、待裁定）。只想知道今天動了什麼 → §1 的表。
 
 ---
 
@@ -18,6 +20,14 @@
 | `e4e1e30` | `fix(m61)`: **installer 出貨舊 bundle** + 圖片從未到模型 + base64 進 prompt |
 | `66c121a` | `fix(m61)`: fs 工具失敗改為「回傳」而非拋出（使用者裁定 A 案） |
 | `0c90a65` | `fix(m61)`: cancel 真的能停掉 parked request；函式庫 console 不再打穿畫面 |
+| `9d175dd` | `feat(m61)`: `i-harness sessions` — durable store 的 CLI 讀取面（§5b） |
+| `4c56f22` | `fix(m61)`: web host 服務真正的 session store，不是 cwd |
+| `7be9623` | `feat(m61)`: `/` 唯讀頁 + session 列 `updatedAt`（§5c） |
+| `d234f21` | `fix(m61)`: events 路由 404 guard、`NO_COLOR` harness 陷阱、flake 診斷升級（§5d） |
+| `eb37042` | `docs(m61)`: 更正「1,598 行膠水」的說法（那是分支歷史，此 repo 無法核對） |
+| `2a36965` | `fix(m61)`: **web 的 Host/Origin 柵欄與 auth 解耦**（DNS-rebind / 跨站 WebSocket，§5e/§5f） |
+
+> 上表在 `2a36965` 之後**未 commit** 的變更集＝case-027 隔離那 5 個檔，見 **§7c（待裁定）**。
 
 ## 0. 使用者回報的問題（本輪追加，全部已修）
 
@@ -110,7 +120,7 @@
 - **§4a settings 對齊**（grok 單一捲動面板 + `/ to search`）**仍未動**——這是使用者在 §4b 之前原本點名的項目。落點與注意事項見 M60 交接 §6。
 - **case-027 並行 flake**：全套並行時 `spawn-running` 會逾時（單獨跑 5.2s 綠）；本輪再次複現後已把該 marker 的預算提到 150s，屬倉庫既有 PTY/spawn flake，不是回歸。
 - **`promptCap = floor(rows/2)`** 仍會在小視窗裁掉大型覆蓋層（M60 §5 已記，非本輪引入）。
-- installer 每輪都已重建（最後 12:5x 版）；**注意 `build-installer` 現在一律重建 dist**，再也不會出貨舊 bundle。
+- installer：凍結後又重建過兩次，**最後一次 17:00**（`verify-installer` PASS）；`build-installer` 現在一律重建 dist，再也不會出貨舊 bundle（§0a）。**仍未涵蓋 case-027 隔離那批未 commit 的變更**（§7c）。
 
 ## 5. 裁定：TUI 凍結（2026-09-10）
 
@@ -203,6 +213,22 @@ TUI 不再投資後改推 CLI。第一個補的缺口：**durable store 沒有�
   獨立的單檔閘門（其餘 PTY 檔照常跑）。在還沒做這件事之前，**不要把它算進「全套綠」的判準**。
   （本輪已讓它的失敗訊息可診斷：不再是無資訊的 "Test timed out"，而是指名 step 3 與那個 marker。）
 
+  **已處置（同日晚）：隔離 + 獨立閘門。**
+  （⚠️ 本節所述的 5 個檔**寫這份交接時尚未 commit**——作者依 TUI 凍結裁定把它留給使用者拍板，見 **§7c**。）
+  - `packages/tui/vitest.config.ts` 的 `exclude` 加入 `test/harness/case-027.test.ts` → 預設
+    `pnpm -r test` 不再看到它（其餘 **70 檔 / 770 測**照跑）。
+  - 它**仍然會跑**：`pnpm --filter @i-harness/tui test:quarantine`（用
+    **`vitest.quarantine.config.ts`** 這個第二份 config）。**不能用 CLI `--exclude` 解隔離**——
+    vitest 是把 CLI 的 exclude **附加**到 config 陣列，不是取代，所以 `--exclude ""` 無效（實測
+    `No test files found`）；這是踩過的坑，記下來。
+  - 根 `pnpm test` = `pnpm -r --no-bail test && pnpm test:quarantine`：**兩段都跑**，所以隔離
+    不等於不驗，只是**分開判定**。
+  - 另修一個更隱蔽的問題：根 `test` 原本是 `pnpm -r test`，**遇第一個失敗就中止**——驗收輪實測它
+    停在 **64/70**，也就是一條 flake 會讓後面 6 個 package **根本沒被執行**。已加 `--no-bail`，
+    讓「哪一個紅」與「有沒有跑完」不再互相遮蔽。
+  - **代價要講清楚**：預設閘門現在少了一條 PTY 情境的覆蓋。要宣告 release 已驗證，**兩段都要綠**。
+    解除隔離的唯一正當理由是「量測證明預算真的夠」，不是為了讓某次紅燈消失。
+
 ## 5e. 安全性修復：web 的 Host/Origin 柵欄不再取決於 auth
 
 **發現（驗收輪，同一天）**：`web-host` 的柵欄（DNS-rebind 的 Host 檢查、CORS 的 Origin 檢查）原本
@@ -246,7 +272,7 @@ stream **讀回對話**。而 `127.0.0.1` 的 bind **不是**柵欄——DNS reb
 而 Node 內建 `WebSocket` 會**靜默忽略**自訂的 `Host` 標頭——用它測 rebind 會得到假的 UPGRADED。
 測這類柵欄要用 `node:http` 的**原始 handshake**，才能真的控制送出什麼。
 
-### 5f. 獨立複驗（verifier pass，同日；作者／驗證者分離）
+## 5f. 獨立複驗（verifier pass，同日；作者／驗證者分離）
 
 對**無 auth** 的真 server（`PORT=4391 node --import tsx apps/cli/src/index.ts web`，未帶 `--launch-token`）用 `node:http` 原始 handshake 重跑：
 
@@ -285,3 +311,47 @@ stream **讀回對話**。而 `127.0.0.1` 的 bind **不是**柵欄——DNS reb
   真 key」的值）；設計如此（`process.env > file`、env shadow 時拒寫、暫存 0600）。驗收輪不慎把內容
   印進了 session log，**建議輪換該檔內的 key**。
 - grok 源碼在 `D:\grok-build-main`；`[Click here to Upgrade]` 是 grok 自己的訂閲推廣，**不對齊**。
+
+---
+
+## 7. 現況、下一步、待裁定（接手請從這裡看）
+
+### 7a. 現況（`m61` @ `2a36965`，已推上 `origin/m61`）
+
+| 項目 | 狀態 |
+|---|---|
+| 全 workspace `pnpm -r typecheck` | **0 錯** |
+| `pnpm --filter @i-harness/web-host test` | **163 passed**（16 檔；含本輪新增的兩條柵欄 regression） |
+| installer | **17:00 重建**、`verify-installer` **PASS**；新 bundle 另外用**原始 handshake** 實測柵欄（evil Host 拒 / evil Origin 拒 / loopback UPGRADED） |
+| 工作樹 | **1 個未 commit 的變更集**（case-027 隔離 5 檔）→ §7c |
+| 遠端 | `origin/m61` = `2a36965`；`m61` 疊在 `main`（M60 尖端）之上 |
+
+- ⚠️ **使用者機器上裝的還是 13:11 那份（柵欄修前）**：`C:\Program Files\I-harness\dist\ih.mjs`。要跑一次 `build\I-harness-Setup-0.1.0.exe` 才會生效。
+- ⚠️ `case-027` 仍是**單獨跑才可靠**的測試；在隔離那批變更進版控之前，**不要把 `pnpm -r test` 的綠當成「全套綠」**。
+
+### 7b. 下一步（建議順序）
+
+1. **web 的 prompt UI（L3）** —— 讓 `/` 從「唯讀檢視器」變成「能對話」。
+   - 接點：mux 的 `command` endpoint（`packages/web-host/src/host.ts:576`，payload `{prompt}`），
+     契約 `{type:"open", streamId, endpoint:"command", payload:{sessionId, prompt}}` → 同一條 stream 回 `ready` → `item…` → `end`。
+   - 還要處理 `approval` / `question` 兩種 `value` 框架（mux 已備 `handlers`，見 `mux.ts`）。
+   - **柵欄已經先在位（§5e）**，所以現在做不會把洞放大——這正是把它排在 L3 之前的原因。
+2. **`case-027` 的長期處置**：它單獨跑綠（~5.2s）、與**任何**非單獨執行的負載耦合。要嘛量測後調預算，要嘛就承認它是獨立閘門（目前是後者）。
+3. TUI 凍結區（§4a settings 面板、§4b 剩餘外觀項、模型請求逾時）**維持不動**，除非使用者改變裁定。
+
+### 7c. 待使用者裁定
+
+- **case-027 隔離的 5 個檔要不要進版控**：`packages/tui/vitest.config.ts`、`packages/tui/vitest.quarantine.config.ts`（新）、`packages/tui/package.json`、根 `package.json`、本文件 §5d。
+  作者（隔壁 session）指出這**觸及 M61 §5 的 TUI 凍結裁定**（雖然是閘門可靠性、不是外觀），**刻意沒有 commit**，要使用者拍板。
+  - 代價要講清楚：預設閘門少一條 PTY 情境覆蓋；要宣告 release 已驗證＝**兩段都要綠**（`pnpm test` 現在兩段都跑）。
+  - 這批裡有一個**與 case-027 無關、但真的會咬人**的修正值得單獨留下：根 `test` 原本是 `pnpm -r test`，**遇第一個失敗就中止**——實測停在 **64/70**，後面 6 個 package **根本沒被執行**。`--no-bail` 讓「哪一個紅」與「有沒有跑完」不再互相遮蔽。
+- **`~/.i-harness/credentials.json` 的金鑰建議輪換**（驗收輪不慎把內容印進 session log，§6）。
+- **L3（web prompt UI）要不要交給隔壁 session 做**——它主動問了。
+
+### 7d. 這輪學到的（方法論）
+
+- **測柵欄要用原始 handshake**：`ws` 客戶端**從不送 `Origin`**；Node 內建 `WebSocket` 會**靜默忽略**自訂 `Host`——用它們測 rebind 只會得到假的 UPGRADED。要用 `node:http` 的 `request`（§5e/§5f 都有範例）。
+- **突變測試才算證明**：本輪三處（events 404、WS 柵欄、HTTP 柵欄）都是「把修補拆掉 → 測試必須紅」才敢說有效。
+- **驗收看行為標記/時間戳，不是檔案大小**：installer 出舊 bundle 那次（§0a）就是這樣才發現的。
+- **別人的修補要獨立複驗**：§5e 原本的嚴重度描述有一句是錯的（rebind 下攻擊頁與 API **同源**，CORS 不會介入），是複驗時才抓到；同時也抓出它的 regression test 只覆蓋了 WS 半邊。
+- **鄰居動同一棵樹時，先看再動**：本輪兩次與隔壁 session 共用工作樹，`git status` 先看清楚誰留了什麼未 commit 的東西，再決定要不要碰。
