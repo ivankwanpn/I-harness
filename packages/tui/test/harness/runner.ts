@@ -8,7 +8,7 @@
 // NOTE: cross-package test imports are blocked by the exports maps, so this
 // harness ships its own trimmed copy (tui-core's is untouchable from here).
 
-import { existsSync } from "node:fs"
+import { existsSync, readdirSync, statSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { spawn } from "node-pty"
 import type { IPty } from "node-pty"
@@ -106,7 +106,17 @@ export function spawnHost(opts: SpawnHostOptions): HostPty {
   }
 }
 
-/** Poll for a marker file (the host writes it with writeFileSync). */
+/** Poll for a marker file (the host writes it with writeFileSync).
+ *
+ * On timeout the rejection carries a SNAPSHOT of the marker dir, because the
+ * bare "not found after N ms" told us nothing about WHY (the M61 handoff's
+ * open question: case-027's `spawn-running` times out under load while the test
+ * passes in ~4.5s alone). The snapshot answers the question the next time it
+ * fires: which markers HAD landed and when — i.e. whether the scenario stalled
+ * BEFORE the wait (the prompt never reached the app / the turn never started)
+ * or the waited-on state itself never arrived. Listing markers by mtime also
+ * shows the wall-clock gaps between phases, which is what distinguishes
+ * "everything is merely slow" from "something stopped". */
 export function awaitMarker(dir: string, name: string, timeoutMs = 15000): Promise<void> {
   const path = `${dir}/${name}`
   return new Promise((resolve, reject) => {
@@ -116,12 +126,51 @@ export function awaitMarker(dir: string, name: string, timeoutMs = 15000): Promi
         resolve()
         return
       }
-      if (Date.now() - start >= timeoutMs) {
-        reject(new Error(`marker "${name}" not found in ${dir} after ${timeoutMs}ms`))
+      const elapsed = Date.now() - start
+      if (elapsed >= timeoutMs) {
+        reject(new Error(
+          `marker "${name}" not found in ${dir} after ${timeoutMs}ms${markerSnapshot(dir, start)}`,
+        ))
         return
       }
       setTimeout(tick, 50)
     }
     tick()
   })
+}
+
+/** The marker dir as a timeline: `name@+<sec>s` in the order the host wrote
+ * them. Markers are zero-byte fs witnesses, so mtime is the only ordering
+ * signal — and it is exactly the one needed to see where a stalled run got to.
+ * Best-effort: a read failure must never replace the real timeout error. */
+function markerSnapshot(dir: string, start: number): string {
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => ({ name: e.name, at: statSync(`${dir}/${e.name}`).mtimeMs }))
+      .sort((a, b) => a.at - b.at)
+    if (entries.length === 0) return " (no markers written at all)"
+    // Anchor at the FIRST marker so the sequence reads as one timeline; the
+    // wait start is marked with an arrow, which is what makes the two failure
+    // shapes distinguishable at a glance: markers AFTER the arrow mean the run
+    // was alive and progressing while we waited, markers that STOP before it
+    // mean the scenario (or the host) stopped before this wait began.
+    const base = entries[0]!.at
+    const waitAt = ((start - base) / 1000).toFixed(1)
+    // Insert the arrow before the first marker at/after the wait start.
+    const out: string[] = []
+    let arrowed = false
+    for (const e of entries) {
+      const at = ((e.at - base) / 1000).toFixed(1)
+      if (!arrowed && Number(at) >= Number(waitAt)) {
+        out.push(`[wait@+${waitAt}s]`)
+        arrowed = true
+      }
+      out.push(`${e.name}@+${at}s`)
+    }
+    if (!arrowed) out.push(`[wait@+${waitAt}s]`)
+    return `\n  ${entries.length} markers: ${out.join(" ")}`
+  } catch (error) {
+    return ` (marker snapshot failed: ${String(error)})`
+  }
 }
