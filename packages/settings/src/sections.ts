@@ -129,6 +129,8 @@ const MODEL_FIELDS: Record<string, FieldSpec> = {
   name: { type: "string" },
   contextWindow: { type: "number", validate: positiveInteger },
   maxTokens: { type: "number", validate: positiveInteger },
+  // M61: content types the model accepts (absent = text-only, M14).
+  inputModalities: { type: "array", items: { type: "enum", enum: ["text", "image"] } },
 }
 
 const providerConfigFields: Record<string, FieldSpec> = {
@@ -141,6 +143,8 @@ const providerConfigFields: Record<string, FieldSpec> = {
   // e.g. OpenCode Zen's x-opencode-session). A property-style object: dynamic
   // keys, string values.
   headers: { type: "object", items: { type: "string" } },
+  // M61: the route-level content types (a model entry may override).
+  inputModalities: { type: "array", items: { type: "enum", enum: ["text", "image"] } },
   models: { type: "array", items: { type: "object", fields: MODEL_FIELDS, required: ["id"] } },
 }
 

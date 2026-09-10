@@ -279,6 +279,58 @@ describe("model resolution", () => {
     expect(f.builds[0]?.profile.headers).toEqual({ "x-opencode-session": "sess-1" })
   })
 
+  it("M61: declared inputModalities reach the built client's profile (route and per-model)", async () => {
+    // Route-level declaration
+    const route = await fixture({
+      providers: {
+        zen: {
+          baseURL: "https://opencode.ai/zen/go",
+          protocol: "openai-completions",
+          apiKeyEnv: "ZEN_KEY",
+          models: [{ id: "glm-5.3-flash" }],
+          inputModalities: ["text", "image"],
+        },
+      },
+      defaultModel: { provider: "zen", model: "glm-5.3-flash" },
+      credentials: { ZEN_KEY: "k" },
+    })
+    await expect(route.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(route.builds[0]?.profile.inputModalities).toEqual(["text", "image"])
+
+    // The MODEL entry overrides the route's declaration
+    const model = await fixture({
+      providers: {
+        zen: {
+          baseURL: "https://opencode.ai/zen/go",
+          protocol: "openai-completions",
+          apiKeyEnv: "ZEN_KEY",
+          inputModalities: ["text", "image"],
+          models: [{ id: "text-only-model", inputModalities: ["text"] }],
+        },
+      },
+      defaultModel: { provider: "zen", model: "text-only-model" },
+      credentials: { ZEN_KEY: "k" },
+    })
+    await expect(model.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(model.builds[0]?.profile.inputModalities).toEqual(["text"])
+
+    // Absent everywhere → the profile carries no field (M14 text-only default)
+    const plain = await fixture({
+      providers: {
+        zen: {
+          baseURL: "https://opencode.ai/zen/go",
+          protocol: "openai-completions",
+          apiKeyEnv: "ZEN_KEY",
+          models: [{ id: "m" }],
+        },
+      },
+      defaultModel: { provider: "zen", model: "m" },
+      credentials: { ZEN_KEY: "k" },
+    })
+    await expect(plain.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(plain.builds[0]?.profile.inputModalities).toBeUndefined()
+  })
+
   it("returns discriminated unconfigured and invalid states without building a client", async () => {
     const empty = await fixture()
     await expect(empty.runtime.resolveModel({})).resolves.toEqual({

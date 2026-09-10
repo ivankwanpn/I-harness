@@ -3,8 +3,9 @@
 // build-installer.mjs — build the NSIS self-contained installer for I-harness.
 //
 // Steps (all cache-friendly; network steps are skipped-if-cached):
-//   1. App payload: resolve `<repo>/dist` — if `dist/ih.mjs` is missing, run
-//      G1's `scripts/build-dist.mjs` (idempotent) to produce it.
+//   1. App payload: run `scripts/build-dist.mjs` (M61: ALWAYS — the old
+//      reuse-if-present shortcut shipped a stale ih.mjs), unless an explicit
+//      `--dist-dir` names an existing payload to package as-is.
 //   2. Node runtime: ensure `build/node-win-x64/node.exe` — download the
 //      official node zip from nodejs.org if the cache is empty, then keep
 //      only what the installer ships (node.exe + *.dll + LICENSE).
@@ -86,19 +87,26 @@ async function ensureDist() {
   const distArgIdx = process.argv.indexOf("--dist-dir")
   if (distArgIdx !== -1) distDir = resolve(process.argv[distArgIdx + 1])
 
-  if (existsSync(join(distDir, "ih.mjs"))) {
-    console.log(`payload present: ${relative(repoRoot, distDir)}/ih.mjs`)
-    return distDir
-  }
   const buildDist = join(repoRoot, "scripts", "build-dist.mjs")
-  if (!existsSync(buildDist)) {
+  // M61: ALWAYS rebuild. The old "reuse dist/ when ih.mjs exists" shortcut
+  // shipped a STALE bundle: after the first build, every later installer
+  // packaged the same old ih.mjs, so the installed app kept running code from
+  // days earlier (the reported "rendering is wrong" was pre-parity m59 UI).
+  // An explicit --dist-dir means "package THIS payload" (CI/smoke hook) and
+  // keeps the old reuse behavior.
+  if (distArgIdx === -1 && !existsSync(buildDist)) {
     fail(
       `${relative(repoRoot, distDir)}/ih.mjs missing and scripts/build-dist.mjs ` +
         `is not present — the dist pipeline (milestone M45 G1) must land before ` +
         `the installer can be built. Nothing was downloaded.`
     )
   }
-  console.log(`payload missing (${relative(repoRoot, distDir)}/ih.mjs) — running scripts/build-dist.mjs (idempotent)`)
+  if (distArgIdx !== -1) {
+    if (!existsSync(join(distDir, "ih.mjs"))) fail(`--dist-dir ${distDir} has no ih.mjs`)
+    console.log(`payload present (--dist-dir): ${relative(repoRoot, distDir)}/ih.mjs`)
+    return distDir
+  }
+  console.log("building the app payload (scripts/build-dist.mjs)…")
   const dist = await runAsync(process.execPath, [buildDist], { stdio: "inherit" })
   // A non-zero exit means the payload is INCOMPLETE (esbuild writes ih.mjs
   // before the native --prod deploy, so an existence check alone would let a
