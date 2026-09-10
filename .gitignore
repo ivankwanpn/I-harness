@@ -1,5 +1,8 @@
 # Node
 node_modules/
+# Local pnpm store (the repo point a checkout's pnpm at D:\.pnpm-store\v11).
+# Build cache, never content — it kept showing up as the only untracked entry.
+.pnpm-store/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
