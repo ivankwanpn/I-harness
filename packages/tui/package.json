@@ -8,6 +8,7 @@
   },
   "scripts": {
     "test": "vitest run",
+    "test:quarantine": "vitest run --config vitest.quarantine.config.ts test/harness/case-027.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
