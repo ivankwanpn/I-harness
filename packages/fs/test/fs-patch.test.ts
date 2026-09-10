@@ -13,6 +13,14 @@ const PATCH_ADD = `*** Begin Patch\n*** Add File: new.txt\n+hello\n+world\n*** E
 const PATCH_UPDATE = `*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** End Patch\n`
 const PATCH_DELETE = `*** Begin Patch\n*** Delete File: old.txt\n*** End Patch\n`
 
+/** M61: an fs failure is RETURNED, not thrown — a throwing tool body fails the
+ * whole turn (core-agent M13/M25) and the call gets no result at all. */
+async function failureOf(p: Promise<unknown>): Promise<{ error: string; code: string }> {
+  const out = (await p) as { error?: string; code?: string }
+  expect(out.error, "expected a returned failure, got " + JSON.stringify(out)).toBeTypeOf("string")
+  return out as { error: string; code: string }
+}
+
 describe("apply_patch tool", () => {
   it("adds a file", async () => {
     const out = (await tool().execute({ patch_content: PATCH_ADD }, {})) as { ok: boolean }
@@ -58,9 +66,10 @@ describe("apply_patch tool", () => {
     expect(out.errors[0]?.path).toBe("a.txt")
     expect(out.errors[0]?.message).toMatch(/not found|context/i)
   })
-  it("rejects duplicate path in one patch (parse error throws)", async () => {
+  it("returns a failure for a duplicate path in one patch (parse error)", async () => {
     const dup = `*** Begin Patch\n*** Add File: new.txt\n+x\n*** Update File: new.txt\n@@\n-x\n+y\n*** End Patch\n`
-    await expect(tool().execute({ patch_content: dup }, {})).rejects.toThrow(/duplicate|already/i)
+    const fail = await failureOf(tool().execute({ patch_content: dup }, {}))
+    expect(fail.error).toMatch(/duplicate|already/i)
   })
   it("failed batch reports applied list and stops (ok:false)", async () => {
     // Add 成功後 Update 失敗（檔不存在）→ applied=[new.txt], errors=[a.txt]
@@ -70,9 +79,10 @@ describe("apply_patch tool", () => {
     expect(out.applied.some((f) => (f as { path: string }).path === "new.txt")).toBe(true)
     expect(out.errors.some((e) => (e as { path: string }).path === "a.txt")).toBe(true)
   })
-  it("rejects trailing content after *** End Patch (fail-closed)", async () => {
+  it("returns a failure for trailing content after *** End Patch (fail-closed)", async () => {
     const patch = `*** Begin Patch\n*** Add File: new.txt\n+x\n*** End Patch\n*** Add File: other.txt\n+y\n*** End Patch\n`
-    await expect(tool().execute({ patch_content: patch }, {})).rejects.toThrow(/end patch|trailing/i)
+    const fail = await failureOf(tool().execute({ patch_content: patch }, {}))
+    expect(fail.error).toMatch(/end patch|trailing/i)
   })
   it("supports *** End of File pure append (EOF marker AFTER + lines)", async () => {
     await writeFile(join(dir, "a.txt"), "first\n")
@@ -81,11 +91,12 @@ describe("apply_patch tool", () => {
     }, {})
     expect(await readFile(join(dir, "a.txt"), "utf-8")).toBe("first\nlast\n")
   })
-  it("rejects *** Move to: (fail-closed)", async () => {
+  it("returns a failure for *** Move to: (fail-closed)", async () => {
     await writeFile(join(dir, "a.txt"), "x\n")
-    await expect(tool().execute({
+    const fail = await failureOf(tool().execute({
       patch_content: `*** Begin Patch\n*** Update File: a.txt\n*** Move to: b.txt\n@@\n-x\n+y\n*** End Patch\n`,
-    }, {})).rejects.toThrow(/Move to|not supported/i)
+    }, {}))
+    expect(fail.error).toMatch(/Move to|not supported/i)
   })
   it("applies replacements by document order when pure-append precedes replace (regression)", async () => {
     // 合法補丁：純插入 chunk（+X，落檔尾）在文件序上先出現，後面才是指向較早行的 replace。

@@ -107,6 +107,16 @@ function exitCodeOf(r: Record<string, unknown>): number | undefined {
   return typeof code === "number" && Number.isFinite(code) ? code : undefined
 }
 
+/** M61: a tool's RETURNED failure shape (`{ error, code }` — the fs tools'
+ * soft failure) renders as the message itself, not as a JSON blob. Everything
+ * else keeps the faithful stringified payload. */
+function failureTextOf(output: unknown): string | undefined {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) return undefined
+  const r = output as Record<string, unknown>
+  if (typeof r.error !== "string" || r.error === "") return undefined
+  return typeof r.code === "string" && r.code !== "" ? `${r.error} (${r.code})` : r.error
+}
+
 /** M59 grok parity: an execute tool's result renders its human-readable
  * stream, not the `{ stdout, stderr, exitCode }` JSON envelope (grok's
  * expanded block shows the raw command output). Only the shell-tool shape
@@ -230,6 +240,7 @@ export function mapSessionEvent(ev: SessionEvent, state: EventMapState): TuiEven
       // JSON envelope (grok shows the raw command output).
       const redacted = redactToolPayload(ev.output)
       const text = structuredChangeText(ev.output)
+        ?? failureTextOf(redacted)
         ?? (kind === "execute" ? executeOutputText(redacted) : undefined)
         ?? stringifyOutput(redacted)
       return {

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createDurableSessionLoader, ModelUnavailableError } from "../src/index.ts"
@@ -385,6 +385,39 @@ describe("createSessionService", () => {
     const again = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true })
     await again.submit("s1", "x", new AbortController().signal)
     expect(again.hasAssembly("s1")).toBe(true)
+  }, 60_000)
+
+  it("M61: a failing fs tool is a model-visible result and the turn CONTINUES", async () => {
+    // The reported bug: `read_image` on a missing file threw, a throwing tool
+    // body fails the whole turn (core-agent M13/M25) — no tool/result, no
+    // turn/end — so the call sat in the scrollback with no answer ("it hung").
+    // fs tools now RETURN the failure; the model reads it and carries on.
+    const workspace = mkdtempSync(join(tmpdir(), "ih-fs-fail-"))
+    const service: SessionService = createSessionService({
+      workspace, approveAll: true,
+      modelPolicy: "test-mock",
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "read", args: { path: "missing.txt" } }] },
+        { role: "assistant", text: "recovered" },
+      ],
+    })
+    const assembly = await service.assemblyFor("s1")
+    await service.submit("s1", "read a missing file", new AbortController().signal)
+
+    const types = assembly.session.events.map((ev) => ev.type)
+    expect(types).toContain("tool/call")
+    expect(types).toContain("tool/result")
+    expect(types).toContain("turn/end") // the turn was NOT left dangling
+    const result = assembly.session.events.find((ev) => ev.type === "tool/result") as { output?: { error?: string; code?: string } }
+    expect(result.output?.error).toBeTypeOf("string")
+    expect(result.output?.code).toBe("ENOENT")
+    // model-visible: the failure text rides the tool result
+    const messages = deriveMessages(assembly.session)
+    const toolMsg = messages.find((m) => m.role === "tool")
+    expect(String(toolMsg?.content)).toContain("ENOENT")
+    // and the turn's assistant answer landed
+    expect(messages.some((m) => m.role === "assistant" && String(m.content).includes("recovered"))).toBe(true)
+    rmSync(workspace, { recursive: true, force: true })
   }, 60_000)
 
   it("settles a queued successor after a failed predecessor without an unhandled rejection", async () => {

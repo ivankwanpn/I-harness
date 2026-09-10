@@ -6,7 +6,8 @@
 // write happens here (the attachment store is the host-published upload path).
 import { readFile } from "node:fs/promises"
 import { extname } from "node:path"
-import { FsToolError, resolvePath } from "@i-harness/fs"
+import { FsToolError, resolvePath, softFail } from "@i-harness/fs"
+import type { FsToolFailure } from "@i-harness/fs"
 import type { Tool } from "@i-harness/core-tools"
 import type { ImageInput } from "@i-harness/core-session"
 
@@ -26,7 +27,7 @@ const MIME_BY_EXT: Record<string, ImageInput["mediaType"]> = {
   ".webp": "image/webp",
 }
 
-export function createReadImageTool(deps: ReadImageToolDeps): Tool<{ path: string }, { images: ImageInput[] }> {
+export function createReadImageTool(deps: ReadImageToolDeps): Tool<{ path: string }, { images: ImageInput[] } | FsToolFailure> {
   const maxImageBytes = deps.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES
   return {
     name: "read_image",
@@ -34,7 +35,10 @@ export function createReadImageTool(deps: ReadImageToolDeps): Tool<{ path: strin
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
-    execute: async ({ path }) => {
+    // M61: an fs failure is RETURNED, never thrown — a throwing tool body fails
+    // the whole turn (core-agent M13/M25) and the call sits in the scrollback
+    // with no result at all, which read as "read_image hung".
+    execute: async ({ path }) => softFail(async () => {
       const resolved = resolvePath(deps.workspace, path)
       const mediaType = MIME_BY_EXT[extname(resolved).toLowerCase()]
       if (mediaType === undefined) {
@@ -45,6 +49,6 @@ export function createReadImageTool(deps: ReadImageToolDeps): Tool<{ path: strin
         throw new FsToolError("FS_TOO_LARGE", `read_image: image is ${data.byteLength} bytes (max ${maxImageBytes})`)
       }
       return { images: [{ mediaType, dataBase64: data.toString("base64") }] }
-    },
+    }),
   }
 }
