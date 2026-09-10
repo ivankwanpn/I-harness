@@ -303,7 +303,17 @@ export function classifyDanger(
   if (verdict === "force") return "dangerous"
   // 現行 dangerous 語義（搬入 index.ts isDangerousArgv）：
   // deny-on-metachar ⇒ approval required even when every basename looks harmless。
-  const METACHAR = [";", "&&", "|", "$(", "`"]
+  //
+  // M62: `>` / `<` / `>>` join the set. They were missing, and they are the
+  // cheapest member of this family to reach: `echo hi > /etc/passwd` (or
+  // `> C:\Windows\...`) has NO dangerous basename and NO listed command, so it
+  // classified "none" and ran with no approval — measured, not theorised. The
+  // shell tools carry no workspace boundary of their own (the `write` TOOL is
+  // gated by isInsideWorkspace; a redirect is not), so leaving redirection out
+  // meant the one control built for "harmless basename, real effect" missed the
+  // easiest case of it. Over-asking here is the intended direction: this layer
+  // is deliberately deny-on-metachar, not a precise effect model.
+  const METACHAR = [";", "&&", "|", "$(", "`", ">", "<"]
   if (argv.some((t) => METACHAR.some((m) => t.includes(m)))) return "dangerous"
   // M22 final-review F1：兩側都 normalize 成 lowercase——basenamePath 已將 argv
   // token lowercase，但呼叫端清單（預設含混合大小寫的 "Remove-Item"）若原樣比對
