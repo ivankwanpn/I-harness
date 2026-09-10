@@ -71,6 +71,7 @@ import type {
   PermissionState,
   QuestionState,
   ScrollbackEngine,
+  SessionSummary,
   TuiAppOptions,
 } from "@i-harness/tui"
 import { createSessionService, type SessionService } from "@i-harness/session-executor"
@@ -118,7 +119,16 @@ export function buildSdkArgs(flags: Pick<TuiFlags, "sessionDir">): string[] {
   return ["sdk", "--session-dir", flags.sessionDir ?? resolveSessionDir()]
 }
 
-/** M61: the DURABLE session-store root. An explicit `--session-dir` wins;
+/** M61: the session picker's row filter — NEVER-USED sessions are hidden. The
+ * durable factory creates a session at construction, so a launch that never
+ * ran a turn used to leave a blank "Session" row at the top of the list.
+ * `turnCount === 0` is the backend's own proof the log is empty; `undefined`
+ * means the listing cannot inspect honestly → the row is KEPT. */
+export function visibleSessions(rows: SessionSummary[]): SessionSummary[] {
+  return rows.filter((row) => row.turnCount !== 0)
+}
+
+/** The DURABLE session-store root. An explicit `--session-dir` wins;
  * otherwise the config home's `sessions/` (the same `$IH_CONFIG_DIR` /
  * `~/.i-harness` convention the settings document uses). Before this the TUI
  * only persisted when `--session-dir` was passed — a bare launch ran the
@@ -370,7 +380,8 @@ export async function createExecutableApp(
     ...appOptions,
     backend,
     providerController,
-    listSessions: () => backend.listSessions(),
+    // M61: the picker hides never-used sessions (see visibleSessions).
+    listSessions: async () => visibleSessions(await backend.listSessions()),
     ...(explicitSessionId !== undefined ? { sessionId: explicitSessionId } : {}),
   })
   await app.initialize({

@@ -19,6 +19,7 @@ import {
   buildEmbeddedSessionOptions,
   buildSdkArgs,
   resolveSessionDir,
+  visibleSessions,
   createExecutableApp,
   createExecutableHost,
   createExecutableTui,
@@ -325,6 +326,15 @@ describe("tui flag parser", () => {
 
   it("builds durable resume options without an initial kickoff", () => {
     expect(buildEmbeddedSessionOptions({ sessionDir: "C:\\sessions", resume: "s-123", prompt: "kickoff" })).toEqual({ prompt: "", storeRoot: "C:\\sessions", rewindStoreRoot: "C:\\sessions", resumeSessionId: "s-123" })
+  })
+
+  it("M61: the picker hides never-used sessions (undefined turn count is kept)", () => {
+    const row = (id: string, turnCount?: number): SessionSummary =>
+      ({ id, title: id, updatedAt: 0, ...(turnCount !== undefined ? { turnCount } : {}) })
+    expect(visibleSessions([row("blank", 0), row("used", 3), row("unknown")]).map((r) => r.id)).toEqual([
+      "used",
+      "unknown",
+    ])
   })
 
   it("defaults the durable root to the config home's sessions/ (M61)", () => {
