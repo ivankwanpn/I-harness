@@ -13,8 +13,35 @@
 |---|---|
 | `52fc46a` | `feat(m61)`: 外觀對齊第二批 |
 | `c0f2aca` | `fix(m61)`: TUI 預設持久化 → resume／session picker 可用 |
-| `ec8ec43` | `docs(m61)`: 本檔 |
+| `ec8ec43` / `885b039` | `docs(m61)`: 本檔（含 picker 過濾與 deferred-create 的取捨） |
 | `b9c4e59` | `fix(m61)`: picker 隱藏從未使用的 session |
+| `e4e1e30` | `fix(m61)`: **installer 出貨舊 bundle** + 圖片從未到模型 + base64 進 prompt |
+| `66c121a` | `fix(m61)`: fs 工具失敗改為「回傳」而非拋出（使用者裁定 A 案） |
+
+## 0. 使用者回報的三件事（本輪追加，全部已修）
+
+### 0a. 「畫面渲染有問題」＝ installer 一直出貨**舊 bundle**
+- `scripts/build-installer.mjs` 第 1 步原本是「`dist/ih.mjs` 存在就沿用」→ 第一次建置之後**每次打包都用同一份舊 bundle**。使用者 11:43 裝的那版，程式碼其實是 **09-09 14:53** 的（`C:\Program Files\I-harness\dist\ih.mjs` 時間戳可證、`grep "Worked for"` = 0）——所以他看到 JSON envelope、runtime-context 列、6 行輸入框，全部是 m59 之前的行為。
+- **修**：`ensureDist()` 一律跑 `build-dist`；只有明確 `--dist-dir` 才沿用現成 payload。新 bundle 12:26 / 5,072,407 bytes（舊的 5,047,846）。
+- **教訓**：安裝檔的「檔案大小差不多」不代表內容是新的；驗收要看 bundle 內的行為標記或時間戳。
+
+### 0b. `read_image` 的圖片**從來沒有**到模型
+- 所有 adapter 都用 `profile.inputModalities` 判斷能不能送圖，但**產品裡沒有任何地方設定過它**（沒有 template、settings 也沒欄位）→ 永遠 text-only → `[image omitted: model is text-only]` 是唯一可能的結果。
+- **修**：`llm.providers.<route>.inputModalities` 與 `...models[i].inputModalities`（model 覆蓋 route，封閉集合 `{text,image}`，缺省＝text-only 的 M14 負能力）。使用者要讓 opencode-go 有視覺，加 `"inputModalities": ["text", "image"]` 即可。
+
+### 0c. 圖片 base64 被塞進 prompt 文字
+- `deriveMessages` 對 tool/result 是 `JSON.stringify(ev.output)` → `read_image` 的結果把**整張圖的 base64 當文字**送（1 MB 圖 ≈ 140 萬字元），**外加**真正的 image part。
+- **修**：`toolResultText()` 剝掉真正的 `images` 陣列、附短描述（`image: x.jpg 800x600 12345B base64:AAAA…`），與 `deriveSearchText` 同規則；非陣列的畸形 `images` 仍原樣保留（M14 防禦規則）。
+
+### 0d. `read_image` 讀不到檔案「卡住」 → **A 案：fs 失敗改為回傳**
+- 真相：tool body 拋錯 = **整個回合失敗**（core-agent M13/M25：整批結果丟棄、不寫 tool/result、不寫 turn/end）→ 那個 `Call read_image` 永遠沒有結果、回合列一直轉。
+- 使用者裁定 **A**：`FsToolError` 與一般 errno（ENOENT/EACCES/EISDIR/…）由 `read`/`write`/`edit`/`list_dir`/`apply_patch`/`read_image` **回傳** `{ error, code }`；真正的程式錯誤（TypeError…）仍照舊拋出、回合失敗。TUI 把這個形狀渲染成訊息（`ENOENT: … (ENOENT)`）而不是 JSON。
+- 新增端到端測試（`session-executor`）：讀不存在的檔案 → 模型看得到 ENOENT 結果、有 turn/end、回合繼續。
+
+### 0e. 「Resume 顯示 no sessions」
+- 不是新 bug：使用者先前的對話跑在**舊版**（沒有 store root＝ephemeral），**從來沒有寫進磁碟**，救不回來。修好後（`c0f2aca`）首次啟動會建立 `~/.i-harness/sessions/`；`listSessions` 現在只列真的跑過回合的 session，所以「開過沒用」的空殼不會出現。
+- 驗證：`~/.i-harness/sessions/` 建於 12:33（新版首次啟動），內含 3 個 94-byte 空殼（開過沒用）→ 被 `visibleSessions` 正確濾掉。
+
 
 ### 1a. 外觀對齊（§4b 其餘項目）
 
