@@ -45,12 +45,49 @@ describe("web composition (R-C1)", () => {
     return {
       port: 0,
       workspace,
+      // M61: the store is no longer the workspace by default — every test
+      // pins it explicitly to its own temp dir so the suite never reads (or
+      // writes) the real `~/.i-harness/sessions` store. The DEFAULT root is
+      // pinned by its own test below.
+      storeRoot: workspace,
       settings: new SettingsStore({ configDir }),
       credentials: createCredentialStore(join(configDir, "credentials.json")),
       providerRegistry: createProviderRegistry(),
       ...extra,
     }
   }
+
+  it("M61: without an explicit storeRoot the host serves the SHARED root", async () => {
+    // The regression this guards: the host rooted its jsonl store at the
+    // WORKSPACE, so `/api/sessions` answered {sessions:[]} no matter how many
+    // conversations the agent had kept.
+    const configDir = mkdtempSync(join(tmpdir(), "ih-web-shared-"))
+    const workspace = mkdtempSync(join(tmpdir(), "ih-web-shared-ws-"))
+    const sharedRoot = join(configDir, "sessions")
+    const seed = createSessionCoordinator(createJsonlBackend(sharedRoot))
+    try {
+      await seed.create({ sessionId: "shared-1" })
+    } finally {
+      await seed.close()
+    }
+    const prevConfigDir = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = configDir
+    let server: Awaited<ReturnType<typeof createWebServer>> | undefined
+    try {
+      server = await createWebServer({
+        port: 0,
+        workspace,
+        settings: new SettingsStore({ configDir }),
+        credentials: createCredentialStore(join(configDir, "credentials.json")),
+      })
+      const list = await fetch(`http://127.0.0.1:${server.port}/api/sessions`)
+      const body = (await list.json()) as { sessions: Array<{ id: string }> }
+      expect(body.sessions.map((row) => row.id)).toContain("shared-1")
+    } finally {
+      process.env.IH_CONFIG_DIR = prevConfigDir
+      await server?.close()
+    }
+  }, 60_000)
 
   it("serves session create/list over the thin composition", async () => {
     // The jsonl backend roots at the workspace — a temp dir so the repo's own
@@ -329,6 +366,9 @@ describe("web composition (R-C1)", () => {
       server = await createWebServer({
         port: 0,
         workspace,
+        // M61: the store is explicit (the seeded temp dir), never the real
+        // `~/.i-harness/sessions` — IH_CONFIG_DIR is set for SETTINGS here.
+        storeRoot: workspace,
         credentials: createCredentialStore(join(configDir, "credentials.json")),
         model,
         // no settings, no providerRegistry: both are resolved inside createWebServer

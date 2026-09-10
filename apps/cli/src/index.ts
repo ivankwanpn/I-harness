@@ -34,7 +34,7 @@ const USAGE =
   "usage: i-harness [<run|web|sdk|acp|tui|sessions> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
   "  tui [--prompt <text>] [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>] [--attach <id>] [--minimal|--fullscreen] |\n" +
   "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] |\n" +
-  "  web [--port N] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
+  "  web [--port N] [--session-dir DIR] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N]"
 
 export { runHeadless } from "./run.ts"
@@ -107,6 +107,9 @@ export async function main(argv: string[]): Promise<number> {
       // H-4: flag > PORT env > default (4310) — pickWebPort owns the priority.
       port: pickWebPort(args, process.env.PORT),
       workspace: process.cwd(),
+      // M61: the session store the host serves — an explicit --session-dir
+      // wins, else the shared default root (the same store the agent keeps).
+      ...(args.includes("--session-dir") ? { storeRoot: args[args.indexOf("--session-dir") + 1] } : {}),
       ...(launchToken !== undefined || hmacSecret !== undefined
         ? { auth: { launchToken, hmacSecret }, printLoginUrl: true }
         : {}),
