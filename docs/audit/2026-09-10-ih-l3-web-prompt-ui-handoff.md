@@ -103,3 +103,37 @@
 ```
 
 未 commit（等你裁定）。`packages/tui` **未被改動**（TUI 凍結維持）。
+
+---
+
+## 7. 附帶發現：外殼工具的批准是不對稱的（**既有行為，非本輪引入**）
+
+為了驗證 §5 那個「approval 卡片的真迴路」缺口，我用真瀏覽器 + 真 server（`approveAll` 未設）驅動了一次真的工具呼叫。**批准的迴路是通的**（`server.executor.onAssembly` → `approvals.attach(a.ctx)` 真的有掛上），但**卡片不會出現**——原因是路徑上平常根本不會有東西走到 ask：
+
+```
+◆ pwsh {"command":"Set-Content -Path '...\approval-ran.txt' -Value …"}
+→ {"stdout":"","stderr":"","exitCode":0}          ← 直接執行，無卡片
+```
+
+真 socket 追蹤：`approvalItems: []`、`errorFrames: []`、`commandSettled: true`。
+
+**根因**（`packages/guard-approval/src/index.ts`，`decide()`）：`SHELL_TOOLS = {bash, pwsh}` 這條分支**只在 `classifyDanger() != "none"` 時**回 `{kind:"ask"}`；指令被分類為安全時**掉到最後的 `return undefined`（= allow）**。
+
+**最小重現**（同一個 `createApprovalPolicy`）：
+
+| 情境 | 決策 |
+|---|---|
+| registry 有註冊 `pwsh`、`Set-Content …`（安全） | **無決策 → allow** |
+| registry 沒有這個工具 | `ask`（not registered） |
+| `write` 未給 `path` | `ask` |
+
+→ **`write` 會問、未知工具會問，唯獨外殼工具不危險就不問**，儘管它們是 non-ReadOnly 且 `askForNonReadOnly` 預設 `true`。
+
+**這不是打字錯誤，是被測試釘住的刻意行為**：`test/guard-approval.test.ts` 的 `Layer 3: harmless bash command executes` 用 `bash` + `echo hi` 斷言直接執行（同檔的 `Layer 1: non-readOnly tool asks` 用的是 `write`）。
+
+**但 `decide()` 自己的註解與實作不一致**：它寫「Layer 1: readOnly tools need no approval / any other non-readOnly tool requires approval」。照那個契約外殼工具應該問。**裁定（同日）：不改行為，只讓註解誠實**——已修正 `src/index.ts`（頂部新增三層「as implemented」總表 + 兩處就地註記），並把測試名稱改為顯式（`…WITHOUT asking (deliberate: shells are the one Layer-1 exception)`），另補一條**判別性**測試：answerer 改成 `throw`，證明「不是被批准，是根本沒問」（沒有這條，「executes」無法區分兩者）。
+
+**為什麼值得記住（安全邊界）**：外殼是唯一能跑任意指令的工具，而它現在**由 danger classifier 單獨把關**，那個 classifier 是 advisory 的（靠工具的 `getArgv` 解析）。同一個測試檔就記錄了它要撐住的繞過面：引號 `'r''m'`、metachar `; rm -rf /`、以及每個 basename 都安全但帶控制流的 `echo a; echo b`。**不要**把 Layer 1 讀成對外殼的保證——它是對「其他所有工具」的保證。
+
+**附帶效果**：因為如此，web 頁面的批准卡在真實情境下**幾乎不可能出現**（除非 agent 剛好跑了被歸類為危險的指令）。§5 那個「只有合成 frame 證據」的缺口，答案不是路不會通，而是**平常沒有車走那條路**。
+

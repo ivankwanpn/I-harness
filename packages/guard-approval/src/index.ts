@@ -25,6 +25,31 @@ export const DEFAULT_DANGEROUS_COMMANDS = [
 ]
 export const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 
+// The three layers, AS IMPLEMENTED (read this before trusting the comments in
+// decide() below — they used to describe an intent the code does not carry out):
+//
+//   readOnly tool .................. allow
+//   `write`, no path / path outside . ask
+//   any other non-readOnly tool .... ask          (the Layer 1 fallback)
+//   `bash` / `pwsh` ................ ask ONLY when classifyDanger() != "none"
+//
+// That last row is the asymmetry worth knowing: the shell tools are
+// non-readOnly, so Layer 1's stated rule would ask for every call — but the
+// SHELL_TOOLS branch returns a decision only for a DANGEROUS command and
+// otherwise falls through to `return undefined` (allow). A registered shell
+// tool running a benign command therefore executes with NO approval, even with
+// `askForNonReadOnly` true and no answerer registered. This is pinned
+// deliberately by "Layer 3: harmless bash command executes" in
+// test/guard-approval.test.ts, and changing it would make every shell call ask
+// (a product decision, not a cleanup).
+//
+// CONSEQUENCE, stated plainly: for the shell tools the safety boundary IS the
+// danger classifier, and that classifier is advisory — it parses `argv` via the
+// tool's own `getArgv`. The tests in the same file record the bypass surface it
+// is meant to survive (quoted `'r''m'`, metachar `; rm -rf /`, and control flow
+// whose every basename is harmless, e.g. `echo a; echo b`). Do not read Layer 1
+// as a guarantee about shells; it is a guarantee about every OTHER tool.
+
 const SHELL_TOOLS = new Set(["bash", "pwsh"])
 const WRITE_TOOLS = new Set(["write"])
 
@@ -82,6 +107,9 @@ function decide(
 
   // Layer 1: readOnly tools need no approval.
   // Config can also opt out of asking for non-readOnly tools wholesale.
+  // NOTE: this asks for "any other non-readOnly tool" (the else below) — the
+  // SHELL_TOOLS branch is the ONE exception, and it asks only for a dangerous
+  // command. See the layers comment at the top of this file.
   if (!tool?.isReadOnly && askForNonReadOnly) {
     if (!tool) {
       // Unknown to this registry ⇒ metadata unavailable ⇒ fail closed.
@@ -91,6 +119,9 @@ function decide(
       // Layer 3: dangerous shell command, classified on parsed argv via the
       // tool's getArgv (advisory input) + the danger-class classifier —
       // metachar-denying, OS-level/escape escalation to "extreme" (M22).
+      // A command classified "none" falls through to `return undefined`
+      // (ALLOW) — deliberate, pinned by "Layer 3: harmless bash command
+      // executes". It is also why Layer 1's rule does not hold for shells.
       const command = (call.args as { command?: string } | undefined)?.command ?? ""
       const argv = tool.getArgv?.(call.args) ?? command.split(/\s+/).filter((s) => s.length > 0)
       const danger = classifyDanger(argv, workspace, dangerousCommands, dangerousFlags)

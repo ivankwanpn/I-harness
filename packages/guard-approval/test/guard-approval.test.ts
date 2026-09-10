@@ -85,10 +85,24 @@ describe("guard-approval policy", () => {
     await expect(registry.execute({ name: "bash", args: { command: "rm -rf x" } })).rejects.toThrow(/approval|denied/i)
   })
 
-  it("Layer 3: harmless bash command executes", async () => {
+  it("Layer 3: harmless bash command executes WITHOUT asking (deliberate: shells are the one Layer-1 exception)", async () => {
     const { ctx, registry } = setup({ workspace: process.cwd() })
     registry.register(makeBashTool((args: { command: string }) => (args.command as string).split(" ")))
     registerApprovalAnswerer(ctx, async () => ({ approved: true }))
+    const result = await registry.execute({ name: "bash", args: { command: "echo hi" } })
+    expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
+  })
+
+  it("Layer 3: a benign shell command runs even with NO answerer (it never asks at all)", async () => {
+    // The discriminating version of the case above: an answerer that would
+    // THROW proves the ask never happened. Without it, "executes" alone cannot
+    // distinguish "approved by the answerer" from "never asked" — and the
+    // difference is the whole point of the Layer-1 exception for shells (see
+    // the layers comment in src/index.ts). Every OTHER non-readOnly tool fails
+    // closed here; the shell tools do not, because classifyDanger() said none.
+    const { ctx, registry } = setup({ workspace: process.cwd() })
+    registry.register(makeBashTool((args: { command: string }) => (args.command as string).split(" ")))
+    registerApprovalAnswerer(ctx, async () => { throw new Error("must not be asked") })
     const result = await registry.execute({ name: "bash", args: { command: "echo hi" } })
     expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
   })
