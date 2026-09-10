@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi } from "vitest"
@@ -536,6 +536,81 @@ describe("web composition (R-C1)", () => {
       }
     } finally {
       rmSync(workspace, { recursive: true, force: true })
+    }
+  }, 60_000)
+
+  // M62 regression: the web path must actually CONFINE the shell.
+  //
+  // Measured before this was wired: createWebServer never passed a sandbox at
+  // all (SessionServiceOptions had no such field, and nothing in the repo read
+  // settings.sandboxMode), so a shell command sent through the page wrote
+  // outside the workspace while settings.json said "workspace-write" — and the
+  // page's own `/sandbox` command was a false assurance. This is the green
+  // version of that measurement: the setting now reaches the assembly.
+  it("M62: settings.sandboxMode confines a shell command sent over the mux", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ih-web-sandbox-"))
+    const workspace = join(root, "ws")
+    const outsideDir = join(root, "outside")
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(outsideDir, { recursive: true })
+    // OUTSIDE the writable root but OWNED by this test: the first version of
+    // this test pointed at the temp ROOT, which plain Windows already refuses —
+    // so it "passed" for the wrong reason (measured: with the fix disabled the
+    // write was denied by the OS, not by the sandbox, and the mutant survived).
+    const outside = join(outsideDir, "outside.txt")
+    const configDir = mkdtempSync(join(tmpdir(), "ih-web-sandbox-cfg-"))
+    // A LOADED store written with the operator's setting. This matters: an
+    // UNLOADED SettingsStore answers `get()` with the DEFAULTS (workspace-write),
+    // so a test handing in a fresh store would pass on the default and never
+    // exercise the setting at all — which is exactly how the first version of
+    // this test survived its own mutation.
+    const loadedSettings = new SettingsStore({ configDir })
+    await loadedSettings.load()
+    await loadedSettings.set({ sandboxMode: "workspace-write" })
+
+    let server: Awaited<ReturnType<typeof createWebServer>> | undefined
+    try {
+      server = await createWebServer({
+        ...options(workspace),
+        settings: loadedSettings,
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: "pwsh", args: { command: `Set-Content -Path '${outside}' -Value ESCAPED` } }] } as MockStep,
+          { role: "assistant", text: "DONE" } as MockStep,
+        ],
+      })
+      const created = await fetch(`http://127.0.0.1:${server.port}/api/sessions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+      })
+      const { id } = (await created.json()) as { id: string }
+
+      const frames: string[] = []
+      const ws = new WebSocket(`ws://127.0.0.1:${server.port}/api/mux`)
+      await new Promise<void>((resolve) => { ws.addEventListener("open", () => resolve()) })
+      ws.addEventListener("message", (ev: { data: unknown }) => {
+        const m = JSON.parse(String(ev.data)) as { type?: string; streamId?: string; value?: { status?: string } }
+        if (m.type === "item" && m.streamId === "cmd" && m.value?.status !== undefined) frames.push(m.value.status)
+      })
+      ws.send(JSON.stringify({ type: "open", streamId: "cmd", endpoint: "command", payload: { sessionId: id, prompt: "go" } }))
+
+      const t0 = Date.now()
+      while (frames.length < 2 && Date.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 25))
+      ws.close()
+
+      expect(frames).toEqual(["started", "ok"])
+      // The whole point: the write did NOT land outside the workspace.
+      expect(existsSync(outside), "a shell command escaped the workspace").toBe(false)
+      // Discriminating: the tool ran and was REFUSED, so this is a confinement
+      // rather than a turn that failed for an unrelated reason.
+      const events = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${id}/events?limit=50`)
+        .then((r) => r.json()) as { events: Array<{ type: string; name?: string; output?: { exitCode?: number; stderr?: string } }> }
+      const result = events.events.find((e) => e.type === "tool/result")
+      expect(result, "the tool never ran — the turn failed for another reason").toBeDefined()
+      expect(result?.output?.exitCode).not.toBe(0)
+      expect(String(result?.output?.stderr ?? "")).toMatch(/denied|unauthorized/i)
+    } finally {
+      await server?.close()
+      rmSync(root, { recursive: true, force: true })
+      rmSync(configDir, { recursive: true, force: true })
     }
   }, 60_000)
 })
