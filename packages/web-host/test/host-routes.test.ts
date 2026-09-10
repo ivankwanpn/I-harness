@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { once } from "node:events"
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises"
+import { request as httpRequest } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import WebSocket from "ws"
@@ -184,6 +185,82 @@ describe("web-host HTTP", () => {
     } finally {
       await rm(root, { recursive: true, force: true }).catch(() => {})
     }
+  })
+
+  // M61 security: the mux upgrade fence (Host/Origin → loopback) used to sit
+  // inside `if (auth !== undefined)`, so a bare `i-harness web` — the default,
+  // no --launch-token — skipped it entirely and upgraded from ANY Origin. The
+  // `ws` client never sends an Origin, so the pre-existing upgrade tests could
+  // not see this. Browsers do NOT apply CORS to WebSocket frames, which makes
+  // the origin check the WHOLE fence for the mux: a page the user merely
+  // visited could open the mux and send `command` prompts (the agent runs
+  // tools) or read a session stream. Hence a raw handshake below, where Origin
+  // and Host can actually be set.
+  it("mux upgrade rejects a foreign Origin and a rebound Host — even with NO auth configured", async () => {
+    await withHost(async (base, _host, _coordinator, _root) => {
+      const { port } = new URL(base)
+      const attempt = (headers: Record<string, string>): Promise<string> =>
+        new Promise((resolve) => {
+          const req = httpRequest({
+            host: "127.0.0.1",
+            port: Number(port),
+            path: "/api/mux",
+            headers: {
+              connection: "Upgrade",
+              upgrade: "websocket",
+              "sec-websocket-version": "13",
+              "sec-websocket-key": "dGhlIHNhbXBsZSBub25jZQ==",
+              ...headers,
+            },
+          })
+          req.on("upgrade", (_res, socket) => { socket.destroy(); resolve("upgraded") })
+          req.on("response", (res) => { res.resume(); resolve(`http ${res.statusCode}`) })
+          req.on("error", (e) => resolve(`error ${(e as Error).message}`))
+          req.end()
+        })
+
+      // A foreign page: browser always sends Origin on a WS handshake.
+      expect(await attempt({ origin: "https://evil.example" })).not.toBe("upgraded")
+      // A rebound hostname: the attacker's domain resolving to loopback. The
+      // loopback BIND is not a fence — the Host header is.
+      expect(await attempt({ host: "evil.example" })).not.toBe("upgraded")
+      // Negative control: the local page must still work, or the fence is
+      // just "reject everything" and proves nothing.
+      expect(await attempt({ origin: `http://127.0.0.1:${port}` })).toBe("upgraded")
+    })
+  })
+
+  // The HTTP half of the same fix. Worth its own test because the two halves
+  // fail differently: under DNS rebinding the attacker's page and the API are
+  // SAME-ORIGIN (both `evil.example:PORT`), so CORS does not hide the response
+  // — the Host fence is the whole defence for the read side, and it has to
+  // hold on a host with no auth configured.
+  it("HTTP fence rejects a rebound Host and a foreign Origin — even with NO auth configured", async () => {
+    await withHost(async (base, _host, _coordinator, _root) => {
+      const { port } = new URL(base)
+      const raw = (headers: Record<string, string>): Promise<{ status: number; body: string }> =>
+        new Promise((resolve, reject) => {
+          const req = httpRequest({ host: "127.0.0.1", port: Number(port), path: "/api/sessions", headers }, (res) => {
+            let body = ""
+            res.setEncoding("utf8")
+            res.on("data", (c) => { body += c })
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, body }))
+          })
+          req.on("error", reject)
+          req.end()
+        })
+
+      const rebound = await raw({ host: "evil.example" })
+      expect(rebound.status).toBe(403)
+      expect(rebound.body).toContain("forbidden host")
+      const foreign = await raw({ host: `127.0.0.1:${port}`, origin: "https://evil.example" })
+      expect(foreign.status).toBe(403)
+      expect(foreign.body).toContain("forbidden origin")
+      // Controls: the local page keeps working, and a non-browser client (no
+      // Origin — curl, the SDK) is deliberately still allowed.
+      expect((await raw({ host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` })).status).toBe(200)
+      expect((await raw({ host: `127.0.0.1:${port}` })).status).toBe(200)
+    })
   })
 
   it("upgrades /api/mux, wires live streams, and close() resolves with a stream open", async () => {
