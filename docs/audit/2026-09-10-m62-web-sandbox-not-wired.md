@@ -102,3 +102,38 @@ new SettingsStore({configDir}).get().sandboxMode          → "workspace-write" 
 1. **`settings.sandboxMode` 現在對 web 是活的**；`run` 那條路仍以 `opts.sandbox`（程式化）為準，未與設定串接。要不要讓它也讀設定、要不要有 `--sandbox` 旗標，仍未定。
 2. **TUI 不在這條鏈上**（凍結區）。它有自己的沙箱路徑；`/sandbox` 這個 web 指令與 TUI 的設定現在寫的是**同一個** `settings.sandboxMode`，而 TUI 是否消費它**未查**。
 
+---
+
+## 8. installer 重建（同日稍後）
+
+```
+node scripts/build-installer.mjs   → build\I-harness-Setup-0.1.0.exe       51,296,391 B  (48.92 MiB)
+                                     build\I-harness-Setup-0.1.0-test.exe  51,293,137 B
+node scripts/verify-installer.mjs  → === VERIFY PASS ===
+```
+
+`verify-installer` 全數通過（靜默安裝 → 雙命令冒煙 → `dist-selfcheck` → 淨卸載），其中 **`dist-selfcheck: PASS`** 是重點：在**捆入的 node v22.23.2** 之下，minimal 宿主、Windows-ACL seam（`confined child exit=7`）、SDK spawn（`protocolVersion=2`）都在 dist 內自足。
+
+### 8b. 一個方法論教訓：**不要用 PowerShell `Select-String` 掃 dist bundle 的內容**
+
+我第一次驗 bundle 時得到「今天的程式碼不在裡面」的**假陰性**——`Select-String` 對這個 5 MB 單行 bundle 的 UTF-8 內容處理不可靠（同一批字串，Node 的 `String.includes` 全部 **true**，`Select-String` 卻報 MISSING，包含純 ASCII 的 `"Send a prompt"` 與 `"new session"`）。
+
+**正確作法**：用 Node 讀檔比對，例如
+
+```
+node -e "const s=require('fs').readFileSync('dist/ih.mjs','utf8'); console.log(s.includes('Send a prompt'))"
+```
+
+我沒有把假陰性當結論——查下去才發現是工具的問題，不是 bundle 的問題。
+
+### 8c. 使用者的機器上**還是舊的**
+
+```
+C:\Program Files\I-harness\dist\ih.mjs   2026-09-09 15:34:56 UTC   5,067,451 B
+  "Send a prompt" → false        ← L3 對話頁不在裡面
+D:\I-harness-main\dist\ih.mjs            2026-09-10 15:31:57 UTC   5,100,074 B
+  "Send a prompt" → true
+```
+
+`verify-installer` 驗的是** `-test.exe` 變體**（使用者層、不寫系統；在沙箱下正常，因為正常版寫 `Program Files` 需要提權）。**正常版尚未實跑安裝**——要讓安裝版生效，得執行一次 `build\I-harness-Setup-0.1.0.exe`（會跳 UAC）。
+
