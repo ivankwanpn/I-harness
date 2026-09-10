@@ -14,7 +14,7 @@ import { createRequire } from "node:module"
 import { randomBytes } from "node:crypto"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { append, type SessionEvent } from "@i-harness/core-session"
-import { createSessionCoordinator, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
+import { createSessionCoordinator, resolveSessionStoreRoot, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -100,6 +100,12 @@ export function parsePort(raw: string | undefined, fallback = DEFAULT_WEB_PORT):
 export interface WebServerOptions {
   port: number
   workspace: string
+  /** M61: the durable session store the host SERVES. Absent → the shared
+   * default root (`<harness home>/sessions`), the SAME store the TUI, the CLI
+   * and `--attach` use. It used to be `workspace` (the cwd) — so `/api/sessions`
+   * answered `{sessions:[]}` no matter how many conversations the agent had
+   * actually kept, and the search index pointed at the cwd too. */
+  storeRoot?: string
   /** Explicit caller-owned coordinator. Absent creates an owned JSONL
    * coordinator that close() drains after executor shutdown. */
   coordinator?: SessionCoordinator
@@ -381,7 +387,9 @@ export function defaultContextWindow(opts: WebServerOptions): number | undefined
 export async function createWebServer(opts: WebServerOptions): Promise<WebServer> {
   const listenPort = Number.isFinite(opts.port) && opts.port >= 0 ? Math.floor(opts.port) : DEFAULT_WEB_PORT
   const ownsCoordinator = opts.coordinator === undefined
-  const coordinator = opts.coordinator ?? createSessionCoordinator(createJsonlBackend(opts.workspace))
+  // M61: the session store is NOT the workspace — see WebServerOptions.storeRoot.
+  const storeRoot = opts.storeRoot ?? resolveSessionStoreRoot()
+  const coordinator = opts.coordinator ?? createSessionCoordinator(createJsonlBackend(storeRoot))
   // E-region seams for the host (optional pieces — the routes 404 per absent
   // piece, so an API-only embedder stays unchanged).
   const providerRegistry = opts.providerRegistry ?? createProviderRegistry()
@@ -432,7 +440,7 @@ export async function createWebServer(opts: WebServerOptions): Promise<WebServer
   // M29: the store root is always known here (the workspace) — the file-backed
   // query derives the search/lineage surface out of the box (reconcile-on-
   // search, :memory: index per process).
-  const sessionQuery = createFileBackedSessionQuery({ storeRoot: opts.workspace })
+  const sessionQuery = createFileBackedSessionQuery({ storeRoot })
   const executor = createSessionService({
     workspace: opts.workspace,
     coordinator,
