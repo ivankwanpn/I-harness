@@ -60,6 +60,25 @@
 
 > ⚠️ **一個誠實標註**：第一次跑 `pnpm test`（與我自己的另一個指令同時進行）時 `packages/web-host` **紅了**，且 `pnpm -r` 因此**沒跑到 `apps/cli`**（69/70）。單獨重跑同一份程式碼 → **全綠**。所以那是一次**負載下 flake**，不是我的回歸；但它同時再次印證了接手核查 §1c 的那條閘門問題（`pnpm -r` 在壓力下會少跑專案，而失敗訊息不會告訴你少了哪些）。
 
+### 4b. 真瀏覽器複驗（後補；L3 初次交付時**沒有**這一步）
+
+初次交付只有兩層證據（vm 跑頁面真腳本 + 真 host 真 socket），**頁面本身從未在瀏覽器裡對真 server 開過**——這是我自己標記過的缺口。補測以 Playwright 驅動真 Chromium，對 `createWebServer` 起的真 server（`mockScript` 假模型，不碰 API、不花錢）：
+
+```json
+{ "title": "I-harness", "headerVersion": "I-harnessv0.1.0",
+  "emptyList": "no sessions in this store", "composerInitiallyDisabled": true,
+  "composerEnabledAfterCreate": true, "sessionRows": 1, "statusAfterSelect": "ready",
+  "transcriptHasUserPrompt": true, "transcriptHasMockReply": true,
+  "transcriptHasTurnMarker": true, "statusAfterTurn": "ready",
+  "sendButtonLabel": "Send", "consoleErrors": [] }
+```
+
+**這一輪真的走完整條路**：按 `+ new session`（頁面自己 POST `/api/sessions`）→ composer 由 disabled 變 enabled → 點 Send → 執行器真的跑完一個回合 → 標記文字經「落定後回讀 durable log」出現在 transcript → 按鈕回到 `Send`、狀態回到 `ready`。**console 零錯誤。**
+
+> **環境事實（本輪排障結論，值得記下）**：這台機器先前**跑不了** Playwright——DSH 內有 `playwright@1.61.1`，但它要瀏覽器 revision **1228**，而快取裡只有 **1217**（另一個較舊的 Playwright 用的）。補下載後可用：`chromium-1228`（Chrome for Testing 149.0.7827.55）與 `chromium_headless_shell-1228` 裝在 `%LOCALAPPDATA%\ms-playwright`。驅動方式是**從 DSH 的安裝位置 import**（`file:///D:/deepseek-harness/node_modules/.pnpm/playwright@1.61.1/.../playwright`），所以 **I-harness 的 `package.json` / `pnpm-lock.yaml` 零改動**。
+
+**仍然沒有涵蓋的**（下一輪候選）：**approval / question 卡片的真迴路**。`packages/web-host/test/host-routes.test.ts` 的 `withHost` 固定 `approveAll: true`（執行器永遠不問），唯一帶 `approvalBridge` 的測試是**手工掛 answerer**、不是由真的工具請求驅動。所以「工具被擋 → 卡片彈出 → 按下才執行」這條路目前**只有合成 frame 的證據**（`ui-page.test.ts`），沒有真迴路。
+
 ## 5. 已知邊界 / 殘留
 
 - **重整（F5）後串流文字會消失一次**：`chunk`/`reasoning` 是 live-only（`subscribe()` 不重播歷史），所以「重新載入時正好有一個回合在跑」的那個回合，其**已串出的文字**不會回到畫面——但 `assistant/message` 落定後回讀日誌就會補上。這是既有 live seam 的性質，不是本頁引入的。
