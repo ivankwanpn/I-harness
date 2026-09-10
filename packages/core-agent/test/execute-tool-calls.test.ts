@@ -53,7 +53,19 @@ describe("executeToolCalls scheduler", () => {
     ])
     // `t.order` is SETTLEMENT order of the tool bodies (a later call settles
     // first); commit order is asserted separately via resultsOf above.
-    expect(t.order).toEqual(["fast", "slow"])
+    //
+    // M61: this used to be `toEqual(["fast", "slow"])` — a 35ms margin
+    // (40ms slow vs 5ms fast) standing in for "they really ran concurrently".
+    // That is a timing assertion, not a behaviour assertion: under load
+    // (70 packages transforming in parallel) the slow body's timer can be
+    // delayed past the fast one's, and the test went red while nothing was
+    // wrong — observed exactly once in a full-suite run, green in isolation.
+    // The concurrency claim is what this test is FOR, and maxConcurrent plus
+    // both bodies having settled prove it without borrowing the clock's
+    // authority. (Commit order — the actual contract in the test name — is
+    // still pinned above.)
+    expect(t.order).toHaveLength(2)
+    expect(t.order).toEqual(expect.arrayContaining(["fast", "slow"]))
     expect(t.maxConcurrent).toBe(2)
   })
 

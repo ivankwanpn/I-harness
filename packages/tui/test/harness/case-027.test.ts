@@ -61,5 +61,14 @@ test(
       else rmSync(markerDir, { recursive: true, force: true })
     }
   },
-  120_000,
+  // This budget MUST exceed the scenario's own worst-case step budget, or the
+  // outer timeout fires first and every inner `timeoutMs` is decoration. Sum
+  // of case-027.yaml's waits: 150s (spawn-running — the REAL nested session
+  // spawn, starved under full-suite load) + 40s (queued-prompt) + 30s
+  // (queue-cancelled) + 30s (task-cancelled) + 40s (live-tasks-zero) + 60s
+  // (teardown-wrote) + ~20 assert-cell-colors polls at 5s + 3 quiescent
+  // ≈ 250s. At the old 120s the scenario could NEVER report which step hung:
+  // vitest killed it mid-step and the report said only "Test timed out" —
+  // which is why raising the marker budget alone (M61) did not stop the flake.
+  300_000,
 )

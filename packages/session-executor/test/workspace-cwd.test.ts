@@ -4,13 +4,14 @@
 // `glob` with no path searched the vitest cwd — while the fs tools resolved
 // against the workspace.
 import { describe, expect, it } from "vitest"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createExecService, type ExecService } from "@i-harness/exec"
 import type { TerminalService } from "@i-harness/terminal"
 import { resolveRgPath } from "@i-harness/fs-search"
 import { createSessionAssembly } from "../src/assembly.ts"
+import { rmWorkspaceSync } from "./helpers.ts"
 
 const fwd = (p: string): string => p.replace(/\\/g, "/")
 
@@ -71,7 +72,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
       expect(fwd((output.stdout ?? "").trim())).toBe(fwd(workspace))
     } finally {
       await assembly.dispose()
-      rmSync(workspace, { recursive: true, force: true })
+      rmWorkspaceSync(workspace)
     }
   }, 30_000)
 
@@ -98,7 +99,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
       expect(fwd(job.stdout.trim())).toBe(fwd(workspace))
     } finally {
       await assembly.dispose()
-      rmSync(workspace, { recursive: true, force: true })
+      rmWorkspaceSync(workspace)
     }
   }, 30_000)
 
@@ -123,7 +124,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
       expect(fwd((output.stdout ?? "").trim())).toBe(fwd(workspace))
     } finally {
       await assembly.dispose()
-      rmSync(workspace, { recursive: true, force: true })
+      rmWorkspaceSync(workspace)
     }
   }, 30_000)
 
@@ -155,7 +156,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
       expect(fwd(data.trim())).toBe(fwd(workspace))
     } finally {
       await assembly.dispose()
-      rmSync(workspace, { recursive: true, force: true })
+      rmWorkspaceSync(workspace)
     }
   }, 30_000)
 
@@ -194,7 +195,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
       expect(fwd(output.output ?? "")).toContain(fwd(workspace))
     } finally {
       await assembly.dispose()
-      rmSync(workspace, { recursive: true, force: true })
+      rmWorkspaceSync(workspace)
     }
   }, 30_000)
 
@@ -220,7 +221,7 @@ describe("D1: assembly tools run in the assembly workspace", () => {
       expect(output.matches).toContain("marker.txt")
     } finally {
       await assembly.dispose()
-      rmSync(workspace, { recursive: true, force: true })
+      rmWorkspaceSync(workspace)
     }
   }, 30_000)
 })

@@ -122,6 +122,26 @@ describe("web-host HTTP", () => {
     })
   })
 
+  // M61: the events route was the ONE session route without the
+  // isUnknownSessionError guard — an unknown id reached `coordinator.load()`,
+  // whose ENOENT escaped as the generic 500 (error text AND the absolute store
+  // path on the wire), while `resume`/`goal` answered 404 for the same id. The
+  // route's own posture comment promises "events-route parity", and the SPA
+  // reads this endpoint first when a listed session has since been deleted —
+  // so the assertion below pins the status, the body, and the leak together.
+  it("GET events 404s an unknown session (parity with resume) and leaks no path", async () => {
+    await withHost(async (base) => {
+      const res = await fetch(`${base}/api/sessions/does-not-exist/events`)
+      expect(res.status).toBe(404)
+      const text = await res.text()
+      expect(text).toContain("session not found")
+      // The regression was visible content, not just the status: the raw
+      // ENOENT carried the absolute path of the real store.
+      expect(text).not.toContain("ENOENT")
+      expect(text).not.toContain(".jsonl")
+    })
+  })
+
   it("GET /api/settings serves defaults when no store is configured (404)", async () => {
     await withHost(async (base) => {
       const res = await fetch(`${base}/api/settings`)
