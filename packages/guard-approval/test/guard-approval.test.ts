@@ -131,6 +131,23 @@ describe("guard-approval policy", () => {
     await expect(registry.execute({ name: "bash", args: { command: "echo a; echo b" } })).rejects.toThrow(/approval|denied/i)
   })
 
+  it("M62: output redirection asks — harmless basename, no listed command, real write outside the workspace", async () => {
+    // The measured hole this closes: `echo hi > /etc/passwd` has no dangerous
+    // basename and no listed command, so the classifier said "none" and the
+    // command ran unapproved. The write TOOL is gated by isInsideWorkspace; a
+    // shell redirect is not, which is exactly the shape the metachar layer
+    // exists for ("harmless basename, real effect").
+    const { registry } = setup({ workspace: process.cwd() })
+    registry.register(makeBashTool((args: { command: string }) => (args.command as string).split(" ")))
+    await expect(registry.execute({ name: "bash", args: { command: "echo hi > /etc/passwd" } })).rejects.toThrow(/approval|denied/i)
+    // negative control: the same echo without a redirect still needs no approval
+    const { ctx, registry: ok } = setup({ workspace: process.cwd() })
+    ok.register(makeBashTool((args: { command: string }) => (args.command as string).split(" ")))
+    registerApprovalAnswerer(ctx, async () => { throw new Error("must not be asked") })
+    const result = await ok.execute({ name: "bash", args: { command: "echo hi" } })
+    expect(result.output).toEqual({ stdout: "ran", exitCode: 0 })
+  })
+
   it("askForNonReadOnly=false allows non-readOnly tools without approval", async () => {
     const { registry } = setup({ workspace: process.cwd(), askForNonReadOnly: false })
     registry.register(makeWriteTool)
