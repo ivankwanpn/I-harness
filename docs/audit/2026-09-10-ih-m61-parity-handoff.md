@@ -13,6 +13,8 @@
 |---|---|
 | `52fc46a` | `feat(m61)`: 外觀對齊第二批 |
 | `c0f2aca` | `fix(m61)`: TUI 預設持久化 → resume／session picker 可用 |
+| `ec8ec43` | `docs(m61)`: 本檔 |
+| `b9c4e59` | `fix(m61)`: picker 隱藏從未使用的 session |
 
 ### 1a. 外觀對齊（§4b 其餘項目）
 
@@ -38,6 +40,9 @@
   - `buildEmbeddedSessionOptions()` 一律帶 `storeRoot` + `rewindStoreRoot`。
   - `buildSdkArgs()` 也帶同一 root（`--attach` 生出的 SDK server 必須看到同一個 store，否則找不到 session）。
 - **既有測試已覆蓋後端行為**：`packages/tui/test/backend.test.ts` 的「emits session/open before the replacement session history」「rebinds the live event stream when opening another durable session」「durable TUI session survives close and reopen without repeating kickoff」——**缺的只有 host 的預設 root**，已補單元測試。
+- **附帶**：factory 在**建構時**就會建立 session，所以「開了沒用就關掉」的每一次啟動都會在 store 留下一筆空白 session，而它 `updatedAt` 最新 → 會排在 F3 清單**最上面**。因此 picker 端過濾掉後端能證明是空的列（`turnCount === 0`）；`turnCount === undefined`（後端無法誠實判斷）**保留**，不靠猜測隱藏。過濾放在 host 的 `visibleSessions()`（UI 政策），不動 backend 的 `listSessions` 契約。
+
+> 走過但**放棄**的路：讓 factory 延後建立 session（deferred create）。做法可行（已實測：開機 0 檔、首次 submit 才落檔），但 `defaultEmbeddedFactory` 的「建構即建立」語意被 4 個既有測試依賴，改動面偏大且逼近 sdk/attach 路徑，評估後改走 picker 過濾（風險小、使用者可見結果相同）。若日後要收掉空白檔本身（不只是 UI 隱藏），deferred create 是那條路。
 
 ## 2. 驗證（實跑）
 
@@ -45,7 +50,7 @@
 |---|---|
 | `pnpm --filter @i-harness/tui test` | 71 files / **771 passed**（含 harness 18 檔 21 測） |
 | `pnpm --filter @i-harness/provider-runtime test` | 20 passed |
-| `pnpm --filter @i-harness/tui-app test` | 29 passed |
+| `pnpm --filter @i-harness/tui-app test` | 30 passed |
 | `pnpm -r typecheck` | 全部 Done（exit 0） |
 | `pnpm -r test` | exit 0 |
 | `pnpm e2e` | 5 files / 12 passed |
@@ -62,7 +67,7 @@
 ## 4. 殘留 / 下一步
 
 - **§4a settings 對齊**（grok 單一捲動面板 + `/ to search`）**仍未動**——這是使用者在 §4b 之前原本點名的項目。落點與注意事項見 M60 交接 §6。
-- **case-027 並行 flake**：全套並行時 `spawn-running` 會 90s 逾時（單獨跑 5.2s 綠）；本輪已再次複現，屬倉庫既有 PTY/spawn flake。
+- **case-027 並行 flake**：全套並行時 `spawn-running` 會逾時（單獨跑 5.2s 綠）；本輪再次複現後已把該 marker 的預算提到 150s，屬倉庫既有 PTY/spawn flake，不是回歸。
 - **`promptCap = floor(rows/2)`** 仍會在小視窗裁掉大型覆蓋層（M60 §5 已記，非本輪引入）。
 - installer 本輪已重建（`build/I-harness-Setup-0.1.0{,-test}.exe`）。
 
