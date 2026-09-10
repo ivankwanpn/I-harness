@@ -21,7 +21,10 @@ async function withHost(
   const root = await mkdtemp(join(tmpdir(), "i-harness-web-host-workspaces-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
   const executor = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock", mockCycles: true, coordinator })
-  const host = createWebHost({ port: 0, executor, coordinator, ...buildOptions(coordinator) })
+  // M62: the host is told which workspace the executor runs in, mirroring the CLI
+  // composition — this is what lets the created-session response warn when a
+  // caller's `cwd` names a different directory.
+  const host = createWebHost({ port: 0, executor, coordinator, workspace: process.cwd(), ...buildOptions(coordinator) })
   const { port } = await host.listen()
   try {
     await run(`http://127.0.0.1:${port}`, host, coordinator, root)
@@ -165,6 +168,47 @@ describe("web-host workspace routes (task 3.1, ported)", () => {
 
       const workspaces = await (await fetch(`${base}/api/workspaces`)).json() as { workspaces: Array<{ sessionIds: string[] }> }
       expect(workspaces.workspaces[0]!.sessionIds).toEqual([id])
+    }, (coordinator) => ({ workspaceRegistry: createWorkspaceRegistry(coordinator) }))
+  })
+
+  // M62: an accepted `cwd` is GROUPING metadata — the executor still runs in the
+  // server's workspace, so a caller pointing a session at another directory must
+  // be told. Measured before this: server in A, session created with cwd B, and a
+  // relative `Set-Content` landed in A. The warning is the honest replacement for
+  // a rejection, because accepting-and-recording a cwd is a deliberate feature
+  // (the case above pins it).
+  it("M62: a cwd that differs from the server's workspace comes back as workspaceWarning", async () => {
+    await withHost(async (base, _host, _coordinator, root) => {
+      const dir = join(root, "elsewhere")
+      await mkdir(dir, { recursive: true })
+      const res = await fetch(`${base}/api/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: dir }),
+      })
+      expect(res.status).toBe(200)
+      const body = await res.json() as { id: string; workspaceWarning?: string }
+      expect(body.id).toBeTruthy()
+      expect(body.workspaceWarning, "a session outside the server's workspace must be flagged").toContain("grouping only")
+      expect(body.workspaceWarning).toContain(process.cwd())
+    }, (coordinator) => ({ workspaceRegistry: createWorkspaceRegistry(coordinator) }))
+  })
+
+  it("M62 negative control: a cwd EQUAL to the server's workspace carries no warning", async () => {
+    await withHost(async (base) => {
+      const res = await fetch(`${base}/api/sessions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: process.cwd() }),
+      })
+      expect(res.status).toBe(200)
+      const body = await res.json() as { id: string; workspaceWarning?: string }
+      expect(body.workspaceWarning).toBeUndefined()
+      // and no cwd at all is likewise silent
+      const res2 = await fetch(`${base}/api/sessions`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+      })
+      expect(((await res2.json()) as { workspaceWarning?: string }).workspaceWarning).toBeUndefined()
     }, (coordinator) => ({ workspaceRegistry: createWorkspaceRegistry(coordinator) }))
   })
 
