@@ -104,6 +104,7 @@ import {
 import type { SessionService } from "@i-harness/session-executor"
 import type { AuthContext } from "./auth.ts"
 import { WebSocketMuxServer } from "./mux.ts"
+import { renderSessionsPage } from "./ui.ts"
 import { paginateEvents } from "./pagination.ts"
 import { LiveSessionStreams } from "./live.ts"
 import { ApprovalMuxBridge } from "./approval.ts"
@@ -440,6 +441,14 @@ export interface WebHostOptions {
    * owned — no seam piece needed).
    */
   modelSources?: ModelSources
+  /**
+   * M61: serve the built-in READ-ONLY page at `/` (session list + transcript;
+   * `ui.ts`). Default TRUE — `i-harness web` exists to be looked at, and the
+   * page is a few KB of self-contained HTML that reads the same public
+   * endpoints any client would. `false` restores the API-only stance
+   * (non-API routes 404 JSON) for embedders that front their own UI.
+   */
+  ui?: boolean
 }
 
 /** attachLiveSession() argument: the live Session instance the embedder appends to. */
@@ -800,6 +809,15 @@ export function createWebHost(opts: WebHostOptions): WebHost {
       res.end(JSON.stringify({ healthy: true, version: opts.version ?? DEFAULT_HOST_VERSION }))
       return
     }
+    // M61: the read-only page — the API's own face (session list + transcript;
+    // see ui.ts). Served AFTER the guard, so a fenced host never leaks
+    // conversations through `/`. Opt-out via `ui: false` (the API-only stance
+    // the B3-H3 test pins).
+    if ((opts.ui ?? true) && req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+      res.end(renderSessionsPage(opts.version ?? DEFAULT_HOST_VERSION))
+      return
+    }
     if (req.method === "GET" && url.pathname === "/api/auth/login") {
       if (auth === undefined) { res.writeHead(404); res.end(); return }
       const token = url.searchParams.get("token")
@@ -1057,11 +1075,16 @@ export function createWebHost(opts: WebHostOptions): WebHost {
         const id = ids[index]!
         let meta: SessionMeta | undefined
         let blank: boolean | undefined
+        let updatedAt: number | undefined
         if (profile.status === "rejected") {
           console.warn(`[i-harness] session list: profile for "${id}" failed: ${String(profile.reason)}`)
         } else {
           meta = profile.value.meta
           blank = profile.value.blank
+          // M61: the artifact mtime the profile already read — a client can
+          // order by recency without a second pass (the row used to carry no
+          // time at all, so a UI could not show "how long ago").
+          updatedAt = profile.value.updatedAt
           if (query !== "") {
             const hay = `${meta.title ?? ""} ${id}`.toLowerCase()
             if (!hay.includes(query)) return
@@ -1079,6 +1102,7 @@ export function createWebHost(opts: WebHostOptions): WebHost {
           // source for "当前 session 生效模型" without a full event read.
           ...(meta?.modelSelection !== undefined ? { modelSelection: meta.modelSelection } : {}),
           ...(blank !== undefined ? { blank } : {}),
+          ...(updatedAt !== undefined ? { updatedAt } : {}),
           ...(workspaceBySession?.has(id) ? { workspaceId: workspaceBySession.get(id) } : {}),
           ...(archivedSet?.has(id) ? { archived: true } : {}),
         })

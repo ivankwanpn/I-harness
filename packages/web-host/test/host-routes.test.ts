@@ -10,6 +10,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { askUser, type ApprovalRequest } from "@i-harness/interaction"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSessionCoordinator, type SessionCoordinator } from "@i-harness/session-persistence"
+import { createAuth } from "../src/auth.ts"
 import type { SessionQuery } from "@i-harness/session-query"
 import { SettingsStore } from "@i-harness/settings"
 import { createWebHost, type WebHost, type WebHostOptions } from "../src/host.ts"
@@ -726,15 +727,15 @@ describe("web-host mux question endpoint (task 3.3)", () => {
 })
 
 describe("web-host static serving (B3-H3)", () => {
-  // M26 C-scope: static SPA serving is a deferred one-liner (the branch's
-  // serveStatic is not ported) — non-API routes always 404 JSON. The
-  // traversal-prevention surface returns with the static host.
-  it("no staticDir → non-API routes stay 404 JSON (API-only host, unchanged)", async () => {
+  // M26 C-scope deferred static SPA serving; M61 ships the one piece that
+  // mattered — a built-in read-only page at `/` (ui.ts). `ui: false` keeps
+  // the original API-only stance for embedders that bring their own UI.
+  it("ui: false → non-API routes stay 404 JSON (API-only host, unchanged)", async () => {
     await withHost(async (base) => {
       const res = await fetch(`${base}/`)
       expect(res.status).toBe(404)
       expect(((await res.json()) as { error: string }).error).toBe("not found")
-    })
+    }, { ui: false })
   })
 })
 
@@ -788,5 +789,68 @@ describe("web-host object-body guard (FW-2: null body → 400, never 500)", () =
       await rm(root, { recursive: true, force: true }).catch(() => {})
       await rm(storeRoot, { recursive: true, force: true }).catch(() => {})
     }
+  })
+})
+
+// M61: the read-only page (`/`) — the API's own face. It reads exactly the
+// public endpoints any client uses (list + paged events), so these tests pin
+// both the document and the data path it depends on.
+describe("M61: the read-only page", () => {
+  it("GET / serves the HTML shell; /index.html too; /api/* is untouched", async () => {
+    await withHost(async (base) => {
+      const res = await fetch(`${base}/`)
+      expect(res.status).toBe(200)
+      expect(res.headers.get("content-type")).toContain("text/html")
+      const html = await res.text()
+      expect(html).toContain("<title>I-harness</title>")
+      expect(html).toContain("/api/sessions") // it fetches the public API
+      expect((await fetch(`${base}/index.html`)).status).toBe(200)
+      // the JSON surface keeps answering JSON
+      const health = await fetch(`${base}/api/health`)
+      expect(health.headers.get("content-type")).toContain("application/json")
+    })
+  })
+
+  it("the page's data path serves a REAL transcript (list → paged events)", async () => {
+    await withHost(async (base, _host, coordinator) => {
+      await coordinator.create({ sessionId: "page-1", title: "paged" })
+      await coordinator.append("page-1", [
+        { type: "turn/start" },
+        { type: "user/message", text: "你在什麼目錄" },
+        { type: "tool/call", callId: "c1", name: "bash", args: { command: "pwd" } },
+        { type: "tool/result", callId: "c1", name: "bash", output: { stdout: "/d/playground" } },
+        { type: "assistant/message", text: "目前是 /d/playground" },
+        { type: "turn/end" },
+      ])
+      await coordinator.flush("page-1")
+
+      const list = await (await fetch(`${base}/api/sessions`)).json() as {
+        sessions: Array<{ id: string; title?: string; updatedAt?: number; blank?: boolean }>
+      }
+      const row = list.sessions.find((s) => s.id === "page-1")
+      expect(row).toMatchObject({ title: "paged", blank: false })
+      // M61: the row carries the artifact mtime so a client can order by
+      // recency (it used to carry no time at all).
+      expect(row?.updatedAt).toBeTypeOf("number")
+
+      const page = await (await fetch(`${base}/api/sessions/page-1/events?limit=50`)).json() as {
+        events: Array<{ type: string; text?: string; name?: string }>
+        hasMore: boolean
+      }
+      const types = page.events.map((e) => e.type)
+      expect(types).toContain("user/message")
+      expect(types).toContain("assistant/message")
+      expect(types).toContain("tool/result")
+      expect(page.events.find((e) => e.type === "assistant/message")?.text).toContain("/d/playground")
+      expect(page.hasMore).toBe(false)
+    })
+  })
+
+  it("a fenced host keeps / behind the fence (401 without a token)", async () => {
+    const auth = createAuth({ hmacSecret: "a".repeat(64), launchToken: "launch-xyz" })
+    await withHost(async (base) => {
+      const res = await fetch(`${base}/`)
+      expect(res.status).toBe(401)
+    }, { auth })
   })
 })

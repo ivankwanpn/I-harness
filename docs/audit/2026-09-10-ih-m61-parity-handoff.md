@@ -136,6 +136,17 @@ TUI 不再投資後改推 CLI。第一個補的缺口：**durable store 沒有�
 - `sdk` 的 `session/list` 改用同一個 listing 實作（原本 45 行內嵌邏輯刪掉）。
 - 測試：`apps/cli/test/sessions.test.ts` 12 例（解析、空 store、壞檔、排序、transcript 尾巴、exit code）。
 
+## 5c. web：`/` 唯讀頁（R-C0/R-C1 其實早就做完了）
+
+凍結後查證：**R-C0（engine-owned 組合）與 R-C1（路由面）早已交付**——`apps/cli/src/web.ts` 是 567 行的 thin composition（檔頭明寫 1,598 行膠水未重造）、`packages/web-host` 有 23+ 路由 matcher + 16 個測試檔、`GET /api/sessions/:id/events`（beforeSeq 反向分頁）與 WS mux 都在。所以「web 架構重寫」沒有內容可做。
+
+真正缺的只有 **UI**：`/` 回 404（M26 明確延後 static serving）。本輪補上最小切片：
+
+- `packages/web-host/src/ui.ts` — 單一自帶 HTML（零框架、零建置），左欄 session 清單（新到舊，含 `running`/`empty` 徽章與相對時間）、右欄 transcript（`─── turn` / `❯` / `◆` / `→`；**internal runtime-context 不顯示**），「load older」走 `beforeSeq` 分頁。
+- `WebHostOptions.ui`（預設 **true**）；`ui: false` 保留原本 API-only 姿態（B3-H3 測試改釘這個）。
+- session 列新增 `updatedAt`（profile 本來就讀了，零額外 I/O）——清單終於能按新舊排。
+- 驗證：web-host 160 passed；**真實瀏覽器**（Playwright）開 `http://127.0.0.1:4392/`，畫面確實列出 15 筆真實 session 並成功渲染 `sess-mtv1y8t1-z3rwz` 的 transcript。
+
 ## 6. 注意事項
 - 分支 `m61` 疊在 `main`（M60 尖端）之上；**不要**直接 push 到 `main`。
 - 使用者機器：`~/.i-harness/settings.json`（`busyEnter: "interrupt"` = Steer）；`deepseek` route 目前是 **protocol `openai-completions` + baseURL `https://api.deepseek.com/anthropic` + model `deepseek-flash`** 的**不匹配組合**（`/anthropic` 那條路是 Anthropic 格式），實測會讓請求停在半路。能跑的是 `opencode go`（`https://opencode.ai/zen/go` + `openai-completions`）+ `glm-5.3-flash`。
