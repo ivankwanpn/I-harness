@@ -220,6 +220,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // M32 T3: verbatim effort passthrough (absent → the field is never set;
         // the adapter's translateReasoning owns the wire vocabulary).
         ...(deps.reasoningEffort !== undefined ? { reasoningEffort: deps.reasoningEffort } : {}),
+        // M61: the turn's abort signal rides the request so cancel reaches the
+        // transport — the loop only checks `aborted` when an event ARRIVES, so
+        // a provider parked on a silent socket could not be stopped.
+        ...(abort !== undefined ? { signal: abort } : {}),
       }
 
       // M25: provider/call before the model stream opens.

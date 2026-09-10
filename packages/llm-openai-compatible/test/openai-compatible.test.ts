@@ -33,6 +33,22 @@ describe("llm-openai-compatible protocol", () => {
     await it.return?.()
   })
 
+  it("M61: the request's abort signal reaches fetch (cancel kills a parked request)", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      // a real fetch rejects on abort; assert the init carried the signal
+      expect(init.signal).toBe(signal)
+      return new Response("", { status: 200 })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const controller = new AbortController()
+    const signal = controller.signal
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "", signal } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await it.return?.()
+  })
+
   it("maps SSE chunks to text and tool events with delta accumulation", async () => {
     const sse = [
       `data: ${JSON.stringify({ choices: [{ delta: { content: "hel" } }] })}`,

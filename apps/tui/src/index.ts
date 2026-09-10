@@ -84,7 +84,7 @@ import type { StatusRunner, StatusCommandContext } from "@i-harness/tui"
 // The mock-model script shape (structural — llm-mock stays a tui-only dep; a
 // host only ever hands the script-texture to the service option).
 type MockStep = { role: "assistant"; text?: string; toolCalls?: Array<{ name: string; args: unknown }> }
-import { mkdtempSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { SettingsStore, resolveSettingsPath } from "@i-harness/settings"
 import type { SettingsStoreSurface } from "@i-harness/settings"
@@ -137,6 +137,49 @@ export function visibleSessions(rows: SessionSummary[]): SessionSummary[] {
 export function resolveSessionDir(configDir?: string): string {
   const home = configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
   return join(home, "sessions")
+}
+
+/** M61: while the TUI owns the terminal, a library's stray console write lands
+ * AT THE CARET and corrupts the frame — the rewind journal's adoption note
+ * (`[rewind] bound pre-M54 journal …`) showed up INSIDE the prompt box. The
+ * run captures console.log/info/warn/debug/error into `<config home>/logs/
+ * tui.log` and restores the real console on teardown; logging failures are
+ * swallowed (they must never break the UI). */
+export function captureConsoleForTui(logPath: string): () => void {
+  const methods = ["log", "info", "warn", "error", "debug"] as const
+  const original = methods.map((name) => [name, console[name]] as const)
+  const format = (value: unknown): string => {
+    if (typeof value === "string") return value
+    if (value instanceof Error) return value.stack ?? `${value.name}: ${value.message}`
+    try {
+      return JSON.stringify(value) ?? String(value)
+    } catch {
+      return String(value)
+    }
+  }
+  try {
+    mkdirSync(dirname(logPath), { recursive: true })
+  } catch {
+    /* best effort — the capture still works without the file */
+  }
+  for (const name of methods) {
+    console[name] = ((...args: unknown[]): void => {
+      try {
+        appendFileSync(logPath, `${new Date().toISOString()} [${name}] ${args.map(format).join(" ")}\n`)
+      } catch {
+        /* never break the UI over a log line */
+      }
+    }) as never
+  }
+  return () => {
+    for (const [name, fn] of original) console[name] = fn
+  }
+}
+
+/** `<config home>/logs/tui.log` — where the captured console lines land. */
+export function resolveTuiLogPath(configDir?: string): string {
+  const home = configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
+  return join(home, "logs", "tui.log")
 }
 
 export function buildEmbeddedSessionOptions(flags: Pick<TuiFlags, "sessionDir" | "resume" | "prompt">): { prompt: string; storeRoot?: string; rewindStoreRoot?: string; resumeSessionId?: string } {
@@ -843,6 +886,9 @@ export async function runTui(flags: TuiFlags): Promise<number> {
     backend,
     sessionId: flags.attach ?? flags.resume,
   })
+  // M61: take the console BEFORE the terminal comes up — from here on a
+  // library's console write belongs in the log file, not at the caret.
+  const restoreConsole = captureConsoleForTui(resolveTuiLogPath())
   // M49 Task 8: startup honors the PERSISTED THEME (design §9.3) — the
   // palette given to the app is the resolved active theme; the minimal
   // region's ANSI comes from the same active palette (sgrFromPalette).
@@ -905,7 +951,15 @@ export async function runTui(flags: TuiFlags): Promise<number> {
   // the first-graceful paths (raw mode means Ctrl-C never becomes SIGINT).
   // M49 Task 8: minimal has NO terminal — teardown is a no-op there (the
   // terminal was never initialized; no leave-alt-screen bytes either).
-  const shutdownController = createTuiShutdownController({ close: () => backend.close(), stop: () => attach?.stop(), teardown: () => terminal?.teardown() })
+  const shutdownController = createTuiShutdownController({
+    close: () => backend.close(),
+    stop: () => attach?.stop(),
+    teardown: () => {
+      terminal?.teardown()
+      // M61: restore the real console once the terminal is handed back.
+      restoreConsole()
+    },
+  })
   const shutdown = (): Promise<void> => shutdownController.shutdown()
   const onSignal = (code: number): void => {
     process.removeListener("SIGINT", onSigint)
