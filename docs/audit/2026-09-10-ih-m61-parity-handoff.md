@@ -146,6 +146,52 @@ TUI 不再投資後改推 CLI。第一個補的缺口：**durable store 沒有�
 - `WebHostOptions.ui`（預設 **true**）；`ui: false` 保留原本 API-only 姿態（B3-H3 測試改釘這個）。
 - session 列新增 `updatedAt`（profile 本來就讀了，零額外 I/O）——清單終於能按新舊排。
 - 驗證：web-host 160 passed；**真實瀏覽器**（Playwright）開 `http://127.0.0.1:4392/`，畫面確實列出 15 筆真實 session 並成功渲染 `sess-mtv1y8t1-z3rwz` 的 transcript。
+  - 校正：實際 store 是 **16 筆**（`/api/sessions`、`i-harness sessions --json`、磁碟 `.jsonl` 三方一致），非 15。且這 16 筆的 `title` **全部缺席**（`modelSelection` 只有 1 筆有），所以頁面清單在真實資料上會顯示裸 id（`ui.ts` 的 `s.title || s.id` fallback）——不是 bug，但畫面比測試 fixture 空。
+  - 註：本文件用的 URL 是 `http://`（正確）。對外說明若寫成 `https://127.0.0.1:4310` 是錯的：該 server 是純 HTTP，HTTPS 直連得到 `HTTP 000`（schannel 對 IP + 自簽直接拒）。
+
+## 5d. 驗收輪（verifier pass）：一個真 bug、一個環境陷阱
+
+獨立複驗（非開發者自評）在 `7be9623` 上跑出的結果與修正：
+
+- **真 bug：`GET /api/sessions/:id/events` 對未知 session 回 500（唯一漏 guard 的路由）**
+  同一顆不存在的 id：`goal` → 404、`resume` → 404、`events` → **500**，而且 body 是原始
+  `ENOENT … open 'C:\Users\…\.i-harness\sessions\<id>.jsonl'`——**錯誤字串與絕對 store 路徑一起上線**。
+  根因：`host.ts` 的 `await coordinator.load(id)` 沒有 `isUnknownSessionError` guard；該 helper 被其他
+  **9 處**使用，就這條漏了。而 L400 的註解自己承諾「an unknown session answers 404 (events-route
+  parity)」，`jobs-routes.test.ts` 甚至有兩個測試以「events route parity」為名在驗 404 → 契約早就存在。
+  影響：SPA 的 `ui.ts` 對 `!res.ok` 只能顯示 `events unavailable (500)`——picker 列到已刪除的 session
+  時，使用者看到的就是這個。
+  修法：補上與其他 9 處相同的 guard + regression 測試（同時釘住 status、body、**不洩漏路徑**）。
+  已用突變測試證明該測試會抓到：拆掉 guard → `expected 500 to be 404` 紅。
+  實機複驗：`events` → **404** `{"error":"session not found: …"}`，與 `goal`/`resume` 三路由一致；
+  真 session 仍 **200**、分頁不變（`limit=5` → `hasMore=true, nextBeforeSeq=14`）。
+
+- **環境陷阱：`NO_COLOR` 會讓 PTY harness 紅（不是回歸，但讓「綠」不可信）**
+  `tui-core`/`tui` 的 `test/harness/runner.ts` 把子程序 env 設成 `{ ...process.env, FORCE_COLOR: "1" }`。
+  Node 視 `NO_COLOR` 為絕對（`--no-color` 別名），於是印
+  `Warning: 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.` 到 stderr——
+  **那條 stderr 就在受測 PTY 裡面**，直接打進畫面，`case-010` 的螢幕斷言因此位移。
+  只要環境裡有 `NO_COLOR`（CI runner、shell、編輯器都可能注入）就紅。
+  修法：兩個 runner 都改成先 `const { NO_COLOR: _noColor, ...env } = process.env` 再 `FORCE_COLOR: "1"`。
+
+- **flake 的真正機制（診斷升級，非「再放大數字」）**
+  `case-027` 的 test 層逾時原本 **120s**，卻小於它自己 YAML 內容的最壞預算（`spawn-running` 150s +
+  `queued-prompt` 40s + `queue-cancelled` 30s + `task-cancelled` 30s + `live-tasks-zero` 40s +
+  `teardown-wrote` 60s + ~20 個 5s cell poll ≈ **250s**）→ 外層永遠先砍，**每個內層 `timeoutMs` 都是裝飾**，
+  現場只會看到無資訊的「Test timed out」。這就是 M61 只把 marker 提到 150s 卻沒止住 flake 的原因。
+  修法：test 層提到 **300s**，讓內層預算真的可達。修完之後同樣的紅燈**第一次說得出病因**：
+  `step 3 (await-marker): marker "spawn-running" not found after 150000ms`——即**真實嵌套 spawn 在
+  全套並行下 150s 內起不來**（單獨跑 ~5s）。
+  其他兩個：`workspace-cwd` 的 `EBUSY` 是 PTY handle 未即時釋放（`rmSync` 的 `force:true` 只吞 ENOENT、
+  **不吞 EBUSY**），改成有界重試 helper（`test/helpers.ts` 的 `rmWorkspaceSync`，已單獨證明 EBUSY 重試語意）；
+  `assembly-import` 的 5s 逾時對「兩次模組圖載入 + `resetModules()` 清 transform 快取」太緊（冷啟 ~855ms），提到 30s。
+  另：`core-agent/execute-tool-calls` 有一條**時鐘斷言**——`t.order` 期待 `["fast","slow"]`，但那只是
+  40ms vs 5ms 的餘裕，滿載時會反轉。並發這件事由 `maxConcurrent === 2` + 兩個 body 都結算就已證明，
+  故改為不依賴時鐘（**真正的契約「commit 順序 = 模型順序」仍釘在 `resultsOf` 那條**）。
+
+- **仍未解**：`case-027` 的 `spawn-running` 在**全套並行**下仍可能 150s 起不來。`packages/tui` 自己已
+  `maxWorkers: 2`，但 `pnpm -r` 會讓 70 個 package 同時跑，18 個真 PTY 檔跟整個 workspace 搶機器。
+  這是**超額訂閱**，不是 bug：要不就給它更大的預算，要不就把 PTY harness 當成獨立序列閘門跑。
 
 ## 6. 注意事項
 - 分支 `m61` 疊在 `main`（M60 尖端）之上；**不要**直接 push 到 `main`。

@@ -44,11 +44,19 @@ export interface HostPty {
 }
 
 export function spawnHost(opts: SpawnHostOptions): HostPty {
+  // The scenes assert COLOURED cells, so the child must have colour ON. Node
+  // treats NO_COLOR as absolute (the `--no-color` alias) and prints
+  // "Warning: 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being
+  // set." to stderr — INSIDE the pty, i.e. onto the screen under test, which
+  // desynchronises every assert-screen/cell assertion. Inheriting the host's
+  // env is not enough: an ambient NO_COLOR (CI runners, shells, editors) then
+  // decides whether the suite passes. Drop it explicitly and set FORCE_COLOR.
+  const { NO_COLOR: _noColor, ...env } = process.env
   const pty = spawn(process.execPath, ["--import", "tsx", opts.hostFile, opts.markerDir, ...(opts.extraArgv ?? [])], {
     cols: opts.cols,
     rows: opts.rows,
     cwd: repoRoot,
-    env: { ...process.env, FORCE_COLOR: "1" },
+    env: { ...env, FORCE_COLOR: "1" },
   })
 
   let bytes = 0

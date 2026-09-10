@@ -1589,7 +1589,22 @@ export function createWebHost(opts: WebHostOptions): WebHost {
         res.end(JSON.stringify({ error: "afterSeq must be a number", code: "events-cursor-invalid" }))
         return
       }
-      const { session } = await coordinator.load(id)
+      // Unknown session → 404, never the generic 500 (the posture every other
+      // session route already keeps — `resume` right above, `goal` right
+      // below). Without this the raw ENOENT reached the client, error text and
+      // absolute store path included, and the SPA's only recourse was
+      // "events unavailable (500)" for a session it had merely listed stale.
+      let session: Session
+      try {
+        session = (await coordinator.load(id)).session
+      } catch (error) {
+        if (isUnknownSessionError(error)) {
+          res.writeHead(404, { "content-type": "application/json" })
+          res.end(JSON.stringify({ error: `session not found: ${id}` }))
+          return
+        }
+        throw error
+      }
       const page = paginateEvents(session, {
         ...(limitParam !== null ? { limit: Number(limitParam) } : {}),
         ...(beforeParam !== null && Number.isFinite(Number(beforeParam))
