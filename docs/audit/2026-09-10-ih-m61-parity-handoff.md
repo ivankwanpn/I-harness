@@ -27,7 +27,7 @@
 | `eb37042` | `docs(m61)`: 更正「1,598 行膠水」的說法（那是分支歷史，此 repo 無法核對） |
 | `2a36965` | `fix(m61)`: **web 的 Host/Origin 柵欄與 auth 解耦**（DNS-rebind / 跨站 WebSocket，§5e/§5f） |
 
-> 上表在 `2a36965` 之後**未 commit** 的變更集＝case-027 隔離那 5 個檔，見 **§7c（待裁定）**。
+> 上表之後的唯一變更集＝case-027 隔離那 5 個檔，**已於同日晚經使用者裁定後 commit**（見 §7c）。
 
 ## 0. 使用者回報的問題（本輪追加，全部已修）
 
@@ -214,7 +214,7 @@ TUI 不再投資後改推 CLI。第一個補的缺口：**durable store 沒有�
   （本輪已讓它的失敗訊息可診斷：不再是無資訊的 "Test timed out"，而是指名 step 3 與那個 marker。）
 
   **已處置（同日晚）：隔離 + 獨立閘門。**
-  （⚠️ 本節所述的 5 個檔**寫這份交接時尚未 commit**——作者依 TUI 凍結裁定把它留給使用者拍板，見 **§7c**。）
+  （使用者於同日晚裁定**保留並 commit**——見 §7c；作者原本依 TUI 凍結裁定把它留給使用者拍板。）
   - `packages/tui/vitest.config.ts` 的 `exclude` 加入 `test/harness/case-027.test.ts` → 預設
     `pnpm -r test` 不再看到它（其餘 **70 檔 / 770 測**照跑）。
   - 它**仍然會跑**：`pnpm --filter @i-harness/tui test:quarantine`（用
@@ -323,7 +323,7 @@ stream **讀回對話**。而 `127.0.0.1` 的 bind **不是**柵欄——DNS reb
 | 全 workspace `pnpm -r typecheck` | **0 錯** |
 | `pnpm --filter @i-harness/web-host test` | **163 passed**（16 檔；含本輪新增的兩條柵欄 regression） |
 | installer | **17:00 重建**、`verify-installer` **PASS**；新 bundle 另外用**原始 handshake** 實測柵欄（evil Host 拒 / evil Origin 拒 / loopback UPGRADED） |
-| 工作樹 | **1 個未 commit 的變更集**（case-027 隔離 5 檔）→ §7c |
+| 工作樹 | **乾淨**（case-027 隔離已 commit，見 §7c） |
 | 遠端 | `origin/m61` = `2a36965`；`m61` 疊在 `main`（M60 尖端）之上 |
 
 - ⚠️ **使用者機器上裝的還是 13:11 那份（柵欄修前）**：`C:\Program Files\I-harness\dist\ih.mjs`。要跑一次 `build\I-harness-Setup-0.1.0.exe` 才會生效。
@@ -339,12 +339,12 @@ stream **讀回對話**。而 `127.0.0.1` 的 bind **不是**柵欄——DNS reb
 2. **`case-027` 的長期處置**：它單獨跑綠（~5.2s）、與**任何**非單獨執行的負載耦合。要嘛量測後調預算，要嘛就承認它是獨立閘門（目前是後者）。
 3. TUI 凍結區（§4a settings 面板、§4b 剩餘外觀項、模型請求逾時）**維持不動**，除非使用者改變裁定。
 
-### 7c. 待使用者裁定
+### 7c. 已裁定 / 待辦
 
-- **case-027 隔離的 5 個檔要不要進版控**：`packages/tui/vitest.config.ts`、`packages/tui/vitest.quarantine.config.ts`（新）、`packages/tui/package.json`、根 `package.json`、本文件 §5d。
-  作者（隔壁 session）指出這**觸及 M61 §5 的 TUI 凍結裁定**（雖然是閘門可靠性、不是外觀），**刻意沒有 commit**，要使用者拍板。
-  - 代價要講清楚：預設閘門少一條 PTY 情境覆蓋；要宣告 release 已驗證＝**兩段都要綠**（`pnpm test` 現在兩段都跑）。
-  - 這批裡有一個**與 case-027 無關、但真的會咬人**的修正值得單獨留下：根 `test` 原本是 `pnpm -r test`，**遇第一個失敗就中止**——實測停在 **64/70**，後面 6 個 package **根本沒被執行**。`--no-bail` 讓「哪一個紅」與「有沒有跑完」不再互相遮蔽。
+- **case-027 隔離的 5 個檔：使用者裁定「保留並 commit」**（同日）。理由：隔離讓預設閘門不再每輪出現一條非缺陷紅燈，且同批有一個**與 case-027 無關、但真的會咬人**的修正——根 `test` 原本是 `pnpm -r test`，**遇第一個失敗就中止**，實測停在 **64/70**，後面 6 個 package **根本沒被執行**；`--no-bail` 讓「哪一個紅」與「有沒有跑完」不再互相遮蔽。
+  - **隔離的代價（要記住）**：預設閘門少一條 PTY 情境覆蓋；要宣告 release 已驗證＝**兩段都要綠**（`pnpm test` 現在兩段都跑）。
+  - ⚠️ **獨立複驗的更正：隔離閘門本身也不是穩定的綠。** 隔離後於同機實測 5 次單獨執行：**4 綠（各約 5.1s）、1 紅（152.3s，看起來就是卡在那個 150s 的 marker 預算上）**。所以 §5d 的「單獨跑穩定綠」要降級為「**單獨跑通常綠**」——它與機器負載的耦合比原本認定的更強，隔離只是把它從預設閘門移開，**不代表它變成可信的綠**。
+  - 附註（無行為影響）：`vitest.config.ts` 的 `exclude` 只列了 `node_modules`/`dist` 兩條，並沒有真的保留 vitest 的其餘預設 exclude；`packages/tui` 下沒有會被這條差異掃到的檔案，所以現況無影響，但註解的「Defaults preserved explicitly」說得比實際滿。
 - **`~/.i-harness/credentials.json` 的金鑰建議輪換**（驗收輪不慎把內容印進 session log，§6）。
 - **L3（web prompt UI）要不要交給隔壁 session 做**——它主動問了。
 
