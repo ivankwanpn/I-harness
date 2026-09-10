@@ -24,9 +24,10 @@ steps:
   # ── the running subagent (real spawn over the production key path).
   - write-pty: { data: "spawn a helper" }
   - write-pty: { data: "\r" }
-  # 90s: the REAL spawn assembles a nested session — under full-suite load the
-  # model/tool handshake can take tens of seconds.
-  - await-marker: { name: spawn-running, timeoutMs: 90000 }
+  # 150s: the REAL spawn assembles a nested session — under full-suite load
+  # (18 PTY files in parallel) the model/tool handshake has been seen to take
+  # minutes; solo it lands in ~5s. Documented repo-wide PTY/spawn flake.
+  - await-marker: { name: spawn-running, timeoutMs: 150000 }
   # ── the queued prompt.
   - write-pty: { data: "second" }
   - write-pty: { data: "\r" }
