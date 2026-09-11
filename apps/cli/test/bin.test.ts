@@ -46,3 +46,41 @@ describe("M44 global command shim (i-harness / ih)", () => {
     expect(r.stdout).toContain("usage: tui")
   }, 30_000)
 })
+
+// M62: `i-harness run` is the ONLY interface that executes shells and, until
+// this flag existed, it always ran with HeadlessOptions.sandbox unset — i.e.
+// unconfined — regardless of `settings.sandboxMode`. `web` was wired in
+// 891db14 and the TUI has its own path; headless was the last one. These are
+// spawn tests because the decision lives in the CLI's argument handling, which
+// `runHeadless` (driven directly by cli.test.ts) never sees.
+describe("M62 headless --sandbox", () => {
+  it("rejects an invalid mode instead of coercing it to a default", async () => {
+    // The failure mode being prevented: `--sandbox readonly` silently meaning
+    // workspace-write is the same false assurance the web fix removed.
+    const r = await runNode([SHIM, "run", "hi", "--sandbox", "readonly"])
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain("--sandbox requires one of")
+    expect(r.stderr).toContain("read-only")
+  }, 60_000)
+
+  it("rejects a missing value", async () => {
+    const r = await runNode([SHIM, "run", "hi", "--sandbox"])
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain("--sandbox requires one of")
+  }, 60_000)
+
+  it("documents the flag in help", async () => {
+    const r = await runNode([SHIM, "help"])
+    expect(r.stderr).toContain("--sandbox read-only|workspace-write|danger-full-access")
+  }, 30_000)
+
+  it("accepts a valid mode and proceeds past validation", async () => {
+    // This environment has no model configured, so the run itself stops at the
+    // M49 required-model gate. What is asserted is that it got PAST the sandbox
+    // branch — no usage error, no sandbox complaint.
+    const r = await runNode([SHIM, "run", "hi", "--sandbox", "read-only"])
+    expect(r.stderr).not.toContain("--sandbox requires one of")
+    expect(r.stderr).not.toContain("usage: i-harness run")
+  }, 60_000)
+})
+
