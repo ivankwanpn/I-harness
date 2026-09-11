@@ -18,6 +18,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import type { SessionAssembly, SessionServiceOptions } from "@i-harness/session-executor"
+import type { SandboxMode } from "@i-harness/sandbox"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
@@ -33,7 +34,7 @@ import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 const USAGE =
   "usage: i-harness [<run|web|sdk|acp|tui|sessions> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
   "  tui [--prompt <text>] [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>] [--attach <id>] [--minimal|--fullscreen] |\n" +
-  "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] |\n" +
+  "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
   "  web [--port N] [--session-dir DIR] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N]"
 
@@ -167,6 +168,37 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const yes = args.includes("--yes")
+  // M62: `--sandbox` is the headless face of `settings.sandboxMode`. Measured
+  // gap this closes: HeadlessOptions.sandbox was read from the caller and the
+  // CLI could not supply it, so `i-harness run` — the ONLY remaining interface
+  // that executes shells — always ran with sandbox unset, i.e. unconfined, no
+  // matter what settings.json said. `web` was wired in 891db14 and the TUI has
+  // its own path; this is the last one.
+  //
+  // Resolved HERE rather than inside runHeadless on purpose: HeadlessOptions
+  // stays an embedder contract where unset means "no sandbox requested", so the
+  // hidden __dist-selfcheck and the exported API keep their meaning.
+  const sandboxIdx = args.indexOf("--sandbox")
+  let sandboxMode: SandboxMode | undefined
+  if (sandboxIdx !== -1) {
+    const value = args[sandboxIdx + 1]
+    const allowed: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
+    if (value === undefined || !(allowed as readonly string[]).includes(value)) {
+      // Never coerce a typo to a default: `--sandbox readonly` silently meaning
+      // workspace-write is exactly the false assurance the web fix removed.
+      console.error(`--sandbox requires one of: ${allowed.join(" | ")}`)
+      return Promise.resolve(1)
+    }
+    sandboxMode = value as SandboxMode
+  } else {
+    // Load before reading: an UNLOADED SettingsStore answers get() with DEFAULTS,
+    // so skipping this would silently ignore the operator's file (the same trap
+    // the web fix hit — see docs/audit/2026-09-10-m62-web-sandbox-not-wired.md).
+    const { SettingsStore } = await import("@i-harness/settings")
+    const settings = new SettingsStore()
+    await settings.load()
+    sandboxMode = settings.get().sandboxMode
+  }
   // M25: --telemetry enables the independent host event stream (stdout JSONL
   // sink, assembled in run.ts). Default OFF; I_HARNESS_TELEMETRY=1 is the
   // env-var equivalent.
@@ -256,13 +288,13 @@ export async function main(argv: string[]): Promise<number> {
 
   // task = everything after the "run" command, excluding flag tokens/values.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry") return false
+    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry" || a === "--sandbox") return false
     const prev = args.slice(1)[i - 1]
-    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume"
+    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--sandbox"
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access]")
     return Promise.resolve(1)
   }
 
@@ -270,6 +302,8 @@ export async function main(argv: string[]): Promise<number> {
     workspace: process.cwd(),
     approveAll: yes,
     modelPolicy: "required",
+    // Mirrors the web path: explicit flag wins, otherwise the operator's setting.
+    sandbox: sandboxMode,
   }
   if (model) opts.model = model
   if (telemetry) opts.telemetry = "jsonl"
