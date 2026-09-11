@@ -134,6 +134,52 @@ node scripts/verify-installer.mjs  # 19 項安裝驗證（靜默裝 → 雙命�
 - **思考強度**：6 檔（off/low/medium/high/xhigh/max）× 四協議翻譯表（世代規則）
 - 每會話窗口/輸出上限解析鏈：settings `userModel` > modelContexts > profile > `model-catalog.json` > undefined
 
+### 連不上模型（公司網路 / 代理 / 企業 CA）
+
+**症狀**：任何模型都連不上，錯誤只說 transport failure。這**幾乎不是 API key 的問題**——先分辨網路層與憑證層。
+
+Node 的 `fetch` **不讀** `HTTP_PROXY` / `HTTPS_PROXY`，而且**只在進程啟動時**讀代理與 CA 設定。所以「瀏覽器打得開、curl 打得開、只有 harness 連不上」是典型症狀——**瀏覽器與 curl 不是有效的對照組**，它們有自己的代理與憑證信任來源。
+
+用**跑 harness 的同一個 Node** 做探針（會印出真正的原因）：
+
+```bash
+node -e "fetch('https://api.deepseek.com').then(r => console.log('HTTP', r.status)).catch(e => { console.error(e.message, e.cause); process.exit(1) })"
+```
+
+| 結果 | 意義 | 處置 |
+|---|---|---|
+| 任何 HTTP 狀態（401/403/404/429…） | DNS/TCP/TLS **都通了** | 停止調代理與 CA，改查 **key / 配額 / 網關政策** |
+| `fetch failed` + cause `ENOTFOUND` | DNS | 查 DNS / VPN |
+| `fetch failed` + cause `ECONNREFUSED` | 有代理但沒走 | 見下方代理設定 |
+| `fetch failed` + cause 憑證碼（如 `DEPTH_ZERO_SELF_SIGNED_CERT`、`UNABLE_TO_VERIFY_LEAF_SIGNATURE`） | 企業 TLS 檢測 | 見下方 CA 設定 |
+
+**代理**（公司強制走代理時）：
+
+```powershell
+$env:NODE_USE_ENV_PROXY = "1"          # 等價 CLI：--use-env-proxy
+$env:HTTPS_PROXY = "http://proxy:port"
+$env:HTTP_PROXY  = "http://proxy:port"
+$env:NO_PROXY    = "localhost,127.0.0.1,::1"
+ih web                                  # 必須在設好之後「重新啟動」
+```
+
+**企業 CA**（TLS 檢測閘道）：優先用系統信任庫，這是 Windows 上最省事的一條：
+
+```powershell
+$env:NODE_USE_SYSTEM_CA = "1"
+```
+
+或指定 PEM（**路徑必須是 PEM 檔**，不是 `.crt` 的 DER）：
+
+```powershell
+$env:NODE_EXTRA_CA_CERTS = "C:\path\company-root.pem"
+```
+
+**不要**用 `NODE_TLS_REJECT_UNAUTHORIZED=0`——那等於關掉整個 TLS 驗證。
+
+> 驗證環境是否支援：`node --help | Select-String use-env-proxy`（本倉庫 pin 的 **v22.23.2 與安裝器捆入的 Node 都支援**）。
+> 本專案的 provider 適配器會把 Node 的 `cause` 鏈接出來（`llm-seam` 的 `describeTransportError`），所以上面探針看到的層級，在 harness 的錯誤訊息裡也看得到。
+
 ---
 
 ## 架構與包

@@ -265,3 +265,59 @@ export function projectImagesForTextModel(messages: LLMMessage[]): LLMMessage[] 
     }
   })
 }
+
+/**
+ * Turn a rejected `fetch()` into a message that says WHY.
+ *
+ * Node collapses every pre-response failure — DNS, TCP refused, TLS/cert,
+ * proxy — into the identical `TypeError: fetch failed`, keeping the real
+ * reason only in `err.cause`. Measured here:
+ *
+ *   DNS      -> "fetch failed" / cause ENOTFOUND "getaddrinfo ENOTFOUND host"
+ *   bad port -> "fetch failed" / cause "bad port"
+ *   TLS      -> "fetch failed" / cause DEPTH_ZERO_SELF_SIGNED_CERT
+ *
+ * So an adapter that reports `err.message` alone tells the operator nothing
+ * actionable: a corporate proxy or a TLS-inspecting gateway is INDISTINGUISHABLE
+ * from a typo'd baseURL or an offline machine. That exact ambiguity is the
+ * complaint behind DSH discussion #175 ("any model fails to connect"), where the
+ * fix was an environment variable (Node's fetch does not read the proxy env
+ * unless started with NODE_USE_ENV_PROXY / --use-env-proxy) that the error text
+ * gave no hint of.
+ *
+ * This walks the `cause` chain, keeps each link's `code` and message, and
+ * appends the same remediation hint the community converged on. It never
+ * includes headers or the API key — only the URL and the error text.
+ */
+export async function describeTransportError(label: string, url: string, error: unknown): Promise<Error> {
+  // A caller-initiated abort is NOT a transport fault; naming it as one sends
+  // the operator hunting a network problem that does not exist.
+  const aborted = error instanceof Error && error.name === "AbortError"
+  if (aborted) return new Error(`${label} request aborted by the caller`)
+
+  const chain: string[] = []
+  let current: unknown = error
+  for (let depth = 0; depth < 5 && current !== null && current !== undefined; depth++) {
+    if (!(current instanceof Error)) { chain.push(String(current)); break }
+    const code = (current as NodeJS.ErrnoException).code
+    const detail = current.message
+    chain.push(code !== undefined ? `${detail} (${code})` : detail)
+    current = current.cause
+  }
+
+  let parsed: URL | undefined
+  try { parsed = new URL(url) } catch { /* keep the raw text below */ }
+
+  const host = parsed?.host ?? url
+  // Return a real Error, not a string: core-agent reads `ev.error.message`, so
+  // a bare string would degrade to "undefined".
+  const err = new Error(
+    `${label} transport failure reaching ${host}: ${chain.join(" <- ")}` +
+    " — if this machine reaches the internet through a proxy, Node's fetch ignores" +
+    " HTTP(S)_PROXY unless the process is started with NODE_USE_ENV_PROXY=1" +
+    " (--use-env-proxy); behind a TLS-inspecting gateway, also set" +
+    " NODE_EXTRA_CA_CERTS to the approved CA bundle. Both are read at process start.",
+  )
+  err.cause = error
+  return err
+}

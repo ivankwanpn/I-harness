@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { createRetryingClient, resolveRetryPolicy, type ModelClient, type RetryPolicyConfig } from "@i-harness/llm-seam"
+import { createRetryingClient, describeTransportError, resolveRetryPolicy, type ModelClient, type RetryPolicyConfig } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "@i-harness/llm-openai"
 import { createOpenAICompatibleClient } from "@i-harness/llm-openai-compatible"
 import { createAnthropicClient } from "@i-harness/llm-anthropic"
@@ -450,11 +450,20 @@ async function probeCandidate(url: string, headers: Record<string, string>): Pro
     // unbranded failure; the abort signal contributes its TimeoutError/AbortError.
     const timedOut = error instanceof DOMException
       && (error.name === "TimeoutError" || error.name === "AbortError")
-    return {
-      kind: "error",
-      text: `GET ${url} ${timedOut ? `timed out after ${PROBE_TIMEOUT_MS / 1000}s` : "failed (network error)"}`,
-      tryNext: false,
+    if (timedOut) {
+      return {
+        kind: "error",
+        text: `GET ${url} timed out after ${PROBE_TIMEOUT_MS / 1000}s`,
+        tryNext: false,
+      }
     }
+    // M62: "failed (network error)" discarded the layer, so a DNS failure, a
+    // TLS-inspecting gateway and a misconfigured proxy all read identically —
+    // the operator cannot tell which knob to turn. describeTransportError walks
+    // Node's `cause` chain (this fetch is already wrapped in try/catch here, so
+    // the failure was surfaced but not explained) and names the layer.
+    const described = await describeTransportError("model probe", url, error)
+    return { kind: "error", text: described.message, tryNext: false }
   }
   if (!response.ok) return { kind: "error", text: `GET ${url} → ${response.status}`, tryNext: true }
   // A 2xx with a non-JSON body (error-page HTML, proxy message) makes
