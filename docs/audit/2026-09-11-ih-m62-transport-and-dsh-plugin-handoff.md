@@ -12,8 +12,9 @@
 | commit | 內容 |
 |---|---|
 | `82ed890` | **feat(llm)**：transport 失敗改為指名層級，不再只說 `fetch failed` |
+| `935daab` | **fix(cli)**：headless `run` 補 `--sandbox`，且預設讀 `settings.sandboxMode` |
 
-未提交、也未動的：`D:\deepseek-harness\scripts\dsh-net-probe.mjs`（另一份 checkout，見 §4，**待裁定**）。
+未提交、也未動的：`D:\deepseek-harness\scripts\dsh-net-probe.mjs`（另一份 checkout，見 §6，**待裁定**）。
 
 ## 2. 為什麼做這個（不是我自己的偏好）
 
@@ -99,19 +100,34 @@ pnpm dsh plugin --profile web add dsh-browser-playwright
 
 **一個發現（好消息）**：`Playwright 1.63` **已移除 `page.accessibility`**（實測 `undefined`）。但本外掛**不依賴它** —— 它用 `injected.js` 在頁面內自建 a11y tree 並以 `data-dsh-ref` 標記元素（`playwright.js:561` 用 `locator('[data-dsh-ref=…]')` 取回）。全檔掃過 `\.accessibility\b|_snapshotForAI` → **零命中**。所以 1.63 的移除**不影響它**。
 
-## 6. 殘留 / 待裁定
+## 6. headless `--sandbox`（§7b 第 2 項，**已完成**）
+
+`i-harness run` 原本是**唯一還在實質無沙箱跑外殼的介面**。機制：`run.ts` 讀 `opts.sandbox`（`...(opts.sandbox !== undefined ? { sandbox: opts.sandbox } : {})`），但 **CLI 沒有任何旗標可以給它** —— 所以不論 `settings.sandboxMode` 寫什麼，headless 一律**不傳沙箱**。`web` 在 `891db14` 接好了、TUI 有自己的路徑，headless 是漏掉的那個。
+
+**修法**（`935daab`）：
+
+- `run` 新增 `--sandbox read-only|workspace-write|danger-full-access`
+- **未給旗標 → 讀 `settings.sandboxMode`**，與 web 路徑完全一致
+- 值在 **CLI 解析**，不是塞進 `runHeadless` —— `HeadlessOptions` 保持「embedder 契約：unset = 不要求沙箱」的語意，所以匯出的 API 與 `__dist-selfcheck` 行為不變
+- **無效值／缺值直接拒絕（exit 1），不默默 fallback** —— `--sandbox readonly` 被當成 workspace-write，就是 web 那次修掉的同一種假保證
+- 讀之前一定 `await settings.load()`：**未 load 的 `SettingsStore` 會回傳預設值**，這正是當初讓 web 測試「沒碰到設定卻通過」的陷阱
+- usage 與 help 都更新，旗標才被發現
+
+**驗證**：`pnpm -r typecheck` 0 錯、`pnpm test:default` **70/70 全綠**、`pnpm e2e` 0 錯、`apps/cli` **117 passed + 1 skipped**。
+新增 4 個 spawn 測試（決策在 CLI 參數處理，`runHeadless` 看不到）：無效值被拒且訊息正確、缺值被拒、help 有列旗標、有效值能通過驗證。
+**突變證明**：停用驗證分支 → 兩個測試紅在 `expected +0 to be 1`。
+
+## 7. 殘留 / 待裁定
 
 - **`D:\deepseek-harness\scripts\dsh-net-probe.mjs`**（未提交）：一支網路診斷探針，會先安裝 DSH 自己的 outbound 政策再探測，然後把失敗歸類到 DNS / TCP / TLS-TRUST / TLS-ALERT / PROXY。已測過四種分類都正確。使用者裁定「等有問題再解決」→ **建議刪掉**保持 checkout 乾淨；要留就做成 `dsh net-probe` 子命令（否則只有拿 checkout 的人能用）。
   - 過程中的一個**假陰性教訓**：第一版沒安裝政策，設了壞代理時它**照樣回報「網路正常」**（因為 DSH 的代理不靠 Node 讀環境變數）。**驗這種東西只能驗行為，不能驗 config**（該 library 不會出現在 `--dump-config` 的 composed tree）。
 - **`case-027`**：本輪隔離閘門跑過 **5180ms 綠**。先前紅過一次並讀到 marker 時間軸，指向一個**具體假設**：`host-027.ts:371` 的 `pollMarker("request-exit", 120_000)` —— host 自己的 **120s 上限比 referee 的 150s 場景預算短**，所以 host 永遠先放棄，量到的不是真病因。**此假設尚未驗證**。
-- **`run`（headless）仍缺 `--sandbox`** —— 目前**唯一還在實質無沙箱跑外殼的介面**（web 已接、TUI 有自己的路徑）。這是**下一項該做的**。
-- **installer 未重建**：§4d 的 `workspaceWarning` 與本輪的 transport 診斷**都還沒進安裝版**。
+- **installer 未重建**：§4d 的 `workspaceWarning`、本輪的 transport 診斷與 `--sandbox` **都還沒進安裝版**。
 - **per-session workspace 執行**未做（server 仍是單一 workspace）。
 - **一位 verifier 的操作失誤（記錄下來免得重犯）**：清理 smoke test 殘留行程時，我用**時間窗**（最近 12 分鐘）而非**指令列特徵**（`--headless`）來挑選，誤殺了使用者可能有頭瀏覽器行程。**驗證要留下痕跡才不會誤刪**；後續改用 `CreationDate` + `CommandLine` 比對 `--headless`。
 
-## 7. 下一步（建議順序）
+## 8. 下一步（建議順序）
 
-1. **`run` 補 `--sandbox` 並讀設定** —— 安全項，且是唯一沒有邊界的介面。
-2. **`case-027`**：驗證 §6 那個「host 120s < referee 150s」的假設（若成立，修的是預算關係而非測試內容）。
-3. **installer 重建** —— 否則本輪與 §4d 的改動使用者拿不到。
-4. 其餘殘留見上。
+1. **`case-027`**：驗證 §7 那個「host 120s < referee 150s」的假設（若成立，修的是預算關係而非測試內容）。
+2. **installer 重建** —— 否則本輪三個 commit 與 §4d 的改動使用者拿不到。
+3. 其餘殘留見 §7。
