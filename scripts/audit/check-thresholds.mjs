@@ -217,6 +217,39 @@ check(
   dataHits.length ? `${dataHits.length} field(s), first: ${dataHits[0]}` : "clean",
 )
 
+// -- 6. disposition integrity ------------------------------------------------
+// Two rules the disposition agents were given, checked mechanically because a
+// convention is not a guarantee: the vocabulary is closed, and `已存在` /
+// `improved-writing` may only be claimed where an I-harness cell actually
+// exists. The second matters most -- marking a row `已存在` when I-harness has
+// no such command would silently retire a real gap.
+const DISPOSITIONS = readJson(join(DATA, "2026-09-11-dispositions.json"))
+const VOCAB = new Set(["reuse", "rewrite", "improved-writing", "已存在", "遠期", "不做", "路線差異"])
+if (!DISPOSITIONS?.rows) {
+  check("§8.6 dispositions assigned and internally consistent", false, "no merged disposition file yet")
+} else {
+  const badVocab = []
+  const falseExist = []
+  for (const [key, val] of Object.entries(DISPOSITIONS.rows)) {
+    const d = typeof val === "string" ? val : val?.disposition
+    if (!VOCAB.has(d)) badVocab.push(`${key}='${d}'`)
+    const row = rows.get(key)
+    if ((d === "已存在" || d === "improved-writing") && !row?.perSource?.ih) {
+      falseExist.push(key)
+    }
+  }
+  check(
+    "§8.6 dispositions use the closed vocabulary",
+    badVocab.length === 0,
+    badVocab.length ? `${badVocab.length} invalid: ${badVocab.slice(0, 5).join(", ")}` : `${Object.keys(DISPOSITIONS.rows).length} rows, all valid`,
+  )
+  check(
+    "§8.6 已存在/improved-writing only where an IH cell exists",
+    falseExist.length === 0,
+    falseExist.length ? `${falseExist.length} row(s) claim IH has it but have no IH cell: ${falseExist.slice(0, 8).join(", ")}` : "no false 已存在 claims",
+  )
+}
+
 // ------------------------------------------------------------------ report
 console.log("design §8 acceptance thresholds\n" + "-".repeat(72))
 let failed = 0
