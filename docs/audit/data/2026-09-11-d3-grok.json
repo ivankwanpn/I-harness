@@ -924,9 +924,9 @@
           }
         ],
         "evidence": [
+          "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:256-275",
+          "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:290-305",
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:239-305",
-          "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1828-1832",
-          "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1842-1864",
           "crates/codegen/xai-grok-shell/src/session/goal_summarizer.rs:140-160"
         ],
         "modules": [
@@ -934,7 +934,19 @@
           "crates/common/xai-tool-types",
           "xai-grok-shell"
         ],
-        "verified": true
+        "verified": true,
+        "citationCorrected": {
+          "replaced": [
+            "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1828-1832",
+            "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1842-1864"
+          ],
+          "with": [
+            "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:256-275",
+            "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:290-305"
+          ],
+          "reason": "the ranges ran past the end of the file; the declared loci are prune_orphaned_background_task_tools at :256 and filter_tool_config's impl at :290",
+          "by": "mechanical citation check (2026-09-14)"
+        }
       },
       {
         "name": "parent-wake-safe-point-admission",
@@ -1742,7 +1754,354 @@
         "verified": true
       }
     ],
-    "model": [],
+    "model": [
+      {
+        "name": "embedded-default-model-catalogue",
+        "what": "Default model ids are not string literals but a JSON file embedded with include_str! and parsed once into a LazyLock that asserts the declared `default` appears in `models` (xai-grok-models/src/lib.rs:10, :29-42). Four accessors expose the default plus `web_search`, `image_description` and `session_summary`, each falling back to `default` when its key is absent (lib.rs:45-68); the shipped file sets all four to grok-4.6 across exactly two entries (default_models.json:1-15). The same bytes are the catalogue source for the shell's richer per-model metadata: `default_models` re-parses DEFAULT_MODELS_JSON for context_window, api_backend, reasoning_efforts, variants and the compaction fields (xai-grok-shell/src/agent/config.rs:3707-3765). Default selection precedence is CLI > env `GROK_DEFAULT_MODEL` > config.toml > remote settings, implemented once in `resolve_string_flag` with the remote value as the weakest source (xai-grok-shell/src/agent/config.rs:827-847), and this embedded id is the last resort when no auth-visible selectable model exists (xai-grok-shell/src/agent/models/resolution.rs:85-88).",
+        "invariants": [
+          "A `default` that is absent from `models` is a baked-in developer error and panics on first use rather than degrading to some fallback model (xai-grok-models/src/lib.rs:35-39).",
+          "The three task-specific accessors must keep falling back to `default`; returning nothing would make web-search, image-description and title-generation requests address no model.",
+          "The precedence ladder is load-bearing in one direction only: remote settings may supply a default but can never outrank CLI, env or config (xai-grok-shell/src/agent/config.rs:834-845)."
+        ],
+        "failurePolicy": "fail-closed at startup - malformed embedded JSON, a missing `models` array, an empty entry `model`, or a `default` absent from `models` all panic via expect/assert instead of silently running with a built-in id; once parsed, every accessor is total.",
+        "constants": [
+          {
+            "name": "DEFAULT_MODELS_JSON",
+            "value": "include_str!(\"../default_models.json\")",
+            "evidence": "crates/codegen/xai-grok-models/src/lib.rs:10"
+          },
+          {
+            "name": "shipped default / web_search / image_description / session_summary",
+            "value": "\"grok-4.6\" for all four",
+            "evidence": "crates/codegen/xai-grok-models/default_models.json:2-5"
+          },
+          {
+            "name": "GROK_DEFAULT_MODEL",
+            "value": "env override consulted second in the ladder",
+            "evidence": "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:69"
+          },
+          {
+            "name": "context_window fallback for a catalogue entry",
+            "value": "200_000",
+            "evidence": "crates/codegen/xai-grok-shell/src/agent/config.rs:3731"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-models/src/lib.rs:10",
+          "crates/codegen/xai-grok-models/src/lib.rs:29-42",
+          "crates/codegen/xai-grok-models/src/lib.rs:45-68",
+          "crates/codegen/xai-grok-models/default_models.json:1-15",
+          "crates/codegen/xai-grok-shell/src/agent/config.rs:3707-3765",
+          "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:55-88"
+        ],
+        "modules": [
+          "xai-grok-models",
+          "xai-grok-shell"
+        ],
+        "verified": true
+      },
+      {
+        "name": "fail-closed-model-allowlist-and-visibility-gate",
+        "what": "The model catalogue is filtered by one function in a fixed order: `disabled_models` are removed, then allowlist selectability is applied, then `hidden_models` are marked (xai-grok-shell/src/agent/models/resolution.rs:322-346). The allowlist has two authorities - a fleet pin taken from managed requirements, matched against the routing slug so a user-defined `[model.grok-4-anything]` cannot satisfy `grok-4*`, and a user `allowed_models` list matched against catalog key or slug (resolution.rs:205-218, :229-247, :293-297). A fail-closed pin, an unparsable glob, or a glob set matching nothing marks every entry non-selectable, and the user receives an administrator-policy message rather than a silent grant (resolution.rs:256-260, :278-286, :299-320). A second, orthogonal gate hides models by auth mode: `visible_for_auth(is_session_auth)` is false for `hidden` entries always and for entries with `supported_in_api = false` when the caller is API-key rather than session auth (xai-grok-shell/src/agent/config.rs:4274-4283). This is the model domain's enterprise/platform gate and it is implemented in the shell rather than in xai-grok-models: the embedded catalogue is only the candidate list, and the shell decides what a user may select or even see.",
+        "invariants": [
+          "The order disabled -> allowed -> hidden is stated as the single source of truth for the catalog; a second filtering site would let the two disagree (xai-grok-shell/src/agent/models/resolution.rs:322).",
+          "A fleet pin matches the routing slug, never the user-chosen catalog key, so adding a local `[model.*]` alias cannot smuggle a denied model in (resolution.rs:293-297).",
+          "A fail-closed pin or an unparsable glob set must mark every entry non-selectable rather than falling back to unrestricted (resolution.rs:256-260, :278-286).",
+          "`hidden` hides in every auth mode; `supported_in_api = false` hides only for API-key auth (xai-grok-shell/src/agent/config.rs:4274-4283)."
+        ],
+        "failurePolicy": "fail-closed - an invalid pattern set or a fail-closed managed pin makes every model non-selectable, the catalog stays empty of selectable entries, and the denial is surfaced as policy text; nothing downgrades to unrestricted access.",
+        "constants": [
+          {
+            "name": "allowlist authority order",
+            "value": "requirements.allowed_models pin > cfg.models.allowed_models > unrestricted",
+            "evidence": "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:207-217"
+          },
+          {
+            "name": "fleet vs user match target",
+            "value": "fleet: routing slug only; user: catalog key or slug",
+            "evidence": "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:270-275"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:205-218",
+          "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:229-247",
+          "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:249-297",
+          "crates/codegen/xai-grok-shell/src/agent/models/resolution.rs:299-346",
+          "crates/codegen/xai-grok-shell/src/agent/config.rs:4274-4283"
+        ],
+        "modules": [
+          "xai-grok-shell"
+        ],
+        "verified": true
+      },
+      {
+        "name": "three-backend-sse-sampling-transport",
+        "what": "One client speaks three wire shapes behind `ApiBackend`: ChatCompletions (`/v1/chat/completions`, the serde default), Responses (`/v1/responses`) and the Anthropic Messages API (`/v1/messages`) (xai-grok-sampling-types/src/types.rs:989-999). Streaming is genuine SSE: the request sets `stream` true and `ACCEPT: text/event-stream`, the response byte stream is run through `eventsource()`, a leading UTF-8 BOM is stripped by hand because eventsource-stream 0.2.3 slices it at byte 1, `[DONE]` terminates, and the first transport error is surfaced once after which the scan terminates so a dead HTTP/2 connection cannot busy-loop (xai-grok-sampler/src/client.rs:1071-1129, :1316, :1363-1374). Every request carries x-grok-* correlation headers (conv, req, model-override, session, turn-index, transient-retry, agent, deployment, user) assembled in one place (client.rs:52-88). Layer 2 transforms the raw chunks of each backend into `SamplingEvent` streams (xai-grok-sampler/src/stream/mod.rs:1-15); the Responses decoder tolerates server tools `async_openai` cannot model by dropping the entries that fail to deserialize and re-parsing, and rewrites the terminal `total_tokens` from `context_details` (client.rs:90-120). A stream that stops producing is cut by an idle timeout, `DEFAULT_IDLE_TIMEOUT_SECS = 300` (xai-grok-sampler/src/actor/request_task.rs:41).",
+        "invariants": [
+          "The BOM strip must stay: without it the first SSE frame of a BOM-prefixed response reaches the typed parser as garbage (xai-grok-sampler/src/client.rs:1071-1084).",
+          "A transport error must terminate the stream after being surfaced once; polling again after an h2 failure is the documented busy-loop (client.rs:1088-1096, :1126-1129).",
+          "A stream that ends without a terminal event is an explicit error, never an empty success (xai-grok-sampler/src/stream/collect.rs:16-21, :38-51).",
+          "Correlation headers are applied per request, not baked into the shared client, because the shared client is built without config-derived input (client.rs:52-88)."
+        ],
+        "failurePolicy": "mixed - layers 1 and 2 surface typed errors as stream items (`SamplingError::EventStreamError`, `StreamError`, `Serialization`) and leave the decision to the retry loop above them; a stream with no terminal event fails closed with `SamplingErrorKind::Api`.",
+        "constants": [
+          {
+            "name": "DEFAULT_IDLE_TIMEOUT_SECS",
+            "value": "300",
+            "evidence": "crates/codegen/xai-grok-sampler/src/actor/request_task.rs:41"
+          },
+          {
+            "name": "streaming Accept header",
+            "value": "text/event-stream",
+            "evidence": "crates/codegen/xai-grok-sampler/src/client.rs:1365"
+          },
+          {
+            "name": "ANTHROPIC_DEFAULT_MAX_TOKENS",
+            "value": "128_000",
+            "evidence": "crates/codegen/xai-grok-sampler/src/client.rs:50"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-sampling-types/src/types.rs:989-999",
+          "crates/codegen/xai-grok-sampler/src/client.rs:52-120",
+          "crates/codegen/xai-grok-sampler/src/client.rs:1071-1129",
+          "crates/codegen/xai-grok-sampler/src/client.rs:1280-1374",
+          "crates/codegen/xai-grok-sampler/src/stream/mod.rs:1-15",
+          "crates/codegen/xai-grok-sampler/src/stream/collect.rs:14-51"
+        ],
+        "modules": [
+          "xai-grok-sampler",
+          "xai-grok-sampling-types"
+        ],
+        "verified": true
+      },
+      {
+        "name": "classified-retry-budget-with-pool-escape",
+        "what": "Retry is a pure classifier plus an actor-side executor. `classify_error` returns Retry, RetryWithBackoff, RetryWithImageStrip, RetryWithClientRebuild, EmitToSession or Fatal (xai-grok-sampler/src/retry.rs:73-93): auth errors and encrypted-content errors are emitted to the session instead of retried; 413 and byte-size-coded rejections plus image-processing errors strip images and retry; a retry veto is Fatal because re-sending the same payload fails deterministically (xai-grok-sampling-types/src/error.rs:558-564); rate limits are capped at `min(max_retries, RATE_LIMIT_RETRY_THRESHOLD = 2)` and honour `Retry-After`, otherwise the budget is `DEFAULT_MAX_RETRIES = 15` overridable by `GROK_MAX_RETRIES` or a per-model `max_retries` (retry.rs:5-28, :130-143). Backoff is `2s << (n-1)` capped at `MAX_RETRY_BACKOFF = 30s` with +/-20% jitter; the FIRST transport retry is instead a 200 ms `TRANSPORT_REBUILD_BACKOFF` that rebuilds the client with `force_http1 = true` to escape a poisoned HTTP/2 pool (retry.rs:11-13, :42-64; xai-grok-sampler/src/actor/request_task.rs:453-474). A connection reset or broken pipe during body upload additionally strips images proactively before any retry, on the theory that a proxy rejected an oversized body without answering 413 (request_task.rs:363-388).",
+        "invariants": [
+          "A retry veto must never be retried: the sampler actor and one-shot callers share `is_retry_vetoed` so a new veto lands everywhere at once (xai-grok-sampling-types/src/error.rs:558-564).",
+          "Only 401 is an auth error; 403 is a policy denial and must not trigger an OIDC refresh (xai-grok-sampling-types/src/error.rs:332-346).",
+          "The image-strip retry stops when nothing is left to strip, upgrading to Fatal instead of looping (xai-grok-sampler/src/actor/request_task.rs:411-418).",
+          "The rate-limit budget is bounded by RATE_LIMIT_RETRY_THRESHOLD, not by the general retry budget (xai-grok-sampler/src/retry.rs:130-134)."
+        ],
+        "failurePolicy": "mixed - transient errors retry under a bounded, jittered budget; deterministic classes fail fast as Fatal; auth failures are handed to the session for re-auth rather than retried; the HTTP/1.1 rebuild fails soft, reusing the old client if construction fails (xai-grok-sampler/src/actor/request_task.rs:469-474).",
+        "constants": [
+          {
+            "name": "DEFAULT_MAX_RETRIES",
+            "value": "15",
+            "evidence": "crates/codegen/xai-grok-sampler/src/retry.rs:9"
+          },
+          {
+            "name": "RATE_LIMIT_RETRY_THRESHOLD / RATE_LIMIT_RETRY_DISABLED",
+            "value": "2 / 1",
+            "evidence": "crates/codegen/xai-grok-sampler/src/retry.rs:5-7"
+          },
+          {
+            "name": "MAX_RETRY_BACKOFF",
+            "value": "30 s",
+            "evidence": "crates/codegen/xai-grok-sampler/src/retry.rs:11"
+          },
+          {
+            "name": "TRANSPORT_REBUILD_BACKOFF",
+            "value": "200 ms, first transport retry only",
+            "evidence": "crates/codegen/xai-grok-sampler/src/retry.rs:13"
+          },
+          {
+            "name": "GROK_MAX_RETRIES",
+            "value": "env override of the retry budget",
+            "evidence": "crates/codegen/xai-grok-sampler/src/retry.rs:26"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-sampler/src/retry.rs:5-28",
+          "crates/codegen/xai-grok-sampler/src/retry.rs:42-71",
+          "crates/codegen/xai-grok-sampler/src/retry.rs:95-163",
+          "crates/codegen/xai-grok-sampler/src/actor/request_task.rs:355-474",
+          "crates/codegen/xai-grok-sampling-types/src/error.rs:332-346",
+          "crates/codegen/xai-grok-sampling-types/src/error.rs:515-564"
+        ],
+        "modules": [
+          "xai-grok-sampler",
+          "xai-grok-sampling-types"
+        ],
+        "verified": true
+      },
+      {
+        "name": "shared-process-wide-sampling-clients-with-kill-switch",
+        "what": "Sampling reuses two process-wide `reqwest::Client`s held in `OnceLock`s instead of building one per session: an HTTP/2 pooled client (h2 keepalive 15 s interval / 5 s timeout while idle, pool idle eviction after 90 s, `GROK_POOL_MAX_IDLE` default 2, `GROK_CONNECT_TIMEOUT_SECS` default 10) and a pool-less HTTP/1.1 client used to escape a poisoned pool (xai-grok-sampler/src/shared_http.rs:14-15, :74-131). Sharing is safe only because the builders take no config-derived input - auth, extra headers, base URL and User-Agent are applied per request (shared_http.rs:1-9; xai-grok-sampler/src/client.rs:667+). Both clients are built through the TLS policy crate, which pins rustls (`use_rustls_tls`, native certs off, webpki bundle on), adds OS roots plus opt-in extra roots from `GROK_EXTRA_CA_BUNDLE` (fallback `SSL_CERT_FILE`, bundle capped at 1 MiB) and reads the roots once per process (xai-grok-extra-ca/src/lib.rs:14-18, :47-59, :82-101). Two kill switches exist: `GROK_SAMPLER_SHARED_CLIENT=0|false` builds a fresh client per `SamplingClient`, and `SamplerConfig::force_http1` selects the HTTP/1.1 client directly (shared_http.rs:17-32; client.rs:612-617). A failed build is deliberately not cached, so the cell stays empty and the next call retries (shared_http.rs:34-50).",
+        "invariants": [
+          "The shared builders must stay configuration-free: any config-derived input (auth, headers, base URL) belongs per request, or two sessions would share another session's credentials (shared_http.rs:1-9).",
+          "A build failure must not populate the OnceLock; caching it would make one transient failure permanent for the process (shared_http.rs:34-50, pinned by the `shared_does_not_cache_build_failures` test).",
+          "Environment knobs are read once per process by design, so a rollback is consistent between the kill switch and the pool knobs (shared_http.rs:17-19, :74-83).",
+          "Every client must be built through the TLS policy helper, because rustls must stay pinned; a native-tls client would break the certificate-error classifier (xai-grok-extra-ca/src/lib.rs:4, :47-59)."
+        ],
+        "failurePolicy": "fail-soft - client construction errors are returned as `SamplingError::Http` to the caller and are not latched; a bad extra CA bundle is logged and skipped rather than failing client construction (xai-grok-extra-ca/src/lib.rs:1-4).",
+        "constants": [
+          {
+            "name": "GROK_SAMPLER_SHARED_CLIENT",
+            "value": "\"0\" or \"false\" (case-insensitive) disables client sharing",
+            "evidence": "crates/codegen/xai-grok-sampler/src/shared_http.rs:17-26"
+          },
+          {
+            "name": "GROK_POOL_MAX_IDLE / GROK_POOL_IDLE_TIMEOUT_SECS",
+            "value": "2 / 90",
+            "evidence": "crates/codegen/xai-grok-sampler/src/shared_http.rs:81, :94-97"
+          },
+          {
+            "name": "h2 keepalive",
+            "value": "interval 15 s, timeout 5 s, while_idle true",
+            "evidence": "crates/codegen/xai-grok-sampler/src/shared_http.rs:109-111"
+          },
+          {
+            "name": "MAX_EXTRA_CA_BUNDLE_BYTES",
+            "value": "1024 * 1024",
+            "evidence": "crates/codegen/xai-grok-extra-ca/src/lib.rs:14"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-sampler/src/shared_http.rs:1-50",
+          "crates/codegen/xai-grok-sampler/src/shared_http.rs:74-131",
+          "crates/codegen/xai-grok-sampler/src/client.rs:612-617",
+          "crates/codegen/xai-grok-extra-ca/src/lib.rs:14-18",
+          "crates/codegen/xai-grok-extra-ca/src/lib.rs:47-59",
+          "crates/codegen/xai-grok-extra-ca/src/lib.rs:82-101"
+        ],
+        "modules": [
+          "xai-grok-sampler",
+          "xai-grok-extra-ca"
+        ],
+        "verified": true
+      },
+      {
+        "name": "origin-scoped-transport-prewarm",
+        "what": "Transport warm-up is best effort and credential-free: `prewarm_transport` dials the endpoint origin once per pool-idle window through the shared pooled client, carries no credentials, drains the body up to a 64 KiB cap and is bounded by a 15 s timeout (xai-grok-sampler/src/prewarm.rs:1-16, :63-128, :194-216). Concurrency is controlled by an origin claim state machine - an origin is `InFlight` or `Warmed(Instant)`, a claim is released by `Drop` unless committed, so every non-warmed outcome (failure, timeout, cap) frees the origin for a later dial (prewarm.rs:130-158). At most 32 origins are tracked, with a sweep of stale entries before a full tracker rejects the prewarm (prewarm.rs:16, :160-187). Because reqwest exposes no pool-hit signal, the crate records freshness at first sampling use - `warm_fresh`, `warm_stale`, `warm_pending`, `warm_absent` - into the `sampler.transport_prewarm_first_use` span (prewarm.rs:260-323).",
+        "invariants": [
+          "A prewarm must carry no credentials; it is a bare GET of the origin (prewarm.rs:1-4, :199).",
+          "A claim must be released on every path that did not warm, or a failed prewarm would permanently suppress later attempts for that origin (prewarm.rs:144-150).",
+          "The tracker is bounded at 32 origins and sweeps expired entries before reporting full, so one noisy process cannot grow it without limit (prewarm.rs:16, :160-170).",
+          "The warm window is the same pool idle timeout the client uses, so 'warm' cannot disagree with the pool's own eviction (prewarm.rs:152-157, :173)."
+        ],
+        "failurePolicy": "fail-open - prewarming is skipped on every adverse outcome (`NoOrigin`, `ClientUnavailable`, `AlreadyClaimed`, `TrackerFull`, `Failed`, `TimedOut`) and a skipped prewarm never fails the sampling request; only a fully drained pooled response counts as warmed.",
+        "constants": [
+          {
+            "name": "PREWARM_TIMEOUT",
+            "value": "15 s",
+            "evidence": "crates/codegen/xai-grok-sampler/src/prewarm.rs:12"
+          },
+          {
+            "name": "DRAIN_CAP_BYTES",
+            "value": "64 * 1024",
+            "evidence": "crates/codegen/xai-grok-sampler/src/prewarm.rs:14"
+          },
+          {
+            "name": "MAX_TRACKED_ORIGINS / MAX_FIRST_USE_ORIGINS",
+            "value": "32 / 32",
+            "evidence": "crates/codegen/xai-grok-sampler/src/prewarm.rs:16, :249"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-sampler/src/prewarm.rs:1-16",
+          "crates/codegen/xai-grok-sampler/src/prewarm.rs:63-128",
+          "crates/codegen/xai-grok-sampler/src/prewarm.rs:130-187",
+          "crates/codegen/xai-grok-sampler/src/prewarm.rs:194-216",
+          "crates/codegen/xai-grok-sampler/src/prewarm.rs:260-323",
+          "crates/codegen/xai-grok-sampler/src/client.rs:667-672"
+        ],
+        "modules": [
+          "xai-grok-sampler"
+        ],
+        "verified": true
+      },
+      {
+        "name": "refresh-aware-credential-seam-with-401-attribution",
+        "what": "Credentials for every outbound data-collector and sampler request go through one dependency-inversion seam: `HttpAuth::apply` builds the header and `AuthCredentialProvider` adds a refresh-aware snapshot plus 401 recovery (xai-grok-auth/src/auth_provider.rs:29-57). The snapshot is a structured value (token, user, team, deployment, api_key_id, organization) rather than a bare string, because the OTel layer and 401 attribution need identity fields (auth_provider.rs:9-27). The production implementation checks wire validity before returning a token and delegates 401 recovery to the auth manager's background recovery path (xai-grok-shell/src/auth/credential_provider.rs:79-117); a static provider reports `refresh_after_unauthorized() == false` so no refresh is attempted (auth_provider.rs:91-102). The optional `middleware` feature supplies `AuthRetryMiddleware`, which stamps the bearer, clones the request, and on 401 refreshes and replays up to `max_retries` times (xai-grok-auth/src/retry_middleware.rs:65-98); the feature is enabled by xai-grok-http, xai-file-utils and xai-grok-shell (xai-grok-auth/Cargo.toml:10; xai-grok-http/Cargo.toml:15). Attribution reads a `StampedBearerSuffix` recorded in the request extensions at stamp time - only the last 12 characters of the token, counted as chars because `auth.json` or an auth-provider command can return non-ASCII - rather than re-resolving the token, which would race the refresh the 401 itself triggers (retry_middleware.rs:12-28, :44-55; xai-grok-auth/src/bearer_fragment.rs:4-15). The refresh lifetime is also protected across suspend: `xai-system-power` exists so an AuthManager can avoid starting a refresh just before sleep and may block a `WillSleep` handler briefly to let an in-flight rotation finish (xai-system-power/src/lib.rs:1-14, :38-59).",
+        "invariants": [
+          "`snapshot().token` must mirror the bearer `HttpAuth::apply` would send, or 401-attribution prefixes will not match the request that was actually made (xai-grok-auth/src/auth_provider.rs:35-38).",
+          "Only the bearer tail is stamped and logged: JWT heads are a shared constant and the tail is the safe part for a sink (retry_middleware.rs:12-16).",
+          "The suffix must be taken by char index, not byte offset, or a multi-byte token panics (bearer_fragment.rs:8-14).",
+          "A provider with no credential must produce no stamp at all - absence, not an empty string (retry_middleware.rs:308-325, pinned by test)."
+        ],
+        "failurePolicy": "fail-soft - a header that cannot be built is warned about and the request continues unauthenticated (retry_middleware.rs:51-54); a refresh failure simply ends the retry loop and returns the last 401 response (retry_middleware.rs:80-97); a deployment key never refreshes and never sends the token-auth header (xai-grok-shell/src/auth/credential_provider.rs:106-116).",
+        "constants": [
+          {
+            "name": "BEARER_SUFFIX_LEN",
+            "value": "12 (chars)",
+            "evidence": "crates/codegen/xai-grok-auth/src/bearer_fragment.rs:6"
+          },
+          {
+            "name": "middleware feature",
+            "value": "middleware = [\"dep:reqwest-middleware\", \"dep:http\"]",
+            "evidence": "crates/codegen/xai-grok-auth/Cargo.toml:10"
+          },
+          {
+            "name": "401 retry budget at the call sites",
+            "value": "1 (xai-grok-http, xai-file-utils); 0 for the feedback client",
+            "evidence": "crates/codegen/xai-grok-http/src/lib.rs:311"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-auth/src/auth_provider.rs:9-57",
+          "crates/codegen/xai-grok-auth/src/bearer_fragment.rs:4-15",
+          "crates/codegen/xai-grok-auth/src/retry_middleware.rs:12-28",
+          "crates/codegen/xai-grok-auth/src/retry_middleware.rs:44-98",
+          "crates/codegen/xai-grok-shell/src/auth/credential_provider.rs:79-117",
+          "crates/codegen/xai-system-power/src/lib.rs:1-14"
+        ],
+        "modules": [
+          "xai-grok-auth",
+          "xai-grok-shell",
+          "xai-system-power"
+        ],
+        "verified": true
+      },
+      {
+        "name": "secret-redaction-before-log-and-sink",
+        "what": "One crate owns redaction for everything that leaves the process. `redact_secrets` runs a `RegexSet` prefilter and returns the input borrowed when nothing matches, then applies ten ordered passes: PEM private-key blocks, `sk-`/`sk_`/`xai-` keys, AWS AKIA/ASIA ids, GitHub PATs, GitLab/Slack tokens, Google `AIza` keys, `Bearer` tokens, bare JWTs, URLs (userinfo, fragment and sensitive query keys such as access_token/api_key/code/state stripped) and a generic `secret|token|password = value` assignment pattern with an 8-character value floor (xai-grok-secrets/src/sanitizer.rs:5-51, :53-70, :75-108, :278-304). `redact_user_paths` collapses `$HOME` to `~` and whole path segments equal to the OS username to `<user>`, with a `/Users|/home` regex backstop used only when the environment carries no home or username, so REST paths like `/users/<id>` are not mangled (sanitizer.rs:143-200). `walk_json_strings`/`redact_json_string_values` apply the same scrub to every string value of a JSON document, and are the entry points used by the telemetry exporter, the Sentry path and the Mixpanel client (sanitizer.rs:110-126; xai-grok-telemetry/src/redact_common.rs:13-14, xai-grok-telemetry/src/sentry.rs:94, xai-mixpanel/src/lib.rs:55).",
+        "invariants": [
+          "The `\\b` anchor on the API-key pattern is load-bearing: without it `task-`, `disk-` and `risk-` prefixes turn into redactions (xai-grok-secrets/src/sanitizer.rs:8-11).",
+          "The username backstop runs only when `$HOME`/`$USER` are unavailable, because regex-based user matching over-redacts real paths (sanitizer.rs:190-195).",
+          "`redact_url` must rebuild the query through the form-urlencoded serializer so the `redacted` placeholder is not percent-encoded (sanitizer.rs:277-304).",
+          "The borrowed-vs-owned return is part of the contract: callers test for `Cow::Owned` to decide whether a value changed (sanitizer.rs:91-93, :120-126)."
+        ],
+        "failurePolicy": "fail-open with respect to flow (redaction never errors and never blocks a request) but fail-safe in the direction that matters: an unmatched string is passed through unchanged, so the regexes are the only defence and a new secret shape requires a new pattern.",
+        "constants": [
+          {
+            "name": "REDACTED / REDACTED_URL_VALUE / REDACTED_USER_SEGMENT",
+            "value": "\"[REDACTED_SECRET]\" / \"redacted\" / \"<user>\"",
+            "evidence": "crates/codegen/xai-grok-secrets/src/sanitizer.rs:5-6, :143"
+          },
+          {
+            "name": "generic assignment value floor",
+            "value": "8 characters",
+            "evidence": "crates/codegen/xai-grok-secrets/src/sanitizer.rs:34-51"
+          },
+          {
+            "name": "SENSITIVE_QUERY_PARAMS",
+            "value": "16 names (access_token, api_key, code, state, refresh_token, ...)",
+            "evidence": "crates/codegen/xai-grok-secrets/src/sanitizer.rs:53-70"
+          },
+          {
+            "name": "username floor",
+            "value": "3 characters, deduped case-insensitively",
+            "evidence": "crates/codegen/xai-grok-secrets/src/sanitizer.rs:154-166"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-secrets/src/sanitizer.rs:5-51",
+          "crates/codegen/xai-grok-secrets/src/sanitizer.rs:75-126",
+          "crates/codegen/xai-grok-secrets/src/sanitizer.rs:143-200",
+          "crates/codegen/xai-grok-secrets/src/sanitizer.rs:277-304",
+          "crates/codegen/xai-grok-telemetry/src/redact_common.rs:13-14",
+          "crates/codegen/xai-mixpanel/src/lib.rs:55"
+        ],
+        "modules": [
+          "xai-grok-secrets",
+          "xai-grok-telemetry",
+          "xai-mixpanel"
+        ],
+        "verified": true
+      }
+    ],
     "extension": [
       {
         "name": "mcp-multi-transport-with-in-process-acp-bridge",
