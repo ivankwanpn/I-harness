@@ -308,7 +308,20 @@ async function main(): Promise<void> {
   const watcher = setInterval(() => {
     const tasks = service.tasks(sessionId)
     const queue = service.queue(sessionId)
-    if (!firedSpawn && tasks.some((t) => t.id === "root/helper" && t.status === "running")) {
+    // "alive" = the task exists and has not reached a terminal state. The view
+    // status "queued" is the registry's `accepted`, which `submit()` returns
+    // SYNCHRONOUSLY — long before the child provider's first step claims the
+    // task and flips it to "running" (task-protocol.ts claim()). Waiting for
+    // "running" therefore made this witness depend on a NESTED spawn + child
+    // model step completing, which is not what the scene asserts: the marker is
+    // about the dashboard showing an ACTIVE task, and the cancellation contract
+    // below is unchanged (it still requires the task to LEAVE the active set).
+    // Terminal = completed/failed/cancelled, so the alive set is exactly these
+    // three — the same set lines below already use for the cancel and count
+    // witnesses, which is why the old `=== "running"` here was the odd one out.
+    const alive = (t: { status?: string }): boolean =>
+      t.status === "queued" || t.status === "running" || t.status === "waiting"
+    if (!firedSpawn && tasks.some((t) => t.id === "root/helper" && alive(t))) {
       firedSpawn = true
       marker("spawn-running")
     }
@@ -333,14 +346,14 @@ async function main(): Promise<void> {
       releaseParent()
       releaseChild()
     }
-    if (!firedTaskCancelled && firedSpawn && !tasks.some((t) => t.id === "root/helper" && (t.status === "queued" || t.status === "running" || t.status === "waiting"))) {
+    if (!firedTaskCancelled && firedSpawn && !tasks.some((t) => t.id === "root/helper" && alive(t))) {
       firedTaskCancelled = true
       marker("task-cancelled")
     }
     // the status-line task-count truth (the row's live task count) — the
     // count witness transitions: spawned>0 → after the cancel 0 (the
     // "counts 1→0" proof the scene asserts via marker).
-    const liveTasks = tasks.filter((t) => t.status === "queued" || t.status === "running" || t.status === "waiting").length
+    const liveTasks = tasks.filter((t) => alive(t)).length
     writeFileSync(`${MARKER_DIR}/live-tasks`, String(liveTasks))
     if (!firedCountsZero && firedTaskCancelled && liveTasks === 0) {
       firedCountsZero = true
