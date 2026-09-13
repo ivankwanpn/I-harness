@@ -1,0 +1,696 @@
+{
+  "source": "ih",
+  "sourcePath": "D:/I-harness-main",
+  "sourceRev": "13213ffa0694f24ad3749005c29aa09a233adacd",
+  "version": "0.1.0",
+  "versionSource": "package.json",
+  "dirName": "I-harness-main",
+  "versionMismatch": false,
+  "dirVersion": null,
+  "extractedAt": "2026-09-13",
+  "commandModel": "registry+capability-gate",
+  "count": 50,
+  "commands": [
+    {
+      "rawName": "always-approve",
+      "canonical": "always-approve",
+      "aliases": [],
+      "displayName": "always-approve",
+      "description": "Always-approve (live guardian capability)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/approval.ts:25"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "auto",
+      "canonical": "auto",
+      "aliases": [],
+      "displayName": "auto",
+      "description": "Always-approve toggle (live guardian capability)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/approval.ts:33"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "btw",
+      "canonical": "btw",
+      "aliases": [],
+      "displayName": "btw",
+      "description": "Interject a sidebar question",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/run.ts:85"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "description": "Compact the conversation now (shadow + summary)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/run.ts:26"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "compact-mode",
+      "canonical": "compact-mode",
+      "aliases": [],
+      "displayName": "compact-mode",
+      "description": "Toggle compact mode (tighter layout)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/visual.ts:78"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "config-agents",
+      "canonical": "config-agents",
+      "aliases": [],
+      "displayName": "config-agents",
+      "description": "Subagent role table (builtin + registered)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/eco.ts:117"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "context",
+      "canonical": "context",
+      "aliases": [],
+      "displayName": "context",
+      "description": "Context usage for this session (local)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:76"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "copy",
+      "canonical": "copy",
+      "aliases": [],
+      "displayName": "copy",
+      "description": "Copy the selected block",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/tools.ts:38"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "dashboard",
+      "canonical": "dashboard",
+      "aliases": [],
+      "displayName": "dashboard",
+      "description": "Open the local session dashboard",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:45"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "doctor",
+      "canonical": "doctor",
+      "aliases": [],
+      "displayName": "doctor",
+      "description": "Terminal capability report (live probe)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/tools.ts:21"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "edit-prompt",
+      "canonical": "edit-prompt",
+      "aliases": [],
+      "displayName": "edit-prompt",
+      "description": "Edit the prompt draft in $EDITOR",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/navigation.ts:64"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "effort",
+      "canonical": "effort",
+      "aliases": [],
+      "displayName": "effort",
+      "description": "Model reasoning effort (settings llm.defaultModel.reasoningEffort)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/g1.ts:46"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "description": "Write the session transcript to a workspace file",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/tools.ts:45"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "find",
+      "canonical": "find",
+      "aliases": [],
+      "displayName": "find",
+      "description": "Search the scrollback (type the pattern, Enter applies)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/navigation.ts:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "fork",
+      "canonical": "fork",
+      "aliases": [],
+      "displayName": "fork",
+      "description": "Fork the current session (backend fork)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:60"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "fullscreen",
+      "canonical": "fullscreen",
+      "aliases": [],
+      "displayName": "fullscreen",
+      "description": "Relaunch in fullscreen mode (cell TUI)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/visual.ts:93"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "goal",
+      "canonical": "goal",
+      "aliases": [],
+      "displayName": "goal",
+      "description": "Current goal (from the goal event stream)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/surfaces.ts:38"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "help",
+      "canonical": "help",
+      "aliases": [],
+      "displayName": "help",
+      "description": "Slash commands + active key bindings",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/tools.ts:61"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "history",
+      "canonical": "history",
+      "aliases": [],
+      "displayName": "history",
+      "description": "Open the prompt history panel",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/navigation.ts:54"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "home",
+      "canonical": "home",
+      "aliases": [],
+      "displayName": "home",
+      "description": "Show the welcome screen",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:28"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "hooks",
+      "canonical": "hooks",
+      "aliases": [],
+      "displayName": "hooks",
+      "description": "Hooks config (9 events, per-handler sha256)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/eco.ts:73"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "jump",
+      "canonical": "jump",
+      "aliases": [],
+      "displayName": "jump",
+      "description": "Jump to a turn (engine anchors; /jump <n> jumps directly)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/navigation.ts:25"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "marketplace",
+      "canonical": "marketplace",
+      "aliases": [],
+      "displayName": "marketplace",
+      "description": "Plugin market shelf (not yet installed)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/eco.ts:100"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "mcps",
+      "canonical": "mcps",
+      "aliases": [],
+      "displayName": "mcps",
+      "description": "MCP servers configured for this session",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/eco.ts:55"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "minimal",
+      "canonical": "minimal",
+      "aliases": [],
+      "displayName": "minimal",
+      "description": "Relaunch in minimal mode (terminal-native scrollback)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/visual.ts:86"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "model",
+      "canonical": "model",
+      "aliases": [],
+      "displayName": "model",
+      "description": "Model selector (ArgPicker over the active provider catalog)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/g1.ts:29"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "multiline",
+      "canonical": "multiline",
+      "aliases": [],
+      "displayName": "multiline",
+      "description": "Toggle multiline prompt editing",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/visual.ts:70"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "new",
+      "canonical": "new",
+      "aliases": [],
+      "displayName": "new",
+      "description": "Start a new session (backend create)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "description": "Plan mode (live backend switching capability)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/run.ts:47"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plugins",
+      "canonical": "plugins",
+      "aliases": [],
+      "displayName": "plugins",
+      "description": "Plugin catalog (installed/enabled states)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/eco.ts:87"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "provider",
+      "canonical": "provider",
+      "aliases": [],
+      "displayName": "provider",
+      "description": "Provider management (menu / add / use / delete / reload)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/g1.ts:20"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "queue",
+      "canonical": "queue",
+      "aliases": [],
+      "displayName": "queue",
+      "description": "Toggle the queue pane",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/run.ts:63"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "quit",
+      "canonical": "quit",
+      "aliases": [],
+      "displayName": "quit",
+      "description": "Quit the TUI",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/tools.ts:78"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rename",
+      "canonical": "rename",
+      "aliases": [],
+      "displayName": "rename",
+      "description": "Rename the session title",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:88"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "resume",
+      "canonical": "resume",
+      "aliases": [],
+      "displayName": "resume",
+      "description": "Open the session picker",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:35"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rewind",
+      "canonical": "rewind",
+      "aliases": [],
+      "displayName": "rewind",
+      "description": "Rewind the session (open the rewind picker)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/run.ts:18"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "session-info",
+      "canonical": "session-info",
+      "aliases": [],
+      "displayName": "session-info",
+      "description": "Session details (id/model/turns/context)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:107"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "settings",
+      "canonical": "settings",
+      "aliases": [],
+      "displayName": "settings",
+      "description": "Settings modal (Appearance / Mouse / Models / Approval …)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/g1.ts:38"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "skills",
+      "canonical": "skills",
+      "aliases": [],
+      "displayName": "skills",
+      "description": "Skills registry (workspace + global)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/eco.ts:43"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "tasks",
+      "canonical": "tasks",
+      "aliases": [],
+      "displayName": "tasks",
+      "description": "Toggle the tasks pane",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/run.ts:74"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "theme",
+      "canonical": "theme",
+      "aliases": [],
+      "displayName": "theme",
+      "description": "Cycle theme (auto → grok-night → grok-day → tokyo-night → …)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/visual.ts:45"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "timeline",
+      "canonical": "timeline",
+      "aliases": [],
+      "displayName": "timeline",
+      "description": "Toggle the turn timeline rail (right columns)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/timeline.ts:12"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "timestamps",
+      "canonical": "timestamps",
+      "aliases": [],
+      "displayName": "timestamps",
+      "description": "Toggle right-aligned timestamps on rows",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/visual.ts:61"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "toggle-mouse-reporting",
+      "canonical": "toggle-mouse-reporting",
+      "aliases": [],
+      "displayName": "toggle-mouse-reporting",
+      "description": "Toggle terminal mouse capture (native copy/paste vs in-app hover/scroll)",
+      "gate": "capability:(ctx: SlashContext) => ctx.mouseReportingToggle === true",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/mouse.ts:19"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "transcript",
+      "canonical": "transcript",
+      "aliases": [],
+      "displayName": "transcript",
+      "description": "Open the transcript in $PAGER (temp file)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/tools.ts:53"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "tutorial",
+      "canonical": "tutorial",
+      "aliases": [],
+      "displayName": "tutorial",
+      "description": "Topic list (terminal setup / keys / rewind / minimal)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/surfaces.ts:31"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "usage",
+      "canonical": "usage",
+      "aliases": [],
+      "displayName": "usage",
+      "description": "Context usage for THIS session only (no account quota)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/surfaces.ts:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "view-plan",
+      "canonical": "view-plan",
+      "aliases": [],
+      "displayName": "view-plan",
+      "description": "View the plan (live backend switching capability)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/run.ts:55"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "vim-mode",
+      "canonical": "vim-mode",
+      "aliases": [],
+      "displayName": "vim-mode",
+      "description": "Vim-style editing mode (live editor capability)",
+      "gate": "capability:(ctx) => hasCapability(ctx",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/text-input.ts:65"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "workflow",
+      "canonical": "workflow",
+      "aliases": [
+        "workflows"
+      ],
+      "displayName": "workflow",
+      "description": "Run/list workflow jobs (run <name> | status [id] | list)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/tui/src/app/slash/impl/workflow2.ts:133"
+      ],
+      "verified": false
+    }
+  ],
+  "hosts": {
+    "usageLine": " [<run|web|sdk|acp|tui|sessions> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\\n",
+    "hosts": [
+      {
+        "host": "run",
+        "evidence": "apps/cli/src/index.ts:12"
+      },
+      {
+        "host": "web",
+        "evidence": "apps/cli/src/index.ts:27"
+      },
+      {
+        "host": "sdk",
+        "evidence": "apps/cli/src/index.ts:11"
+      },
+      {
+        "host": "acp",
+        "evidence": "apps/cli/src/index.ts:26"
+      },
+      {
+        "host": "tui",
+        "evidence": "apps/cli/src/index.ts:29"
+      },
+      {
+        "host": "sessions",
+        "evidence": "apps/cli/src/index.ts:32"
+      }
+    ]
+  }
+}

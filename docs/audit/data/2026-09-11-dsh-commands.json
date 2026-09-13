@@ -1,0 +1,58 @@
+{
+  "source": "dsh",
+  "sourcePath": "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
+  "sourceRev": null,
+  "version": "0.1.5-rc.2",
+  "versionSource": "package.json",
+  "dirName": "deepseek-harness-dsh-v0.1.5-rc.2",
+  "versionMismatch": false,
+  "dirVersion": "0.1.5-rc.2",
+  "extractedAt": "2026-09-13",
+  "commandModel": "per-package+interaction-ref",
+  "count": 3,
+  "commands": [
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "description": "Human-facing `/compact` command over the backend-independent compaction seam.",
+      "packageName": "command-compact",
+      "gate": "dsh:commands-service",
+      "mechanism": null,
+      "evidence": [
+        "packages/compaction/command-compact/src/index.ts:10"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "feedback",
+      "canonical": "feedback",
+      "aliases": [],
+      "displayName": "feedback",
+      "description": null,
+      "packageName": "command-feedback",
+      "gate": "dsh:commands-service",
+      "mechanism": null,
+      "evidence": [
+        "packages/feedback/command-feedback/src/index.ts:39"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "goal",
+      "canonical": "goal",
+      "aliases": [],
+      "displayName": "goal",
+      "description": "Human-facing `/goal` command over the persisted same-session goal domain.",
+      "packageName": "command-goal",
+      "gate": "dsh:commands-service",
+      "mechanism": null,
+      "evidence": [
+        "packages/goal/command-goal/src/index.ts:12"
+      ],
+      "verified": false
+    }
+  ],
+  "interactionRefs": []
+}
