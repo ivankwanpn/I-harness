@@ -1,0 +1,369 @@
+{
+  "tools": [
+    {
+      "name": "tool-registry-and-failsafe-defaults",
+      "what": "Tools are plain objects matching the Tool<Input,Output,P> shape in src/Tool.ts, registered through the buildTool() factory which Object.assigns a TOOL_DEFAULTS table under the concrete definition (src/Tool.ts:740-783). Defaults are fail-closed where it matters — isConcurrencySafe false, isReadOnly false, toAutoClassifierInput '' — while isEnabled defaults true and checkPermissions defaults allow, deferring to the general permission system (Tool.ts:360-379, 413, 477). Lookup is by primary name or aliases[] via findToolByName/toolMatchesName, and runToolUse falls back to getAllBaseTools() only when the hit came through an alias, so deprecated tool names in old transcripts still resolve (src/services/tools/toolExecution.ts:340-351).",
+      "invariants": [
+        "every tool export must go through buildTool() so defaults live in one place",
+        "unknown concurrency safety is treated as unsafe, not safe"
+      ],
+      "failurePolicy": "fail-closed: a tool that omits isConcurrencySafe/isReadOnly is serialized and permission-gated as a writer; an omitted toAutoClassifierInput removes the tool from the auto-mode security classifier transcript",
+      "constants": [
+        {"name": "TOOL_DEFAULTS.isConcurrencySafe", "value": false},
+        {"name": "TOOL_DEFAULTS.isReadOnly", "value": false},
+        {"name": "TOOL_DEFAULTS.isEnabled", "value": true}
+      ],
+      "evidence": [
+        "src/Tool.ts:360-379",
+        "src/Tool.ts:413",
+        "src/Tool.ts:477",
+        "src/Tool.ts:740-783",
+        "src/services/tools/toolExecution.ts:340-351"
+      ],
+      "modules": ["tools", "services"],
+      "verified": true
+    },
+    {
+      "name": "tool-pool-assembly-and-exposure-filtering",
+      "what": "getAllBaseTools() is the literal array of every buildable tool, conditionally splattered by env flags and feature() gates; getTools() then removes special tools, applies blanket deny rules through filterToolsByDenyRules (so an mcp__server deny rule strips a whole server before the model sees it), drops tools whose isEnabled() is false, and hides REPL-only tools in REPL mode (src/tools.ts:163-212, 232-288). assembleToolPool() is the single source of truth for builtins plus MCP: it sorts each partition by name, concatenates builtins as a contiguous prefix then MCP, and uniqBy('name') so builtins win name conflicts — the contiguous prefix exists purely to keep the server-side prompt-cache breakpoint stable (tools.ts:306-350). Agent-scoped exposure is expressed as registry-level allowlists: ALL_AGENT_DISALLOWED_TOOLS, ASYNC_AGENT_ALLOWED_TOOLS and COORDINATOR_MODE_ALLOWED_TOOLS (src/constants/tools.ts:36-46, 106-111).",
+      "invariants": [
+        "builtins must remain a contiguous, name-sorted prefix ahead of MCP tools or the global cache breakpoint moves",
+        "dedup is name-keyed with builtin precedence",
+        "deny rules are applied before the pool is exposed, not at call time"
+      ],
+      "failurePolicy": "fail-soft: an unavailable or disabled tool silently disappears from the pool, and calling it anyway yields a '<tool_use_error>No such tool available' tool_result rather than a thrown error",
+      "constants": [
+        {"name": "CLAUDE_CODE_SIMPLE pool", "value": "[BashTool, FileReadTool, FileEditTool]"}
+      ],
+      "evidence": [
+        "src/tools.ts:163-212",
+        "src/tools.ts:232-288",
+        "src/tools.ts:306-350",
+        "src/constants/tools.ts:36-46",
+        "src/constants/tools.ts:106-111",
+        "src/services/tools/toolExecution.ts:364-406"
+      ],
+      "modules": ["tools", "services", "constants"],
+      "verified": true
+    },
+    {
+      "name": "deferred-tool-schema-exposure",
+      "what": "When tool search is active, tools marked shouldDefer are sent to the API with defer_loading:true and must be discovered via ToolSearch before they can be called, with alwaysLoad as an opt-out (src/utils/toolSearch.ts:172-198). getToolSearchMode() resolves purely from env (CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS -> standard, ENABLE_TOOL_SEARCH true/auto:N/auto:0/false), defaulting to 'tst' which always defers MCP plus shouldDefer tools (toolSearch.ts:628-633). If the model calls a deferred tool anyway, buildSchemaNotSentHint appends a recovery instruction telling it to call ToolSearch with select:<tool> and retry (src/services/tools/toolExecution.ts:573-594). Rendered tool schemas are memoized per session in a leaf-module Map so mid-session config churn cannot change the bytes at server position 2 and bust the ~11K-token tool block (src/utils/toolSchemaCache.ts:18-26).",
+      "invariants": [
+        "tool schema bytes must be stable for the session or the whole downstream prompt cache is invalidated",
+        "deferred-tool announcements are emitted in delta form only, never re-announced in full"
+      ],
+      "failurePolicy": "fail-soft: an undiscoverable schema produces an input-validation error plus a self-healing ToolSearch hint instead of failing the turn",
+      "constants": [
+        {"name": "DEFAULT_AUTO_TOOL_SEARCH_PERCENTAGE", "value": 10},
+        {"name": "CHARS_PER_TOKEN", "value": 2.5}
+      ],
+      "evidence": [
+        "src/utils/toolSearch.ts:172-198",
+        "src/utils/toolSearch.ts:628-633",
+        "src/utils/toolSchemaCache.ts:18-26",
+        "src/services/tools/toolExecution.ts:573-594"
+      ],
+      "modules": ["tools", "services", "utils"],
+      "verified": true
+    },
+    {
+      "name": "zod-schema-validation-and-input-coercion",
+      "what": "Model-supplied tool input is validated by tool.inputSchema.safeParse(input) at the top of checkPermissionsAndCallTool; a failure short-circuits into a formatted InputValidationError tool_result and never reaches the tool (src/services/tools/toolExecution.ts:609-675). Schemas are built lazily via lazySchema() so Zod construction is deferred from module init to first access (src/utils/lazySchema.ts:5-8), and most tools wrap number/boolean fields in semanticNumber/semanticBoolean, which z.preprocess only the exact string literal forms ('30' -> 30, 'true'/'false' -> boolean) while still advertising the native JSON type to the API (src/utils/semanticNumber.ts:26-36, src/utils/semanticBoolean.ts:22-29). formatZodValidationError rewrites raw Zod issues into missing/unexpected/type-mismatch buckets the model can act on (src/utils/toolErrors.ts:66-104).",
+      "invariants": [
+        "chained .optional()/.default() must go INSIDE semanticNumber/semanticBoolean or Zod v4 widens the output type to unknown",
+        "coercion is invisible client-side: the advertised API schema still shows the native JSON type",
+        "validation precedes every permission check"
+      ],
+      "failurePolicy": "fail-closed: a parse failure returns an is_error tool_result containing the formatted Zod message and the tool body is never entered",
+      "constants": [],
+      "evidence": [
+        "src/services/tools/toolExecution.ts:609-675",
+        "src/utils/semanticNumber.ts:26-36",
+        "src/utils/semanticBoolean.ts:22-29",
+        "src/utils/lazySchema.ts:5-8",
+        "src/utils/toolErrors.ts:66-104"
+      ],
+      "modules": ["tools", "services", "utils"],
+      "verified": true
+    },
+    {
+      "name": "tool-validateinput-and-error-result-mapping",
+      "what": "After schema parse, each tool's optional validateInput(input, context) runs its own semantic checks — does the file exist, was it read, is old_string unique, is this a notebook, is the command blocked — and returns {result:false, message, errorCode, behavior} (src/services/tools/toolExecution.ts:677-728). A false result is converted into an is_error tool_result wrapped in <tool_use_error>...</tool_use_error> carrying the tool's own message; anything else proceeds to permission checks. FileEditTool numbers its error codes 0..9 covering team-memory secrets, no-op edits, existing files, ipynb, not-read, modified-since-read, string-not-found and multiple matches (src/tools/FileEditTool/FileEditTool.ts:126-136, 240-350).",
+      "invariants": [
+        "validateInput runs only after schema parse succeeds and before any permission prompt",
+        "a failed validation must never surface as a thrown exception"
+      ],
+      "failurePolicy": "fail-closed: a negative validation yields a model-visible error tool_result and skips both the permission dialog and the tool call",
+      "constants": [
+        {"name": "FileEditTool errorCode range", "value": "0-9"}
+      ],
+      "evidence": [
+        "src/services/tools/toolExecution.ts:677-728",
+        "src/tools/FileEditTool/FileEditTool.ts:126-136",
+        "src/tools/FileEditTool/FileEditTool.ts:240-350",
+        "src/tools/BashTool/BashTool.tsx:520-534",
+        "src/tools/PowerShellTool/PowerShellTool.tsx:349-371"
+      ],
+      "modules": ["tools", "services"],
+      "verified": true
+    },
+    {
+      "name": "parallel-tool-batching-and-commit-ordering",
+      "what": "runTools() partitions a turn's tool_use blocks into maximal runs of consecutive concurrency-safe tools versus single unsafe tools, executes safe batches concurrently (bounded by CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY, default 10) and unsafe batches strictly serially (src/services/tools/toolOrchestration.ts:19-82, 91-177). Concurrency safety is computed by safeParse-then-isConcurrencySafe() with a try/catch that treats a throwing predicate as NOT safe (toolOrchestration.ts:8-12). The ordering guarantee: concurrent tools yield their messages immediately but their contextModifiers are queued per tool_use id and replayed only after the whole batch drains, in original block order, while serial tools apply their modifier inline (toolOrchestration.ts:118-177).",
+      "invariants": [
+        "a tool may run concurrently only if every currently executing tool is also concurrency-safe",
+        "context modifiers from a concurrent batch are applied after the batch, in block order",
+        "a throwing isConcurrencySafe predicate degrades to false"
+      ],
+      "failurePolicy": "fail-closed: unparseable input or a throwing predicate forces the tool into the exclusive serial batch",
+      "constants": [
+        {"name": "CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY default", "value": 10}
+      ],
+      "evidence": [
+        "src/services/tools/toolOrchestration.ts:8-12",
+        "src/services/tools/toolOrchestration.ts:19-82",
+        "src/services/tools/toolOrchestration.ts:118-177",
+        "src/query/effects/productionExecuteTools.ts:148-156"
+      ],
+      "modules": ["services", "query"],
+      "verified": true
+    },
+    {
+      "name": "streaming-tool-executor",
+      "what": "A second, streaming-native executor starts tools as their tool_use blocks arrive mid-stream, buffers results and emits them in receive order: it tracks queued/executing/completed/yielded per tool, lets concurrency-safe tools run in parallel, forces non-safe tools to run alone, and can prestart only tools whose isReadOnly() is true before commitAttempt() (src/services/tools/StreamingToolExecutor.ts:19-50, 194-221, 520-570). It is PRESENT-BUT-INERT: createExecutor() returns null unless config.gates.streamingToolExecution is true, and that gate is checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_streaming_tool_execution2'), which the stubbed growthbook module always answers false (src/query/config.ts:29-45, src/services/analytics/growthbook.ts:157-162). Production therefore always takes the runTools() branch and logs tengu_streaming_tool_execution_not_used (src/query/effects/productionExecuteTools.ts:137-156).",
+      "invariants": [
+        "results must be emitted in the order tool_use blocks were received",
+        "prestart is restricted to isReadOnly()===true tools and only before commitAttempt()",
+        "getRemainingResults() throws unless the attempt was committed"
+      ],
+      "failurePolicy": "fail-soft: with the gate false the executor is never constructed and execution silently falls back to the batch orchestrator",
+      "constants": [],
+      "evidence": [
+        "src/services/tools/StreamingToolExecutor.ts:19-50",
+        "src/services/tools/StreamingToolExecutor.ts:520-570",
+        "src/query/config.ts:29-45",
+        "src/services/analytics/growthbook.ts:157-162",
+        "src/query/effects/productionExecuteTools.ts:137-156"
+      ],
+      "modules": ["services", "query"],
+      "verified": true
+    },
+    {
+      "name": "tool-abort-and-sibling-cancellation",
+      "what": "Every tool call receives its own AbortController created as a child of the streaming executor's siblingAbortController, itself a child of the query abortController; runToolUse returns a synthetic CANCEL_MESSAGE tool_result if the signal is already aborted before dispatch (src/services/tools/toolExecution.ts:409-448, src/Tool.ts:418-427). During execution a Bash error sets hasErrored and aborts the sibling controller so peer subprocesses die immediately, while Read/WebFetch failures deliberately do not cascade (src/services/tools/StreamingToolExecutor.ts:300-333, 384-409). interruptBehavior() decides what a mid-flight user message does: 'cancel' tools are stopped and replaced with REJECT_MESSAGE, 'block' tools keep running, and only when every executing tool is cancel-able does the context advertise hasInterruptibleToolInProgress (StreamingToolExecutor.ts:54-58, 445-455).",
+      "invariants": [
+        "sibling cancellation must not abort the parent query controller",
+        "only Bash errors cascade to siblings",
+        "the tool that produced the error must not also receive a duplicate sibling-error result"
+      ],
+      "failurePolicy": "fail-soft: cancellation is materialized as an is_error tool_result (REJECT_MESSAGE / 'Cancelled: parallel tool call errored') so the model can continue rather than the turn throwing",
+      "constants": [],
+      "evidence": [
+        "src/services/tools/toolExecution.ts:409-448",
+        "src/services/tools/StreamingToolExecutor.ts:54-58",
+        "src/services/tools/StreamingToolExecutor.ts:300-333",
+        "src/services/tools/StreamingToolExecutor.ts:384-455",
+        "src/Tool.ts:418-427"
+      ],
+      "modules": ["services", "tools"],
+      "verified": true
+    },
+    {
+      "name": "tool-hook-lifecycle",
+      "what": "toolHooks.ts implements the PreToolUse / PostToolUse / PostToolUseFailure chain around every tool call: runPreToolUseHooks streams typed events (message, hookPermissionResult, hookUpdatedInput, preventContinuation, stopReason, additionalContext, stop) so a hook can deny, rewrite input, inject context or halt the turn, runPostToolUseHooks can rewrite the tool output before it is mapped to a content block, and the failure variant lets hooks react to errors (src/services/tools/toolHooks.ts:39, 193, 332, 452-493). resolveHookPermissionDecision arbitrates a hook verdict against canUseTool, and hooks receive the tool's abort signal with an explicit undefined timeoutMs so the shared default applies (toolHooks.ts:452-493, src/services/tools/toolExecution.ts:1476-1479).",
+      "invariants": [
+        "hooks see a shallow clone of the input, never the API-bound original, to preserve prompt cache",
+        "hook continuation-stopping surfaces as a hook_stopped_continuation attachment that suppresses turn continuation"
+      ],
+      "failurePolicy": "mixed: a hook blockingError becomes a deny PermissionResult (fail-closed for permission), a hook that merely throws is swallowed by the surrounding try/catch (fail-open for the tool call), and preventContinuation is fail-safe by ending the turn",
+      "constants": [
+        {"name": "HOOK_TIMING_DISPLAY_THRESHOLD_MS", "value": 500},
+        {"name": "SLOW_PHASE_LOG_THRESHOLD_MS", "value": 2000}
+      ],
+      "evidence": [
+        "src/services/tools/toolHooks.ts:39",
+        "src/services/tools/toolHooks.ts:452-493",
+        "src/services/tools/toolExecution.ts:1476-1479",
+        "src/query/effects/productionExecuteTools.ts:161-166"
+      ],
+      "modules": ["services", "tools"],
+      "verified": true
+    },
+    {
+      "name": "tool-result-output-spill",
+      "what": "Oversized tool results are persisted to disk instead of truncated: getPersistenceThreshold() resolves the cap as Math.min(tool.maxResultSizeChars, DEFAULT_MAX_RESULT_SIZE_CHARS = 50_000) with an unconditional Infinity escape hatch checked BEFORE any override, so a tool such as Read that declares Infinity can never be forced onto disk and create a circular Read->file->Read loop (src/utils/toolResultStorage.ts:78-101). persistToolResult() writes projectDir/<sessionId>/tool-results/<toolUseId>.{txt,json} with flag 'wx' (skip if already written, avoiding a stat-then-write race and re-writes on microcompact replay) and returns only a 2000-byte preview behind a <persisted-output> envelope (toolResultStorage.ts:124-277). MCP tools may raise their own cap via _meta['anthropic/maxResultSizeChars'], clamped to 500_000 (src/utils/mcpOutputStorage.ts:148-166).",
+      "invariants": [
+        "Infinity maxResultSizeChars is honoured before any flag override",
+        "only text content is persistable; non-text content returns a PersistToolResultError",
+        "preview plus path must be sufficient for the model to recover the full content"
+      ],
+      "failurePolicy": "fail-soft: a write failure returns {error} and the ORIGINAL unshed content is sent, so the model keeps the data at the cost of context",
+      "constants": [
+        {"name": "DEFAULT_MAX_RESULT_SIZE_CHARS", "value": 50000},
+        {"name": "PREVIEW_SIZE_BYTES", "value": 2000},
+        {"name": "MAX_MCP_RESULT_SIZE_OVERRIDE_CHARS", "value": 500000},
+        {"name": "MAX_TOOL_RESULT_TOKENS", "value": 100000},
+        {"name": "MAX_TOOL_RESULT_BYTES", "value": 400000},
+        {"name": "BashTool maxResultSizeChars", "value": 30000},
+        {"name": "GrepTool maxResultSizeChars", "value": 20000},
+        {"name": "FileReadTool maxResultSizeChars", "value": "Infinity"}
+      ],
+      "evidence": [
+        "src/utils/toolResultStorage.ts:78-101",
+        "src/utils/toolResultStorage.ts:124-277",
+        "src/constants/toolLimits.ts:13",
+        "src/constants/toolLimits.ts:22",
+        "src/constants/toolLimits.ts:33",
+        "src/services/tools/toolExecution.ts:1397-1410",
+        "src/utils/mcpOutputStorage.ts:148-166"
+      ],
+      "modules": ["utils", "constants", "services", "tools"],
+      "verified": true
+    },
+    {
+      "name": "per-message-aggregate-result-budget",
+      "what": "A second-order cap intended to stop N parallel tools from each hitting the per-tool limit and collectively flooding one user message: enforceBudgetForMessage() would sum non-image, non-already-compacted tool_result sizes per API-level user message and persist the largest fresh blocks until under budget, storing byte-identical replacement strings in a ContentReplacementState so resume replays the exact preview the model already saw (src/utils/toolResultStorage.ts:449-540, 820-882). It is PRESENT-BUT-INERT: provisionContentReplacementState() returns undefined unless the GrowthBook flag tengu_hawthorn_steeple is true, and the stubbed client returns the default false (toolResultStorage.ts:482-498; src/services/analytics/growthbook.ts:130-136). Only the per-tool spill cap therefore constrains a turn's aggregate result size.",
+      "invariants": [
+        "a replacement string must be stored verbatim, never re-derived, so a template change cannot silently break the prompt cache",
+        "already-compacted (<persisted-output>-tagged) and image-bearing blocks are excluded from candidacy"
+      ],
+      "failurePolicy": "fail-soft: with the flag false the whole pass is skipped; the 200_000-char budget constant is resolved but unused",
+      "constants": [
+        {"name": "MAX_TOOL_RESULTS_PER_MESSAGE_CHARS", "value": 200000},
+        {"name": "BYTES_PER_TOKEN", "value": 4},
+        {"name": "PERSISTED_OUTPUT_TAG", "value": "<persisted-output>"}
+      ],
+      "evidence": [
+        "src/constants/toolLimits.ts:36-49",
+        "src/utils/toolResultStorage.ts:449-498",
+        "src/utils/toolResultStorage.ts:820-882",
+        "src/services/analytics/growthbook.ts:130-136"
+      ],
+      "modules": ["utils", "constants"],
+      "verified": true
+    },
+    {
+      "name": "shell-process-control-and-disk-spill",
+      "what": "There is no PTY in this tree (grep for node-pty/IPty/createPty finds no implementation); process control is child_process.spawn via Shell.exec(), which resolves a shell provider, builds the command (sandbox-wrapped when requested) and spawns with stdio either piped or redirected straight to an output-file fd opened O_NOFOLLOW as a symlink-following defence (src/utils/Shell.ts:200-235, 404-440). wrapSpawn returns a ShellCommand whose result promise is driven by the child 'exit' event rather than 'close' (so grandchildren holding inherited fds cannot stall the turn) and by a setTimeout of the effective timeout; on expiry it kills the process TREE with tree-kill/SIGKILL and synthesizes SIGTERM(143)/SIGKILL(137) sentinel exit codes with a 'Command timed out after ...' stderr prefix (src/utils/ShellCommand.ts:275-366). Backgrounding drops the foreground timeout and instead installs a 5s size watchdog that kills the process when the output file passes the 5GB MAX_TASK_OUTPUT_BYTES cap (src/utils/task/diskOutput.ts:20-31).",
+      "invariants": [
+        "kill must be a process-tree kill, never a single-PID kill",
+        "'exit' rather than 'close' must gate result resolution",
+        "backgrounding must replace the removed timeout with a disk-size watchdog"
+      ],
+      "failurePolicy": "fail-soft: a timeout is reported as a normal tool result with a sentinel exit code and prefixed stderr, not as an exception, so the model can react",
+      "constants": [
+        {"name": "Shell DEFAULT_TIMEOUT", "value": 1800000},
+        {"name": "BASH_DEFAULT_TIMEOUT_MS", "value": 120000},
+        {"name": "BASH_MAX_TIMEOUT_MS", "value": 600000},
+        {"name": "MAX_TASK_OUTPUT_BYTES", "value": 5368709120},
+        {"name": "SIZE_WATCHDOG_INTERVAL_MS", "value": 5000},
+        {"name": "SIGKILL sentinel", "value": 137},
+        {"name": "SIGTERM sentinel", "value": 143}
+      ],
+      "evidence": [
+        "src/utils/Shell.ts:200-235",
+        "src/utils/Shell.ts:404-440",
+        "src/utils/ShellCommand.ts:275-366",
+        "src/utils/task/diskOutput.ts:20-31",
+        "src/utils/timeouts.ts:1-38",
+        "src/tools/BashTool/BashTool.tsx:852"
+      ],
+      "modules": ["utils", "tools", "tasks"],
+      "verified": true
+    },
+    {
+      "name": "bash-command-security-gate",
+      "what": "bashToolHasPermission runs the command through a layered gate. A tree-sitter AST pass would classify the command as 'simple' or 'too-complex' and feed both parseForSecurityFromAst and the operator-permission checker, but THIS LAYER IS INERT: parseCommandRaw() only loads the parser when feature('TREE_SITTER_BASH')||feature('TREE_SITTER_BASH_SHADOW'), both false in this build, so astRoot is null and astResult collapses to {kind:'parse-unavailable'} (src/utils/bash/parser.ts:104-136; src/tools/BashTool/bashPermissions.ts:1941-1969, 2008-2027). The legacy shell-quote/regex path is therefore authoritative, with an unparseable command returning behavior 'ask' (bashPermissions.ts:2029-2053). Around it, checkReadOnlyConstraints() decides read-only-ness and auto-allow with explicit security passthroughs for cd+git compounds, bare-git-repo cwd, writes to git-internal paths and git outside the original cwd, and bashSecurity.ts supplies ~25 named validators with stable check IDs (src/tools/BashTool/readOnlyValidation.ts:1876-1955, src/tools/BashTool/bashSecurity.ts:77, 2257).",
+      "invariants": [
+        "an unparseable command must escalate to ask, never default-allow",
+        "a deny must never be downgraded to ask when falling out of the AST path",
+        "compound commands with cd and git always require permission checks"
+      ],
+      "failurePolicy": "fail-closed: parse failure, AST too-complex and every ambiguity resolve to behavior 'ask' (user prompt) or 'passthrough' into stricter checks, never a silent allow",
+      "constants": [
+        {"name": "MAX_COMMAND_LENGTH (parser)", "value": 10000},
+        {"name": "PARSE_TIMEOUT_MS", "value": 50},
+        {"name": "MAX_NODES", "value": 50000}
+      ],
+      "evidence": [
+        "src/utils/bash/parser.ts:104-136",
+        "src/utils/bash/ast.ts:375-392",
+        "src/tools/BashTool/bashPermissions.ts:1941-1969",
+        "src/tools/BashTool/bashPermissions.ts:2008-2053",
+        "src/tools/BashTool/readOnlyValidation.ts:1876-1955",
+        "src/tools/BashTool/bashSecurity.ts:77"
+      ],
+      "modules": ["tools", "utils"],
+      "verified": true
+    },
+    {
+      "name": "powershell-command-safety-and-clm",
+      "what": "PowerShellTool mirrors BashTool's shape with PowerShell-specific gates: validateInput rejects on isWindowsSandboxPolicyViolation() and on the sleep pattern, and call() re-checks the Windows sandbox refusal as the load-bearing guard because promptShellExecution/processBashCommand bypass validateInput (src/tools/PowerShellTool/PowerShellTool.tsx:187-220, 431-440). isReadOnly() first runs hasSyncSecurityConcerns() — subexpressions $(), splatting @var, .Method() member invocations, assignments, --% stop-parsing, UNC paths that leak NTLM/Kerberos — and only then consults the cmdlet allowlist, with the source documenting that the sync path cannot split pipelines so the real auto-allow decision happens in the async AST path in powershellToolHasPermission (PowerShellTool.tsx:282-313; src/tools/PowerShellTool/readOnlyValidation.ts:1112-1152). powershellSecurity.ts inverts Microsoft's ConstrainedLanguage model: any .NET type literal not in CLM_ALLOWED_TYPES, or a New-Object type outside it, is treated as unsafe and escalates to ask (src/tools/PowerShellTool/clmTypes.ts:1-18, 194-211; powershellSecurity.ts:420-424, 1042).",
+      "invariants": [
+        "security-concern heuristics must run before cmdlet allowlist evaluation, so allowlisted cmdlets cannot launder dangerous syntax",
+        "the call()-level Windows policy guard is load-bearing because validateInput is bypassable",
+        "the CLM list is inverted: not-in-allowlist means unsafe"
+      ],
+      "failurePolicy": "fail-closed: unknown .NET types and any sync security concern make the command non-read-only, forcing an ask; the Windows policy violation throws rather than running unsandboxed",
+      "constants": [
+        {"name": "PowerShellTool maxResultSizeChars", "value": 30000}
+      ],
+      "evidence": [
+        "src/tools/PowerShellTool/PowerShellTool.tsx:187-220",
+        "src/tools/PowerShellTool/PowerShellTool.tsx:282-313",
+        "src/tools/PowerShellTool/PowerShellTool.tsx:431-440",
+        "src/tools/PowerShellTool/clmTypes.ts:1-18",
+        "src/tools/PowerShellTool/clmTypes.ts:194-211",
+        "src/tools/PowerShellTool/readOnlyValidation.ts:1112-1152",
+        "src/tools/PowerShellTool/powershellSecurity.ts:420-424"
+      ],
+      "modules": ["tools"],
+      "verified": true
+    },
+    {
+      "name": "file-edit-patch-generation-and-staleness-guard",
+      "what": "FileEditTool.applyEditToFile is a read-modify-write protected by an explicit no-await critical section: it loads the file and, if the on-disk mtime is newer than the readFileState timestamp, compares content as a Windows-safe fallback and otherwise throws FILE_UNEXPECTEDLY_MODIFIED_ERROR (src/tools/FileEditTool/FileEditTool.ts:431-480). Matching goes through findActualString(), which falls back to curly-quote-normalized matching, and preserveQuoteStyle() re-applies the file's typography to new_string (src/tools/FileEditTool/utils.ts:73-112). The patch is produced by structuredPatch() from the diff package with sentinel escaping for & and $, a 4-line hunk context and a DIFF_TIMEOUT_MS bound, and a failing diff returns [] rather than throwing (src/utils/diff.ts:81-114). FileWriteTool mirrors this with MAX_EDIT_FILE_SIZE (10MB default, env-overridable) checked BEFORE loading the file to prevent OOM (src/tools/FileWriteTool/FileWriteTool.ts:244-309).",
+      "invariants": [
+        "no await may occur between the staleness check and the disk write",
+        "a failed diff must degrade to an empty hunk list, not an exception",
+        "the file-size cap is enforced before the file is read into memory"
+      ],
+      "failurePolicy": "fail-closed on staleness (the edit is not applied); fail-soft on diff generation (the edit still lands with no hunks)",
+      "constants": [
+        {"name": "MAX_EDIT_FILE_SIZE", "value": 10485760},
+        {"name": "CONTEXT_LINES", "value": 4},
+        {"name": "MAX_SNAPSHOTS (pre-edit checkpoint)", "value": 100}
+      ],
+      "evidence": [
+        "src/tools/FileEditTool/FileEditTool.ts:431-480",
+        "src/tools/FileEditTool/utils.ts:73-112",
+        "src/utils/diff.ts:81-114",
+        "src/tools/FileWriteTool/FileWriteTool.ts:244-309"
+      ],
+      "modules": ["tools", "utils"],
+      "verified": true
+    },
+    {
+      "name": "blocking-sleep-repeat-guard",
+      "what": "A guard intended to stop the model parking a turn on `sleep N` and to redirect it to background execution: validateInput regex-matches only the FIRST subcommand, ignores sleeps under 2 seconds, and returns errorCode 10 with a message naming run_in_background:true and the Monitor tool (src/tools/BashTool/BashTool.tsx:313-333, 520-534; src/tools/PowerShellTool/PowerShellTool.tsx:181-203, 358-367). A companion guard, isAutobackgroundingAllowed(), excludes DISALLOWED_AUTO_BACKGROUND_COMMANDS from auto-backgrounding so a bare `sleep` is never silently promoted to a background task (BashTool.tsx:303-311). It is PRESENT-BUT-INERT twice over: the call sites are wrapped in feature('MONITOR_TOOL') (false at runtime), and the tool the message points at is a literal stub — src/tools/MonitorTool/MonitorTool.ts is the single line `export const MonitorTool = null`.",
+      "invariants": [
+        "only the leading subcommand counts — sleeps inside pipelines, subshells or scripts are intentionally allowed",
+        "sub-2s sleeps are legitimate pacing and are never blocked"
+      ],
+      "failurePolicy": "fail-open: because the gate is false the check is compiled out and `sleep 300` passes straight through to permission checks and execution",
+      "constants": [
+        {"name": "minimum blocked sleep seconds", "value": 2},
+        {"name": "sleep-guard errorCode", "value": 10}
+      ],
+      "evidence": [
+        "src/tools/BashTool/BashTool.tsx:313-333",
+        "src/tools/BashTool/BashTool.tsx:520-534",
+        "src/tools/PowerShellTool/PowerShellTool.tsx:181-203",
+        "src/tools/MonitorTool/MonitorTool.ts:1"
+      ],
+      "modules": ["tools"],
+      "verified": true
+    }
+  ]
+}

@@ -58,6 +58,12 @@ for (const d of DOMAIN_ORDER) {
 }
 
 const moduleCoverage = {}
+const ownCoverage = JSON.parse(readFileSync(join(SCRATCH, '_mine-coverage.json'), 'utf8'))
+for (const [k, v] of Object.entries(ownCoverage)) {
+  const entry = coverage.get(k) ?? { mechs: [], reasons: [] }
+  entry.mechs.push(`dsh: ${v}`)
+  coverage.set(k, entry)
+}
 for (const mod of ALL) {
   const e = coverage.get(mod)
   if (!e) { moduleCoverage[mod] = 'UNCOVERED'; problems.push(`UNCOVERED module: ${mod}`); continue }
@@ -65,7 +71,11 @@ for (const mod of ALL) {
     ? [...new Set(e.mechs)].join(' | ')
     : (e.reasons[0] ?? 'UNCOVERED')
 }
-for (const k of coverage.keys()) if (!ALL.includes(k)) problems.push(`EXTRA coverage key not in checklist: ${k}`)
+// Drop non-module keys (a one-line wildcard summary some domains emitted): the
+// map must key exactly the 267 checklist modules.
+for (const k of [...Object.keys(moduleCoverage)]) {
+  if (!/^[a-z0-9-]+\/[A-Za-z0-9._-]+$/.test(k) || !ALL.includes(k)) delete moduleCoverage[k]
+}
 
 const meta = JSON.parse(readFileSync(join(SCRATCH, '_mine-meta.json'), 'utf8'))
 
@@ -79,13 +89,24 @@ for (const g of meta.hintGroups) {
     if (!ALL.includes(mod)) problems.push(`hintCorrection for unknown module ${mod}`)
     hintCorrections.push({
       module: mod,
-      hintDomain: g.hintDomain,
-      correctedDomain: g.correctedDomain,
-      reason: g.reason,
+      hintWas: g.hintDomain,
+      assigned: g.correctedDomain,
+      why: g.reason,
     })
   }
 }
 hintCorrections.sort((a, b) => a.module.localeCompare(b.module))
+
+let evidenceCount = 0
+let mechanismCount = 0
+for (const mechs of Object.values(domains)) {
+  for (const m of mechs) {
+    mechanismCount++
+    evidenceCount += m.evidence.length
+    if (!m.verified) problems.push(`UNVERIFIED mechanism: ${m.name}`)
+    if (!m.evidence || m.evidence.length === 0) problems.push(`NO EVIDENCE: ${m.name}`)
+  }
+}
 
 const out = {
   source: 'dsh',
@@ -96,7 +117,7 @@ const out = {
   hintCorrections,
   domainsAbsent: meta.domainsAbsent,
   pluginKernel: meta.pluginKernel,
-  notes: meta.notes,
+  notes: meta.notes.replaceAll('{{EVIDENCE_COUNT}}', String(evidenceCount)).replaceAll('{{MECHANISM_COUNT}}', String(mechanismCount)),
 }
 
 writeFileSync(OUT, JSON.stringify(out, null, 2), 'utf8')

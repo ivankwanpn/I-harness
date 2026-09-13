@@ -12,7 +12,7 @@
       "constants": [],
       "evidence": [
         "packages/core/agent-loop/src/agent.ts:128-147",
-        "packages/core/agent-loop/src/types.ts:29-36",
+        "packages/core/agent/src/types.ts:29-36",
         "packages/core/agent-loop/src/inbox.ts:123-134"
       ],
       "modules": ["core/agent-loop", "core/agent"],

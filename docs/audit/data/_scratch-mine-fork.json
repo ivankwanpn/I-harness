@@ -1,0 +1,1181 @@
+{
+  "source": "opencode-fork",
+  "dirName": "opencode-fork-private-999.0.15",
+  "version": "999.0.19",
+  "domains": {
+    "loop": [
+      {
+        "name": "engine-fixed-at-session-creation",
+        "what": "Every session stores an execution engine column fixed at creation (default 'classic', existing rows decode as classic, kernel children inherit 'kernel'). SessionExecutionRouter.resolve reads the stored engine and returns that engine's SessionExecution implementation; a missing engine registration fails with KernelUnavailableError and there is NEVER a fallback to classic. The routing facade unions all engines' active snapshots and maps KernelUnavailableError on exclusive work to BusyError.",
+        "invariants": [
+          "The engine is immutable per session - it is read from the session row on every call, never chosen at runtime.",
+          "A missing kernel registration must fail, never fall back to classic.",
+          "New sessions default to classic (DefaultEngine = 'classic')."
+        ],
+        "failurePolicy": "fail-closed - unknown session is NotFoundError, unregistered kernel is KernelUnavailableError, and non-drain work on a kernel session without kernel installed fails as busy.",
+        "constants": [
+          "DefaultEngine = 'classic' (packages/core/src/session/command.ts:66)",
+          "session.engine column default 'classic' (packages/core/src/session/sql.ts:52)",
+          "session_execution.engine default 'kernel' (packages/core/src/session/sql.ts:299)"
+        ],
+        "evidence": [
+          "packages/core/src/session/execution/router.ts:12-17",
+          "packages/core/src/session/execution/router.ts:40-51",
+          "packages/core/src/session/execution.ts:53-78",
+          "packages/core/src/session/command.ts:62-66",
+          "packages/core/src/session/sql.ts:50-52"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "classic-engine-loop",
+        "what": "The classic engine remains the default and is still driven from recorded history: SessionExecutionLocal wraps SessionRunCoordinator and calls SessionRunner.run({sessionID, force}) per drain, resolving the session's Location layer for the drain. The runner's loop is while(shouldRun){ while(needsContinuation){ runTurn } } over durable attempts, and a missing session during a drain is a defect.",
+        "invariants": [
+          "One drain per session at a time, enforced by the coordinator keyed on session id.",
+          "A drain must resolve the session before running, and must not run for a missing session."
+        ],
+        "failurePolicy": "fail-soft - non-interrupt drain failures are logged and swallowed so a later wake can retry; interrupt-only causes are not logged.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/execution/local.ts:16-36",
+          "packages/core/src/session/execution/local.ts:16-36",
+          "packages/core/src/session/execution/local.ts:17-27",
+          "packages/core/src/session/runner/llm.ts:1055-1095"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "kernel-durable-turn-coordinator",
+        "what": "The kernel engine runs turns through TurnCoordinator: one process-local coordinator per active kernel session (coalescing same-session wakes, allowing different sessions concurrently), which creates the turn cancellation scope, waits for publication and terminal commit, and releases execution ownership only after durable settlement. All provider turns and compaction share this coordinator and never fall back to classic; compaction runs as a fenced phase that acquires idle, compacts and releases idle.",
+        "invariants": [
+          "Ownership is released only after durable settlement; a fenced (interrupted) lease must not publish further content.",
+          "Provider turns and compaction must share one coordinator so they cannot interleave.",
+          "Kernel sessions must never execute classic non-drain work."
+        ],
+        "failurePolicy": "fail-closed - a busy session fails compaction with SessionExecution.BusyError; an interrupted turn settles durably in the drain and resume joiners observe the interruption as the desired outcome rather than an error.",
+        "constants": [
+          "retry delay = min(500 * 2^(attempt-1), 10_000) ms (packages/core/src/session/kernel/coordinator.ts:40)"
+        ],
+        "evidence": [
+          "packages/core/src/session/kernel/index.ts:19-33",
+          "packages/core/src/session/kernel/index.ts:94-123",
+          "packages/core/src/session/kernel/coordinator.ts:76-95",
+          "packages/core/src/session/kernel/coordinator.ts:40"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "lease-generation-fencing",
+        "what": "Durable execution coordination lives in a session_execution row holding current generation, opaque lease token, phase and recovery state. LifecycleStore.start acquires a turn lease with generation+1; acquireIdle takes a phase lease for compaction; every checkpoint, settlement and release is a conditional UPDATE on (generation, lease token), so a stale lease from a fenced or superseded turn simply matches no rows. An interrupt advances the generation and clears the lease before cancellation work begins.",
+        "invariants": [
+          "Every durable write under a lease must be fenced by (generation, token); an unfenced write is a correctness bug.",
+          "The interrupt fence must be durable and must precede cancellation, so a restarted process cannot resume a cancelled turn."
+        ],
+        "failurePolicy": "fail-closed - a mismatched generation/token returns the current snapshot unchanged or fails the operation instead of writing.",
+        "constants": [
+          "generation starts at 0 and increments per lease (packages/core/src/session/sql.ts:300)",
+          "state default 'idle', indexed by session_execution_state_idx (packages/core/src/session/sql.ts:303,315)"
+        ],
+        "evidence": [
+          "packages/core/src/session/sql.ts:288-315",
+          "packages/core/src/session/kernel/lifecycle-store.ts:68-87",
+          "packages/core/src/session/kernel/lifecycle-store.ts:123-225",
+          "packages/core/src/session/kernel/lifecycle-store.ts:324",
+          "packages/core/src/session/kernel/lifecycle-store.ts:511-561"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "kernel-startup-reconciliation",
+        "what": "On construction the kernel reconciles every non-idle kernel execution: it selects session_execution rows joined to sessions whose engine is 'kernel' and whose state is not idle, then for each runs RecoveryPlanner.plan, offers the plan to a plugin seam (recoveryAdvice), applies it through RecoveryExecutor and increments diagnostics counters. By construction reconciliation performs zero provider calls - it only applies idempotent terminal/read-model reconciliation, never provider, tool, shell, compaction or notification-as-turn work.",
+        "invariants": [
+          "Startup reconciliation must be idempotent and must never call a provider.",
+          "A failure to reconcile one session must not prevent reconciling the others."
+        ],
+        "failurePolicy": "fail-soft - a failed plan/apply is logged and counted (startup.reconcile_failed) and the loop continues; every row increments startup.reconciled.",
+        "constants": [
+          "diagnostics counters 'startup.reconciled' / 'startup.reconcile_failed' (packages/core/src/session/kernel/index.ts:85-87)"
+        ],
+        "evidence": [
+          "packages/core/src/session/kernel/index.ts:65-92",
+          "packages/core/src/session/kernel/index.ts:48-63"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "durable-attempt-state-machine",
+        "what": "SessionAttempt projects provider attempts into a durable row whose status moves through started/responding/retrying/continuation and ends as ended/interrupted/abandoned, with a derived public Status of idle | active/retry_wait/needs_recovery/cancelling | recovery-required. recoveryDecision decides continuation vs abandonment after a crash, scheduled() lists attempts whose retry time has arrived, and projection functions (projectStarted/projectResponseStarted/projectEnded/projectRetried/projectRecoveryDecided) consume the durable events in order.",
+        "invariants": [
+          "Only one attempt may be active per session; a start is a conditional write that fails when another attempt is active (ActiveAttemptConflictError).",
+          "An attempt whose post-crash state is ambiguous must become recovery-required, never silently retried as a fresh attempt."
+        ],
+        "failurePolicy": "fail-closed - RecoveryRequiredError/RecoveryConflictError are explicit failures; the public status surfaces recovery-required instead of guessing.",
+        "constants": [
+          "public status states = idle | active | retry_wait | needs_recovery | cancelling | recovery-required (packages/core/src/session/attempt.ts:33-70)"
+        ],
+        "evidence": [
+          "packages/core/src/session/attempt.ts:20",
+          "packages/core/src/session/attempt.ts:33-71",
+          "packages/core/src/session/attempt.ts:147-171",
+          "packages/core/src/session/attempt.ts:214-228",
+          "packages/core/src/session/command.ts:46-56"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "provider-attempt-retry-budget",
+        "what": "The fork runner makes each provider attempt durable and bounds automatic retry: physical attempts are tagged {attempt, retryOf} and tracked in the attempt row, the turn transition RetryProvider authorizes exactly one bounded replacement attempt, and the budget is MAX_PROVIDER_ATTEMPTS. Retry delay is min(error.retryAfterMs ?? 500 * 2^(attempt-1), 10_000) ms.",
+        "invariants": [
+          "A retry must be authorized by a durable retry notice; the runner may not silently re-issue a provider request.",
+          "At most MAX_PROVIDER_ATTEMPTS physical attempts per turn."
+        ],
+        "failurePolicy": "fail-closed - exhausting the attempt budget settles the turn with the provider error instead of retrying again.",
+        "constants": [
+          "MAX_PROVIDER_ATTEMPTS = 3 (packages/core/src/session/runner/llm.ts:213)",
+          "retry delay = min(retryAfterMs ?? 500 * 2^(attempt-1), 10_000) ms (packages/core/src/session/runner/llm.ts:214-215)"
+        ],
+        "evidence": [
+          "packages/core/src/session/runner/llm.ts:200-215",
+          "packages/core/src/session/runner/llm.ts:557-566",
+          "packages/core/src/session/runner/llm.ts:640-650",
+          "packages/core/src/session/runner/llm.ts:768-792"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "identical-tool-failure-circuit-breaker",
+        "what": "The runner keeps a per-turn map of tool failure signatures; when the same signature has already failed MAX_IDENTICAL_TOOL_FAILURES times the turn stops repeating it (the tool result is settled as a failure and the loop no longer continues on that path). This complements, rather than replaces, the permission-based repeat guard.",
+        "invariants": [
+          "The failure counter is per turn (shared across physical attempts) and keyed by a signature, so it cannot be reset by a retry."
+        ],
+        "failurePolicy": "fail-closed - repeated identical failures terminate the repetitive behaviour instead of burning the step budget.",
+        "constants": [
+          "MAX_IDENTICAL_TOOL_FAILURES = 2 (packages/core/src/session/runner/llm.ts:126)"
+        ],
+        "evidence": [
+          "packages/core/src/session/runner/llm.ts:126",
+          "packages/core/src/session/runner/llm.ts:678-690"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "session-stop-hooks",
+        "what": "Before a turn is allowed to end, the runner evaluates stop hooks through PluginRuntime: 'session.stop' for a normal turn and 'session.subagent.stop' for a subagent turn. A hook publishes its decision into a mutable outcome holder; 'continue' supplies continuation prompt fragments and the turn keeps going, 'stop' ends it. The block count is shared across every provider attempt within one turn and capped by MAX_BLOCKS_PER_TURN.",
+        "invariants": [
+          "The block counter must be shared across provider attempts of one turn, so hooks cannot loop forever.",
+          "A hook that throws, fails or times out must not block the turn from ending - evaluation degrades to 'stop'."
+        ],
+        "failurePolicy": "fail-open - hook evaluation catches all causes and treats them as 'stop' (the turn ends normally).",
+        "constants": [
+          "MAX_BLOCKS_PER_TURN = 3 (packages/core/src/session/stop-hook.ts:6)",
+          "shared stopBlockCount across attempts (packages/core/src/session/runner/llm.ts:1078-1079)"
+        ],
+        "evidence": [
+          "packages/core/src/session/stop-hook.ts:6",
+          "packages/core/src/session/stop-hook.ts:20-47",
+          "packages/core/src/session/runner/llm.ts:910",
+          "packages/core/src/session/runner/llm.ts:1078-1095"
+        ],
+        "modules": ["core/session", "core/plugin"],
+        "verified": true
+      },
+      {
+        "name": "session-serialized-runner",
+        "what": "The host layer keeps one Runner per session in a Map, with onIdle deleting the entry and setting status idle, onBusy setting busy, and cancelIfRunning/assertNotBusy exposing the busy state. ensureRunning joins or starts a run; startShell maps RunnerBusy to Session.BusyError. This is the same serialization contract as upstream, retained alongside the kernel coordinator.",
+        "invariants": [
+          "One runner per session id; the entry must be removed on idle.",
+          "Shell execution must not start while the session is busy."
+        ],
+        "failurePolicy": "fail-closed - startShell on a busy session fails with Session.BusyError.",
+        "constants": [],
+        "evidence": [
+          "packages/opencode/src/session/run-state.ts:44-54",
+          "packages/opencode/src/session/run-state.ts:63-73",
+          "packages/opencode/src/session/run-state.ts:79-80",
+          "packages/opencode/src/session/run-state.ts:110-126"
+        ],
+        "modules": ["opencode/session"],
+        "verified": true
+      },
+      {
+        "name": "background-job-registry",
+        "what": "The in-process BackgroundJob registry is retained unchanged in core (status running|completed|error|cancelled, with start/extend/wait/waitForPromotion/promote/cancel) and the host wraps it per instance. It is deliberately NOT durable: the module documents that process restart or owner-scope closure loses status and interrupts live work. The fork's durable task protocol sits above it rather than replacing it.",
+        "invariants": [
+          "The registry must not be treated as a durability boundary - durable ownership lives in the task submission/outbox tables.",
+          "Starting an already-running id must extend that job rather than duplicate it."
+        ],
+        "failurePolicy": "fail-soft - job failure is captured as status error/cancelled in the Info snapshot; a restart loses running jobs by design.",
+        "constants": [
+          "status values = running | completed | error | cancelled (packages/core/src/background-job.ts:7)"
+        ],
+        "evidence": [
+          "packages/core/src/background-job.ts:7",
+          "packages/core/src/background-job.ts:115-120",
+          "packages/core/src/background-job.ts:139-144",
+          "packages/opencode/src/background/job.ts:1"
+        ],
+        "modules": ["opencode/background"],
+        "verified": true
+      }
+    ],
+    "session": [
+      {
+        "name": "durable-event-log",
+        "what": "The durable append-only event log is retained in core with the same contract as upstream: publish() assigns the aggregate sequence inside a transaction and can commit a local projection atomically via the commit hook; SubscriberOverflowError fails a bounded subscriber rather than silently dropping events; allBounded uses Queue.dropping(capacity) and fails the queue when an offer is refused; latestSequence and commitDurableEvent (plus a batched commitDurableEvents) are the write path. replay/replayAll/durable(aggregateID, after) re-apply and tail serialized events.",
+        "invariants": [
+          "Sequence assignment belongs to the log, never to the caller.",
+          "A bounded subscriber that overflows must fail (SubscriberOverflowError), not lose events silently.",
+          "A local commit hook requires a durable event."
+        ],
+        "failurePolicy": "fail-closed - duplicate/divergent sequences abort the transaction and subscriber overflow fails the stream.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/event.ts:21",
+          "packages/core/src/event.ts:116",
+          "packages/core/src/event.ts:160",
+          "packages/core/src/event.ts:194-200",
+          "packages/core/src/event.ts:247",
+          "packages/core/src/event.ts:435"
+        ],
+        "modules": ["core/event", "core/database"],
+        "verified": true
+      },
+      {
+        "name": "session-command-durable-admission",
+        "what": "Prompt submission is a durable, conflict-checked command protocol. SessionCommand.admit takes an optional id (idempotency key), the prompt, a delivery mode, an intent and an expectedActiveAttemptID, and fails with PromptConflictError when the same message id already exists with a different prompt, with ActiveAttemptConflictError when the caller's expected attempt is not the active one, and with TurnConflictError on turn-level conflicts. It also owns create/restore (RestoreConflictError), switchAgent/switchModel, synthetic admission and plan-path resolution.",
+        "invariants": [
+          "Re-admitting the same message id with an equivalent prompt must be idempotent and return the existing admission (SessionInput.equivalent), while a divergent prompt must fail.",
+          "An expected-active-attempt guard must be honoured so a stale caller cannot inject input into a superseded attempt."
+        ],
+        "failurePolicy": "fail-closed - conflicts are typed errors and no partial admission is written.",
+        "constants": [
+          "DefaultEngine = 'classic' (packages/core/src/session/command.ts:66)"
+        ],
+        "evidence": [
+          "packages/core/src/session/command.ts:37-60",
+          "packages/core/src/session/command.ts:91-120",
+          "packages/core/src/session/command.ts:157",
+          "packages/core/src/session/input.ts:487-515"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "durable-task-submission-protocol",
+        "what": "Subagent delegation is expressed as a task_submission row keyed by the parent identity (parent session, assistant message, tool call id) plus child session, child input id, description, prompt, agent, agentPath, model, completion delivery mode ('tool' | 'parent'), status accepted/running/completed/error/cancelled/recovery-required, outcome, result message/text and error. InvocationConflict rejects a second submission for the same parent tool call, and the API exposes claim/terminalize/recovery operations.",
+        "invariants": [
+          "One submission per (parentSession, assistantMessage, toolCallID) - a duplicate invocation must conflict rather than fork a second child.",
+          "A submission must terminate with an outcome; ambiguous post-crash state becomes 'recovery-required', never silently completed."
+        ],
+        "failurePolicy": "fail-closed - InvocationConflict/Missing/Cancelled are typed errors; outcome includes recovery-required for the ambiguous case.",
+        "constants": [
+          "statuses = accepted | running | completed | error | cancelled | recovery-required (packages/core/src/session/task-submission.ts:56)",
+          "completion delivery = 'tool' | 'parent' (packages/core/src/session/task-submission.ts:30)"
+        ],
+        "evidence": [
+          "packages/core/src/session/task-submission.ts:23-41",
+          "packages/core/src/session/task-submission.ts:43-63",
+          "packages/core/src/session/task-submission.ts:65-74",
+          "packages/core/src/session/sql.ts:153",
+          "packages/core/src/tool/task.ts:414-419"
+        ],
+        "modules": ["core/session", "core/tool"],
+        "verified": true
+      },
+      {
+        "name": "task-notification-outbox",
+        "what": "Completion notifications are durable: task_notification_outbox is the source of truth, a process-local PubSub sliding signal is only an advisory wakeup, and drain() is single-flight behind a Semaphore(1). Notification payloads carry {taskID, state, description, text} with state completed/error/cancelled/recovery-required, and the resulting message id is derived deterministically from the submission id (msg_task_notification_<sha256 prefix>) so re-delivery is idempotent.",
+        "invariants": [
+          "The outbox, not the in-process signal, is the durable source of truth; a lost signal must not lose a notification.",
+          "The notification message id must be a pure function of the submission id.",
+          "Only one drain may run at a time."
+        ],
+        "failurePolicy": "fail-soft with a durable backstop - a missed wakeup leaves the row in the outbox for the next drain.",
+        "constants": [
+          "notification states = completed | error | cancelled | recovery-required (packages/core/src/session/task-notification.ts:14)",
+          "advisory signal = PubSub.sliding(1) (packages/core/src/session/task-notification.ts:49)",
+          "drain lock = Semaphore.makeUnsafe(1) (packages/core/src/session/task-notification.ts:50)"
+        ],
+        "evidence": [
+          "packages/core/src/session/task-notification.ts:12-17",
+          "packages/core/src/session/task-notification.ts:30-43",
+          "packages/core/src/session/task-notification.ts:49-50",
+          "packages/core/src/session/sql.ts:196"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "task-cancellation-tree",
+        "what": "TaskCancellation.cancelTree cancels a whole delegation tree by ownership root: in one transaction it flips task submissions to cancelled, terminalizes the outbox rows, marks cancellation rows terminal, appends cancellation text, and abandons attempts still in started/responding/retrying/continuation. After the transaction commits it signals the notification outbox and then interrupts and waits for every affected session.",
+        "invariants": [
+          "The database state must be settled inside one transaction before any session is interrupted.",
+          "Every session named by the cancellation must be interrupted and waited for, so no orphan turn keeps running."
+        ],
+        "failurePolicy": "fail-closed - cancellation is recorded durably with message 'Task cancelled by ownership root'; a missing session is a typed Missing error.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/task-cancellation.ts:34-48",
+          "packages/core/src/session/task-cancellation.ts:91-134",
+          "packages/core/src/session/task-cancellation.ts:169-182",
+          "packages/core/src/session/task-cancellation.ts:203-217",
+          "packages/core/src/session/sql.ts:222"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "session-projection-repair",
+        "what": "SessionRepair.repairSession replays a session's durable event log (readAggregate with limit 10_000 and the SessionDurable manifest) and rebuilds missing or divergent projection rows: it repairs the attempt row when the last ProviderAttempt.Started id does not match the stored row, replaying Started/ResponseStarted/Ended/Recovery.Decided/Retried in log order so the row settles into its terminal status, and rebuilds session_input rows only for PromptAdmitted events whose row is MISSING (because projectAdmitted dies with LifecycleConflict on an existing row).",
+        "invariants": [
+          "Repair must never replay an input row that already exists - only missing rows may be projected.",
+          "Attempt repair must replay ALL attempt transitions in log order, not just Started, or an ended attempt would be resurrected as started."
+        ],
+        "failurePolicy": "fail-soft - repair returns {repaired: boolean} rather than failing the session; a rebuilt input row without promoted_seq is an accepted limitation documented in the module.",
+        "constants": [
+          "event replay limit = 10_000 (packages/core/src/session/repair.ts:34)"
+        ],
+        "evidence": [
+          "packages/core/src/session/repair.ts:12-26",
+          "packages/core/src/session/repair.ts:27-61",
+          "packages/core/src/session/repair.ts:63-74",
+          "packages/core/src/session/repair.ts:76-95"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "durable-session-schema",
+        "what": "The fork's session schema keeps session, todo, session_message, session_input and session_context_epoch and adds durable coordination tables: task_submission, task_notification_outbox, session_cancellation, session_attempt, session_turn, session_execution, session_tool_discovery_call and session_tool_discovery. session.permission now stores PermissionV2.Ruleset and session.engine fixes the execution engine; session_execution stores the kernel generation/lease/state.",
+        "invariants": [
+          "session.permission must hold the V2 rule shape {action, resource, effect}.",
+          "Kernel-only tables must never be touched by classic sessions."
+        ],
+        "failurePolicy": "fail-closed - schema writes are transactional; constraint violations abort.",
+        "constants": [
+          "session.execution engine column default 'classic' (packages/core/src/session/sql.ts:52)",
+          "session_execution engine default 'kernel', generation 0, state 'idle' (packages/core/src/session/sql.ts:299-303)"
+        ],
+        "evidence": [
+          "packages/core/src/session/sql.ts:22",
+          "packages/core/src/session/sql.ts:50-52",
+          "packages/core/src/session/sql.ts:153",
+          "packages/core/src/session/sql.ts:196",
+          "packages/core/src/session/sql.ts:222",
+          "packages/core/src/session/sql.ts:240",
+          "packages/core/src/session/sql.ts:263",
+          "packages/core/src/session/sql.ts:292-303",
+          "packages/core/src/session/sql.ts:328-348"
+        ],
+        "modules": ["core/session", "core/database"],
+        "verified": true
+      },
+      {
+        "name": "legacy-transcript-retirement-migration",
+        "what": "A two-step migration chain retired the legacy transcript tables: first a session_message_tombstone table was introduced, then a later migration drops the message and part tables together with their indexes (message_session_time_created_id_idx, part_message_id_id_idx, part_session_idx) and drops the tombstone table itself. Messages now live exclusively in session_message.",
+        "invariants": [
+          "The drop migration must remove the dependent indexes before dropping the tables.",
+          "After this migration no code path may read message/part."
+        ],
+        "failurePolicy": "fail-closed - migrations run in a transaction; a failure aborts the migration.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:8-14",
+          "packages/core/src/database/migration/20260812063844_session-message-tombstone.ts:9",
+          "packages/core/src/session/sql.ts:90"
+        ],
+        "modules": ["core/database", "core/session"],
+        "verified": true
+      },
+      {
+        "name": "session-lifecycle-settlement",
+        "what": "SessionLifecycle settles durable state that a crashed or aborted turn left open: settleAssistant fails pending/running tool parts and the step, settleCompletedAttempt ends the provider attempt once no tool part is pending/running, terminateAttempt ends an attempt in started/responding/retrying/continuation with a terminal outcome, abandonOrphan abandons an attempt with no owner, reconcileForStart ends attempts already terminal, and endOpenTurn closes an open turn.",
+        "invariants": [
+          "Settlement must publish the durable Ended events, not simply edit rows, so projections and repair agree.",
+          "Settlement must be idempotent - an already-ended attempt/turn returns false instead of double-writing."
+        ],
+        "failurePolicy": "fail-closed - a terminal attempt is left terminal; settlement only ever moves state forward.",
+        "constants": [
+          "attempt outcome mapping abandoned -> 'abandoned' (packages/core/src/session/lifecycle.ts:57-64)"
+        ],
+        "evidence": [
+          "packages/core/src/session/lifecycle.ts:16-49",
+          "packages/core/src/session/lifecycle.ts:51-80",
+          "packages/core/src/session/lifecycle.ts:82-117",
+          "packages/core/src/session/lifecycle.ts:134-160"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "session-input-promotion-and-startup-candidates",
+        "what": "Input admission is richer than upstream: rows carry delivery (steer|queue), an intent, and an optional synthetic descriptor with a scope, and expose pending/findForSession/hasPending, isTurnScoped/isSessionScoped, waitForPending, latestPromoted, promotedUnterminalizedAtOrBefore, cancelPending and promote/promoteSteers/promoteNextQueued. startupCandidates lists steer-delivery input rows that must be re-driven after a restart.",
+        "invariants": [
+          "Synthetic turn-scoped input must not be treated as session-scoped pending work.",
+          "Promotion must be an ordered, once-only transition (promoted_seq guards)."
+        ],
+        "failurePolicy": "fail-closed - a divergent projection dies with LifecycleConflict.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/input.ts:104-141",
+          "packages/core/src/session/input.ts:180-213",
+          "packages/core/src/session/input.ts:350-392",
+          "packages/core/src/session/input.ts:414-471",
+          "packages/core/src/session/input.ts:561-620"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      }
+    ],
+    "context": [
+      {
+        "name": "compaction-engine-v2",
+        "what": "core SessionCompaction is the engine-owned compactor used by the kernel: it selects a head to summarise against a token budget, builds the summarisation prompt from a fixed SUMMARY_TEMPLATE with a SUMMARY_OUTPUT_TOKENS cap, records the durable Started/Ended/Failed compaction phase under the session lease, supports a SummaryTransform seam, and returns {compacted, shouldContinue}. It exposes auto(), auto({force}) and manual({instructions}) entry points, and a failed or interrupted compaction settles as 'Compaction failed'/'Compaction interrupted'.",
+        "invariants": [
+          "The compaction prompt must follow the fixed Markdown section order described by SUMMARY_TEMPLATE.",
+          "Compaction must be a fenced phase (durable started/ended) so a crash mid-compaction is recoverable.",
+          "Auto compaction may only report shouldContinue when it actually compacted."
+        ],
+        "failurePolicy": "mixed - a recoverable error settles the phase as failed with its reason while a non-recoverable one surfaces; shouldContinue is false unless compacted.",
+        "constants": [
+          "DEFAULT_BUFFER = 20_000 (packages/core/src/session/compaction.ts:23)",
+          "DEFAULT_KEEP_TOKENS = 8_000 (packages/core/src/session/compaction.ts:24)",
+          "TOOL_OUTPUT_MAX_CHARS = 2_000 (packages/core/src/session/compaction.ts:25)",
+          "SUMMARY_OUTPUT_TOKENS = 4_096 (packages/core/src/session/compaction.ts:26)"
+        ],
+        "evidence": [
+          "packages/core/src/session/compaction.ts:23-27",
+          "packages/core/src/session/compaction.ts:108-135",
+          "packages/core/src/session/compaction.ts:227-250",
+          "packages/core/src/session/compaction.ts:327-394",
+          "packages/core/src/session/compaction.ts:413-422"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "fenced-compaction-under-lease",
+        "what": "In the kernel engine compaction runs as a fenced phase of the same turn coordinator: TurnCoordinator.compact acquires an idle lease, performs the compaction, and releases the lease; the SessionExecution surface exposes compact() and the router maps a busy coordinator to SessionExecution.BusyError. The kernel index additionally exposes compact with the same fencing and maps SessionRunCoordinator.Busy to BusyError.",
+        "invariants": [
+          "Compaction must acquire the idle lease (generation+1, fresh token), so it cannot run concurrently with a provider turn.",
+          "Release must be fenced by the lease generation/token."
+        ],
+        "failurePolicy": "fail-closed - a session that is not idle fails compaction as busy rather than compacting concurrently with a turn.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/kernel/coordinator.ts:83-84",
+          "packages/core/src/session/kernel/coordinator.ts:736-758",
+          "packages/core/src/session/kernel/index.ts:95-102",
+          "packages/core/src/session/execution.ts:38-44",
+          "packages/core/src/session/execution.ts:20-29"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "kernel-tool-output-bounding",
+        "what": "ToolOutputStore is the core (kernel-path) output bounder: when a tool result exceeds the configured lines/bytes it writes the full text under the managed 'tool-output' directory and returns a bounded preview with the marker '... output truncated; full content saved to <path> ...'. It exposes limits(), bound() and cleanup(); limits fall back to MAX_LINES/MAX_BYTES when no config service is present.",
+        "invariants": [
+          "The full content must be persisted before a bounded preview is returned.",
+          "Config-provided limits override the defaults, and the managed directory must be the only spill location."
+        ],
+        "failurePolicy": "fail-soft - with no Config service the defaults are used; storage failures surface as ToolOutputStore.StorageError which the runner includes in its RunError union.",
+        "constants": [
+          "MAX_LINES = 2_000 (packages/core/src/tool-output-store.ts:13)",
+          "MAX_BYTES = 50 * 1024 (packages/core/src/tool-output-store.ts:14)",
+          "RETENTION = 7 days (packages/core/src/tool-output-store.ts:15)",
+          "MANAGED_DIRECTORY = 'tool-output' (packages/core/src/tool-output-store.ts:17)"
+        ],
+        "evidence": [
+          "packages/core/src/tool-output-store.ts:13-17",
+          "packages/core/src/tool-output-store.ts:42-48",
+          "packages/core/src/tool-output-store.ts:119-126",
+          "packages/core/src/tool-output-store.ts:139-159"
+        ],
+        "modules": ["core"],
+        "verified": true
+      },
+      {
+        "name": "kernel-system-prompt-composition",
+        "what": "The kernel runner composes the system parts itself: SessionRunnerSystem.provider picks ONE prompt template by model id (muse-spark -> meta, gpt-4/o1/o3 -> beast, gpt -> codex or gpt, gemini, claude, trinity, kimi, default), identity() states the model id and provider, and mcp() renders <mcp_instructions> for servers whose tools are not wholly denied under the V2 ruleset (a rule with resource '*' and effect 'deny' hides the server). The coordinator then combines these with the system-context registry, instructions, references and skill guidance.",
+        "invariants": [
+          "Template selection is per model id and returns exactly one template.",
+          "MCP instructions must be filtered by the V2 permission ruleset before being shown."
+        ],
+        "failurePolicy": "fail-open - an unknown model id falls back to the default template, and a fully denied MCP server is simply omitted.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/runner/system.ts:17-26",
+          "packages/core/src/session/runner/system.ts:28-30",
+          "packages/core/src/session/runner/system.ts:32-53",
+          "packages/core/src/session/kernel/coordinator.ts:17-18"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "request-option-partitioning",
+        "what": "SessionRunnerRequestPolicy.apply splits a request body into a generation-options object (temperature, topP/top_p, topK/top_k, maxOutputTokens/max_output_tokens/maxTokens/max_tokens), a provider-options object (the rest), and a body that additionally strips provider-only keys for the resolved route (openai: promptCacheKey, reasoningEffort, reasoningSummary, serviceTier, textVerbosity; anthropic: thinking; gemini: thinkingConfig). optionKey maps a route id to one of anthropic-messages/gemini and defaults to openai.",
+        "invariants": [
+          "Generation knobs must be removed from the wire body and carried as generation options.",
+          "A provider-only key must never leak into the request body for a route that does not understand it."
+        ],
+        "failurePolicy": "fail-soft - unknown routes fall back to the openai key set and absent numeric options are simply omitted.",
+        "constants": [
+          "providerOptionOnlyKeys.openai = [promptCacheKey, reasoningEffort, reasoningSummary, serviceTier, textVerbosity] (packages/core/src/session/runner/request-policy.ts:6)"
+        ],
+        "evidence": [
+          "packages/core/src/session/runner/request-policy.ts:5-15",
+          "packages/core/src/session/runner/request-policy.ts:17-48"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "tool-result-preparation",
+        "what": "Before a tool result is appended to the model context it is normalised through the runner's tool-result preparation path, which produces the provider-facing ToolResultValue from the durable part state; the kernel coordinator chooses the settlement via selectSettlement and reports a tool error as a typed error result rather than dropping the call.",
+        "invariants": [
+          "A settlement must carry a valid ToolResultValue; otherwise the fallback settlement is used so the model never receives a malformed result."
+        ],
+        "failurePolicy": "fail-soft - an unrecognised settlement value falls back to the previously approved settlement.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/runner/tool-result-preparation.ts:1",
+          "packages/core/src/session/kernel/coordinator.ts:62-67"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "context-epoch-and-system-context",
+        "what": "The fork keeps the per-session context epoch (baseline text, source snapshot, baseline_seq) and the namespaced system-context source registry with initialize/reconcile/replace, InitializationBlocked and ReplacementBlocked. The kernel coordinator imports the registry and context epoch when it assembles a turn, so a kernel turn and a classic turn use the same baseline semantics.",
+        "invariants": [
+          "The baseline snapshot may only be replaced by a complete generation; an unavailable admitted source blocks the replacement.",
+          "baseline_seq must reflect the sequence at which the baseline was materialized."
+        ],
+        "failurePolicy": "fail-closed - InitializationBlocked/ReplacementBlocked prevent a partial baseline from reaching the model.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/context-epoch.ts:46-77",
+          "packages/core/src/session/context-epoch.ts:122-138",
+          "packages/core/src/system-context/index.ts:197-215",
+          "packages/core/src/system-context/index.ts:282-290",
+          "packages/core/src/session/kernel/coordinator.ts:25",
+          "packages/core/src/session/kernel/coordinator.ts:17-18"
+        ],
+        "modules": ["core/session", "core/system-context"],
+        "verified": true
+      },
+      {
+        "name": "deferred-tool-context-economy",
+        "what": "Deferred tools are kept out of the model's tool list and out of the context until searched: ToolCatalog marks each tool's exposure as direct | deferred | hidden, and the registry only materialises tool_search (over the already permission-filtered snapshot) when at least one deferred tool exists. The discovery record is durable per session (session_tool_discovery / session_tool_discovery_call), so a tool found once stays found, and a stale definition hash forces a new search.",
+        "invariants": [
+          "A deferred tool must not appear in the provider tool list before it has been searched in this session.",
+          "tool_search must only see the permission-filtered catalog.",
+          "A selection whose definition hash changed must be searched again before use."
+        ],
+        "failurePolicy": "mixed - an unsupported call is answered with 'search for it with tool_search first'; a stale durable discovery result is rejected with an explicit message rather than executed.",
+        "constants": [
+          "exposure values = direct | deferred | hidden (packages/core/src/tool/catalog.ts:32)"
+        ],
+        "evidence": [
+          "packages/core/src/tool/catalog.ts:16-34",
+          "packages/core/src/tool/registry.ts:314-318",
+          "packages/core/src/tool/registry.ts:373-381",
+          "packages/core/src/tool/registry.ts:417-432",
+          "packages/core/src/tool/registry.ts:454",
+          "packages/core/src/session/tool-discovery.ts:146-186",
+          "packages/core/src/session/tool-discovery.ts:23-66"
+        ],
+        "modules": ["core/tool", "core/session"],
+        "verified": true
+      }
+    ],
+    "tools": [
+      {
+        "name": "tool-catalog-and-source-aware-registry",
+        "what": "The fork's core ToolRegistry is source-aware and catalog-backed: registrations are grouped by source key, each carries ToolCatalog.Metadata (namespace, search hint, exposure), a definitionHash and a permission list; materialize() filters by the V2 ruleset, by a per-context visibility predicate, and by source state, and returns both provider ToolDefinitions and a ToolCatalog.Snapshot. Unregistering a tool removes its catalog entry and re-arms deferred discovery; BUILTIN_TASK_AGENT_TYPES enumerates the task tool's agent types.",
+        "invariants": [
+          "A tool whose permission is wholly denied must be removed from the catalog, not merely hidden.",
+          "Replacing a tool with a different definition hash must invalidate a previous deferred selection."
+        ],
+        "failurePolicy": "fail-closed - source state transitions through pending/ready/degraded/failed/disabled and only ready sources are advertised.",
+        "constants": [
+          "source states = pending | ready | degraded | failed | disabled (packages/core/src/tool/catalog.ts:16)",
+          "BUILTIN_TASK_AGENT_TYPES = ['general','explore','research','worker'] (packages/core/src/tool/registry.ts:100)"
+        ],
+        "evidence": [
+          "packages/core/src/tool/registry.ts:100",
+          "packages/core/src/tool/registry.ts:218-265",
+          "packages/core/src/tool/registry.ts:298-318",
+          "packages/core/src/tool/registry.ts:396-420",
+          "packages/core/src/tool/catalog.ts:16-34"
+        ],
+        "modules": ["core/tool"],
+        "verified": true
+      },
+      {
+        "name": "bash-tool-backgrounding",
+        "what": "The fork's bash tool executes a shell command through ChildProcess.make with the host user's full authority and a bounded capture. Unlike upstream, a foreground command that exceeds its timeout is NOT killed: it is transferred to a background task ('timeout' reason) and the model can inspect it with get_task_output and cancel it with stop_task. run_in_background returns a task id immediately, a new user steer also transfers a running command to the background (reason 'steer'), and per-session concurrency is capped.",
+        "invariants": [
+          "Permission must be asserted before spawn, with external_directory approval required for workdir and argument paths outside the Location.",
+          "At most MAX_RUNNING_PER_SESSION commands may run per session.",
+          "A timed-out foreground command must become an owned background task, never be abandoned or silently killed."
+        ],
+        "failurePolicy": "mixed - a timeout backgrounds the command instead of failing it; capture beyond MAX_CAPTURE_BYTES is truncated and reported; explicit stop_task cancellation terminates it.",
+        "constants": [
+          "DEFAULT_TIMEOUT_MS = 3 * 60 * 1_000 (packages/core/src/tool/bash.ts:32)",
+          "MAX_TIMEOUT_MS = 10 * 60 * 1_000 (packages/core/src/tool/bash.ts:33)",
+          "MAX_CAPTURE_BYTES = 1 MiB (packages/core/src/tool/bash.ts:34)",
+          "MAX_PROGRESS_BYTES = 32 * 1024 (packages/core/src/tool/bash.ts:35)",
+          "MAX_RUNNING_PER_SESSION = 10 (packages/core/src/tool/bash.ts:36)",
+          "foreground timeout is clamped to DEFAULT_TIMEOUT_MS (packages/core/src/tool/bash.ts:437)"
+        ],
+        "evidence": [
+          "packages/core/src/tool/bash.ts:31-43",
+          "packages/core/src/tool/bash.ts:81-89",
+          "packages/core/src/tool/bash.ts:340",
+          "packages/core/src/tool/bash.ts:400-407",
+          "packages/core/src/tool/bash.ts:437",
+          "packages/core/src/tool/bash.ts:526-569"
+        ],
+        "modules": ["core/tool"],
+        "verified": true
+      },
+      {
+        "name": "kernel-tool-scheduling",
+        "what": "The kernel schedules tool bodies with ToolScheduler: each prepared call declares concurrency 'parallel' or 'exclusive'; parallel bodies run concurrently up to MaxActiveBodies with head-of-line finalization, and an exclusive body first drains every active parallel body before running. Outcomes are classified success/error/cancelled/abandoned, and interruptBodies tears down active work.",
+        "invariants": [
+          "Never more than MaxActiveBodies bodies in flight.",
+          "An exclusive body must wait for all active parallel bodies to drain, and finalization is head-of-line."
+        ],
+        "failurePolicy": "fail-closed - on interruption all active bodies are interrupted and classified as cancelled/abandoned rather than left running.",
+        "constants": [
+          "MaxActiveBodies = 10 (packages/core/src/session/kernel/tool-scheduler.ts:42)"
+        ],
+        "evidence": [
+          "packages/core/src/session/kernel/tool-scheduler.ts:9-17",
+          "packages/core/src/session/kernel/tool-scheduler.ts:31-42",
+          "packages/core/src/session/kernel/tool-scheduler.ts:44-73",
+          "packages/core/src/session/kernel/tool-scheduler.ts:102-120"
+        ],
+        "modules": ["core/session"],
+        "verified": true
+      },
+      {
+        "name": "task-control-tools",
+        "what": "The fork exposes explicit task-control tools in core: task (delegation, with background/foreground semantics), get_task_output (status and recent output of a running background task) and stop_task (explicit cancellation). The bash tool's description instructs the model to use these instead of polling, and stop-task feeds the cancellation path that also settles durable state.",
+        "invariants": [
+          "A background task must be observable and cancellable through dedicated tools; the model must not poll task status.",
+          "stop_task must go through the same durable cancellation path as an ownership-root cancel."
+        ],
+        "failurePolicy": "fail-soft - reading the output of a finished task returns its terminal state; cancelling an unknown task is a typed failure.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/tool/get-task-output.ts:1",
+          "packages/core/src/tool/stop-task.ts:1",
+          "packages/core/src/tool/bash.ts:340",
+          "packages/core/src/tool/task.ts:29"
+        ],
+        "modules": ["core/tool"],
+        "verified": true
+      },
+      {
+        "name": "tool-search-durable-discovery",
+        "what": "tool_search is a session-owned durable discovery boundary: SessionToolDiscovery.call executes a search through the ToolSearch module, projects a durable ToolDiscovery.Completed event (with its aggregate sequence) into session_tool_discovery_call/session_tool_discovery rows, and execute() rejects a call whose durable result conflicts with the invocation or whose record is stale. Selections are replayed into the registry's materialization context so a previously discovered tool becomes directly callable.",
+        "invariants": [
+          "A discovery result must be durable; an invocation conflicting with its durable result must fail.",
+          "A stale durable discovery result must be rejected with 'issue a new tool_search call before using this tool'."
+        ],
+        "failurePolicy": "fail-closed - conflicts and staleness are explicit failures rather than best-effort execution.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/tool-discovery.ts:18-23",
+          "packages/core/src/session/tool-discovery.ts:75-108",
+          "packages/core/src/session/tool-discovery.ts:146-186",
+          "packages/core/src/session/sql.ts:328-348"
+        ],
+        "modules": ["core/session", "core/tool"],
+        "verified": true
+      },
+      {
+        "name": "code-mode-in-core",
+        "what": "Code mode is provided from core in the fork (packages/core/src/tool/code-mode.ts) and builds a namespaced tree of MCP tool definitions wrapped as codemode SandboxTool definitions, so the model can call server-namespaced tools from an interpreted program. It reuses the same @opencode-ai/codemode interpreter with its blocked member names, depth limits and concurrency cap.",
+        "invariants": [
+          "Only permission-visible MCP tools may enter the code-mode tree.",
+          "The interpreter's value-depth and blocked-member rules must stay in force for tools reached this way."
+        ],
+        "failurePolicy": "fail-soft - a tool error surfaces inside the program as a ToolError value rather than aborting the session.",
+        "constants": [
+          "namespacing by entry.server and entry.local (packages/core/src/tool/code-mode.ts:131-137)"
+        ],
+        "evidence": [
+          "packages/core/src/tool/code-mode.ts:3",
+          "packages/core/src/tool/code-mode.ts:131-137"
+        ],
+        "modules": ["core/tool", "codemode"],
+        "verified": true
+      },
+      {
+        "name": "host-tool-compat-shims",
+        "what": "The host package retains only a thin tool surface: schema.ts, truncate.ts/truncation-dir.ts (the classic output spill with the same MAX_LINES/MAX_BYTES contract) and plugin-compat.ts / plugin-compat-v2.ts, which adapt legacy host tool definitions onto the core registry. The 30+ individual tool implementations moved to core, so host tool code is now compatibility glue rather than tool logic.",
+        "invariants": [
+          "Host-side tool shims must not reimplement tool semantics; they only adapt definitions.",
+          "The classic truncation contract (2000 lines / 50 KiB) must stay aligned with the core ToolOutputStore."
+        ],
+        "failurePolicy": "fail-soft - a shim that cannot adapt a definition omits it rather than failing registry construction.",
+        "constants": [
+          "host truncate defaults match core: 2_000 lines / 50 KiB (packages/opencode/src/tool/truncate.ts)"
+        ],
+        "evidence": [
+          "packages/opencode/src/tool/plugin-compat.ts:1",
+          "packages/opencode/src/tool/plugin-compat-v2.ts:1",
+          "packages/opencode/src/tool/truncate.ts:1"
+        ],
+        "modules": ["opencode/tool"],
+        "verified": true
+      }
+    ],
+    "subagent": [
+      {
+        "name": "durable-delegation-with-permits",
+        "what": "The fork's task tool delegates through TaskSubmission (durable row per invocation) and a SubagentPermit budget: permissions are acquired under a key before the child session is created, re-keyed to the child session id afterwards, and released on settle or by the job scope for background runs. Config controls the budget ('subagent_max_concurrency') and nesting ('subagent_depth', default 1). Child sessions of a kernel parent are created with engine 'kernel'.",
+        "invariants": [
+          "A permit must be acquired before the child is created and re-keyed to the child id, or the concurrency budget leaks.",
+          "The depth limit is measured by walking the parent chain and defaults to 1.",
+          "A child of a kernel session must be a kernel session."
+        ],
+        "failurePolicy": "fail-closed - acquiring beyond the limit fails the tool call with 'Subagent concurrency limit reached'; depth exceeded fails with the limit in the message.",
+        "constants": [
+          "subagent_max_concurrency from location config, undefined = unlimited (packages/core/src/tool/task.ts:175-176)",
+          "subagent_depth default 1 (packages/core/src/tool/task.ts:224)",
+          "completionDelivery = runInBackground ? 'parent' : 'tool' (packages/core/src/tool/task.ts:416)"
+        ],
+        "evidence": [
+          "packages/core/src/tool/task.ts:171-182",
+          "packages/core/src/tool/task.ts:217-227",
+          "packages/core/src/tool/task.ts:273-301",
+          "packages/core/src/tool/task.ts:393-424",
+          "packages/core/src/session/subagent-permit.ts:27-43"
+        ],
+        "modules": ["core/tool", "core/session"],
+        "verified": true
+      },
+      {
+        "name": "parent-wake-on-task-completion",
+        "what": "Background delegation notifies the parent automatically: completionDelivery 'parent' means the child's terminal state is written to the notification outbox and the parent session is woken, while 'tool' returns the result to the waiting tool call. The task tool description tells the model that asynchronous delegation is the default when available, that the parent is woken on completion, and that it must never poll.",
+        "invariants": [
+          "A background task's completion must be delivered through the durable outbox, not by the parent polling.",
+          "Foreground (completionDelivery 'tool') tasks must still register their result on the tool call."
+        ],
+        "failurePolicy": "fail-soft with durable backstop - a missed in-process wakeup leaves the outbox row for the next drain.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/tool/task.ts:45-68",
+          "packages/core/src/tool/task.ts:414-419",
+          "packages/core/src/session/task-notification.ts:30-38",
+          "packages/core/src/session/task-notification.ts:203-205"
+        ],
+        "modules": ["core/tool", "core/session"],
+        "verified": true
+      },
+      {
+        "name": "task-cancellation-by-ownership-root",
+        "what": "Cancelling a delegation cancels the whole tree from its ownership root: TaskCancellation.cancelTree settles submissions, outbox rows, cancellation rows and attempts durably in one transaction, then signals notifications and interrupts/waits for every affected session. SessionRunState.cancel calls cancelTree with hooks that cancel the child's background job and then wait for it, and only falls back to the legacy per-job walk over the session's running background jobs when the durable submission row is missing (TaskCancellation.Missing). The stop_task tool feeds the same path.",
+        "invariants": [
+          "Cancellation must be durable before any session is interrupted.",
+          "Every descendant session named by the cancellation must be interrupted and awaited."
+        ],
+        "failurePolicy": "fail-closed - state is recorded as cancelled/abandoned; no descendant is left running.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/session/task-cancellation.ts:48-107",
+          "packages/core/src/session/task-cancellation.ts:203-217",
+          "packages/opencode/src/session/run-state.ts:83-103",
+          "packages/opencode/src/session/run-state.ts:133-152"
+        ],
+        "modules": ["core/session", "core/tool"],
+        "verified": true
+      },
+      {
+        "name": "agent-selection-and-default",
+        "what": "Agents live in core as AgentV2 with a Draft/State.Transformable surface; defaultID is 'build', and selection requires the agent to exist, have mode !== 'subagent' and not be hidden. The host keeps a generator for agent files (packages/opencode/src/agent/generator.ts) instead of the upstream builtin agent map.",
+        "invariants": [
+          "A subagent or hidden agent must never be selectable as the session agent.",
+          "The default agent is 'build' when present."
+        ],
+        "failurePolicy": "fail-closed - an ineligible agent is rejected and the caller falls back to the default before failing.",
+        "constants": [
+          "defaultID = 'build' (packages/core/src/agent.ts:10)"
+        ],
+        "evidence": [
+          "packages/core/src/agent.ts:8-17",
+          "packages/core/src/agent.ts:45-74",
+          "packages/opencode/src/agent/generator.ts:1"
+        ],
+        "modules": ["core", "opencode/agent"],
+        "verified": true
+      },
+      {
+        "name": "subagent-stop-hook",
+        "what": "Subagent turns evaluate the same stop-hook protocol under the distinct hook name 'session.subagent.stop', so a plugin can decide whether a subagent turn may finish (with MAX_BLOCKS_PER_TURN shared per turn) independently of a top-level turn's 'session.stop'.",
+        "invariants": [
+          "The subagent hook name must be selected by whether an agent was supplied to the evaluation.",
+          "The same per-turn block cap applies to subagent stops."
+        ],
+        "failurePolicy": "fail-open - hook failures degrade to 'stop'.",
+        "constants": [
+          "MAX_BLOCKS_PER_TURN = 3 (packages/core/src/session/stop-hook.ts:6)"
+        ],
+        "evidence": [
+          "packages/core/src/session/stop-hook.ts:26-30",
+          "packages/core/src/session/stop-hook.ts:36-47",
+          "packages/core/src/plugin/runtime.ts:22-23"
+        ],
+        "modules": ["core/session", "core/plugin"],
+        "verified": true
+      }
+    ],
+    "safety": [
+      {
+        "name": "permission-v2-engine",
+        "what": "The fork's permission model is {action, resource, effect} (PermissionV2) living in core. evaluate(action, resource, ...rulesets) takes the last wildcard-matching rule and defaults to effect 'ask'; fromToolOverrides converts a per-tool enable map into allow/deny rules with resource '*'; evaluateInput short-circuits to deny when any relevant rule denies and otherwise combines per-resource effects as deny > ask > allow; ask() only creates a request when the combined effect is 'ask', and assert() runs uninterruptibly. A missing agent is presented as deny-all via exported missingAgentPermissions.",
+        "invariants": [
+          "Rule resolution is last-match wildcard on (action, resource) with effect defaulting to 'ask'.",
+          "Deny must dominate the combination of multiple resources.",
+          "A missing agent must present deny-all, not an empty (permissive) ruleset."
+        ],
+        "failurePolicy": "fail-closed - unmatched requests ask, a missing agent denies, and DeclinedError/CorrectedError/BlockedError are distinct failures.",
+        "constants": [
+          "missingAgentPermissions = [{action:'*', resource:'*', effect:'deny'}] (packages/core/src/permission.ts:20)",
+          "effects = allow | ask | deny via Permission.Effect (packages/core/src/permission.ts:59)"
+        ],
+        "evidence": [
+          "packages/core/src/permission.ts:16-26",
+          "packages/core/src/permission.ts:81-105",
+          "packages/core/src/permission.ts:169-183",
+          "packages/core/src/permission.ts:224-238",
+          "packages/core/src/permission.ts:1"
+        ],
+        "modules": ["core/permission"],
+        "verified": true
+      },
+      {
+        "name": "permission-ask-and-remembered-rules",
+        "what": "The V2 permission service keeps pending requests and a remembered allow list. A reply that saves the request's resources appends allow rules and then re-evaluates every other pending request of the agent, auto-approving those whose resources are all now allowed; a declined reply fails the request. Requests carry agent identity so approval is scoped correctly.",
+        "invariants": [
+          "Remembering a rule must only auto-approve pending requests whose resources are ALL covered by the effective ruleset.",
+          "An approved rule must be derived from the request's save list, never from the user's arbitrary input."
+        ],
+        "failurePolicy": "fail-closed - pending requests fail on finalization; unmatched requests stay 'ask'.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/permission.ts:190-206",
+          "packages/core/src/permission.ts:285-304",
+          "packages/core/src/permission.ts:124-149"
+        ],
+        "modules": ["core/permission"],
+        "verified": true
+      },
+      {
+        "name": "permission-v1-to-v2-migration",
+        "what": "The stored session permission column was migrated in place from the V1 shape {permission, pattern, action} to the V2 shape {action, resource, effect}: the migration rewrites each element of the JSON array with json_group_array/json_object, guarded by json_valid and by a check that the first element still carries the V1 'permission' key, so already-migrated rows are left untouched. The session column type annotation switched to PermissionV2.Ruleset.",
+        "invariants": [
+          "The migration must be idempotent - rows already in V2 shape must not be rewritten.",
+          "The array must stay a JSON array of rule objects, never become an object.",
+          "The rewrite must be guarded by json_valid so malformed rows are skipped rather than corrupted."
+        ],
+        "failurePolicy": "fail-closed - invalid or non-V1 rows are excluded by the WHERE clause and left as-is; the migration runs in the schema migration transaction.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:4-8",
+          "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:13-26",
+          "packages/core/src/session/sql.ts:50"
+        ],
+        "modules": ["core/database", "core/session"],
+        "verified": true
+      },
+      {
+        "name": "legacy-permission-rules-shim",
+        "what": "Because the runner consumes V2 rules but V1 consumers remain, the host keeps packages/opencode/src/permission/legacy-rules.ts: it re-exports the V1 evaluate/fromConfig/merge/disabled/visibleTools implementation plus the ~/$HOME pattern expansion and the edit/write/apply_patch -> 'edit' and MCP resource tools -> 'read' mappings, and exports itself under both LegacyPermissionRules and Permission so existing imports keep compiling. The upstream permission service files (index.ts/arity.ts/evaluate.ts) are gone.",
+        "invariants": [
+          "The legacy shim must produce the V1 rule shape only; it must not become a second policy engine for new code.",
+          "Its last-match lookup and default 'ask' must remain identical to the upstream implementation it replaces."
+        ],
+        "failurePolicy": "fail-closed - the shim keeps the upstream default of action 'ask' for unmatched requests.",
+        "constants": [
+          "edit-family tools = edit, write, apply_patch (packages/opencode/src/permission/legacy-rules.ts:42)",
+          "MCP resource tools mapped to 'read' (packages/opencode/src/permission/legacy-rules.ts:43)"
+        ],
+        "evidence": [
+          "packages/opencode/src/permission/legacy-rules.ts:6-16",
+          "packages/opencode/src/permission/legacy-rules.ts:18-35",
+          "packages/opencode/src/permission/legacy-rules.ts:41-56",
+          "packages/opencode/src/permission/legacy-rules.ts:58-59"
+        ],
+        "modules": ["opencode/permission"],
+        "verified": true
+      },
+      {
+        "name": "subagent-grant-and-blocked-permissions",
+        "what": "Delegation in the fork derives the child's ruleset from explicit grants: grantRules turns a list of {tool, resource} grants into V2 allow rules while removing any action present in a blocked set, and the task tool combines this with the parent's ruleset. This replaces upstream's rule-shape-specific inheritance with an explicit grant model.",
+        "invariants": [
+          "A blocked action must never appear in the derived ruleset even if granted.",
+          "Grants are additive allow rules over a resource; the surrounding ruleset still defaults to ask."
+        ],
+        "failurePolicy": "fail-closed - blocked capabilities are removed rather than trusted to the child's own config.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/tool/task.ts:33-43",
+          "packages/core/src/tool/task.ts:206-227"
+        ],
+        "modules": ["core/tool"],
+        "verified": true
+      },
+      {
+        "name": "no-os-level-sandbox",
+        "what": "REFUTED for the fork as well: there is still no OS-level confinement. The fork's bash tool spawns ChildProcess.make directly with the configured shell and states in its own tool description that the command runs 'with the host user's filesystem, process, and network authority', gated only by permission.assert (including external_directory approval for outside paths). The only 'sandbox' identifiers in core are the project sandboxes path column, a path-normalisation migration of that column, and the codemode package's JS-level SandboxTool types - none of which confine a spawned process.",
+        "invariants": [
+          "Permission assert is the only gate; the tool description itself must keep disclosing that the host user's authority applies.",
+          "External working directories and argument paths must require external_directory approval."
+        ],
+        "failurePolicy": "fail-open with respect to the OS - an allowed command runs with full user authority; there is no confinement to fall back on.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/tool/bash.ts:340",
+          "packages/core/src/tool/bash.ts:81-89",
+          "packages/core/src/tool/bash.ts:400-407",
+          "packages/core/src/project/sql.ts:16",
+          "packages/core/src/tool/code-mode.ts:3"
+        ],
+        "modules": ["core/tool", "core/project"],
+        "verified": true
+      },
+      {
+        "name": "permission-ask-plugin-seam",
+        "what": "Permission evaluation is pluggable: evaluateRequest runs the 'permission.ask' hook through PluginRuntime with a mutable effect holder before any request is created, so a plugin can rewrite the effect (for example auto-allow or force-ask) for a specific action/resource. The hook name is part of the named hook union.",
+        "invariants": [
+          "The plugin seam must run before the request is created or remembered, and must only be able to set a declared effect value.",
+          "The default outcome must remain the evaluated effect when no hook writes to the holder."
+        ],
+        "failurePolicy": "fail-closed on the default path - if no hook overrides, the evaluated effect (ask/deny) stands.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/permission.ts:198-206",
+          "packages/core/src/plugin/runtime.ts:15"
+        ],
+        "modules": ["core/permission", "core/plugin"],
+        "verified": true
+      }
+    ],
+    "extension": [
+      {
+        "name": "named-plugin-hook-runtime",
+        "what": "PluginRuntime is a scoped, ordered, named hook registry: HookName is a constant union (session.message.before, session.chat.params/headers, session.chat.messages.transform, session.chat.system.transform, session.compacting, session.compaction.autocontinue, session.text.complete, permission.ask, shell.env, tool.execute.before/after, tool.definition, command.execute.before, provider.small-model, session.stop, session.subagent.stop). Callbacks are registered under an owner with an order plus a monotonic sequence, stored sorted, disposed through the registering scope, and run sequentially over one event value that hooks may mutate through a mutable holder.",
+        "invariants": [
+          "Hook execution order is owner order then registration sequence; callbacks within a hook name must run sequentially, never concurrently.",
+          "Every registration must be disposed with its scope or the hook leaks across reloads.",
+          "Hook names are a closed union - an unregistered name is a type error, not a silent no-op."
+        ],
+        "failurePolicy": "mixed - hook callbacks may be Effect or plain values and run around a mutable event; call-site policies vary (stop hooks catch all causes and fail open, permission hooks default to the evaluated effect).",
+        "constants": [
+          "17 named hooks (packages/core/src/plugin/runtime.ts:6-24)"
+        ],
+        "evidence": [
+          "packages/core/src/plugin/runtime.ts:6-26",
+          "packages/core/src/plugin/runtime.ts:57-99",
+          "packages/core/src/plugin/runtime.ts:109-116",
+          "packages/core/src/plugin/runtime.ts:85-91"
+        ],
+        "modules": ["core/plugin"],
+        "verified": true
+      },
+      {
+        "name": "v1-plugin-compatibility-bridge",
+        "what": "The fork adapts the entire legacy V1 Hooks surface onto the CoreV2 Effect host: v1-compat.ts declares the legacy interface (dispose, event, auth, provider, chat.message/params/headers, permission.ask, command.execute.before, tool.execute.before/after, shell.env, experimental.chat.*, session.compacting, compaction.autocontinue, text.complete, tool.definition, experimental.provider.small_model) and maps each onto host.<domain>.hook(...) via define(), with mutable get/set outputs; v1-projection.ts converts V2 model/provider/auth/credential values back into legacy SDK shapes. Plugin entry points are registered with a bounded initialization timeout.",
+        "invariants": [
+          "Every legacy hook must be bridged onto exactly one named runtime hook; an unmapped legacy hook would silently stop firing.",
+          "Projection must be one-way (V2 -> legacy) so a legacy plugin cannot mutate V2 state except through the documented mutable outputs."
+        ],
+        "failurePolicy": "fail-soft - plugin initialization is bounded (8s) and a failed hook/init is logged and skipped rather than aborting the session.",
+        "constants": [
+          "plugin initializationTimeout = 8 seconds (packages/opencode/src/plugin/index.ts:80)"
+        ],
+        "evidence": [
+          "packages/core/src/plugin/v1-compat.ts:54-80",
+          "packages/core/src/plugin/v1-compat.ts:388",
+          "packages/core/src/plugin/v1-compat.ts:494",
+          "packages/core/src/plugin/v1-projection.ts:15",
+          "packages/opencode/src/plugin/index.ts:80-95",
+          "packages/opencode/src/plugin/index.ts:388"
+        ],
+        "modules": ["core/plugin", "opencode/plugin"],
+        "verified": true
+      },
+      {
+        "name": "source-composed-command-registry",
+        "what": "The CoreV2 Command service is composed of an ordered Source[] plus a base command map: get() walks sources in reverse before the base map, list() merges every source, skills are projected into commands only when skill.slash !== false, and a beforeExecute hook runs the plugin 'command.execute.before' hook over the projected parts. init/review are injected as the exported INIT/REVIEW constants by a CoreV2 plugin from core copies of the templates, config markdown enters through the config-command plugin, and MCP prompts register themselves as a Source. The duplicate v1 registry under packages/opencode/src/command was deleted.",
+        "invariants": [
+          "Source order is precedence: the last source wins over earlier sources and over the base map.",
+          "A skill with slash === false must not become a command.",
+          "Command execution must pass through the beforeExecute plugin hook."
+        ],
+        "failurePolicy": "mixed - an unknown command fails with CommandNotFoundError/AgentNotFoundError from prompt-expansion; an MCP prompt template resolves lazily so a dead server does not break the registry.",
+        "constants": [
+          "INIT = 'init', REVIEW = 'review' (packages/core/src/command.ts:15-16)"
+        ],
+        "evidence": [
+          "packages/core/src/command.ts:15-16",
+          "packages/core/src/command.ts:18-23",
+          "packages/core/src/command.ts:79-118",
+          "packages/core/src/plugin/command.ts:14-22",
+          "packages/core/src/mcp/runtime.ts:931-953",
+          "packages/core/src/session/prompt-expansion.ts:268-307"
+        ],
+        "modules": ["core", "core/mcp", "core/plugin"],
+        "verified": true
+      },
+      {
+        "name": "mcp-runtime-in-core",
+        "what": "MCP moved out of the host into core (packages/core/src/mcp/runtime.ts): it owns connect/watch/tool listing, prompts and resources, and it registers its prompts as a Command source (a list() of stub commands and a get() that lazily calls getPrompt and maps declared arguments to $1..$n). The host no longer has an mcp directory; the MCP resource tools stay host-side as compat scaffolding.",
+        "invariants": [
+          "MCP prompts must surface through the shared command registry, not a private list.",
+          "Only connected servers may contribute prompts/commands."
+        ],
+        "failurePolicy": "fail-soft - a server that is not connected contributes nothing; the commands source returns stubs whose get() fails lazily if the server died.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/mcp/runtime.ts:931-938",
+          "packages/core/src/mcp/runtime.ts:946-953",
+          "packages/core/src/mcp/runtime.ts:970-972",
+          "packages/core/src/mcp/runtime.ts:603-604",
+          "packages/core/src/mcp/runtime.ts:1029"
+        ],
+        "modules": ["core/mcp"],
+        "verified": true
+      },
+      {
+        "name": "lsp-runtime-in-core",
+        "what": "LSP also moved into core (packages/core/src/lsp, 7 files) so both engines share one language-server runtime; the host keeps packages/opencode/src/lsp for the host-side wiring.",
+        "invariants": [
+          "Language server lifecycle must be core-owned so a kernel turn and a classic turn use the same clients."
+        ],
+        "failurePolicy": "fail-soft - a server that fails to launch simply contributes no diagnostics.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/lsp/lsp.ts:1",
+          "packages/opencode/src/lsp/lsp.ts:1"
+        ],
+        "modules": ["core/lsp", "opencode/lsp"],
+        "verified": true
+      },
+      {
+        "name": "claude-plugin-marketplace",
+        "what": "A new install surface manages Claude-style plugin marketplaces: state lives in a versioned claude-marketplaces.json under the global state path with a cache directory under data; a marketplace is a git/GitHub/HTTP source whose manifest is read from .claude-plugin/marketplace.json or marketplace.json; install copies the plugin (or a subdirectory of a cloned repo) into a per-plugin install directory, records its capabilities and copies its skills/commands into generated directories and its MCP servers into the config. plugin ids are '<name>@<marketplace>' and source paths are validated to stay inside the marketplace directory ('Plugin source escapes marketplace directory').",
+        "invariants": [
+          "A resolved plugin source path must stay inside the marketplace root.",
+          "Marketplace state must be versioned (version 1) and validate the file shape before use.",
+          "Installing must be atomic per plugin: the previous install directory is removed before copying."
+        ],
+        "failurePolicy": "fail-closed - an unresolvable plugin/marketplace throws NotFound-style errors ('Marketplace not found', 'Plugin not found in marketplace'), and an invalid state file throws 'Invalid Claude marketplace state file'.",
+        "constants": [
+          "state file = <global state>/claude-marketplaces.json (packages/opencode/src/plugin/claude-marketplace.ts:125)",
+          "cache dir = <global data>/claude-marketplaces (packages/opencode/src/plugin/claude-marketplace.ts:126)",
+          "state version = 1 (packages/opencode/src/plugin/claude-marketplace.ts:76)"
+        ],
+        "evidence": [
+          "packages/opencode/src/plugin/claude-marketplace.ts:76-77",
+          "packages/opencode/src/plugin/claude-marketplace.ts:124-126",
+          "packages/opencode/src/plugin/claude-marketplace.ts:201-204",
+          "packages/opencode/src/plugin/claude-marketplace.ts:341",
+          "packages/opencode/src/plugin/claude-marketplace.ts:572-592",
+          "packages/opencode/src/plugin/claude-marketplace.ts:723-746"
+        ],
+        "modules": ["opencode/plugin"],
+        "verified": true
+      },
+      {
+        "name": "direct-extension-capability-approval",
+        "what": "Besides marketplaces the fork manages 'direct extensions' with an explicit capability model: a versioned direct-extensions.json state file records each plugin's id, source, targets, requested capabilities, APPROVED capabilities, enabled flag and installedAt, plus managed MCP entries. Capabilities are partitioned into declarative ones (skills, commands, mcp, themes) and runtime ones (plugin.runtime, agent.transform, catalog.transform, command.transform, ...), and declarations are written into the user's config with a flock and a jsonc-preserving editor.",
+        "invariants": [
+          "A runtime capability must be explicitly approved; the requested set must never be treated as granted.",
+          "Config edits must be made under a file lock and preserve JSONC formatting/comments.",
+          "State is versioned (version 2) and validated."
+        ],
+        "failurePolicy": "fail-closed - an unapproved capability is not enabled; a missing state file is treated as empty rather than an error.",
+        "constants": [
+          "declarativeCapabilities = [skills, commands, mcp, themes] (packages/opencode/src/plugin/direct-extension.ts:65)",
+          "state version = 2 (packages/opencode/src/plugin/direct-extension.ts:50)"
+        ],
+        "evidence": [
+          "packages/opencode/src/plugin/direct-extension.ts:27-53",
+          "packages/opencode/src/plugin/direct-extension.ts:60-70",
+          "packages/opencode/src/plugin/direct-extension.ts:2-6"
+        ],
+        "modules": ["opencode/plugin"],
+        "verified": true
+      },
+      {
+        "name": "plugin-runtime-readiness",
+        "what": "A readiness reporter derives each managed plugin's state from observations of its declared capabilities: skills are ready when a discovered skill lies inside the plugin's skill directory, commands when every declared command name is available, tool sources when every source status is ready, MCP when every server status is connected, and the aggregate is ready when all capabilities are ready (or partially ready when some are). While a plugin is still initializing, an unmet capability reports 'pending' instead of 'unavailable'.",
+        "invariants": [
+          "A capability that is unmet while initialization is in flight must report pending, not failed.",
+          "The aggregate state must be derived from the per-capability states, never asserted independently."
+        ],
+        "failurePolicy": "fail-soft - the reporter reports state; it never blocks plugin loading.",
+        "constants": [],
+        "evidence": [
+          "packages/opencode/src/plugin/runtime-readiness.ts:49-63",
+          "packages/opencode/src/plugin/runtime-readiness.ts:81-115",
+          "packages/opencode/src/plugin/runtime-readiness.ts:133-150"
+        ],
+        "modules": ["opencode/plugin"],
+        "verified": true
+      },
+      {
+        "name": "skills-and-context-guidance",
+        "what": "Skills remain markdown SKILL.md files discovered from the same locations as upstream and are additionally projected into slash commands by the command registry (subject to the slash opt-out). Core adds SkillGuidance and skill/guidance.ts so the kernel runner can render skill guidance into the system prompt, and a per-session skill module (packages/core/src/session/skill.ts).",
+        "invariants": [
+          "Skill projection into commands must honour the slash flag.",
+          "Skill guidance must be rendered through the same permission-filtered path as other system context."
+        ],
+        "failurePolicy": "fail-soft - an unreadable or invalid skill is skipped.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/command.ts:118",
+          "packages/core/src/skill.ts:57",
+          "packages/core/src/skill.ts:119",
+          "packages/core/src/session/skill.ts:1",
+          "packages/core/src/skill/guidance.ts:1"
+        ],
+        "modules": ["core/skill", "opencode/skill"],
+        "verified": true
+      },
+      {
+        "name": "plugin-provider-and-live-model-plugins",
+        "what": "The provider plugin set was extended: alongside the upstream vendor plugins the fork adds codex-models.ts and live-models.ts, which discover a provider's models at runtime rather than from a static list, and a dynamic provider plugin. These feed the provider catalogue as plugin-provided model definitions.",
+        "invariants": [
+          "Live-discovered models must be merged into the catalogue under their provider id.",
+          "A discovery failure must leave the static catalogue intact."
+        ],
+        "failurePolicy": "fail-soft - a failed live discovery yields no additional models.",
+        "constants": [],
+        "evidence": [
+          "packages/core/src/plugin/provider/codex-models.ts:1",
+          "packages/core/src/plugin/provider/live-models.ts:1",
+          "packages/core/src/plugin/provider/dynamic.ts:1"
+        ],
+        "modules": ["core/plugin"],
+        "verified": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,370 @@
+{
+  "loop": [
+    {
+      "name": "sequential-effect-state-machine",
+      "what": "The turn engine is a pure reducer plus a generator driver. transition(state,event,env) maps a RunState and a RunEvent to the next state, an ordered list of QueryOutputs and at most one state-driving RunEffect (src/query/runtime/transition.ts:39-232); runQueryRuntime loops transition -> yield outputs -> execute the single effect -> feed the effect's final event back (src/query/runtime/runner.ts:56-121). Structural invariants are asserted on every step (src/query/contracts/invariants.ts) and a stalled or multi-effect step is converted into an effect_failed event rather than thrown (runner.ts:91-112). src/query.ts:21-61 is the production entry point and delegates to runProductionRuntimeFacade, so this reducer is the live loop, not a shadow implementation.",
+      "invariants": [
+        "exactly one state-driving effect per transition; >1 is a runtime_stalled/multiple_effects_not_supported failure",
+        "every effect must complete with a final event (effect_completed_without_event otherwise)",
+        "a terminal phase must carry an outcome"
+      ],
+      "failurePolicy": "fail-closed: a transition that throws while no effect is active rethrows; otherwise it is converted to effect_failed and the run terminates with that error, so the loop cannot spin",
+      "constants": [
+        {"name": "RunRuntimeError codes", "value": "effect_completed_without_event | runtime_stalled | multiple_effects_not_supported"}
+      ],
+      "evidence": [
+        "src/query/runtime/runner.ts:56-121",
+        "src/query/runtime/transition.ts:39-50",
+        "src/query/runtime/transition.ts:80-126",
+        "src/query.ts:21-61",
+        "src/query/runtime/facade.ts:45-68"
+      ],
+      "modules": ["query"],
+      "verified": true
+    },
+    {
+      "name": "turn-budget-ladder",
+      "what": "A RunBudget carries seven counters (modelAttempts, toolRounds, providerRetries, recoveries, stopHookContinuations, outputTokens, costUsd) and a deadline, with per-limit checks resolved through LIMIT_FOR_COUNTER (src/query/runtime/budget.ts:10-58, 141-168). Budget is consumed at fixed points in the reducer (model completion, each tool round, each recovery, each stop-hook continuation) and checked against a context-dependent subset: GLOBAL_CONTINUATION_CHECKS is [deadline, outputTokens, costUsd], joined by modelAttempts plus stopHookContinuations or recoveries for continuation decisions (transition.ts:33-37, 148-166). maxRecoveries and maxStopHookContinuations default to 3 each and every limit must be finite and non-negative (budget.ts:60-109). A legacy maxTurns is translated into maxToolRounds only when > 0 (budget.ts:111-119).",
+      "invariants": [
+        "budget counters and deltas must be finite and non-negative (RangeError otherwise)",
+        "the continuation checks are narrower than the global checks, so a stop-hook continuation cannot loop on tool rounds alone",
+        "limits are immutable for a run; consumeBudget returns a new budget"
+      ],
+      "failurePolicy": "fail-closed: exceeding any checked limit produces a RunBudgetExceeded passed to the policy, which returns stop and terminates the run with reason max_turns or budget_exceeded",
+      "constants": [
+        {"name": "maxRecoveries default", "value": 3},
+        {"name": "maxStopHookContinuations default", "value": 3},
+        {"name": "GLOBAL_CONTINUATION_CHECKS", "value": "deadline, outputTokens, costUsd"}
+      ],
+      "evidence": [
+        "src/query/runtime/budget.ts:10-21",
+        "src/query/runtime/budget.ts:60-99",
+        "src/query/runtime/budget.ts:141-168",
+        "src/query/runtime/transition.ts:33-37",
+        "src/query/runtime/transition.ts:148-181",
+        "src/query/policies/turn.ts:41-59"
+      ],
+      "modules": ["query"],
+      "verified": true
+    },
+    {
+      "name": "effect-scoped-abort-and-cleanup",
+      "what": "RunLifecycle owns one run-level AbortController and one child controller per active effect, tracks a single active effect, and attaches a cleanup closure registered by the driver that disposes the effect generator (src/query/runtime/lifecycle.ts:13-129). beginEffect force-closes any previous effect with reason effect_replaced; finishEffect aborts the effect's own controller with effect_completed; close() is idempotent, removes the parent listener and awaits all pending closures with Promise.allSettled, rethrowing the first rejection (lifecycle.ts:47-116). Child controllers are created through createChildAbortController, which holds both ends weakly so an abandoned child can still be collected and removes the parent listener once the child aborts (src/utils/abortController.ts:68-99).",
+      "invariants": [
+        "at most one active effect at a time (activeEffectCount is 0 or 1)",
+        "cleanup can be attached only once per effect id",
+        "closing the run is idempotent; the first close promise is reused",
+        "an aborted child never propagates abort upward to its parent"
+      ],
+      "failurePolicy": "fail-soft on cleanup: the driver awaits the effect's return() and, if that throws while closing, it is swallowed so the primary failure survives on the terminal outcome (runner.ts:140-176)",
+      "constants": [
+        {"name": "DEFAULT_MAX_LISTENERS", "value": 50}
+      ],
+      "evidence": [
+        "src/query/runtime/lifecycle.ts:47-60",
+        "src/query/runtime/lifecycle.ts:76-107",
+        "src/query/runtime/lifecycle.ts:109-129",
+        "src/utils/abortController.ts:68-99",
+        "src/query/runtime/runner.ts:140-178"
+      ],
+      "modules": ["query", "utils"],
+      "verified": true
+    },
+    {
+      "name": "abort-and-interrupt-semantics",
+      "what": "An abort signal is polled at the top of every loop iteration and a pending abort is turned into an abort_requested event, which terminates with reason aborted_tools when the run was executing tools and aborted_streaming otherwise (runner.ts:56-59, transition.ts:52-60). The driver races each effect's next() against the abort signal unless the effect declares it owns abort (call_model and execute_tools do), so a hung stream still unblocks (runner.ts:114-120, 184-205, facade.ts:65-68). On terminal abort the facade runs cleanupAfterAbort and, unless the abort reason is the literal 'interrupt', injects a user-interruption message so the model sees why the turn ended (facade.ts:77-99).",
+      "invariants": [
+        "an abort always terminates the run; it never resumes",
+        "effectOwnsAbort effects must observe the signal themselves or the loop cannot advance",
+        "the parent abort signal is never aborted by a child effect"
+      ],
+      "failurePolicy": "fail-soft on cleanup: cleanupAfterAbort failures are swallowed to preserve the terminal outcome (query/runtime/productionSession.ts:50-58)",
+      "constants": [
+        {"name": "abort reasons used by the runtime", "value": "aborted_tools, aborted_streaming, effect_replaced, effect_completed, interrupt, consumer_closed, terminal"}
+      ],
+      "evidence": [
+        "src/query/runtime/runner.ts:56-59",
+        "src/query/runtime/runner.ts:184-205",
+        "src/query/runtime/transition.ts:52-60",
+        "src/query/runtime/facade.ts:65-99",
+        "src/query/runtime/productionSession.ts:50-58"
+      ],
+      "modules": ["query"],
+      "verified": true
+    },
+    {
+      "name": "priority-command-queue",
+      "what": "All input - user prompts, task notifications and orphaned permission answers - funnels through one module-level command queue with three priorities ('now' > 'next' > 'later'), FIFO inside a priority (src/utils/messageQueueManager.ts:39-59, 149-153). dequeue() linearly scans for the highest-priority matching entry and supports a predicate so a between-turn drain can restrict to main-thread commands (cmd.agentId === undefined) without restructuring callers (messageQueueManager.ts:165-191). System-generated commands default to 'later' so user input is never starved (messageQueueManager.ts:135-147), and the queue exposes a frozen snapshot via useSyncExternalStore so React and non-React consumers see the same ordering (messageQueueManager.ts:51-78).",
+      "invariants": [
+        "priority order is fixed at now < next < later numerically",
+        "the snapshot is replaced (never mutated) on every change, so reference equality is a valid change signal",
+        "non-editable modes (task-notification) are excluded from UP/ESC recall into the input buffer"
+      ],
+      "failurePolicy": "fail-soft: dequeue on an empty or fully-filtered queue returns undefined and leaves the queue untouched",
+      "constants": [
+        {"name": "QueuePriority", "value": "now | next | later"},
+        {"name": "default priority for enqueue", "value": "next"},
+        {"name": "default priority for enqueuePendingNotification", "value": "later"}
+      ],
+      "evidence": [
+        "src/utils/messageQueueManager.ts:39-59",
+        "src/utils/messageQueueManager.ts:135-153",
+        "src/utils/messageQueueManager.ts:165-191",
+        "src/utils/messageQueueManager.ts:341-363",
+        "src/utils/queueProcessor.ts:33-59"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "mid-turn-command-drain-steering",
+      "what": "New input enters a running loop in the collecting_attachments phase: selectQueuedCommands pulls commands at or above 'next' (downgraded to 'later' when a Sleep tool ran this turn), drops slash commands, and filters to either main-thread commands or task notifications addressed to this agent id (src/query/effects/productionCollectAttachmentServices.ts:159-185). The drain is staged, not immediate: commitFact() removes exactly the staged commands from the queue and notifies their lifecycle as 'started' only when the effect commits, so an aborted turn leaves the queue intact (productionCollectAttachmentServices.ts:116-149); the snapshot returns the uncommitted state when the abort signal is set (productionCollectAttachmentServices.ts:151-156). The drained commands are appended as attachments, which is what turns a mid-turn user message into the next model input.",
+      "invariants": [
+        "staged commands are removed from the queue only on effect commit",
+        "an aborted collect returns the pre-commit snapshot so nothing is lost",
+        "only 'prompt' and 'task-notification' modes are consumable"
+      ],
+      "failurePolicy": "fail-soft: an aborted or failed collection leaves staged commands in the queue for the next drain",
+      "constants": [
+        {"name": "consumable modes", "value": "prompt, task-notification"},
+        {"name": "main-thread sources for draining", "value": "repl_main_thread* and sdk"}
+      ],
+      "evidence": [
+        "src/query/effects/productionCollectAttachmentServices.ts:116-156",
+        "src/query/effects/productionCollectAttachmentServices.ts:159-185",
+        "src/query/runtime/transition.ts:182-228"
+      ],
+      "modules": ["query"],
+      "verified": true
+    },
+    {
+      "name": "stop-hook-continuation-loop",
+      "what": "After a model turn with no tool calls the loop runs the Stop-hook chain and can be pushed back into another model turn. A stop_evaluated event with continuationRequested=true is checked against the budget (adding modelAttempts and stopHookContinuations or recoveries to the global checks) and, if allowed, consumes the matching counter and re-schedules prepare_context (src/query/runtime/transition.ts:127-181). Hook-driven continuation suppression travels as a hook_stopped_continuation attachment that sets shouldPreventContinuation and makes the tool effect report completionCandidate 'hook_stopped' (src/query/effects/productionExecuteTools.ts:157-197). Stop hooks also run the turn-end side effects: prompt suggestion, memory extraction and auto-dream are fired only when not in bare mode and only for the main thread (src/query/stopHooks.ts:92-131).",
+      "invariants": [
+        "a stop-hook continuation is charged against both a global and a kind-specific counter",
+        "an unknown continuationKind is a RunInvariantError, not a silent policy continuation",
+        "background bookkeeping is skipped for subagent query sources and in --bare mode"
+      ],
+      "failurePolicy": "fail-closed at the budget: once maxStopHookContinuations or maxRecoveries is reached the run terminates rather than re-entering the model",
+      "constants": [
+        {"name": "default maxStopHookContinuations", "value": 3},
+        {"name": "completionCandidate for a suppressed continuation", "value": "hook_stopped"}
+      ],
+      "evidence": [
+        "src/query/runtime/transition.ts:127-181",
+        "src/query/effects/productionExecuteTools.ts:157-197",
+        "src/query/stopHooks.ts:92-131"
+      ],
+      "modules": ["query"],
+      "verified": true
+    },
+    {
+      "name": "early-stdin-capture",
+      "what": "To avoid losing keystrokes typed while the REPL is still mounting, startCapturingEarlyInput puts stdin into raw mode before Ink initialises and buffers chunks into a module-level string that consumeEarlyInput() later drains (src/utils/earlyInput.ts:20-67). Capture is refused unless stdin is a TTY and is explicitly disabled under -p/--print, because raw mode clears ISIG and would make a print-mode run uninterruptible (earlyInput.ts:29-40). Failure to set raw mode is swallowed and capture simply does not happen.",
+      "invariants": [
+        "capture only runs for an interactive TTY",
+        "print mode must never enter raw mode",
+        "the stdin 'readable' handler is a single module-level reference so it can be removed"
+      ],
+      "failurePolicy": "fail-soft: a throw from setRawMode clears the capturing flag and startup continues without early input",
+      "constants": [],
+      "evidence": [
+        "src/utils/earlyInput.ts:20-40",
+        "src/utils/earlyInput.ts:42-67",
+        "src/utils/earlyInput.ts:164-189"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "proactive-self-tick-loop",
+      "what": "A module-level state machine (active/paused/contextBlocked/loopIntervalMs/nextTickAt with a listener set) plus a React effect that, when nothing else is pending, schedules a timer and enqueues a synthetic `<tick>HH:MM:SS</tick>` prompt into the command queue, driving the agent to act without user input (src/proactive/index.ts:1-77, src/proactive/useProactive.ts:39-99). The guard is deliberately broad: it waits while a query is loading, while any command is queued, while local JSX UI is active, and while plan mode is on (useProactive.ts:47-56). The module is fully implemented but INERT: every consumer is a `feature('PROACTIVE') ? require(...) : null` ternary, so proactiveModule/useProactive are null at every call site (src/screens/REPL.tsx:178-183, src/tools.ts:25-26).",
+      "invariants": [
+        "the tick is queued, never submitted directly, so it obeys queue priority",
+        "the timer is unref'd so it cannot hold the process open",
+        "the effect clears both the timer and nextTickAt on every re-evaluation"
+      ],
+      "failurePolicy": "fail-soft: with the flag false the consumers take the null branch and no tick is ever produced",
+      "constants": [
+        {"name": "tick payload", "value": "<TICK_TAG>{localTime}</TICK_TAG>"}
+      ],
+      "evidence": [
+        "src/proactive/index.ts:18-28",
+        "src/proactive/useProactive.ts:47-88",
+        "src/screens/REPL.tsx:178-183",
+        "src/tools.ts:25-26"
+      ],
+      "modules": ["proactive", "screens", "tools"],
+      "verified": true
+    },
+    {
+      "name": "speculative-turn-execution",
+      "what": "startSpeculation begins a real agent turn on a predicted follow-up prompt before the user accepts it, bounded to 20 turns and 100 messages, with write tools (Edit, Write, NotebookEdit) excluded from the speculative pool (src/services/PromptSuggestion/speculation.ts:58-62, 405, 638-643). Accepting speculation injects the prepared messages into the live conversation (prepareMessagesForInjection, acceptSpeculation, handleSpeculationAccept) and aborting it discards them. It is INERT: isSpeculationEnabled() requires process.env.USER_TYPE === 'ant' (speculation.ts:340-346), and USER_TYPE is never assigned anywhere in the tree.",
+      "invariants": [
+        "speculation is capped in both turns and message count",
+        "write tools are excluded so a discarded speculation cannot have mutated the workspace",
+        "injected messages are prepared through a dedicated transform, not appended raw"
+      ],
+      "failurePolicy": "fail-soft: the abort path discards the speculative state and returns to idle",
+      "constants": [
+        {"name": "MAX_SPECULATION_TURNS", "value": 20},
+        {"name": "MAX_SPECULATION_MESSAGES", "value": 100},
+        {"name": "WRITE_TOOLS", "value": "Edit, Write, NotebookEdit"}
+      ],
+      "evidence": [
+        "src/services/PromptSuggestion/speculation.ts:58-62",
+        "src/services/PromptSuggestion/speculation.ts:340-346",
+        "src/services/PromptSuggestion/speculation.ts:405",
+        "src/services/PromptSuggestion/speculation.ts:720",
+        "src/services/PromptSuggestion/speculation.ts:805-838"
+      ],
+      "modules": ["services"],
+      "verified": true
+    }
+  ],
+  "session": [
+    {
+      "name": "jsonl-transcript-append-log",
+      "what": "A session is an append-only JSONL file at <configHome>/projects/<sanitized-project>/<sessionId>.jsonl written with mode 0o600 (src/utils/sessionStorage.ts:194-206, 505-513). Only user, assistant, attachment and system entries are transcript messages; progress entries are explicitly excluded because including them caused chain forks that orphaned real messages on resume (sessionStorage.ts:124-142). The transcript is the event log the resume path, hooks (transcript_path) and the SDK all read, and it is addressed through sessionProjectDir rather than the live cwd so a resumed or branched session does not drift into a second file (sessionStorage.ts:203-214).",
+      "invariants": [
+        "progress/ephemeral entries must never be written into the parentUuid chain",
+        "every transcript file is created 0o600 inside a 0o700 project directory",
+        "the transcript path is derived from sessionId plus sessionProjectDir, never from the current cwd alone"
+      ],
+      "failurePolicy": "fail-closed on write errors: appendToFile retries once after mkdir and then logs and rethrows rather than silently dropping transcript data (sessionStorage.ts:505-526)",
+      "constants": [
+        {"name": "file mode", "value": "0o600"},
+        {"name": "directory mode", "value": "0o700"}
+      ],
+      "evidence": [
+        "src/utils/sessionStorage.ts:124-142",
+        "src/utils/sessionStorage.ts:194-214",
+        "src/utils/sessionStorage.ts:505-526"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "parent-uuid-conversation-chain",
+      "what": "Each transcript entry carries a uuid and a parentUuid, so the conversation is a linked chain rather than a flat array; the write path assigns parentUuid only from chain participants (src/utils/sessionStorage.ts:144-152). Legacy transcripts that already contain progress entries are repaired at load time by bridging the chain across them (sessionStorage.ts:160-174), and deserialization filters unresolved tool uses, orphaned thinking-only assistant messages and whitespace-only assistant messages before the chain is handed back (src/utils/conversationRecovery.ts:150-194). Resume also strips permissionMode values that are not in the current PERMISSION_MODES set, because the field is unvalidated JSON from a possibly different build (conversationRecovery.ts:169-180).",
+      "invariants": [
+        "a chain participant is anything that is not a progress entry",
+        "no unresolved tool_use may survive deserialization",
+        "permissionMode read from disk is validated against the current mode enum before use"
+      ],
+      "failurePolicy": "fail-soft: legacy progress entries are bridged rather than rejected, and unknown permission modes are dropped rather than failing the resume",
+      "constants": [],
+      "evidence": [
+        "src/utils/sessionStorage.ts:144-174",
+        "src/utils/conversationRecovery.ts:150-194"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "buffered-transcript-write-pipeline",
+      "what": "Transcript writes are queued per file and drained on a 100 ms timer, batching entries into newline-joined chunks and flushing early when a chunk would reach 100 MB (src/utils/sessionStorage.ts:427-428, 482-502, 528-549). The drain resolves each queued entry's promise even when the underlying append fails, so a caller can never hang on a dead filesystem; individual write errors are logged and a drain that arrives while another drain is active schedules itself again rather than racing (sessionStorage.ts:482-502).",
+      "invariants": [
+        "one drain at a time per write pipeline",
+        "queued entry promises are always settled, success or failure",
+        "chunk size is bounded so a single flush cannot build an unbounded string"
+      ],
+      "failurePolicy": "fail-soft: a failed append is logged as an error, the batch's promises still resolve, and the remaining queue is rescheduled",
+      "constants": [
+        {"name": "FLUSH_INTERVAL_MS", "value": 100},
+        {"name": "MAX_CHUNK_BYTES", "value": 104857600}
+      ],
+      "evidence": [
+        "src/utils/sessionStorage.ts:427-428",
+        "src/utils/sessionStorage.ts:482-502",
+        "src/utils/sessionStorage.ts:528-549"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "tombstone-rewrite-guard",
+      "what": "Removing an already-written message (a tombstone, used when a message is orphaned) normally rewrites the session file in place, first trying a fast 64 KB-tail path and falling back to a full read-modify-write that drops the matching uuid line (src/utils/sessionStorage.ts:812-841). Because session files can grow to multiple GB, the full rewrite is refused above a hard 50 MB cap and the tombstone is skipped with a warning instead, preventing an OOM (sessionStorage.ts:117-119, 821-829). Malformed lines are preserved verbatim rather than dropped, so a partial rewrite cannot destroy unrelated data (sessionStorage.ts:831-839).",
+      "invariants": [
+        "the full-file rewrite path must be size-capped",
+        "unparseable lines are kept, never silently discarded",
+        "the tail fast-path is attempted before any full read"
+      ],
+      "failurePolicy": "fail-soft: an oversized file skips tombstone removal and logs a warning; the session continues with the message still present",
+      "constants": [
+        {"name": "MAX_TOMBSTONE_REWRITE_BYTES", "value": 52428800},
+        {"name": "tail fast-path window", "value": "64KB"}
+      ],
+      "evidence": [
+        "src/utils/sessionStorage.ts:117-119",
+        "src/utils/sessionStorage.ts:812-841"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "session-pid-registry-and-reaper",
+      "what": "Every top-level session (interactive, SDK, bg, daemon) writes a PID record to <configHome>/sessions/<pid>.json containing pid, sessionId, cwd, startedAt, kind and entrypoint, and registers an exit cleanup that unlinks it; teammates and subagents are deliberately excluded so swarm usage does not pollute the concurrency count (src/utils/concurrentSessions.ts:48-106). The PID file follows a session switch through onSessionSwitch so `claude ps` never reads the wrong transcript (concurrentSessions.ts:95-100). countConcurrentSessions filters strictly on /^\\d+\\.json$/, counts live PIDs and sweeps stale files, but skips sweeping on WSL where a Windows PID is not probeable (concurrentSessions.ts:148-184).",
+      "invariants": [
+        "only top-level sessions register (getAgentId() != null returns false)",
+        "the PID filename matches ^\\d+\\.json$ before any parseInt, so notes files are never swept as stale",
+        "the sessions directory is created 0o700 and the PID file follows session switches"
+      ],
+      "failurePolicy": "fail-soft: registration errors are logged and return false; countConcurrentSessions returns 0 on a readdir failure",
+      "constants": [
+        {"name": "SessionKind", "value": "interactive | bg | daemon | daemon-worker"},
+        {"name": "sessions dir mode", "value": "0o700"}
+      ],
+      "evidence": [
+        "src/utils/concurrentSessions.ts:48-106",
+        "src/utils/concurrentSessions.ts:148-184"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "config-migration-ladder",
+      "what": "User configuration is migrated by a version-gated sequence rather than by schema evolution: runMigrations compares getGlobalConfig().migrationVersion against CURRENT_MIGRATION_VERSION (11) and, on mismatch, runs seven idempotent migrations that rewrite settings.json (bypassPermissions-accepted, enableAllProjectMcpServers, Sonnet 1M to 4.5, legacy Opus, Opus to Opus-1M), then stamps the new version in a single saveGlobalConfig (src/main.tsx:280-301). Each migration is self-guarding: migrateOpusToOpus1m returns immediately unless the merge experiment is on and userSettings.model is exactly 'opus', and writes the new value only when it differs from the default (src/migrations/migrateOpusToOpus1m.ts:24-43). One migration is additionally gated on feature('TRANSCRIPT_CLASSIFIER') and one on the always-false bundler literal, so those two cannot run in this build (main.tsx:290-295).",
+      "invariants": [
+        "every migration must be idempotent and re-runnable",
+        "the version stamp is written once, in the same pass, after all migrations",
+        "migrations mutate user settings, never the transcript"
+      ],
+      "failurePolicy": "fail-soft: migrations are synchronous best-effort writes; a migration that finds nothing to change returns without touching disk",
+      "constants": [
+        {"name": "CURRENT_MIGRATION_VERSION", "value": 11},
+        {"name": "migration count", "value": 7}
+      ],
+      "evidence": [
+        "src/main.tsx:280-301",
+        "src/migrations/migrateOpusToOpus1m.ts:24-43"
+      ],
+      "modules": ["migrations", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "file-checkpoint-snapshot-and-rewind",
+      "what": "Before a file is edited, fileHistoryTrackEdit snapshots its pre-edit contents into a rolling per-message snapshot list of at most 100 entries keyed by message id, with each tracked path mapped to a versioned backup name (null meaning the file did not exist at that version) (src/utils/fileHistory.ts:32-55, 81-109). Restore and diff entry points (fileHistoryRewind, fileHistoryCanRestore, fileHistoryGetDiffStats, checkOriginFileChanged) let the user rewind tracked files to the state at a chosen message. Checkpointing is on by default interactively and off for SDK sessions unless CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING is set, and either path can be disabled by env or config (fileHistory.ts:64-79).",
+      "invariants": [
+        "the backup must be captured before the edit, so the pre-edit content is recoverable",
+        "at most MAX_SNAPSHOTS snapshots are retained (oldest evicted, sequence counter still increments)",
+        "a null backup name means 'file absent at this version' and must not be confused with a backup file"
+      ],
+      "failurePolicy": "fail-soft: with checkpointing disabled the tracking functions return immediately and edits proceed without backups",
+      "constants": [
+        {"name": "MAX_SNAPSHOTS", "value": 100},
+        {"name": "SDK opt-in env var", "value": "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING"},
+        {"name": "disable env var", "value": "CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING"}
+      ],
+      "evidence": [
+        "src/utils/fileHistory.ts:32-55",
+        "src/utils/fileHistory.ts:64-79",
+        "src/utils/fileHistory.ts:81-109",
+        "src/utils/fileHistory.ts:348",
+        "src/utils/fileHistory.ts:400"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    }
+  ]
+}
