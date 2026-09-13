@@ -8,20 +8,36 @@
   "versionMismatch": false,
   "dirVersion": "0.1.5-rc.2",
   "extractedAt": "2026-09-13",
-  "commandModel": "per-package+interaction-ref",
-  "count": 3,
+  "commandModel": "per-package + inline commands.register",
+  "count": 6,
   "commands": [
     {
       "rawName": "compact",
       "canonical": "compact",
       "aliases": [],
       "displayName": "compact",
-      "description": "Human-facing `/compact` command over the backend-independent compaction seam.",
-      "packageName": "command-compact",
+      "description": "Compact older conversation history",
+      "inputHint": null,
+      "usageCrossCheck": "compact",
       "gate": "dsh:commands-service",
       "mechanism": null,
       "evidence": [
-        "packages/compaction/command-compact/src/index.ts:10"
+        "packages/compaction/command-compact/src/index.ts:100"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "description": "Download this Session log as a ZIP archive",
+      "inputHint": null,
+      "usageCrossCheck": null,
+      "gate": "dsh:commands-service",
+      "mechanism": null,
+      "evidence": [
+        "packages/session-query/session-log-export/src/index.ts:78"
       ],
       "verified": false
     },
@@ -30,12 +46,13 @@
       "canonical": "feedback",
       "aliases": [],
       "displayName": "feedback",
-      "description": null,
-      "packageName": "command-feedback",
+      "description": "record feedback about this session",
+      "inputHint": "<text>",
+      "usageCrossCheck": "feedback",
       "gate": "dsh:commands-service",
       "mechanism": null,
       "evidence": [
-        "packages/feedback/command-feedback/src/index.ts:39"
+        "packages/feedback/command-feedback/src/index.ts:118"
       ],
       "verified": false
     },
@@ -44,15 +61,77 @@
       "canonical": "goal",
       "aliases": [],
       "displayName": "goal",
-      "description": "Human-facing `/goal` command over the persisted same-session goal domain.",
-      "packageName": "command-goal",
+      "description": "set or view the goal for a long-running task",
+      "inputHint": "[<objective>|clear|edit <objective>|pause|resume]",
+      "usageCrossCheck": "goal",
       "gate": "dsh:commands-service",
       "mechanism": null,
       "evidence": [
-        "packages/goal/command-goal/src/index.ts:12"
+        "packages/goal/command-goal/src/index.ts:190"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "permission",
+      "canonical": "permission",
+      "aliases": [],
+      "displayName": "permission",
+      "description": "Switch the permission preset (sandbox mode + approval policy)",
+      "inputHint": "<preset>",
+      "usageCrossCheck": null,
+      "gate": "dsh:commands-service",
+      "mechanism": null,
+      "evidence": [
+        "packages/interaction/permission-presets/src/index.ts:256"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "description": "Enter or leave plan mode",
+      "inputHint": "[off|message]",
+      "usageCrossCheck": null,
+      "gate": "dsh:commands-service",
+      "mechanism": null,
+      "evidence": [
+        "packages/plan/plan-mode/src/index.ts:225"
       ],
       "verified": false
     }
   ],
-  "interactionRefs": []
+  "registerSites": [
+    {
+      "file": "packages/compaction/command-compact/src/index.ts",
+      "line": 100,
+      "name": "compact"
+    },
+    {
+      "file": "packages/feedback/command-feedback/src/index.ts",
+      "line": 118,
+      "name": "feedback"
+    },
+    {
+      "file": "packages/goal/command-goal/src/index.ts",
+      "line": 190,
+      "name": "goal"
+    },
+    {
+      "file": "packages/interaction/permission-presets/src/index.ts",
+      "line": 256,
+      "name": "permission"
+    },
+    {
+      "file": "packages/plan/plan-mode/src/index.ts",
+      "line": 225,
+      "name": "plan"
+    },
+    {
+      "file": "packages/session-query/session-log-export/src/index.ts",
+      "line": 78,
+      "name": "export"
+    }
+  ]
 }

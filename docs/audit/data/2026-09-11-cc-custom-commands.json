@@ -9,7 +9,7 @@
   "dirVersion": null,
   "extractedAt": "2026-09-13",
   "commandModel": "directory+isEnabled",
-  "count": 65,
+  "count": 67,
   "commands": [
     {
       "rawName": "add-dir",
@@ -50,6 +50,21 @@
       "mechanism": null,
       "evidence": [
         "src/commands/agents-platform/index.ts:2"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "auto-compact-window",
+      "canonical": "auto-compact-window",
+      "aliases": [],
+      "displayName": "auto-compact-window",
+      "description": "Set the context window cap used by auto-compact",
+      "kind": "local-jsx",
+      "gate": "isEnabled:() => !getIsNonInteractiveSession()",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/limit-controls.ts:276",
+        "src/commands/limit-controls.ts:288"
       ],
       "verified": false
     },
@@ -203,7 +218,8 @@
       "gate": "isEnabled:() => !getIsNonInteractiveSession()",
       "mechanism": null,
       "evidence": [
-        "src/commands/context/index.ts:5"
+        "src/commands/context/index.ts:5",
+        "src/commands/context/index.ts:14"
       ],
       "verified": false
     },
@@ -213,11 +229,12 @@
       "aliases": [],
       "displayName": "context-window",
       "description": "Set the effective context window token budget",
-      "kind": "text",
+      "kind": "local-jsx",
       "gate": "isEnabled:() => !getIsNonInteractiveSession()",
       "mechanism": null,
       "evidence": [
-        "src/commands/limit-controls.ts:222"
+        "src/commands/limit-controls.ts:222",
+        "src/commands/limit-controls.ts:234"
       ],
       "verified": false
     },
@@ -413,7 +430,7 @@
       "gate": "none",
       "mechanism": null,
       "evidence": [
-        "src/commands/init.ts:175"
+        "src/commands/init.ts:228"
       ],
       "verified": false
     },
@@ -428,6 +445,20 @@
       "mechanism": null,
       "evidence": [
         "src/commands/init-verifiers.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "insights",
+      "canonical": "insights",
+      "aliases": [],
+      "displayName": "insights",
+      "description": "Generate a report analyzing your Claude Code sessions",
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/insights.ts:2838"
       ],
       "verified": false
     },
@@ -470,6 +501,21 @@
       "mechanism": null,
       "evidence": [
         "src/commands/loop/index.ts:4"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "max-output",
+      "canonical": "max-output",
+      "aliases": [],
+      "displayName": "max-output",
+      "description": "Set the default max output token budget",
+      "kind": "local-jsx",
+      "gate": "isEnabled:() => !getIsNonInteractiveSession()",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/limit-controls.ts:249",
+        "src/commands/limit-controls.ts:261"
       ],
       "verified": false
     },
@@ -582,20 +628,6 @@
       "mechanism": null,
       "evidence": [
         "src/commands/pr_comments/index.ts:4"
-      ],
-      "verified": false
-    },
-    {
-      "rawName": "project_areas",
-      "canonical": "project_areas",
-      "aliases": [],
-      "displayName": "project_areas",
-      "description": "Generate a report analyzing your Claude Code sessions",
-      "kind": "prompt",
-      "gate": "none",
-      "mechanism": null,
-      "evidence": [
-        "src/commands/insights.ts:1150"
       ],
       "verified": false
     },
@@ -899,7 +931,7 @@
       "aliases": [],
       "displayName": "version",
       "description": "Print the version this session is running (not what autoupdate downloaded)",
-      "kind": "text",
+      "kind": "local",
       "gate": "isEnabled:() => process.env.USER_TYPE === 'ant'",
       "mechanism": null,
       "evidence": [

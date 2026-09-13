@@ -1,0 +1,1090 @@
+{
+  "group": "tools",
+  "packages": [
+    {
+      "name": "output-retention",
+      "responsibility": "Two-layer output-size control: (1) a pure byte-budget text retainer that keeps a head and/or tail of a stream without splitting UTF-8 characters, and (2) a spill store that writes the complete original text to a temp file outside the workspace and answers a notice string with the file path. spill-guard.ts composes both as a registry-level cascade handler on tools/execute.",
+      "publicSurface": [
+        "RetainedText",
+        "RetentionMode",
+        "TextRetainer",
+        "TextRetainerOptions",
+        "SpillStore",
+        "SpillStoreOptions",
+        "createTextRetainer",
+        "createSpillStore",
+        "createUnifiedSpillStore",
+        "createOutputSpillGuard",
+        "gcSpillStore",
+        "spillNotice"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Retention is a byte budget with an explicit head/headTail mode; the default is headTail split by headRatio 0.5, and the head/tail pieces are provably byte-disjoint (headBytes + tailBytes === maxBytes < fullBytes).",
+          "rationale": "A tail alone loses the command header; a head alone loses the exit summary. Keeping both under one budget with disjointness avoids repeating characters at the seam.",
+          "evidence": ["packages/output-retention/src/index.ts:20", "packages/output-retention/src/index.ts:35", "packages/output-retention/src/index.ts:145", "packages/output-retention/src/index.ts:147"]
+        },
+        {
+          "decision": "Options are validated fail-loud: any non-conforming runtime value (null, string, NaN, Infinity, non-positive maxBytes, headRatio outside (0,1]) throws instead of being coerced or silently defaulted; only `undefined` gets a default. Validated values are captured at construction so mutating the options object later cannot bypass the budget.",
+          "rationale": "A silent coercion of maxBytes would break the memory bound the whole package exists to enforce.",
+          "evidence": ["packages/output-retention/src/index.ts:31", "packages/output-retention/src/index.ts:32", "packages/output-retention/src/index.ts:40", "packages/output-retention/src/index.ts:128"]
+        },
+        {
+          "decision": "Truncation is surrogate-safe: the head prefix is a binary search over code units followed by a back-off walk that never ends on a split/unpaired surrogate (and keeps nothing when the text starts with an unpaired low surrogate); the tail walks backwards treating pairs atomically and stops at an unpaired surrogate.",
+          "rationale": "slice() indexes UTF-16 code units, so a naive byte-truncation can emit a lone surrogate - invalid text for the model.",
+          "evidence": ["packages/output-retention/src/index.ts:54", "packages/output-retention/src/index.ts:73", "packages/output-retention/src/index.ts:97", "packages/output-retention/src/index.ts:106"]
+        },
+        {
+          "decision": "Spilled originals are written outside the workspace (per-process mkdtemp root, or a configured stable root) and the label is injectively encoded before entering the filename ([A-Za-z0-9._-] verbatim, everything else -> ~<codepoint hex>, empty -> '~'), opened with 'wx' at mode 0o600.",
+          "rationale": "A label carrying '/' or '..' must not escape the spill root or create an ambiguous path; a stable default root is what makes GC meaningful (the guard uses <tmpdir>/i-harness-spill while the bare createSpillStore defaults to a fresh mkdtemp).",
+          "evidence": ["packages/output-retention/src/index.ts:170", "packages/output-retention/src/index.ts:179", "packages/output-retention/src/index.ts:181", "packages/output-retention/src/index.ts:196", "packages/output-retention/src/spill-guard.ts:21"]
+        }
+      ],
+      "failurePolicy": "Mixed and explicit. Validation is fail-loud (throws on malformed options: index.ts:32-42). Spill writing is fail-loud on the write path (the fd error is rethrown after closing: index.ts:185-188). GC is fail-open/best-effort: it runs once at mount, failures only console.warn and never block the mount, and per-file unlink errors are swallowed (spill-guard.ts:25, spill-guard.ts:76, spill-guard.ts:85). The cascade guard passes through undefined/null/number/boolean outputs untouched (spill-guard.ts:32).",
+      "events": [],
+      "keyConstants": [
+        { "name": "DEFAULT_HEAD_RATIO", "value": "0.5", "evidence": "packages/output-retention/src/index.ts:20" },
+        { "name": "DEFAULT_MAX_OUTPUT_BYTES (spill guard)", "value": "64_000", "evidence": "packages/output-retention/src/spill-guard.ts:12" },
+        { "name": "DEFAULT_MAX_AGE_MS (spill GC)", "value": "86_400_000 (24h)", "evidence": "packages/output-retention/src/spill-guard.ts:13" },
+        { "name": "DEFAULT_MAX_TOTAL_BYTES (spill GC)", "value": "512 * 1024 * 1024 (512 MiB)", "evidence": "packages/output-retention/src/spill-guard.ts:14" },
+        { "name": "spill file mode", "value": "0o600, opened 'wx'", "evidence": "packages/output-retention/src/index.ts:181" },
+        { "name": "default spill root (guard)", "value": "<tmpdir>/i-harness-spill", "evidence": "packages/output-retention/src/spill-guard.ts:21" },
+        { "name": "default spill root (bare store)", "value": "mkdtempSync(<tmpdir>/i-harness-retention-spill-)", "evidence": "packages/output-retention/src/index.ts:173" }
+      ],
+      "gaps": [
+        "createSpillStore never cleans up: the code notes '絕不寫 workspace——研究決策；不清理（已知 limitation）' (packages/output-retention/src/index.ts:171). The bare store's per-process mkdtemp root is therefore never reclaimed; only the guard's GC (age + total-bytes trim) removes files, and only under the guard's stable root."
+      ],
+      "evidence": ["packages/output-retention/src/index.ts:125", "packages/output-retention/src/spill-guard.ts:30", "packages/output-retention/src/spill-guard.ts:59"]
+    },
+    {
+      "name": "rewind",
+      "responsibility": "Backend snapshot/rollback engine for a session: a RewindStore keeps a per-session journal (points.jsonl + content-addressed pre-image blobs + workspace-binding meta.json + pending/orphaned crash sidecars), a RewindRecorder captures fs pre-images turn by turn, and a RewindService answers points()/plan() (two-phase dry run) and execute() (file restore + conversation shadow marker + journal truncate).",
+      "publicSurface": [
+        "RewindError",
+        "RewindErrorCode",
+        "normalizeRelPath",
+        "workspaceAbsPath",
+        "RewindStore",
+        "RewindStoreOptions",
+        "sha256Hex",
+        "RewindRecorder",
+        "RewindRecorderOptions",
+        "RewindTakeResult",
+        "RewindService",
+        "RewindServiceOptions",
+        "RewindExecuteHooks",
+        "createGitProbe",
+        "createGitProbeForStore",
+        "GitExec",
+        "GitExecOptions",
+        "GitProbe",
+        "GitProbeOptions"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Storage is a per-session journal of points plus content-addressed blobs: points.jsonl is rewritten atomically (temp+rename) on every append/truncate, blobs/<sha256> are written only if missing (idempotent dedup across turns), and the session key is guarded against path separators / '..' because it lands in a filesystem path.",
+          "rationale": "The journal is small so whole-file atomic rewrite is cheaper than risking a torn append line; content addressing makes identical pre-images share one file.",
+          "evidence": ["packages/rewind/src/store.ts:48", "packages/rewind/src/store.ts:55", "packages/rewind/src/store.ts:193", "packages/rewind/src/store.ts:220", "packages/rewind/src/store.ts:163"]
+        },
+        {
+          "decision": "Paths are workspace-relative keys through one seam (normalizeRelPath / workspaceAbsPath): absolute paths, any '..' segment and empty results are refused with REWIND_PATH_REFUSED, and workspaceAbsPath re-checks containment as defense in depth.",
+          "rationale": "Identical files addressed as a.txt / ./a.txt must not alias twice, and journal paths must never resolve outside the workspace.",
+          "evidence": ["packages/rewind/src/path.ts:17", "packages/rewind/src/path.ts:19", "packages/rewind/src/path.ts:23", "packages/rewind/src/path.ts:39"]
+        },
+        {
+          "decision": "Undo semantics are 'rewind to the END of turn T-1' with lazy conflict classification: each file record stores the preBlob (pre-image), isNewFile, and the afterHash re-read at finalize; plan() compares current disk hash against afterHash to classify clean vs modified/deleted/created, and conflicts are STILL executed (a rewind is destructive by design, honestly marked).",
+          "rationale": "Avoids a full snapshot per turn and lets the plan be a pure read-side dry run; the afterHash is the only signal that distinguishes 'the turn's deltas are still in place' from 'the disk moved on'.",
+          "evidence": ["packages/rewind/src/service.ts:6", "packages/rewind/src/service.ts:111", "packages/rewind/src/service.ts:160", "packages/rewind/src/types.ts:15", "packages/rewind/src/recorder.ts:168"]
+        },
+        {
+          "decision": "Durability/honesty on crash: take() is synchronous, so durable writes go through a serial queue where each op snapshots the entry list eagerly (blob before sidecar, so the sidecar never names a blob that is not on disk); a leftover pending.json whose turn has no point is archived into orphaned.jsonl and reported by plan().orphanedTurns with its paths merged into unTracked - never fabricated into a point, never auto-restored. commit(anchorSeq) clears the sidecar only after the point is in the journal, on the same queue.",
+          "rationale": "A crash between the file write and the queue drain can still lose the last in-flight entries, so the claim must be limited to what was flushed; auto-restoring an unfinished turn would be a guess.",
+          "evidence": ["packages/rewind/src/recorder.ts:14", "packages/rewind/src/recorder.ts:125", "packages/rewind/src/recorder.ts:196", "packages/rewind/src/store.ts:384", "packages/rewind/src/service.ts:178"]
+        },
+        {
+          "decision": "Workspace binding: meta.json records the absolute workspace the journal resolves against; every SERVICE surface (points/plan/execute) and the journal-WRITING paths (ensureDir) fail closed with REWIND_WORKSPACE_MISMATCH on a foreign journal, while raw reads are unguarded by design and a pre-M54 journal without meta.json is 'unknown workspace' and gets adopted by the first writer with a console.warn.",
+          "rationale": "A resume from another cwd must never restore into the wrong tree; the adoption of a legacy journal is the one irreversible decision, so it is made visible rather than silent.",
+          "evidence": ["packages/rewind/src/store.ts:9", "packages/rewind/src/store.ts:304", "packages/rewind/src/store.ts:318", "packages/rewind/src/store.ts:329", "packages/rewind/src/service.ts:44"]
+        },
+        {
+          "decision": "Git evidence is read-only and strictly fail-soft: the probe runs only rev-parse and status --porcelain=v1 -z with GIT_OPTIONAL_LOCKS=0 and GIT_TERMINAL_PROMPT=0, memoized per instance, returns [] on every failure (missing git / non-repo / timeout), and paths it reports are filtered against what the journal already explains; they are listed in plan().unseen and NEVER turned into file ops.",
+          "rationale": "Shell/external-editor writes are invisible to the recorder; git can only OBSERVE dirtiness (the agent's own uncommitted work is dirty too), so the probe must supply evidence, not decisions.",
+          "evidence": ["packages/rewind/src/git-probe.ts:10", "packages/rewind/src/git-probe.ts:127", "packages/rewind/src/git-probe.ts:142", "packages/rewind/src/service.ts:201", "packages/rewind/src/service.ts:244"]
+        }
+      ],
+      "failurePolicy": "Fail-closed for safety/exclusivity, fail-open for evidence. Fail-closed: workspace mismatch (store.ts:304-313, store.ts:332-337), path refusal (path.ts:19-29), invalid target turn (service.ts:333), negative truncate count (store.ts:206), invalid blob id/session key (store.ts:49-53, store.ts:163-167), corrupt journal/meta/pending (store.ts:186, store.ts:288, store.ts:355). Fail-soft: the git probe never throws (git-probe.ts:13-15, git-probe.ts:142-151) and its errors in the service are swallowed to [] (service.ts:232-242); a file-op error during execute is collected (had_errors) and, being non-empty, PREVENTS the journal truncate so retry data survives (service.ts:280-320); recorder durability errors are reported through onDurabilityError and never poison later writes (recorder.ts:223-229).",
+      "events": [
+        "rewind/point (produced; declared without importing core-session as RewindEvent at packages/rewind/src/types.ts:186, appended through hooks.appendEvent at packages/rewind/src/service.ts:305-313; the union member lives in packages/core-session/src/index.ts:131)",
+        "user/message and turn/end (consumed indirectly: the recorder exposes begin()/finalize() and the event-name literals are wired by the host at packages/session-executor/src/assembly.ts:411 and packages/session-executor/src/assembly.ts:413)"
+      ],
+      "keyConstants": [
+        { "name": "promptPreview truncation in points()", "value": "slice(0, 120)", "evidence": "packages/rewind/src/service.ts:138" },
+        { "name": "git probe timeout", "value": "5_000 ms (DEFAULT_TIMEOUT_MS)", "evidence": "packages/rewind/src/git-probe.ts:57" },
+        { "name": "git probe maxBuffer", "value": "10 * 1024 * 1024", "evidence": "packages/rewind/src/git-probe.ts:58" },
+        { "name": "blob id shape", "value": "/^[a-f0-9]{64}$/", "evidence": "packages/rewind/src/store.ts:55" },
+        { "name": "RewindMode", "value": "\"all\" | \"files\" | \"conversation\"", "evidence": "packages/rewind/src/types.ts:101" }
+      ],
+      "gaps": [
+        "Shell-only changes are invisible: the recorder sees ONLY fs tool writes (write/edit/apply_patch); anything modified via bash or ripgrep never appears in plan().unTracked and is not protected by a rewind (packages/rewind/src/service.ts:34-38, packages/rewind/src/types.ts:146-150).",
+        "v1 approximation at finalize: a touched file that fails to re-read (ENOENT or any read error) is treated as absent at turn end -> status 'deleted' (packages/rewind/src/recorder.ts:148-150).",
+        "Recorded paths outside the workspace are written UNTRACKED (relForRewind returns null for absolute/.. targets), and capture failure must never change tool behavior (packages/fs/src/index.ts:51-79).",
+        "Host-seeded history is not recorded: the recorder subscription is append-onward, so pre-existing turns are out of scope (packages/session-executor/src/assembly.ts:314-315)."
+      ],
+      "evidence": ["packages/rewind/src/index.ts:1", "packages/rewind/src/error.ts:5", "packages/rewind/src/recorder.ts:110", "packages/rewind/src/store.ts:111"]
+    },
+    {
+      "name": "attachment",
+      "responsibility": "Image attachment persistence plus the model-callable read_image tool: bytes are written under <workspaceDir>/.i-harness/attachments/<opaque-id>.bin behind a validate-before-publish limit check, and read_image turns an on-disk image file into an inline ImageInput (mime + base64) without any store write.",
+      "publicSurface": [
+        "ImageAttachmentLimits",
+        "ImageAttachmentRef",
+        "ImageAttachmentStore",
+        "SaveImageAttachment",
+        "ImageMediaType",
+        "createImageAttachmentStore",
+        "createReadImageTool",
+        "ReadImageToolDeps"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The attachment id is opaque and never a filesystem path: `att-<uuid>` maps to <workspaceDir>/.i-harness/attachments/<id>.bin, so no caller-supplied name can steer the write target; the display name is stored only in the returned ref.",
+          "rationale": "Path-shaped ids from an upload surface are a traversal footgun; an opaque key keeps resolution trivial.",
+          "evidence": ["packages/attachment/src/index.ts:3", "packages/attachment/src/index.ts:69", "packages/attachment/src/index.ts:70", "packages/attachment/src/index.ts:79"]
+        },
+        {
+          "decision": "Validate-before-publish: save() checks the media type against the allowed list and the per-image byte cap BEFORE any mkdir/write, so a rejected upload leaves nothing on disk.",
+          "rationale": "A partially written attachment would be a dangling ref the model could still load.",
+          "evidence": ["packages/attachment/src/index.ts:6", "packages/attachment/src/index.ts:65", "packages/attachment/src/index.ts:67", "packages/attachment/src/index.ts:71"]
+        },
+        {
+          "decision": "read_image is READ-ONLY and returns fs failures instead of throwing: it reuses the fs layer's resolvePath (workspace-relative + absolute, '..' escape rejected) and softFail wrapper, resolves the mime type from the file extension, and caps the file at maxImageBytes (default 10 MiB).",
+          "rationale": "The code states a throwing tool body fails the whole turn (core-agent M13/M25), which read to the model as 'read_image hung'.",
+          "evidence": ["packages/attachment/src/read-image.ts:5", "packages/attachment/src/read-image.ts:9", "packages/attachment/src/read-image.ts:41", "packages/attachment/src/read-image.ts:48"]
+        }
+      ],
+      "failurePolicy": "Fail-closed on save (unsupported media type and oversized image throw before any write: index.ts:65-68), fail-loud on an unsupported read_image extension (FS_NOT_FOUND: read-image.ts:45) but RETURNED to the model rather than thrown, via softFail (read-image.ts:41). delete() is deliberately best-effort: unlink errors are swallowed (index.ts:83).",
+      "events": [],
+      "keyConstants": [
+        { "name": "maxImageBytes", "value": "10 * 1024 * 1024", "evidence": "packages/attachment/src/index.ts:49" },
+        { "name": "maxImagesPerMessage", "value": "4", "evidence": "packages/attachment/src/index.ts:50" },
+        { "name": "maxMessageImageBytes", "value": "20 * 1024 * 1024", "evidence": "packages/attachment/src/index.ts:51" },
+        { "name": "maxImagePixels", "value": "16 * 1024 * 1024", "evidence": "packages/attachment/src/index.ts:52" },
+        { "name": "maxImageDimension", "value": "8192", "evidence": "packages/attachment/src/index.ts:53" },
+        { "name": "mediaTypes", "value": "image/png, image/jpeg, image/webp, image/gif", "evidence": "packages/attachment/src/index.ts:54" },
+        { "name": "read_image per-image cap", "value": "10 * 1024 * 1024 (DEFAULT_MAX_IMAGE_BYTES)", "evidence": "packages/attachment/src/read-image.ts:20" }
+      ],
+      "gaps": [
+        "v0 does not parse image dimensions - width/height stay undefined even though ImageAttachmentRef declares them (packages/attachment/src/index.ts:7, packages/attachment/src/index.ts:31-39).",
+        "Of the six declared ImageAttachmentLimits fields, save() enforces only mediaTypes and maxImageBytes; maxImagesPerMessage, maxMessageImageBytes, maxImagePixels and maxImageDimension are never read in src/ (packages/attachment/src/index.ts:16-23 vs packages/attachment/src/index.ts:64-74)."
+      ],
+      "evidence": ["packages/attachment/src/index.ts:57", "packages/attachment/src/index.ts:75", "packages/attachment/src/read-image.ts:30"]
+    },
+    {
+      "name": "core-tools",
+      "responsibility": "The Tool contract and the tool registry that owns registration, exposure filtering, the approval/guard gate, the search-promotion mechanism for deferred tools, and the three-stage dispatch pipeline (prepare -> dispatch -> finalize). Also ships get_context_remaining as an opt-in, fail-closed registration helper.",
+      "publicSurface": [
+        "Tool",
+        "ToolExposure",
+        "ToolExec",
+        "ToolDecision",
+        "ToolCall",
+        "ToolResult",
+        "PreparedCall",
+        "ToolSchema",
+        "SearchableTool",
+        "ToolRegistry",
+        "createToolRegistry",
+        "ApprovalGuardian",
+        "GuardianRequest",
+        "GuardianVerdict",
+        "registerContextRemaining"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The Tool interface is a plain data+behaviour record: name/description/inputSchema (+optional outputSchema), execute(args, exec), and OPTIONAL metadata that the policy layer reads rather than the dispatcher - timeoutMs, isConcurrencySafe, isReadOnly, getArgv(args), exposure, searchHint. ToolExec carries abortSignal plus M19/M26 identity (sessionId, callId, callEventSeq) and is the only thing a tool body sees about its caller.",
+          "rationale": "Policy consumers (guard-approval, timeout guard, concurrency partitioner) need metadata without the registry knowing about them; identity is additive so a prepared call without it behaves as before.",
+          "evidence": ["packages/core-tools/src/index.ts:10", "packages/core-tools/src/index.ts:16", "packages/core-tools/src/index.ts:19", "packages/core-tools/src/index.ts:24", "packages/core-tools/src/index.ts:31"]
+        },
+        {
+          "decision": "Exposure is a three-value model on the tool plus a registry-side promotion set: 'hidden' tools never appear in schemas(); 'deferred' tools appear only after their name is returned by search(); everything else is 'direct'. Promotion is one-way for the registry's lifetime, and unregister() removes the tool AND its promotion state so a mount can cleanly reclaim its names.",
+          "rationale": "Deferred retrieval needs a promotion memory that survives across provider calls ('available on the next provider call'), and a re-mount must not inherit stale promotions.",
+          "evidence": ["packages/core-tools/src/index.ts:8", "packages/core-tools/src/index.ts:138", "packages/core-tools/src/index.ts:141", "packages/core-tools/src/index.ts:199", "packages/core-tools/src/index.ts:194"]
+        },
+        {
+          "decision": "The search engine is pluggable and its absence is loud: installSearch(fn) sets the hook, search() throws 'no search engine installed' until then, every returned name is promoted, and the corpus handed to the engine is deferredSearchIndex() - raw metadata of only the deferred tools (searchHint included when present). deferredToolCount() reports that corpus size.",
+          "rationale": "core-tools must not depend on a BM25 implementation; failing loud beats silently searching an empty corpus.",
+          "evidence": ["packages/core-tools/src/index.ts:328", "packages/core-tools/src/index.ts:333", "packages/core-tools/src/index.ts:335", "packages/core-tools/src/index.ts:341", "packages/core-tools/src/index.ts:352"]
+        },
+        {
+          "decision": "Decisions are a closed vocabulary merged monotonically (allow < ask < deny): mergeDecision throws a HARD error on a non-object or an out-of-vocabulary kind (never allow), returns the local decision when the candidate has no 'kind', and picks the stricter of local vs ancestor. The pre-execute waterfall handler deliberately returns `undefined` rather than {kind:'allow'} when it produced no decision, because emit propagates the chain value parent-ward and a returned decision object would make an ancestor guard-approval skip classifying the ToolCall (fail-open for ancestor approval).",
+          "rationale": "Audit F03-1 required a decision-shaped object to be unable to short-circuit the guard layer, and the ancestor-propagation fix (Task 10 mechanism B) must not be defeatable by a child's default-allow.",
+          "evidence": ["packages/core-tools/src/index.ts:73", "packages/core-tools/src/index.ts:78", "packages/core-tools/src/index.ts:92", "packages/core-tools/src/index.ts:221", "packages/core-tools/src/index.ts:165", "packages/core-tools/src/index.ts:242"]
+        },
+        {
+          "decision": "prepare() is the single enforcement point and is fail-closed at the approval seam: unknown tool name throws; a deny decision throws; 'ask' consults the optional approval/guardian first (deny -> throw, approve -> auto-approve, allow -> human answerer) and with NO registered answerer the call throws 'approval required but no answerer registered (fail closed)'. Monotonic guards (ctx.checkGuards('tools/execute', ...)) run UNCONDITIONALLY before dispatch so no decision can bypass them. Dispatch is the only overlapping stage (the tools/execute cascade around the real body); prepare/finalize stay in the ordered lane, and a per-dispatch decision is returned through the emit chain instead of a shared closure slot so concurrent prepares cannot race.",
+          "rationale": "Guard-timeout/retry/repeat guards are monotonic vetoes, not policies that a decision can outrank; a shared decision slot raced under concurrent prepares.",
+          "evidence": ["packages/core-tools/src/index.ts:247", "packages/core-tools/src/index.ts:251", "packages/core-tools/src/index.ts:259", "packages/core-tools/src/index.ts:269", "packages/core-tools/src/index.ts:302", "packages/core-tools/src/index.ts:212"]
+        },
+        {
+          "decision": "Same-layer duplicate registration is a hard error, while child scopes get their own registry instance and may shadow by name; get(name) returns undefined for unknown names so policy consumers can fail closed instead of throwing; verifyToolCatalog(expected, catalog) throws listing missing tool names as a completeness check.",
+          "rationale": "Audit F03-5: two tools with one name in one registry is a bug, but plugin scoping needs intentional shadowing.",
+          "evidence": ["packages/core-tools/src/index.ts:180", "packages/core-tools/src/index.ts:187", "packages/core-tools/src/index.ts:360"]
+        },
+        {
+          "decision": "registerContextRemaining is FAIL-CLOSED by registration: without a positive contextWindow the tool is simply not added to the catalog, and `used` is priced with token-meter's activeTokens over deriveMessages(session) (the single M15 projection a model ever sees); it is marked isReadOnly.",
+          "rationale": "Registering a budget tool without knowing the window would report a fabricated number; pricing anything other than the projected messages would misprice the real prompt.",
+          "evidence": ["packages/core-tools/src/context-remaining.ts:9", "packages/core-tools/src/context-remaining.ts:22", "packages/core-tools/src/context-remaining.ts:29", "packages/core-tools/src/context-remaining.ts:32"]
+        }
+      ],
+      "failurePolicy": "Fail-closed by default with a fail-loud malformed-input policy. Hard throws: unknown tool (index.ts:214), duplicate registration (index.ts:180), guard denial (index.ts:248), deny decision (index.ts:251), ask with no answerer (index.ts:260), user denial (index.ts:263), guardian denial (index.ts:277), malformed pre-execute decision (index.ts:95/100/167/172), search with no engine installed (index.ts:333), catalog completeness failure (index.ts:364). No decision at all normalizes to allow (index.ts:222) - the one fail-open point, and it is the documented pre-M13 semantics.",
+      "events": [
+        "tools/pre-execute (plugin waterfall event, NOT a SessionEvent; consumed/validated at packages/core-tools/src/index.ts:158 and emitted at :221)",
+        "tools/execute (plugin cascade event wrapping the tool body, NOT a SessionEvent; packages/core-tools/src/index.ts:247, :303)",
+        "tools/post-execute (plugin waterfall event, NOT a SessionEvent; packages/core-tools/src/index.ts:313)"
+      ],
+      "keyConstants": [
+        { "name": "DECISION_STRICTNESS", "value": "{ allow: 0, ask: 1, deny: 2 }", "evidence": "packages/core-tools/src/index.ts:78" },
+        { "name": "DECISION_KINDS", "value": "allow | deny | ask (closed set)", "evidence": "packages/core-tools/src/index.ts:73" },
+        { "name": "get_context_remaining registration gate", "value": "contextWindow undefined or <= 0 -> not registered", "evidence": "packages/core-tools/src/context-remaining.ts:23" }
+      ],
+      "gaps": [
+        "The strictness ranking is documented as currently unused for merging: 'A resolveStrictestDecision walk is therefore a no-op today; revisit only if multi-producer decisions become possible' (packages/core-tools/src/index.ts:80-85).",
+        "Nothing in src/ implements multi-producer decision resolution, per-scope registries, or a search-engine default - installSearch must be called or search() throws."
+      ],
+      "evidence": ["packages/core-tools/src/index.ts:119", "packages/core-tools/src/index.ts:136", "packages/core-tools/src/index.ts:311", "packages/core-tools/src/index.ts:319"]
+    },
+    {
+      "name": "fs",
+      "responsibility": "The five workspace file tools (read, edit, write, apply_patch, list_dir) with a returned-failure error model, CRLF-preserving edits, TOCTOU re-check before write, atomic same-directory temp+rename writes, a codex-style structured patch parser, and an optional pre-image sink for the rewind engine.",
+      "publicSurface": [
+        "FsToolDeps",
+        "FsToolError",
+        "FsToolErrorCode",
+        "FsToolFailure",
+        "FileSnapshot",
+        "LiteralEditResult",
+        "RewindCapture",
+        "applyLiteralEdit",
+        "assertSnapshotFresh",
+        "assertTextData",
+        "createFsTools",
+        "detectLineEndings",
+        "normalizeLineEndings",
+        "resolvePath",
+        "restoreLineEndings",
+        "softFail",
+        "writeFileAtomic"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Two different path policies in one function: a RELATIVE input is resolved against the workspace and a `..` escape (relative() starting with '..' or absolute) throws FS_NOT_FOUND; an ABSOLUTE input is taken as-is and may point outside the workspace (the comment says absolute reads outside the workspace are deliberately preserved).",
+          "rationale": "Explicitly stated as '既有行為：絕對輸入原樣（讀取 workspace 外檔案——read 保留）；`..` 逃逸 → 現在拒'.",
+          "evidence": ["packages/fs/src/index.ts:25", "packages/fs/src/index.ts:27", "packages/fs/src/index.ts:29", "packages/fs/src/index.ts:32"]
+        },
+        {
+          "decision": "EXPECTED fs failures are RETURNED as { error, code } instead of thrown: softFail converts an FsToolError or a whitelisted Node errno (ENOENT, EACCES, EPERM, EISDIR, ENOTDIR, EEXIST, EMFILE, ENOSPC, EROFS, EBUSY) into a result; anything else (a TypeError, a bug) still throws and fails the turn loudly. The stated reason is that a throwing tool body makes core-agent discard the batch and append neither tool/result nor turn/end, so the call read as 'hung'.",
+          "rationale": "The model must SEE an expected failure to adapt; only real bugs should cost the turn.",
+          "evidence": ["packages/fs/src/error.ts:15", "packages/fs/src/error.ts:35", "packages/fs/src/error.ts:41", "packages/fs/src/error.ts:45", "packages/fs/src/error.ts:50"]
+        },
+        {
+          "decision": "edit is a guarded read-modify-write: empty old_string, old_string === new_string, a non-regular file, and a binary/UTF-8-invalid file are all refused (FS_AMBIGUOUS_EDIT / FS_NOT_REGULAR_FILE); a non-unique match is FS_AMBIGUOUS_EDIT unless replace_all; an optional observedMtimeMs from the model's read must match Math.floor(st.mtimeMs) or FS_STALE_VERSION; and after computing the new text the file is re-stat'ed and the {mtimeMs,size} snapshot compared (assertSnapshotFresh) before the write, closing the read->write TOCTOU window. Line endings are detected on a 4096-char sample, normalized to LF for matching, then restored to the detected style.",
+          "rationale": "M21 §4.2: a concurrent writer between read and rename must be detected rather than silently overwritten.",
+          "evidence": ["packages/fs/src/index.ts:151", "packages/fs/src/index.ts:160", "packages/fs/src/index.ts:163", "packages/fs/src/index.ts:174", "packages/fs/src/version.ts:9", "packages/fs/src/text.ts:7"]
+        },
+        {
+          "decision": "Writes are atomic by same-directory temp file + rename, with mkdir -p of the parent and best-effort unlink of the temp on failure; an optional mode is applied to the temp file so the pre-rename window is never looser than the target (win32 ignores mode - documented as best-effort there).",
+          "rationale": "POSIX rename within a directory is atomic and NTFS rename in the same directory is atomic too; a partially written file is never visible.",
+          "evidence": ["packages/fs/src/atomic.ts:5", "packages/fs/src/atomic.ts:14", "packages/fs/src/atomic.ts:17", "packages/fs/src/atomic.ts:18"]
+        },
+        {
+          "decision": "apply_patch is strict and fail-closed on the parser: it must start with '*** Begin Patch' and end with '*** End Patch', a duplicate path in one patch is an error, unknown lines are errors, content after End Patch is an error, '*** Move to:' is explicitly unsupported in v0 (fail-closed, use delete+add), Add File onto an existing path is refused before writing, update hunks are applied with a forward-only cursor and reverse-order splicing, and the hunk loop STOPS at the first failing hunk, reporting applied-so-far plus the error.",
+          "rationale": "A silently ignored directive or a partial multi-file patch would leave the workspace in an unexplained state; reporting applied/errors lets the model recover.",
+          "evidence": ["packages/fs/src/patch.ts:36", "packages/fs/src/patch.ts:77", "packages/fs/src/patch.ts:104", "packages/fs/src/patch.ts:190", "packages/fs/src/patch.ts:255"]
+        },
+        {
+          "decision": "Rewind capture is an OPTIONAL additive sink: FsToolDeps.rewind is a structural RewindCapture (fs never imports packages/rewind - the assembly glues them); absent => byte-identical behavior at zero cost; present => write does ONE extra read of the pre-image (ENOENT => new file), edit/apply_patch reuse the bytes they already read, and the result carries preImageRef/isNewFile. Paths that escape the workspace are captured as null (written UNTRACKED) and any capture failure returns {} so tool behavior never changes.",
+          "rationale": "The log is the rewind channel; a capture failure must be honest (untracked) rather than fatal or silently 'tracked'.",
+          "evidence": ["packages/fs/src/index.ts:41", "packages/fs/src/index.ts:54", "packages/fs/src/index.ts:72", "packages/fs/src/patch.ts:23", "packages/fs/src/patch.ts:239"]
+        }
+      ],
+      "failurePolicy": "Fail-soft at the tool boundary (expected fs failures returned via softFail: error.ts:41-51) but fail-closed on every safety check it can make: escape refusal (index.ts:32), stale version (version.ts:10-15), ambiguous edit (index.ts:151/163/171), binary/non-UTF-8 (text.ts:22-31), Add-onto-existing (patch.ts:187-191), malformed patch (patch.ts:36-113). There is NO sandbox integration in this package: grep for sandbox/Sandbox in packages/fs/src returns no matches, FsToolDeps has no sandbox field (index.ts:38-49), and the compose site passes only { workspace, rewind } (packages/session-executor/src/assembly.ts:358-361). A sandbox refusal therefore cannot reach fs; confinement for fs is the relative-path `..` refusal plus whatever the tool's own caller does. Unanticipated errors (non-errno) still throw and fail the turn.",
+      "events": [],
+      "keyConstants": [
+        { "name": "SOFT_ERRNO set", "value": "ENOENT, EACCES, EPERM, EISDIR, ENOTDIR, EEXIST, EMFILE, ENOSPC, EROFS, EBUSY", "evidence": "packages/fs/src/error.ts:35" },
+        { "name": "line-ending detection sample", "value": "first 4096 chars", "evidence": "packages/fs/src/text.ts:8" },
+        { "name": "FsToolErrorCode vocabulary", "value": "FS_NOT_FOUND | FS_NOT_REGULAR_FILE | FS_ALREADY_EXISTS | FS_EDIT_NOT_FOUND | FS_AMBIGUOUS_EDIT | FS_STALE_VERSION | FS_TOO_LARGE | FS_IO_ERROR", "evidence": "packages/fs/src/error.ts:1" },
+        { "name": "atomic temp name", "value": ".<basename>.<6 random bytes hex>.tmp in the target directory", "evidence": "packages/fs/src/atomic.ts:15" }
+      ],
+      "gaps": [
+        "No sandbox/confinement hook exists in this package at all (no sandbox symbol in packages/fs/src; FsToolDeps at packages/fs/src/index.ts:38-49 carries only workspace + rewind).",
+        "apply_patch v0 does not support `*** Move to:` - fail-closed with FS_EDIT_NOT_FOUND and the instruction to use delete + add (packages/fs/src/patch.ts:75-78).",
+        "assertTextData's maxBytes (FS_TOO_LARGE) is implemented but never passed by any caller in src/ (packages/fs/src/text.ts:20-23; the only call sites are index.ts:165 and patch.ts:231 without a limit)."
+      ],
+      "evidence": ["packages/fs/src/index.ts:92", "packages/fs/src/index.ts:230", "packages/fs/src/index.ts:205", "packages/fs/src/text.ts:39"]
+    },
+    {
+      "name": "fs-lock",
+      "responsibility": "Session ownership lease primitive: one process holds a process-lifetime EXCLUSIVE OS byte-range lock on a per-session lock file (Win32 LockFileEx / Linux flock), acquired non-blocking with a JS backoff retry until a deadline, released idempotently.",
+      "publicSurface": [
+        "AcquireOptions",
+        "SessionLock",
+        "SessionLockConflictError",
+        "SessionLockUnsupportedError",
+        "acquireSessionLock",
+        "lockPathFor"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The lease is an OS byte-range lock on an open handle held for the writer's whole lifetime, NOT a lockfile+PID scheme: the OS auto-releases on process death, so there is no stale-lock problem; release() is idempotent and there is no reentrancy (an explicit Linux comment notes two opens in the SAME process still conflict because each open is its own open file description).",
+          "rationale": "An orphaned lockfile deadlocks every later writer; an OS handle lock cannot be orphaned.",
+          "evidence": ["packages/fs-lock/src/index.ts:3", "packages/fs-lock/src/index.ts:41", "packages/fs-lock/src/linux.ts:148", "packages/fs-lock/src/win32.ts:153"]
+        },
+        {
+          "decision": "Non-blocking at the OS level (LOCKFILE_FAIL_IMMEDIATELY / flock LOCK_NB) with the wait moved into JS: retryMs 20 doubling to retryMaxMs 200 until deadlineMs 2000, then SessionLockConflictError; conflict-class codes are ERROR_LOCK_VIOLATION(33) and ERROR_ACCESS_DENIED(5) on win32 and EAGAIN on linux; every other failure throws immediately with no lease taken.",
+          "rationale": "A synchronous FFI wait would block the event loop; fail-closed on a conflicting holder is the codex try_lock + WouldBlock->Conflict semantics.",
+          "evidence": ["packages/fs-lock/src/index.ts:63", "packages/fs-lock/src/win32.ts:65", "packages/fs-lock/src/win32.ts:81", "packages/fs-lock/src/win32.ts:218", "packages/fs-lock/src/linux.ts:180"]
+        },
+        {
+          "decision": "Platform boundary is explicit and fail-closed: only win32 (LockFileEx via koffi/kernel32) and linux (flock) ship bindings; any other platform throws SessionLockUnsupportedError, and darwin stays fail-closed on purpose because no weaker lockfile+PID fallback is shipped. Backend modules are dynamically imported and import only errors.ts at runtime to avoid a runtime import cycle; the win32 binding table must pass a zeroed 32-byte OVERLAPPED because koffi 3.1.x crashes on a NULL lpOverlapped.",
+          "rationale": "Shipping a weaker fallback would silently change the guarantee the lease exists to provide.",
+          "evidence": ["packages/fs-lock/src/index.ts:78", "packages/fs-lock/src/index.ts:80", "packages/fs-lock/src/win32.ts:10", "packages/fs-lock/src/win32.ts:88", "packages/fs-lock/src/errors.ts:3"]
+        },
+        {
+          "decision": "The lock path is deterministic and derived only from the session id: <storeRoot>/.i-harness-locks/<sha256(sessionId).slice(0,24)>.lock - a hash keeps arbitrary session ids filesystem-safe and the directory rides the session store's lifecycle rather than %TEMP%.",
+          "rationale": "Placing the lock beside the store means locks die with the store they protect.",
+          "evidence": ["packages/fs-lock/src/index.ts:47", "packages/fs-lock/src/index.ts:56", "packages/fs-lock/src/index.ts:57"]
+        }
+      ],
+      "failurePolicy": "Fail-closed throughout. A live conflicting holder past the deadline is SessionLockConflictError (index.ts:66-68, win32.ts:204, win32.ts:219, linux.ts:181); unsupported platform or a missing native backend/kernel32 is SessionLockUnsupportedError (index.ts:82, win32.ts:129); any non-conflict OS failure throws immediately (win32.ts:206, win32.ts:216, linux.ts:178); a failed acquire closes the best-effort handle so it never leaks (win32.ts:224-230).",
+      "events": [],
+      "keyConstants": [
+        { "name": "retryMs default", "value": "20", "evidence": "packages/fs-lock/src/index.ts:33" },
+        { "name": "retryMaxMs default", "value": "200", "evidence": "packages/fs-lock/src/index.ts:36" },
+        { "name": "deadlineMs default", "value": "2000", "evidence": "packages/fs-lock/src/index.ts:38" },
+        { "name": "lock file path", "value": "<storeRoot>/.i-harness-locks/<sha256(sessionId) 24 hex>.lock", "evidence": "packages/fs-lock/src/index.ts:58" },
+        { "name": "win32 lock range", "value": "1 byte from offset 0, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY", "evidence": "packages/fs-lock/src/win32.ts:211" }
+      ],
+      "gaps": [
+        "Only Windows and Linux are supported: darwin (and everything else) fails closed with SessionLockUnsupportedError, and no weaker fallback is shipped by design (packages/fs-lock/src/index.ts:71-73, packages/fs-lock/src/index.ts:80-82).",
+        "The lease is advisory on a lock FILE, not on the session data: release() only unlocks and closes (win32.ts:153-162, linux.ts:125-141) - the .lock file is never unlinked, and nothing in src/ prevents a non-cooperating writer from touching the session files without acquiring the lock."
+      ],
+      "evidence": ["packages/fs-lock/src/index.ts:76", "packages/fs-lock/src/errors.ts:10", "packages/fs-lock/src/win32.ts:177", "packages/fs-lock/src/linux.ts:156"]
+    },
+    {
+      "name": "fs-search",
+      "responsibility": "The glob and grep tools: both shell out to a lazily resolved @vscode/ripgrep binary through the exec service, run in the assembly workspace, and expose themselves as DEFERRED tools with a searchHint so the model discovers them through tool_search.",
+      "publicSurface": [
+        "FsSearchToolDeps",
+        "GlobResult",
+        "GrepMatch",
+        "GrepResult",
+        "createFsSearchTools",
+        "resolveRgPath"
+      ],
+      "designDecisions": [
+        {
+          "decision": "ripgrep resolution is lazy and memoized: resolveRgPath() resolves @vscode/ripgrep at the call boundary because that package resolves its platform binary at module evaluation, so a static import would fail whole-loader on a partial install.",
+          "rationale": "Keeps an incomplete optional install from breaking the module graph; the failure lands at first use.",
+          "evidence": ["packages/fs-search/src/index.ts:12", "packages/fs-search/src/index.ts:14", "packages/fs-search/src/index.ts:17", "packages/fs-search/src/index.ts:19"]
+        },
+        {
+          "decision": "Exit-code semantics are explicit: rg exit 1 with no matches is a NORMAL empty result, while any other non-zero exit (2+ = rg error, -1 = spawn failure) is returned as { matches: [], error } instead of a silent empty success.",
+          "rationale": "A spawn failure or an unusable rg would otherwise look to the model exactly like 'nothing matched'.",
+          "evidence": ["packages/fs-search/src/index.ts:88", "packages/fs-search/src/index.ts:91", "packages/fs-search/src/index.ts:136", "packages/fs-search/src/index.ts:139"]
+        },
+        {
+          "decision": "Result sets are capped and VCS directories are excluded twice: glob caps at 100 matches with --sort=modified and emits both --glob=!**/<vcs> and --glob=!**/<vcs>/** for each of .git/.svn/.hg/.bzr/.jj/.sl; grep caps at 250 matches and parses rg --json lines, skipping malformed JSON lines rather than failing.",
+          "rationale": "The caps bound the model-visible payload; the two exclude forms cover both descending into and searching at/inside a VCS directory.",
+          "evidence": ["packages/fs-search/src/index.ts:8", "packages/fs-search/src/index.ts:9", "packages/fs-search/src/index.ts:10", "packages/fs-search/src/index.ts:101", "packages/fs-search/src/index.ts:152"]
+        },
+        {
+          "decision": "Both tools are deferred-exposure, read-only, concurrency-safe, and run rg with cwd = the assembly workspace so relative path args (and the glob default '.') resolve like every other fs tool; absent workspace, exec's own cwd contract applies.",
+          "rationale": "Deferred retrieval keeps two rarely-needed tools out of the always-on catalog; a shared cwd keeps path semantics consistent across the fs family.",
+          "evidence": ["packages/fs-search/src/index.ts:58", "packages/fs-search/src/index.ts:59", "packages/fs-search/src/index.ts:82", "packages/fs-search/src/index.ts:134"]
+        }
+      ],
+      "failurePolicy": "Fail-soft for execution failures (a caught error becomes { matches: [], error: message }: index.ts:103-105, index.ts:159-161) but fail-loud for caller errors: an empty glob pattern or empty grep pattern throws (index.ts:63, index.ts:126). Deliberately NO sandbox: grep for sandbox/Sandbox in packages/fs-search/src returns no matches and the exec.run calls pass only { argv, cwd } (index.ts:87, index.ts:134), so rg runs unconfined even under a read-only session mode.",
+      "events": [],
+      "keyConstants": [
+        { "name": "GLOB_MAX_RESULTS", "value": "100", "evidence": "packages/fs-search/src/index.ts:9" },
+        { "name": "GREP_MAX_MATCHES", "value": "250", "evidence": "packages/fs-search/src/index.ts:10" },
+        { "name": "GLOB_VCS_EXCLUDES", "value": ".git, .svn, .hg, .bzr, .jj, .sl (each excluded twice)", "evidence": "packages/fs-search/src/index.ts:8" }
+      ],
+      "gaps": [
+        "No sandbox/confinement parameter exists for either tool (packages/fs-search/src/index.ts:22-28 deps, index.ts:87 and index.ts:134 call sites).",
+        "No gap markers (TODO/FIXME/deferred/limitation) exist in packages/fs-search/src beyond the caps themselves."
+      ],
+      "evidence": ["packages/fs-search/src/index.ts:46", "packages/fs-search/src/index.ts:109", "packages/fs-search/src/index.ts:165"]
+    },
+    {
+      "name": "fs-watch",
+      "responsibility": "A chokidar-backed filesystem event stream exposed as an AsyncIterable of { path, kind: add|change|unlink }, with a synchronous baseline snapshot taken at create time so pre-existing files never emit 'add' while files created right after creation do.",
+      "publicSurface": [
+        "DEFAULT_IGNORE",
+        "FsWatchEvent",
+        "FsWatcher",
+        "FsWatcherOptions",
+        "createFsWatcher"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Events are DELTAS against a baseline walked synchronously at create time: the watcher runs with ignoreInitial:false and filters echoes by consulting the baseline promise, which closes the create-before-scan race in which chokidar's ignoreInitial would swallow a write that happened right after createFsWatcher. change/unlink are never filtered.",
+          "rationale": "A late subscriber must not miss an early write, and a pre-existing file must not be reported as an addition.",
+          "evidence": ["packages/fs-watch/src/index.ts:9", "packages/fs-watch/src/index.ts:55", "packages/fs-watch/src/index.ts:88", "packages/fs-watch/src/index.ts:131", "packages/fs-watch/src/index.ts:148"]
+        },
+        {
+          "decision": "The FIRST read of the iterable awaits chokidar readiness; events arriving in between are buffered in a queue, and a waiter list is served directly. A single error is latched (pendingError) and surfaces once per iterator: startup errors release readiness so the first read cannot hang, late errors reject a waiting next() and terminate the stream.",
+          "rationale": "Readiness gating plus buffering is what makes 'no event is ever missed by a late subscriber' true; latching avoids an error being reported twice or hanging the first read.",
+          "evidence": ["packages/fs-watch/src/index.ts:6", "packages/fs-watch/src/index.ts:110", "packages/fs-watch/src/index.ts:120", "packages/fs-watch/src/index.ts:158", "packages/fs-watch/src/index.ts:177"]
+        },
+        {
+          "decision": "Ignore semantics are path SEGMENT based (any depth, exact name match) with the defaults node_modules/.git/.i-harness/dist plus caller-supplied segments, and awaitWriteFinish stabilizes writes at a 100 ms threshold.",
+          "rationale": "Segment matching makes 'artifact-zone' match a directory of that name anywhere without glob syntax; write stabilization avoids partial-read events.",
+          "evidence": ["packages/fs-watch/src/index.ts:17", "packages/fs-watch/src/index.ts:38", "packages/fs-watch/src/index.ts:47", "packages/fs-watch/src/index.ts:82", "packages/fs-watch/src/index.ts:135"]
+        }
+      ],
+      "failurePolicy": "Fail-soft/degrade-not-throw: a missing or unreadable root during the baseline walk is skipped (index.ts:64-66), events after close are dropped (index.ts:111), and the only error channel is the latched pendingError rejecting a waiting next() once (index.ts:177-181); close() is idempotent and ends the iterable (index.ts:190-196). Nothing here is fail-closed on a bad root - the caller sees an empty/complete stream rather than an error.",
+      "events": [
+        "FsWatchEvent kind add | change | unlink (package-local event vocabulary, NOT SessionEventMap members; packages/fs-watch/src/index.ts:28)",
+        "chokidar 'ready' and 'all'/'error' watcher events are consumed internally (packages/fs-watch/src/index.ts:139-163)"
+      ],
+      "keyConstants": [
+        { "name": "DEFAULT_IGNORE", "value": "node_modules, .git, .i-harness, dist", "evidence": "packages/fs-watch/src/index.ts:38" },
+        { "name": "WATCH_READINESS_MS (awaitWriteFinish stabilityThreshold)", "value": "100", "evidence": "packages/fs-watch/src/index.ts:47" }
+      ],
+      "gaps": [
+        "No gap markers (TODO/FIXME/deferred/limitation) in packages/fs-watch/src; the module is a single 198-line file with no documented deferrals."
+      ],
+      "evidence": ["packages/fs-watch/src/index.ts:81", "packages/fs-watch/src/index.ts:24"]
+    },
+    {
+      "name": "shell",
+      "responsibility": "The bash and pwsh tools: resolves which shell executable to spawn, keeps a tool NAMED bash honest by never silently running another shell, applies optional output retention with a spill bridge, and forwards an optional sandbox policy into the exec service.",
+      "publicSurface": [
+        "ResolvedShell",
+        "ShellRetentionOptions",
+        "ShellToolDeps",
+        "bashAvailable",
+        "createShellTools",
+        "getArgv",
+        "registerShell",
+        "resolvePwshExe",
+        "resolveShell"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Shell resolution and honesty: on win32 resolveShell prefers bash when bash is on PATH and otherwise returns pwsh, but the bash TOOL hardcodes argv ['bash','-c',command] so a tool named bash can never silently execute PowerShell; when bashAvailable() is false the tool returns exitCode -1 with a legible stderr ('bash is not installed on this host... Use the pwsh tool') instead of an empty-output spawn failure. resolvePwshExe prefers pwsh.exe on PATH and otherwise uses %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe, both accepting the same -NoLogo -NoProfile -NonInteractive -Command flags.",
+          "rationale": "M59: a bare spawn failure left the model flailing across bash/pwsh/terminal_open; both editions of PowerShell accept the same flags so the fallback is behaviour-preserving.",
+          "evidence": ["packages/shell/src/index.ts:14", "packages/shell/src/index.ts:24", "packages/shell/src/index.ts:29", "packages/shell/src/index.ts:58", "packages/shell/src/index.ts:222", "packages/shell/src/index.ts:229"]
+        },
+        {
+          "decision": "getArgv is a minimal in-package quote parser (whitespace split, single/double quotes, backslash escapes outside quotes and inside double quotes) supplied as Tool.getArgv so guard-approval can classify a command from its argv without spawning; the comment names the bypass shapes it exists to normalize (r\\m, 'r''m', r\"\"m).",
+          "rationale": "Approval policy needs a best-effort argv view of the command string; leaving it unparsed makes quote-based bypasses visible as one opaque argument.",
+          "evidence": ["packages/shell/src/index.ts:78", "packages/shell/src/index.ts:81", "packages/shell/src/index.ts:96", "packages/shell/src/index.ts:221"]
+        },
+        {
+          "decision": "Retention is OPT-IN at the tool-return layer only: exec keeps the full stream; with deps.retention unset the result shape is unchanged. Retainers are built FRESH per run (they are one-accumulation stateful objects) with maxBytes default 64_000, and the truncation verdict is the UNION of the exec layer's marker (stdoutSpillPath or truncated.stdout) and the retainer's own truncation, so enabling exec spill and shell retention together cannot produce a silent truncation with no notice. The notice points at the exec spill file when one exists and never writes a second copy.",
+          "rationale": "M21 A/B bridge: exec returns only the tail after spilling, so the retainer alone would judge truncated:false and drop the notice.",
+          "evidence": ["packages/shell/src/index.ts:150", "packages/shell/src/index.ts:161", "packages/shell/src/index.ts:164", "packages/shell/src/index.ts:186", "packages/shell/src/index.ts:194"]
+        },
+        {
+          "decision": "Confinement is REQUESTED, not enforced, here: ShellToolDeps carries an optional sandboxPolicy which is attached to both exec.run and exec.runBackground as the `sandbox` field; the provider (opts.sandbox) is handed to registerExec, which composes the exec service. Absent either, no sandbox field is sent and pre-M16 passthrough behavior applies; the same optional cwd (assembly workspace) rides along.",
+          "rationale": "One policy value flows from assembly to exec so the prompt's description and the actual enforcement cannot drift.",
+          "evidence": ["packages/shell/src/index.ts:136", "packages/shell/src/index.ts:145", "packages/shell/src/index.ts:240", "packages/shell/src/index.ts:243", "packages/shell/src/index.ts:282"]
+        }
+      ],
+      "failurePolicy": "Mostly fail-open at the tool boundary with one legible fail-loud case. When bash is missing the tool RETURNS a synthetic result (stdout '', stderr explanation, exitCode -1) rather than throwing (index.ts:229-237). When the sandbox refuses, shell does NOT handle it: deps.exec.run is awaited without a try/catch (index.ts:243, index.ts:263), so exec's SandboxUnavailableError rejection propagates out of the tool body; core-agent records tool/error and rethrows the first error after discarding the batch, i.e. the turn fails (packages/core-agent/src/execute-tool-calls.ts:125-133, :223-227). The background variant is different: exec.runBackground's rejection handler marks the job status 'error' with the message in stderr, so a refusal on a background bash/pwsh surfaces as an errored job, not a thrown turn (packages/exec/src/index.ts:262-267).",
+      "events": [],
+      "keyConstants": [
+        { "name": "retention maxBytes default", "value": "64_000", "evidence": "packages/shell/src/index.ts:130" },
+        { "name": "bash argv", "value": "['bash','-c',command]", "evidence": "packages/shell/src/index.ts:238" },
+        { "name": "pwsh argv", "value": "[resolvePwshExe(),'-NoLogo','-NoProfile','-NonInteractive','-Command',command]", "evidence": "packages/shell/src/index.ts:258" },
+        { "name": "pwsh fallback path", "value": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "evidence": "packages/shell/src/index.ts:74" }
+      ],
+      "gaps": [
+        "No gap markers (TODO/FIXME/deferred/limitation) in packages/shell/src; the M59 notes document fixed defects rather than open deferrals."
+      ],
+      "evidence": ["packages/shell/src/index.ts:16", "packages/shell/src/index.ts:212", "packages/shell/src/index.ts:247", "packages/shell/src/index.ts:270"]
+    },
+    {
+      "name": "exec",
+      "responsibility": "The process-execution service behind the shell tools: spawns argv (optionally confined), kills whole process trees on timeout/abort, normalizes CRLF, captures stdout/stderr with an optional memory-tail + disk-spill collector, and owns a background-job registry with get/list/kill.",
+      "publicSurface": [
+        "BackgroundJobStatus",
+        "BackgroundJobView",
+        "ExecCommand",
+        "ExecResult",
+        "ExecService",
+        "ExecServiceOptions",
+        "ExecSpillOptions",
+        "createExecService",
+        "registerExec"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Confinement is resolved once at spawn from the command-carried policy: no policy -> passthrough; a policy with mode danger-full-access -> passthrough; a confined policy with NO provider -> throw SandboxUnavailableError (deliberate boundary: a confined command must never run unconfined just because a backend is missing); a confined policy WITH a provider -> assertSandboxCapable (M22 enforcement gate, e.g. read isolation) then provider.confine(argv, policy), keeping the ConfinedArgv (denialSignatures/runnerFailureRules/enforcement) on the handle for the done path.",
+          "rationale": "Fail-closed at the sandbox boundary; the capability gate exists so a policy demanding read isolation never runs on a backend that cannot declare it.",
+          "evidence": ["packages/exec/src/index.ts:99", "packages/exec/src/index.ts:107", "packages/exec/src/index.ts:110", "packages/exec/src/index.ts:112", "packages/exec/src/index.ts:116", "packages/exec/src/index.ts:117"]
+        },
+        {
+          "decision": "A runner failure is translated, not surfaced as an ordinary non-zero exit: when the process was confined, exited non-zero, did not time out, and the ConfinedArgv carries runnerFailureRules, classifyRunnerFailure inspects stderr and the promise REJECTS with SandboxUnavailableError(mode, detail) - because the command body never executed, only the runner failed to start.",
+          "rationale": "M16 final-review I3: bwrap exit 125 ('bwrap: failed to ...') is not a command failure and a confusing non-zero exit hides that the sandbox is unavailable.",
+          "evidence": ["packages/exec/src/index.ts:176", "packages/exec/src/index.ts:185", "packages/exec/src/index.ts:191"]
+        },
+        {
+          "decision": "Lifecycle control is tree-wide and shared: one killTree implementation serves the timeout timer, the returned kill(), and the external abort listener (taskkill /T /F on win32, process-group SIGKILL with a direct-child fallback elsewhere). An external abort is explicitly NOT a timeout - timedOut stays false so callers see the real killed exitCode - and the abort listener is removed once the process settles.",
+          "rationale": "Three call sites with one implementation cannot drift; conflating abort with timeout would mislabel user cancellation.",
+          "evidence": ["packages/exec/src/index.ts:77", "packages/exec/src/index.ts:81", "packages/exec/src/index.ts:143", "packages/exec/src/index.ts:148", "packages/exec/src/index.ts:168"]
+        },
+        {
+          "decision": "Spill is foreground-only and collector-based: run() captures through OutputCollector (memory tail of maxOutputBytes default 64_000 + complete-stream spill file opened at first overflow, with a spill cap that degrades by discarding the file and marking lossy) while runBackground keeps plain stream accumulation into job.stdout with no spill. Spill fields (stdoutSpillPath/stderrSpillPath/truncated) attach only when something actually overflowed; the promise is returned directly so no field is dropped.",
+          "rationale": "Background jobs must stay stream-observable; a partially written spill file is worse than an honest lossy tail, hence discard + lossy flag.",
+          "evidence": ["packages/exec/src/index.ts:22", "packages/exec/src/index.ts:134", "packages/exec/src/index.ts:231", "packages/exec/src/index.ts:236", "packages/exec/src/spill.ts:43", "packages/exec/src/spill.ts:59", "packages/exec/src/spill.ts:69"]
+        },
+        {
+          "decision": "Background jobs live in an in-process Map keyed bash-<n> with status running|completed|killed|error: runBackground returns immediately, a settle handler maps timedOut->killed, exitCode 0->completed, otherwise error, and a rejection (SandboxUnavailableError) lands as an errored job with the message in stderr instead of an unhandled rejection. killJob on an unknown id throws; on a finished job it returns 'already-finished'.",
+          "rationale": "A runner-failure rejection must not become an unhandled rejection, and the model needs a legible job state instead of a hang.",
+          "evidence": ["packages/exec/src/index.ts:241", "packages/exec/src/index.ts:247", "packages/exec/src/index.ts:251", "packages/exec/src/index.ts:262", "packages/exec/src/index.ts:279"]
+        }
+      ],
+      "failurePolicy": "Fail-closed on the sandbox boundary (missing provider -> SandboxUnavailableError BEFORE spawning: index.ts:111-113; capability mismatch -> assertSandboxCapable throw: index.ts:116; runner failure -> reject with SandboxUnavailableError: index.ts:191). Everything else is ordinary result reporting rather than fail-closed: exit code, timedOut flag, and unknown-job lookups are throws (index.ts:273, index.ts:281). The spawn environment always merges process.env with cmd.env (index.ts:126) and stdio is pipe/pipe/pipe (index.ts:127).",
+      "events": [],
+      "keyConstants": [
+        { "name": "DEFAULT_MAX_OUTPUT_BYTES (exec spill)", "value": "64_000", "evidence": "packages/exec/src/index.ts:43" },
+        { "name": "OutputCollector maxSpillBytes default", "value": "64 * 1024 * 1024 (64 MiB)", "evidence": "packages/exec/src/spill.ts:35" },
+        { "name": "default spill root", "value": "mkdtempSync(<tmpdir>/i-harness-spill-)", "evidence": "packages/exec/src/spill.ts:37" },
+        { "name": "spill file mode", "value": "0o600, opened 'wx'", "evidence": "packages/exec/src/spill.ts:81" },
+        { "name": "background job id", "value": "bash-<counter>", "evidence": "packages/exec/src/index.ts:243" },
+        { "name": "service key", "value": "\"exec/service\"", "evidence": "packages/exec/src/index.ts:291" }
+      ],
+      "gaps": [
+        "M21 A-tier spill is foreground-only: runBackground deliberately passes no spill options and keeps plain stream accumulation (packages/exec/src/index.ts:231-233, packages/exec/src/index.ts:246).",
+        "Accepted limitation on the runner-failure reject path: spill files already written stay behind as orphans (packages/exec/src/index.ts:183-184).",
+        "On a spill OPEN failure the collector silently disables spilling (spillDisabled) and the result is marked lossy rather than erroring (packages/exec/src/spill.ts:84, packages/exec/src/spill.ts:69)."
+      ],
+      "evidence": ["packages/exec/src/index.ts:227", "packages/exec/src/index.ts:290", "packages/exec/src/index.ts:121", "packages/exec/src/spill.ts:21"]
+    },
+    {
+      "name": "terminal",
+      "responsibility": "PTY-backed terminal and process control: a TerminalService owning node-pty sessions with a ring-buffered, offset-addressable read log, session-owner gating, and six terminal_* tools plus three process_* tools mounted behind a ConPTY-noise error guard.",
+      "publicSurface": [
+        "createProcessTools",
+        "createTerminalService",
+        "createTerminalTools",
+        "filterConptyNoise",
+        "isKnownConptyNoise",
+        "registerTerminal"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Output is a per-terminal chunk log with documented UTF-16-code-unit offsets: read(offset) returns [offset, offset+maxBytes) and is repeatable/re-readable (log-view semantics, not consuming), the internal ring drops the oldest chunks past RING_MAX 1_000_000 units, and offsets earlier than the ring start are served from the ring start (a documented shortcoming). read defaults maxBytes to 64_000 and reports truncated when more remains.",
+          "rationale": "A poll-with-nextOffset model cannot lose data to a race the way a consuming queue can; the ring bounds memory for a long-running interactive session.",
+          "evidence": ["packages/terminal/src/service.ts:67", "packages/terminal/src/service.ts:74", "packages/terminal/src/service.ts:110", "packages/terminal/src/service.ts:122", "packages/terminal/src/service.ts:176"]
+        },
+        {
+          "decision": "Ownership is enforced per PTY: open() records the caller's exec.sessionId as ownerSessionId, and getOwned throws TERMINAL_NOT_FOUND for an unknown id and TERMINAL_OWNER_MISMATCH when the caller's session id differs from a recorded owner (an unowned session stays accessible to anyone).",
+          "rationale": "One session must not drive another session's interactive terminal; the ownership check lives in one helper used by every operation.",
+          "evidence": ["packages/terminal/src/service.ts:138", "packages/terminal/src/service.ts:141", "packages/terminal/src/service.ts:160", "packages/terminal/src/tool.ts:68"]
+        },
+        {
+          "decision": "Sizing is tracked service-side rather than read from node-pty: view.cols/rows come from the tracked values, resize always updates them, and pty.resize is only issued when status is running AND the ConPTY is ready (the first onData), with a sync throw swallowed - because ConPTY's getters are asynchronous/stale after a resize and resizing an already-exited pty throws from node-pty's deferred queue as an async uncaught.",
+          "rationale": "M26-B2 win32 calibration: the tracked value is the only trustworthy size, and an uncaught async throw would fail the test/runtime.",
+          "evidence": ["packages/terminal/src/service.ts:81", "packages/terminal/src/service.ts:101", "packages/terminal/src/service.ts:196", "packages/terminal/src/service.ts:202"]
+        },
+        {
+          "decision": "Known win32 ConPTY agent noise on the error path is filtered and may become a benign outcome: a regex matches 'AttachConsole failed' / 'conpty_console_list_agent', every tool's execute is wrapped by guardPtyErrors, matching lines are stripped from a thrown report, and a report that is ONLY noise converts to a returned { suppressed, note } result instead of an error.",
+          "rationale": "The fork'd conpty_console_list_agent writes to inherited stderr on every PTY kill (exit 0) and cannot be intercepted library-side; tool errors are the only escaping report.",
+          "evidence": ["packages/terminal/src/service.ts:10", "packages/terminal/src/service.ts:13", "packages/terminal/src/tool.ts:24", "packages/terminal/src/tool.ts:30", "packages/terminal/src/tool.ts:38"]
+        }
+      ],
+      "failurePolicy": "Fail-loud with a noise-tolerant error path. Unknown terminal ids and owner mismatches throw (service.ts:140, service.ts:142); waitExited on an unknown id rejects and dispose rejects all pending exit waiters (service.ts:211, service.ts:216-220); PTY noise-only errors are downgraded to a benign returned result by the tool-level guard (tool.ts:30-32). There is NO sandbox integration: grep for sandbox/Sandbox in packages/terminal/src returns no matches and TerminalToolDeps carries only service + cwd (tool.ts:5-11), so terminal_open/process_spawn spawn outside the exec sandbox and without timeoutMs.",
+      "events": [],
+      "keyConstants": [
+        { "name": "DEFAULT_COLS", "value": "80", "evidence": "packages/terminal/src/service.ts:63" },
+        { "name": "DEFAULT_ROWS", "value": "24", "evidence": "packages/terminal/src/service.ts:64" },
+        { "name": "DEFAULT_MAX_READ_BYTES", "value": "64_000", "evidence": "packages/terminal/src/service.ts:65" },
+        { "name": "RING_MAX", "value": "1_000_000 UTF-16 code units", "evidence": "packages/terminal/src/service.ts:75" },
+        { "name": "service key", "value": "\"terminal/service\"", "evidence": "packages/terminal/src/tool.ts:171" },
+        { "name": "signal mapping", "value": "INT -> write \\x03; TERM and KILL both -> pty.kill()", "evidence": "packages/terminal/src/service.ts:183" }
+      ],
+      "gaps": [
+        "No sandbox/confinement parameter on the PTY tools (packages/terminal/src/tool.ts:5-11, packages/terminal/src/tool.ts:164-174) and no timeoutMs on any of them (packages/terminal/src/tool.ts:42-160).",
+        "Documented shortcoming: an offset earlier than the ring start is served from the ring start, and the dropped prefix is unrecoverable (packages/terminal/src/service.ts:73-75).",
+        "No gap markers (TODO/FIXME/deferred/limitation) beyond the ring-buffer note."
+      ],
+      "evidence": ["packages/terminal/src/index.ts:1", "packages/terminal/src/service.ts:135", "packages/terminal/src/tool.ts:122", "packages/terminal/src/tool.ts:164"]
+    },
+    {
+      "name": "text-diff",
+      "responsibility": "Structured line-diff builder and unified renderer used by the fs write/read surfaces: wraps the `diff` library's structuredPatch into per-change-region hunks with literal 1-based old/new line numbers, bounds oversized inputs with index-aligned head/tail windows, and renders a unified patch.",
+      "publicSurface": [
+        "DEFAULT_CONTEXT",
+        "DiffHunk",
+        "DiffLine",
+        "MAX_BYTES",
+        "MAX_LINES",
+        "TextDiff",
+        "TextDiffOptions",
+        "createTextDiff",
+        "renderUnifiedDiff"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The diff algorithm is NOT hand-rolled: structuredPatch from the `diff` library does LCS/Myers, and the package's own work is normalization, hunk splitting and rendering.",
+          "rationale": "Stated explicitly: 'the algorithm/LCS/Myers engine is NOT hand-rolled'.",
+          "evidence": ["packages/text-diff/src/index.ts:1", "packages/text-diff/src/index.ts:166"]
+        },
+        {
+          "decision": "Oversized inputs are windowed with position-aligned head and tail pairs instead of truncating the diff: head compares rows [0..N) on both sides, the tail pair is compared only when the two absolute ranges OVERLAP, and the union range is clamped so it never re-diffs head rows. A window of one side is never diffed against a positionally skewed window of the other, because that would fabricate deletions/additions from the skew (e.g. a pure append above the window size).",
+          "rationale": "A fabricated change is a lying diff; a size delta must appear as surplus rows at the end of the longer side, not as boundary skew.",
+          "evidence": ["packages/text-diff/src/index.ts:79", "packages/text-diff/src/index.ts:93", "packages/text-diff/src/index.ts:118", "packages/text-diff/src/index.ts:123"]
+        },
+        {
+          "decision": "There is a hard work budget of 750 ms passed to structuredPatch as its abortable timeout; hitting it yields an honest bounded result (no hunks, truncated: true) instead of blocking the turn.",
+          "rationale": "'pathological low-similarity inputs must never block the turn'.",
+          "evidence": ["packages/text-diff/src/index.ts:42", "packages/text-diff/src/index.ts:168", "packages/text-diff/src/index.ts:170"]
+        },
+        {
+          "decision": "Hunks are split back into per-change-region hunks: the library merges two change regions when the context run between them is at most context*2 rows, so convertHunk cuts the merged hunk at each gap (keeping up to `context` rows of padding) and derives each hunk's oldStart/newStart/oldLines/newLines from the literal line numbers actually walked. '\\ No newline at end of file' annotates the previous row instead of consuming a row, and is re-emitted by the renderer. CRLF/CR are normalized to LF before diffing; the structured rows carry no line endings.",
+          "rationale": "Per-region hunks keep the model's view of a change locality honest; treating the no-newline marker as a row would shift every subsequent line number.",
+          "evidence": ["packages/text-diff/src/index.ts:189", "packages/text-diff/src/index.ts:205", "packages/text-diff/src/index.ts:241", "packages/text-diff/src/index.ts:258", "packages/text-diff/src/index.ts:49"]
+        }
+      ],
+      "failurePolicy": "Fail-soft and bounded: no path throws for pathological input. Oversized input degrades to the windowed diff with truncated:true (index.ts:65-67), a timeout degrades to an empty truncated result (index.ts:170-172), and an empty diff renders an empty patch body (index.ts:276-286). Caller misuse cannot be expressed - context is clamped with Math.max(0, ...) (index.ts:62).",
+      "events": [],
+      "keyConstants": [
+        { "name": "DEFAULT_CONTEXT", "value": "3", "evidence": "packages/text-diff/src/index.ts:37" },
+        { "name": "MAX_LINES", "value": "50_000", "evidence": "packages/text-diff/src/index.ts:38" },
+        { "name": "MAX_BYTES", "value": "2 * 1024 * 1024", "evidence": "packages/text-diff/src/index.ts:39" },
+        { "name": "WINDOW_LINES", "value": "10_000 (per head/tail window half)", "evidence": "packages/text-diff/src/index.ts:41" },
+        { "name": "DIFF_TIMEOUT_MS", "value": "750", "evidence": "packages/text-diff/src/index.ts:44" }
+      ],
+      "gaps": [
+        "No gap markers (TODO/FIXME/deferred/limitation) in packages/text-diff/src; truncation and timeout are designed outcomes with explicit flags rather than deferrals."
+      ],
+      "evidence": ["packages/text-diff/src/index.ts:61", "packages/text-diff/src/index.ts:88", "packages/text-diff/src/index.ts:276"]
+    },
+    {
+      "name": "todo",
+      "responsibility": "The todo_write tool: a whole-list snapshot model where every call replaces the previous list, validated (non-empty content, no duplicate content, at most one in_progress by default) and persisted as a todo/write session event, with deriveTodoList() as the pure projection.",
+      "publicSurface": [
+        "TodoToolDeps",
+        "createTodoTool",
+        "deriveTodoList",
+        "validateTodoItems"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Whole-list replace, no merge: the model must send the WHOLE list every call and it REPLACES the previous one, which the header states keeps status tracking race-free (last write wins, no merge logic), and the list lives in the session log as todo/write events so projection is a pure function and persistence mirrors it for free.",
+          "rationale": "Merge semantics on a concurrently-updated list would need conflict resolution; a snapshot does not.",
+          "evidence": ["packages/todo/src/index.ts:1", "packages/todo/src/index.ts:34", "packages/todo/src/index.ts:56"]
+        },
+        {
+          "decision": "Validation is fail-loud inside the tool body: empty/whitespace content and duplicate content throw, and more than one in_progress item throws unless allowParallelInProgress is set.",
+          "rationale": "One in_progress item is the planner invariant; duplicates make status reporting ambiguous.",
+          "evidence": ["packages/todo/src/index.ts:19", "packages/todo/src/index.ts:22", "packages/todo/src/index.ts:26"]
+        },
+        {
+          "decision": "The tool declares isConcurrencySafe: true (a whole-list replace has no read-modify-write hazard) while isReadOnly is false, and the projection is last-event-wins over session.events.",
+          "rationale": "Concurrency safety follows from replace semantics; the projection must be a pure fold so replay is deterministic.",
+          "evidence": ["packages/todo/src/index.ts:52", "packages/todo/src/index.ts:67"]
+        }
+      ],
+      "failurePolicy": "Fail-loud: validation errors throw out of the tool body (index.ts:20, index.ts:22, index.ts:27) rather than being returned, unlike the fs family; there is no try/catch anywhere in the module.",
+      "events": ["todo/write (produced at packages/todo/src/index.ts:56; consumed by deriveTodoList at packages/todo/src/index.ts:70; union member declared at packages/core-session/src/index.ts:57)"],
+      "keyConstants": [
+        { "name": "status vocabulary", "value": "pending | in_progress | completed", "evidence": "packages/todo/src/index.ts:44" },
+        { "name": "in_progress limit default", "value": "1 (unless allowParallelInProgress)", "evidence": "packages/todo/src/index.ts:26" }
+      ],
+      "gaps": [
+        "No gap markers (TODO/FIXME/deferred/limitation) in packages/todo/src."
+      ],
+      "evidence": ["packages/todo/src/index.ts:15", "packages/todo/src/index.ts:31", "packages/todo/src/index.ts:54"]
+    },
+    {
+      "name": "tool-search",
+      "responsibility": "The deferred-tool retrieval mechanism: a self-developed BM25 engine (exact-name, select: list, +required-term, and natural-language modes) plus registerToolSearch, which installs that engine into the core-tools registry and registers the direct-exposure tool_search tool.",
+      "publicSurface": [
+        "ToolSearchConfig",
+        "Searchable",
+        "SearchOptions",
+        "registerToolSearch",
+        "search",
+        "searchText",
+        "splitName",
+        "tokenize",
+        "toolSearchName"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The engine is pure functions over a caller-supplied corpus (no I/O, no registry knowledge): splitName camelCase/dash/underscore splitting and tokenize with an English stopword set feed both searchText (name + split name + description + searchHint + recursively harvested JSON-schema titles/descriptions/property names/items/anyOf/oneOf/allOf/enum values) and the BM25 document frequencies.",
+          "rationale": "Modeled on opencode-fork's tool-search but kept dependency-free so it can be unit-tested and reused by the skills package.",
+          "evidence": ["packages/tool-search/src/search.ts:1", "packages/tool-search/src/search.ts:22", "packages/tool-search/src/search.ts:36", "packages/tool-search/src/search.ts:62"]
+        },
+        {
+          "decision": "Four selection modes with a strict precedence: 'select:a,b' resolves EXACT tool names and throws on an unknown selector (and on more than `limit` matches); an exact case-insensitive name match returns that single tool immediately; '+term' tokens become REQUIRED (every one must be in the document's token set) while the remaining terms only rank; otherwise all terms rank by BM25 with k1 1.2 / b 0.75 and a tie-break by name for determinism.",
+          "rationale": "An agent that knows the name must not be at the mercy of a ranker, and a missing exact selector must fail loud instead of returning a fuzzy list; the deterministic tie-break keeps repeated calls stable.",
+          "evidence": ["packages/tool-search/src/search.ts:83", "packages/tool-search/src/search.ts:90", "packages/tool-search/src/search.ts:99", "packages/tool-search/src/search.ts:141", "packages/tool-search/src/search.ts:124"]
+        },
+        {
+          "decision": "The deferred mechanism is a two-sided contract with core-tools: registerToolSearch calls registry.installSearch(...) with an engine that searches registry.deferredSearchIndex() (the DEFERRED corpus only) and maps hits back into ToolSchema with exposure 'deferred'; core-tools then PROMOTES every returned name so those tools appear in schemas() on the next provider call. The tool_search tool itself is exposure 'direct', isReadOnly, and returns { query, matches, totalDeferred }.",
+          "rationale": "Keeps the engine ignorant of the registry while the registry owns promotion; the model discovers deferred tools without them occupying the standing catalog.",
+          "evidence": ["packages/tool-search/src/index.ts:20", "packages/tool-search/src/index.ts:25", "packages/tool-search/src/index.ts:29", "packages/tool-search/src/tool.ts:23", "packages/tool-search/src/tool.ts:28", "packages/core-tools/src/index.ts:335"]
+        },
+        {
+          "decision": "Query and limit validation is fail-loud at the engine boundary: an empty query throws, and limit must be an integer in [1, MAX_LIMIT] with DEFAULT_LIMIT 8 applied when neither limit nor defaultLimit is given; registerToolSearch's own defaultLimit is also 8.",
+          "rationale": "An empty query has no defined ranking; an out-of-range limit is a caller bug, not a request for a different number.",
+          "evidence": ["packages/tool-search/src/search.ts:73", "packages/tool-search/src/search.ts:75", "packages/tool-search/src/search.ts:77", "packages/tool-search/src/index.ts:19"]
+        }
+      ],
+      "failurePolicy": "Fail-loud at validation boundaries (empty query, bad limit, unknown exact selector, select list exceeding the limit: search.ts:75, search.ts:78, search.ts:85, search.ts:90, search.ts:95) and fail-loud at the registry seam (search() with no installed engine throws 'no search engine installed', core-tools/src/index.ts:333). Zero matches is a normal empty array, not an error (search.ts:104, search.ts:123 filter).",
+      "events": [],
+      "keyConstants": [
+        { "name": "DEFAULT_LIMIT", "value": "8", "evidence": "packages/tool-search/src/search.ts:5" },
+        { "name": "MAX_LIMIT", "value": "20", "evidence": "packages/tool-search/src/search.ts:6" },
+        { "name": "BM25 K1", "value": "1.2", "evidence": "packages/tool-search/src/search.ts:7" },
+        { "name": "BM25 B", "value": "0.75", "evidence": "packages/tool-search/src/search.ts:8" },
+        { "name": "tool name", "value": "\"tool_search\"", "evidence": "packages/tool-search/src/tool.ts:3" },
+        { "name": "STOPWORDS", "value": "the, a, an, of, to, and, or, for, in, on, with, is, are, my", "evidence": "packages/tool-search/src/search.ts:4" }
+      ],
+      "gaps": [
+        "No gap markers (TODO/FIXME/deferred/limitation) in packages/tool-search/src."
+      ],
+      "evidence": ["packages/tool-search/src/search.ts:103", "packages/tool-search/src/search.ts:129", "packages/tool-search/src/index.ts:14", "packages/tool-search/src/tool.ts:10"]
+    },
+    {
+      "name": "skills",
+      "responsibility": "SKILL.md deferred retrieval: a registry that scans <workspace>/skills and the global ~/.i-harness/skills root (workspace overrides global), a YAML front-matter parser, BM25 search reused from tool-search, an implicit-invocation gate with a shadow-selector telemetry report, and the skill_search / skill_get tools plus their plugin/mount forms.",
+      "publicSurface": [
+        "MAX_SKILL_DEPTH",
+        "MAX_SKILL_ENTRIES",
+        "SKILL_FILE",
+        "SKILL_NAME_MAX_LENGTH",
+        "SKILL_NAME_PATTERN",
+        "SkillToolError",
+        "createSkillGetTool",
+        "createSkillRegistry",
+        "createSkillSearchTool",
+        "createSkillsPlugin",
+        "explicitMentionMatches",
+        "isValidSkillName",
+        "parseFrontmatter",
+        "registerSkills",
+        "searchSkillSummaries",
+        "selectShadowCandidates",
+        "skillGetName",
+        "skillSearchName",
+        "skillsPluginName",
+        "skillsServiceName",
+        "toSearchable",
+        "ParsedSkill",
+        "SearchOptions",
+        "Searchable",
+        "ShadowCandidate",
+        "ShadowReport",
+        "Skill",
+        "SkillFrontmatter",
+        "SkillGetArgs",
+        "SkillGetOutput",
+        "SkillRegistry",
+        "SkillRegistryDeps",
+        "SkillSearchArgs",
+        "SkillSearchMatch",
+        "SkillSearchOutput",
+        "SkillSelectorEvent",
+        "SkillSource",
+        "SkillSummary",
+        "SkillTelemetryEmitter",
+        "SkillToolDeps",
+        "SkillToolErrorCode",
+        "SkillsMountConfig",
+        "SkillsMountHandle"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Bodies stay DEFERRED: list() and searchSkills() touch summaries only (name/description/path/source), the BM25 searchable text is exactly name + description with NO inputSchema and NO searchHint, and getSkill() re-reads the SKILL.md fresh. The registry rescans per access instead of watching (documented as a v0 choice because scanning a handful of files is cheap) and one bad skill warns and skips rather than breaking the registry.",
+          "rationale": "Deferred retrieval is the whole point: bodies are the expensive part and must be loaded only when asked for; a single malformed SKILL.md must not take down the whole skill surface.",
+          "evidence": ["packages/skills/src/registry.ts:1", "packages/skills/src/registry.ts:5", "packages/skills/src/search.ts:1", "packages/skills/src/registry.ts:159"]
+        },
+        {
+          "decision": "Front-matter is validated strictly through the real `yaml` parser, not line-oriented parsing: the document must begin with a trimmed `---` fence line and close it; the meta block must be a YAML mapping; any nested/non-scalar value ANYWHERE in the block invalidates the whole document; name/description present but non-string is invalid; description whitespace runs are collapsed to one line (YAML folding). Name defaults to the directory name when absent, and must satisfy the kebab-case pattern with a length cap.",
+          "rationale": "Hand-rolled parsing would silently mis-parse a description, which means wrong guidance for the model; forward compatibility is preserved by tolerating unknown scalar keys.",
+          "evidence": ["packages/skills/src/frontmatter.ts:1", "packages/skills/src/frontmatter.ts:32", "packages/skills/src/frontmatter.ts:49", "packages/skills/src/frontmatter.ts:53", "packages/skills/src/registry.ts:104"]
+        },
+        {
+          "decision": "skill_search is the deferred-retrieval entry and skill_get the explicit body load; both are exposure 'direct' and isReadOnly so the model can DISCOVER skills it does not know exist. skill_get renders a <skill_content> block with an XML-escaped body, the base directory, and a SAMPLED file list (hidden entries and SKILL.md excluded, sorted, capped, marked 'sampled N of M').",
+          "rationale": "Discovery must not require prior knowledge; the sample note keeps the model from assuming the list is complete.",
+          "evidence": ["packages/skills/src/tool.ts:1", "packages/skills/src/tool.ts:100", "packages/skills/src/tool.ts:152", "packages/skills/src/tool.ts:227", "packages/skills/src/tool.ts:234"]
+        },
+        {
+          "decision": "Implicit invocation is gated and separately OBSERVED: the shadow selector runs before the real selection, is deterministic and pure, caps at 8 candidates, unions the exact/select matches, the real BM25 hits and a lexical substring variant, and emits a skill/selector-shadow telemetry row through an injected emitter - never changing behavior and swallowing a malformed query. When allowImplicitInvocation is false, skill_search returns ONLY explicit mention matches (whole skill name as a query word, or a select: list) and a keyword query returns an EMPTY list while skill_get stays available; the default is true.",
+          "rationale": "M27 R-B6 needs offline evidence of what a variant selector would pick without perturbing the live selection; the gate lets a host switch to explicit-only invocation without losing the loading path.",
+          "evidence": ["packages/skills/src/shadow.ts:1", "packages/skills/src/shadow.ts:103", "packages/skills/src/shadow.ts:143", "packages/skills/src/tool.ts:108", "packages/skills/src/tool.ts:119"]
+        },
+        {
+          "decision": "getSkill distinguishes 'broken' from 'not found': if the valid index lacks the name it probes the conventional <root>/<name>/SKILL.md locations (workspace first) and lets readSkillFile THROW a coded SkillToolError (SKILL_INVALID_FRONTMATTER / SKILL_INVALID_NAME) so the tool tells the model to repair the file instead of reporting a misleading SKILL_NOT_FOUND. All tool errors carry a remedy sentence.",
+          "rationale": "A skill that exists but is broken must not look absent; the model can only fix what it is told about.",
+          "evidence": ["packages/skills/src/registry.ts:34", "packages/skills/src/registry.ts:189", "packages/skills/src/registry.ts:209", "packages/skills/src/tool.ts:157"]
+        }
+      ],
+      "failurePolicy": "Tiered. Scan is fail-soft: a missing root is silent, an unreadable directory warns, a per-skill error warns and is skipped (registry.ts:138-142, registry.ts:159-162), and the entry cap warns once and stops descending (registry.ts:155-158). Explicit requests are fail-closed and loud: skill_get throws SKILL_INVALID_NAME for an empty/malformed name and SKILL_NOT_FOUND for an unknown one (tool.ts:157, tool.ts:163, tool.ts:170), and a broken on-disk skill throws a coded error with a remedy (registry.ts:95, registry.ts:99, registry.ts:106, registry.ts:113). The shadow report never throws - a malformed query is swallowed (shadow.ts:126-129) and an empty query reports an empty list (shadow.ts:118).",
+      "events": [
+        "skill/selector-shadow (telemetry event passed to an injected SkillTelemetryEmitter; NOT a SessionEventMap member - packages/skills/src/shadow.ts:33, emitted at packages/skills/src/tool.ts:109)"
+      ],
+      "keyConstants": [
+        { "name": "SKILL_NAME_PATTERN", "value": "/^[a-z0-9]+(?:-[a-z0-9]+)*$/", "evidence": "packages/skills/src/registry.ts:51" },
+        { "name": "SKILL_NAME_MAX_LENGTH", "value": "64", "evidence": "packages/skills/src/registry.ts:52" },
+        { "name": "SKILL_FILE", "value": "\"SKILL.md\"", "evidence": "packages/skills/src/registry.ts:53" },
+        { "name": "MAX_SKILL_DEPTH", "value": "4 directory levels below the skills root", "evidence": "packages/skills/src/registry.ts:55" },
+        { "name": "MAX_SKILL_ENTRIES", "value": "256 per root", "evidence": "packages/skills/src/registry.ts:58" },
+        { "name": "MODEL_FILE_LIMIT", "value": "10 sampled files in the rendered content", "evidence": "packages/skills/src/tool.ts:32" },
+        { "name": "SHADOW_LIMIT", "value": "8 (clamped to max 20)", "evidence": "packages/skills/src/shadow.ts:51" },
+        { "name": "global skills root", "value": "join(homedir(), '.i-harness', 'skills')", "evidence": "packages/skills/src/registry.ts:78" }
+      ],
+      "gaps": [
+        "v0 has no watcher - the registry rescans on every access (packages/skills/src/registry.ts:5-6).",
+        "The 'skills' service stays registered after unmount: the plugin's unmount only reclaims the two tools because core-plugin's service store has no unregister seam in v0 (packages/skills/src/tool.ts:286-289, packages/skills/src/tool.ts:301-304)."
+      ],
+      "evidence": ["packages/skills/src/index.ts:1", "packages/skills/src/registry.ts:170", "packages/skills/src/tool.ts:262", "packages/skills/src/search.ts:18"]
+    },
+    {
+      "name": "lsp",
+      "responsibility": "Language-server integration: a Content-Length-framed JSON-RPC connection over a spawned subprocess, an LspInstance with an initialize handshake, a serialized abortable query queue and transient didOpen/didClose lifecycles, pure wire-payload normalizers, text renderers with caps, and the lsp + lsp_diagnostics tools mounted by a one-server-per-run scheduler.",
+      "publicSurface": [
+        "LspConnection",
+        "LspInstance",
+        "MessageDecoder",
+        "LspToolConfig",
+        "LspMountHandle",
+        "LspServerConfig",
+        "createLspTools",
+        "encodeMessage",
+        "formatCallHierarchyCalls",
+        "formatCallHierarchyItem",
+        "formatDiagnostics",
+        "formatHover",
+        "formatLocations",
+        "formatSymbols",
+        "isPos",
+        "mountLspClient",
+        "normalizeCallHierarchyCalls",
+        "normalizeCallHierarchyItems",
+        "normalizeDiagnostics",
+        "normalizeHover",
+        "normalizeLocations",
+        "normalizeSymbols",
+        "resolveFileInWorkspace",
+        "spawnLspConnection",
+        "validateLspConfig"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Only Content-Length is parsed and every frame is bounded: the decoder rejects a missing/odd Content-Length header and any message larger than maxMessageBytes (default 16 MB) by THROWING, and the connection treats an undecodable frame as stream corruption and fails ALL pending requests. Stderr is kept bounded to the last maxStderrBytes (default 1 MB) as a diagnostic tail.",
+          "rationale": "A malformed frame cannot be resynchronized, so continuing would desynchronize the stream; a bounded stderr tail preserves the last error without unbounded memory.",
+          "evidence": ["packages/lsp/src/protocol.ts:1", "packages/lsp/src/protocol.ts:20", "packages/lsp/src/protocol.ts:23", "packages/lsp/src/connection.ts:72", "packages/lsp/src/connection.ts:48"]
+        },
+        {
+          "decision": "Requests are abortable at the protocol level: an already-aborted signal rejects immediately, a later abort sends $/cancelRequest, drops the pending entry and rejects with 'aborted', and the abort listener is removed on settle. Server->client REQUESTS are always answered (with -32601 if no handler), because JSON-RPC mandates a response or the server hangs; server->client NOTIFICATIONS are ignored by design (the M18 pull model).",
+          "rationale": "An unanswered server request deadlocks a language server; ignoring notifications keeps the client from acting on pushes it never asked for.",
+          "evidence": ["packages/lsp/src/connection.ts:111", "packages/lsp/src/connection.ts:118", "packages/lsp/src/connection.ts:143", "packages/lsp/src/connection.ts:83", "packages/lsp/src/connection.ts:87"]
+        },
+        {
+          "decision": "All queries are SERIALIZED on one promise chain and each runs a transient didOpen -> request -> didClose(finally) lifecycle with version 1 and the file contents as the document text; a failed query does not stall later ones because the chain continues via the (run, run) continuation form. Two operation classes dispatch differently: workspaceSymbol/incomingCalls/outgoingCalls go straight to the connection without opening a document, while the textDocument operations run inside withOpenDocument.",
+          "rationale": "One query at a time is the documented spec §3.4 model, and the transient lifecycle means the server always analyzes the CURRENT bytes rather than a stale open buffer.",
+          "evidence": ["packages/lsp/src/instance.ts:154", "packages/lsp/src/instance.ts:157", "packages/lsp/src/instance.ts:159", "packages/lsp/src/instance.ts:186", "packages/lsp/src/instance.ts:202"]
+        },
+        {
+          "decision": "Capability gating is fail-closed: before dispatch, the operation's capability key is looked up from the initialize result and an explicit false OR an ABSENT key throws LSP_UNSUPPORTED_OPERATION (absent counts as unsupported). The initialize handshake is bounded by startupTimeoutMs (default 10 000) via Promise.race, whose timeout error is the one that surfaces, and a late rejection after the timeout win is swallowed.",
+          "rationale": "Sending an unsupported method produces an opaque server error; an absent capability is not evidence of support.",
+          "evidence": ["packages/lsp/src/instance.ts:197", "packages/lsp/src/instance.ts:198", "packages/lsp/src/instance.ts:130", "packages/lsp/src/instance.ts:142", "packages/lsp/src/instance.ts:141"]
+        },
+        {
+          "decision": "Teardown is bounded in four steps and never waits forever: shutdown request bounded by shutdownTimeoutMs (default 4000, a failure or timeout is swallowed as best-effort) -> exit notification (best-effort) -> grace of killGraceMs (default 5000) waiting for conn.closed -> kill escalation. dispose() is idempotent via a disposed flag that also makes later queries throw.",
+          "rationale": "A hung language server must not hold the host open; the grace period gives a well-behaved server the chance to exit before the kill.",
+          "evidence": ["packages/lsp/src/instance.ts:263", "packages/lsp/src/instance.ts:267", "packages/lsp/src/instance.ts:275", "packages/lsp/src/instance.ts:289", "packages/lsp/src/instance.ts:176"]
+        },
+        {
+          "decision": "Mount is one server per RUN, enforced by a module-level reservation set: a second mount with the same serverName is a hard error, and a second mount with a DIFFERENT name is ALSO a hard error ('only one LSP server per run is supported (M18 core)' - multi-server is an explicit non-goal). A failed mount disposes the instance, unregisters any half-registered tools and releases the reservation; unmount is idempotent and releases the reservation even when dispose throws.",
+          "rationale": "The tool surface has no server selector, so two live servers would be ambiguous; releasing the reservation in a finally block prevents a permanent lockout after a bad mount.",
+          "evidence": ["packages/lsp/src/scheduler.ts:18", "packages/lsp/src/scheduler.ts:23", "packages/lsp/src/scheduler.ts:38", "packages/lsp/src/scheduler.ts:70", "packages/lsp/src/scheduler.ts:89"]
+        },
+        {
+          "decision": "Normalization is a separate, pure, fail-closed seam and rendering is separately capped: malformed wire entries are discarded while well-formed ones are kept (never a throw), DocumentSymbol trees are flattened depth-first with the opened document's uri injected, the tool layer enforces that the mounted server actually serves the file's extension (LSP_NO_SERVER_FOR_FILE), and the 1-based arg coordinates are converted to 0-based wire positions (and back at render). lsp_diagnostics does an optional cursor filter: line must overlap, and character (only with line) must be contained in BOTH dimensions.",
+          "rationale": "Keeping translation pure makes it unit-testable and keeps a partially malformed payload useful; the extension gate produces a legible error instead of a server-side mystery.",
+          "evidence": ["packages/lsp/src/translate.ts:1", "packages/lsp/src/translate.ts:25", "packages/lsp/src/translate.ts:77", "packages/lsp/src/tools.ts:27", "packages/lsp/src/tools.ts:136"]
+        }
+      ],
+      "failurePolicy": "Fail-closed on protocol and capability boundaries: undecodable/oversized frames fail all pending requests (connection.ts:72-74, protocol.ts:21-23); unsupported operations throw (instance.ts:199); a hung initialize rejects ready with LSP_INITIALIZE_TIMEOUT (instance.ts:145); requests on a disposed instance throw (instance.ts:176, instance.ts:196); a failed mount disposes and releases the reservation (scheduler.ts:70-79). Caller-argument errors inside the tools throw with the server name and the missing argument (tools.ts:66-76), and the extension gate throws (tools.ts:34). Best-effort-only: kill() on an already-dead process (connection.ts:148-153) and shutdown/exit during dispose (instance.ts:280-287).",
+      "events": [],
+      "keyConstants": [
+        { "name": "maxMessageBytes default", "value": "16 * 1024 * 1024", "evidence": "packages/lsp/src/scheduler.ts:48" },
+        { "name": "maxStderrBytes default", "value": "1_000_000", "evidence": "packages/lsp/src/scheduler.ts:49" },
+        { "name": "killGraceMs default", "value": "5_000", "evidence": "packages/lsp/src/scheduler.ts:50" },
+        { "name": "shutdownTimeoutMs default", "value": "4_000", "evidence": "packages/lsp/src/scheduler.ts:51" },
+        { "name": "startupTimeoutMs default", "value": "10_000", "evidence": "packages/lsp/src/instance.ts:126" },
+        { "name": "serverName pattern", "value": "/^[A-Za-z0-9_-]{1,32}$/", "evidence": "packages/lsp/src/types.ts:17" },
+        { "name": "render caps", "value": "maxLocations 100, maxResultChars 16000, maxResults 50 (diagnostics)", "evidence": "packages/lsp/src/render.ts:7" },
+        { "name": "SEVERITY_LABELS", "value": "1 Error, 2 Warning, 3 Information, 4 Hint (else 'Unknown')", "evidence": "packages/lsp/src/render.ts:12" }
+      ],
+      "gaps": [
+        "Multi-server is an explicit M18 non-goal: only ONE LSP server per run can be mounted, and a second (even differently named) mount is a hard error (packages/lsp/src/scheduler.ts:20-24, packages/lsp/src/scheduler.ts:38-40).",
+        "The package exposes no workspace/configuration or diagnostic-push handling: server->client notifications are ignored by design (packages/lsp/src/connection.ts:87), so pull-only (textDocument/diagnostic) is the diagnostic path.",
+        "languages matching is extension-only (last dot of the basename) and resolveFileInWorkspace is exported but the tools use their own resolve() (packages/lsp/src/session-cwd.ts:5, packages/lsp/src/tools.ts:79)."
+      ],
+      "evidence": ["packages/lsp/src/index.ts:1", "packages/lsp/src/instance.ts:113", "packages/lsp/src/tools.ts:41", "packages/lsp/src/scheduler.ts:26"]
+    },
+    {
+      "name": "mcp-client",
+      "responsibility": "Model Context Protocol client: transport construction (stdio / streamable-http), an OAuth 2.1 provider + local callback server, tool/resource bridging into the core-tools registry with name normalization, and a generation-based reconnect supervisor with backoff, an overlap guard and per-generation tool re-sync.",
+      "publicSurface": [
+        "MAX_PUBLIC_NAME_LENGTH",
+        "McpOAuthError",
+        "McpServerUnavailableError",
+        "assertServerName",
+        "challengeFor",
+        "createConnectedClient",
+        "createMcpSupervisor",
+        "createMcpTool",
+        "createOAuthCallbackServer",
+        "createOAuthClientProvider",
+        "createResourceTools",
+        "createTransport",
+        "generateCodeVerifier",
+        "mountMcpClient",
+        "publicToolName",
+        "resolveRootUris",
+        "syncTools",
+        "validateMcpConfig"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Reconnection is GENERATION-based: every reconnect builds a NEW client + transport; transport death calls generationDown guarded by an isCurrent identity check (so stale/duplicate notifications are no-ops); backoff is min(maxDelayMs, initialDelayMs * 2^(n-1)); a generation that stays alive >= maxDelayMs resets the attempt budget; beyond maxRetries the supervisor unregisters ALL of the server's tools, stops reconnecting and emits state 'lost' exactly once. Timers are cleared on close and unref'd so they never keep the process alive.",
+          "rationale": "A dead transport cannot be reused (the SDK aborts it on connect failure), so a fresh generation is the only correct retry unit; an identity guard plus idempotent scheduling is what prevents two overlapping child processes.",
+          "evidence": ["packages/mcp-client/src/supervisor.ts:8", "packages/mcp-client/src/supervisor.ts:221", "packages/mcp-client/src/supervisor.ts:210", "packages/mcp-client/src/supervisor.ts:240", "packages/mcp-client/src/supervisor.ts:178", "packages/mcp-client/src/supervisor.ts:67"]
+        },
+        {
+          "decision": "A stable PROXY is what tool closures bind, never a raw generation client: every call consults `current` at call time and fails fast with McpServerUnavailableError while no generation exists, so a call during an outage errors immediately instead of hanging on a dead transport.",
+          "rationale": "Tools registered in the registry outlive individual generations; they must route dynamically and fail fast.",
+          "evidence": ["packages/mcp-client/src/supervisor.ts:103", "packages/mcp-client/src/supervisor.ts:110", "packages/mcp-client/src/errors.ts:4"]
+        },
+        {
+          "decision": "Overlap guard: a failing generation must CLOSE within 5_000 ms or reconnecting stops and the server goes 'lost' with an explanatory message, because two live stdio children for one server is forbidden. Ownership guards around resync (gen !== current) route each failure to exactly ONE failCycle, preventing double-scheduled retries.",
+          "rationale": "A leaked retry timer would run an attempt twice and spawn two overlapping generations - the exact failure the guard exists to forbid.",
+          "evidence": ["packages/mcp-client/src/supervisor.ts:59", "packages/mcp-client/src/supervisor.ts:297", "packages/mcp-client/src/supervisor.ts:288", "packages/mcp-client/src/supervisor.ts:313"]
+        },
+        {
+          "decision": "Tool sync is two-phase and registry-conflict behavior depends on the phase: phase 1 drains ALL pages (cap 100 pages, duplicate public name within one listing throws) and detects blocked tools without touching the registry; phase 2 disposes the previous generation's tools, then registers the new ones, rolling back everything registered so far on a failure. On INITIAL sync (previous empty) the conflict PROPAGATES so the mount fails closed; on a re-sync it logs a warning and returns an empty map so a working client keeps running. blockedTools never enter the map; directTools non-empty switches every unlisted tool to exposure 'deferred'; unknown entries in either list warn without failing.",
+          "rationale": "Spec §3.4: a squatted name must not be silently ignored at startup, but a transient conflict mid-life must not kill an already-running session.",
+          "evidence": ["packages/mcp-client/src/bridge.ts:34", "packages/mcp-client/src/bridge.ts:74", "packages/mcp-client/src/bridge.ts:82", "packages/mcp-client/src/bridge.ts:90", "packages/mcp-client/src/bridge.ts:94", "packages/mcp-client/src/bridge.ts:86"]
+        },
+        {
+          "decision": "Public tool names are `mcp__<serverName>__<rawName>`, sanitized to [A-Za-z0-9_-] and capped at 64 chars, with a 12-hex SHA-256 suffix appended whenever normalization or truncation CHANGED the name - and forced whenever either segment itself contains '__', because that would make the join ambiguous to parse back. The raw name is what is sent on the wire; the public name is never parsed back.",
+          "rationale": "Distinct (server, tool) identities must never collapse into one registry name; an ambiguous join would make two different tools alias.",
+          "evidence": ["packages/mcp-client/src/naming.ts:3", "packages/mcp-client/src/naming.ts:17", "packages/mcp-client/src/naming.ts:23", "packages/mcp-client/src/naming.ts:25"]
+        },
+        {
+          "decision": "OAuth is a fail-closed loop around the official SDK provider: each attempt builds a NEW transport (the SDK aborts a transport on connect failure), an UnauthorizedError starts the browser flow and the code is awaited on a 127.0.0.1-only callback server whose handler requires a non-empty code AND state equal to the expected flow state (CSRF); after 3 Unauthorized attempts it throws McpOAuthError. Tokens/verifier/state/client/discovery live behind an injected McpTokenStore with a memory write-through layer. Token refresh is proactive and fail-SOFT: a 60 s expiry skew triggers a single-flight refresh, any failure returns the stored token, warns, notifies the host via onAuthRefreshFailed, and discards the cached discovery when the error is not an OAuthError or two consecutive failures occurred - the stored credential is never cleared.",
+          "rationale": "A missing authorization code or a mismatched state must not be accepted; a failed refresh must not destroy a working token, because the 401/M53 reconnect path owns recovery.",
+          "evidence": ["packages/mcp-client/src/client.ts:82", "packages/mcp-client/src/client.ts:96", "packages/mcp-client/src/client.ts:103", "packages/mcp-client/src/oauth-callback.ts:16", "packages/mcp-client/src/oauth-callback.ts:34", "packages/mcp-client/src/oauth.ts:42", "packages/mcp-client/src/oauth.ts:141", "packages/mcp-client/src/oauth.ts:203"]
+        },
+        {
+          "decision": "An auth-class failure on a LIVE request (only the SDK's UnauthorizedError or this package's McpOAuthError) tears the generation down so the supervisor can rebuild it - but ONLY when someone observes the death (a registered onDisconnect callback or reconnect.enabled). A one-shot mount keeps the pre-M53 behavior: surface the error and leave the client alive, because closing it would kill the transport permanently with nothing able to replace it. Teardown is single-flight and stops the callback server FIRST so a fixed callbackPort is free before the next generation rebinds it.",
+          "rationale": "Generic 5xx/network errors must never tear a healthy generation down, and an unobserved teardown is a self-inflicted outage.",
+          "evidence": ["packages/mcp-client/src/client.ts:75", "packages/mcp-client/src/client.ts:80", "packages/mcp-client/src/client.ts:197", "packages/mcp-client/src/client.ts:208", "packages/mcp-client/src/client.ts:189"]
+        }
+      ],
+      "failurePolicy": "Explicitly split by phase. Startup failure is a MOUNT failure that rejects (supervisor.ts:322-333, scheduler.ts:77-83) unless failOnStartupError is false, in which case the mount logs a warning and mounts EMPTY (scheduler.ts:80-82). Runtime generation death is fail-soft-but-bounded: retry with backoff up to maxRetries, then 'lost' with all tools unregistered (supervisor.ts:198-201). Calls with no live generation fail FAST with McpServerUnavailableError (supervisor.ts:107-133). Registry conflicts are fail-closed on initial sync and fail-soft (rollback + warn) on re-sync (bridge.ts:90-100). A tool result with isError throws 'tool error: <json>' from the tool body (bridge.ts:25-28). Config validation is fail-loud up front (types.ts:80-131).",
+      "events": [
+        "mcp/server-status (host status callback carrying { server, state: connecting|ready|reconnecting|lost, attempts?, lastError?, authRefreshFailed? }; the code states it is NOT a SessionEventMap member - packages/mcp-client/src/supervisor.ts:22-35, emitted at supervisor.ts:88-96)"
+      ],
+      "keyConstants": [
+        { "name": "MAX_PUBLIC_NAME_LENGTH", "value": "64", "evidence": "packages/mcp-client/src/naming.ts:6" },
+        { "name": "HASH_LENGTH (name suffix)", "value": "12 hex chars", "evidence": "packages/mcp-client/src/naming.ts:8" },
+        { "name": "DEFAULT_INITIAL_DELAY_MS", "value": "1_000", "evidence": "packages/mcp-client/src/supervisor.ts:56" },
+        { "name": "DEFAULT_MAX_DELAY_MS", "value": "30_000", "evidence": "packages/mcp-client/src/supervisor.ts:57" },
+        { "name": "DEFAULT_MAX_RETRIES", "value": "5", "evidence": "packages/mcp-client/src/supervisor.ts:58" },
+        { "name": "OVERLAP_GUARD_MS", "value": "5_000", "evidence": "packages/mcp-client/src/supervisor.ts:61" },
+        { "name": "tool list pagination cap", "value": "100 pages", "evidence": "packages/mcp-client/src/bridge.ts:74" },
+        { "name": "toolCallTimeoutMs default", "value": "60_000", "evidence": "packages/mcp-client/src/client.ts:141" },
+        { "name": "MAX_AUTH_ATTEMPTS", "value": "3", "evidence": "packages/mcp-client/src/client.ts:69" },
+        { "name": "AUTH_RETRY_DELAY_MS", "value": "1_000", "evidence": "packages/mcp-client/src/client.ts:70" },
+        { "name": "auth.authTimeoutMs default", "value": "300_000", "evidence": "packages/mcp-client/src/client.ts:95" },
+        { "name": "EXPIRY_SKEW_MS (proactive refresh)", "value": "60_000", "evidence": "packages/mcp-client/src/oauth.ts:42" },
+        { "name": "serverName pattern", "value": "/^[A-Za-z0-9_-]{1,32}$/", "evidence": "packages/mcp-client/src/types.ts:82" },
+        { "name": "blockedTools/directTools cap", "value": "200 entries, /^[A-Za-z0-9_-]{1,64}$/, no duplicates", "evidence": "packages/mcp-client/src/types.ts:71" }
+      ],
+      "gaps": [
+        "resources/templates/list is optional in the client interface and the tool throws a build-shape error when the mounted client lacks it (packages/mcp-client/src/resources.ts:46, packages/mcp-client/src/client.ts:66).",
+        "OAuth redirect handling is headless by default: no browser is opened automatically - the URL goes to the console, the token store and the optional onRedirect callback (packages/mcp-client/src/oauth.ts:220-226).",
+        "No gap markers (TODO/FIXME/deferred/limitation) otherwise; the SDK-1.30 transport-reuse constraint is documented as the reason for new transports rather than as an open defect (packages/mcp-client/src/client.ts:85-87)."
+      ],
+      "evidence": ["packages/mcp-client/src/index.ts:1", "packages/mcp-client/src/scheduler.ts:41", "packages/mcp-client/src/client.ts:114", "packages/mcp-client/src/types.ts:80"]
+    },
+    {
+      "name": "workspace",
+      "responsibility": "A durable Workspace registry over the session coordinator's generic document store: it owns the workspace records (id/path/title/sessionIds/timestamps) plus a registry-global archived-session display set, and separately exports a bounded directory walker used as the '@' file-reference provider. It performs no filesystem mutation and no path realpath/stat itself.",
+      "publicSurface": [
+        "DEFAULT_LIST_FILES_OPTIONS",
+        "DEFAULT_LIST_FILES_SKIP_NAMES",
+        "WORKSPACE_DOC_KEY",
+        "Workspace",
+        "WorkspaceBadRequestError",
+        "WorkspaceInvalidPathError",
+        "WorkspaceNameConflictError",
+        "WorkspaceNotFoundError",
+        "WorkspaceRegistry",
+        "WorkspaceSnapshot",
+        "WorkspaceUnknownSessionError",
+        "createWorkspaceRegistry",
+        "listWorkspaceFiles",
+        "FileReferenceCandidate",
+        "ListWorkspaceFilesOptions"
+      ],
+      "designDecisions": [
+        {
+          "decision": "It OWNS exactly one durable document (`workspace-registry`) reached through the injected SessionCoordinator's generic getDocument/putDocument, in the subagent-snapshot pattern: a versioned whole-state snapshot { formatVersion: 1, workspaces, archivedSessionIds? }. The REGISTRY has no fs at all - create() does pure string normalization only and the comment states the caller (host route) realpaths the path and stats the directory before calling; the walker lives in a separate module because the registry stays fs-free.",
+          "rationale": "Keeping the registry pure makes it testable over any coordinator backend and keeps the path-trust decision in the host, which is the layer that owns the route and the trust boundary.",
+          "evidence": ["packages/workspace/src/index.ts:5", "packages/workspace/src/index.ts:67", "packages/workspace/src/index.ts:85", "packages/workspace/src/index.ts:233", "packages/workspace/src/index.ts:53"]
+        },
+        {
+          "decision": "What the HOST injects: the SessionCoordinator (document store + list() used for the archive existence gate), the already-canonical directory path, the route-level realpath/stat and HTTP status mapping (the registry only carries DSH failure CODES in its error classes), and the composition of listWorkspaceFiles over a registered path. The registry itself computes no absolute path, stats nothing and never creates/deletes a directory.",
+          "rationale": "Errors carry codes precisely so the host can map them to HTTP statuses without string matching; the durable record is the registry's only responsibility.",
+          "evidence": ["packages/workspace/src/index.ts:44", "packages/workspace/src/index.ts:51", "packages/workspace/src/index.ts:101", "packages/workspace/src/index.ts:143", "packages/workspace/src/index.ts:300"]
+        },
+        {
+          "decision": "Every operation goes through ONE serialization chain (DSH operationTail parity): mutations AND reads are queued so two concurrent read-modify-write cycles on the shared document cannot interleave and lose a write, and a list during a mutation observes either the pre- or the post-state, never a torn one. The chain tail is kept alive after failures so one rejection does not break later operations.",
+          "rationale": "A whole-document read-modify-write is inherently racy without serialization; queueing reads as well makes the snapshot consistent.",
+          "evidence": ["packages/workspace/src/index.ts:188", "packages/workspace/src/index.ts:196", "packages/workspace/src/index.ts:199", "packages/workspace/src/index.ts:221"]
+        },
+        {
+          "decision": "Archive is a DISPLAY layer over accounting, not an account change: archivedSessionIds is registry-GLOBAL (archiveSession takes only a session id), archiving KEEPS the session's sessionIds slot, is idempotent and rejects an UNKNOWN id fail-loud (checked against coordinator.list()) so a typo cannot record a dangling id in a set the user cannot enumerate. The field is optional on disk and normalized to [] on load so records written before it parse unchanged, and every mutator writes it back. unarchiveSession is a DELIBERATE additive extension over DSH (which has no restore verb) and treats an unknown id as a no-op.",
+          "rationale": "A one-way archive set is a footgun for the sidebar's archived section, but a hidden id the user can never see listed must not be recordable by a typo.",
+          "evidence": ["packages/workspace/src/index.ts:88", "packages/workspace/src/index.ts:213", "packages/workspace/src/index.ts:294", "packages/workspace/src/index.ts:298", "packages/workspace/src/index.ts:314"]
+        },
+        {
+          "decision": "create() is idempotent by PATH (a second create resolves the existing record with created:false) and generates a stable non-path id `ws-<uuid8>`; rename requires a non-blank unique title (conflict -> WorkspaceNameConflictError); attachSession PREPENDS (DSH order) and is a no-op when already attached (no rewrite). The walker is bounded and deterministic: caps maxEntries 500 / maxVisited 3000 / maxDepth 8 with early frontier abandonment, exact-name skips for node_modules/.git/.i-harness/dist at any depth, symlinks skipped entirely (never followed, so a link cannot drag the walk outside the workspace or loop), codepoint sort per level, and case-insensitive substring matching with NO ranking.",
+          "rationale": "The walk must never be unbounded (a large repo is a keystroke-rate surface) and a picker must not reorder between hosts, so localeCompare is rejected as ICU-dependent.",
+          "evidence": ["packages/workspace/src/index.ts:240", "packages/workspace/src/index.ts:244", "packages/workspace/src/index.ts:267", "packages/workspace/src/index.ts:284", "packages/workspace/src/files.ts:8", "packages/workspace/src/files.ts:120", "packages/workspace/src/files.ts:129"]
+        }
+      ],
+      "failurePolicy": "Fail-loud on its own invariants and fail-soft only below the walk root. Fail-loud: blank/separator-only path (WorkspaceInvalidPathError, index.ts:231/237), blank title (WorkspaceBadRequestError, index.ts:260), unknown workspace (WorkspaceNotFoundError, index.ts:265/281), duplicate title (WorkspaceNameConflictError, index.ts:268), unknown session on archive (WorkspaceUnknownSessionError, index.ts:302), and a corrupt registry document (throws, index.ts:210). Fail-soft/degrade: an unreadable NESTED directory in the walk is skipped, but an unreadable/missing ROOT rethrows because an empty answer would be a silent lie (files.ts:113-119).",
+      "events": [],
+      "keyConstants": [
+        { "name": "WORKSPACE_DOC_KEY", "value": "\"workspace-registry\"", "evidence": "packages/workspace/src/index.ts:67" },
+        { "name": "workspaceId shape", "value": "ws-<first 8 chars of a uuid>", "evidence": "packages/workspace/src/index.ts:244" },
+        { "name": "listWorkspaceFiles maxEntries", "value": "500", "evidence": "packages/workspace/src/files.ts:73" },
+        { "name": "listWorkspaceFiles maxDepth", "value": "8", "evidence": "packages/workspace/src/files.ts:74" },
+        { "name": "listWorkspaceFiles maxVisited", "value": "3000", "evidence": "packages/workspace/src/files.ts:75" },
+        { "name": "DEFAULT_LIST_FILES_SKIP_NAMES", "value": "node_modules, .git, .i-harness, dist", "evidence": "packages/workspace/src/files.ts:65" },
+        { "name": "DSH failure codes", "value": "bad-request, workspace-invalid-path, workspace-not-found, workspace-name-conflict, session-not-found", "evidence": "packages/workspace/src/index.ts:102" }
+      ],
+      "gaps": [
+        "Explicitly DEFERRED in the module header: `delete` (unregistering without touching the directory; the host route DELETE /api/workspaces/:id is intentionally absent so it answers the generic JSON 404), insertBefore/insertSessionBefore display reordering, `follow` (reconnect baseline + ordered increments; the live stream is a later task), and `status` / directory liveness ('ok' | 'missing-dir') (packages/workspace/src/index.ts:30-42).",
+        "listWorkspaceFiles is the 'honest minimal' vs DSH: substring match with no ranking, symlinks never followed, and a cap hit stops the walk early answering only the collected prefix (packages/workspace/src/files.ts:22-27, packages/workspace/src/files.ts:13-14).",
+        "archiveSession's existence check uses coordinator.list() (the persistence list), and the header notes it is identical to the host route's session account - there is no live-session fallback inside the registry itself (packages/workspace/src/index.ts:296-301)."
+      ],
+      "evidence": ["packages/workspace/src/index.ts:195", "packages/workspace/src/index.ts:203", "packages/workspace/src/files.ts:90", "packages/workspace/src/index.ts:58"]
+    }
+  ],
+  "coverage": { "assigned": 18, "covered": 18 }
+}

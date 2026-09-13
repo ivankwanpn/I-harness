@@ -231,40 +231,57 @@ function extractIHHosts(root) {
 }
 
 // -- dsh ---------------------------------------------------------------------
-// Registration: packages/<area>/command-<name>/src/index.ts exporting
-// `name = 'command-compact'`. The HUMAN slash name lives in the USAGE string.
-// dsh is not command-centric: its real command surface is the interaction
-// refs (session-send &c). Both layers are captured.
+// Registration: a slash command exists ONLY if some package calls
+//   ctx.commands.register({ name: '...', description: '...', handler })
+// on the Cordis `commands` service. There is no central table, so the sweep has
+// to be repository-wide: the three `command-*` packages are merely the ones
+// shipped as standalone packages, and three MORE commands are registered inline
+// from their domain packages (/permission, /plan, /export).
+//
+// An earlier version of this extractor guessed at a `session-send` /
+// `session-followup` / `session-steer` / `session-inject` "interaction command"
+// family carried over from the audited harness's own docs. Those literal names
+// do NOT occur anywhere in dsh 0.1.5-rc.2 (whole-tree grep: zero hits). The real
+// delivery model is four in-process Agent tiers -- send / followup / steer /
+// inject -- which are API calls, not commands, and are therefore documented by
+// the extraction agent rather than fabricated here as command rows.
 function extractDsh() {
   const root = SOURCES.dsh
   const cmds = []
-  for (const f of walk(join(root, "packages"), (n) => n === "index.ts")) {
-    if (!/[\\/]command-[^\\/]+[\\/]src[\\/]index\.ts$/.test(f)) continue
+  const sites = []
+  for (const f of walk(join(root, "packages"), (n) => n.endsWith(".ts"))) {
+    if (/[\\/](tests?|__tests__)[\\/]/.test(f) || /\.(spec|test)\.ts$/.test(f)) continue
     const text = slurp(f)
-    const pkg = basename(join(f, "..", ".."))
-    const slash = text.match(/Usage:\s*(\/[a-z0-9-]+)/)
-    const raw = slash ? slash[1].slice(1) : pkg.replace(/^command-/, "")
-    cmds.push({
-      rawName: raw,
-      canonical: raw,
-      aliases: [],
-      displayName: raw,
-      description: (text.match(/^\s*\*\s*(Human-facing[^\n]*)/m) || [])[1] || null,
-      packageName: pkg,
-      gate: "dsh:commands-service",
-      mechanism: null,
-      evidence: [evidence(root, f, "export const name")],
-      verified: false,
+    const lines = text.split(/\r?\n/)
+    lines.forEach((line, i) => {
+      if (!/commands\.register\(/.test(line)) return
+      // the registered object's fields are on the following lines
+      const win = lines.slice(i, i + 10).join("\n")
+      const nm = win.match(/name:\s*'([^']+)'/)
+      if (!nm) return
+      const desc = win.match(/description:\s*'([^']*)'/)
+      const hint = win.match(/hint:\s*'([^']*)'/)
+      const rel = relative(root, f).replace(/\\/g, "/")
+      sites.push({ file: rel, line: i + 1, name: nm[1] })
+      // the package's own USAGE string, when present, independently names the
+      // human-facing slash form -- recorded so the two can be cross-checked
+      const usage = text.match(/USAGE\s*=\s*'Usage:\s*(\/[a-z0-9-]+)/)
+      cmds.push({
+        rawName: nm[1],
+        canonical: nm[1],
+        aliases: [],
+        displayName: nm[1],
+        description: desc ? desc[1] : null,
+        inputHint: hint ? hint[1] : null,
+        usageCrossCheck: usage ? usage[1].slice(1) : null,
+        gate: "dsh:commands-service",
+        mechanism: null,
+        evidence: [`${rel}:${i + 1}`],
+        verified: false,
+      })
     })
   }
-  // interaction command refs (the session-* layer)
-  const refs = []
-  const cf = join(root, "packages/interaction/commands/src/index.ts")
-  const ctext = slurp(cf)
-  for (const m of ctext.matchAll(/["']([a-z]+-(?:send|followup|steer|inject|cancel|pending|status))["']/g)) {
-    refs.push({ ref: m[1], evidence: evidence(root, cf, m[1]) })
-  }
-  return { commands: dedupe(cmds, root), interactionRefs: refs }
+  return { commands: dedupe(cmds, root), registerSites: sites }
 }
 
 // -- codex -------------------------------------------------------------------
@@ -501,13 +518,66 @@ function extractGrok() {
 }
 
 // -- cc-custom ---------------------------------------------------------------
-// Registration: src/commands/<name>/index.ts (and a few flat src/commands/*.ts),
-// each default-exporting an object literal with `name: '...'`.
+// Registration: src/commands/<name>/index.ts (and some flat src/commands/*.ts),
+// each exporting a COMMAND OBJECT. The name must come from that object, not from
+// the first `name:` in the file: taking the first match produced a phantom
+// command and dropped two real ones (measured):
+//   insights.ts       `const INSIGHT_SECTIONS: InsightSection[] = [...]` is a
+//                     report-section TABLE whose entries have `name:`; the real
+//                     command declares `name: 'insights'` far below it. The first
+//                     match recorded `project_areas`, a command that does not
+//                     exist, and lost `insights`.
+//   limit-controls.ts drives THREE commands from a descriptor table; taking the
+//                     first lost `max-output` and `auto-compact-window`.
+// The discriminator used here is shape: a command is an OBJECT literal (`= {`),
+// while the tables that caused the false positives are ARRAYS (`= [`).
 //
 // 21 further directories are DISABLED STUBS -- one-line .js files of the form
 //   export default { isEnabled: () => false, isHidden: true, name: 'stub' }
 // They are not commands and must not inflate the count, but they are real tree
 // content, so they are recorded separately rather than dropped silently.
+
+/**
+ * Object-literal regions of a module: `const X = {` … matching close,
+ * `export default {`, and CALL SITES that take an object argument such as
+ * `createMovedToPluginCommand({ ... })`. Brace counting is required because
+ * these literals nest. The call-site form matters: cc-custom declares two
+ * commands (/pr-comments, /security-review) exclusively through
+ * `createMovedToPluginCommand({...})`, so matching only `= {` loses them.
+ * Returns [{startLine, text}].
+ */
+function objectLiteralRegions(text) {
+  const lines = text.split(/\r?\n/)
+  const regions = []
+  const starter =
+    /^\s*(?:export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]*)?=\s*\{|^\s*export\s+default\s*\{|^\s*(?:export\s+default\s+)?[A-Za-z_$][\w$]*\(\s*\{/
+  for (let i = 0; i < lines.length; i++) {
+    if (!starter.test(lines[i])) continue
+    let depth = 0
+    let started = false
+    const buf = []
+    for (let j = i; j < lines.length; j++) {
+      const l = lines[j]
+      for (const ch of l) {
+        if (ch === "{") {
+          depth++
+          started = true
+        } else if (ch === "}") depth--
+      }
+      buf.push(l)
+      if (started && depth <= 0) break
+    }
+    regions.push({ startLine: i + 1, text: buf.join("\n") })
+    i += buf.length - 1
+  }
+  return regions
+}
+
+/** Heuristic: does this object literal look like a Command definition? */
+function looksLikeCommand(regionText) {
+  return /\b(type|description|isEnabled|load|userFacingName|supportsNonInteractive)\s*:/.test(regionText)
+}
+
 function extractCcCustom() {
   const root = SOURCES["cc-custom"]
   const dir = join(root, "src/commands")
@@ -520,26 +590,28 @@ function extractCcCustom() {
       stubs.push({ file: rel, note: "disabled stub (isEnabled:false, isHidden:true)" })
       continue
     }
-    // only a top-level declaration counts: `name:` starting its own line
-    const m = text.match(/^\s*name:\s*'([^']+)'/m)
-    if (!m) continue
-    const raw = m[1]
-    const desc = text.match(/description:\s*\n?\s*'((?:[^'\\]|\\.)*)'/)
-    const enabled = text.match(/isEnabled:\s*([^,\n]+)/)
-    const type = text.match(/type:\s*'([^']+)'/)
-    const sample = text.split(/\r?\n/).find((l) => l.trim().startsWith("name:")) || `name: '${raw}'`
-    cmds.push({
-      rawName: raw,
-      canonical: raw,
-      aliases: [],
-      displayName: raw,
-      description: desc ? desc[1].slice(0, 200) : null,
-      kind: type ? type[1] : null,
-      gate: enabled ? `isEnabled:${enabled[1].trim().slice(0, 60)}` : "none",
-      mechanism: null,
-      evidence: [evidence(root, f, sample.trim())],
-      verified: false,
-    })
+    for (const region of objectLiteralRegions(text)) {
+      if (!looksLikeCommand(region.text)) continue
+      const m = region.text.match(/\bname:\s*'([^']+)'/)
+      if (!m) continue
+      const raw = m[1]
+      const lineNo = region.startLine + (region.text.slice(0, region.text.indexOf(m[0])).split("\n").length - 1)
+      const desc = region.text.match(/description:\s*\n?\s*'((?:[^'\\]|\\.)*)'/)
+      const enabled = region.text.match(/isEnabled:\s*([^,\n]+)/)
+      const type = region.text.match(/\btype:\s*'([^']+)'/)
+      cmds.push({
+        rawName: raw,
+        canonical: raw,
+        aliases: [],
+        displayName: raw,
+        description: desc ? desc[1].slice(0, 200) : null,
+        kind: type ? type[1] : null,
+        gate: enabled ? `isEnabled:${enabled[1].trim().slice(0, 60)}` : "none",
+        mechanism: null,
+        evidence: [`${rel}:${lineNo}`],
+        verified: false,
+      })
+    }
   }
   return { commands: dedupe(cmds, root), disabledStubs: stubs }
 }
@@ -570,9 +642,12 @@ const EXTRACTORS = {
   },
   dsh: () => {
     const r = extractDsh()
+    if (r.commands.length === 0) {
+      throw new Error("dsh: no commands.register() sites found -- the sweep is wrong, not the source")
+    }
     return {
-      ...env("dsh", SOURCES.dsh, "per-package+interaction-ref", r.commands),
-      interactionRefs: r.interactionRefs,
+      ...env("dsh", SOURCES.dsh, "per-package + inline commands.register", r.commands),
+      registerSites: r.registerSites,
     }
   },
   codex: () => {
