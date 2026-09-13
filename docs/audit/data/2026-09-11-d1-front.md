@@ -82,7 +82,11 @@
 
 > **⚠ 本次盤點最嚴重的產品級發現：這套引擎在出貨路徑上沒有被接線。**
 >
-> `packages/tui/src/backend/embedded.ts:969` 是全 repo **唯一**一個非測試的 `createSessionService` 呼叫（我在 `packages/`＋`apps/` 全樹確認過），它傳了 `workspace`、`sessionId`、`modelPolicy`、`sessionFor`、`coordinator`、`beforeDispose`、`loadMeta`、`approveAll`、`mockCycles`、`modelBindingFor`、`rewindStoreRoot`——**沒有 `compact`**。
+> 非測試的 `createSessionService` 呼叫點**有多個**——`packages/tui/src/backend/embedded.ts:969`、`apps/cli/src/index.ts:424`（sdk）、`apps/cli/src/index.ts:594`（acp）、`apps/cli/src/web.ts:471`，另有 `apps/tui/src/index.ts:235` 一個（該處用 `modelPolicy: "test-mock"`，是否算「非測試」兩個代理有分歧：一份算四個，一份算五個）。**無一傳 `compact`。**
+>
+> **⚠ 更正記錄**：本節初稿寫「`embedded.ts:969` 是全 repo 唯一一個非測試呼叫點，我在 `packages/`＋`apps/` 全樹確認過」——**那句話是錯的**。我的搜尋實際只掃了 `packages/`，卻在文字裡宣稱涵蓋全 repo。這是兩個獨立子代理在後續階段分別抓到的，也正是本審計一直在批評的那種事：**把抽樣講成全稱**。上面已改為正確的多呼叫點敘述。
+>
+> **實質結論不變**：無論四個還是五個，**沒有任何宿主傳 `compact`**，headless 路徑讀的 `HeadlessOptions.compact`（`apps/cli/src/run.ts:231-233,258`）**沒有任何非測試檔案設定過**（只有 `apps/cli/test/cli.test.ts` 設過）。另有一個更細的條件：`service.ts:256-258` 是**析取**，所以即使傳了 compact config，只要 binding 沒有 `contextWindow` 也會被丟掉。
 >
 > 連鎖後果（每一環都有出處）：
 >
