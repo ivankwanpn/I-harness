@@ -1,0 +1,741 @@
+{
+  "domain": "extension",
+  "rows": {
+    "mcp-transport-variants-and-startup-negotiation": {
+      "domain": "extension",
+      "label": "mcp-transport-variants-and-startup-negotiation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["mcp-client-transport-and-startup-budget"],
+        "grok": ["mcp-multi-transport-with-in-process-acp-bridge"],
+        "cc-custom": ["mcp-transport-negotiation"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 僅 stdio 與 HTTP 兩種傳輸"
+    },
+    "mcp-client-connection-supervision-and-recovery": {
+      "domain": "extension",
+      "label": "mcp-client-connection-supervision-and-recovery",
+      "members": {
+        "ih": ["mcp-client-with-generation-based-reconnection-and-oauth"],
+        "dsh": ["mcp-client-connection-supervision-and-reconnect"],
+        "codex": [],
+        "grok": ["mcp-liveness-probe-and-token-fenced-retry"],
+        "cc-custom": ["mcp-connection-lifecycle-and-recovery"],
+        "opencode": ["mcp-client-lifecycle"],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 世代重連完整，缺斷路器"
+    },
+    "mcp-oauth-consent-and-credential-persistence": {
+      "domain": "extension",
+      "label": "mcp-oauth-consent-and-credential-persistence",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["mcp-oauth-consent-with-in-and-cross-process-dedup"],
+        "cc-custom": ["mcp-oauth-and-xaa-auth"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 的 OAuth 併在重連機制內"
+    },
+    "mcp-tool-public-namespacing-and-collision-safety": {
+      "domain": "extension",
+      "label": "mcp-tool-public-namespacing-and-collision-safety",
+      "members": {
+        "ih": [],
+        "dsh": ["mcp-tool-bridging-and-namespace-isolation"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["mcp-instructions-and-tool-identity"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 命名與二階段同步在 client 內"
+    },
+    "mcp-tool-catalog-ingest-and-exposure-hardening": {
+      "domain": "extension",
+      "label": "mcp-tool-catalog-ingest-and-exposure-hardening",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["mcp-tool-catalog-exposure-and-elicitation-roundtrip"],
+        "grok": ["mcp-tool-name-and-icon-ingest-hardening"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無目錄分頁與快取硬化"
+    },
+    "mcp-elicitation-and-server-initiated-input": {
+      "domain": "extension",
+      "label": "mcp-elicitation-and-server-initiated-input",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["mcp-elicitation-single-slot-rendezvous"],
+        "cc-custom": ["mcp-elicitation-bridge"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無伺服器發起的詢問流程"
+    },
+    "mcp-server-configuration-resolution-and-policy": {
+      "domain": "extension",
+      "label": "mcp-server-configuration-resolution-and-policy",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["mcp-config-resolution-and-policy"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "分層設定與企業白名單可借鏡"
+    },
+    "mcp-result-normalization-and-output-spill": {
+      "domain": "extension",
+      "label": "mcp-result-normalization-and-output-spill",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["mcp-result-transformation-and-spill"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "超限結果落盤而非靜默丟棄"
+    },
+    "mcp-runtime-ownership-in-core": {
+      "domain": "extension",
+      "label": "mcp-runtime-ownership-in-core",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["mcp-runtime-in-core"]
+      },
+      "disposition": "路線差異",
+      "rationale": "分叉把 MCP 執行期移入 core"
+    },
+    "plugin-marketplace-registry-and-source-sync": {
+      "domain": "extension",
+      "label": "plugin-marketplace-registry-and-source-sync",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["plugin-manifest-and-marketplace-distribution"],
+        "grok": ["plugin-marketplace-install-with-tighten-only-sha-pinning"],
+        "cc-custom": ["plugin-marketplace-management"],
+        "opencode": [],
+        "opencode-fork": ["claude-plugin-marketplace"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 只有來源註冊，缺釘選"
+    },
+    "plugin-install-enable-and-capability-policy": {
+      "domain": "extension",
+      "label": "plugin-install-enable-and-capability-policy",
+      "members": {
+        "ih": ["plugin-lifecycle-that-never-executes-plugin-code"],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["plugin-install-and-component-integration"],
+        "opencode": [],
+        "opencode-fork": ["direct-extension-capability-approval"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已裝載且不執行外掛程式碼"
+    },
+    "plugin-package-execution-in-vm-realm": {
+      "domain": "extension",
+      "label": "plugin-package-execution-in-vm-realm",
+      "members": {
+        "ih": [],
+        "dsh": ["dynamic-cordis-package-sandbox-approval-and-client-execution"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "不做",
+      "rationale": "執行外掛程式碼違反 IH 原則"
+    },
+    "plugin-hook-runtime-and-ordered-registry": {
+      "domain": "extension",
+      "label": "plugin-hook-runtime-and-ordered-registry",
+      "members": {
+        "ih": ["plugin-event-kernel-with-four-extension-channels"],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["plugin-hook-runtime"],
+        "opencode-fork": ["named-plugin-hook-runtime"]
+      },
+      "disposition": "improved-writing",
+      "rationale": "IH 四通道與祖先合成更完整"
+    },
+    "plugin-runtime-state-and-readiness-reporting": {
+      "domain": "extension",
+      "label": "plugin-runtime-state-and-readiness-reporting",
+      "members": {
+        "ih": [],
+        "dsh": ["plugin-inventory-rpc-and-configurable-settings-surfaces"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["plugin-runtime-readiness"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無外掛狀態與就緒回報"
+    },
+    "plugin-contributed-provider-and-model-hooks": {
+      "domain": "extension",
+      "label": "plugin-contributed-provider-and-model-hooks",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["provider-plugin-hooks"],
+        "opencode-fork": ["plugin-provider-and-live-model-plugins"]
+      },
+      "disposition": "rewrite",
+      "rationale": "外掛擴充供應商需宣告式設計"
+    },
+    "plugin-v1-compatibility-bridge": {
+      "domain": "extension",
+      "label": "plugin-v1-compatibility-bridge",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["v1-plugin-compatibility-bridge"]
+      },
+      "disposition": "路線差異",
+      "rationale": "分叉需兼容舊外掛，IH 無舊帳"
+    },
+    "filesystem-skill-discovery-and-root-precedence": {
+      "domain": "extension",
+      "label": "filesystem-skill-discovery-and-root-precedence",
+      "members": {
+        "ih": [],
+        "dsh": ["filesystem-skill-discovery-and-watch-invalidation"],
+        "codex": [],
+        "grok": ["skill-discovery-with-ignore-versus-disabled"],
+        "cc-custom": ["skills-discovery-and-precedence"],
+        "opencode": ["skill-discovery-and-injection"],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 掃描能力併入技能檢索機制"
+    },
+    "skill-registry-layered-precedence-and-caching": {
+      "domain": "extension",
+      "label": "skill-registry-layered-precedence-and-caching",
+      "members": {
+        "ih": [],
+        "dsh": ["skill-registry-layered-precedence-and-caching"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "分層排序與快取可直接沿用"
+    },
+    "skill-catalog-and-guidance-injection": {
+      "domain": "extension",
+      "label": "skill-catalog-and-guidance-injection",
+      "members": {
+        "ih": [],
+        "dsh": ["skill-catalog-injection-and-model-facing-loader"],
+        "codex": ["layered-skill-catalog-developer-injection"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["skills-and-context-guidance"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 尚無技能目錄訊息注入"
+    },
+    "skill-deferred-body-retrieval-and-search": {
+      "domain": "extension",
+      "label": "skill-deferred-body-retrieval-and-search",
+      "members": {
+        "ih": ["skill-md-deferred-retrieval-with-a-shadow-selector"],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已延遲載入並有影子選擇器"
+    },
+    "explicit-and-implicit-skill-invocation": {
+      "domain": "extension",
+      "label": "explicit-and-implicit-skill-invocation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["explicit-mention-and-implicit-skill-invocation"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "提及掃描與隱式觀測可借鏡"
+    },
+    "bundled-skill-registry-with-lazy-extraction": {
+      "domain": "extension",
+      "label": "bundled-skill-registry-with-lazy-extraction",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["bundled-skills-registry"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "內建技能首次叫用才解壓"
+    },
+    "lsp-client-runtime-and-transient-document-lifecycle": {
+      "domain": "extension",
+      "label": "lsp-client-runtime-and-transient-document-lifecycle",
+      "members": {
+        "ih": ["lsp-integration-with-one-server-per-run-scheduling"],
+        "dsh": ["lsp-stdio-server-pooling-and-transient-document-lifecycle"],
+        "codex": [],
+        "grok": ["language-server-client-with-inert-by-default-backend"],
+        "cc-custom": ["lsp-server-lifecycle"],
+        "opencode": ["lsp-diagnostics-and-navigation"],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 限單伺服器，參考支援多台"
+    },
+    "lsp-provider-registry-and-extension-routing": {
+      "domain": "extension",
+      "label": "lsp-provider-registry-and-extension-routing",
+      "members": {
+        "ih": [],
+        "dsh": ["lsp-provider-registry-and-extension-routing"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "純函式副檔名路由設計乾淨"
+    },
+    "lsp-model-facing-tool-and-result-caps": {
+      "domain": "extension",
+      "label": "lsp-model-facing-tool-and-result-caps",
+      "members": {
+        "ih": [],
+        "dsh": ["lsp-model-facing-tool-and-result-caps"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "工具與輸出上限可直接沿用"
+    },
+    "lsp-passive-diagnostics-delivery": {
+      "domain": "extension",
+      "label": "lsp-passive-diagnostics-delivery",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["lsp-passive-diagnostics"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "診斷去重與量限值得內建"
+    },
+    "lsp-runtime-ownership-in-core": {
+      "domain": "extension",
+      "label": "lsp-runtime-ownership-in-core",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["lsp-runtime-in-core"]
+      },
+      "disposition": "路線差異",
+      "rationale": "分叉把 LSP 執行期移入 core"
+    },
+    "hook-lifecycle-event-engine-and-control-effects": {
+      "domain": "extension",
+      "label": "hook-lifecycle-event-engine-and-control-effects",
+      "members": {
+        "ih": [],
+        "dsh": ["hook-protocol-execution-and-vendor-dialect-bridges"],
+        "codex": ["hook-lifecycle-event-engine"],
+        "grok": [],
+        "cc-custom": ["hook-execution-engine"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 僅四事件，缺廠商方言"
+    },
+    "hook-configuration-sources-and-trust-policy": {
+      "domain": "extension",
+      "label": "hook-configuration-sources-and-trust-policy",
+      "members": {
+        "ih": ["model-facing-hook-and-extension-surfaces-over-the-plugin-seams"],
+        "dsh": [],
+        "codex": ["hook-trust-ledger"],
+        "grok": [],
+        "cc-custom": ["hook-config-sources-and-policy"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 有 sha256 信任但無政策層"
+    },
+    "hook-execution-mode-gating-and-output-spill": {
+      "domain": "extension",
+      "label": "hook-execution-mode-gating-and-output-spill",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["hook-mode-gating-and-output-spill"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "非同步鉤子不得否決，值得照做"
+    },
+    "unified-command-and-slash-registry": {
+      "domain": "extension",
+      "label": "unified-command-and-slash-registry",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["custom-command-registry"],
+        "opencode-fork": ["source-composed-command-registry"]
+      },
+      "disposition": "reuse",
+      "rationale": "來源排序註冊表設計乾淨"
+    },
+    "workflow-script-engine-and-bounded-fan-out": {
+      "domain": "extension",
+      "label": "workflow-script-engine-and-bounded-fan-out",
+      "members": {
+        "ih": [],
+        "dsh": ["durable-todo-goal-schedule-and-workflow-extension-state"],
+        "codex": [],
+        "grok": ["workflow-rhai-engine-with-journal-replay"],
+        "cc-custom": ["workflow-engine"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 走靜態 YAML 工作流非腳本"
+    },
+    "durable-todo-checklist-state": {
+      "domain": "extension",
+      "label": "durable-todo-checklist-state",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["todo-durable-state"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 待辦狀態歸於子代理面"
+    },
+    "scheduled-task-and-cron-execution": {
+      "domain": "extension",
+      "label": "scheduled-task-and-cron-execution",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["cron-scheduling"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無排程；可借單一鎖設計"
+    },
+    "plan-mode-with-durable-plan-files": {
+      "domain": "extension",
+      "label": "plan-mode-with-durable-plan-files",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["plan-mode-and-plan-files"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 計畫為日誌狀態非檔案"
+    },
+    "collaboration-mode-and-personality-templates": {
+      "domain": "extension",
+      "label": "collaboration-mode-and-personality-templates",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["collaboration-mode-and-personality-templates"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "產品級模式模板，暫不納入"
+    },
+    "tool-search-and-deferred-tool-loading": {
+      "domain": "extension",
+      "label": "tool-search-and-deferred-tool-loading",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["tool-search-deferred-tools"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 工具延後曝光歸於工具面"
+    },
+    "code-mode-javascript-host": {
+      "domain": "extension",
+      "label": "code-mode-javascript-host",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["code-mode-javascript-host"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["codemode-execute-tool"],
+        "opencode-fork": []
+      },
+      "disposition": "不做",
+      "rationale": "PTC 執行模型程式碼違反原則"
+    },
+    "extension-contributor-registry": {
+      "domain": "extension",
+      "label": "extension-contributor-registry",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["extension-registry-contributor-seams"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 以 ctx 服務取代貢獻者表"
+    },
+    "subagent-bundle-cache-with-user-edit-preservation": {
+      "domain": "extension",
+      "label": "subagent-bundle-cache-with-user-edit-preservation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["subagent-bundle-cache-with-user-edit-preservation"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "校驗清單保護手改檔案可借鏡"
+    },
+    "workspace-instruction-baseline-and-change-projection": {
+      "domain": "extension",
+      "label": "workspace-instruction-baseline-and-change-projection",
+      "members": {
+        "ih": [],
+        "dsh": ["workspace-instruction-baseline-and-change-projection"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 有發掘但無變更投影"
+    },
+    "settings-namespace-registry-and-file-persistence": {
+      "domain": "extension",
+      "label": "settings-namespace-registry-and-file-persistence",
+      "members": {
+        "ih": [],
+        "dsh": ["settings-namespace-registry-and-file-backed-persistence"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 設定文件歸於運維面"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": [
+        "ih:mcp-client-with-generation-based-reconnection-and-oauth",
+        "grok:mcp-oauth-consent-with-in-and-cross-process-dedup",
+        "cc-custom:mcp-oauth-and-xaa-auth"
+      ],
+      "whyNotMerged": "ih-2 是同一個機制同時涵蓋世代重連、OAuth 同意流程與公開工具命名，但一個機制只能入一列，已置於重連列（其主體）。因此 OAuth 列與公開命名列都沒有 ih 成員，兩列無法標 已存在；已在 rationale 註明 IH 的實作併在重連機制內。"
+    },
+    {
+      "mechanisms": [
+        "dsh:durable-todo-goal-schedule-and-workflow-extension-state",
+        "cc-custom:todo-durable-state",
+        "cc-custom:cron-scheduling"
+      ],
+      "whyNotMerged": "dsh 把待辦、目標、排程與工作流併成單一機制（6 個模組中工作流佔 3 個），已置於工作流列。因此待辦列與排程列缺 dsh 成員。未把 dsh 硬拆進待辦列，因為那會主張『四合一機制等同單一待辦狀態』，是錯的合併。"
+    },
+    {
+      "mechanisms": [
+        "ih:skill-md-deferred-retrieval-with-a-shadow-selector",
+        "cc-custom:tool-search-deferred-tools"
+      ],
+      "whyNotMerged": "兩者都是『先不曝光、用搜尋工具按需載入』的延遲檢索，但延後物件不同（技能內文 vs 工具結構），索引與選擇語法也不同。且 IH 的工具延後曝光記在 tools 面（deferred-tool-exposure-with-search-driven-promotion），故本域以路線差異處理而未合併。"
+    },
+    {
+      "mechanisms": [
+        "ih:skill-md-deferred-retrieval-with-a-shadow-selector",
+        "codex:explicit-mention-and-implicit-skill-invocation"
+      ],
+      "whyNotMerged": "兩者都含『僅觀測、不改變行為』的隱式技能叫用偵測路徑，相似度很高；但 ih-4 的主體是內文延遲載入與 BM25 檢索，cx-5 的主體是 $name 提及掃描與選擇，主體不同，未合併。若後續判定主體可讓，這兩列可再合。"
+    },
+    {
+      "mechanisms": [
+        "cc-custom:plan-mode-and-plan-files",
+        "codex:collaboration-mode-and-personality-templates"
+      ],
+      "whyNotMerged": "兩者都含計畫模式，但 cx-10 把它一般化為『模式＋模型＋推理強度』的模板束且計畫不落盤（僅事件流），cc-18 則以權限模式切換加計畫檔為核心。共用面只有計畫模式一項，不足以斷定同一能力。"
+    },
+    {
+      "mechanisms": [
+        "dsh:dynamic-cordis-package-sandbox-approval-and-client-execution",
+        "opencode-fork:direct-extension-capability-approval"
+      ],
+      "whyNotMerged": "兩者都以明確核准作為外掛取得執行期能力的前提，但 dsh-10 的主體是在 node:vm 中執行外掛程式碼（IH 明令不做），ocf-7 是可宣告／執行期能力帳本。核准只是共同前置條件，不是同一能力。"
+    },
+    {
+      "mechanisms": [
+        "cc-custom:bundled-skills-registry",
+        "grok:subagent-bundle-cache-with-user-edit-preservation"
+      ],
+      "whyNotMerged": "兩者都把打包資源解到快取並硬化路徑與權限，但 cc-11 解的是編譯進 CLI 的技能附件（首次叫用才解），gk-10 是有校驗清單、保留手改檔的已發佈子代理包；物件與失效策略不同。"
+    },
+    {
+      "mechanisms": [
+        "opencode-fork:mcp-runtime-in-core",
+        "opencode-fork:lsp-runtime-in-core"
+      ],
+      "whyNotMerged": "兩者是同一個分叉決定的兩個實例（把擴充執行期移入 core），但 ocf-4 的主體其實是 MCP 提示改走共用指令註冊表；主體不同故分列，不合成『執行期重新分層』一列。"
+    },
+    {
+      "mechanisms": [
+        "codex:extension-registry-contributor-seams",
+        "ih:plugin-event-kernel-with-four-extension-channels"
+      ],
+      "whyNotMerged": "兩者都是擴充面接入主機的縫，但 cx-11 的貢獻者是編譯期第一方 crate（TypeId 為鍵、建構後不可變），ih-1 是執行期外掛鉤子（scope 樹、四通道）。接入模型不同，未合併。"
+    },
+    {
+      "mechanisms": [
+        "dsh:mcp-tool-bridging-and-namespace-isolation",
+        "grok:mcp-tool-name-and-icon-ingest-hardening"
+      ],
+      "whyNotMerged": "兩者都處理 MCP 工具名稱，但方向相反：dsh 是主機對外合成公開名（加雜湊尾綴避免身分塌陷），grok 是對內以最嚴供應商交集拒收不合規名。一個是產出、一個是准入，未合併。"
+    },
+    {
+      "mechanisms": [
+        "codex:plugin-manifest-and-marketplace-distribution",
+        "cc-custom:plugin-install-and-component-integration"
+      ],
+      "whyNotMerged": "cx-8 同時涵蓋 manifest 能力種類、marketplace 來源與安裝，已置於 marketplace 列；因此安裝啟用列沒有 codex 成員。未再切分 cx-8，以免同一機制重複計數。"
+    },
+    {
+      "mechanisms": [
+        "cc-custom:lsp-passive-diagnostics",
+        "opencode:lsp-diagnostics-and-navigation"
+      ],
+      "whyNotMerged": "兩者都把 LSP 診斷送給模型，但 cc-9 是推播式、去重與量限的附件管線，oc-4 是逐檔或全工作區的隨選報告，且 oc-4 已置於 LSP 執行期列（其主體是啟動與檔案追蹤）。"
+    },
+    {
+      "mechanisms": [
+        "dsh:workspace-instruction-baseline-and-change-projection",
+        "ih:instruction-file-discovery-with-a-sync-stat-keyed-cache (context 面)"
+      ],
+      "whyNotMerged": "IH 的指令檔發掘記在 context 面，依規則不能作為本域成員，故本列標 rewrite 而非路線差異；dsh-12 另有由工具結果觸發的變更投影，該部分 IH 確實沒有。"
+    },
+    {
+      "mechanisms": [
+        "dsh:settings-namespace-registry-and-file-backed-persistence",
+        "ih:settings-document-layered-precedence-hot-reload-comment-preservation (ops 面)"
+      ],
+      "whyNotMerged": "IH 的設定文件記在運維面，故本列無 ih 成員而只能標路線差異。dsh-13 另有命名空間修訂號與路徑尋址寫入，是本列相對 IH 的實質增量，值得讀者另眼看待。"
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 78,
+    "mechanismsPlaced": 78
+  }
+}

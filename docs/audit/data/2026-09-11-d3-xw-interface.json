@@ -1,0 +1,497 @@
+{
+  "domain": "interface",
+  "rows": {
+    "renderer-event-stream-contract": {
+      "domain": "interface",
+      "label": "renderer-event-stream-contract",
+      "members": {
+        "ih": ["tui-event-stream-contract-over-the-session-log"],
+        "dsh": ["session-event-stream-contract"],
+        "codex": ["event-msg-stream-contract"],
+        "grok": [],
+        "cc-custom": ["print-mode-streaming-loop"],
+        "opencode": ["renderer-stream-transport"],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "IH 以 log seq 為游標，可完整重推導"
+    },
+    "wire-event-envelope-and-acceptance": {
+      "domain": "interface",
+      "label": "wire-event-envelope-and-acceptance",
+      "members": {
+        "ih": [],
+        "dsh": ["session-wire-event-acceptance"],
+        "codex": ["app-server-notification-contract-and-capability-negotiation"],
+        "grok": [],
+        "cc-custom": ["sdk-message-schema-contract"],
+        "opencode": ["event-envelope-contract"],
+        "opencode-fork": ["event-v2-legacy-payload-bridge"]
+      },
+      "disposition": "rewrite",
+      "rationale": "封閉信封外欄位即錯，值得照 IH 慣例做"
+    },
+    "durable-versioned-event-manifest": {
+      "domain": "interface",
+      "label": "durable-versioned-event-manifest",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["versioned-event-manifest"],
+        "opencode-fork": ["event-manifest-versioned-contract"]
+      },
+      "disposition": "遠期",
+      "rationale": "durable 版本化 manifest 屬產品級"    },
+    "subscriber-routing-and-bounded-replay": {
+      "domain": "interface",
+      "label": "subscriber-routing-and-bounded-replay",
+      "members": {
+        "ih": [],
+        "dsh": ["forwarded-event-subscription-contract"],
+        "codex": ["renderer-notification-routing-and-bounded-replay"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "有界重放與增量合併值得自建訂閱層"
+    },
+    "client-remote-stream-supervision": {
+      "domain": "interface",
+      "label": "client-remote-stream-supervision",
+      "members": {
+        "ih": [],
+        "dsh": ["client-remote-stream-supervision"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "退避加抖動與 generation 契約可直接抄"
+    },
+    "session-projection-consumer-contract": {
+      "domain": "interface",
+      "label": "session-projection-consumer-contract",
+      "members": {
+        "ih": [],
+        "dsh": ["session-projection-consumer-contract"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "缺 key 即能力缺席的讀取契約可照搬"
+    },
+    "user-question-interaction-seam": {
+      "domain": "interface",
+      "label": "user-question-interaction-seam",
+      "members": {
+        "ih": [],
+        "dsh": ["user-question-interaction-seam"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "提問意圖須在提問方驗證，值得自建"
+    },
+    "control-protocol-with-request-correlation": {
+      "domain": "interface",
+      "label": "control-protocol-with-request-correlation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["sdk-control-protocol"],
+        "opencode": [],
+        "opencode-fork": ["worker-thread-rpc-bridge"]
+      },
+      "disposition": "rewrite",
+      "rationale": "id 對帳與未知子型別拒收，須自建"
+    },
+    "structured-io-transport": {
+      "domain": "interface",
+      "label": "structured-io-transport",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["structured-io-transport"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "單一 stdout 寫者與待決表可直接照抄"
+    },
+    "command-run-request-channel": {
+      "domain": "interface",
+      "label": "command-run-request-channel",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["tui-control-channel"],
+        "opencode-fork": ["tui-control-request-channel"]
+      },
+      "disposition": "reuse",
+      "rationale": "FIFO 命令佇列通道乾淨，可整段照抄"
+    },
+    "screen-mode-policy": {
+      "domain": "interface",
+      "label": "screen-mode-policy",
+      "members": {
+        "ih": ["screen-mode-policy-and-host-re-launch-seam"],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["screen-mode-policy"],
+        "opencode": ["screen-mode-policy"],
+        "opencode-fork": ["renderer-screen-mode-policy"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 只有主機重啟縫，缺模式決定策略"
+    },
+    "screen-mode-switch-state-reseed": {
+      "domain": "interface",
+      "label": "screen-mode-switch-state-reseed",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["screen-mode-switch-with-in-process-reseed"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "就地換模式並重推導衍生狀態值得學"
+    },
+    "slash-command-capability-gate": {
+      "domain": "interface",
+      "label": "slash-command-capability-gate",
+      "members": {
+        "ih": ["hard-slash-command-capability-gate"],
+        "dsh": [],
+        "codex": ["slash-command-capability-gating"],
+        "grok": ["session-capability-gated-command-advertisement"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 有硬閘但能力從未推入，須接通"
+    },
+    "tool-presentation-mode-policy": {
+      "domain": "interface",
+      "label": "tool-presentation-mode-policy",
+      "members": {
+        "ih": [],
+        "dsh": ["tool-presentation-mode-policy"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "native/ptc 工具面模式屬模型側政策"
+    },
+    "settings-seam": {
+      "domain": "interface",
+      "label": "settings-seam",
+      "members": {
+        "ih": [],
+        "dsh": ["settings-seam"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "命名空間註冊與遮罩描述子是乾淨參考"
+    },
+    "file-settings-provider": {
+      "domain": "interface",
+      "label": "file-settings-provider",
+      "members": {
+        "ih": [],
+        "dsh": ["file-settings-provider"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "葉級保註解寫入與跨程序鎖須自建"
+    },
+    "operator-config-layer-stack": {
+      "domain": "interface",
+      "label": "operator-config-layer-stack",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["operator-config-layer-stack-and-requirements"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "分層來源歸因與 requirements 值得照做"
+    },
+    "handshake-capability-negotiation": {
+      "domain": "interface",
+      "label": "handshake-capability-negotiation",
+      "members": {
+        "ih": [],
+        "dsh": ["acp-capability-advertisement"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["client-capability-negotiation"],
+        "opencode-fork": ["acp-capability-negotiation"]
+      },
+      "disposition": "reuse",
+      "rationale": "連線級能力協商且未知即假，可照抄"
+    },
+    "client-endpoint-capability-probe": {
+      "domain": "interface",
+      "label": "client-endpoint-capability-probe",
+      "members": {
+        "ih": [],
+        "dsh": ["directory-picker-capability-detection"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["capability-detection-endpoint"],
+        "opencode-fork": ["experimental-capabilities-endpoint"]
+      },
+      "disposition": "reuse",
+      "rationale": "能力端點由旗標推導不重讀環境"
+    },
+    "plugin-runtime-capability-readiness": {
+      "domain": "interface",
+      "label": "plugin-runtime-capability-readiness",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["plugin-runtime-capability-readiness"]
+      },
+      "disposition": "rewrite",
+      "rationale": "逐能力就緒度上報，無證據不算就緒"
+    },
+    "selected-capability-roots": {
+      "domain": "interface",
+      "label": "selected-capability-roots",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["selected-capability-roots"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "能力根位置模型屬多環境部署工程"
+    },
+    "client-boot-manifest-announcement": {
+      "domain": "interface",
+      "label": "client-boot-manifest-announcement",
+      "members": {
+        "ih": [],
+        "dsh": ["client-boot-manifest-announcement"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "單一內容定址啟動圖與就緒訊號可自建"
+    },
+    "terminal-capability-detection": {
+      "domain": "interface",
+      "label": "terminal-capability-detection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["screen-mode-and-terminal-capability-detection"],
+        "grok": [],
+        "cc-custom": ["terminal-capability-detection", "hyperlink-capability-detection"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "開機探測終端能力，未知一律為假"
+    },
+    "terminal-query-response-protocol": {
+      "domain": "interface",
+      "label": "terminal-query-response-protocol",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["terminal-query-protocol"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "DA1 哨兵分批與無超時查詢值得學"
+    },
+    "headless-stdin-tty-override": {
+      "domain": "interface",
+      "label": "headless-stdin-tty-override",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["headless-stdin-override"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "管線 stdin 時改用 tty，三項排除條件"
+    },
+    "transcript-export-render-seam": {
+      "domain": "interface",
+      "label": "transcript-export-render-seam",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["render-export-seam"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "分塊重繪匯出且縫不破工具配對"
+    },
+    "renderer-event-queue-turn-flush": {
+      "domain": "interface",
+      "label": "renderer-event-queue-turn-flush",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["sdk-event-queue"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "有界佇列汰舊不汰新，可直接照抄"
+    },
+    "queue-state-broadcast-contract": {
+      "domain": "interface",
+      "label": "queue-state-broadcast-contract",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["queue-state-broadcast-contract"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "整份快照而非增量補丁，避免錯位"
+    },
+    "ndjson-line-safety": {
+      "domain": "interface",
+      "label": "ndjson-line-safety",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["ndjson-line-safety"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "跳脫 U+2028/9 的純函式可逐字照抄"
+    },
+    "gated-presentation-io-modules": {
+      "domain": "interface",
+      "label": "gated-presentation-io-modules",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["gated-presentation-io-modules"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "模組存在但恆為 null，等於未接通"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": ["hard-slash-command-capability-gate", "slash-command-capability-gating", "session-capability-gated-command-advertisement"],
+      "whyNotMerged": "Merged after review, recorded here because the enforcement point genuinely differs: IH is a hard dispatch gate that refuses the line before it becomes a prompt; codex evaluates three orthogonal predicates at list-construction time (is_visible platform/build, side-conversation allowlist, during-task exhaustive match); grok advertises a per-session Copy snapshot whose Default is all-false and ships the live tool-name list out-of-band in ACP AvailableCommandsUpdate.meta, so a client ignoring _meta offers commands it cannot run. Same capability, three enforcement points."
+    },
+    {
+      "mechanisms": ["dsh:tool-presentation-mode-policy", "ih:screen-mode-policy-and-host-re-launch-seam", "codex:screen-mode-and-terminal-capability-detection", "grok:screen-mode-switch-with-in-process-reseed", "cc-custom:screen-mode-policy"],
+      "whyNotMerged": "dsh tool-presentation-mode-policy was explicitly NOT merged into screen-mode-policy despite the shared 'presentation mode' vocabulary. It selects the MODEL-FACING tool surface (native schemas vs run_code+SDK prompt vs both) with a scoped nearest-wins presentAs override; the others decide terminal rendering mode (alt-screen vs inline). Merging on the word 'presentation' would have been a name-driven false merge."
+    },
+    {
+      "mechanisms": ["codex:screen-mode-and-terminal-capability-detection", "codex:event-msg-stream-contract", "codex:app-server-notification-contract-and-capability-negotiation"],
+      "whyNotMerged": "codex screen-mode-and-terminal-capability-detection is ONE inventory entry spanning two of my rows (alt-screen decision policy AND the TTY requirement + bounded 100 ms cursor/color/keyboard-enhancement probe). Hard rule 2 forbids citing one source mechanism twice, so I placed the whole entry in terminal-capability-detection (which the mechanism name itself names) and left the screen-mode-policy row codex-free. Same collision on codex app-server-notification-contract-and-capability-negotiation: it is both the wire-format contract (row: wire-event-envelope-and-acceptance) and a per-connection capability negotiation, and I placed it only in the former, which makes handshake-capability-negotiation codex-free even though codex genuinely negotiates capabilities. Codex's composite inventory entries under-represent it in two rows; a reader comparing row membership must know this."
+    },
+    {
+      "mechanisms": ["cc-custom:render-export-seam"],
+      "whyNotMerged": "Placed as a required single-member row, but flagged: render-export-seam is largely renderer-internal (chunked renderToAnsiString, StaticKeybindingProvider deliberately omitting ChordInterceptor because useInput would hang with no stdin, ansiToSvg/ansiToPng rasterization, screenshotClipboard) which the taxonomy marks OUT of scope. Only the seam itself is arguably backend interface - chunk size 40, the ceiling/empty-strip termination contract, and the requirement that a chunk seam must not break tool_use<->tool_result grouping. A reviewer may prefer to drop this row from the interface domain; I kept it because the brief forbids skipping mechanisms."
+    },
+    {
+      "mechanisms": ["dsh:settings-seam", "codex:operator-config-layer-stack-and-requirements"],
+      "whyNotMerged": "Both are 'the presentation layer configures the engine' but at different layers. dsh settings-seam is the consumer-facing service a configuration UI talks to (namespace registration, redacted describe(), path-addressed SettingsPathOp so a redacted view cannot rebuild a section and delete secrets, SETTINGS_CONFLICT with expected/actual revisions). codex operator-config-layer-stack is engine-side config RESOLUTION (multi-source layer stack, requirements constraining lower layers, managed-features path, source attribution, permission-profile catalog). Collapsing a consumption seam into a resolution model was not justifiable."
+    },
+    {
+      "mechanisms": ["dsh:forwarded-event-subscription-contract", "codex:renderer-notification-routing-and-bounded-replay"],
+      "whyNotMerged": "Merged as subscriber-routing-and-bounded-replay, but this is the weakest merge in the domain and the row should be read as a family. dsh is a typesafe allowlisted forward contract ($on, 19 allowlisted events, two waterfall entries) whose consumer face omits an augmentation and fails to compile rather than no-op; codex is a renderer-side bounded ring buffer (32768 events/thread, 4 KiB coalesce cap, 256 KiB budget, front-first eviction) with thread-id classification and a narrow rebase allowlist. What they share is only 'how a subscriber is fed'."
+    },
+    {
+      "mechanisms": ["cc-custom:structured-io-transport", "cc-custom:sdk-control-protocol"],
+      "whyNotMerged": "Kept as two rows although both live on the same stdio stream. sdk-control-protocol is the wire protocol (21 request subtypes, request_id correlation, separate stdout/stdin envelope unions, error responses re-stating pending_permission_requests). structured-io-transport is the process-level carrier (NDJSON line-splitting, a single stdout writer so a control_request cannot overtake queued stream_events, abort resolving locally without host ack, resolvedToolUseIds duplicate suppression). Protocol and transport, not one capability."
+    },
+    {
+      "mechanisms": ["grok:queue-state-broadcast-contract", "dsh:session-projection-consumer-contract"],
+      "whyNotMerged": "Both hand a renderer derived state as a wholesale snapshot rather than incremental patches, and both care about the running row being carried out-of-band. But grok's is one typed per-session broadcast with a golden-JSON wire test and a required sessionId routing key; dsh's is a registry of versioned projection units (sessionStats v1, tokenUsage v2, contextPressure/contextBreakdown v4) where a missing key means capability-absence, never zero. The shared idea did not survive close reading."
+    },
+    {
+      "mechanisms": ["dsh:directory-picker-capability-detection", "cc-custom:headless-stdin-override", "cc-custom:terminal-capability-detection"],
+      "whyNotMerged": "A tempting single 'host capability detection' family that I deliberately did not form. dsh's probeReport surface is described only inside its screen-mode mechanism and has no standalone inventory entry in any source, so it is unreferenceable as a member; cc-custom headless-stdin-override is a stream substitution that merely requires TTY facts (with CI / mcp argv / win32 opt-outs); cc-custom terminal-capability-detection is a static env allowlist computed once at module load. Grouping them would have required inventing member names, which the brief forbids."
+    },
+    {
+      "mechanisms": ["opencode:versioned-event-manifest", "opencode-fork:event-manifest-versioned-contract", "opencode:event-envelope-contract", "opencode-fork:event-v2-legacy-payload-bridge"],
+      "whyNotMerged": "Placing opencode-upstream and opencode-fork members in the SAME row is deliberate, not an oversight: the fork's own evidence (packages/core/src/public-event-manifest.ts re-exporting EventManifest.ServerDefinitions; opencode/src/event-manifest.ts re-exporting Definitions/Durable/Latest from the schema package) shows the fork inherits the upstream mechanism rather than designing a different one. Treating upstream and fork as two independent sources here would have manufactured a false disagreement."
+    }
+  ],
+  "coverage": { "mechanismsSeen": 53, "mechanismsPlaced": 53 }
+}

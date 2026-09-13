@@ -1,0 +1,949 @@
+{
+  "domain": "safety",
+  "rows": {
+    "os-sandbox-backend-selection-probing-and-profile-synthesis": {
+      "domain": "safety",
+      "label": "os-sandbox-backend-selection-probing-and-profile-synthesis",
+      "members": {
+        "ih": ["startup-applied-os-sandbox-that-refuses-to-run-unprotected"],
+        "dsh": ["platform-runner-chain-selection-and-probing", "per-runner-profile-synthesis-and-writable-roots"],
+        "codex": ["platform-sandbox-selection-and-transform", "seatbelt-and-bubblewrap-backends"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["startup-applied-os-sandbox"],
+        "cc-custom": ["os-sandbox-delegation"]
+      },
+      "disposition": "已存在",
+      "rationale": "OS 隔離後端選擇與設定檔合成已具備"
+    },
+    "confinement-availability-gate-and-refusal": {
+      "domain": "safety",
+      "label": "confinement-availability-gate-and-refusal",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["refuse-to-start-unprotected-sandbox"],
+        "cc-custom": ["sandbox-availability-gate"]
+      },
+      "disposition": "rewrite",
+      "rationale": "需驗證隔離確實生效，否則拒絕啟動"
+    },
+    "windows-write-restricted-token-sandbox-and-sid-grants": {
+      "domain": "safety",
+      "label": "windows-write-restricted-token-sandbox-and-sid-grants",
+      "members": {
+        "ih": ["windows-write-restricted-token-backend"],
+        "dsh": ["windows-acl-write-restricted-token", "windows-acl-capability-sid-grant-lifecycle"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "Windows 寫入受限權杖與授權生命週期已有"
+    },
+    "windows-multi-level-sandbox-with-wfp-network-filters": {
+      "domain": "safety",
+      "label": "windows-multi-level-sandbox-with-wfp-network-filters",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["windows-sandbox-three-levels-with-wfp"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "獨立帳號加 WFP 網路過濾，工程量體大"
+    },
+    "bwrap-read-deny-placeholder-mounts": {
+      "domain": "safety",
+      "label": "bwrap-read-deny-placeholder-mounts",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["bwrap-reexec-with-read-deny-placeholders"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "bwrap 讀取拒絕需以不可讀掛載覆蓋"
+    },
+    "declarative-sandbox-policy-with-read-write-network-axes": {
+      "domain": "safety",
+      "label": "declarative-sandbox-policy-with-read-write-network-axes",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["sandbox-policy-model"]
+      },
+      "disposition": "rewrite",
+      "rationale": "政策需含讀寫與網路三軸宣告"
+    },
+    "named-sandbox-profile-catalog-with-anti-hollowing-merge": {
+      "domain": "safety",
+      "label": "named-sandbox-profile-catalog-with-anti-hollowing-merge",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["predefined-sandbox-profiles-and-anti-hollowing-merge"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "具名設定檔需防專案覆寫掏空"
+    },
+    "read-isolation-capability-declaration-and-refusal-gate": {
+      "domain": "safety",
+      "label": "read-isolation-capability-declaration-and-refusal-gate",
+      "members": {
+        "ih": ["read-isolation-is-declared-but-absent-the-gate-is-never-armed-outside-tests"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "讀隔離僅宣告未實作，閘門須接線"
+    },
+    "in-process-fs-write-containment-fence": {
+      "domain": "safety",
+      "label": "in-process-fs-write-containment-fence",
+      "members": {
+        "ih": [],
+        "dsh": ["fs-mutation-containment-fence"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "需在 fs 層加寫入範圍圍籬"
+    },
+    "confinement-wired-only-into-shell-tools": {
+      "domain": "safety",
+      "label": "confinement-wired-only-into-shell-tools",
+      "members": {
+        "ih": ["confinement-covers-only-shell-fs-fs-search-and-terminal-have-no-sandbox-integration"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "隔離只接 shell，需擴及 fs 與終端"
+    },
+    "sandbox-mode-vocabulary-resolution-and-session-override-log": {
+      "domain": "safety",
+      "label": "sandbox-mode-vocabulary-resolution-and-session-override-log",
+      "members": {
+        "ih": ["sandbox-mode-resolution-and-advisory-prompt-text"],
+        "dsh": ["sandbox-mode-vocabulary-and-per-call-policy", "session-sandbox-mode-override-log"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "沙箱模式解析與覆寫日誌已具備"
+    },
+    "sandbox-escalation-ladder-with-approval": {
+      "domain": "safety",
+      "label": "sandbox-escalation-ladder-with-approval",
+      "members": {
+        "ih": ["sandbox-escalation-ladder-declared-tested-no-production-caller"],
+        "dsh": ["escalation-ladder-and-approval-choreography"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "升級階梯測試存在但未接生產路徑"
+    },
+    "permission-rule-evaluation-and-precedence": {
+      "domain": "safety",
+      "label": "permission-rule-evaluation-and-precedence",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["permission-rule-engine"],
+        "opencode-fork": ["legacy-permission-rules-shim"],
+        "grok": [],
+        "cc-custom": ["permission-rule-decision-ladder"]
+      },
+      "disposition": "rewrite",
+      "rationale": "需可設定的規則式權限決策引擎"
+    },
+    "core-permission-service-with-pending-ask-and-uninterruptible-assert": {
+      "domain": "safety",
+      "label": "core-permission-service-with-pending-ask-and-uninterruptible-assert",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["core-permission-service-v2"],
+        "opencode-fork": ["permission-v2-engine"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "核心權限服務含不可中斷 assert"
+    },
+    "permission-ask-queue-with-remembered-approvals": {
+      "domain": "safety",
+      "label": "permission-ask-queue-with-remembered-approvals",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["permission-ask-queue"],
+        "opencode-fork": ["permission-ask-and-remembered-rules"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "待決詢問佇列與記住授權需自建"
+    },
+    "permission-ask-plugin-seam": {
+      "domain": "safety",
+      "label": "permission-ask-plugin-seam",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["permission-ask-plugin-seam"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "權限外掛接縫可改寫判定結果"
+    },
+    "hooks-as-permission-gates": {
+      "domain": "safety",
+      "label": "hooks-as-permission-gates",
+      "members": {
+        "ih": ["hooks-as-fail-closed-gates-and-fail-visible-observers"],
+        "dsh": ["hooks-as-permission-gates"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["hooks-as-fail-open-gates-with-deny-precedence"],
+        "cc-custom": ["hook-permission-gate"]
+      },
+      "disposition": "rewrite",
+      "rationale": "hook 閘門語意完整但未接線"
+    },
+    "approval-service-policy-and-turn-enclosed-audit-pair": {
+      "domain": "safety",
+      "label": "approval-service-policy-and-turn-enclosed-audit-pair",
+      "members": {
+        "ih": [],
+        "dsh": ["approval-service-policy-and-audit-pair"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "審批政策與同回合稽核配對需補"
+    },
+    "single-shot-approval-decision": {
+      "domain": "safety",
+      "label": "single-shot-approval-decision",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["approval-decision-single-shot"]
+      },
+      "disposition": "rewrite",
+      "rationale": "審批需原子單次裁決與中止即拒絕"
+    },
+    "session-scoped-approval-cache": {
+      "domain": "safety",
+      "label": "session-scoped-approval-cache",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["session-scoped-approval-cache"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "同回合審批快取可避免重複詢問"
+    },
+    "permission-preset-bundling-over-mode-and-approval-knobs": {
+      "domain": "safety",
+      "label": "permission-preset-bundling-over-mode-and-approval-knobs",
+      "members": {
+        "ih": [],
+        "dsh": ["permission-preset-bundling-and-knob-write-path"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "模式與審批雙旋鈕的 preset 綁定"
+    },
+    "permission-mode-vocabulary-and-projection": {
+      "domain": "safety",
+      "label": "permission-mode-vocabulary-and-projection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["permission-mode-projection-and-queue-drain"],
+        "cc-custom": ["permission-mode-model"]
+      },
+      "disposition": "rewrite",
+      "rationale": "權限模式詞彙與投影需統一"
+    },
+    "bypass-permissions-organization-killswitch": {
+      "domain": "safety",
+      "label": "bypass-permissions-organization-killswitch",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["bypass-permissions-killswitch"]
+      },
+      "disposition": "rewrite",
+      "rationale": "組織需能停用繞過權限模式"
+    },
+    "three-layer-approval-policy-with-shell-danger-classifier": {
+      "domain": "safety",
+      "label": "three-layer-approval-policy-with-shell-danger-classifier",
+      "members": {
+        "ih": ["three-layer-approval-policy-with-an-advisory-danger-classifier"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "三層審批與 shell 危險分類已具備"
+    },
+    "guardian-auto-review-subagent-with-circuit-breaker": {
+      "domain": "safety",
+      "label": "guardian-auto-review-subagent-with-circuit-breaker",
+      "members": {
+        "ih": ["guardian-auto-review-subagent-with-fail-closed-verdict-and-breaker"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "守護審查子代理含斷路器已具備"
+    },
+    "auto-mode-llm-danger-classifier": {
+      "domain": "safety",
+      "label": "auto-mode-llm-danger-classifier",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["auto-mode-llm-danger-classifier"]
+      },
+      "disposition": "rewrite",
+      "rationale": "以模型分類自動放行屬遠期實驗"
+    },
+    "advisory-repeat-tool-call-reminder": {
+      "domain": "safety",
+      "label": "advisory-repeat-tool-call-reminder",
+      "members": {
+        "ih": ["repeat-call-nudge-guard-observational-never-blocking"],
+        "dsh": ["advisory-repeat-tool-guard"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "重複呼叫提醒已具備"
+    },
+    "denial-count-circuit-breaker-back-to-prompting": {
+      "domain": "safety",
+      "label": "denial-count-circuit-breaker-back-to-prompting",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["denial-tracking-circuit-breaker"]
+      },
+      "disposition": "rewrite",
+      "rationale": "連續拒絕達門檻應改回詢問"
+    },
+    "tool-execution-timeout-guard": {
+      "domain": "safety",
+      "label": "tool-execution-timeout-guard",
+      "members": {
+        "ih": ["tool-timeout-guard-converting-a-hang-into-tool-timeout"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "工具逾時守衛已具備"
+    },
+    "tool-retry-guard-with-re-entrancy-protection": {
+      "domain": "safety",
+      "label": "tool-retry-guard-with-re-entrancy-protection",
+      "members": {
+        "ih": ["tool-retry-guard-with-re-entrancy-protection"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "工具重試守衛已具備"
+    },
+    "scoped-per-agent-preset-mount-isolation": {
+      "domain": "safety",
+      "label": "scoped-per-agent-preset-mount-isolation",
+      "members": {
+        "ih": ["agent-preset-as-scoped-per-agent-configuration"],
+        "dsh": ["preset-scope-isolation-gate"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "preset 掛載範圍隔離已具備"
+    },
+    "human-question-tool-seam": {
+      "domain": "safety",
+      "label": "human-question-tool-seam",
+      "members": {
+        "ih": [],
+        "dsh": ["human-question-tool-seam"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "需接上人類提問工具接縫"
+    },
+    "client-approval-and-permission-surfaces": {
+      "domain": "safety",
+      "label": "client-approval-and-permission-surfaces",
+      "members": {
+        "ih": [],
+        "dsh": ["client-approval-and-permission-surfaces"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "遠端客戶端審批介面屬產品層"
+    },
+    "sandbox-denial-classification-and-evidence": {
+      "domain": "safety",
+      "label": "sandbox-denial-classification-and-evidence",
+      "members": {
+        "ih": [],
+        "dsh": ["shell-confinement-wrap-and-denial-classification"],
+        "codex": ["sandbox-violation-classification"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "沙箱拒絕需轉為結構化證據"
+    },
+    "sandbox-violation-surfacing-in-ui": {
+      "domain": "safety",
+      "label": "sandbox-violation-surfacing-in-ui",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["sandbox-violation-surfacing"]
+      },
+      "disposition": "rewrite",
+      "rationale": "沙箱攔截需在介面可見"
+    },
+    "no-os-level-sandbox-permission-only-confinement": {
+      "domain": "safety",
+      "label": "no-os-level-sandbox-permission-only-confinement",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["no-os-level-sandbox"],
+        "opencode-fork": ["no-os-level-sandbox"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "路線差異",
+      "rationale": "以權限模型取代 OS 隔離的路線"
+    },
+    "permission-rule-shadow-detection": {
+      "domain": "safety",
+      "label": "permission-rule-shadow-detection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["permission-rule-shadow-detection"]
+      },
+      "disposition": "rewrite",
+      "rationale": "規則遮蔽僅診斷不改變決策"
+    },
+    "path-safety-and-dangerous-removal-guard": {
+      "domain": "safety",
+      "label": "path-safety-and-dangerous-removal-guard",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["path-safety-and-dangerous-removal-guard"]
+      },
+      "disposition": "rewrite",
+      "rationale": "需拒絕根目錄刪除與逃逸 glob"
+    },
+    "dangerous-allow-rule-stripping": {
+      "domain": "safety",
+      "label": "dangerous-allow-rule-stripping",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["dangerous-allow-rule-stripping"]
+      },
+      "disposition": "rewrite",
+      "rationale": "自動模式需剝除危險放行規則"
+    },
+    "sandbox-auto-allow-and-write-allowlist-shortcut": {
+      "domain": "safety",
+      "label": "sandbox-auto-allow-and-write-allowlist-shortcut",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["sandbox-auto-allow-and-write-allowlist"]
+      },
+      "disposition": "rewrite",
+      "rationale": "已隔離指令可略過詢問的捷徑"
+    },
+    "ssrf-guard-for-http-hooks": {
+      "domain": "safety",
+      "label": "ssrf-guard-for-http-hooks",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["ssrf-guard-for-http-hooks"]
+      },
+      "disposition": "遠期",
+      "rationale": "HTTP hook 的 SSRF 防護屬遠期"
+    },
+    "hook-write-deny-under-sandbox": {
+      "domain": "safety",
+      "label": "hook-write-deny-under-sandbox",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["hook-write-deny-under-sandbox"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "沙箱需保護 hook 安裝路徑"
+    },
+    "session-permission-ruleset-persistence": {
+      "domain": "safety",
+      "label": "session-permission-ruleset-persistence",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["session-permission-persistence"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "需持久化每 session 權限規則集"
+    },
+    "permission-ruleset-v1-to-v2-migration": {
+      "domain": "safety",
+      "label": "permission-ruleset-v1-to-v2-migration",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["permission-v1-to-v2-migration"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "規則模型改版需冪等遷移"
+    },
+    "subagent-grant-and-blocked-permissions": {
+      "domain": "safety",
+      "label": "subagent-grant-and-blocked-permissions",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["subagent-grant-and-blocked-permissions"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "子代理授權需明確授予與封鎖"
+    },
+    "mcp-and-external-directory-permission-gates": {
+      "domain": "safety",
+      "label": "mcp-and-external-directory-permission-gates",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["mcp-and-external-directory-gates"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "MCP 與外部目錄需獨立權限閘"
+    },
+    "managed-policy-layer-with-root-owned-pin": {
+      "domain": "safety",
+      "label": "managed-policy-layer-with-root-owned-pin",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["root-owned-managed-policy-pin"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "企業代管政策層屬產品層"
+    },
+    "macos-mdm-forced-managed-preferences": {
+      "domain": "safety",
+      "label": "macos-mdm-forced-managed-preferences",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["macos-mdm-forced-managed-preferences"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "macOS MDM 代管偏好屬平台層"
+    },
+    "signed-policy-at-rest-fail-closed-arm": {
+      "domain": "safety",
+      "label": "signed-policy-at-rest-fail-closed-arm",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["ed25519-signed-policy-at-rest-fail-closed-arm"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "靜態政策簽章屬產品層"
+    },
+    "requirement-pinned-feature-flags-tiers": {
+      "domain": "safety",
+      "label": "requirement-pinned-feature-flags-tiers",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["requirement-pinned-feature-flags-with-seven-tier-ladder"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "需求釘選旗標多層解析屬產品層"
+    },
+    "config-overlay-confinement-allowlist": {
+      "domain": "safety",
+      "label": "config-overlay-confinement-allowlist",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["config-overlay-confinement-allowlist"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "環境覆寫需白名單收斂"
+    },
+    "build-provenance-folder-trust-gate": {
+      "domain": "safety",
+      "label": "build-provenance-folder-trust-gate",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["build-provenance-folder-trust-gate"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "專案範圍載入需資料夾信任"
+    },
+    "managed-mcp-and-marketplace-denylists": {
+      "domain": "safety",
+      "label": "managed-mcp-and-marketplace-denylists",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["managed-mcp-and-marketplace-denylists"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "代管 MCP 與市集黑名單屬產品層"
+    },
+    "external-auth-provider-and-api-key-lockout": {
+      "domain": "safety",
+      "label": "external-auth-provider-and-api-key-lockout",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["external-auth-provider-and-api-key-lockout"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "外部驗證供應者與金鑰鎖定屬產品"
+    },
+    "subscription-tier-and-zero-data-retention-gates": {
+      "domain": "safety",
+      "label": "subscription-tier-and-zero-data-retention-gates",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["subscription-tier-and-zero-data-retention-gates"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "訂閱層級與零留存屬服務端"
+    },
+    "enterprise-proxy-ca-bundle": {
+      "domain": "safety",
+      "label": "enterprise-proxy-ca-bundle",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["enterprise-proxy-ca-bundle"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "企業代理 CA 憑證屬部署層"
+    },
+    "retention-and-secret-redaction": {
+      "domain": "safety",
+      "label": "retention-and-secret-redaction",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["retention-and-secret-redaction"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "日誌需秘密脫敏處理"
+    },
+    "permission-profile-model-with-requirement-catalog": {
+      "domain": "safety",
+      "label": "permission-profile-model-with-requirement-catalog",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["permission-profile-model-with-requirement-allowed-catalog"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "權限設定檔模型與需求目錄待建"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": ["codex:permission-profile-model-with-requirement-allowed-catalog", "grok:predefined-sandbox-profiles-and-anti-hollowing-merge", "cc-custom:sandbox-policy-model"],
+      "whyNotMerged": "All three are declarative named-policy catalogs with built-ins plus user-defined entries, so they look like one capability. Kept apart because codex's profile also carries approval granularity and an External variant, grok's carries a project-vs-global anti-hollowing merge, and cc's has no named profiles at all - it is a read/write/network axis schema. Each adds a distinct half."
+    },
+    {
+      "mechanisms": ["codex:windows-sandbox-three-levels-with-wfp", "ih:windows-write-restricted-token-backend", "dsh:windows-acl-write-restricted-token"],
+      "whyNotMerged": "codex's RestrictedToken tier is the same backend as the ih/dsh row, but codex's mechanism is the three-valued level model whose centrepiece is the Elevated tier (separate offline user, ACLs, WFP). Merging would either bury the elevated backend or imply ih and dsh have network filtering."
+    },
+    {
+      "mechanisms": ["grok:bwrap-reexec-with-read-deny-placeholders", "dsh:per-runner-profile-synthesis-and-writable-roots", "codex:seatbelt-and-bubblewrap-backends"],
+      "whyNotMerged": "All three compose bubblewrap/seatbelt argv from a policy, so this was the closest call in the domain. Kept apart because grok's entire content is read-DENIAL (mode-000 bind-over, PID-suffixed placeholder, abort on a partial plan) - the only real read-deny implementation in the seven sources - and folding it into profile synthesis would hide exactly the finding this domain exists to surface."
+    },
+    {
+      "mechanisms": ["ih:three-layer-approval-policy-with-an-advisory-danger-classifier", "cc-custom:permission-rule-decision-ladder"],
+      "whyNotMerged": "Both are ordered allow/deny/ask ladders for tool authorization. ih's is a fixed three-layer policy whose shell boundary is an argv danger classifier; cc's is user-configurable rules drawn from eight settings sources with bypass-immune safety checks. Structurally similar, semantically not the same decision procedure."
+    },
+    {
+      "mechanisms": ["cc-custom:sandbox-auto-allow-and-write-allowlist", "ih:three-layer-approval-policy-with-an-advisory-danger-classifier"],
+      "whyNotMerged": "Both let a shell command skip the ask, but the predicates differ: cc skips when the command will genuinely be sandboxed, ih skips when the danger classifier returns none. Same effect, different safety argument - and cc's second half (write-target allowlist) has no ih counterpart."
+    },
+    {
+      "mechanisms": ["dsh:approval-service-policy-and-audit-pair", "cc-custom:approval-decision-single-shot"],
+      "whyNotMerged": "Both are fail-closed single-resolution approval paths (abort/cancel can never become allow). dsh's mechanism is a policy service with a turn-enclosed asked/decided audit pair and a signal race; cc's is handler atomicity in the UI. The overlap is real but each carries invariants the other lacks."
+    },
+    {
+      "mechanisms": ["codex:session-scoped-approval-cache", "opencode:permission-ask-queue", "opencode-fork:permission-ask-and-remembered-rules"],
+      "whyNotMerged": "All three implement 'do not ask twice in a session'. codex keys a decision cache on a serialized resource-key set with subset generalisation; opencode/fork record allow RULES and re-evaluate a pending queue, and their queue has cascading reject and delete-on-exit invariants codex has no analogue for. Merged opencode+fork, left codex separate."
+    },
+    {
+      "mechanisms": ["opencode:session-permission-persistence", "opencode-fork:permission-v1-to-v2-migration"],
+      "whyNotMerged": "Adjacent (the migration rewrites the very column the persistence defines) but one is 'store the session ruleset durably, it participates in every later evaluation' and the other is an idempotent column-shape rewrite. Keeping them apart preserves that the fork's stored shape is versioned."
+    },
+    {
+      "mechanisms": ["opencode-fork:permission-ask-plugin-seam", "ih:hooks-as-fail-closed-gates-and-fail-visible-observers", "dsh:hooks-as-permission-gates"],
+      "whyNotMerged": "All three let external code set a permission outcome, and dsh/cc hooks can already emit allow. Kept apart because the fork's seam is an in-process mutable effect holder consulted before a request is created, not a subprocess hook protocol with trust hashing and timeouts."
+    },
+    {
+      "mechanisms": ["grok:root-owned-managed-policy-pin", "grok:macos-mdm-forced-managed-preferences"],
+      "whyNotMerged": "The MDM layer is one entry in the very layer ordering the first mechanism defines, so these are two halves of one enterprise story. Kept apart because one is layer precedence plus the is_system flag and the other is a pathless source type with its own forced-read gating."
+    },
+    {
+      "mechanisms": ["cc-custom:bypass-permissions-killswitch", "grok:root-owned-managed-policy-pin"],
+      "whyNotMerged": "grok's documentedly user-visible effect is the always-approve lock that cc's killswitch implements, so they meet on one control. grok's is a whole managed-layer model (ordering, root-owned vs MDM authority) and cc's is a single org control whose remote half is inert in this build."
+    },
+    {
+      "mechanisms": ["dsh:permission-preset-bundling-and-knob-write-path", "grok:permission-mode-projection-and-queue-drain", "cc-custom:permission-mode-model"],
+      "whyNotMerged": "Presets bundle two independent knobs (sandbox mode and approval policy) and refuse to compose over an unconfined executor; the mode enums are a single axis. Merged grok+cc as the mode vocabulary, kept dsh's preset bundling apart because it is about how two knobs are presented and written, not about the vocabulary itself."
+    },
+    {
+      "mechanisms": ["ih:guardian-auto-review-subagent-with-fail-closed-verdict-and-breaker", "cc-custom:auto-mode-llm-danger-classifier"],
+      "whyNotMerged": "Both put a model in the approval path. ih's guardian can only ever restrict (allow falls through to the human, deny/timeout/malformed all deny); cc's classifier exists to WIDEN autonomy by auto-allowing. Opposite directions, so merging would misstate both."
+    },
+    {
+      "mechanisms": ["opencode:core-permission-service-v2", "opencode:permission-rule-engine", "opencode-fork:permission-v2-engine", "opencode-fork:legacy-permission-rules-shim"],
+      "whyNotMerged": "One tree ships two rule models (V1 permission/pattern/action and V2 action/resource/effect) and the fork keeps the V1 implementation alive as a shim. I paired V1-with-shim and V2-with-V2 rather than emitting one 'permission engine' row, so the fork's in-place migration stays visible."
+    },
+    {
+      "mechanisms": ["cc-custom:dangerous-allow-rule-stripping", "cc-custom:path-safety-and-dangerous-removal-guard", "ih:three-layer-approval-policy-with-an-advisory-danger-classifier"],
+      "whyNotMerged": "Three danger predicates at three different times: config-time stripping of interpreter allow-rules, path-shaped removal/glob checks, and call-time argv classification. All feed approval, none is the same check."
+    },
+    {
+      "mechanisms": ["ih:confinement-covers-only-shell-fs-fs-search-and-terminal-have-no-sandbox-integration", "dsh:fs-mutation-containment-fence"],
+      "whyNotMerged": "Same capability slot (in-process filesystem write containment) with opposite contents: dsh has a real re-canonicalising containment fence on the two mutations, ih has resolvePath '..' refusal only. A merged row would claim ih has a fence it does not have."
+    },
+    {
+      "mechanisms": ["grok:external-auth-provider-and-api-key-lockout", "grok:subscription-tier-and-zero-data-retention-gates"],
+      "whyNotMerged": "Both are account/server-derived gates with deliberately mixed fail postures, but one governs authentication method availability and the other governs entitlement and data-retention behaviour. Different subjects, different failure modes."
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 82,
+    "mechanismsPlaced": 82
+  }
+}

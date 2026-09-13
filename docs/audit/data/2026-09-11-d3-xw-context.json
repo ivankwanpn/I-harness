@@ -1,0 +1,507 @@
+{
+  "domain": "context",
+  "rows": {
+    "g1-append-only-shadow-projection-compaction": {
+      "domain": "context",
+      "label": "append-only-shadow-projection-compaction",
+      "members": {
+        "ih": ["append-only-shadow-projection-compaction-never-rewrites-the-log"],
+        "dsh": ["surface-replace-projection"],
+        "codex": ["pre-sampling-compaction-with-provider-routing"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "投影完整但未接任何出貨主機"
+    },
+    "g2-binding-context-window-pressure-threshold-policy": {
+      "domain": "context",
+      "label": "binding-context-window-pressure-threshold-policy",
+      "members": {
+        "ih": ["auto-compaction-gate-stack-with-hysteresis-and-breaker"],
+        "dsh": ["pressure-threshold-compaction-policy", "compaction-engine-seam"],
+        "codex": ["context-window-token-status-and-compact-scope"],
+        "grok": [],
+        "cc-custom": ["auto-compact-threshold-and-circuit-breaker"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "門檻式自動壓縮閘未接通"
+    },
+    "g3-full-replace-compaction-with-transcript-pointer": {
+      "domain": "context",
+      "label": "full-replace-compaction-with-transcript-pointer",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["full-replace-compaction-rather-than-tail-retention"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "整段重寫並以指標回復"
+    },
+    "g4-transcript-segment-rendering-with-byte-caps": {
+      "domain": "context",
+      "label": "transcript-segment-rendering-with-byte-caps",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["compaction-transcript-rendering-with-byte-caps"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "可重現分段輸出附截斷標記"
+    },
+    "g5-deterministic-tool-result-content-pruning": {
+      "domain": "context",
+      "label": "deterministic-tool-result-content-pruning",
+      "members": {
+        "ih": ["model-free-prune-pass-auto-path-only"],
+        "dsh": ["tool-result-pruner"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["tool-result-pruning"],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "無模型替換裁切，IH僅自動路徑"
+    },
+    "g6-time-and-api-triggered-cache-aware-tool-result-clearing": {
+      "domain": "context",
+      "label": "time-and-api-triggered-cache-aware-tool-result-clearing",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["time-based-microcompact", "api-side-context-management", "cached-microcompact"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "依快取冷熱決定清除時機"
+    },
+    "g7-tool-output-spill-and-bounded-preview": {
+      "domain": "context",
+      "label": "tool-output-spill-and-bounded-preview",
+      "members": {
+        "ih": ["two-layer-output-retention-and-spill"],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["kernel-tool-output-bounding"]
+      },
+      "disposition": "已存在",
+      "rationale": "溢出落盤與預覽標記已完備"
+    },
+    "g8-dynamic-context-change-only-snapshot-injection": {
+      "domain": "context",
+      "label": "dynamic-context-change-only-snapshot-injection",
+      "members": {
+        "ih": ["runtime-context-as-durable-log-snapshots"],
+        "dsh": ["runtime-context-snapshot-projection"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "逐來源變更才追加且可回放"
+    },
+    "g9-agent-instruction-file-injection": {
+      "domain": "context",
+      "label": "agent-instruction-file-injection",
+      "members": {
+        "ih": ["instruction-file-discovery-with-a-sync-stat-keyed-cache"],
+        "dsh": ["agent-instructions-discovery"],
+        "codex": [],
+        "grok": ["project-instruction-injection-into-user-message"],
+        "cc-custom": [],
+        "opencode": ["instruction-file-discovery"],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "指令檔探索與注入已上線"
+    },
+    "g10-model-family-prompt-template-selection": {
+      "domain": "context",
+      "label": "model-family-prompt-template-selection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["model-family-system-prompt"],
+        "opencode-fork": ["kernel-system-prompt-composition"]
+      },
+      "disposition": "rewrite",
+      "rationale": "依模型家族選唯一模板"
+    },
+    "g11-named-contribution-system-prompt-assembly": {
+      "domain": "context",
+      "label": "named-contribution-system-prompt-assembly",
+      "members": {
+        "ih": [],
+        "dsh": ["system-prompt-assembly"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "具名有序組裝與嚴格變數"
+    },
+    "g12-section-diffed-world-state-fragments": {
+      "domain": "context",
+      "label": "section-diffed-world-state-fragments",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["world-state-section-diffing", "contextual-fragment-injection-primitive"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "鍵控區段差異與標記片段"
+    },
+    "g13-context-window-resolution-chain": {
+      "domain": "context",
+      "label": "context-window-resolution-chain",
+      "members": {
+        "ih": ["context-window-resolution-chain"],
+        "dsh": ["context-window-resolution"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["context-window-resolution"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "逐欄解析鏈已上線"
+    },
+    "g14-context-capacity-overflow-classification": {
+      "domain": "context",
+      "label": "context-capacity-overflow-classification",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["structured-context-length-error-classifier", "boundary-exact-token-gate-and-image-budget-hysteresis"],
+        "cc-custom": [],
+        "opencode": ["context-overflow-detection"],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "溢位錯字分類與精確算術"
+    },
+    "g15-per-step-time-context-injection": {
+      "domain": "context",
+      "label": "per-step-time-context-injection",
+      "members": {
+        "ih": [],
+        "dsh": ["time-context-injection"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "時間注入與投影片重播"
+    },
+    "g16-per-step-tmux-location-context-injection": {
+      "domain": "context",
+      "label": "per-step-tmux-location-context-injection",
+      "members": {
+        "ih": [],
+        "dsh": ["tmux-location-context-injection"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "tmux座標注入並驗證真偽"
+    },
+    "g17-context-epoch-generation-replacement": {
+      "domain": "context",
+      "label": "context-epoch-generation-replacement",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["system-context-source-registry", "builtin-context-sources"],
+        "opencode-fork": ["context-epoch-and-system-context"]
+      },
+      "disposition": "rewrite",
+      "rationale": "具名來源與世代基線替換"
+    },
+    "g18-model-summarisation-compaction": {
+      "domain": "context",
+      "label": "model-summarisation-compaction",
+      "members": {
+        "ih": ["anchored-incremental-summarization-with-verbatim-sensitive-instructions"],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["legacy-summarisation-compaction"],
+        "opencode": ["compaction-summarisation"],
+        "opencode-fork": ["compaction-engine-v2"]
+      },
+      "disposition": "rewrite",
+      "rationale": "摘要式壓縮未接通出貨主機"
+    },
+    "g19-retained-tail-and-window-preserving-compaction": {
+      "domain": "context",
+      "label": "retained-tail-and-window-preserving-compaction",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["session-memory-compaction"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "保留近窗免摘要的壓縮路徑"
+    },
+    "g20-post-compaction-derived-state-invalidation": {
+      "domain": "context",
+      "label": "post-compaction-derived-state-invalidation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["post-compact-cache-invalidation"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "壓縮後清快取避免陳舊"
+    },
+    "g21-provider-reported-token-accounting": {
+      "domain": "context",
+      "label": "provider-reported-token-accounting",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["token-accounting"],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "以供應器回報結算累計用量"
+    },
+    "g22-unified-heuristic-token-accounting": {
+      "domain": "context",
+      "label": "unified-heuristic-token-accounting",
+      "members": {
+        "ih": ["single-projection-token-accounting"],
+        "dsh": ["replay-aware-token-meter"],
+        "codex": [],
+        "grok": ["single-source-token-estimation"],
+        "cc-custom": ["token-estimation"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "單一估算來源，IH已投影計價"
+    },
+    "g23-api-facing-prompt-series-and-surface-generation": {
+      "domain": "context",
+      "label": "api-facing-prompt-series-and-surface-generation",
+      "members": {
+        "ih": [],
+        "dsh": ["prompt-series-and-surface-generation-tracking"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "提示快取連續性與世代追蹤"
+    },
+    "g24-request-body-option-partitioning": {
+      "domain": "context",
+      "label": "request-body-option-partitioning",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["request-option-partitioning"]
+      },
+      "disposition": "rewrite",
+      "rationale": "選項與主體分離以適配路由"
+    },
+    "g25-provider-facing-tool-result-preparation": {
+      "domain": "context",
+      "label": "provider-facing-tool-result-preparation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["tool-result-preparation"]
+      },
+      "disposition": "rewrite",
+      "rationale": "工具結果正規化再入上下文"
+    },
+    "g26-file-reference-and-plan-mode-reminder-injection": {
+      "domain": "context",
+      "label": "file-reference-and-plan-mode-reminder-injection",
+      "members": {
+        "ih": [],
+        "dsh": ["file-reference-seam"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["plan-mode-reminders"],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "合成提示片段注入使用者訊息"
+    },
+    "g27-compaction-liveness-and-lease-fencing": {
+      "domain": "context",
+      "label": "compaction-liveness-and-lease-fencing",
+      "members": {
+        "ih": ["compaction-engine-is-not-wired-in-any-shipped-host-inert"],
+        "dsh": ["compaction-durable-bracket-transaction"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["fenced-compaction-under-lease"]
+      },
+      "disposition": "rewrite",
+      "rationale": "壓縮需圍籬，IH引擎未接主機"
+    },
+    "g28-compaction-and-retry-on-context-overflow": {
+      "domain": "context",
+      "label": "compaction-and-retry-on-context-overflow",
+      "members": {
+        "ih": [],
+        "dsh": ["context-overflow-recovery"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["reactive-compact-on-overflow"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "溢位改以壓縮換取重試"
+    },
+    "g29-fail-closed-overflow-without-history-loss": {
+      "domain": "context",
+      "label": "fail-closed-overflow-without-history-loss",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["context-collapse-and-history-snip"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "旗標關閉時寧可失敗不丟史"
+    },
+    "g30-output-token-limit-recovery-and-escalation": {
+      "domain": "context",
+      "label": "output-token-limit-recovery-and-escalation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["max-output-token-recovery-and-escalation"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "輸出截斷續跑與額度提升"
+    },
+    "g31-token-budget-continuation-nudge": {
+      "domain": "context",
+      "label": "token-budget-continuation-nudge",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["token-budget-reminder-and-compact-fallback"],
+        "grok": [],
+        "cc-custom": ["token-budget-continuation"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "續跑額度提示需旗標開啟"
+    },
+    "g32-deferred-tool-context-economy": {
+      "domain": "context",
+      "label": "deferred-tool-context-economy",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["deferred-tool-context-economy"]
+      },
+      "disposition": "reuse",
+      "rationale": "延後工具曝光與可持久搜尋"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": ["ih:append-only-shadow-projection-compaction-never-rewrites-the-log", "dsh:surface-replace-projection"],
+      "whyNotMerged": "MERGED, but recording that the merge rests on a shared invariant, not a shared shape: ih hides by marker sets the render pass consults (shadowedSeqs / removedSeqs / rewind windows) while dsh hides by a positional surfaceOp replace carrying sourceEventSeqs. Both keep the durable log untouched and treat the model-visible surface as a projection, so I judged them the same capability; the naming difference ('shadow projection' vs 'surface replace') is exactly the artifact the brief warns about. A reviewer who wants the marker-set/positional-replace split preserved should split row g1, and pre-sampling-compaction-with-provider-routing would then have to move out of it as well."
+    },
+    {
+      "mechanisms": ["codex:pre-sampling-compaction-with-provider-routing", "ih:append-only-shadow-projection-compaction-never-rewrites-the-log", "dsh:surface-replace-projection"],
+      "whyNotMerged": "MERGED into g1 on the invariant 'compaction must never write a new history in place — it publishes a checkpoint plus a replacement history and keeps the original events', which codex states verbatim. Doubt kept because codex's row is also the only carrier of pre-sampling TIMING (run_pre_sampling_compact at the head of run_turn) and of provider routing to remote/server-side compaction, and neither of those is part of the append-only projection capability. If timing deserves its own row, codex's mechanism has to leave g1 and g1 shrinks to ih + dsh."
+    },
+    {
+      "mechanisms": ["ih:append-only-shadow-projection-compaction-never-rewrites-the-log", "ocf:context-collapse-and-history-snip", "grok:full-replace-compaction-rather-than-tail-retention"],
+      "whyNotMerged": "Left separate. All three end with the model seeing less, but by three different mechanisms: append-only shadowing of a durable log (ih), an optional snip/collapse layer whose modules are null in the shipped bundle (cc-custom), and a full rebuild of fresh history with recoverability supplied by a transcript pointer rather than by the log (grok). Merging them would have claimed a common design that only ih and dsh actually share."
+    },
+    {
+      "mechanisms": ["dsh:time-context-injection", "dsh:tmux-location-context-injection", "opencode:plan-mode-reminders", "dsh:file-reference-seam"],
+      "whyNotMerged": "Four injection triggers, four rows anchored on four different surfaces. Time and tmux are per-step durable context snapshots with rate limiting; plan-mode reminders are synthetic parts mutated onto the last user message; the file-reference seam is a cancellable UI picker with no production caller in the host core. g26 very deliberately pairs two of them (dsh file-reference-seam + opencode plan-mode-reminders) as a cross-source row under the 'synthetic fragment in the user message' idea, and I am not confident that pairing is not itself an over-merge — it is the weakest merge in this file."
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 66,
+    "mechanismsPlaced": 66
+  }
+}

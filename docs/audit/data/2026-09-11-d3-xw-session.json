@@ -1,0 +1,622 @@
+{
+  "domain": "session",
+  "rows": {
+    "append-only-event-log-with-seq-by-append": {
+      "domain": "session",
+      "label": "append-only-event-log-with-seq-by-append",
+      "members": {
+        "ih": ["append-only-event-log-with-seq-by-append"],
+        "dsh": ["append-only-jsonl-event-log"],
+        "codex": ["append-only-rollout-with-compacted-projection"],
+        "grok": ["append-only-jsonl-session-event-log"],
+        "cc-custom": ["jsonl-transcript-append-log"],
+        "opencode": ["durable-event-log"],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "六源皆不可重寫的追加日誌；IH 自配 seq"
+    },
+    "seq-contiguity-and-branded-sequence-types": {
+      "domain": "session",
+      "label": "seq-contiguity-and-branded-sequence-types",
+      "members": {
+        "ih": [],
+        "dsh": ["seq-contiguity-and-branded-sequence-types"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "序號品牌型別加三處連續性斷言，可整段照搬"
+    },
+    "rewind-capable-backend-atomic-rewrite-and-torn-tail-structural-repair": {
+      "domain": "session",
+      "label": "rewind-capable-backend-atomic-rewrite-and-torn-tail-structural-repair",
+      "members": {
+        "ih": ["jsonl-backend-with-atomic-rewrite-and-torn-tail-recovery"],
+        "dsh": ["crash-repair-torn-tail-and-interrupted-turn-closers"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "皆原子替換加破尾截斷；IH 另守路徑安全"
+    },
+    "write-behind-batching-with-failure-retention-and-flush-barrier": {
+      "domain": "session",
+      "label": "write-behind-batching-with-failure-retention-and-flush-barrier",
+      "members": {
+        "ih": ["write-behind-with-failure-retention-and-quiescence-barrier"],
+        "dsh": ["write-behind-batching-and-flush-barrier"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["buffered-transcript-write-pipeline"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "三源定時批次加屏障；IH 失敗批次回插不丟"
+    },
+    "pre-side-effect-durability-checkpoint": {
+      "domain": "session",
+      "label": "pre-side-effect-durability-checkpoint",
+      "members": {
+        "ih": [],
+        "dsh": ["semantic-checkpoint-policy"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "呼叫模型或工具前先落盤；極小但值得自建"
+    },
+    "fork-with-source-coordinate-marker-remapping": {
+      "domain": "session",
+      "label": "fork-with-source-coordinate-marker-remapping",
+      "members": {
+        "ih": ["fork-with-source-coordinate-marker-remapping"],
+        "dsh": ["session-fork-inherited-prefix"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["session-lifecycle-and-forking"],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "三源只複製完整前綴並重編座標；IH 另拒照抄"
+    },
+    "parent-uuid-conversation-chain": {
+      "domain": "session",
+      "label": "parent-uuid-conversation-chain",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["parent-uuid-conversation-chain"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "以 parentUuid 鏈表達對話；IH 走投影"
+    },
+    "tombstone-rewrite-guard": {
+      "domain": "session",
+      "label": "tombstone-rewrite-guard",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["tombstone-rewrite-guard"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "刪單筆的原地改寫需上限與保留壞行，可照搬"
+    },
+    "session-format-adjacent-migration-chain": {
+      "domain": "session",
+      "label": "session-format-adjacent-migration-chain",
+      "members": {
+        "ih": [],
+        "dsh": ["session-format-adjacent-migration-chain"],
+        "codex": ["six-database-sqlite-state-runtime"],
+        "grok": [],
+        "cc-custom": ["config-migration-ladder"],
+        "opencode": [],
+        "opencode-fork": ["legacy-transcript-retirement-migration"]
+      },
+      "disposition": "rewrite",
+      "rationale": "多源皆有單調版本加相鄰遷移鏈；IH 應自建"
+    },
+    "unknown-event-vocabulary-refusal-with-ignorable-marker": {
+      "domain": "session",
+      "label": "unknown-event-vocabulary-refusal-with-ignorable-marker",
+      "members": {
+        "ih": ["coordinator-load-gate-version-refusal-before-repair"],
+        "dsh": ["unknown-event-vocabulary-refusal"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 註冊事件型別；無 ignorable 即拒收"
+    },
+    "format-version-refusal-before-any-repair": {
+      "domain": "session",
+      "label": "format-version-refusal-before-any-repair",
+      "members": {
+        "ih": [],
+        "dsh": ["generation-migration-publication"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "認不得的格式先拒絕，破壞性修復永不觸及"
+    },
+    "newer-schema-read-only-degradation": {
+      "domain": "session",
+      "label": "newer-schema-read-only-degradation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["dashboard-capacity-eviction-with-schema-gate"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "較新 schema 改唯讀開啟而非降版，可照搬"
+    },
+    "projection-fold-with-cache-and-rebuild": {
+      "domain": "session",
+      "label": "projection-fold-with-cache-and-rebuild",
+      "members": {
+        "ih": ["derivemessages-wire-shape-enforcement"],
+        "dsh": ["surface-projection-and-derived-history-cache"],
+        "codex": ["rollout-reconstruction-on-resume"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["session-projection-tables"],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "四源皆由日誌摺出模型可見史；IH 另鎖線形狀"
+    },
+    "durable-projection-checkpoint-and-restore": {
+      "domain": "session",
+      "label": "durable-projection-checkpoint-and-restore",
+      "members": {
+        "ih": [],
+        "dsh": ["projection-registry-checkpoint-restore", "projection-cache-write-behind"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["context-epoch-persistence"],
+        "opencode-fork": ["session-projection-repair"]
+      },
+      "disposition": "rewrite",
+      "rationale": "投影可持久化為快取並只補摺尾端；須自建"
+    },
+    "crash-repair-of-interrupted-turn-and-orphan-tasks": {
+      "domain": "session",
+      "label": "crash-repair-of-interrupted-turn-and-orphan-tasks",
+      "members": {
+        "ih": ["tail-only-log-semantic-crash-repair"],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["session-lifecycle-settlement"]
+      },
+      "disposition": "improved-writing",
+      "rationale": "兩源只補結尾不捏造成果；IH 純函式不改輸入"
+    },
+    "session-ownership-lease-lock": {
+      "domain": "session",
+      "label": "session-ownership-lease-lock",
+      "members": {
+        "ih": ["session-ownership-lease-os-byte-range-lock"],
+        "dsh": ["write-lease-and-lazy-materialization"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "核心獨佔鎖已等價；DSH 延遲具現化可再吸收"
+    },
+    "pid-liveness-active-session-registry-and-reaper": {
+      "domain": "session",
+      "label": "pid-liveness-active-session-registry-and-reaper",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["pid-liveness-active-session-registry-with-atomic-replace"],
+        "cc-custom": ["session-pid-registry-and-reaper"],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "他源以 PID 清冊呈現所有權；IH 持鎖但無清冊"
+    },
+    "single-flight-epoch-gated-catalog-fetch": {
+      "domain": "session",
+      "label": "single-flight-epoch-gated-catalog-fetch",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["epoch-versioned-single-flight-gateway-catalog"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "快取單飛加世代守門；屬閘道產品面，暫緩"
+    },
+    "bounded-metadata-only-foreign-session-scan": {
+      "domain": "session",
+      "label": "bounded-metadata-only-foreign-session-scan",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["bounded-metadata-only-foreign-session-scan"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "有界列舉他源 session 詮釋資料；產品面暫緩"
+    },
+    "session-startup-recovery-of-admitted-input": {
+      "domain": "session",
+      "label": "session-startup-recovery-of-admitted-input",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["session-input-promotion-and-startup-candidates"]
+      },
+      "disposition": "rewrite",
+      "rationale": "重啟後須重推已受理輸入；以 IH 日誌自建"
+    },
+    "session-lifecycle-ownership-and-announcement": {
+      "domain": "session",
+      "label": "session-lifecycle-ownership-and-announcement",
+      "members": {
+        "ih": [],
+        "dsh": ["session-lifecycle-ownership"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "建立、進場、公告三段交易化；可直接比照"
+    },
+    "session-listing-path-layout-and-title-derivation": {
+      "domain": "session",
+      "label": "session-listing-path-layout-and-title-derivation",
+      "members": {
+        "ih": ["session-listing-blank-probe-and-title-projection"],
+        "dsh": ["llm-backed-session-title"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "標題由日誌摺出；IH 不呼叫模型且有退路"
+    },
+    "session-controller-remote-facade": {
+      "domain": "session",
+      "label": "session-controller-remote-facade",
+      "members": {
+        "ih": [],
+        "dsh": ["session-controller-remote-facade"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "會話域之上的完整遠端讀取派送面；大工暫緩"
+    },
+    "cross-session-reference-snapshot": {
+      "domain": "session",
+      "label": "cross-session-reference-snapshot",
+      "members": {
+        "ih": [],
+        "dsh": ["cross-session-reference-snapshot"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "把另一會話投影注入當前上下文；含預算，暫緩"
+    },
+    "vendor-extension-session-log-contribution-with-acceptance-watermark": {
+      "domain": "session",
+      "label": "vendor-extension-session-log-contribution-with-acceptance-watermark",
+      "members": {
+        "ih": [],
+        "dsh": ["deepseek-session-log-contribution"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "以供應商請求欄位送日誌增量；綁特定 API，暫緩"
+    },
+    "session-telemetry-record-capture": {
+      "domain": "session",
+      "label": "session-telemetry-record-capture",
+      "members": {
+        "ih": [],
+        "dsh": ["session-telemetry-record-capture"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "日誌旁路擷取加 OTel 匯出；產品化觀測，暫緩"
+    },
+    "durable-input-queue-with-steer-promotion": {
+      "domain": "session",
+      "label": "durable-input-queue-with-steer-promotion",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["durable-queued-user-submissions"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["input-admission-and-steering"],
+        "opencode-fork": ["session-command-durable-admission"]
+      },
+      "disposition": "rewrite",
+      "rationale": "輸入先落盤再按序升格為轉內注入；值得自建"
+    },
+    "durable-task-submission-state-machine": {
+      "domain": "session",
+      "label": "durable-task-submission-state-machine",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["durable-task-submission-protocol"]
+      },
+      "disposition": "rewrite",
+      "rationale": "派工成為具狀態的耐久資料列；值得自建"
+    },
+    "durable-task-notification-outbox": {
+      "domain": "session",
+      "label": "durable-task-notification-outbox",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["task-notification-outbox"]
+      },
+      "disposition": "rewrite",
+      "rationale": "完成通知以耐久寄件匣為準；喚醒僅建議"
+    },
+    "durable-cancellation-tree": {
+      "domain": "session",
+      "label": "durable-cancellation-tree",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": ["task-cancellation-tree"]
+      },
+      "disposition": "rewrite",
+      "rationale": "以所有權根整棵取消並先落盤再中斷；值得自建"
+    },
+    "session-store-schema-versioning-and-transactional-integrity": {
+      "domain": "session",
+      "label": "session-store-schema-versioning-and-transactional-integrity",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["session-sql-schema"],
+        "opencode-fork": ["durable-session-schema"]
+      },
+      "disposition": "路線差異",
+      "rationale": "關聯式會話表加唯一序約束；IH 以日誌表達同事"
+    },
+    "versioned-kv-storage-domain": {
+      "domain": "session",
+      "label": "versioned-kv-storage-domain",
+      "members": {
+        "ih": [],
+        "dsh": ["versioned-kv-storage-domain"],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "具版本與相容清單的 KV 領域層；可作藍本"
+    },
+    "rollout-lineage-index-and-cold-compression": {
+      "domain": "session",
+      "label": "rollout-lineage-index-and-cold-compression",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["rollout-lineage-and-compression"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "冷存壓縮加血緣索引與引用計數；規模化，暫緩"
+    },
+    "per-host-sqlite-durability-and-path-derivation": {
+      "domain": "session",
+      "label": "per-host-sqlite-durability-and-path-derivation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": ["filesystem-probed-journal-mode-with-per-host-db"],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "網路檔案系統偵測加逐主機資料庫路徑；暫緩"
+    },
+    "session-file-rewind-and-snapshot": {
+      "domain": "session",
+      "label": "session-file-rewind-and-snapshot",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": ["file-checkpoint-snapshot-and-rewind"],
+        "opencode": ["conversation-revert-and-snapshot"],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "對話與工作區檔案快照回捲；值得自建不移植"
+    },
+    "session-scoped-todo-store": {
+      "domain": "session",
+      "label": "session-scoped-todo-store",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": ["todo-durable-store"],
+        "opencode-fork": []
+      },
+      "disposition": "路線差異",
+      "rationale": "待辦為會話資料列而非訊息；IH 以日誌表達"
+    },
+    "global-cross-session-message-history": {
+      "domain": "session",
+      "label": "global-cross-session-message-history",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["global-message-history-jsonl"],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "路線差異",
+      "rationale": "全機單一歷史檔與逐會話日誌分離；IH 單層故不採"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": ["ih:coordinator-load-gate-version-refusal-before-repair", "dsh:generation-migration-publication"],
+      "whyNotMerged": "兩者都拒絕較新的格式版本，但 IH 的閘門屬載入協調器（含事件型別註冊表），DSH 的屬世代遷移的發布器；載入閘門的核心價值在版本，故放版本列，遷移發布器另立一列。"
+    },
+    {
+      "mechanisms": ["dsh:session-format-adjacent-migration-chain", "cc-custom:config-migration-ladder"],
+      "whyNotMerged": "雖然都是單調版本加逐步遷移，但 DSH 的鏈由建置期編譯並驗證相鄰性，CC 的是七個各自自我守門的函式寫在啟動路徑上；我對『同一能力』有信心而合併，但若讀者認為一個管日誌格式、一個管使用者設定，就該拆成兩列。"
+    },
+    {
+      "mechanisms": ["dsh:session-controller-remote-facade", "ih:session-listing-blank-probe-and-title-projection"],
+      "whyNotMerged": "facade 內含 list/search，與 IH 的列表投影功能重疊，但 facade 是一整層遠端讀取與派送面（分頁、跟隨串流、promote），遠大於列表；併入會讓 IH 的單一機制被高估。"
+    },
+    {
+      "mechanisms": ["codex:append-only-rollout-with-compacted-projection", "opencode:durable-event-log"],
+      "whyNotMerged": "兩者都同時是追加日誌與投影來源，但 codex 的日誌是每會話單一 JSONL 檔並帶寫入政策過濾，opencode 的是資料庫交易內的關聯式事件列；載體與交易語意不同，只把 codex 放進追加日誌列、opencode 放進投影列。"
+    },
+    {
+      "mechanisms": ["codex:durable-queued-user-submissions", "dsh:session-controller-remote-facade"],
+      "whyNotMerged": "codex 的耐久佇列有跨程序派送與修訂版追蹤，與 facade 的 updateQueue 表面相似；但一個是儲存層佇列，一個是遠端控制面，未合併。"
+    },
+    {
+      "mechanisms": ["ih:append-only-event-log-with-seq-by-append", "cc-custom:tombstone-rewrite-guard"],
+      "whyNotMerged": "IH 的日誌明文規定原始日誌永不改寫（刪除以投影標記表達），CC 的墓碑機制卻會原地改寫整個檔案；同為『移除已寫入的訊息』但一個拒絕改寫、一個接受改寫，屬設計衝突而非同一機制。"
+    },
+    {
+      "mechanisms": ["dsh:deepseek-session-log-contribution", "dsh:session-telemetry-record-capture"],
+      "whyNotMerged": "兩者都把日誌送出去，但前者是供應商請求欄位加回條浮水印（且預設關閉、未接線），後者是旁路擷取加 OTel 匯出；運送契約與消費者不同，未合併。"
+    },
+    {
+      "mechanisms": ["grok:bounded-metadata-only-foreign-session-scan", "dsh:cross-session-reference-snapshot"],
+      "whyNotMerged": "一個只讀他源 session 的詮釋資料（有界清單、不解析內容），另一個把本系統另一會話的投影內容注入當前上下文；前者是列舉、後者是注入，未合併。"
+    },
+    {
+      "mechanisms": ["ih:session-ownership-lease-os-byte-range-lock", "grok:pid-liveness-active-session-registry-with-atomic-replace", "cc-custom:session-pid-registry-and-reaper"],
+      "whyNotMerged": "三者都是『誰擁有這個會話』的機制，但 IH 是核心獨佔鎖（OS 保證、死即釋放），另兩者是用戶空間 PID 清冊（可列舉、有回收但會被回收的 PID 誤判）；可見性與正確性取捨相反，未合併。"
+    },
+    {
+      "mechanisms": ["opencode-fork:session-lifecycle-settlement", "opencode:session-lifecycle-and-forking"],
+      "whyNotMerged": "同源同名前綴但不同事：一個是崩潰後把未結案回合結算完，一個是建立、父子、刪除、分叉的生命週期與所有權；分別歸入修復列與分叉列。"
+    },
+    {
+      "mechanisms": ["dsh:session-lifecycle-ownership", "opencode:session-lifecycle-and-forking"],
+      "whyNotMerged": "我把 DSH 的生命週期與 opencode 的生命週期合併為一列，但 opencode 那筆同時包含分叉，而分叉我另立一列；同一機制名出現在兩列語意中是刻意的切分：生命週期列只取建立、所有權與公告的部分。"
+    },
+    {
+      "mechanisms": ["dsh:unknown-event-vocabulary-refusal", "dsh:generation-migration-publication"],
+      "whyNotMerged": "兩者都是讀取時的拒絕路徑（未知事件型別 vs 未知格式版本），IH 把它們寫在同一支載入閘門裡；因 DSH 清單將它們列為兩個機制，故分置兩列，不跨列合併。"
+    },
+    {
+      "mechanisms": ["dsh:projection-cache-write-behind", "dsh:write-behind-batching-and-flush-barrier"],
+      "whyNotMerged": "兩者都叫 write-behind 也都有節流計時器，但一個寫的是日誌本身（耐久性是承諾），一個寫的是可重建的投影快取（壞了只是重摺）；耐久性等級不同，未合併。"
+    },
+    {
+      "mechanisms": ["dsh:write-behind-batching-and-flush-barrier", "cc-custom:buffered-transcript-write-pipeline"],
+      "whyNotMerged": "已合併為一列（加上 IH），但值得記錄：CC 的 drain 會讓失敗批次的 promise 仍然 resolve，IH 的 flush 則承諾 resolve 即耐久；同一機制的失敗語意強度不同，日後照搬需以 IH 的較強語意為準。"
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 65,
+    "mechanismsPlaced": 65
+  }
+}
