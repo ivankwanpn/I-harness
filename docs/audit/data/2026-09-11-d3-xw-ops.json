@@ -1,9 +1,11 @@
 {
   "domain": "ops",
   "notes": [
-    "grok's domains.ops array is EMPTY in its Phase 1 inventory (unlike its session/context/tools/subagent/safety/extension/retrieval/interface arrays, which are populated). This is an ABSENCE OF MATERIAL, not evidence that grok has no ops plane: grok's own moduleCoverage records xai-grok-telemetry ('Telemetry pipeline and event emission used by the shell and pager. Ops-domain.'), xai-crash-handler ('Crash-handler installation and reporting. Ops-domain.'), xai-grok-update ('Self-update machinery for the CLI. Ops-domain.'), xai-grok-version, xai-tracing-macros, xai-mixpanel ('Minimal Mixpanel track-only client ... Ops-domain analytics sink.') and xai-grok-diag-server (in-guest diagnostics HTTP server /ready /statusz /logs, assigned service). The Phase 1 agent classified these and wrote prose about them but emitted no ops mechanism entries with line citations, so no grok mechanism name exists verbatim in grok's ops array to cite. The empty grok column for every row below must therefore be read as 'not inventoried in this pass', never as 'grok lacks this capability'.",
+    "RE-RUN. The previous version of this file was built while grok's domains.ops array was EMPTY, and its first note instructed the reader to read the empty grok column as 'not inventoried in this pass', never as 'grok lacks this capability'. That caveat is now OBSOLETE and is withdrawn: grok's domains.ops now carries 8 mechanisms (three-mode-telemetry-policy-gate, typed-event-emission-with-fire-and-forget-exit-drain, dual-analytics-sink-with-minimal-mixpanel-client, external-otel-stream-behind-a-fail-closed-privacy-gate, crash-handler-with-postmortem-capture-and-archive, smoke-test-verified-self-update-with-atomic-activation, compile-time-version-stamping-with-runtime-commit-injection, timestamped-and-timed-tracing-macros), each with line-cited invariants and verified:true, and every one of the 8 is placed in exactly one row below. Grok's own domainsAbsent no longer names ops at all; its one entry is RETRIEVAL (xai-grok-session-search FTS5+BM25 with a reindex lease, xai-codebase-graph tree-sitter go-to-definition/references, xai-fuzzy-file-search ignore-walk+nucleo, all three real and read but not yet written up as cited entries). That is a SEPARATE DOMAIN and is not an ops hole: it contributes no member to any row in this file and is not counted in coverage.",
     "opencode is two inventories in one file: the 'upstream' half and the 'fork' half are both counted as separate sources (opencode, opencode-fork), per the brief.",
-    "ih's own domainsAbsent records ops as deliberately shallow: telemetry, feedback and the settings document are the whole surface, with no crash handler, no update/distribution mechanism, no benchmarking harness and no cost accounting beyond token estimation; GET /api/telemetry is deliberately absent from the web host, so the emitted stream has no in-repo consumer. Dispositions below judge against that surface."
+    "ih's own domainsAbsent records ops as deliberately shallow: telemetry, feedback and the settings document are the whole surface, with no crash handler, no update/distribution mechanism, no benchmarking harness and no cost accounting beyond token estimation; GET /api/telemetry is deliberately absent from the web host, so the emitted stream has no in-repo consumer. Dispositions below judge against that surface.",
+    "Only one non-grok grouping changed in this re-run: grok's material was added to rows where the shared capability is the same, and no previously merged non-grok pairing was split or re-labelled, so a diff against the previous version shows grok members plus three new grok-only rows.",
+    "Rule 6 preservation: five of grok's eight ops mechanisms carry a wiringNote, and each is carried on its row as a wiringNote field rather than dropped. None of the eight is present-but-unwired as a whole - all are live code - but the notes matter to how the rows read: the emission path has no bounded queue or drop-on-full (unbounded spawned posts; the bounded queue belongs to a different crate), the policy gate contains two inert helpers including a special-user gate with no shipped caller, the OTLP row's Sentry sibling reuses the same redaction primitives with send_default_pii false, the self-update row's channel label is a cached no-network pointer that rejects pre-release candidates on stable/enterprise channels, and the tracing macros contain no sampling, env gate or flag at all."
   ],
   "rows": {
     "session-telemetry-stream-capture-and-sink-fanout": {
@@ -15,11 +17,28 @@
         "codex": [],
         "opencode": [],
         "opencode-fork": [],
-        "grok": [],
+        "grok": ["typed-event-emission-with-fire-and-forget-exit-drain"],
         "cc-custom": []
       },
       "disposition": "已存在",
-      "rationale": "IH 具封閉清單與 sink 隔離"
+      "rationale": "IH 具封閉清單與 sink 隔離",
+      "wiringNote": "grok's wiringNote: this emission path has NO bounded queue, batching or drop-on-full - product events are unbounded tokio::spawn posts, and the bounded-queue/circuit-breaker behaviour for trace uploads lives in a different crate the shell's upload path calls. So grok's member adds typed events, a pending counter and an entrypoint-gated exit drain, not backpressure; IH's per-sink error isolation is not the same guarantee as grok's drain, and neither source bounds the queue here."
+    },
+    "telemetry-emission-policy-gate": {
+      "domain": "ops",
+      "label": "telemetry-emission-policy-gate",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["three-mode-telemetry-policy-gate"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "三態閘預設關；IH 可補",
+      "wiringNote": "The gate itself is live and consulted per emission site, but grok's wiringNote records two inert pieces: has_workspace_env_markers and the GROK_TELEMETRY_SPECIAL_USER gate is_special_user exist with no shipped caller (dead code today). The mode gate should therefore be read as live, not as a complete identity/policy stack."
     },
     "per-message-feedback-ledger": {
       "domain": "ops",
@@ -60,11 +79,12 @@
         "codex": ["otel-session-telemetry-and-metric-export"],
         "opencode": ["otlp-telemetry-export", "ai-sdk-span-attribution"],
         "opencode-fork": ["otlp-telemetry-export"],
-        "grok": [],
+        "grok": ["external-otel-stream-behind-a-fail-closed-privacy-gate"],
         "cc-custom": ["otel-telemetry-export"]
       },
       "disposition": "rewrite",
-      "rationale": "自建 OTLP 匯出，不引 SDK"
+      "rationale": "自建 OTLP 匯出，含隱私丟棄閘",
+      "wiringNote": "grok's wiringNote: the internal OTLP trace pipeline and the Sentry path share the same redaction primitives (redact_common), and Sentry is configured with send_default_pii false, a 0.01 trace sample rate and a before_send scrubber. That Sentry path is a related but distinct sink and is not a member of this row."
     },
     "token-and-cost-accounting": {
       "domain": "ops",
@@ -180,11 +200,11 @@
         "codex": [],
         "opencode": [],
         "opencode-fork": [],
-        "grok": [],
+        "grok": ["crash-handler-with-postmortem-capture-and-archive"],
         "cc-custom": ["graceful-shutdown-and-crash-containment"]
       },
       "disposition": "rewrite",
-      "rationale": "IH 無崩潰處理，宜補"
+      "rationale": "IH 無崩潰處理；可補事後報告"
     },
     "profile-based-distribution-layout": {
       "domain": "ops",
@@ -255,7 +275,7 @@
         "codex": ["analytics-facts-and-feature-state-metrics"],
         "opencode": [],
         "opencode-fork": [],
-        "grok": [],
+        "grok": ["dual-analytics-sink-with-minimal-mixpanel-client"],
         "cc-custom": ["analytics-event-pipeline"]
       },
       "disposition": "路線差異",
@@ -321,6 +341,22 @@
       "disposition": "rewrite",
       "rationale": "在地結構化日誌可自建"
     },
+    "timestamped-and-timed-tracing-macros": {
+      "domain": "ops",
+      "label": "timestamped-and-timed-tracing-macros",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["timestamped-and-timed-tracing-macros"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "無 TTY 的時間戳與計時巨集",
+      "wiringNote": "grok's wiringNote: no rate limiting, sampling, env gate or feature flag exists in this crate - the two capabilities are timestamp prefixing and elapsed-time logging, and nothing else. This is why the mechanism is a call-site macro pair rather than a diagnostics pipeline, and why it did not join the local logging row."
+    },
     "installation-detection-and-self-update": {
       "domain": "ops",
       "label": "installation-detection-and-self-update",
@@ -330,11 +366,27 @@
         "codex": [],
         "opencode": ["installation-detection-and-auto-update"],
         "opencode-fork": ["installation-method-detection"],
-        "grok": [],
+        "grok": ["smoke-test-verified-self-update-with-atomic-activation"],
         "cc-custom": ["install-and-update"]
       },
       "disposition": "遠期",
-      "rationale": "需發佈通道，非當前重點"
+      "rationale": "需發佈通道；可借原子啟用",
+      "wiringNote": "grok's wiringNote: the channel label shown next to the version comes from a cached stable pointer with no network I/O, and version comparison rejects a pre-release candidate on the stable and enterprise channels. Recorded because it is the activation-side companion to grok's smoke-test integrity gate, and because it shows the version-stamping member and this row are wired to each other in grok but are separate capabilities."
+    },
+    "compile-time-version-stamping-with-runtime-commit-injection": {
+      "domain": "ops",
+      "label": "compile-time-version-stamping-with-runtime-commit-injection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["compile-time-version-stamping-with-runtime-commit-injection"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "建置期版本戳記，IH 可補"
     },
     "cli-self-diagnostics-command-surface": {
       "domain": "ops",
@@ -474,65 +526,90 @@
   },
   "unmergedDoubts": [
     {
-      "mechanisms": ["cc-custom:telemetry-event-manifest-and-sanitisation", "ih:host-side-telemetry-stream-with-a-closed-manifest-and-sink-isolation"],
-      "whyNotMerged": "Both are a closed telemetry event manifest, but cc-custom's is a generated protobuf wire contract for a product-analytics backend whose only consumer is a no-op, while ih's manifest drives a live multicast sink fan-out and is the source the emitted type union is derived from; merging them would put an inert schema in the same row as a working stream."
+      "mechanisms": ["cc-custom:telemetry-event-manifest-and-sanitisation", "ih:host-side-telemetry-stream-with-a-closed-manifest-and-sink-isolation", "grok:typed-event-emission-with-fire-and-forget-exit-drain"],
+      "whyNotMerged": "Both are a closed telemetry event manifest, but cc-custom's is a generated protobuf wire contract for a product-analytics backend whose only consumer is a no-op, while ih's manifest drives a live multicast sink fan-out and is the source the emitted type union is derived from; merging them would put an inert schema in the same row as a working stream. Re-run note: the grok material does NOT bridge this - grok's typed-event emission is live (macro-registered typed events, an RAII-counted pending counter, an entrypoint-gated exit drain, RESERVED_EVENT_KEYS protection) so it was merged into ih's row, which sharpens rather than removes the contrast with cc-custom's inert emit target. The doubt stands."
     },
     {
-      "mechanisms": ["cc-custom:feature-flag-client", "opencode:runtime-flag-registry", "opencode-fork:runtime-flags-gating"],
-      "whyNotMerged": "All three are a runtime gate layer, but cc-custom's is a remote server-driven client whose own header records that the previous implementation shipped deviceID, sessionId, email and org UUIDs to a hardcoded endpoint (which is why it was deleted), while opencode's two are locally-read OPENCODE_* env vars with typed safe defaults; the source of truth differs fundamentally."
+      "mechanisms": ["cc-custom:feature-flag-client", "opencode:runtime-flag-registry", "opencode-fork:runtime-flags-gating", "grok:three-mode-telemetry-policy-gate"],
+      "whyNotMerged": "All four are a runtime gate layer, but cc-custom's is a remote server-driven client whose own header records that the previous implementation shipped deviceID, sessionId, email and org UUIDs to a hardcoded endpoint (which is why it was deleted), while opencode's two are locally-read OPENCODE_* env vars with typed safe defaults; the source of truth differs fundamentally. Re-run note: grok's third instance was considered for the flag registry row and kept out - it is one telemetry compliance mode (Disabled|SessionMetrics|Enabled, Disabled as the default) consulted through two narrow predicates at emission sites, plus env overrides and propagation to children as GROK_TELEMETRY_ENABLED, not a registry of independent flags; its value is the default-off posture, so it got its own row."
     },
     {
       "mechanisms": ["ih:settings-document-layered-precedence-hot-reload-comment-preservation", "opencode:runtime-flag-registry", "opencode-fork:runtime-flags-gating"],
-      "whyNotMerged": "A layered, comment-preserving settings document with polling hot reload and a per-section revision counter is not an env-var flag registry: one resolves a merged document with unknown-key survival, the other snapshots process.env into typed getters."
+      "whyNotMerged": "A layered, comment-preserving settings document with polling hot reload and a per-section revision counter is not an env-var flag registry: one resolves a merged document with unknown-key survival, the other snapshots process.env into typed getters. The grok material adds nothing here - grok's telemetry mode is applied as config plus env overrides over a file/remote config, which is closer to IH's settings document than to opencode's flag registry, but it is a single policy field rather than a layered document and is placed in its own row. The doubt stands."
     },
     {
-      "mechanisms": ["codex:sqlite-log-database-and-diagnostics", "opencode:file-and-stderr-logging", "opencode-fork:structured-file-logging", "cc-custom:local-diagnostic-logging"],
-      "whyNotMerged": "All four persist the harness's own structured logs locally, but codex's is a bounded-queue batched SQLite store that also carries cross-cutting db open/migrate telemetry, partition pruning and a read-only audit API; folding it in would mislabel the row as plain file logging."
+      "mechanisms": ["codex:sqlite-log-database-and-diagnostics", "opencode:file-and-stderr-logging", "opencode-fork:structured-file-logging", "cc-custom:local-diagnostic-logging", "grok:typed-event-emission-with-fire-and-forget-exit-drain"],
+      "whyNotMerged": "All five persist the harness's own structured logs locally, but codex's is a bounded-queue batched SQLite store that also carries cross-cutting db open/migrate telemetry, partition pruning and a read-only audit API; folding it in would mislabel the row as plain file logging. Re-run note: grok's bounded local diagnostic file (unified.jsonl under the grok home, 5 MiB cap, inode recheck every 2 s, tail rewritten in place under an exclusive advisory lock) is a genuine file-logging clause and would have been the closest grok match for the file-logging row, but it is one clause of a mechanism whose main body is the typed event emission pipeline, and rule 2 lets a mechanism sit in only one row; it therefore rides in the telemetry stream row and the file-logging row's grok column stays empty. The codex exclusion stands."
     },
     {
       "mechanisms": ["cc-custom:profiling-and-benchmark-instrumentation", "opencode:heap-snapshot-watchdog", "opencode-fork:heap-snapshot-watchdog"],
-      "whyNotMerged": "The heap-dump halves genuinely match (V8 snapshot above an RSS threshold plus a manual command), but cc-custom's mechanism also carries three perf_hooks profilers, per-checkpoint memory snapshots and an FPS tracker, so either row label would misrepresent one side."
+      "whyNotMerged": "The heap-dump halves genuinely match (V8 snapshot above an RSS threshold plus a manual command), but cc-custom's mechanism also carries three perf_hooks profilers, per-checkpoint memory snapshots and an FPS tracker, so either row label would misrepresent one side. Grok's ops array carries no profiler, heap-dump or benchmark mechanism, so the split is untouched; it stands."
     },
     {
       "mechanisms": ["dsh:performance-benchmark-budgets", "cc-custom:profiling-and-benchmark-instrumentation"],
-      "whyNotMerged": "Both measure performance, but dsh's is a CI-asserted budget suite with derived, self-re-asserting thresholds, while cc-custom's is live instrumentation for debugging a running process; a regression gate and a profiler are not the same capability."
+      "whyNotMerged": "Both measure performance, but dsh's is a CI-asserted budget suite with derived, self-re-asserting thresholds, while cc-custom's is live instrumentation for debugging a running process; a regression gate and a profiler are not the same capability. Grok contributes nothing here (its only timing mechanism is a call-site macro, recorded separately), so the doubt stands."
     },
     {
       "mechanisms": ["dsh:session-stats-projection", "cc-custom:local-usage-analytics-and-insights", "opencode-fork:session-stats-aggregation"],
-      "whyNotMerged": "dsh folds the CURRENT session's turn/step/wall-time buckets into a live projection unit served through the projection seam, whereas the other two aggregate the whole stored session history offline into per-model/per-tool reports; live accounting and historical analytics are different jobs."
+      "whyNotMerged": "dsh folds the CURRENT session's turn/step/wall-time buckets into a live projection unit served through the projection seam, whereas the other two aggregate the whole stored session history offline into per-model/per-tool reports; live accounting and historical analytics are different jobs. Grok's ops array has no stats or usage-report mechanism at all, so nothing changes; the doubt stands."
     },
     {
       "mechanisms": ["dsh:runtime-inspector-diagnostics", "cc-custom:doctor-and-context-diagnostics", "opencode:debug-diagnostics-commands"],
-      "whyNotMerged": "Both are diagnostic surfaces, but dsh's is a loopback HTTP+WebSocket inspector with a CDP-shaped protocol and live Cordis runtime-tree queries (experimental, out-of-repo), while the other two are static CLI self-inspection commands that read local state and print placeholders."
+      "whyNotMerged": "Both are diagnostic surfaces, but dsh's is a loopback HTTP+WebSocket inspector with a CDP-shaped protocol and live Cordis runtime-tree queries (experimental, out-of-repo), while the other two are static CLI self-inspection commands that read local state and print placeholders. Re-run note: the grok material does NOT bridge this. Grok's in-guest diagnostics server (xai-grok-diag-server, /ready /statusz /logs) is still only in moduleCoverage and is assigned to the service domain, so no verbatim ops mechanism name exists to cite, and none of grok's 8 ops mechanisms is a diagnostics surface - its crash handler is a fatal-signal postmortem, which is evidence capture, not inspection. The live-inspector vs static-CLI split stands."
     },
     {
       "mechanisms": ["dsh:invariant-runtime-diagnostics", "codex:in-repo-diagnostics-gauges", "opencode-fork:kernel-diagnostics-counters-percentiles"],
-      "whyNotMerged": "Both are in-process registries installed by packages, but dsh's registers assertions whose whole point is to throw a package-attributed InvariantError, while the other two register gauges/counters/percentiles that only observe; an assertion registry and a measurement registry fail in opposite directions."
+      "whyNotMerged": "Both are in-process registries installed by packages, but dsh's registers assertions whose whole point is to throw a package-attributed InvariantError, while the other two register gauges/counters/percentiles that only observe; an assertion registry and a measurement registry fail in opposite directions. Re-run note: the grok material does NOT bridge this. Grok has no in-process metrics registry mechanism in ops; the only counters in its material are the external OTel stream's drop/health counters, which are internal bookkeeping inside that mechanism (placed in the OTLP row) and observe rather than assert. The split stands."
     },
     {
-      "mechanisms": ["dsh:anonymous-identity-attribution", "cc-custom:ant-only-internal-instrumentation"],
-      "whyNotMerged": "Both attach an identity to telemetry, but dsh's is a random per-harness-home UUID explicitly derivable from nothing identifying, while cc-custom's collects Kubernetes namespace and container id for a vendor-internal build tier; the privacy postures are opposite."
+      "mechanisms": ["dsh:anonymous-identity-attribution", "cc-custom:ant-only-internal-instrumentation", "grok:dual-analytics-sink-with-minimal-mixpanel-client"],
+      "whyNotMerged": "Both attach an identity to telemetry, but dsh's is a random per-harness-home UUID explicitly derivable from nothing identifying, while cc-custom's collects Kubernetes namespace and container id for a vendor-internal build tier; the privacy postures are opposite. Re-run note: grok's dual-analytics sink attaches identity plus a 20-field EventEnrichment snapshot (os, arch, cpu share and time, memory, uptime, CI flag, entrypoint, interactivity, release channel, dev build) to every tracked event and ships it to product-events and Mixpanel sinks, which is a third instance and sits on cc-custom's side of the divide (deployment context, gathered by default). It was not merged because that enrichment is a clause of the sink mechanism, which belongs to the product-analytics row and can be cited only once. The doubt stands."
     },
     {
       "mechanisms": ["dsh:session-feedback-command-and-remote", "ih:per-message-feedback-channel-with-verify-after-write-durability", "dsh:message-feedback-ledger"],
-      "whyNotMerged": "A free-text session-level /feedback command with a category vocabulary is a different mechanism from a per-message vote ledger with optimistic concurrency and durable-target verification, so dsh's two feedback mechanisms landed in different rows."
+      "whyNotMerged": "A free-text session-level /feedback command with a category vocabulary is a different mechanism from a per-message vote ledger with optimistic concurrency and durable-target verification, so dsh's two feedback mechanisms landed in different rows. Grok's ops array carries no feedback or bug-report mechanism, so the split is untouched; it stands."
     },
     {
       "mechanisms": ["codex:rollout-trace-event-manifest-bundle", "codex:sqlite-log-database-and-diagnostics"],
-      "whyNotMerged": "Both are durable local stores for diagnostics, but one is a replayable bundle of schema-versioned raw events with payload refs and a reducer cache, the other a pruned log table with a flush interval; the replay contract is the whole point of the first and absent from the second."
+      "whyNotMerged": "Both are durable local stores for diagnostics, but one is a replayable bundle of schema-versioned raw events with payload refs and a reducer cache, the other a pruned log table with a flush interval; the replay contract is the whole point of the first and absent from the second. Grok's tracing macros record no events of their own, so nothing bridges this; the doubt stands."
+    },
+    {
+      "mechanisms": ["grok:crash-handler-with-postmortem-capture-and-archive", "dsh:fail-loud-crash-handling", "cc-custom:graceful-shutdown-and-crash-containment"],
+      "whyNotMerged": "MERGED into fail-loud-crash-handling-and-graceful-shutdown, and this entry records what the merge flattens. All three install process-level fatal-path handling and control the exit, which is why they share a row: dsh hooks late unhandled plugin-init rejections and defers exit through a release hook, cc-custom installs SIGINT/SIGTERM/SIGHUP plus uncaughtException/unhandledRejection and restores the terminal under a failsafe timer, grok registers one sigaction for SIGBUS/SIGSEGV/SIGABRT on a 16 KiB alternate stack. What only grok has is the postmortem artifact pipeline: a fixed-layout non-allocating blob (magic GCRX, at most 64 frames, at most 571 bytes) written into .bss, symbolicating and an owner-only last-crash-report.txt at the next startup, archived into history/crash-<timestamp>.txt keeping the last five. A reader looking specifically for crash-report design should not read this row as 'nobody has one'."
+    },
+    {
+      "mechanisms": ["grok:compile-time-version-stamping-with-runtime-commit-injection", "opencode-fork:installation-method-detection", "cc-custom:doctor-and-context-diagnostics", "grok:smoke-test-verified-self-update-with-atomic-activation"],
+      "whyNotMerged": "grok's version identity was considered for both the installation/self-update row and the CLI self-diagnostics row and kept out of both: the fork's installation-method-detection happens to carry build-time version globals and cc-custom's doctor happens to print a version, but those are install detection and a diagnostics surface, whereas grok's mechanism is the identity itself - VERSION as option_env!-or-CARGO_PKG_VERSION, IS_DEV_BUILD as exactly the absence of injection, a OnceLock first-set-wins runtime commit so the lib crates do not recompile per commit, a GROK_TEST_VERSION override for tests, and a caller-supplied channel label. It got its own single-source row."
+    },
+    {
+      "mechanisms": ["grok:timestamped-and-timed-tracing-macros", "cc-custom:local-diagnostic-logging", "opencode:file-and-stderr-logging", "opencode-fork:structured-file-logging"],
+      "whyNotMerged": "grok's tprintln!/teprintln! (unix-seconds::message at info/warn, pre-epoch clock yields 0) and timed! (Instant measurement returning (value, elapsed_ms) or logging elapsed at a caller-chosen level, with try: arms that add an error field and return the original Result) are call-site macros with no sink, no path, no rotation and no level configuration, whereas the three file-logging mechanisms own the record format and the destination. cc-custom's withDiagnosticsTiming is the nearest analogue (it wraps an async operation and writes started/completed(duration_ms)/failed records and rethrows), but it is one clause of a mechanism that also owns three log surfaces and a PII-free channel; the macros therefore stay in their own row."
+    },
+    {
+      "mechanisms": ["codex:analytics-facts-and-feature-state-metrics", "grok:dual-analytics-sink-with-minimal-mixpanel-client", "cc-custom:analytics-event-pipeline"],
+      "whyNotMerged": "MERGED into product-analytics-event-pipeline, and the merge spans three very different maturities that the label hides: codex constructs turn/token/resolved-config/app-invocation facts at turn boundaries and ships them through an analytics events client (live, including flag-default-drift counters), grok's client::track fans out to a product-events sink and a deliberately minimal hand-rolled Mixpanel client with a 20-field enrichment snapshot (live, the only shipped vendor client in the row, and the reason the row is 路線差異 rather than 不做), and cc-custom's pipeline is stubbed end to end - logEvent/logEventAsync are no-ops, the sink is never attached, the sink initializers and 1P logger are empty - so only its stripProtoFields helper and two env gates are live. The three were still grouped because the capability is the same channel, but 'someone has product analytics' is true for two of the three and false for the third."
+    },
+    {
+      "mechanisms": ["dsh:otel-telemetry-export", "grok:external-otel-stream-behind-a-fail-closed-privacy-gate", "cc-custom:otel-telemetry-export", "codex:otel-session-telemetry-and-metric-export", "opencode:otlp-telemetry-export"],
+      "whyNotMerged": "MERGED into otlp-telemetry-export-with-span-attribution, and the merge hides two real postural differences. (1) Where the redaction happens: dsh redacts at CAPTURE, through a session-telemetry/record waterfall that is the deployment's only redaction extension point, while grok redacts at emit time and then DROPS a violating record or the whole metric export at export time because the SDK's read path is immutable - a fail-closed drop is not a scrubbing seam, and grok also caps content (512-character string prefix, bounded JSON depth, collection size and bytes) and refuses to let remote policy enable anything (it may only force-disable or tighten). (2) Activation defaulting: dsh's shipped backend defaults to FEEDBACK_ONLY and constructs no SDK state when DISABLED, cc-custom activates only when CLAUDE_CODE_ENABLE_TELEMETRY is truthy, opencode/fork export only when OTEL_EXPORTER_OTLP_ENDPOINT is set, and grok needs a double opt-in (GROK_EXTERNAL_OTEL plus a real exporter selected) and additionally refuses to activate when the internal pipeline already consumed the shared OTEL_EXPORTER_OTLP_* variables. All are opt-in, but only grok's is fail-closed on privacy violations."
+    },
+    {
+      "mechanisms": ["grok:smoke-test-verified-self-update-with-atomic-activation", "opencode:installation-detection-and-auto-update", "opencode-fork:installation-method-detection", "cc-custom:install-and-update"],
+      "whyNotMerged": "MERGED into installation-detection-and-self-update, and the merge hides that three of the four members do not actually update anything: the fork's mechanism only detects the installation method (consumed by uninstall) and carries build-time version globals, cc-custom's update check is a self-described stub with no importers and dist-tag getters that always return null (its live half is a local installer), and only opencode upstream resolves a latest version and runs a matching upgrade command. Grok's is a full self-update that converges the on-disk install to a channel pointer with no checksum or signature at all - integrity is a bounded 30 s smoke test, which is why a non-loopback GROK_CLI_BASE_URL is ignored by URL parsing - and activates by setting +x before an atomic rename of a per-racer temp sibling, renaming the destination aside on Windows. The row is 遠期 for IH because it needs a release channel, but grok's smoke-test-instead-of-checksum and atomic-activation design is the transferable part."
     }
   ],
   "coverage": {
-    "mechanismsSeen": 55,
-    "mechanismsPlaced": 55,
+    "mechanismsSeen": 63,
+    "mechanismsPlaced": 63,
     "bySource": {
       "ih": 3,
       "dsh": 12,
       "codex": 8,
-      "grok": 0,
+      "grok": 8,
       "cc-custom": 16,
       "opencode": 8,
       "opencode-fork": 8
-    }
+    },
+    "note": "63 = 3 + 12 + 8 + 8 + 16 + 8 + 8, the sum of domains.ops lengths across the seven sources after grok's ops array was populated (the previous run counted 55 with grok at 0). Each of the 63 appears in exactly one row; every cited name was matched verbatim against that source's domains.ops. Grok's RETRIEVAL material recorded in its domainsAbsent is a different domain and is deliberately not counted here."
   }
 }

@@ -14,7 +14,9 @@
         "codex": [],
         "opencode": [],
         "opencode-fork": [],
-        "grok": [],
+        "grok": [
+          "three-backend-sse-sampling-transport"
+        ],
         "cc-custom": [
           "anthropic-messages-wire-request-assembly",
           "openai-responses-wire-adapter"
@@ -63,7 +65,9 @@
           "llm-request-execution-and-retry"
         ],
         "opencode-fork": [],
-        "grok": [],
+        "grok": [
+          "classified-retry-budget-with-pool-escape"
+        ],
         "cc-custom": [
           "retry-backoff-and-rate-limit-policy"
         ]
@@ -208,13 +212,15 @@
         "opencode-fork": [
           "credential-store-with-oauth-refresh"
         ],
-        "grok": [],
+        "grok": [
+          "refresh-aware-credential-seam-with-401-attribution"
+        ],
         "cc-custom": [
           "client-construction-credentials-and-egress"
         ]
       },
       "disposition": "已存在",
-      "rationale": "ref式憑證且環境優先"
+      "rationale": "七源同型，ref式環境優先"
     },
     "interactive-oauth-authorization-flow": {
       "domain": "model",
@@ -288,7 +294,9 @@
           "model-default-and-fallback-resolution"
         ],
         "opencode-fork": [],
-        "grok": [],
+        "grok": [
+          "embedded-default-model-catalogue"
+        ],
         "cc-custom": []
       },
       "disposition": "rewrite",
@@ -399,23 +407,86 @@
       },
       "disposition": "rewrite",
       "rationale": "快取斷點偵測器未接通"
+    },
+    "fail-closed-model-allowlist-and-visibility-gate": {
+      "domain": "model",
+      "label": "fail-closed-model-allowlist-and-visibility-gate",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [
+          "fail-closed-model-allowlist-and-visibility-gate"
+        ],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "企業白名單與可見性閘門"
+    },
+    "shared-process-wide-sampling-clients-with-kill-switch": {
+      "domain": "model",
+      "label": "shared-process-wide-sampling-clients-with-kill-switch",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [
+          "shared-process-wide-sampling-clients-with-kill-switch"
+        ],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "行程共用連線池與TLS政策"
+    },
+    "origin-scoped-transport-prewarm": {
+      "domain": "model",
+      "label": "origin-scoped-transport-prewarm",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [
+          "origin-scoped-transport-prewarm"
+        ],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "暖機僅省延遲，非核心"
+    },
+    "secret-redaction-before-log-and-sink": {
+      "domain": "model",
+      "label": "secret-redaction-before-log-and-sink",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [
+          "secret-redaction-before-log-and-sink"
+        ],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "日誌與遙測出口遮罩未具"
     }
   },
   "unmergedDoubts": [
     {
       "mechanisms": [
-        "grok:domains.model（空陣列，無逐字機制名可引用）"
-      ],
-      "whyNotMerged": "先聲明以免空欄被誤讀：grok 的 domains.model 是空的，但這是『這一份沒有產出機制級材料』，不是『grok 沒有模型面』。grok 的 moduleCoverage 裡有 xai-grok-models（內嵌 default_models.json 的型號目錄，CLI>env>config.toml>remote settings 解析）、xai-grok-sampler（HTTP 串流取樣與重試）、xai-grok-auth（refresh-aware token 解析）與 xai-grok-secrets，harvest 也有 effort/model 指令條目（SwitchModel{model_id, effort}、catalog 精確比對）。因規則 1 要求成員名逐字存在於該源本域的 inventory，這些都無法入列，故 grok 在每一列都是空成員；缺的是材料，不是能力。"
-    },
-    {
-      "mechanisms": [
         "dsh:llm-failure-taxonomy-and-normalization",
         "dsh:provider-retry-policy-and-execution",
         "cc-custom:retry-backoff-and-rate-limit-policy",
-        "opencode:llm-request-execution-and-retry"
+        "opencode:llm-request-execution-and-retry",
+        "grok:classified-retry-budget-with-pool-escape"
       ],
-      "whyNotMerged": "考慮把 dsh 的錯誤碼分類併入重試列。未併：dsh 刻意分成兩個機制——重試是註冊期凍結的不可變政策，分類是 HarnessError 上的穩定代碼且明言『絕不解析訊息文字』；cc-custom 與 opencode 把分類塞在重試包裝內，但政策與分類表是兩個決策，合併會讓『要不要再試』與『這錯是什麼』變成一列。"
+      "whyNotMerged": "考慮把 dsh 的錯誤碼分類併入重試列。未併：dsh 刻意分成兩個機制——重試是註冊期凍結的不可變政策，分類是 HarnessError 上的穩定代碼且明言『絕不解析訊息文字』；cc-custom、opencode 與 grok 都把分類塞在重試包裝內（grok 的 classify_error 直接回傳 Retry/RetryWithImageStrip/EmitToSession/Fatal，且 veto 一律 Fatal），但政策與分類表是兩個決策，合併會讓『要不要再試』與『這錯是什麼』變成一列。"
     },
     {
       "mechanisms": [
@@ -430,9 +501,10 @@
         "dsh:model-catalogue-and-exact-model-metadata",
         "dsh:provider-model-discovery-service",
         "codex:remote-model-catalog-with-cache-and-bundled-fallback",
-        "opencode:models-dev-catalogue-cache"
+        "opencode:models-dev-catalogue-cache",
+        "grok:embedded-default-model-catalogue"
       ],
-      "whyNotMerged": "考慮把『取得目錄』（列5）與『目錄轉執行期中繼資料』（列7）併成一列。未併：dsh 明分 listModels 為顧問性目錄、discovery 為不落地的草稿式探詢，codex 的遠端抓取與其內建 models.json 也是兩層；合併會把『去哪拿清單』與『清單條目怎麼驗證』混為一談。"
+      "whyNotMerged": "考慮把『取得目錄』（列5）與『目錄轉執行期中繼資料』（列7）併成一列。未併：dsh 明分 listModels 為顧問性目錄、discovery 為不落地的草稿式探詢，codex 的遠端抓取與其內建 models.json 也是兩層；合併會把『去哪拿清單』與『清單條目怎麼驗證』混為一談。grok 這支更麻煩：它的 include_str! 內嵌目錄同時是候選清單（列5 的位置）、per-model metadata 的來源（列7 的位置：context_window/api_backend/reasoning_efforts/variants）與預設模型解析的最後手段（列13 的位置），規則 2 下只能入一列，依其名義主體（default 目錄）放列13。副作用是列5 沒有 grok 成員，那是事實而非遺漏——grok 不做網路探索，目錄是編譯進去的，探索面的差異是設計哲學（內嵌＋車隊 pin）不是缺料。"
     },
     {
       "mechanisms": [
@@ -455,9 +527,10 @@
         "dsh:http-proxy-transport-policy",
         "codex:responses-websocket-transport-with-https-fallback",
         "opencode-fork:llm-runtime-native-vs-aisdk-selection",
-        "cc-custom:protocol-selection-and-capability-negotiation"
+        "cc-custom:protocol-selection-and-capability-negotiation",
+        "grok:shared-process-wide-sampling-clients-with-kill-switch"
       ],
-      "whyNotMerged": "四者都在決定『請求怎麼出去』，考慮併成一個出口政策列。未併：dsh 是把 HTTP_PROXY/NO_PROXY 解析成 undici 全域 dispatcher 的環境政策（純資料、可結構化複製），另三者是在兩條平行實作間選一條並回退；政策解析與路徑選擇不是同一能力，dsh 自成列16。"
+      "whyNotMerged": "五者都在決定『請求怎麼出去』，考慮併成一個出口政策列。未併：dsh 是把 HTTP_PROXY/NO_PROXY 解析成 undici 全域 dispatcher 的環境政策（純資料、可結構化複製），codex/fork/cc-custom 是在兩條平行實作間選一條並回退，三者留在列14；grok 這支是第三種東西——行程共用連線池（兩個 OnceLock reqwest client，builder 不得吃任何設定衍生輸入）加 rustls 釘選與 GROK_EXTRA_CA_BUNDLE 額外根憑證、外加兩個 kill switch，自成一列21。三者主題不同（代理語意／路徑回退／連線池與信任根），合併會讓讀者以為 grok 處理代理或 dsh 管連線池；dsh 這支維持列16 的 reuse。"
     },
     {
       "mechanisms": [
@@ -470,26 +543,29 @@
     {
       "mechanisms": [
         "dsh:plugin-package-attribution-inventory",
-        "dsh:deepseek-wire-protocol-and-request-extensions"
+        "dsh:deepseek-wire-protocol-and-request-extensions",
+        "grok:three-backend-sse-sampling-transport"
       ],
-      "whyNotMerged": "考慮併入列1。未併：列1 收的是擴充註冊表本身與線路協定，這支是透過該註冊表掛上去的單一頂層欄位外掛（dsh_plugin_packages 的載入清單）；基礎設施與其中一個外掛不是同一能力。"
+      "whyNotMerged": "考慮併入列1。未併：列1 收的是擴充註冊表本身、線路協定與（新增的）grok 三後端傳輸；grok 這支裡的 x-grok-* 關聯標頭（conv/req/session/turn-index/agent…）雖然也是一次請求的身分標註，但它是傳輸層欄位而非外掛清單，故隨 grok 主體留在列1；這支 dsh 是透過擴充註冊表掛上去的單一頂層欄位外掛（dsh_plugin_packages 的載入清單），基礎設施與其中一個外掛不是同一能力，列17 維持單源。"
     },
     {
       "mechanisms": [
         "dsh:agent-default-model-resolution",
         "opencode:model-default-and-fallback-resolution",
-        "ih:typed-model-resolution-with-a-settings-backed-provider-runtime"
+        "ih:typed-model-resolution-with-a-settings-backed-provider-runtime",
+        "grok:embedded-default-model-catalogue"
       ],
-      "whyNotMerged": "考慮把預設模型選擇併入列6 的解析列（在 ih，llm.defaultModel 只是解析優先序的一層）。未併：dsh 與 opencode 都把它做成獨立服務並各自有 recent-model 檔與小模型評分（成本 0.8／年齡 0.2、18 個月上限）；『未指定時用哪個』與『指定的怎麼綁定』是兩個決策，列13 因此無 ih 成員。"
+      "whyNotMerged": "考慮把預設模型選擇併入列6 的解析列（在 ih，llm.defaultModel 只是解析優先序的一層）。未併：dsh 與 opencode 都把它做成獨立服務並各自有 recent-model 檔與小模型評分（成本 0.8／年齡 0.2、18 個月上限），grok 另有 CLI > env > config.toml > remote settings 的優先序與 web_search/image_description/session_summary 三個回退到 default 的輔助模型存取子；『未指定時用哪個』與『指定的怎麼綁定』是兩個決策，列13 因此無 ih 成員。"
     },
     {
       "mechanisms": [
         "dsh:streaming-call-dispatch-and-chunk-assembly",
         "cc-custom:streaming-wire-to-transcript-assembly",
         "ih:five-wire-adapters-with-per-generation-reasoning-translation",
-        "cc-custom:anthropic-messages-wire-request-assembly"
+        "cc-custom:anthropic-messages-wire-request-assembly",
+        "grok:three-backend-sse-sampling-transport"
       ],
-      "whyNotMerged": "考慮把回應組裝（列11）併入請求組裝（列1）——兩者在 cc-custom 是同一個 services/api 目錄、在 dsh 是同一個 seam 的兩端，合併可讓 ih 的線路機制同時覆蓋兩者。未併：『把 chunk 疊成訊息』是獨立演算法（BlockAssembler 的 keep/drop 單一決策、interruptedBlocks 前綴），列11 因此無 ih 成員，其 rewrite 應讀成『把這些行為併進 IH 既有組裝器』。"
+      "whyNotMerged": "考慮把回應組裝（列11）併入請求組裝（列1）——兩者在 cc-custom 是同一個 services/api 目錄、在 dsh 是同一個 seam 的兩端，合併可讓 ih 的線路機制同時覆蓋兩者。未併：『把 chunk 疊成訊息』是獨立演算法（BlockAssembler 的 keep/drop 單一決策、interruptedBlocks 前綴），列11 因此無 ih 成員，其 rewrite 應讀成『把這些行為併進 IH 既有組裝器』。grok 這支的第二層（raw chunk → SamplingEvent 解碼器、Responses 伺服器工具容錯、無終止事件即失敗）在位置上屬列11，但規則 2 下它已隨三後端主體入列1，未重複計入。"
     },
     {
       "mechanisms": [
@@ -498,9 +574,10 @@
         "ih:ref-based-credential-store-with-env-over-file-precedence",
         "dsh:oauth-authorization-flow-registry",
         "codex:chatgpt-oauth-pkce-loopback-login",
-        "cc-custom:subscription-oauth-credential-lifecycle"
+        "cc-custom:subscription-oauth-credential-lifecycle",
+        "grok:refresh-aware-credential-seam-with-401-attribution"
       ],
-      "whyNotMerged": "考慮把互動授權（列10）併入憑證存放與解析（列9），因為 opencode 與 fork 本來就把兩者寫成一個機制、codex 的 auth-persistence 也含 401 復原。未併：『憑證放哪、怎麼分層解析』與『人怎麼完成授權』是兩個能力，且 dsh 的 flow registry 只做生命週期不碰協定；強行合併會讓列9 變成十一成員的大列。"
+      "whyNotMerged": "考慮把互動授權（列10）併入憑證存放與解析（列9），因為 opencode 與 fork 本來就把兩者寫成一個機制、codex 的 auth-persistence 也含 401 復原。未併：『憑證放哪、怎麼分層解析』與『人怎麼完成授權』是兩個能力，且 dsh 的 flow registry 只做生命週期不碰協定；強行合併會讓列9 變成十二成員的大列。grok 的 refresh-aware seam（結構化 snapshot、wire 有效性檢查、401 交由背景復原、靜態 provider 明示不刷新）整支都是列9 的形狀，故入列9，使該列成為七源全到的唯一一列。"
     },
     {
       "mechanisms": [
@@ -508,10 +585,50 @@
         "dsh:http-proxy-transport-policy"
       ],
       "whyNotMerged": "這支後段（proxy、NO_PROXY、mTLS、CA、unix socket 走同一出口政策）與 dsh 的代理政策重疊，考慮放進列16。未併：它的主體是用解析出的憑證把 Anthropic/Bedrock/Vertex/Foundry 客戶端建起來（且 Bedrock/Vertex/Foundry 完全繞過直接 API 的憑證解析），故放入憑證列9。"
+    },
+    {
+      "mechanisms": [
+        "grok:fail-closed-model-allowlist-and-visibility-gate",
+        "opencode:provider-registry-merge-chain",
+        "opencode-fork:provider-catalog-state-availability-policy"
+      ],
+      "whyNotMerged": "考慮把 grok 的白名單閘門併入列6（opencode 的 merge chain 尾段確實有 enabled_providers/disabled_providers 與 status/whitelist/blacklist 過濾，fork 的 finalize() 也會用 'provider.use' 政策語句移除被拒的 provider）。未併：那兩支的主體分別是『多來源疊合成註冊表』與『catalog state reducer 推導可用性』，過濾只是其中一段；grok 這支是一個獨立能力——disabled→allowlist→hidden 的固定順序、車隊 pin 比對 routing slug（本地 [model.*] 別名無法夾帶）、無法解析的 glob 一律 fail-closed 成全不可選並回以管理員政策文字、外加依 auth 模式（session vs API key）的 visible_for_auth 可見性。合併會把企業閘門埋進十成員的註冊列，故列20 單源。"
+    },
+    {
+      "mechanisms": [
+        "grok:origin-scoped-transport-prewarm",
+        "codex:responses-websocket-transport-with-https-fallback",
+        "cc-custom:client-construction-credentials-and-egress"
+      ],
+      "whyNotMerged": "三者都含『先暖再說』的成分：grok 是對 endpoint origin 做無憑證的暖機 GET（每 pool-idle 窗一次、上限 32 個 origin、claim 狀態機、只記錄 warm_fresh/stale/pending/absent），codex 是每個 turn 首連先用 response.create(generate=false) 暖 WebSocket session，cc-custom 是 init 階段的 fire-and-forget preconnect。未併：後兩者是各自機制內的一個子句（規則 2 下已分別入列14 與列9），且被暖的對象不同——連線池／session／socket——暖池與暖 session 不是同一能力，故列22 單源。"
+    },
+    {
+      "mechanisms": [
+        "grok:secret-redaction-before-log-and-sink",
+        "grok:retention-and-secret-redaction（safety 域）",
+        "ih:ref-based-credential-store-with-env-over-file-precedence"
+      ],
+      "whyNotMerged": "grok 把同一個 xai-grok-secrets crate 申報了兩次：本域這支是實作面（RegexSet 前濾＋十道有序樣式、$HOME/使用者名折疊、walk_json_strings 供 telemetry/Sentry/Mixpanel 使用），safety 域的 retention-and-secret-redaction 是同一 crate 的能力面描述。safety 那支屬 safety crosswalk，本列只放本域成員；IH 在七個域的機制清單裡都沒有出口前遮罩這類能力（最接近的只有列9 憑證存放的單向 describe() 記錄，那是不同機制且已入列9），故此列無 ih 成員、標 rewrite 指的是『在 IH 補一個出口遮罩面』。"
+    },
+    {
+      "mechanisms": [
+        "ih:context-window-resolution-chain（context 域）",
+        "dsh:context-window-and-max-output-metadata",
+        "cc-custom:context-window-and-max-output-metadata"
+      ],
+      "whyNotMerged": "規則 1『成員名須逐字存在於該源本域』在此咬到：IH 有等效能力（context 域的 context-window-resolution-chain：顯式值 > profile.modelContexts > profile.contextWindow > 目錄卡 > undefined，maxOutputTokens 同步推導，無視窗即 fail-closed），但它被歸在 context 域，不能當列8 的 ih 成員。故列8 的 rewrite 應讀成『把 IH 既有的視窗鏈接上這兩個參考的條目驗證與未接推導』，不是『IH 沒有視窗解析』。"
+    },
+    {
+      "mechanisms": [
+        "ih:single-projection-token-accounting（context 域）",
+        "dsh:token-metering-and-usage-projection",
+        "cc-custom:model-cost-and-usage-costing"
+      ],
+      "whyNotMerged": "同一條域界線咬到的第二列：IH 的 token 計量在 context 域（single-projection-token-accounting 只對 deriveMessages(session) 定價，固定密度估算），不能入列12。且兩半要分開讀——計量半邊 IH 有等效物（只是位置不同），計價半邊（dsh 的 route-priced anchor 與分桶用量、cc-custom 的 USD 分級價目與快取讀寫價、未知模型回退主模型價並標記）IH 清單中完全沒有。故列12 的 rewrite 是『計價面新增、計量面與 context 域那支對齊』。"
     }
   ],
   "coverage": {
-    "mechanismsSeen": 60,
-    "mechanismsPlaced": 60
+    "mechanismsSeen": 68,
+    "mechanismsPlaced": 68
   }
 }
