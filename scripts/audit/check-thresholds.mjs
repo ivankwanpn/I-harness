@@ -250,6 +250,63 @@ if (!DISPOSITIONS?.rows) {
   )
 }
 
+// -- 7. D3 (mechanism matrix) -------------------------------------------------
+// D3's whole premise is "everything that exists was surveyed", so its gates are
+// about completeness and provenance rather than about a rendered table.
+const D3 = join(AUDIT, "2026-09-11-sevenway-backend-mechanisms.md")
+const d3Modules = readJson(join(DATA, "2026-09-11-d3-modules.json"))
+const D3_FILES = {
+  ih: "2026-09-11-d3-ih.json",
+  dsh: "2026-09-11-d3-dsh.json",
+  codex: "2026-09-11-d3-codex.json",
+  opencode: "2026-09-11-d3-opencode.json",
+  "opencode-fork": "2026-09-11-d3-opencode.json",
+  grok: "2026-09-11-d3-grok.json",
+  "cc-custom": "2026-09-11-d3-cc-custom.json",
+}
+if (!d3Modules) {
+  check("§8.D3 module inventory exists", false, "2026-09-11-d3-modules.json absent")
+} else {
+  const uncovered = []
+  let expectedTotal = 0
+  let coveredTotal = 0
+  for (const [key, file] of Object.entries(D3_FILES)) {
+    const inv = readJson(join(DATA, file))
+    if (!inv) {
+      uncovered.push({ key, reason: `no inventory (${file})`, missing: [] })
+      continue
+    }
+    const body = key === "opencode" ? inv.upstream : key === "opencode-fork" ? inv.fork : inv
+    if (!body) {
+      uncovered.push({ key, reason: `no ${key === "opencode" ? "upstream" : "fork"} section`, missing: [] })
+      continue
+    }
+    const expected = (d3Modules.sources[key]?.modules ?? []).map((m) => m.name)
+    const cov = body.moduleCoverage ?? {}
+    const missing = expected.filter((n) => !(n in cov))
+    expectedTotal += expected.length
+    coveredTotal += expected.length - missing.length
+    if (missing.length) uncovered.push({ key, reason: `${missing.length} unaccounted`, missing })
+  }
+  check(
+    "§8.D3 every module of every source is accounted for",
+    uncovered.length === 0,
+    uncovered.length
+      ? uncovered.map((u) => `${u.key}: ${u.reason}${u.missing.length ? ` [${u.missing.slice(0, 6).join(", ")}…]` : ""}`).join("; ")
+      : `${coveredTotal}/${expectedTotal} modules across 7 sources`,
+  )
+}
+
+if (!existsSync(D3)) {
+  check("§8.D3 mechanism matrix written", false, "D3 not written yet")
+  check("§8.D3 no standalone placeholders in D3", false, "D3 not written yet")
+} else {
+  const t = readFileSync(D3, "utf8")
+  check("§8.D3 mechanism matrix written", t.length > 2000, `${(t.length / 1024).toFixed(0)} KB`)
+  const hits = scanStandalone(t)
+  check("§8.D3 no standalone placeholders in D3", hits.length === 0, hits.length ? `first: ${hits[0].trim().slice(0, 100)}` : "clean")
+}
+
 // ------------------------------------------------------------------ report
 console.log("design §8 acceptance thresholds\n" + "-".repeat(72))
 let failed = 0
