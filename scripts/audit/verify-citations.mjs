@@ -169,8 +169,19 @@ function checkClaim(source, cmd, field, claimText, citations) {
       stats.docComment++
       docOnly.push({ source, cmd: cmd.rawName, cite, lineText: stripped.slice(0, 120) })
     } else if (stripped === "") {
-      stats.blank++
-      problems.push({ source, cmd: cmd.rawName, kind: "BLANK_LINE", detail: cite })
+      // For a RANGE, only the first line was inspected above; a range may
+      // legitimately begin on a blank line and still carry the claim further
+      // down, so the whole range is checked before calling it a defect.
+      let hasContent = false
+      if (endLine != null && endLine > line) {
+        for (let k = line; k < Math.min(endLine, ls.length); k++) {
+          if ((ls[k] ?? "").trim() !== "") { hasContent = true; break }
+        }
+      }
+      if (!hasContent) {
+        stats.blank++
+        problems.push({ source, cmd: cmd.rawName, kind: "BLANK_LINE", detail: cite })
+      }
     } else {
       anyCode = true
     }

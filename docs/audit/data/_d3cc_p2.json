@@ -1,0 +1,630 @@
+{
+  "context": [
+    {
+      "name": "context-window-resolution",
+      "what": "The effective context window is resolved locally with a documented precedence: settings.contextWindowTokens wins outright, then an explicit [1m] model suffix, then the context-1m beta combined with modelSupports1M, then the sonnet-1M experiment flag, else a 200k default (src/utils/context.ts:52-73). Per-family max-output defaults and upper limits are a separate table keyed on the canonical model name (context.ts:124-170), clamped by settings.maxOutputTokens and CLAUDE_CODE_MAX_OUTPUT_TOKENS (context.ts:172-189). The 1M paths are additionally killable by CLAUDE_CODE_DISABLE_1M_CONTEXT for HIPAA-constrained deployments (context.ts:32-50), and the sonnet-1M experiment branch is unreachable because nothing ever writes getGlobalConfig().clientDataCache (context.ts:75-87).",
+      "invariants": [
+        "settings.contextWindowTokens short-circuits every detection path",
+        "1M is refused when CLAUDE_CODE_DISABLE_1M_CONTEXT is set, before any other check",
+        "max output is always bounded by the model family upperLimit"
+      ],
+      "failurePolicy": "fail-soft: an unrecognised model falls back to 200_000 context, 32_000 default output and a 64_000 upper limit",
+      "constants": [
+        {"name": "MODEL_CONTEXT_WINDOW_DEFAULT", "value": 200000},
+        {"name": "COMPACT_MAX_OUTPUT_TOKENS", "value": 20000},
+        {"name": "MAX_OUTPUT_TOKENS_DEFAULT", "value": 32000},
+        {"name": "MAX_OUTPUT_TOKENS_UPPER_LIMIT", "value": 64000},
+        {"name": "CAPPED_DEFAULT_MAX_TOKENS", "value": 8000},
+        {"name": "ESCALATED_MAX_TOKENS", "value": 64000}
+      ],
+      "evidence": [
+        "src/utils/context.ts:10-26",
+        "src/utils/context.ts:32-50",
+        "src/utils/context.ts:52-87",
+        "src/utils/context.ts:124-189"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "auto-compact-threshold-and-circuit-breaker",
+      "what": "Auto-compaction fires when the estimated token count crosses the effective window minus a 13k buffer, with warning and error thresholds 20k below that and a manual blocking limit 3k below the raw window (src/services/compact/autoCompact.ts:68-71, 85-158). Two guards bound the damage: a circuit breaker stops retrying after 3 consecutive failures (autoCompact.ts:76, 218-226, 308-324) and a minimum turn gap of 3 prevents compaction on consecutive turns after a success (autoCompact.ts:83, 228-237). Both /compact-adjacent env overrides (DISABLE_COMPACT, DISABLE_AUTO_COMPACT) and the user config autoCompactEnabled gate the whole path (autoCompact.ts:160-171), and recursion is refused for the session_memory and compact query sources (autoCompact.ts:173-185).",
+      "invariants": [
+        "compaction never runs for a forked compact/session-memory query source (deadlock guard)",
+        "the consecutive-failure counter resets only on success",
+        "the token warning state must report the same threshold the trigger uses"
+      ],
+      "failurePolicy": "fail-soft: a compaction failure is logged, the failure counter increments, and the turn proceeds uncompacted until the breaker trips",
+      "constants": [
+        {"name": "AUTOCOMPACT_BUFFER_TOKENS", "value": 13000},
+        {"name": "WARNING_THRESHOLD_BUFFER_TOKENS", "value": 20000},
+        {"name": "ERROR_THRESHOLD_BUFFER_TOKENS", "value": 20000},
+        {"name": "MANUAL_COMPACT_BUFFER_TOKENS", "value": 3000},
+        {"name": "MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES", "value": 3},
+        {"name": "MIN_TURNS_BEFORE_RECOMPACT", "value": 3},
+        {"name": "MAX_OUTPUT_TOKENS_FOR_SUMMARY", "value": 20000}
+      ],
+      "evidence": [
+        "src/services/compact/autoCompact.ts:29-55",
+        "src/services/compact/autoCompact.ts:68-83",
+        "src/services/compact/autoCompact.ts:106-171",
+        "src/services/compact/autoCompact.ts:203-237",
+        "src/services/compact/autoCompact.ts:282-324"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "session-memory-compaction",
+      "what": "A first-choice compaction strategy that prunes messages around a preserved window rather than summarising: trySessionMemoryCompaction keeps between minTokens (10k) and maxTokens (40k) of post-compact context with at least 5 text-bearing messages, adjusting the cut index to preserve API invariants (src/services/compact/sessionMemoryCompact.ts:47-61, 232, 324, 514). It is tried before legacy compaction inside autoCompactIfNeeded and, when it wins, additionally clears the session-messages cache, runs post-compact cleanup, resets the last-summarized message id and notifies cache-break detection (src/services/compact/autoCompact.ts:254-280). The threshold is re-checked against the auto-compact threshold so a result that is still too large is rejected (sessionMemoryCompact.ts:604-611).",
+      "invariants": [
+        "the cut index is adjusted to preserve tool_use/tool_result and thinking-block pairing",
+        "MEMORY/summary content is not counted as summarisable text",
+        "a post-compact size at or above the auto-compact threshold invalidates the attempt"
+      ],
+      "failurePolicy": "fail-soft: a failed or over-threshold attempt returns undefined and the caller falls through to legacy compaction",
+      "constants": [
+        {"name": "DEFAULT_SM_COMPACT_CONFIG.minTokens", "value": 10000},
+        {"name": "DEFAULT_SM_COMPACT_CONFIG.minTextBlockMessages", "value": 5},
+        {"name": "DEFAULT_SM_COMPACT_CONFIG.maxTokens", "value": 40000}
+      ],
+      "evidence": [
+        "src/services/compact/sessionMemoryCompact.ts:47-61",
+        "src/services/compact/sessionMemoryCompact.ts:403",
+        "src/services/compact/sessionMemoryCompact.ts:514-543",
+        "src/services/compact/sessionMemoryCompact.ts:604-611",
+        "src/services/compact/autoCompact.ts:254-280"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "legacy-summarisation-compaction",
+      "what": "The fallback compactor asks the model for a summary of the conversation and rebuilds the history from it: compactConversation streams a summary under a 20k output budget with up to 2 streaming retries, then re-injects a bounded set of files, plans, skills and async agents so work in progress survives (src/services/compact/compact.ts:113-120, 357, 1205, 1357-1510). Prompt-too-long during compaction is recovered by truncating the head and retrying up to 3 times with a truncation marker, and a partial-compaction variant can compact only a message range (compact.ts:197-213, 436, 737). Compaction runs with its own canUseTool that suppresses user questions in the auto-compact case (compact.ts:1087, autoCompact.ts:283-291).",
+      "invariants": [
+        "post-compact re-injection is budgeted (5 files, 50k tokens total, 5k per file, 25k for skills)",
+        "a summary that comes back incomplete is retried, never accepted as a truncation",
+        "auto-compact must not prompt the user"
+      ],
+      "failurePolicy": "fail-soft: an abort during compaction is recognised by its exact error message and not logged as a failure; other errors propagate to the auto-compact failure counter",
+      "constants": [
+        {"name": "POST_COMPACT_MAX_FILES_TO_RESTORE", "value": 5},
+        {"name": "POST_COMPACT_TOKEN_BUDGET", "value": 50000},
+        {"name": "POST_COMPACT_MAX_TOKENS_PER_FILE", "value": 5000},
+        {"name": "POST_COMPACT_SKILLS_TOKEN_BUDGET", "value": 25000},
+        {"name": "MAX_COMPACT_STREAMING_RETRIES", "value": 2},
+        {"name": "MAX_PTL_RETRIES", "value": 3}
+      ],
+      "evidence": [
+        "src/services/compact/compact.ts:113-120",
+        "src/services/compact/compact.ts:195-213",
+        "src/services/compact/compact.ts:357",
+        "src/services/compact/compact.ts:436",
+        "src/services/compact/compact.ts:737",
+        "src/services/compact/compact.ts:1087",
+        "src/services/compact/compact.ts:1205",
+        "src/services/compact/compact.ts:1357-1510"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "time-based-microcompact",
+      "what": "When the gap since the last main-thread assistant message exceeds a configured threshold, the server-side prompt cache has already expired, so the client content-clears old compactable tool results before the request instead of paying to rewrite them: maybeTimeBasedMicrocompact collects tool_use ids for a fixed set of compactable tools, keeps the most recent N and replaces the rest with an '[Old tool result content cleared]' marker (src/services/compact/microCompact.ts:32-46, 130-145, 155-173, 219-239). keepRecent is floored at 1 because slice(-0) returns the whole array and clearing everything leaves the model with no working context (microCompact.ts:231-236). The trigger requires an explicit main-thread query source so analysis-only callers such as /context and /compact cannot fire it (microCompact.ts:195-217).",
+      "invariants": [
+        "at least one compactable result is always kept",
+        "the trigger requires an explicit repl_main_thread source, never undefined",
+        "only the fixed COMPACTABLE_TOOLS set is eligible"
+      ],
+      "failurePolicy": "fail-soft: when the trigger does not fire the messages are returned unchanged and other paths continue",
+      "constants": [
+        {"name": "IMAGE_MAX_TOKEN_SIZE", "value": 2000},
+        {"name": "COMPACTABLE_TOOLS", "value": "Read, Shell tools, Grep, Glob, WebSearch, WebFetch, Edit, Write"},
+        {"name": "cleared-content marker", "value": "[Old tool result content cleared]"}
+      ],
+      "evidence": [
+        "src/services/compact/microCompact.ts:32-46",
+        "src/services/compact/microCompact.ts:79-120",
+        "src/services/compact/microCompact.ts:155-173",
+        "src/services/compact/microCompact.ts:195-239"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "api-side-context-management",
+      "what": "A subset of context pruning is delegated to the API through a context-management edit list rather than done client-side: getAPIContextManagement emits clear_thinking_20251015 to drop prior-turn thinking blocks (keeping only the last thinking turn when the cache is known cold), and clear_tool_uses_20250919 with an input-token trigger and a clear_at_least keep-target when the corresponding env flags are set (src/services/compact/apiMicrocompact.ts:16-17, 64-126). The thinking strategy is unconditional for non-redacted thinking, but the tool-clearing strategies are ant-only: the function returns early for any other USER_TYPE before building them (apiMicrocompact.ts:89-102).",
+      "invariants": [
+        "thinking blocks are never cleared while redact-thinking is active (they carry no model-visible content)",
+        "clear_at_least is derived as trigger minus keep-target so a clear always frees at least that many tokens",
+        "the API edit list is empty rather than absent when no strategy applies"
+      ],
+      "failurePolicy": "fail-soft: when no strategy applies the function returns undefined and the request proceeds with the full context",
+      "constants": [
+        {"name": "DEFAULT_MAX_INPUT_TOKENS", "value": 180000},
+        {"name": "DEFAULT_TARGET_INPUT_TOKENS", "value": 40000}
+      ],
+      "evidence": [
+        "src/services/compact/apiMicrocompact.ts:16-17",
+        "src/services/compact/apiMicrocompact.ts:64-126"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "post-compact-cache-invalidation",
+      "what": "Compaction invalidates module-level caches that were derived from the pre-compaction message array, in one place so every compaction path behaves the same: runPostCompactCleanup resets microcompact warning state, clears the memoized getUserContext cache and the CLAUDE.md memory-file cache, clears system-prompt sections, classifier approvals and speculative bash checks, clears beta tracing state and the session-messages cache (src/services/compact/postCompactCleanup.ts:30-62). Main-thread-only resets are gated on the query source because subagents share module-level state with the main thread and resetting it from a subagent would corrupt the main thread (postCompactCleanup.ts:21-51). Skill content is deliberately NOT cleared so it survives multiple compactions (postCompactCleanup.ts:16-19, 55-59).",
+      "invariants": [
+        "main-thread module state is reset only for main-thread compactions",
+        "invoked-skill content must survive compaction",
+        "every compaction path (auto, manual, session-memory) calls the same cleanup"
+      ],
+      "failurePolicy": "fail-soft: cleanup is best-effort synchronous cache clearing with no failure path",
+      "constants": [],
+      "evidence": [
+        "src/services/compact/postCompactCleanup.ts:11-62"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "max-output-token-recovery-and-escalation",
+      "what": "When a response is cut off at the output-token limit the loop pushes itself forward instead of ending the turn: recoverModelContext emits an internal continuation prompt telling the model to resume mid-thought and counts the attempt, up to 3 consecutive recoveries before it terminates (src/query/effects/contextRecovery.ts:27, 201-229). An escalation path would instead retry once at 64k output tokens, but it is gated on the GrowthBook feature value tengu_otk_slot_v1 whose default is false and which the stubbed client always returns, so the escalation is INERT and only the continuation path is live (contextRecovery.ts:181-199). Prompt-too-long and media-too-large are handled on the same path, producing terminal reasons prompt_too_long or image_error, with stop-failure hooks fired in both cases (contextRecovery.ts:93-177).",
+      "invariants": [
+        "the recovery count is carried in run state and survives across attempts",
+        "an explicit CLAUDE_CODE_MAX_OUTPUT_TOKENS disables the escalation path",
+        "the continuation prompt is marked isMeta so it is not treated as user input"
+      ],
+      "failurePolicy": "mixed: a recoverable truncation continues the turn; an unrecoverable prompt-too-long or media error terminates with a typed reason after firing stop-failure hooks",
+      "constants": [
+        {"name": "MAX_OUTPUT_TOKENS_RECOVERY_LIMIT", "value": 3},
+        {"name": "ESCALATED_MAX_TOKENS", "value": 64000}
+      ],
+      "evidence": [
+        "src/query/effects/contextRecovery.ts:27",
+        "src/query/effects/contextRecovery.ts:93-177",
+        "src/query/effects/contextRecovery.ts:179-229",
+        "src/query/runtime/productionSessionContinuation.ts:37-92"
+      ],
+      "modules": ["query", "services"],
+      "verified": true
+    },
+    {
+      "name": "token-budget-continuation",
+      "what": "A task-budget tracker nudges the model to keep working while spend is under the budget, and stops when the budget is nearly exhausted or returns are diminishing: checkTokenBudget continues while turn tokens are below 90% of budget, stops when they reach it, and additionally stops when three or more continuations have each added fewer than 500 tokens (src/query/tokenBudget.ts:3-4, 45-92). Subagent runs and a null or non-positive budget short-circuit to a stop with no completion event. The tracker is INERT as a production mechanism: it is only constructed when feature('TOKEN_BUDGET') is true, which is false in this build, so budgetTracker is null and no token-budget input reaches the stop evaluation (src/query/runtime/productionSessionState.ts:67-69, productionSessionContinuation.ts:83-85).",
+      "invariants": [
+        "agent-scoped runs never use the task budget",
+        "a budget completion event is only emitted when at least one continuation happened",
+        "the diminishing-returns check requires both the previous and current deltas to be small"
+      ],
+      "failurePolicy": "fail-soft: with no budget the decision is a plain stop, which is the pre-existing behaviour",
+      "constants": [
+        {"name": "COMPLETION_THRESHOLD", "value": 0.9},
+        {"name": "DIMINISHING_THRESHOLD", "value": 500},
+        {"name": "diminishing-returns minimum continuations", "value": 3}
+      ],
+      "evidence": [
+        "src/query/tokenBudget.ts:3-4",
+        "src/query/tokenBudget.ts:45-92",
+        "src/query/runtime/productionSessionState.ts:67-69",
+        "src/query/runtime/productionSessionContinuation.ts:83-85"
+      ],
+      "modules": ["query"],
+      "verified": true
+    },
+    {
+      "name": "token-estimation",
+      "what": "Because accurate counts are only available from the API, the client carries a whole estimation ladder: countTokensWithAPI and countMessagesTokensWithAPI for exact counts, a Haiku-based fallback counter that returns null when the active protocol is not 'messages' and switches model for Vertex-global or thinking blocks, and pure rough estimators at 4 bytes per token (2 for json/jsonl/jsonc) plus a 4/3 padding factor when approximating messages (src/services/tokenEstimation.ts:126-142, 213-252, 261-289, 345-355; src/services/compact/microCompact.ts:74-120). tokenCountWithEstimation prefers the last API response's usage and falls back to the estimator (src/utils/tokens.ts:226). Images and documents are counted as a flat 2000 tokens regardless of format (microCompact.ts:34, 66-68).",
+      "invariants": [
+        "an estimate must be conservative (padded 4/3) rather than optimistic",
+        "the API count wins whenever a recent usage block exists",
+        "thinking-block estimation counts the thinking text only, not the signature"
+      ],
+      "failurePolicy": "fail-soft: the API counters return null rather than throwing when unavailable, and every caller has an estimator fallback",
+      "constants": [
+        {"name": "bytesPerToken default", "value": 4},
+        {"name": "bytesPerTokenForFileType(json/jsonl/jsonc)", "value": 2},
+        {"name": "message estimate padding", "value": "4/3"},
+        {"name": "image/document token estimate", "value": 2000},
+        {"name": "TOKEN_COUNT_THINKING_BUDGET", "value": 1024},
+        {"name": "TOKEN_COUNT_MAX_TOKENS", "value": 2048}
+      ],
+      "evidence": [
+        "src/services/tokenEstimation.ts:34-35",
+        "src/services/tokenEstimation.ts:126-142",
+        "src/services/tokenEstimation.ts:213-252",
+        "src/services/compact/microCompact.ts:74-120",
+        "src/utils/tokens.ts:226"
+      ],
+      "modules": ["services", "utils"],
+      "verified": true
+    },
+    {
+      "name": "reactive-compact-on-overflow",
+      "what": "A second compaction layer intended to react to a server-side prompt-too-long by forking a compaction of the current messages and retrying once, with a hasAttemptedReactiveCompact latch so it cannot loop (src/query/effects/contextRecovery.ts:51-57, 125-165). It is INERT: the module is loaded only when feature('REACTIVE_COMPACT') is true (src/query/runtime/productionSessionServices.ts:84-86), and mediaRecoveryEnabled — the flag that arms the media-size branch — is derived from that same null module, so tryReactiveCompact and isMediaSizeError are never supplied (productionSessionServices.ts:117-121). A prompt-too-long therefore terminates directly, after firing stop-failure hooks, instead of attempting a reactive compaction.",
+      "invariants": [
+        "the attempt latch is set on success so a second overflow cannot re-compact",
+        "reactive compaction rebuilds messages through buildPostCompactMessages rather than patching them"
+      ],
+      "failurePolicy": "fail-soft in design (undefined result falls through to termination), fail-closed in effect because the layer never arms",
+      "constants": [],
+      "evidence": [
+        "src/query/runtime/productionSessionServices.ts:84-86",
+        "src/query/runtime/productionSessionServices.ts:117-121",
+        "src/query/effects/contextRecovery.ts:125-165"
+      ],
+      "modules": ["query", "services"],
+      "verified": true
+    },
+    {
+      "name": "context-collapse-and-history-snip",
+      "what": "Two further context-reduction layers exist as modules that would be injected into the same session-services bundle as reactive compact: history snip (services/compact/snipCompact.js) exposing applySnip, and context collapse (services/contextCollapse/index.js) exposing applyCollapse plus recoverCollapse, where collapse additionally takes ownership of overflow recovery whenever it and auto-compact are both enabled (src/query/runtime/productionSessionServices.ts:78-83, 117-119). Both are INERT: each is loaded behind feature('HISTORY_SNIP') and feature('CONTEXT_COLLAPSE') respectively from bun:bundle, both false in this build, so applySnip, applyCollapse and recoverCollapse are all undefined and the collapse-drain retry branch in context recovery is unreachable (src/query/effects/contextRecovery.ts:104-123).",
+      "invariants": [
+        "collapse may only own overflow recovery when auto-compact is also enabled",
+        "the collapse-drain retry is refused when the previous transition was already a collapse drain (no consecutive drains)",
+        "snip and collapse are supplied only through the session service bundle, never called directly"
+      ],
+      "failurePolicy": "fail-closed in effect: with the modules null the services are absent and the recovery ladder skips straight to reactive-compact/termination",
+      "constants": [],
+      "evidence": [
+        "src/query/runtime/productionSessionServices.ts:78-83",
+        "src/query/runtime/productionSessionServices.ts:117-119",
+        "src/query/effects/contextRecovery.ts:104-123"
+      ],
+      "modules": ["query", "services"],
+      "verified": true
+    },
+    {
+      "name": "cached-microcompact",
+      "what": "A variant that would reuse cached microcompact edits across turns rather than recomputing which tool results to clear: the session state passes cachedMicrocompact:true and, when pendingCacheEdits exist, applies them to the prepared context (src/query/runtime/productionSessionModel.ts:48, 93). It is INERT because both sites are gated on feature('CACHED_MICROCOMPACT'), which comes from bun:bundle and is false in this build, so the cached-edit path never activates and only the time-based microcompact above runs (productionSessionModel.ts:48, 93).",
+      "invariants": [
+        "cached edits are applied only to a prepared context, never to raw messages",
+        "the cached path is an optimisation over the same clearing semantics, not a different policy"
+      ],
+      "failurePolicy": "fail-soft: with the flag false the runtime takes the uncached path",
+      "constants": [],
+      "evidence": [
+        "src/query/runtime/productionSessionModel.ts:48",
+        "src/query/runtime/productionSessionModel.ts:93"
+      ],
+      "modules": ["query"],
+      "verified": true
+    }
+  ],
+  "safety": [
+    {
+      "name": "os-sandbox-delegation",
+      "what": "OS-level confinement is not implemented in this tree: src/utils/sandbox/sandbox-adapter.ts imports SandboxManager, SandboxRuntimeConfigSchema and SandboxViolationStore from the npm package @anthropic-ai/sandbox-runtime and wraps BaseSandboxManager.wrapWithSandbox, initialize, updateConfig and reset (src/utils/sandbox/sandbox-adapter.ts:1-22, 717-738, 743-805, 811-816). Every shell spawn consults shouldUseSandbox, which returns false when sandboxing is disabled, when dangerouslyDisableSandbox is set and unsandboxed commands are allowed, or when the command matches a settings.json sandbox.excludedCommands pattern (src/tools/BashTool/shouldUseSandbox.ts:130-153). The package is present in node_modules with compiled Linux and macOS backends (sandbox/linux-sandbox-utils.js, sandbox/macos-sandbox-utils.js, sandbox/generate-seccomp-filter.js), but the syscall-level seatbelt/bubblewrap+socat+seccomp enforcement lives in node_modules and is outside the range verified here. excludedCommands is explicitly documented in-source as a convenience feature and not a security boundary (shouldUseSandbox.ts:18-20).",
+      "invariants": [
+        "wrapWithSandbox must not be called before initialization completes (it throws)",
+        "excludedCommands must never be treated as a security boundary; the permission prompt is the control",
+        "dangerouslyDisableSandbox against a disabled sandbox must raise an ask rather than pass silently"
+      ],
+      "failurePolicy": "fail-closed at the delegation boundary: wrapWithSandbox throws 'Sandbox failed to initialize.' when the init promise is absent; sandbox initialization failures are logged and the setting is reported as unavailable rather than silently ignored",
+      "constants": [
+        {"name": "sandbox.enabled default", "value": "false (settings.sandbox?.enabled ?? false)"},
+        {"name": "sandbox.autoAllowBashIfSandboxed default", "value": true},
+        {"name": "sandbox.allowUnsandboxedCommands default", "value": true},
+        {"name": "sandbox.failIfUnavailable default", "value": false},
+        {"name": "supported platforms", "value": "macOS, Linux, WSL2 (WSL1 refused)"}
+      ],
+      "evidence": [
+        "src/utils/sandbox/sandbox-adapter.ts:7-22",
+        "src/utils/sandbox/sandbox-adapter.ts:464-506",
+        "src/utils/sandbox/sandbox-adapter.ts:717-738",
+        "src/utils/sandbox/sandbox-adapter.ts:743-805",
+        "src/tools/BashTool/shouldUseSandbox.ts:18-20",
+        "src/tools/BashTool/shouldUseSandbox.ts:130-153",
+        "node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/linux-sandbox-utils.js",
+        "node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/macos-sandbox-utils.js",
+        "node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/generate-seccomp-filter.js"
+      ],
+      "modules": ["utils", "tools", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "sandbox-policy-model",
+      "what": "The sandbox is configured through a zod schema with separate network and filesystem axes: network has allowedDomains, deniedDomains, allowManagedDomainsOnly, allowUnixSockets, allowAllUnixSockets, allowLocalBinding and explicit httpProxyPort/socksProxyPort; filesystem has allowWrite, denyWrite, denyRead, allowRead (which takes precedence over denyRead for matching paths) and allowManagedReadPathsOnly (src/entrypoints/sandboxTypes.ts:14-93). Several fields document merge semantics with the permission rule system: denyWrite merges with Edit(...) deny rules, allowWrite with Edit(...) allow rules, denyRead with Read(...) deny rules, and deniedDomains with domains extracted from WebFetch(domain:...) deny rules (sandboxTypes.ts:22-24, 60-77). failIfUnavailable turns a non-startable sandbox into a startup error for managed deployments (sandboxTypes.ts:102-110).",
+      "invariants": [
+        "allowRead beats denyRead for matching paths",
+        "allowManagedDomainsOnly ignores user/project/local/flag domains but still respects denies from all sources",
+        "allowUnixSockets is macOS-only (Linux seccomp cannot filter by path)"
+      ],
+      "failurePolicy": "fail-closed when failIfUnavailable is set in managed settings (exit with an error at startup); otherwise fail-open with a warning and commands run unsandboxed",
+      "constants": [
+        {"name": "allowUnixSockets platform", "value": "macOS only"},
+        {"name": "enabledPlatforms", "value": "undocumented setting restricting sandbox to listed platforms"}
+      ],
+      "evidence": [
+        "src/entrypoints/sandboxTypes.ts:14-93",
+        "src/entrypoints/sandboxTypes.ts:98-113",
+        "src/utils/sandbox/sandbox-adapter.ts:509-539"
+      ],
+      "modules": ["entrypoints", "utils"],
+      "verified": true
+    },
+    {
+      "name": "sandbox-availability-gate",
+      "what": "isSandboxingEnabled() requires four independent conditions to hold: the platform is supported by the runtime package, dependency checks produce no errors, the current platform is in the optional enabledPlatforms list, and settings.sandbox.enabled is true (src/utils/sandbox/sandbox-adapter.ts:504-560). Because a silent false would leave a user who explicitly enabled sandboxing with no enforcement and no feedback, getSandboxUnavailableReason() produces a human-readable diagnosis naming the exact cause and a platform-appropriate hint, and it is surfaced once at startup (sandbox-adapter.ts:562-605). Dependency probing is memoized and its cache is cleared on reset (sandbox-adapter.ts:464-466, 829).",
+      "invariants": [
+        "an explicit sandbox.enabled with unmet dependencies must produce a visible reason, never a silent false",
+        "enabledPlatforms defaults to allowing all supported platforms when unset, and to denying all when set to an empty array",
+        "dependency probing is memoized for the session"
+      ],
+      "failurePolicy": "fail-closed on reporting and fail-open on execution: the reason is always surfaced, but commands run unsandboxed unless failIfUnavailable is set",
+      "constants": [
+        {"name": "supported platforms", "value": "macos, linux, wsl (WSL2)"},
+        {"name": "dependency errors checked", "value": "bwrap, socat, seccomp filter on Linux"}
+      ],
+      "evidence": [
+        "src/utils/sandbox/sandbox-adapter.ts:464-466",
+        "src/utils/sandbox/sandbox-adapter.ts:504-560",
+        "src/utils/sandbox/sandbox-adapter.ts:562-605",
+        "src/utils/sandbox/sandbox-adapter.ts:821-829"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "sandbox-auto-allow-and-write-allowlist",
+      "what": "Two sandbox-derived shortcuts in the permission path. First, an ask rule on Bash is skipped when sandboxing is enabled, auto-allow-if-sandboxed is on, and the specific command will actually be sandboxed, so a sandboxed command does not prompt (src/utils/permissions/permissions.ts:1234-1254). Second, a write target is considered already covered when every resolved representation of the path is inside some allowOnly entry and inside no denyWithinAllow entry, which lets redirects such as `echo x > /tmp/claude/y` skip the prompt while still blocking settings.json inside an allowed parent (src/utils/permissions/pathValidation.ts:95-123). Symlinks are resolved on both sides so an allowlisted symlinked directory does not cause spurious prompts (pathValidation.ts:106-113).",
+      "invariants": [
+        "denyWithinAllow must be evaluated before the allow check, so an exception inside an allowed root always wins",
+        "the sandbox shortcut applies only to the Bash tool and only when the command will genuinely be sandboxed",
+        "every resolved path representation must be allowed, and none denied"
+      ],
+      "failurePolicy": "fail-open toward prompting, fail-closed toward denial: an uncertain path falls through to a normal permission prompt rather than being auto-allowed",
+      "constants": [
+        {"name": "MAX_DIRS_TO_LIST", "value": 5}
+      ],
+      "evidence": [
+        "src/utils/permissions/permissions.ts:1234-1254",
+        "src/utils/permissions/pathValidation.ts:95-128",
+        "src/utils/sandbox/sandbox-adapter.ts:482-490"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "permission-rule-decision-ladder",
+      "what": "Tool authorization is a fixed ordered ladder evaluated in checkRuleBasedPermissions: a hard-deny rule for the whole tool (unoverridable), then a normal deny rule, then an ask rule, then the tool's own checkPermissions (which handles per-argument rules such as bash subcommand prefixes), and finally content-specific ask rules and safety checks returned by the tool (src/utils/permissions/permissions.ts:1198-1299). Safety checks for .git/, .claude/, .vscode/ and shell configs are bypass-immune — they must prompt even when a PreToolUse hook returned allow (permissions.ts:1287-1295). A tool-level deny from the tool implementation wins immediately, before any ask-rule handling (permissions.ts:1271-1275).",
+      "invariants": [
+        "hard-deny is evaluated first and cannot be overridden by any later stage",
+        "safetyCheck ask decisions are bypass-immune and must not be downgraded by hook allows",
+        "a tool's own deny short-circuits before content-specific ask handling"
+      ],
+      "failurePolicy": "fail-closed: the ladder only ever returns ask or deny; a null result means 'no rule-based objection' and hands off to the interactive/SDK decision, never to an implicit allow",
+      "constants": [
+        {"name": "rule sources", "value": "userSettings, projectSettings, localSettings, flagSettings, policySettings, cliArg, command, session"},
+        {"name": "behaviors", "value": "allow, deny, ask, hard_deny"}
+      ],
+      "evidence": [
+        "src/utils/permissions/permissions.ts:1198-1299",
+        "src/utils/permissions/permissions.ts:273-310"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "permission-mode-model",
+      "what": "Permission modes are a closed enum with a user-addressable subset: EXTERNAL_PERMISSION_MODES is the five modes exposed to external consumers (acceptEdits, bypassPermissions, default, dontAsk, plan) and INTERNAL_PERMISSION_MODES adds 'auto' only when feature('TRANSCRIPT_CLASSIFIER') is true (src/types/permissions.ts:16-38). Each mode carries a display config and an external alias, and the auto-mode entry is likewise spread behind the same feature flag (src/utils/permissions/PermissionMode.ts:42-80). Because the flag is false in this build, 'auto' is not in the runtime validation set, so a settings.json defaultMode of 'auto' or a --permission-mode auto cannot resolve, and auto-mode entry is refused with 'Cannot transition to auto mode: gate is not enabled' (src/utils/permissions/permissionSetup.ts:624-632).",
+      "invariants": [
+        "the runtime validation set is the only source of truth for user-addressable modes",
+        "every internal mode maps to an external alias for SDK consumers",
+        "entering auto mode requires the gate and additionally strips dangerous allow rules first"
+      ],
+      "failurePolicy": "fail-closed: an unknown or gated mode is rejected rather than coerced to default at entry points that consult the enum",
+      "constants": [
+        {"name": "EXTERNAL_PERMISSION_MODES", "value": "acceptEdits, bypassPermissions, default, dontAsk, plan"},
+        {"name": "internal-only modes", "value": "auto (feature-gated), bubble"}
+      ],
+      "evidence": [
+        "src/types/permissions.ts:16-38",
+        "src/utils/permissions/PermissionMode.ts:42-80",
+        "src/utils/permissions/permissionSetup.ts:717-727"
+      ],
+      "modules": ["types", "utils"],
+      "verified": true
+    },
+    {
+      "name": "bypass-permissions-killswitch",
+      "what": "Bypass-permissions mode can be disabled by an organisation, and the check runs once before the first query: shouldDisableBypassPermissions() consults the tencent-named Statsig gate tengu_disable_bypass_permissions_mode first and settings.permissions.disableBypassPermissionsMode second, with the gate taking precedence (src/utils/permissions/permissionSetup.ts:696-711). When it returns true the app state is rewritten into a disabled-bypass context and the run-once flag is reset after /login so the check re-runs against the new org (src/utils/permissions/bypassPermissionsKillswitch.ts:16-54). The remote half is INERT: checkStatsigFeatureGate_CACHED_MAY_BE_STALE is a no-op stub returning false, so only the settings.json half of the switch can ever fire (src/services/analytics/growthbook.ts:157-162).",
+      "invariants": [
+        "the killswitch check runs at most once per login session, and is re-armed on auth change",
+        "the remote gate takes precedence over local settings when it is available",
+        "disabling bypass permissions rewrites state rather than merely hiding the mode"
+      ],
+      "failurePolicy": "fail-open for bypass availability: with the remote gate stubbed, an organisation cannot revoke bypass mode remotely and only the local setting disables it",
+      "constants": [
+        {"name": "gate name", "value": "tengu_disable_bypass_permissions_mode"},
+        {"name": "settings key", "value": "permissions.disableBypassPermissionsMode === 'disable'"}
+      ],
+      "evidence": [
+        "src/utils/permissions/permissionSetup.ts:696-711",
+        "src/utils/permissions/bypassPermissionsKillswitch.ts:16-54",
+        "src/services/analytics/growthbook.ts:157-162"
+      ],
+      "modules": ["utils", "services"],
+      "verified": true
+    },
+    {
+      "name": "hook-permission-gate",
+      "what": "Hooks can decide tool authorization from outside the rule engine: a hook's JSON output may carry hookSpecificOutput.permissionDecision of 'allow' | 'deny' | 'ask' plus a reason, which is parsed into hookPermissionBehavior and hookPermissionDecisionReason and aggregated (src/utils/hooks.ts:598-670, 3470-3511). executePreToolHooks is the entry point, short-circuiting immediately when no PreToolUse hook is configured so the common path costs nothing (hooks.ts:4065-4106). The blocking-error path (exit code 2 or a JSON block decision) produces a blockingError, which the caller converts to a deny PermissionResult, while a hook's permission 'allow' does NOT bypass the bypass-immune safety checks in the rule ladder (src/utils/permissions/permissions.ts:1287-1295).",
+      "invariants": [
+        "an unknown permissionDecision value is reported as an error, never silently accepted",
+        "no PreToolUse hook configured means no aggregation work and no result",
+        "a hook allow cannot override a safetyCheck ask"
+      ],
+      "failurePolicy": "mixed: an explicit hook deny or blocking error is fail-closed (deny); a hook that merely fails is fail-soft and surfaces as a non-blocking error",
+      "constants": [
+        {"name": "valid permissionDecision values", "value": "allow, deny, ask"},
+        {"name": "hook events", "value": "PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd, Stop, StopFailure, SubagentStart, SubagentStop, PreCompact, PostCompact, PermissionRequest, PermissionDenied, Setup, TeammateIdle, TaskCreated, TaskCompleted, Elicitation, ElicitationResult, ConfigChange, WorktreeCreate, WorktreeRemove, InstructionsLoaded"}
+      ],
+      "evidence": [
+        "src/utils/hooks.ts:598-670",
+        "src/utils/hooks.ts:4065-4107",
+        "src/utils/permissions/permissions.ts:1287-1295",
+        "src/entrypoints/sdk/coreSchemas.ts:343"
+      ],
+      "modules": ["utils", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "approval-decision-single-shot",
+      "what": "Interactive approval is resolved exactly once: the handler's claim() function performs an atomic check-and-mark before any await, and every entry point (onAbort, onAllow, onReject, recheckPermission) returns immediately if the decision was already claimed (src/hooks/toolPermission/handlers/interactiveHandler.ts:107-154). An abort is logged as a reject with source user_abort and resolves through cancelAndAbort; an allow routes through handleUserAllow so the granted permission updates are applied together with the decision; a permission update that a hook already decided cannot be re-decided because recheckPermission short-circuits on isResolved (interactiveHandler.ts:147-154).",
+      "invariants": [
+        "the claim must happen before the first await in every handler",
+        "an abort counts as a reject, with a distinguishable decision source",
+        "a re-check after resolution is a no-op"
+      ],
+      "failurePolicy": "fail-closed: an aborted or already-resolved prompt cannot be turned into an allow; the resolution is a reject or the earlier decision",
+      "constants": [],
+      "evidence": [
+        "src/hooks/toolPermission/handlers/interactiveHandler.ts:107-154"
+      ],
+      "modules": ["hooks"],
+      "verified": true
+    },
+    {
+      "name": "denial-tracking-circuit-breaker",
+      "what": "Repeated permission denials cause the system to stop retrying and fall back to prompting the user: DENIAL_LIMITS sets maxConsecutive 3 and maxTotal 20, recordDenial increments both counters, recordSuccess resets the consecutive counter, and shouldFallbackToPrompting returns true once either limit is reached (src/utils/permissions/denialTracking.ts:12-43). This is the mechanism that prevents a model from hammering a denied tool in a loop.",
+      "invariants": [
+        "a success resets only the consecutive counter, never the total",
+        "fallback triggers on either limit independently"
+      ],
+      "failurePolicy": "fail-closed: once the limit is reached the system prompts instead of auto-deciding",
+      "constants": [
+        {"name": "DENIAL_LIMITS.maxConsecutive", "value": 3},
+        {"name": "DENIAL_LIMITS.maxTotal", "value": 20}
+      ],
+      "evidence": [
+        "src/utils/permissions/denialTracking.ts:12-43"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "path-safety-and-dangerous-removal-guard",
+      "what": "Path handling carries dedicated safety predicates beyond the generic rule engine: isDangerousRemovalPath rejects removing a filesystem root or a bare drive root, backed by Windows drive-root and drive-child regexes (src/utils/permissions/pathValidation.ts:318-331); validateGlobPattern rejects patterns whose base directory would escape the workspace; and expandTilde plus getGlobBaseDirectory normalise user input before any comparison (pathValidation.ts:57-80, 269). These feed the safetyCheck decisions that the rule ladder treats as bypass-immune (src/utils/permissions/permissions.ts:1287-1295).",
+      "invariants": [
+        "a root or drive root is never a legitimate removal target",
+        "glob patterns are validated by their base directory, not by string prefix",
+        "tilde expansion happens before any containment comparison"
+      ],
+      "failurePolicy": "fail-closed: a dangerous removal path or an escaping glob is refused outright rather than downgraded to a prompt",
+      "constants": [
+        {"name": "WINDOWS_DRIVE_ROOT_REGEX", "value": "/^[A-Za-z]:\\/?$/"},
+        {"name": "WINDOWS_DRIVE_CHILD_REGEX", "value": "/^[A-Za-z]:\\/[^/]+$/"},
+        {"name": "GLOB_PATTERN_REGEX", "value": "/[*?[\\]{}]/"}
+      ],
+      "evidence": [
+        "src/utils/permissions/pathValidation.ts:24-25",
+        "src/utils/permissions/pathValidation.ts:57-80",
+        "src/utils/permissions/pathValidation.ts:269",
+        "src/utils/permissions/pathValidation.ts:318-331",
+        "src/utils/permissions/permissions.ts:1287-1295"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "dangerous-allow-rule-stripping",
+      "what": "To stop the model from laundering arbitrary execution through a broad allow rule, two curated pattern lists enumerate interpreters and package runners that must never be allowlisted as a bare prefix: CROSS_PLATFORM_CODE_EXEC covers python/node/deno/ruby/perl/php/lua plus npx/bunx/npm run/yarn run/pnpm run/bun run and the shells bash/sh/ssh, shared between the Bash and PowerShell predicates so the two cannot drift; DANGEROUS_BASH_PATTERNS adds zsh, fish, eval, exec, env, xargs and sudo (src/utils/permissions/dangerousPatterns.ts:14-55). These lists feed isDangerousBashPermission/isDangerousPowerShellPermission, whose matcher handles the rule-shape variants (exact, ':*', trailing '*', ' *', ' -...*'), and rules matching them are stripped at auto-mode entry (src/utils/permissions/permissionSetup.ts:628-632). Because auto mode itself is gated on the absent TRANSCRIPT_CLASSIFIER flag, the stripping runs only if that mode is ever entered.",
+      "invariants": [
+        "the cross-platform list is shared so Bash and PowerShell cannot drift apart on interpreter additions",
+        "every rule-shape variant of a dangerous prefix must be matched, not just the bare prefix",
+        "stripping happens at mode entry, not per tool call"
+      ],
+      "failurePolicy": "fail-closed at the intent level (rules are removed), but inert in effect because the mode that would perform the stripping cannot be entered",
+      "constants": [
+        {"name": "CROSS_PLATFORM_CODE_EXEC entries", "value": 20},
+        {"name": "DANGEROUS_BASH_PATTERNS extra entries", "value": "zsh, fish, eval, exec, env, xargs, sudo"}
+      ],
+      "evidence": [
+        "src/utils/permissions/dangerousPatterns.ts:14-55",
+        "src/utils/permissions/permissionSetup.ts:624-632"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "auto-mode-llm-danger-classifier",
+      "what": "An LLM classifier was meant to judge whether a tool call is safe enough for auto mode: classifyYoloAction builds a transcript from recent messages, sends it to a model with an XML-templated system prompt of allow/soft-deny/environment rules, and returns a structured verdict; the templates and the default external rules come from text files loaded at module scope under feature('TRANSCRIPT_CLASSIFIER') with empty-string fallbacks (src/utils/permissions/yoloClassifier.ts:53-67, 99, 1005). The companion bash classifier is an explicit stub ('Stub for external builds - classifier permissions feature is ANT-ONLY') whose isClassifierPermissionsEnabled() returns false and whose classifyBashCommand always returns matches:false with reason 'This feature is disabled' (src/utils/permissions/bashClassifier.ts:1-53). Classifier approval caching is also feature-gated on BASH_CLASSIFIER and TRANSCRIPT_CLASSIFIER and no-ops without them (src/utils/classifierApprovals.ts:19-33, 41-54).",
+      "invariants": [
+        "the prompt templates are empty strings when the flag is off, so no classifier call can be well-formed",
+        "classifier approval cache reads and writes are both no-ops when the flags are off",
+        "an unavailable classifier never yields an allow"
+      ],
+      "failurePolicy": "fail-closed: with the classifier disabled, isClassifierPermissionsEnabled() is false and no auto-allow can be produced from classification; the tool call falls back to the normal permission ladder",
+      "constants": [
+        {"name": "BASE_PROMPT", "value": "'' when feature('TRANSCRIPT_CLASSIFIER') is false"},
+        {"name": "disabled-classifier result", "value": "{matches:false, confidence:'high', reason:'This feature is disabled'}"}
+      ],
+      "evidence": [
+        "src/utils/permissions/yoloClassifier.ts:53-67",
+        "src/utils/permissions/yoloClassifier.ts:1005",
+        "src/utils/permissions/bashClassifier.ts:1-53",
+        "src/utils/classifierApprovals.ts:19-54"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "ssrf-guard-for-http-hooks",
+      "what": "HTTP hooks can be configured by a project, so the URL is untrusted; isBlockedAddress blocks private, link-local and non-routable ranges to prevent reaching cloud metadata endpoints such as 169.254.169.254 or internal infrastructure, covering 0.0.0.0/8, 10/8, 100.64/10 (CGNAT, used by some metadata services), 169.254/16, 172.16/12 and 192.168/16 plus the IPv6 unspecified, unique-local, link-local and IPv4-mapped forms (src/utils/hooks/ssrfGuard.ts:5-70). Loopback is deliberately allowed because local policy servers are a primary HTTP-hook use case, and the guard is documented as effectively bypassed when a global or sandbox proxy performs DNS resolution — the sandbox proxy enforces its own domain allowlist instead (ssrfGuard.ts:12-17, 37-40).",
+      "invariants": [
+        "loopback is allowed by design; every other non-routable range is blocked",
+        "the guard runs on the resolved address from dns.lookup, not on the hostname string",
+        "IPv4-mapped IPv6 addresses must be checked against the IPv4 ranges"
+      ],
+      "failurePolicy": "fail-closed on the address decision (a blocked range refuses the request); the guard's protection is documented as void when traffic is proxied, in which case the sandbox domain allowlist is the control",
+      "constants": [
+        {"name": "blocked IPv4 ranges", "value": "0.0.0.0/8, 10/8, 100.64/10, 169.254/16, 172.16/12, 192.168/16"},
+        {"name": "blocked IPv6 ranges", "value": "::, fc00::/7, fe80::/10, ::ffff:<blocked v4>"},
+        {"name": "loopback", "value": "127.0.0.0/8 and ::1 allowed"}
+      ],
+      "evidence": [
+        "src/utils/hooks/ssrfGuard.ts:5-70"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "sandbox-violation-surfacing",
+      "what": "Blocked sandbox operations are recorded and shown to the user rather than failing invisibly: the sandbox-runtime exposes a SandboxViolationStore which the adapter re-exports along with a getSandboxViolationStore accessor (src/utils/sandbox/sandbox-adapter.ts:21, 930), and the UI subscribes to it, counts recent violations, renders a 'Sandbox blocked N operations' hint with a shortcut to details, and clears the count after 5 seconds (src/components/PromptInput/SandboxPromptFooterHint.tsx:9-56). An expanded view reads the same store for the full list (src/components/SandboxViolationExpandedView.tsx:35).",
+      "invariants": [
+        "the violation store is owned by the runtime package; the adapter only re-exports it",
+        "the hint is suppressed entirely when sandboxing is disabled or the count is zero",
+        "the counter auto-expires so a stale violation is not shown indefinitely"
+      ],
+      "failurePolicy": "fail-soft: violation reporting is advisory and never blocks the command that triggered it",
+      "constants": [
+        {"name": "violation hint auto-clear", "value": "5000 ms"}
+      ],
+      "evidence": [
+        "src/utils/sandbox/sandbox-adapter.ts:21",
+        "src/utils/sandbox/sandbox-adapter.ts:930",
+        "src/components/PromptInput/SandboxPromptFooterHint.tsx:9-56",
+        "src/components/SandboxViolationExpandedView.tsx:35"
+      ],
+      "modules": ["utils", "components"],
+      "verified": true
+    },
+    {
+      "name": "permission-rule-shadow-detection",
+      "what": "The rule model can silently make a user's own rules unreachable (for example a tool-wide deny above a content-specific allow), so the tree carries an explicit detector: detectUnreachableRules walks the rule set and reports rules shadowed by a broader rule from a shared setting source, with isSharedSettingSource distinguishing sources whose rules apply across projects (src/utils/permissions/shadowedRuleDetection.ts:61, 193). The result feeds the /doctor context warnings rather than the runtime decision path, so shadowing is advisory.",
+      "invariants": [
+        "shadow detection never changes the decision; it only reports",
+        "only rules from shared setting sources participate in shadowing analysis"
+      ],
+      "failurePolicy": "fail-soft: detection is diagnostic only and a false negative has no security consequence",
+      "constants": [],
+      "evidence": [
+        "src/utils/permissions/shadowedRuleDetection.ts:61",
+        "src/utils/permissions/shadowedRuleDetection.ts:193"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    }
+  ]
+}

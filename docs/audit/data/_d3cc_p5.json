@@ -1,0 +1,554 @@
+{
+  "model": [
+    {
+      "name": "anthropic-messages-wire-request-assembly",
+      "what": "adapters/messagesAdapter.ts buildMessagesRequest() is the single assembler for the Anthropic Messages body: normalized model ([1m] stripped), system blocks with cache_control, cache breakpoints, tools, max_tokens, thinking, output_config (effort/task_budget/format), betas and the CLAUDE_CODE_EXTRA_BODY merge; it is sent through the SDK at claude.ts:1308 as beta.messages.create({...params, stream:true}) (src/services/api/adapters/messagesAdapter.ts:528-719; src/services/api/claude.ts:1308-1318). Fast mode (speed:'fast' plus the fast-mode beta and the $30/$150 tier) is decided by isFastModeEnabled && isFastModeAvailable && !cooldown && supported-model, but isFastModeAvailable() is hard-false in this fork, so it is present-but-inert; the AFK beta is gated on feature('TRANSCRIPT_CLASSIFIER') and is likewise off (src/utils/fastMode.ts:28-37; messagesAdapter.ts:653-665).",
+      "invariants": [
+        "temperature is only sent when thinking is disabled (the API requires temperature=1 otherwise)",
+        "max_tokens must exceed thinking.budget_tokens, with the budget clamped to max_tokens-1",
+        "betas pass through filterBetasForEndpoint() before hitting the wire"
+      ],
+      "failurePolicy": "fail-closed on config (no base URL or key throws before any request); otherwise fail-soft, since CLAUDE_CODE_EXTRA_BODY parse errors are logged and ignored",
+      "constants": [
+        {"name": "MAX_NON_STREAMING_TOKENS", "value": 64000},
+        {"name": "CAPPED_DEFAULT_MAX_TOKENS", "value": 8000},
+        {"name": "MAX_OUTPUT_TOKENS_UPPER_LIMIT", "value": 64000}
+      ],
+      "evidence": [
+        "src/services/api/adapters/messagesAdapter.ts:528-557",
+        "src/services/api/adapters/messagesAdapter.ts:653-719",
+        "src/services/api/claude.ts:1308-1318",
+        "src/utils/fastMode.ts:28-37"
+      ],
+      "modules": ["services", "utils"],
+      "verified": true
+    },
+    {
+      "name": "openai-responses-wire-adapter",
+      "what": "adapters/responsesAdapter.ts implements the second wire protocol: queryModelResponses() converts messages to the neutral IR, builds /v1/responses {instructions, input, tools, max_output_tokens, stream, reasoning}, POSTs it with node https.request rather than fetch to get true incremental SSE, retries once on 401 via requestProfile.refreshAfterUnauthorized, and feeds SSE data lines to createResponsesStreamAssembler (src/services/api/adapters/responsesAdapter.ts:269-361, 643-728, 884-1009). Request profiles come either from a subscription adapter (ChatGPT/Codex) or from the generic fallback in responsesTransport.ts (ANTHROPIC_BASE_URL + '/responses', Bearer key) (responsesTransport.ts:10-37). The vertical slice deliberately omits retry, prompt caching, context management and telemetry, and encrypted-reasoning replay is only emitted when an item already carries `encrypted` (src/services/api/adapters/responsesStreamLifecycle.ts:10-68).",
+      "invariants": [
+        "declared capabilities exclude prompt-caching markers and server-side token counting while keeping strict tool schemas",
+        "at most one 401-driven profile refresh per request",
+        "ToolSearchTool and LSP/deferred tools are filtered out of the Responses request"
+      ],
+      "failurePolicy": "fail-soft: any config, network or HTTP failure yields an assistant API-error message and returns instead of throwing",
+      "constants": [
+        {"name": "MAX_EVENT_QUEUE_SIZE", "value": 10000}
+      ],
+      "evidence": [
+        "src/services/api/adapters/responsesAdapter.ts:269-361",
+        "src/services/api/adapters/responsesAdapter.ts:884-1009",
+        "src/services/api/adapters/responsesTransport.ts:10-37",
+        "src/services/api/adapters/responsesStreamLifecycle.ts:10-68"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "protocol-selection-and-capability-negotiation",
+      "what": "utils/protocol/protocolState.ts is the source of truth for the active protocol with the hierarchy runtime override (set by /protocol) > CLAUDE_CODE_PROTOCOL env > default 'messages'; claude.ts:718-728 is the single dispatch point that routes the main query loop to queryModelResponses under 'responses' (src/utils/protocol/protocolState.ts:52-176; src/services/api/claude.ts:718-728). Protocol capability flags and the ProtocolAdapter contract live in services/api/protocol.ts with the neutral IR in protocolTypes.ts, and getProtocolClient() throws under 'responses' because that path bypasses the Anthropic SDK (src/services/api/protocol.ts:26-121; src/services/api/client.ts:363-381). Compatibility gating restricts responses to gpt-/o1/o3 model prefixes.",
+      "invariants": [
+        "protocol resolution never uses truthiness helpers — only the literals 'messages' and 'responses'",
+        "an adapter must not be reachable under a protocol it does not implement (hard throw)"
+      ],
+      "failurePolicy": "fail-closed for an unimplemented protocol/client combination (throws); an unknown env value silently falls back to 'messages'",
+      "constants": [],
+      "evidence": [
+        "src/utils/protocol/protocolState.ts:52-101",
+        "src/services/api/protocol.ts:26-121",
+        "src/services/api/claude.ts:718-728",
+        "src/services/api/client.ts:363-381"
+      ],
+      "modules": ["services", "utils"],
+      "verified": true
+    },
+    {
+      "name": "streaming-wire-to-transcript-assembly",
+      "what": "streamAssembler.ts centralizes protocol-neutral stream accumulation: per-block _chunks joined at materialize time, initialize/accumulate helpers for text, tool-args and thinking, and finalizeContentBlock producing an AssistantMessage (src/services/api/streamAssembler.ts:119-277). attachUsageToMessage mutates the message in place because the transcript write queue holds that reference — a documented exception to the surrounding purity (streamAssembler.ts:225-252). claudeStreamBatch.flushClaudeContentBlockStop pins the yield order (pending raw events, then the finalized message), responsesStreamAssembler consumes Responses SSE into text/reasoning_text/reasoning_summary/redacted_reasoning/tool blocks, and partial-message streaming only reaches SDK consumers when includePartialMessages is set (src/services/api/claudeStreamBatch.ts:9-27; src/QueryEngine.ts:808-816).",
+      "invariants": [
+        "assembler helpers are pure except attachUsageToMessage (documented mutation contract)",
+        "materialization strips the internal _chunks field before the block is sent anywhere"
+      ],
+      "failurePolicy": "fail-soft: unparseable tool-argument JSON materializes through safeParseJSON, defaulting to {}",
+      "constants": [],
+      "evidence": [
+        "src/services/api/streamAssembler.ts:119-277",
+        "src/services/api/claudeStreamBatch.ts:9-27",
+        "src/QueryEngine.ts:808-816"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "third-party-model-discovery",
+      "what": "initThirdPartyModelDiscovery() (called at startup and after every provider activation) fetches the model catalogue for non-first-party endpoints: candidate /v1/models URLs are derived from ANTHROPIC_BASE_URL with OpenAI-style version segments and known compat-suffix stripping, or ANTHROPIC_MODELS_URL is used verbatim, and the first 2xx OpenAI-shaped response wins (src/utils/model/modelFetch.ts:58-110, 143-296). A default model is auto-selected (sonnet > claude > opus/flagship/pro/max > first) and written to ANTHROPIC_MODEL (modelFetch.ts:326-353). Subscription providers take a different branch using the adapter-supplied ModelCatalogSource with redirect:'reject' and a one-shot 401 refresh (src/services/subscriptions/providerRuntime.ts:15-26).",
+      "invariants": [
+        "discovery never runs for first-party api.anthropic.com hosts",
+        "settings.model (persisted) beats auto-selection; auto-selection only fills ANTHROPIC_MODEL when absent",
+        "discovered models are cleared whenever the active provider changes"
+      ],
+      "failurePolicy": "fail-soft: all candidate failures are logged and an empty list is returned, leaving the 'default' model fallback",
+      "constants": [
+        {"name": "FETCH_TIMEOUT_MS", "value": 15000}
+      ],
+      "evidence": [
+        "src/utils/model/model.ts:57-124",
+        "src/utils/model/modelFetch.ts:58-110",
+        "src/utils/model/modelFetch.ts:326-353",
+        "src/services/subscriptions/providerRuntime.ts:15-26"
+      ],
+      "modules": ["utils", "services"],
+      "verified": true
+    },
+    {
+      "name": "model-catalogue-alias-and-validation",
+      "what": "Static per-provider model IDs live in utils/model/configs.ts and are re-exported through modelStrings.ts as ModelStrings, with settings.modelOverrides layered on top and resolveOverriddenModel() mapping ARNs back to canonical IDs (src/utils/model/configs.ts:9-118; src/utils/model/modelStrings.ts:63-145). firstPartyNameToCanonical() strips date and provider suffixes so cost, context and effort decisions share one key; aliases (sonnet|opus|haiku|best|opusplan plus [1m] variants) resolve in parseUserSpecifiedModel with legacy Opus 4/4.1 silently remapped to the current Opus default unless CLAUDE_CODE_DISABLE_LEGACY_MODEL_REMAP is set (src/utils/model/model.ts:310-363; src/utils/model/aliases.ts:1-14). validateModel() validates unknown names with a real minimal sideQuery (cached) and suggests a third-party fallback on 404, with 3P capability overrides read from ANTHROPIC_DEFAULT_*_MODEL_SUPPORTED_CAPABILITIES (src/utils/model/validateModel.ts:24-162; src/utils/model/modelSupportOverrides.ts:30-49).",
+      "invariants": [
+        "canonical IDs are always in first-party format before any table lookup",
+        "[1m] is carried across skill model overrides only for families that support 1M",
+        "model ids are matched case-insensitively for overrides but the original case is preserved for custom deployment names"
+      ],
+      "failurePolicy": "fail-closed on validation (an unknown model is rejected with an explicit message); fail-soft elsewhere (an unknown model falls back to the raw string)",
+      "constants": [
+        {"name": "MODEL_ALIASES", "value": 7}
+      ],
+      "evidence": [
+        "src/utils/model/configs.ts:9-118",
+        "src/utils/model/model.ts:310-363",
+        "src/utils/model/aliases.ts:1-14",
+        "src/utils/model/validateModel.ts:24-162"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "context-window-and-max-output-metadata",
+      "what": "utils/context.ts holds the client-side context and output metadata: getContextWindowForModel() resolves settings.contextWindowTokens > explicit [1m] suffix > context-1m beta with modelSupports1M > sonnet-1M experiment > 200k default, and getModelMaxOutputTokens() maps canonical families to a (default, upperLimit) pair which messagesAdapter.getMaxOutputTokensForModel() clamps through settings.maxOutputTokens and CLAUDE_CODE_MAX_OUTPUT_TOKENS (src/utils/context.ts:52-189). Two metadata sources are inert: the GrowthBook slot cap tengu_otk_slot_v1 (the stub returns false, so the 8k cap never applies) and the Sonnet 1M experiment, which reads getGlobalConfig().clientDataCache['coral_reef_sonnet'] — nothing in the tree ever writes clientDataCache, so that 1M path can never fire (src/utils/context.ts:75-87; src/utils/config.ts:478-479).",
+      "invariants": [
+        "[1m] and the 1M beta are ignored when CLAUDE_CODE_DISABLE_1M_CONTEXT is set",
+        "the settings override wins over every detection path",
+        "max output is bounded by the model family upperLimit"
+      ],
+      "failurePolicy": "fail-soft: unknown models get a 32k default and a 64k upper limit",
+      "constants": [
+        {"name": "MODEL_CONTEXT_WINDOW_DEFAULT", "value": 200000},
+        {"name": "COMPACT_MAX_OUTPUT_TOKENS", "value": 20000},
+        {"name": "MAX_OUTPUT_TOKENS_DEFAULT", "value": 32000},
+        {"name": "ESCALATED_MAX_TOKENS", "value": 64000}
+      ],
+      "evidence": [
+        "src/utils/context.ts:10-26",
+        "src/utils/context.ts:52-87",
+        "src/utils/context.ts:124-189",
+        "src/services/api/adapters/messagesAdapter.ts:476-491"
+      ],
+      "modules": ["utils", "services"],
+      "verified": true
+    },
+    {
+      "name": "reasoning-effort-translation",
+      "what": "utils/effort.ts owns the effort vocabulary (low|medium|high|max|xhigh plus numeric ant-only values) and the translation chain: modelSupportsEffort() allowlists opus-4-6 and sonnet-4-6 plus a 3P env override and CLAUDE_CODE_ALWAYS_ENABLE_EFFORT, and resolveAppliedEffort() applies env CLAUDE_CODE_EFFORT_LEVEL ('unset'/'auto' meaning send nothing), then appState, then the model default, clamping 'max' to 'high' for models that do not support it (src/utils/effort.ts:11-66, 134-266). On the Messages wire it becomes output_config.effort plus the effort beta header; on the Responses wire the string is copied straight into reasoning.effort and a reasoning object is always emitted (src/services/api/adapters/messagesAdapter.ts:258-282; src/services/api/adapters/responsesAdapter.ts:693-700). Numeric effort overrides are ant-only (anthropic_internal.effort_override) and therefore inert externally.",
+      "invariants": [
+        "the absence of an effort value means 'high' at the API, not a sent parameter",
+        "max effort is first-party Opus-4.6-only unless the endpoint is third-party",
+        "effort is only serialized when modelSupportsEffort() is true"
+      ],
+      "failurePolicy": "fail-soft: unknown effort strings coerce to 'high' rather than being forwarded",
+      "constants": [
+        {"name": "EFFORT_LEVELS", "value": 5}
+      ],
+      "evidence": [
+        "src/utils/effort.ts:11-66",
+        "src/utils/effort.ts:134-266",
+        "src/services/api/adapters/messagesAdapter.ts:258-282"
+      ],
+      "modules": ["utils", "services"],
+      "verified": true
+    },
+    {
+      "name": "provider-registry-and-env-activation",
+      "what": "utils/providers/providerStore.ts persists providers.json (version 2) with two kinds — api-key (baseURL/apiKey/modelsURL) and subscription (subscriptionProvider/credentialRef) — and applyActiveProviderToEnv() mirrors the active provider into ANTHROPIC_BASE_URL/API_KEY/MODELS_URL plus OPENAI_* mirrors, force-deletes the Bedrock/Vertex/Foundry switches because runtime providers always route through the custom direct API path, and on fingerprint change clears discovered models, the valid-model cache and apiKeyHelper/AWS/GCP credential caches (src/utils/providers/providerStore.ts:33-86, 171-309). providerRuntime.ts layers the subscription registry on top: activate asserts adapter readiness, connect runs OAuth login and upserts the provider, and remove/logout tear it down and deactivate (src/services/subscriptions/providerRuntime.ts:15-93).",
+      "invariants": [
+        "provider ids cannot contain spaces or control characters",
+        "a duplicate registration or unknown provider id throws",
+        "a subscription provider is unrepresentable without a credentialRef",
+        "applying a provider always clears dependent credential and model caches"
+      ],
+      "failurePolicy": "fail-closed for unknown or invalid provider ids (throw); malformed providers.json entries are skipped and the store is recreated empty",
+      "constants": [
+        {"name": "PROVIDERS_FILE_NAME", "value": "providers.json (schema version 2)"}
+      ],
+      "evidence": [
+        "src/utils/providers/providerStore.ts:33-86",
+        "src/utils/providers/providerStore.ts:171-309",
+        "src/services/subscriptions/providerRuntime.ts:15-93",
+        "src/services/subscriptions/registry.ts:3-23"
+      ],
+      "modules": ["utils", "services"],
+      "verified": true
+    },
+    {
+      "name": "subscription-oauth-credential-lifecycle",
+      "what": "The ChatGPT/Codex subscription adapter implements a full device-code OAuth flow (POST usercode, poll token treating 403/404 as pending and 410 as expired, then exchange authorization_code with the returned code_verifier) and persists the result under the secure-storage namespace subscriptionAuth with strict field validation (src/services/subscriptions/chatgptCodex/deviceAuth.ts:20-174; src/services/subscriptions/credentialStore.ts:9-58). ChatGptCodexTokenManager serves cached access tokens until 60s before expiry and deduplicates concurrent refreshes behind one in-flight promise, while ChatGptCodexTransport pins every endpoint to https://chatgpt.com with exact path/protocol/port/search assertions, attaches Authorization/ChatGPT-Account-Id/originator headers, and transforms the Codex body (store:false, stream:true, drop max_output_tokens/temperature/top_p, add include reasoning.encrypted_content) (chatgptCodex/tokenManager.ts:30-116; chatgptCodex/transport.ts:98-192). Quota failures map 403 to entitlement_denied and 429 to quota_exceeded.",
+      "invariants": [
+        "credentials are only ever written through the secure-storage abstraction (keychain with a plaintext fallback)",
+        "refreshed credentials keep the previous accountId and refreshToken when the response omits them",
+        "endpoint URLs must be exactly https://chatgpt.com/<approved path>"
+      ],
+      "failurePolicy": "fail-closed: every OAuth or transport error becomes a typed SubscriptionError and no request is issued with a stale or missing credential",
+      "constants": [
+        {"name": "CHATGPT_CODEX_REFRESH_BUFFER_MS", "value": 60000},
+        {"name": "CHATGPT_CODEX_BASE_URL", "value": "https://chatgpt.com/backend-api/codex"}
+      ],
+      "evidence": [
+        "src/services/subscriptions/chatgptCodex/deviceAuth.ts:20-174",
+        "src/services/subscriptions/chatgptCodex/tokenManager.ts:30-116",
+        "src/services/subscriptions/chatgptCodex/transport.ts:98-192",
+        "src/services/subscriptions/credentialStore.ts:9-58"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "client-construction-credentials-and-egress",
+      "what": "getAnthropicClient() resolves credentials for the direct API path (requiring ANTHROPIC_BASE_URL plus ANTHROPIC_API_KEY or apiKeyHelper; the fork's own error text states OAuth is unavailable) and then selects AnthropicBedrock, AnthropicFoundry, AnthropicVertex or plain Anthropic from env switches, with AWS bearer-token plus cached STS/inference credentials, Foundry API key or DefaultAzureCredential, and Vertex GoogleAuth branches (src/services/api/client.ts:85-226, 336-441). Default headers carry x-app:cli, User-Agent, X-Claude-Code-Session-Id, parsed ANTHROPIC_CUSTOM_HEADERS, an optional x-client-app from CLAUDE_AGENT_SDK_CLIENT_APP and an optional x-anthropic-additional-protection, with a client-request-id injected only for genuine first-party hosts (client.ts:383-441). All egress honours proxy, NO_PROXY, mTLS, CA certs and unix sockets, and init.ts orders CA certs then global mTLS then global agents then a fire-and-forget preconnect (src/utils/mtls.ts:23-152; src/utils/proxy.ts:344-413; src/entrypoints/init.ts:107-132).",
+      "invariants": [
+        "no base URL or key means a hard throw before any client exists",
+        "Bedrock/Vertex/Foundry bypass direct-API credential resolution entirely",
+        "client-request-id and additional-protection headers are first-party only"
+      ],
+      "failurePolicy": "fail-closed on missing credentials; fail-soft on mTLS and certificate load errors, which are logged and the TLS config simply omitted",
+      "constants": [
+        {"name": "API_TIMEOUT_MS default", "value": 600000}
+      ],
+      "evidence": [
+        "src/services/api/client.ts:85-226",
+        "src/services/api/client.ts:383-441",
+        "src/utils/mtls.ts:23-152",
+        "src/utils/proxy.ts:344-413"
+      ],
+      "modules": ["services", "utils"],
+      "verified": true
+    },
+    {
+      "name": "retry-backoff-and-rate-limit-policy",
+      "what": "withRetry() wraps every Messages call with a 10-attempt budget (CLAUDE_CODE_MAX_RETRIES), exponential backoff from 500ms capped at 32s with 25% jitter and retry-after honouring, and a separate 2000ms base for third-party 429s (src/services/api/withRetry.ts:49-148, 636-713). 529/overloaded errors are retried only for the foreground query-source allowlist and at most 3 consecutive times before surfacing a repeated-529 message, while background sources drop immediately to avoid retry amplification; connection errors are retried except SSL failures, and 'input length and max_tokens exceed context limit' 400s are parsed to downscale max_tokens (withRetry.ts:401-443, 516-520, 728-739, 878-890). Persistent unattended retry is gated on feature('UNATTENDED_RETRY') and is therefore inert, and 'bash_classifier' is absent from the 529 allowlist because it is added under feature('BASH_CLASSIFIER') (withRetry.ts:94-102, 74-87).",
+      "invariants": [
+        "529 retries are capped per query chain and pre-seeded when a streaming 529 falls back to non-streaming",
+        "fast-mode fallback and cooldown logic only engage when fast mode is available (never, in this fork)",
+        "non-retryable statuses honour the x-should-retry header"
+      ],
+      "failurePolicy": "mixed: retries are generous for transient, 429 and 529 errors, but auth and 400-style errors are surfaced immediately",
+      "constants": [
+        {"name": "DEFAULT_MAX_RETRIES", "value": 10},
+        {"name": "BASE_DELAY_MS", "value": 500},
+        {"name": "THIRD_PARTY_429_BASE_DELAY_MS", "value": 2000},
+        {"name": "MAX_529_RETRIES", "value": 3},
+        {"name": "PERSISTENT_MAX_BACKOFF_MS", "value": 300000}
+      ],
+      "evidence": [
+        "src/services/api/withRetry.ts:49-148",
+        "src/services/api/withRetry.ts:94-102",
+        "src/services/api/withRetry.ts:401-443",
+        "src/services/api/withRetry.ts:636-713"
+      ],
+      "modules": ["services"],
+      "verified": true
+    },
+    {
+      "name": "beta-header-negotiation",
+      "what": "constants/betas.ts holds the wire beta literals and per-provider routing sets (Bedrock extra-body betas, the Vertex count-token allowed set), while utils/betas.ts computes per-model betas — base claude-code header for non-Haiku, 1M only when the model has [1m] and the endpoint is first-party, interleaved thinking, redact-thinking for interactive 1P, context management, prompt-caching scope, Vertex/Foundry web search — with memoization, and merges SDK-supplied betas through filterAllowedSdkBetas where only context-1m is allowed (src/constants/betas.ts:3-48; src/utils/betas.ts:37-79, 228-447). Two rollout-driven betas are inert because GrowthBook is a stub: strict tools (tengu_tool_pear -> false) blocks STRUCTURED_OUTPUTS, and token-efficient tools (tengu_amber_json_tools, default false and ant-only) never fires. filterBetasForEndpoint() strips anything not matching the third-party prefix allowlist before the body is sent (src/services/api/adapters/messagesAdapter.ts:686).",
+      "invariants": [
+        "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS and first-party host detection gate all 1P-only betas",
+        "SDK-provided betas can never widen the allowlist",
+        "Bedrock receives a disjoint beta set through extraBodyParams instead of headers"
+      ],
+      "failurePolicy": "fail-soft: unknown betas are dropped for non-first-party endpoints rather than risking a 400",
+      "constants": [
+        {"name": "ALLOWED_SDK_BETAS", "value": "['context-1m-2025-08-07']"},
+        {"name": "THIRD_PARTY_ALLOWED_BETA_PREFIXES", "value": 6}
+      ],
+      "evidence": [
+        "src/constants/betas.ts:3-48",
+        "src/utils/betas.ts:37-79",
+        "src/utils/betas.ts:228-447",
+        "src/services/api/adapters/messagesAdapter.ts:686"
+      ],
+      "modules": ["utils", "services", "constants"],
+      "verified": true
+    },
+    {
+      "name": "model-cost-and-usage-costing",
+      "what": "utils/modelCost.ts maps canonical model short names to USD-per-Mtok tiers covering input, output, cache read, cache write and web-search requests, and calculateUSDCost() multiplies them against BetaUsage including server_tool_use.web_search_requests (src/utils/modelCost.ts:36-180, 217-231). Unknown models fall back to the default main-loop model's tier (else COST_TIER_5_25) and call setHasUnknownModelCost()/logEvent so UIs can warn. The Opus 4.6 fast pricing tier ($30/$150) requires usage.speed==='fast' AND isFastModeEnabled(), so in this fork it always resolves to $5/$25 (src/utils/fastMode.ts:17-37).",
+      "invariants": [
+        "cost lookup is keyed on the canonical name, so 1P/Bedrock/Vertex id variants share one tier",
+        "cache read and cache write tokens are priced separately from input tokens"
+      ],
+      "failurePolicy": "fail-soft: never throws; an unknown model is priced as the default model and flagged",
+      "constants": [
+        {"name": "COST_TIER_3_15", "value": "3/15 per Mtok"},
+        {"name": "COST_TIER_5_25", "value": "5/25 per Mtok"},
+        {"name": "COST_TIER_30_150", "value": "30/150 per Mtok (fast mode, unreachable here)"},
+        {"name": "webSearchRequests USD per request", "value": 0.01}
+      ],
+      "evidence": [
+        "src/utils/modelCost.ts:36-99",
+        "src/utils/modelCost.ts:131-180",
+        "src/utils/modelCost.ts:217-231",
+        "src/utils/fastMode.ts:17-37"
+      ],
+      "modules": ["utils"],
+      "verified": true
+    },
+    {
+      "name": "prompt-cache-break-detection",
+      "what": "services/api/promptCacheBreakDetection.ts implements a complete cache-break detector: it hashes system blocks with and without cache_control, tool schemas plus per-tool hashes, the beta list, effort, fast-mode and auto-mode latches and extra-body params, stores per query-source/agent state, and can write a diff of the previous prompt to a temp cache-break diff file (src/services/api/promptCacheBreakDetection.ts:19-26, 241-260). In this tree it is INERT: the only call site of recordPromptState() sits inside `if (feature('PROMPT_CACHE_BREAK_DETECTION'))`, which is false here, so no state is ever recorded and the notifyCompaction/notifyCacheDeletion/cleanupAgentTracking APIs called by compact, microCompact and runAgent mutate state that was never initialized (src/services/api/claude.ts:1035-1059).",
+      "invariants": [
+        "the detector tracks the latched header values actually sent, not live toggles",
+        "tracked sources are bounded with eviction at capacity so a long session cannot leak"
+      ],
+      "failurePolicy": "fail-soft: the detector is wrapped in try/catch and can never break the request path",
+      "constants": [],
+      "evidence": [
+        "src/services/api/claude.ts:1035-1059",
+        "src/services/api/promptCacheBreakDetection.ts:19-26",
+        "src/services/api/promptCacheBreakDetection.ts:241-260"
+      ],
+      "modules": ["services"],
+      "verified": true
+    }
+  ],
+  "service": [
+    {
+      "name": "sdk-stdio-control-protocol",
+      "what": "src/cli/structuredIO.ts implements the SDK control channel on stdin/stdout NDJSON: line assembly with prependUserMessage injection before and between stdin blocks, message classification, a request-response map keyed by request_id with per-request zod response schemas, abort-signal driven control_cancel_request, and orphan/duplicate control_response suppression through a bounded resolvedToolUseIds set (src/cli/structuredIO.ts:134-164, 199-245, 317-447, 449-515). print.ts drives the same channel, servicing initialize, interrupt, end_session, set_permission_mode, set_model and mcp_message and replying with an explicit error for unknown subtypes so the peer never hangs (src/cli/print.ts:2609-2729). There is no authentication on this surface: any process holding the pipes can drive the session, and closing stdin rejects every pending request.",
+      "invariants": [
+        "every control_request gets exactly one response, or an explicit error response",
+        "a duplicate control_response for an already-resolved tool_use_id is dropped to avoid duplicate tool_use blocks",
+        "all pending requests are rejected when stdin closes"
+      ],
+      "failurePolicy": "fail-closed: unparseable stdin lines print an error and process.exit(1); unknown subtypes answer with an error response",
+      "constants": [
+        {"name": "MAX_RESOLVED_TOOL_USE_IDS", "value": 1000}
+      ],
+      "evidence": [
+        "src/cli/structuredIO.ts:134-164",
+        "src/cli/structuredIO.ts:199-245",
+        "src/cli/structuredIO.ts:449-515",
+        "src/cli/print.ts:2609-2729"
+      ],
+      "modules": ["cli", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "sdk-wire-schema-contract",
+      "what": "The SDK wire contract is expressed as zod schemas: coreSchemas.ts defines every outbound message shape and composes SDKMessageSchema as a 24-way union (assistant, user, replay, result, system, partial, status, api-retry, hook, task, session_state_changed, rate_limit_event, prompt_suggestion and more), while controlSchemas.ts defines the inbound control plane plus success/error response envelopes (src/entrypoints/sdk/coreSchemas.ts:1347-1446, 1843-1870; src/entrypoints/sdk/controlSchemas.ts:106-133, 370-389, 574-606). coreTypes.generated.ts and entrypoints/agentSdkTypes.ts publish the corresponding TypeScript types and the in-process authoring surface (tool() and createSdkMcpServer() over the MCP SDK) (src/entrypoints/agentSdkTypes.ts:24-121).",
+      "invariants": [
+        "message discriminants are literals, so unknown types are rejected by the union",
+        "a control response is either success or error with a request_id, never both",
+        "tool()/createSdkMcpServer() attach schema descriptions through zod's global registry"
+      ],
+      "failurePolicy": "fail-closed: a schema parse failure rejects the pending control request",
+      "constants": [],
+      "evidence": [
+        "src/entrypoints/sdk/coreSchemas.ts:1843-1870",
+        "src/entrypoints/sdk/controlSchemas.ts:106-133",
+        "src/entrypoints/sdk/controlSchemas.ts:574-606",
+        "src/entrypoints/agentSdkTypes.ts:24-121"
+      ],
+      "modules": ["entrypoints", "cli"],
+      "verified": true
+    },
+    {
+      "name": "ndjson-stream-integrity-guard",
+      "what": "Two defences keep stdout parseable for line-oriented consumers: ndjsonSafeStringify escapes U+2028 and U+2029 in every serialized control or message frame so no receiver's line-terminator splitting can cut a JSON string, and under --output-format=stream-json installStreamJsonStdoutGuard() wraps process.stdout.write, buffers until newline, forwards lines that JSON-parse and diverts everything else to stderr prefixed [stdout-guard], flushing any partial buffer on shutdown (src/cli/ndjsonSafeStringify.ts:16-32; src/utils/streamJsonStdoutGuard.ts:14-109).",
+      "invariants": [
+        "every structured write is one line ending in a newline",
+        "empty lines are tolerated while non-JSON lines are never emitted on stdout in stream-json mode",
+        "the guard is idempotent and restores the original write on cleanup"
+      ],
+      "failurePolicy": "fail-soft for stray output (diverted to stderr with the write callback still reported as success); fail-hard only for stdin parse errors",
+      "constants": [
+        {"name": "STDOUT_GUARD_MARKER", "value": "[stdout-guard]"}
+      ],
+      "evidence": [
+        "src/cli/ndjsonSafeStringify.ts:16-32",
+        "src/utils/streamJsonStdoutGuard.ts:14-109",
+        "src/cli/structuredIO.ts:449-451"
+      ],
+      "modules": ["cli", "utils"],
+      "verified": true
+    },
+    {
+      "name": "sdk-permission-prompt-channel",
+      "what": "When the local rule engine answers 'ask', StructuredIO.createCanUseTool() races a PermissionRequest hook against a can_use_tool control_request to the SDK host: the hook promise always resolves and the loser is aborted, so a host dialog and a hook cannot both decide (src/cli/structuredIO.ts:517-643). Sandbox network permission requests are piggybacked onto the same subtype under the synthetic tool name SandboxNetworkAccess, returning false (deny) if the host cannot be reached, and --permission-prompt-tool redirects prompts to a named MCP tool instead, which must exist and expose inputJSONSchema or the CLI exits 1 (structuredIO.ts:715-737; src/cli/print.ts:3780-3828).",
+      "invariants": [
+        "the hook-versus-host race resolves once, with the losing request cancelled rather than left pending",
+        "an unknown or absent MCP permission tool is a hard failure, never a silent bypass",
+        "a failed permission request always yields behavior:'deny'"
+      ],
+      "failurePolicy": "fail-closed on denials and channel errors; fail-soft on hook errors, where the host prompt still decides",
+      "constants": [
+        {"name": "SANDBOX_NETWORK_ACCESS_TOOL_NAME", "value": "SandboxNetworkAccess"}
+      ],
+      "evidence": [
+        "src/cli/structuredIO.ts:517-643",
+        "src/cli/structuredIO.ts:715-737",
+        "src/cli/print.ts:3780-3828"
+      ],
+      "modules": ["cli", "server"],
+      "verified": true
+    },
+    {
+      "name": "sdk-output-format-exit-and-error-surface",
+      "what": "The headless transport contract is defined by --output-format: stream-json (requiring --verbose) writes every message as NDJSON through structuredIO.write, json writes only the final result or the whole array with --verbose, and text prints the result text or a subtype-specific error line (error_during_execution, error_max_turns, error_max_budget_usd, error_max_structured_output_retries) (src/cli/print.ts:732-803, 826-901, 915-917). Process exit is 1 iff the last message is a result with is_error, otherwise 0 via gracefulShutdownSync; pre-run resume/load failures are emitted as a synthetic error result on stdout in stream-json mode or on stderr otherwise, and subcommands centralize exit(1)/exit(0) in cli/exit.ts (src/cli/exit.ts:19-31; src/main.tsx:1379-1405). Flag combinations are validated up front: stream-json input requires stream-json output, and the replay and partial-message flags require both.",
+      "invariants": [
+        "stream-json output requires --verbose",
+        "--input-format=stream-json requires --output-format=stream-json",
+        "the exit code is derived from the final result message, not from individual errors"
+      ],
+      "failurePolicy": "fail-closed for invalid flag combinations and load failures, exiting 1 with a machine-readable error result",
+      "constants": [],
+      "evidence": [
+        "src/cli/print.ts:732-803",
+        "src/cli/print.ts:861-917",
+        "src/cli/print.ts:4136-4161",
+        "src/cli/exit.ts:19-31"
+      ],
+      "modules": ["cli", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "user-message-replay-and-dedup",
+      "what": "--replay-user-messages (requiring stream-json in and out) turns the stdin channel into an acknowledged stream: the CLI echoes replayed user, assistant and control_response frames, injects replayed assistant and system messages back into conversation context, and answers duplicate user messages with a copy carrying isReplay:true while skipping re-execution (src/cli/print.ts:3527-3592, 4411-4441). Deduplication checks both the on-disk transcript (doesMessageExistInSession) and a runtime uuid set, and historical duplicates additionally close their command lifecycle; QueryEngine computes the ackable set as user messages minus meta, tool-result and compaction sentinels (src/cli/structuredIO.ts:188-197, 410-413; src/QueryEngine.ts:462-471).",
+      "invariants": [
+        "a user message uuid is executed at most once per session",
+        "replay mode requires both input and output format to be stream-json",
+        "only ackable message kinds (real user messages and compact boundaries) are echoed"
+      ],
+      "failurePolicy": "fail-soft: duplicates are dropped and acked, never re-run, and the turn still completes",
+      "constants": [],
+      "evidence": [
+        "src/cli/print.ts:3527-3592",
+        "src/cli/structuredIO.ts:188-197",
+        "src/QueryEngine.ts:462-471"
+      ],
+      "modules": ["cli"],
+      "verified": true
+    },
+    {
+      "name": "mcp-server-mode-over-stdio",
+      "what": "`claude mcp serve` runs the harness itself as an MCP server (name claude/tengu, version from MACRO.VERSION) over StdioServerTransport: ListTools exposes every enabled built-in tool with zod input schemas converted to JSON Schema and output schemas included only when the converted root type is object (unions dropped), while CallTool resolves the tool by name, validates input, executes it with a default empty permission context and no interactive prompt channel, and returns text content or a structured isError result (src/entrypoints/mcp.ts:35-195). The transport is the entire trust boundary — no token, no allowlist — and the harness's own permission UI is not reachable from this surface.",
+      "invariants": [
+        "tools are enumerated from an empty permission context, so the catalog does not depend on user rules",
+        "only object-rooted output schemas are advertised (an MCP SDK requirement)",
+        "tool execution failures are returned as isError content, not thrown at the transport"
+      ],
+      "failurePolicy": "fail-soft for tool errors (isError result); fail-closed for a bad working directory at startup",
+      "constants": [
+        {"name": "READ_FILE_STATE_CACHE_SIZE", "value": 100}
+      ],
+      "evidence": [
+        "src/entrypoints/mcp.ts:35-97",
+        "src/entrypoints/mcp.ts:99-195",
+        "src/cli/handlers/mcp.tsx:42-72"
+      ],
+      "modules": ["entrypoints", "cli"],
+      "verified": true
+    },
+    {
+      "name": "direct-connect-http-ws-client",
+      "what": "The surviving half of direct connect: createDirectConnectSession() POSTs {cwd, dangerously_skip_permissions?} to ${serverUrl}/sessions with an optional authorization Bearer header and validates the zod connectResponseSchema ({session_id, ws_url, work_dir}); DirectConnectSessionManager then opens a WebSocket to ws_url with the same Bearer header, parses newline-delimited messages, routes can_use_tool control_requests (synthesizing the corresponding assistant tool_use block) to the local UI, answers unsupported subtypes with an error response so the server cannot hang, and sends interrupts (src/server/createDirectConnectSession.ts:26-88; src/server/directConnectManager.ts:43-211). The server half is ABSENT from this tree: main.tsx dynamically imports ./server/server.js, ./server/sessionManager.js, ./server/backends/dangerousBackend.js and ./server/parseConnectUrl.js, none of which exist, and every call site sits inside feature('DIRECT_CONNECT') which evaluates false (src/main.tsx:2950-2968, 3047-3067).",
+      "invariants": [
+        "the client refuses to proceed unless the session response matches the schema",
+        "auth is a bearer token only, sent on both HTTP and WebSocket",
+        "unknown control subtypes are always answered with an error response"
+      ],
+      "failurePolicy": "fail-closed on session creation (DirectConnectError on network, HTTP or schema failure); fail-soft on the socket, where send helpers return false or disconnect without throwing",
+      "constants": [
+        {"name": "connectResponseSchema", "value": "{session_id, ws_url, work_dir?}"}
+      ],
+      "evidence": [
+        "src/server/createDirectConnectSession.ts:26-88",
+        "src/server/directConnectManager.ts:43-211",
+        "src/server/types.ts:5-24",
+        "src/main.tsx:2950-2968"
+      ],
+      "modules": ["server", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "ssh-remote-ndjson-transport",
+      "what": "SSH remote sessions reuse the SDK NDJSON protocol over an ssh child process: a probe resolves the remote binary and cwd (aborting the whole feature if cc-custom/claude-custom is not on the remote PATH), host strings starting with '-' or containing NUL/CR/LF are rejected, and the remote command is `cd <dir> && exec <binary> -p --input-format stream-json --output-format stream-json --verbose --permission-prompt-tool stdio` (src/ssh/createSSHSession.ts:87-215). SSHSessionManager incrementally parses the remote stdout lines, keeps a 64KB stderr tail for diagnostics, forwards can_use_tool requests to the local UI, and writes user, control_response and interrupt frames to the remote stdin; --local exercises the same protocol against a local child (src/ssh/SSHSessionManager.ts:63-211). The whole surface is registered behind feature('SSH_REMOTE') and is therefore inert in this build (src/main.tsx:3034-3042).",
+      "invariants": [
+        "remote host input is validated before interpolation into an ssh command and shell-quoted POSIX-style",
+        "permission prompts from the remote surface locally through the control protocol, never auto-approved",
+        "stdout is parsed line-by-line with non-JSON lines logged and ignored"
+      ],
+      "failurePolicy": "fail-closed on probe and validation failure (SSHSessionError); fail-soft on malformed remote stdout lines",
+      "constants": [
+        {"name": "STDERR_TAIL_LIMIT", "value": 65536}
+      ],
+      "evidence": [
+        "src/ssh/createSSHSession.ts:87-215",
+        "src/ssh/SSHSessionManager.ts:63-211",
+        "src/main.tsx:3034-3042"
+      ],
+      "modules": ["ssh", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "in-process-sdk-mcp-bridge",
+      "what": "MCP servers registered in-process by the SDK consumer are reached through the same control channel rather than a separate process: the SDK side wraps a JSONRPCMessage in an mcp_message control_request (server_name plus request_id) and StructuredIO.sendMcpMessage() awaits the matching mcp_response frame, while SdkControlClientTransport and SdkControlServerTransport implement the MCP Transport interface on each end and preserve message ids for correlation (src/services/mcp/SdkControlTransport.ts:60-136; src/cli/structuredIO.ts:742-757). print.ts registers placeholder 'sdk' configs from initialize.sdkMcpServers so tools can be listed before the real instance is attached (src/cli/print.ts:2656-2671).",
+      "invariants": [
+        "each MCP message is correlated by server_name plus request_id through the control channel",
+        "transports are single-use: sending after close throws",
+        "multiple SDK MCP servers can be in flight simultaneously"
+      ],
+      "failurePolicy": "fail-closed: the transport throws 'Transport is closed' and a missing response rejects the pending control request",
+      "constants": [],
+      "evidence": [
+        "src/services/mcp/SdkControlTransport.ts:60-136",
+        "src/cli/structuredIO.ts:742-757",
+        "src/cli/print.ts:2656-2671"
+      ],
+      "modules": ["services", "cli"],
+      "verified": true
+    },
+    {
+      "name": "host-injected-env-and-session-token-channel",
+      "what": "A host or bridge can push update_environment_variables frames on stdin; StructuredIO applies every key-value pair directly to process.env before the message loop observes the frame and drops it, which is how a bridge refreshes a session access token for the live process and not just for child Bash commands (src/cli/structuredIO.ts:332-345; src/entrypoints/sdk/controlTypes.ts:148-152). This is the only credential-propagation channel into a running session, and because the stdio surface has no message-level authentication, anything that can write to stdin can also overwrite arbitrary environment of the running process; print.ts acknowledges the type but deliberately does not re-handle it (src/cli/print.ts:3536-3538).",
+      "invariants": [
+        "env frames are applied before any consumer sees them and are never replayed to stdout",
+        "the channel is exactly as trusted as the stdin pipe (no token check)"
+      ],
+      "failurePolicy": "fail-open by design (unauthenticated environment mutation), which is safe only because stdin is assumed private",
+      "constants": [],
+      "evidence": [
+        "src/cli/structuredIO.ts:332-345",
+        "src/entrypoints/sdk/controlTypes.ts:148-152",
+        "src/cli/print.ts:3536-3538"
+      ],
+      "modules": ["cli", "entrypoints"],
+      "verified": true
+    },
+    {
+      "name": "internal-permission-context-logging",
+      "what": "services/internalLogging.ts gathers the Kubernetes namespace from the service-account file and the container id parsed from /proc/self/mountinfo (Docker and containerd patterns) and emits tengu_internal_record_permission_context with the serialized tool permission context at summary and initialization moments (src/services/internalLogging.ts:17-90). The mechanism is INERT twice over in this tree: every helper returns early unless USER_TYPE === 'ant', and logEvent is a permanent no-op stub because the analytics sink is never attached (src/services/analytics/index.ts:95-133).",
+      "invariants": [
+        "namespace and container ids are never read for non-ant users",
+        "the summary is emitted at most once per moment"
+      ],
+      "failurePolicy": "fail-soft: all filesystem reads are wrapped and return sentinel strings on failure",
+      "constants": [
+        {"name": "tool permission event", "value": "tengu_internal_record_permission_context"}
+      ],
+      "evidence": [
+        "src/services/internalLogging.ts:17-90",
+        "src/services/analytics/index.ts:95-133"
+      ],
+      "modules": ["services"],
+      "verified": true
+    }
+  ]
+}

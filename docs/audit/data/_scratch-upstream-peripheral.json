@@ -1,0 +1,1383 @@
+{
+  "source": "opencode-1.18.30",
+  "domains": {
+    "model": [
+      {
+        "name": "models-dev-catalogue-cache",
+        "domain": "model",
+        "what": "Keeps the models.dev provider/model catalogue available offline and fresh. The `ModelsDev` Effect service resolves its source from `Flag.OPENCODE_MODELS_URL` (default https://models.opencode.ai), caches `api.json` into `Global.Path.cache/models.json`, and falls back disk -> embedded `OPENCODE_MODELS_DEV` snapshot -> network fetch performed under a cross-process `Flock`. A background fiber repeats `refresh()` every 60 minutes, and the in-memory value is `Effect.cachedInvalidateWithTTL(populate, Duration.infinity)` that is invalidated on refresh with a `ModelsDev.Event.Refreshed` publish.",
+        "invariants": [
+          "Never fetch when Flag.OPENCODE_DISABLE_MODELS_FETCH is set - callers must still receive a usable (possibly empty) catalogue",
+          "Cache writes stay atomic: fetch into `<file>.<pid>.<timestamp>.tmp` then rename",
+          "A custom OPENCODE_MODELS_URL must hash into a distinct cache filename so the default cache is not clobbered"
+        ],
+        "failurePolicy": "fail-soft - a disk read failure removes the cache file and yields undefined, network refresh failures are logged (`Failed to fetch models.dev`) and ignored, and the last good cached value keeps serving; only `populate` itself is `Effect.orDie`.",
+        "constants": [
+          "MODELS_DEV_DEFAULT_URL = \"https://models.opencode.ai\"",
+          "MODELS_DEV_CACHE_TTL = 5 minutes",
+          "MODELS_DEV_FETCH_TIMEOUT = \"10 seconds\"",
+          "MODELS_DEV_HTTP_RETRIES = 2 with Schedule.exponential(200) jittered",
+          "MODELS_DEV_REFRESH_INTERVAL = \"60 minutes\"",
+          "MODELS_DEV_CACHE_FILE = Global.Path.cache/models.json",
+          "MODELS_DEV_LOCK_KEY = `models-dev:${filepath}`"
+        ],
+        "evidence": [
+          "packages/core/src/models-dev.ts:160",
+          "packages/core/src/models-dev.ts:165",
+          "packages/core/src/models-dev.ts:222",
+          "packages/core/src/models-dev.ts:224-229",
+          "packages/core/src/models-dev.ts:257"
+        ],
+        "quote": [
+          "const source = Flag.OPENCODE_MODELS_URL || \"https://models.opencode.ai\"",
+          "const ttl = Duration.minutes(5)",
+          "if (Flag.OPENCODE_DISABLE_MODELS_FETCH) return {}",
+          "const text = yield* Effect.scoped(",
+          "yield* Effect.forkScoped(refresh().pipe(Effect.repeat(Schedule.spaced(\"60 minutes\")), Effect.ignore))"
+        ],
+        "modules": [
+          "packages/core/src/models-dev.ts",
+          "packages/core/src/plugin/models-dev.ts",
+          "packages/opencode/src/provider"
+        ],
+        "verified": true
+      },
+      {
+        "name": "provider-registry-merge-chain",
+        "domain": "model",
+        "what": "Builds the runtime provider/model registry by layering sources in a fixed order inside the `Provider` InstanceState initializer. models.dev catalog entries (`fromModelsDevProvider`) are extended by plugin `provider.models` hooks, then `cfg.provider`, then env-var API keys, then stored `auth.json` entries, then plugin `auth.loader` options, then built-in `custom(dep)` loaders, then config again; afterwards providers are filtered through `enabled_providers`/`disabled_providers` and models through status/whitelist/blacklist.",
+        "invariants": [
+          "Plugins must be listed before `cfg.provider` is read so a plugin `config()` hook can mutate provider config",
+          "`mergeProvider` never invents a provider absent from the models.dev catalog (`if (!match) return`)",
+          "Providers left with zero models are deleted from the registry"
+        ],
+        "failurePolicy": "mixed - unknown/disabled providers and models are silently dropped (fail-closed for access) while `auth.get`/`auth.all` failures inside the initializer are `Effect.orDie` and abort registry construction.",
+        "constants": [
+          "MODEL_SUGGESTION_LIMIT = 3",
+          "MODEL_SUGGESTION_FUZZY_THRESHOLD = -10000",
+          "DEFAULT_MODEL_NPM = \"@ai-sdk/openai-compatible\""
+        ],
+        "evidence": [
+          "packages/opencode/src/provider/provider.ts:1440-1441",
+          "packages/opencode/src/provider/provider.ts:1427-1438",
+          "packages/opencode/src/provider/provider.ts:1596-1606",
+          "packages/opencode/src/provider/provider.ts:1693-1699",
+          "packages/opencode/src/provider/provider.ts:1715-1718"
+        ],
+        "quote": [
+          "// load plugins first so config() hook runs before reading cfg.provider",
+          "function mergeProvider(providerID: ProviderV2.ID, provider: Partial<Info>) {",
+          "const auths = yield* auth.all().pipe(Effect.orDie)",
+          "if (model.status === \"alpha\" && !runtimeFlags.enableExperimentalModels) delete provider.models[modelID]",
+          "if (Object.keys(provider.models).length === 0) {"
+        ],
+        "modules": [
+          "packages/opencode/src/provider",
+          "packages/opencode/src/auth",
+          "packages/core/src/models-dev.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "model-capability-and-limit-metadata",
+        "domain": "model",
+        "what": "Normalizes models.dev records into the runtime `Provider.Model`: modalities become `capabilities.input/output` over text/audio/image/video/pdf, `tool_call` becomes `capabilities.toolcall`, plus temperature/reasoning/attachment and `interleaved` (boolean or `{field}`); `limit.context/input/output` and a cost object with cache read/write, `tiers` and `context_over_200k` are carried through. `fromModelsDevModel`/`fromModelsDevProvider` also expand `model.experimental.modes` into extra synthetic model ids `<id>-<mode>` with their own cost, body options and headers.",
+        "invariants": [
+          "api.npm resolution order stays cloudflare-gateway -> model.provider.npm -> provider.npm -> \"@ai-sdk/openai-compatible\"",
+          "capabilities.toolcall defaults to true while temperature/reasoning/attachment default to false",
+          "Config-defined models keep already-computed variants when `existingModel.api.npm` is unchanged"
+        ],
+        "failurePolicy": "fail-soft - absent catalogue fields collapse to defaults (0 cost, 0 limits, false capabilities); only `status: \"deprecated\"` models are removed outright (alpha models unless enableExperimentalModels).",
+        "constants": [
+          "CONTEXT_OVER_200K_THRESHOLD = 200_000",
+          "DEFAULT_TOOLCALL_CAPABILITY = true",
+          "MODE_MODEL_ID = `${model.id}-${mode}`"
+        ],
+        "evidence": [
+          "packages/opencode/src/provider/provider.ts:1289-1308",
+          "packages/opencode/src/provider/provider.ts:1284-1288",
+          "packages/opencode/src/provider/provider.ts:1241-1249",
+          "packages/opencode/src/provider/provider.ts:1326-1337",
+          "packages/opencode/src/session/session.ts:384-386"
+        ],
+        "quote": [
+          "capabilities: {",
+          "limit: {",
+          "if (c?.context_over_200k) {",
+          "for (const [mode, opts] of Object.entries(model.experimental?.modes ?? {})) {",
+          "(input.model.cost?.experimentalOver200K && contextTokens > 200_000"
+        ],
+        "modules": [
+          "packages/opencode/src/provider",
+          "packages/core/src/models-dev.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "model-default-and-fallback-resolution",
+        "domain": "model",
+        "what": "Decides which model a session uses when none is pinned, plus the small/fast model. `Provider.defaultModel` returns `cfg.model` first, then the most recent entry that still resolves from `Global.Path.state/model.json`, then the top-ranked model of a configured provider via `Provider.sort`; `Provider.getSmallModel` honours `cfg.small_model`, an `experimental.provider.small_model` plugin hook, then a family-priority list; `Provider.getModel` failures carry fuzzysort `suggestions`.",
+        "invariants": [
+          "Recent-model entries are only honoured if the provider and the model still exist in the registry",
+          "ModelNotFoundError must always carry suggestions so callers can self-correct",
+          "Azure/Azure-cognitive-services deliberately return no small model"
+        ],
+        "failurePolicy": "fail-closed - throws NoProvidersError / NoModelsError / ModelNotFoundError rather than guessing a model.",
+        "constants": [
+          "MODEL_PRIORITY = [\"gpt-5\", \"claude-sonnet-4\", \"big-pickle\", \"gemini-3-pro\"]",
+          "SMALL_MODEL_FAMILY_PRIORITY = [\"gemini-flash\", \"gpt-nano\", \"claude-haiku\"]",
+          "MODEL_SUGGESTION_LIMIT = 3",
+          "RECENT_MODEL_FILE = Global.Path.state/model.json",
+          "BEDROCK_CROSS_REGION_PREFIXES = [\"global.\", \"us.\", \"eu.\"]"
+        ],
+        "evidence": [
+          "packages/opencode/src/provider/provider.ts:2008-2010",
+          "packages/opencode/src/provider/provider.ts:2013",
+          "packages/opencode/src/provider/provider.ts:2047-2048",
+          "packages/opencode/src/provider/provider.ts:1971-1975",
+          "packages/opencode/src/provider/provider.ts:1885-1891"
+        ],
+        "quote": [
+          "const defaultModel = Effect.fn(\"Provider.defaultModel\")(function* () {",
+          "const recent = yield* fs.readJson(path.join(Global.Path.state, \"model.json\")).pipe(",
+          "const priority = [\"gpt-5\", \"claude-sonnet-4\", \"big-pickle\", \"gemini-3-pro\"]",
+          "const priority = providerID.startsWith(\"opencode\")",
+          "const info = provider.models[modelID]"
+        ],
+        "modules": [
+          "packages/opencode/src/provider"
+        ],
+        "verified": true
+      },
+      {
+        "name": "provider-sdk-resolution-and-timeouts",
+        "domain": "model",
+        "what": "Turns a `Provider.Model` into a language model. `resolveSDK` merges provider+model options, substitutes `${VAR}` placeholders in the base URL via vars loaders and env, injects `includeUsage` for openai-compatible SDKs and rewrites the google-vertex anthropic base URL, then instantiates either a bundled AI-SDK factory from `BUNDLED_PROVIDERS` or a `Npm.add`-installed package resolved by its `create*` export. The fetch is wrapped with a header timeout, a per-chunk SSE inactivity abort (`wrapSSE`) and a `AbortSignal.any` of all signals, and SDK instances are memoized by a fast hash of providerID/npm/options.",
+        "invariants": [
+          "chunkTimeout and headerTimeout are deleted from options before reaching the SDK factory",
+          "The proxied fetch must pass `timeout: false` to the underlying fetch to avoid double timeouts",
+          "Bundled SDK instances are reused across calls with identical option hashes"
+        ],
+        "failurePolicy": "fail-closed - any resolution failure is wrapped in `InitError`; a stalled SSE body aborts with ProviderError.ResponseStreamError(\"SSE read timed out\").",
+        "constants": [
+          "OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000",
+          "DEFAULT_CHUNK_TIMEOUT = 300_000",
+          "DEFAULT_HEADER_TIMEOUT = 300_000"
+        ],
+        "evidence": [
+          "packages/opencode/src/provider/provider.ts:35",
+          "packages/opencode/src/provider/provider.ts:1798-1802",
+          "packages/opencode/src/provider/provider.ts:37-51",
+          "packages/opencode/src/provider/provider.ts:1788-1796",
+          "packages/opencode/src/provider/provider.ts:1842-1849"
+        ],
+        "quote": [
+          "const OPENAI_HEADER_TIMEOUT_DEFAULT = 300_000",
+          "const customFetch = options[\"fetch\"]",
+          "function wrapSSE(res: Response, ms: number, ctl: AbortController) {",
+          "const key = Hash.fast(",
+          "const installedPath = await (async () => {"
+        ],
+        "modules": [
+          "packages/opencode/src/provider",
+          "packages/core/src/npm.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "credential-store-and-oauth-lifecycle",
+        "domain": "model",
+        "what": "Credentials live in one JSON file `Global.Path.data/auth.json` (written mode 0600) behind the `Auth` service, with `OPENCODE_AUTH_CONTENT` able to override the file wholesale and three credential shapes (`oauth`, `api`, `wellknown`). Interactive OAuth is driven by `ProviderAuth`: plugin `auth` hooks declare text/select prompts, `authorize` stores a pending result keyed by provider, and `callback` exchanges the code and writes either an api key or an oauth record. Refresh is lazy on use - `Integration.connection.resolve` refreshes when the token expires within 5 minutes, Azure CLI tokens are cached until 60s before expiry, and OAuth-dummy-key providers (Azure, xAI, Snowflake, Codex) rewrite the Authorization header per request.",
+        "invariants": [
+          "auth.json must always be written with mode 0o600",
+          "Provider ids are normalized by stripping trailing slashes, and both the normalized and raw key are deleted on removal",
+          "An OAuth callback that does not return type \"success\" must raise OauthCallbackFailed and must not write credentials"
+        ],
+        "failurePolicy": "mixed - unreadable/corrupt auth entries are filtered out (fail-soft), but a missing pending OAuth attempt fails closed with OauthMissing / OauthCodeMissing and validation failures raise ProviderAuthValidationFailed.",
+        "constants": [
+          "AUTH_FILE = Global.Path.data/auth.json",
+          "AUTH_FILE_MODE = 0o600",
+          "OAUTH_DUMMY_KEY = \"opencode-oauth-dummy-key\"",
+          "OAUTH_REFRESH_WINDOW = 5 minutes",
+          "AZURE_TOKEN_REFRESH_BUFFER = 60_000",
+          "AZURE_OAUTH_FAKE_EXPIRY = 365 days",
+          "OAUTH_DEFAULT_EXPIRES_IN = 3600 s (xAI/OpenAI) and 600 s (Snowflake)"
+        ],
+        "evidence": [
+          "packages/opencode/src/auth/index.ts:10",
+          "packages/opencode/src/auth/index.ts:79",
+          "packages/opencode/src/auth/index.ts:59",
+          "packages/opencode/src/provider/auth.ts:179-185",
+          "packages/core/src/integration.ts:397-402",
+          "packages/opencode/src/plugin/azure.ts:10"
+        ],
+        "quote": [
+          "const file = path.join(Global.Path.data, \"auth.json\")",
+          ".writeJson(file, { ...data, [norm]: info }, 0o600)",
+          "if (process.env.OPENCODE_AUTH_CONTENT) {",
+          "const result = yield* Effect.promise(() => method.authorize(input.inputs))",
+          "if (!implementation?.refresh) return credential.value",
+          "const AZURE_TOKEN_REFRESH_BUFFER = 60_000"
+        ],
+        "modules": [
+          "packages/opencode/src/auth",
+          "packages/opencode/src/provider/auth.ts",
+          "packages/core/src/integration.ts",
+          "packages/core/src/credential",
+          "packages/opencode/src/plugin"
+        ],
+        "verified": true
+      },
+      {
+        "name": "reasoning-effort-variant-translation",
+        "domain": "model",
+        "what": "Translates models.dev `reasoning_options` (effort value lists, toggle, budget_tokens min/max) plus per-family heuristics into the `variants` map of a `Provider.Model`, where each variant is a provider-native option patch (`reasoningEffort`, `thinkingConfig.thinkingLevel`, `reasoning: {effort}`, budget tokens ...). `ProviderTransform.reasoningVariants` / `variants` / `reasoningEffort` / `reasoningBudget` pick the mapping from `api.npm`, and `maxOutputTokens` clamps requested output to OUTPUT_TOKEN_MAX.",
+        "invariants": [
+          "maxOutputTokens must never exceed the model's declared output limit nor OUTPUT_TOKEN_MAX",
+          "Budget variants are capped at min(max ?? OUTPUT_TOKEN_MAX - 1, model.limit.output - 1, OUTPUT_TOKEN_MAX - 1)",
+          "Variants marked `disabled` are stripped at merge time instead of being sent"
+        ],
+        "failurePolicy": "fail-soft - unknown families/protocols produce an empty variant map rather than an error, and requests fall back to provider defaults.",
+        "constants": [
+          "OUTPUT_TOKEN_MAX = 32_000",
+          "WIDELY_SUPPORTED_EFFORTS = [\"low\", \"medium\", \"high\"]",
+          "OPENAI_EFFORTS = [\"none\", \"minimal\", \"low\", \"medium\", \"high\", \"xhigh\"]",
+          "OPENAI_NONE_EFFORT_RELEASE_DATE = \"2025-11-13\"",
+          "OPENAI_XHIGH_EFFORT_RELEASE_DATE = \"2025-12-04\"",
+          "INCLUDE_ENCRYPTED_REASONING = [\"reasoning.encrypted_content\"]"
+        ],
+        "evidence": [
+          "packages/opencode/src/provider/transform.ts:18",
+          "packages/opencode/src/provider/transform.ts:1704-1710",
+          "packages/opencode/src/provider/transform.ts:1736-1749",
+          "packages/opencode/src/provider/transform.ts:573-581",
+          "packages/opencode/src/provider/transform.ts:1468-1470"
+        ],
+        "quote": [
+          "export const OUTPUT_TOKEN_MAX = 32_000",
+          "export function reasoningVariants(model: ModelsDev.Model, target: Provider.Model): Provider.Model[\"variants\"] {",
+          "function budgetVariants(model: Provider.Model, min?: number, max?: number) {",
+          "const WIDELY_SUPPORTED_EFFORTS = [\"low\", \"medium\", \"high\"]",
+          "export function maxOutputTokens(model: Provider.Model, outputTokenMax = OUTPUT_TOKEN_MAX): number {"
+        ],
+        "modules": [
+          "packages/opencode/src/provider"
+        ],
+        "verified": true
+      },
+      {
+        "name": "llm-request-execution-and-retry",
+        "domain": "model",
+        "what": "The @opencode-ai/llm package separates a `Protocol` (common LLMRequest -> provider body plus a streaming state machine) from `Framing` (SSE or AWS event stream -> frames) and from the `RequestExecutor`, which performs the HTTP call, maps provider failures to typed LLMError reasons with secret redaction and body truncation, and retries retryable statuses with jittered backoff. On top of that the session layer runs `SessionRetry.policy`, a second retry schedule with rate-limit/Go-upsell surfacing that explicitly refuses to retry context-overflow errors.",
+        "invariants": [
+          "Context-overflow errors must never be retried",
+          "Secrets in headers, URL query keys and JSON bodies must be redacted before being attached to an error, and bodies beyond BODY_LIMIT truncated",
+          "Retry delay must be capped and must honour retry-after / retry-after-ms when present"
+        ],
+        "failurePolicy": "mixed - the executor retries 429/503/504/529 up to 2 times then fails with a typed LLMError; the session policy stops after 5 attempts and surfaces an actionable message with UPSELL/limit actions.",
+        "constants": [
+          "BODY_LIMIT = 16_384",
+          "MAX_RETRIES = 2",
+          "BASE_DELAY_MS = 500",
+          "MAX_DELAY_MS = 10_000",
+          "RETRYABLE_STATUSES = 429, 503, 504, 529",
+          "RETRY_INITIAL_DELAY = 2000",
+          "RETRY_BACKOFF_FACTOR = 2",
+          "RETRY_JITTER_FACTOR = 0.25",
+          "RETRY_MAX_DELAY_NO_HEADERS = 30_000",
+          "RETRY_MAX_DELAY = 2_147_483_647",
+          "RETRY_MAX_RETRIES = 5"
+        ],
+        "evidence": [
+          "packages/llm/src/route/executor.ts:35-38",
+          "packages/llm/src/route/executor.ts:91",
+          "packages/llm/src/route/executor.ts:353-364",
+          "packages/llm/src/route/protocol.ts:36-43",
+          "packages/llm/src/route/framing.ts:19-25",
+          "packages/opencode/src/session/retry.ts:26-31",
+          "packages/opencode/src/session/retry.ts:87"
+        ],
+        "quote": [
+          "const BODY_LIMIT = 16_384",
+          "const retryableStatus = (status: number) => status === 429 || status === 503 || status === 504 || status === 529",
+          "const retryStatusFailures = <A, R>(",
+          "export interface Protocol<Body, Frame, Event, State> {",
+          "export interface Framing<Frame> {",
+          "export const RETRY_INITIAL_DELAY = 2000",
+          "if (SessionV1.ContextOverflowError.isInstance(error)) return undefined"
+        ],
+        "modules": [
+          "packages/llm/src/route",
+          "packages/llm/src/protocols",
+          "packages/opencode/src/session/retry.ts"
+        ],
+        "verified": true
+      }
+    ],
+    "service": [
+      {
+        "name": "http-server-listener-and-lifecycle",
+        "domain": "service",
+        "what": "`Server.listen` builds the Effect HTTP router as a listener layer over a Node http server, resolves a port (explicit port, or 4096 then any free port when asked for 0), publishes an mDNS service when the hostname is non-loopback, and returns a `Listener` whose `stop(true)` force-closes active HTTP sockets and every tracked WebSocket. It also installs a fresh ConfigProvider per listener so `Config.string` reads the current env, and mounts the UI catch-all route behind the auth router middleware.",
+        "invariants": [
+          "A fresh ConfigProvider must be provided per listener so config reads do not observe a stale process.env snapshot",
+          "Observability layer must be provided last so eagerly forked fibers capture the right logger (TUI corruption otherwise)",
+          "WebSocket closes are bounded by a 1 second timeout and never block shutdown"
+        ],
+        "failurePolicy": "fail-soft - mDNS publish/close failures are swallowed and WebSocket close errors caught; the port fallback retries on any listen error.",
+        "constants": [
+          "PORT_FALLBACK_FIRST = 4096",
+          "DEFAULT_HOSTNAME = \"127.0.0.1\"",
+          "GRACEFUL_SHUTDOWN_TIMEOUT = \"1 second\"",
+          "WEBSOCKET_CLOSE_TIMEOUT = \"1 second\"",
+          "WEBSOCKET_CLOSE_CODE = 1001 (\"server closing\")",
+          "CORS_MAX_AGE = 86_400",
+          "MDNS_DEFAULT_DOMAIN = \"opencode.local\""
+        ],
+        "evidence": [
+          "packages/opencode/src/server/server.ts:117-122",
+          "packages/opencode/src/server/server.ts:214",
+          "packages/opencode/src/server/routes/instance/httpapi/websocket-tracker.ts:5",
+          "packages/opencode/src/server/routes/instance/httpapi/server.ts:121-128",
+          "packages/opencode/src/cli/network.ts:7-16"
+        ],
+        "quote": [
+          "function startWithPortFallback(opts: ListenOptions) {",
+          "NodeHttpServer.layer(() => server, { port: opts.port, host: opts.hostname, gracefulShutdownTimeout: \"1 second\" }),",
+          "export const SERVER_CLOSING_EVENT = () => new Socket.CloseEvent(1001, \"server closing\")",
+          "const cors = (corsOptions?: CorsOptions) =>",
+          "port: {"
+        ],
+        "modules": [
+          "packages/opencode/src/server",
+          "packages/opencode/src/server/routes/instance/httpapi",
+          "packages/opencode/src/cli/cmd/serve.ts",
+          "packages/opencode/src/cli/network.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "service-basic-auth-with-ticket-bypass",
+        "domain": "service",
+        "what": "The server is optionally protected by HTTP Basic credentials: `ServerAuth.Config` reads `OPENCODE_SERVER_PASSWORD` (optional) and `OPENCODE_SERVER_USERNAME` (default \"opencode\"); when a password is set every typed route requires either an `Authorization: Basic` header or an `auth_token` query parameter, otherwise 401 with `WWW-Authenticate: Basic realm=\"Secure Area\"`. Public UI assets and PTY WebSocket upgrades carrying a valid one-time ticket bypass the check; the ticket service issues UUID tickets with a 60 second TTL and consumes them atomically with an invalidateWhen comparison of ptyID/directory/workspace.",
+        "invariants": [
+          "Auth is applied as route-group middleware, not by wrapping handlers, so a downstream NotFound cannot be remapped into Unauthorized",
+          "PTY connect tickets are single-use and scoped to ptyID+directory+workspaceID",
+          "Only the fixed PUBLIC_UI_PATHS set may bypass auth"
+        ],
+        "failurePolicy": "fail-closed - with a password configured any non-matching credential gets 401; when no password is configured the middleware degenerates to a pass-through `(effect) => effect`.",
+        "constants": [
+          "OPENCODE_SERVER_USERNAME_DEFAULT = \"opencode\"",
+          "UNAUTHORIZED = 401",
+          "WWW_AUTHENTICATE = 'Basic realm=\"Secure Area\"'",
+          "AUTH_TOKEN_QUERY = \"auth_token\"",
+          "PTY_TICKET_TTL = 60 seconds",
+          "PTY_TICKET_CAPACITY = 10_000",
+          "PUBLIC_UI_PATHS = [/site.webmanifest, /web-app-manifest-192x192.png, /web-app-manifest-512x512.png]"
+        ],
+        "evidence": [
+          "packages/opencode/src/server/auth.ts:17-20",
+          "packages/opencode/src/server/auth.ts:24-26",
+          "packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts:12-14",
+          "packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts:101-116",
+          "packages/opencode/src/server/shared/public-ui.ts:4-8",
+          "packages/core/src/pty/ticket.ts:9-10"
+        ],
+        "quote": [
+          "export class Config extends ConfigService.Service<Config>()(\"@opencode/ServerAuthConfig\", {",
+          "export function required(config: Info) {",
+          "const AUTH_TOKEN_QUERY = \"auth_token\"",
+          "export const authorizationRouterMiddleware = HttpRouter.middleware()(",
+          "export const PUBLIC_UI_PATHS = new Set<string>([",
+          "const DEFAULT_TTL = Duration.seconds(60)"
+        ],
+        "modules": [
+          "packages/opencode/src/server/auth.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/middleware/authorization.ts",
+          "packages/opencode/src/server/shared",
+          "packages/core/src/pty/ticket.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "openapi-spec-and-sdk-codegen",
+        "domain": "service",
+        "what": "The typed Effect HttpApi tree is the single source for both the published OpenAPI document and the generated SDK. `GET /doc` serves a lazily built, cached `OpenApi.fromApi(PublicApi)` JSON; `PublicApi` applies a `matchLegacyOpenApi` transform that strips Schema.optional null arms, renames/dedupes components and re-documents SSE responses, and `Server.openapi()` + `opencode generate` inject `x-codeSamples`. `@opencode-ai/httpapi-codegen` compiles an HttpApi into client files guarded by a `.httpapi-codegen.json` manifest.",
+        "invariants": [
+          "The /doc response must stay lazy so CLI/script processes never pay for OpenAPI generation",
+          "The legacy transform must not mark request bodies required for non-/api paths",
+          "Generated SDK files must be byte-identical to committed output (prettier formatting, printWidth 120)"
+        ],
+        "failurePolicy": "fail-closed - codegen raises GenerationError for unsupported groups/endpoints, and /doc is auth-gated like every other route.",
+        "constants": [
+          "CODEGEN_MANIFEST = \".httpapi-codegen.json\"",
+          "OPENAPI_TITLE = \"opencode\"",
+          "OPENAPI_VERSION = \"1.0.0\"",
+          "PRETTIER_PRINT_WIDTH = 120",
+          "FIND_FILE_LIMIT_MAX = 200"
+        ],
+        "evidence": [
+          "packages/opencode/src/server/routes/instance/httpapi/server.ts:188-192",
+          "packages/opencode/src/server/routes/instance/httpapi/public.ts:530-536",
+          "packages/opencode/src/server/server.ts:67-69",
+          "packages/httpapi-codegen/src/index.ts:74",
+          "packages/protocol/src/api.ts:37",
+          "packages/opencode/src/cli/cmd/generate.ts:10-12"
+        ],
+        "quote": [
+          "const docResponse = lazy(() => HttpServerResponse.jsonUnsafe(OpenApi.fromApi(PublicApi)))",
+          "export const PublicApi = OpenCodeHttpApi.annotateMerge(",
+          "export async function openapi() {",
+          "const manifestName = \".httpapi-codegen.json\"",
+          "HttpApi.make(\"server\")",
+          "const specs = (await Server.openapi()) as {"
+        ],
+        "modules": [
+          "packages/opencode/src/server/routes/instance/httpapi",
+          "packages/httpapi-codegen",
+          "packages/protocol",
+          "packages/server",
+          "packages/sdk/js"
+        ],
+        "verified": true
+      },
+      {
+        "name": "sse-live-event-stream",
+        "domain": "service",
+        "what": "Live events reach consumers over two SSE surfaces sharing the `EventV2` bus. The instance route `GET /event` (declared with `HttpApiSchema.asText({ contentType: \"text/event-stream\" })`) sends `server.connected` immediately, then instance/workspace-filtered events merged with a `server.heartbeat` every 10 seconds, terminating on `server.instance.disposed`. The v2 server route consumes `EventV2.allBounded(events, 256)` so a slow subscriber overflows its own stream instead of blocking publishers, and emits a comment heartbeat every 15 seconds.",
+        "invariants": [
+          "Listener registration is eager so events published between subscribe and first byte are not lost",
+          "Every stream must end when the client disconnects or the instance is disposed",
+          "Responses must keep Cache-Control: no-cache, no-transform and X-Accel-Buffering: no"
+        ],
+        "failurePolicy": "mixed - a slow subscriber fails its own stream with SubscriberOverflowError (dropping queue) while publishers are unaffected; the instance stream is fail-soft and simply terminates.",
+        "constants": [
+          "INSTANCE_HEARTBEAT_INTERVAL = \"10 seconds\"",
+          "V2_HEARTBEAT_INTERVAL = \"15 seconds\"",
+          "V2_SUBSCRIBER_CAPACITY = 256",
+          "CONTENT_TYPE = text/event-stream"
+        ],
+        "evidence": [
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts:63-66",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts:69-73",
+          "packages/server/src/handlers/event.ts:9",
+          "packages/server/src/handlers/event.ts:33-37",
+          "packages/core/src/event.ts:152-164",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/event.ts:14-16"
+        ],
+        "quote": [
+          "const heartbeat = Stream.tick(\"10 seconds\").pipe(",
+          "return HttpServerResponse.stream(",
+          "const subscriberCapacity = 256",
+          "const live = yield* EventV2.allBounded(events, subscriberCapacity)",
+          "export const allBounded = (events: Interface, capacity: number) =>",
+          "HttpApiEndpoint.get(\"subscribe\", EventPaths.event, {"
+        ],
+        "modules": [
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts",
+          "packages/server/src/handlers/event.ts",
+          "packages/core/src/event.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "durable-event-replay-and-sync",
+        "domain": "service",
+        "what": "`EventV2` is an event-sourced log: publish assigns a per-aggregate monotonic `seq`, rejects duplicate event ids and sequence mismatches by dying with InvalidDurableEventError, and `replay`/`replayAll` re-insert a serialized history with strict owner and sequence validation, adopting a divergent prefix only when it matches an existing row. The `/sync` HTTP group exposes start, replay, steal and history; history takes the client's last-known seq per aggregate and returns events with `seq >` that value.",
+        "invariants": [
+          "Sequence numbers are per aggregate and must increase by exactly one",
+          "An event id may exist only once across the whole log",
+          "Owner mismatch is a silent no-op, not an error (another workspace already owns the aggregate)"
+        ],
+        "failurePolicy": "fail-closed - divergence, duplicate ids and out-of-order replays cause Effect.die rather than storing corrupt history.",
+        "constants": [
+          "SYNC_HTTP_PATHS = /sync/start, /sync/replay, /sync/steal, /sync/history",
+          "HISTORY_INPUT = Record<aggregateID, lastKnownSeq>"
+        ],
+        "evidence": [
+          "packages/core/src/event.ts:294-302",
+          "packages/core/src/event.ts:309-315",
+          "packages/core/src/event.ts:485-495",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/sync.ts:38-43",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/sync.ts:29"
+        ],
+        "quote": [
+          "const seq = input?.seq ?? latest + 1",
+          "if (stored)",
+          "const source = events[0]?.aggregateID",
+          "export const SyncPaths = {",
+          "export const HistoryPayload = Schema.Record(Schema.String, NonNegativeInt)"
+        ],
+        "modules": [
+          "packages/core/src/event.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/sync.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/sync.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "acp-stdio-agent-adapter",
+        "domain": "service",
+        "what": "An ACP (Agent Client Protocol) adapter exposes the engine over stdio to editors: `ACP.init` builds an `Agent` whose methods delegate to `ACPService.make`, converting PromptRequest content blocks into prompt parts, mapping tool state to ToolCall updates, and running each request through `runUntilIdle` so the ACP response is only returned after the session emits an idle status. `initialize` reports protocolVersion 1 with loadSession, http/sse MCP and prompt capabilities, and advertises a terminal-auth auth method when the client declares that capability.",
+        "invariants": [
+          "A request must not resolve before the session is idle and its queued session updates have been delivered",
+          "Only one update subscription exists per client connection and it must be started eagerly",
+          "Errors must cross the ACP boundary as RequestError, never as raw defects"
+        ],
+        "failurePolicy": "fail-closed - failures map to ACP request errors (ACPAuthRequiredError, ACPInvalidModelError, ACPUnsupportedOperationError, ...) with a generic \"Internal service failure\" for unknown defects.",
+        "constants": [
+          "ACP_PROTOCOL_VERSION = 1",
+          "ACP_AUTH_METHOD_ID = \"opencode-login\"",
+          "ACP_MCP_CAPABILITIES = http, sse"
+        ],
+        "evidence": [
+          "packages/opencode/src/acp/service.ts:113",
+          "packages/opencode/src/acp/service.ts:49",
+          "packages/opencode/src/acp/service.ts:91-92",
+          "packages/opencode/src/acp/event.ts:74-91",
+          "packages/opencode/src/acp/agent.ts:88-93"
+        ],
+        "quote": [
+          "protocolVersion: 1,",
+          "export const AuthMethodID = \"opencode-login\"",
+          "const runUntilIdle = <A>(sessionId: string, fn: () => Promise<A>) =>",
+          "async runUntilIdle<A>(sessionId: string, request: () => Promise<A>) {",
+          "function run<A>(effect: Effect.Effect<A, ACPService.Error>) {"
+        ],
+        "modules": [
+          "packages/opencode/src/acp"
+        ],
+        "verified": true
+      },
+      {
+        "name": "control-plane-workspace-routing",
+        "domain": "service",
+        "what": "Workspace routing makes one HTTP surface serve local and remote workspaces: `WorkspaceRoutingMiddleware` parses `directory`/`workspace` query fields into a `RequestPlan` (Local, Remote, MissingWorkspace, InvalidWorkspace) and proxies remote plans to another node via HttpApiProxy, while `WorkspaceAdapterRuntime` dispatches adapter operations (target/configure/create/list/remove) per workspace type. The control plane itself exposes `POST /experimental/control-plane/move-session`, backed by `MoveSession.Service`, to relocate a session to another project directory with its changes.",
+        "invariants": [
+          "Every endpoint group behind the middleware must spread WorkspaceRoutingQueryFields or requests carrying them are rejected with 400",
+          "A session's workspace takes precedence over the ambient default when resolving the route",
+          "Move-session must reject a destination directory that belongs to another project"
+        ],
+        "failurePolicy": "fail-closed - invalid workspace ids and missing workspaces are rejected before the handler runs; move-session maps failures to a 400 MoveSessionError.",
+        "constants": [
+          "MOVE_SESSION_PATH = /experimental/control-plane/move-session",
+          "MOVE_SESSION_ERROR_STATUS = 400"
+        ],
+        "evidence": [
+          "packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts:31-42",
+          "packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts:22-25",
+          "packages/opencode/src/control-plane/workspace-adapter-runtime.ts:14-19",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/control-plane.ts:22-25",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/control-plane.ts:12-24"
+        ],
+        "quote": [
+          "type RequestPlan = Data.TaggedEnum<{",
+          "export const WorkspaceRoutingQueryFields = {",
+          "export const target = (info: WorkspaceInfo) =>",
+          "HttpApiEndpoint.post(\"moveSession\", `${root}/move-session`, {",
+          "const moveSession = Effect.fn(\"ControlPlaneHttpApi.moveSession\")(function* (ctx: {"
+        ],
+        "modules": [
+          "packages/opencode/src/server/routes/instance/httpapi/middleware/workspace-routing.ts",
+          "packages/opencode/src/control-plane",
+          "packages/core/src/control-plane"
+        ],
+        "verified": true
+      }
+    ],
+    "ops": [
+      {
+        "name": "file-and-stderr-logging",
+        "domain": "ops",
+        "what": "`Observability.layer` wires Effect's logger with a structured single-line formatter (key=value) that always appends to `<Global.Path.log>/opencode.log` and optionally mirrors to stderr. The minimum level comes from `OPENCODE_LOG_LEVEL` (DEBUG/INFO/WARN/ERROR, default Info); `OPENCODE_PRINT_LOGS=1` adds the stderr logger. Every line carries a per-process `run` id from `crypto.randomUUID().slice(0, 8)` and flattens nested plain objects with Circular detection.",
+        "invariants": [
+          "Logger.toFile batchWindow must not be 0 (it causes high idle CPU usage)",
+          "The formatter must not throw on circular or exotic values ([Circular], Formatter.format fallback)",
+          "The log file is append-only"
+        ],
+        "failurePolicy": "fail-soft - logging never fails the caller, and an unknown OPENCODE_LOG_LEVEL falls back to Info.",
+        "constants": [
+          "LOG_FILE = Global.Path.log/opencode.log",
+          "DEFAULT_LOG_LEVEL = INFO",
+          "OPENCODE_PRINT_LOGS = \"1\"",
+          "RUN_ID_LENGTH = 8 characters"
+        ],
+        "evidence": [
+          "packages/core/src/observability/logging.ts:49-52",
+          "packages/core/src/observability/logging.ts:56-65",
+          "packages/core/src/observability/logging.ts:67-69",
+          "packages/core/src/observability/shared.ts:1",
+          "packages/core/src/observability.ts:11-22"
+        ],
+        "quote": [
+          "export function fileLogger(file = path.join(Global.Path.log, \"opencode.log\"), id: string = runID) {",
+          "export function minimumLogLevel() {",
+          "export function loggers() {",
+          "export const runID = crypto.randomUUID().slice(0, 8)",
+          "export const layer = Layer.unwrap("
+        ],
+        "modules": [
+          "packages/core/src/observability",
+          "packages/core/src/observability.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "otlp-telemetry-export",
+        "domain": "ops",
+        "what": "When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, logs are additionally exported through `OtlpLogger` to `<endpoint>/v1/logs` and traces through a NodeSdk layer with a BatchSpanProcessor + OTLPTraceExporter to `<endpoint>/v1/traces`; an AsyncLocalStorageContextManager is registered globally so the AI SDK can parent spans. Resource attributes include service name/version, deployment.environment.name (= installation channel), opencode.client, opencode.run and service.instance.id, plus parsed OTEL_RESOURCE_ATTRIBUTES.",
+        "invariants": [
+          "The tracing layer must return Layer.empty when no endpoint is configured",
+          "OTLP headers are parsed from a comma-separated k=v list, preserving '=' inside values",
+          "A global context manager is installed so SDK spans attach to the Effect trace"
+        ],
+        "failurePolicy": "fail-open - without an endpoint both loggers and tracing are empty, and resource-attribute parse errors yield {} instead of throwing.",
+        "constants": [
+          "OTLP_LOG_PATH = <endpoint>/v1/logs",
+          "OTLP_TRACE_PATH = <endpoint>/v1/traces",
+          "OTEL_SERVICE_NAME = \"opencode\""
+        ],
+        "evidence": [
+          "packages/core/src/observability/otlp.ts:7",
+          "packages/core/src/observability/otlp.ts:50-53",
+          "packages/core/src/observability/otlp.ts:55-77",
+          "packages/core/src/observability/otlp.ts:36-48",
+          "packages/core/src/observability.ts:20"
+        ],
+        "quote": [
+          "const endpoint = Flag.OTEL_EXPORTER_OTLP_ENDPOINT",
+          "export function loggers() {",
+          "export async function tracingLayer() {",
+          "export function resource(): { serviceName: string; serviceVersion: string; attributes: Record<string, string> } {",
+          "return Layer.merge(logs, yield* Effect.promise(Otlp.tracingLayer))"
+        ],
+        "modules": [
+          "packages/core/src/observability"
+        ],
+        "verified": true
+      },
+      {
+        "name": "ai-sdk-span-attribution",
+        "domain": "ops",
+        "what": "AI-SDK calls are instrumented only when `config.experimental.openTelemetry` is on: the session LLM runtime resolves the Effect OtelTracer service and wraps it in a Proxy that stamps every `startSpan` with the current `session.id`, then passes an `experimental_telemetry` block (isEnabled, tracer, userId metadata) into the AI SDK call options; `Agent.generate` uses the same gate and adds a fixed temperature.",
+        "invariants": [
+          "Telemetry stays opt-in through config, never enabled implicitly",
+          "Only startSpan may be intercepted; all other tracer members pass through unchanged",
+          "The tracer lookup must tolerate the service being absent (serviceOption)"
+        ],
+        "failurePolicy": "fail-open - with the flag off or the tracer missing, generation proceeds uninstrumented.",
+        "constants": [
+          "SPAN_SESSION_ATTRIBUTE = \"session.id\"",
+          "TELEMETRY_USER_METADATA_KEY = \"userId\"",
+          "AGENT_GENERATE_TEMPERATURE = 0.3"
+        ],
+        "evidence": [
+          "packages/opencode/src/session/llm.ts:208-222",
+          "packages/opencode/src/agent/agent.ts:376-378",
+          "packages/opencode/src/agent/agent.ts:388-395"
+        ],
+        "quote": [
+          "const tracer = cfg.experimental?.openTelemetry",
+          "const tracer = cfg.experimental?.openTelemetry",
+          "const params = {"
+        ],
+        "modules": [
+          "packages/opencode/src/session/llm.ts",
+          "packages/opencode/src/agent/agent.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "token-and-cost-accounting",
+        "domain": "ops",
+        "what": "`Session.getUsage` converts a provider Usage plus provider metadata into normalized token buckets (non-cached input, output minus reasoning, reasoning, cache read/write) and a USD cost: tiered pricing is selected by context size, experimentalOver200K applies above 200k context, and cost is computed with Decimal at price-per-million for input/output/cache-read/cache-write with reasoning billed at the output rate. GitHub Copilot `totalNanoAiu` metadata overrides the arithmetic. The processor accumulates each step's usage into the assistant message cost/tokens and emits a step-finish part.",
+        "invariants": [
+          "Cache read+write tokens must be subtracted from inputTokens (AI SDK v6 includes them)",
+          "Negative or non-finite values must clamp to 0 via safe/finite",
+          "Reasoning tokens are billed at the output rate until models.dev exposes separate pricing"
+        ],
+        "failurePolicy": "fail-soft - missing or non-finite usage fields become 0 and unknown provider-metadata keys are ignored.",
+        "constants": [
+          "COST_PER_MILLION_DIVISOR = 1_000_000",
+          "CONTEXT_OVER_200K_THRESHOLD = 200_000",
+          "COPILOT_NANO_AIU_DIVISOR = 100_000_000_000"
+        ],
+        "evidence": [
+          "packages/opencode/src/session/session.ts:338-343",
+          "packages/opencode/src/session/session.ts:364",
+          "packages/opencode/src/session/session.ts:387-402",
+          "packages/opencode/src/session/processor.ts:452-459"
+        ],
+        "quote": [
+          "export const getUsage = (input: { model: Provider.Model; usage: Usage; metadata?: ProviderMetadata }) => {",
+          "const adjustedInputTokens = safe(inputTokens - cacheReadInputTokens - cacheWriteInputTokens)",
+          "const totalNanoAiu = input.metadata?.[\"copilot\"]?.[\"totalNanoAiu\"]",
+          "const usage = Session.getUsage({"
+        ],
+        "modules": [
+          "packages/opencode/src/session/session.ts",
+          "packages/opencode/src/session/processor.ts",
+          "packages/opencode/src/cli/cmd/stats.ts",
+          "packages/opencode/src/acp/usage.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "installation-detection-and-auto-update",
+        "domain": "ops",
+        "what": "`Installation` detects how the binary was installed (curl when execPath lives under .opencode/bin or .local/bin, otherwise probing npm/yarn/pnpm/bun/brew/scoop/choco), resolves the latest published version per method (brew formula or formulae.brew.sh, the configured npm registry, Chocolatey, Scoop, GitHub releases) and runs the matching upgrade command - piping https://opencode.ai/install into bash/sh for curl installs. `upgrade()` in the CLI decides between silently upgrading patch releases, notifying only, or doing nothing based on `autoupdate`, OPENCODE_DISABLE_AUTOUPDATE and OPENCODE_ALWAYS_NOTIFY_UPDATE.",
+        "invariants": [
+          "Version comparison strips a leading 'v' from GitHub tags",
+          "Auto-upgrade only runs for patch releases unless config says otherwise; major/minor only notify",
+          "autoupdate === false and OPENCODE_DISABLE_AUTOUPDATE short-circuit before any network call"
+        ],
+        "failurePolicy": "fail-soft - latest() failures are caught and abort the check, upgrade errors are swallowed after emitting the update event, and choco failures surface a non-elevated-shell hint.",
+        "constants": [
+          "INSTALL_METHODS = curl | npm | yarn | pnpm | bun | brew | scoop | choco | unknown",
+          "BREW_AUTO_UPDATE_ENV = HOMEBREW_NO_AUTO_UPDATE=1",
+          "NPM_PACKAGE_NAME = opencode-ai",
+          "GITHUB_LATEST_URL = https://api.github.com/repos/anomalyco/opencode/releases/latest",
+          "INSTALL_SCRIPT_URL = https://opencode.ai/install"
+        ],
+        "evidence": [
+          "packages/opencode/src/installation/index.ts:174-187",
+          "packages/opencode/src/installation/index.ts:257-263",
+          "packages/opencode/src/installation/index.ts:145-149",
+          "packages/opencode/src/cli/upgrade.ts:10",
+          "packages/opencode/src/cli/upgrade.ts:30-42"
+        ],
+        "quote": [
+          "method: Effect.fn(\"Installation.method\")(function* () {",
+          "const response = yield* httpOk.execute(",
+          "const upgradeCurl = Effect.fnUntraced(",
+          "if (config.autoupdate === false || Flag.OPENCODE_DISABLE_AUTOUPDATE) return",
+          "if (config.autoupdate === \"notify\" || kind !== \"patch\") {"
+        ],
+        "modules": [
+          "packages/opencode/src/installation",
+          "packages/opencode/src/cli/upgrade.ts",
+          "packages/core/src/installation",
+          "packages/schema/src/installation-event.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "heap-snapshot-watchdog",
+        "domain": "ops",
+        "what": "A watchdog in the CLI writes a V8 heap snapshot when process RSS exceeds 2 GiB, checked once a minute, but only when `OPENCODE_AUTO_HEAP_SNAPSHOT` is enabled. It re-arms only after RSS drops back under the limit and takes at most one snapshot per above-limit episode, writing into the log directory with pid+timestamp in the filename; the interval timer is unref'd so it never keeps the process alive.",
+        "invariants": [
+          "At most one snapshot per above-limit episode (armed/lock pair)",
+          "The timer is unref'd and start() is idempotent",
+          "Snapshot write failures are ignored"
+        ],
+        "failurePolicy": "fail-open - every failure is caught and the watchdog never affects normal operation.",
+        "constants": [
+          "HEAP_WATCH_INTERVAL = 60_000 ms",
+          "HEAP_RSS_LIMIT = 2 * 1024 * 1024 * 1024 bytes"
+        ],
+        "evidence": [
+          "packages/opencode/src/cli/heap.ts:5-6",
+          "packages/opencode/src/cli/heap.ts:13",
+          "packages/opencode/src/cli/heap.ts:19-24",
+          "packages/opencode/src/cli/heap.ts:39-42"
+        ],
+        "quote": [
+          "const MINUTE = 60_000",
+          "if (!Flag.OPENCODE_AUTO_HEAP_SNAPSHOT) return",
+          "const stat = process.memoryUsage()",
+          "timer = setInterval(() => {"
+        ],
+        "modules": [
+          "packages/opencode/src/cli/heap.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "runtime-flag-registry",
+        "domain": "ops",
+        "what": "Runtime configuration is read from environment variables through two layers: the eager `Flag` object (module-load-time process.env snapshots plus lazily evaluated getters) and the `RuntimeFlags` Effect ConfigService (parsed with Config.boolean/Config.number at layer build). Flags gate models fetching, sharing, server password, experimental surfaces (references, workspaces, background subagents, plan/code mode, native LLM, WebSockets) and numeric limits such as OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX.",
+        "invariants": [
+          "Truthiness is exactly \"true\" or \"1\" (case-insensitive)",
+          "OPENCODE_EXPERIMENTAL acts as an umbrella default for enabledByExperimental flags unless the specific variable is set",
+          "Flags documented as access-time must stay getters because tests/tools set env after module load"
+        ],
+        "failurePolicy": "fail-soft - invalid numbers resolve to undefined, unset booleans to false, and no flag failure aborts startup.",
+        "constants": [
+          "TRUTHY_VALUES = \"true\" | \"1\"",
+          "OPENCODE_CLIENT_DEFAULT = \"cli\"",
+          "OPENCODE_DISABLE_FFF_DEFAULT = platform === \"win32\"",
+          "OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX = positive integer only",
+          "OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS = positive integer only"
+        ],
+        "evidence": [
+          "packages/core/src/flag/flag.ts:3-6",
+          "packages/core/src/flag/flag.ts:11-13",
+          "packages/core/src/flag/flag.ts:34",
+          "packages/opencode/src/effect/runtime-flags.ts:4-8",
+          "packages/opencode/src/effect/runtime-flags.ts:52"
+        ],
+        "quote": [
+          "export function truthy(key: string) {",
+          "function enabledByExperimental(key: string) {",
+          "OPENCODE_DISABLE_FFF: fff === undefined ? process.platform === \"win32\" : truthy(\"OPENCODE_DISABLE_FFF\"),",
+          "const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))",
+          "outputTokenMax: positiveInteger(\"OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX\"),"
+        ],
+        "modules": [
+          "packages/core/src/flag/flag.ts",
+          "packages/opencode/src/effect/runtime-flags.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "debug-diagnostics-commands",
+        "domain": "ops",
+        "what": "`opencode debug` groups troubleshooting subcommands: `info` prints version, OS, terminal and either the plugin list or why plugins are disabled (OPENCODE_PURE), `paths` prints every Global.Path entry (data/config/cache/state/log), `startup` prints elapsed boot time, `wait` blocks forever for attach debugging, and config/lsp/ripgrep/file/scrap/skill/snapshot/agent/v2 inspectors expose individual services.",
+        "invariants": [
+          "debug info never leaks secrets - it prints plugin specifiers only",
+          "Diagnostics must run without a project instance",
+          "paths enumerates Global.Path keys dynamically rather than a hardcoded list"
+        ],
+        "failurePolicy": "fail-soft - diagnostics read local state and print placeholders (\"unknown\", \"none\") instead of failing.",
+        "constants": [
+          "DEBUG_SUBCOMMANDS = info, paths, startup, wait, config, lsp, ripgrep, file, scrap, skill, snapshot, agent, v2",
+          "DEBUG_WAIT_DURATION = 1 day"
+        ],
+        "evidence": [
+          "packages/opencode/src/cli/cmd/debug/index.ts:19-39",
+          "packages/opencode/src/cli/cmd/debug/index.ts:61-75",
+          "packages/opencode/src/cli/cmd/debug/index.ts:79-87",
+          "packages/opencode/src/cli/cmd/debug/index.ts:41-47"
+        ],
+        "quote": [
+          "export const DebugCommand = cmd({",
+          "console.log(`opencode version: ${InstallationVersion}`)",
+          "const PathsCommand = cmd({",
+          "const WaitCommand = effectCmd({"
+        ],
+        "modules": [
+          "packages/opencode/src/cli/cmd/debug"
+        ],
+        "verified": true
+      }
+    ],
+    "retrieval": [
+      {
+        "name": "file-read-search-surface",
+        "domain": "retrieval",
+        "what": "File and text retrieval for clients: `fs.read` streams bytes with the detected MIME type, `fs.list` and `fs.find` delegate to the `FileSystem` service whose search layer is either the native fff index or the ripgrep fallback (`FileSystemSearch.ripgrepLayer` builds an in-memory file/directory index at startup, capped when the location is not a VCS checkout). Fuzzy match uses fuzzysort on the ripgrep path and fff's scored search otherwise; grep uses ripgrep with a 10-hit limit for the legacy findText route and fff with a 1.5 s time budget and 2000-char line truncation.",
+        "invariants": [
+          "fs.read paths are URL-decoded and resolved relative to the instance directory",
+          "Results are re-anchored with path.relative so they never escape the location directory",
+          "grep/glob/find limits must be positively validated by the route schema (1..200 for find-file)"
+        ],
+        "failurePolicy": "fail-soft - if the fff index cannot be created the service logs a warning and returns empty result sets; the ripgrep path Effect.orDie on index build failure.",
+        "constants": [
+          "FIND_TEXT_LIMIT = 10",
+          "FIND_FILE_DEFAULT_LIMIT = 10",
+          "FIND_FILE_LIMIT_RANGE = 1..200",
+          "FIND_DEFAULT_LIMIT = 50",
+          "RIPGREP_INDEX_LIMIT_NO_VCS = 100_000",
+          "FFF_GREP_TIME_BUDGET_MS = 1_500",
+          "GREP_LINE_TRUNCATE = 2_000"
+        ],
+        "evidence": [
+          "packages/server/src/handlers/fs.ts:12-21",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/file.ts:27-30",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/file.ts:30-32",
+          "packages/core/src/filesystem/search.ts:39",
+          "packages/core/src/filesystem/search.ts:170",
+          "packages/core/src/filesystem/search.ts:182"
+        ],
+        "quote": [
+          ".handleRaw(\"fs.read\", (ctx) =>",
+          "const findText = Effect.fn(\"FileHttpApi.findText\")(function* (ctx: { query: { pattern: string } }) {",
+          "limit: Schema.optional(",
+          "limit: location.vcs ? Number.MAX_SAFE_INTEGER : 100_000,",
+          "{ mode: \"regex\", pageSize: input.limit, timeBudgetMs: 1_500 },",
+          "text: match.lineContent.length > 2_000 ? match.lineContent.slice(0, 2_000) + \"...\" : match.lineContent,"
+        ],
+        "modules": [
+          "packages/core/src/filesystem",
+          "packages/server/src/handlers/fs.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/file.ts",
+          "packages/core/src/ripgrep"
+        ],
+        "verified": true
+      },
+      {
+        "name": "session-search-and-lineage",
+        "domain": "retrieval",
+        "what": "Session retrieval combines listing, search and lineage. `Session.list`/`listGlobal` filter by directory, roots (parent_id IS NULL), updated-time window (start/cursor), archived flag and a case-insensitive LIKE match on the session title, ordered by time_updated desc with a default limit of 100; `Session.children` returns sub-sessions by parent_id, which is the subagent lineage tree also used by fork and compaction.",
+        "invariants": [
+          "Search stays a title LIKE match - there is no full-text index",
+          "Default page size is 100 rows",
+          "Roots filtering uses parent_id IS NULL; child sessions are excluded unless requested"
+        ],
+        "failurePolicy": "fail-closed - database errors Effect.orDie rather than returning a partial list.",
+        "constants": [
+          "SESSION_LIST_DEFAULT_LIMIT = 100"
+        ],
+        "evidence": [
+          "packages/opencode/src/session/session.ts:555-574",
+          "packages/opencode/src/session/session.ts:596-603",
+          "packages/opencode/src/session/session.ts:991-995"
+        ],
+        "quote": [
+          "const listGlobal = Effect.fn(\"Session.listGlobal\")(function* (input?: GlobalListInput) {",
+          "const children = Effect.fn(\"Session.children\")(function* (parentID: SessionID) {",
+          "if (input.search) {"
+        ],
+        "modules": [
+          "packages/opencode/src/session/session.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/session.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "reference-source-materialization",
+        "domain": "retrieval",
+        "what": "Project references are extra directories (local paths or git repositories) the agent may consult. `Reference` materializes each source on state finalize: local sources pass through, git sources are parsed and validated (Repository.parse, isRemote, validateBranch) and mapped to a cache path under the global repos dir, then RepositoryCache.ensure({ refresh: true }) clones or fetches in the background. `ReferenceGuidance` turns the list into an injectable SystemContext block rendering <available_references> with baseline/update/removed variants.",
+        "invariants": [
+          "Invalid/non-remote repositories and invalid branch names are skipped, never materialized",
+          "Repository cache warming is forked so a slow clone never blocks state finalization",
+          "Only references that declare a description are surfaced to the model"
+        ],
+        "failurePolicy": "fail-soft - materialization failures are logged (\"failed to materialize reference\") and the reference is simply absent; the guidance block is omitted when the list is empty.",
+        "constants": [
+          "REFERENCE_GUIDANCE_KEY = \"core/reference-guidance\""
+        ],
+        "evidence": [
+          "packages/core/src/reference.ts:75-83",
+          "packages/core/src/reference.ts:94-103",
+          "packages/core/src/reference/guidance.ts:41-49",
+          "packages/core/src/reference/guidance.ts:50-61"
+        ],
+        "quote": [
+          "const repository = Repository.parse(source.repository)",
+          "yield* cache.ensure({ reference: repository, branch: source.branch, refresh: true }).pipe(",
+          "const available = (yield* references.list())",
+          "return SystemContext.make({"
+        ],
+        "modules": [
+          "packages/core/src/reference.ts",
+          "packages/core/src/reference",
+          "packages/core/src/repository-cache.ts",
+          "packages/core/src/system-context"
+        ],
+        "verified": true
+      },
+      {
+        "name": "image-attachment-normalization",
+        "domain": "retrieval",
+        "what": "`Image.normalize` validates that a file part is a data:...;base64, URL, decodes it with the photon WASM decoder, and - when it exceeds the configured width/height or base64 byte limits - downscales with Lanczos3 across up to 32 shrinking candidate sizes, trying PNG and JPEG at qualities [80, 85, 70, 55, 40] until one fits. Limits are configurable under `attachment.image` with hard defaults.",
+        "invariants": [
+          "Input must be a base64 data URL; other URLs are rejected with ImageInvalidDataUrlError",
+          "With auto_resize disabled an oversized image must fail with ImageSizeError instead of being resized",
+          "Decoded WASM images are always freed"
+        ],
+        "failurePolicy": "fail-closed - decode, size and resizer-unavailable conditions raise typed errors, so a caller cannot send an oversized unnormalized image.",
+        "constants": [
+          "MAX_BASE64_BYTES = 5 * 1024 * 1024",
+          "MAX_WIDTH = 2000",
+          "MAX_HEIGHT = 2000",
+          "AUTO_RESIZE = true",
+          "JPEG_QUALITIES = [80, 85, 70, 55, 40]",
+          "MAX_RESIZE_CANDIDATES = 32",
+          "SHRINK_FACTOR = 0.75"
+        ],
+        "evidence": [
+          "packages/opencode/src/image/image.ts:10-14",
+          "packages/opencode/src/image/image.ts:83-84",
+          "packages/opencode/src/image/image.ts:99-110",
+          "packages/opencode/src/image/image.ts:111-135"
+        ],
+        "quote": [
+          "const MAX_BASE64_BYTES = 5 * 1024 * 1024",
+          "if (!input.url.startsWith(\"data:\") || !input.url.includes(\";base64,\"))",
+          "if (originalWidth <= info.maxWidth && originalHeight <= info.maxHeight && bytes <= info.maxBase64Bytes)",
+          "const scale = Math.min(1, info.maxWidth / originalWidth, info.maxHeight / originalHeight)"
+        ],
+        "modules": [
+          "packages/opencode/src/image/image.ts",
+          "packages/core/src/image"
+        ],
+        "verified": true
+      },
+      {
+        "name": "question-answer-surface",
+        "domain": "retrieval",
+        "what": "The `Question` service is the backend surface for asking the user something mid-turn: `ask` allocates a QuestionID, stores {info, Deferred} in instance state and publishes Question.Asked, then awaits the deferred; `reply` publishes Question.Replied with the answers and completes it, `reject` publishes Question.Rejected and fails it with RejectedError; `list` exposes outstanding requests. On instance disposal every pending question is failed so no fiber hangs.",
+        "invariants": [
+          "A question always settles: reply, reject or instance disposal",
+          "Replies for unknown request ids are logged and answered with Question.NotFoundError, not silently dropped",
+          "Pending entries are removed from state exactly once"
+        ],
+        "failurePolicy": "fail-closed - a dismissed question raises QuestionRejectedError to the asking tool and unknown ids raise Question.NotFoundError.",
+        "constants": [
+          "QUESTION_ID_PREFIX = \"que_\"",
+          "QUESTION_EVENTS = question.asked, question.replied, question.rejected"
+        ],
+        "evidence": [
+          "packages/opencode/src/question/index.ts:87-112",
+          "packages/opencode/src/question/index.ts:114-132",
+          "packages/opencode/src/question/index.ts:134-148",
+          "packages/opencode/src/question/index.ts:74-81",
+          "packages/schema/src/question.ts:10"
+        ],
+        "quote": [
+          "const ask = Effect.fn(\"Question.ask\")(function* (input: {",
+          "const reply = Effect.fn(\"Question.reply\")(function* (input: {",
+          "const reject = Effect.fn(\"Question.reject\")(function* (requestID: QuestionID) {",
+          "yield* Effect.addFinalizer(() =>",
+          "export const ID = Schema.String.check(Schema.isStartsWith(\"que\")).pipe("
+        ],
+        "modules": [
+          "packages/opencode/src/question",
+          "packages/schema/src/question.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/question.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "session-share-upload",
+        "domain": "retrieval",
+        "what": "Sharing publishes a session to a remote service. `SessionShare.share` refuses when share === \"disabled\", creates a share via ShareNext.create (secret + url) and stores the URL on the session; `ShareNext` queues session/message/part/model/session_diff payloads keyed by resource and flushes them to POST <baseUrl>/api/<resource>/<id>/sync after a 1 s debounce, choosing either the enterprise URL (default https://opncd.ai) with no auth or the active account's Console URL with Authorization: Bearer plus x-org-id.",
+        "invariants": [
+          "OPENCODE_DISABLE_SHARE short-circuits all network activity",
+          "Flush is debounced per session and never blocks event delivery",
+          "Only the newest payload per resource key is uploaded"
+        ],
+        "failurePolicy": "fail-soft - flush failures are logged (\"share flush failed\") and dropped, auto-share is forked and ignored, while an explicit share call propagates errors to the caller.",
+        "constants": [
+          "SHARE_FLUSH_DEBOUNCE_MS = 1000",
+          "DEFAULT_SHARE_BASE_URL = \"https://opncd.ai\"",
+          "LEGACY_SHARE_API = /api/share",
+          "CONSOLE_SHARE_API = /api/shares",
+          "SHARE_DISABLED_ENV = OPENCODE_DISABLE_SHARE in {true, 1}"
+        ],
+        "evidence": [
+          "packages/opencode/src/share/share-next.ts:23",
+          "packages/opencode/src/share/share-next.ts:141-145",
+          "packages/opencode/src/share/share-next.ts:206-221",
+          "packages/opencode/src/share/session.ts:26-32",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/session.ts:279-282"
+        ],
+        "quote": [
+          "const disabled = process.env[\"OPENCODE_DISABLE_SHARE\"] === \"true\" || process.env[\"OPENCODE_DISABLE_SHARE\"] === \"1\"",
+          "yield* flush(sessionID).pipe(",
+          "const request = Effect.fn(\"ShareNext.request\")(function* () {",
+          "const share = Effect.fn(\"SessionShare.share\")(function* (sessionID: SessionID) {",
+          "HttpApiEndpoint.post(\"share\", SessionPaths.share, {"
+        ],
+        "modules": [
+          "packages/opencode/src/share",
+          "packages/core/src/share"
+        ],
+        "verified": true
+      },
+      {
+        "name": "attachment-modality-gating",
+        "domain": "retrieval",
+        "what": "Before a request is sent, `ProviderTransform.message` runs `unsupportedParts`, which classifies each file/image part's MIME type through `mimeToModality` (image/, audio/, video/, application/pdf) and, when the target model's capabilities.input[modality] is false, replaces the part with explicit error text telling the model it cannot read that input; empty base64 images are replaced with a corruption notice. `normalizeMessages` additionally rewrites interleaved reasoning fields per provider.",
+        "invariants": [
+          "Unsupported attachments become text, never silently dropped nor sent anyway",
+          "Empty base64 image payloads must be detected before the part reaches the SDK",
+          "Only user-role content arrays are rewritten"
+        ],
+        "failurePolicy": "fail-soft - the request still goes out, with the attachment replaced by an explanatory text part.",
+        "constants": [
+          "SUPPORTED_MODALITIES = text, audio, image, video, pdf"
+        ],
+        "evidence": [
+          "packages/opencode/src/provider/transform.ts:10-16",
+          "packages/opencode/src/provider/transform.ts:409-441",
+          "packages/opencode/src/provider/transform.ts:322-330"
+        ],
+        "quote": [
+          "function mimeToModality(mime: string): Modality | undefined {",
+          "function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {",
+          "typeof model.capabilities.interleaved === \"object\" &&"
+        ],
+        "modules": [
+          "packages/opencode/src/provider/transform.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "instruction-file-ingestion",
+        "domain": "retrieval",
+        "what": "Project and user instruction files are ingested into the system prompt and attached lazily to file reads. `Instruction.systemPaths` collects global AGENTS.md and ~/.claude/CLAUDE.md, the first matching project-level AGENTS.md/CLAUDE.md/CONTEXT.md found walking up from the instance directory, and every path from `config.instructions` (absolute, ~/, glob or relative); `Instruction.system` reads local files (concurrency 8) and http(s) instruction URLs (concurrency 4), wrapping each as \"Instructions from: <path>\". `Instruction.resolve` walks upward from a file the agent reads and attaches the nearest instruction file at most once per assistant message.",
+        "invariants": [
+          "The first project-level instruction file wins - ancestors are not stacked",
+          "An instruction file is attached at most once per message (claims map)",
+          "Files already in the system prompt or already loaded by the read tool are not re-attached"
+        ],
+        "failurePolicy": "fail-soft - read/glob/findUp failures become empty results, so a missing instruction file never breaks a turn.",
+        "constants": [
+          "INSTRUCTION_FILE_NAMES = AGENTS.md, CLAUDE.md, CONTEXT.md (deprecated)",
+          "INSTRUCTION_READ_CONCURRENCY = 8",
+          "INSTRUCTION_URL_CONCURRENCY = 4"
+        ],
+        "evidence": [
+          "packages/opencode/src/session/instruction.ts:60-68",
+          "packages/opencode/src/session/instruction.ts:122-133",
+          "packages/opencode/src/session/instruction.ts:162-163",
+          "packages/opencode/src/session/instruction.ts:193-215"
+        ],
+        "quote": [
+          "const globalFiles = [",
+          "// The first project-level match wins so we don't stack AGENTS.md/CLAUDE.md from every ancestor.",
+          "const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })",
+          "// Walk upward from the file being read and attach nearby instruction files once per message."
+        ],
+        "modules": [
+          "packages/opencode/src/session/instruction.ts",
+          "packages/opencode/src/session/system.ts",
+          "packages/core/src/system-context"
+        ],
+        "verified": true
+      }
+    ],
+    "interface": [
+      {
+        "name": "event-envelope-contract",
+        "domain": "interface",
+        "what": "What a renderer consumes is a versioned envelope: every event is { id, type, properties } (internally { id, type, data, durable?, location?, metadata? }), serialized as one SSE `message` frame whose data is JSON. A subscription opens with server.connected, emits server.heartbeat on an interval, and ends with server.instance.disposed; `EventV2Bridge` attaches the instance/workspace location before publishing so a single global bus can be filtered per directory.",
+        "invariants": [
+          "Event ids always carry the evt_ prefix",
+          "server.connected must be the first frame of a subscribe response",
+          "Location is attached at the publish boundary so consumers can route per directory/workspace"
+        ],
+        "failurePolicy": "fail-soft - unknown event types are simply not mapped, and a closed stream ends the turn rather than crashing the renderer.",
+        "constants": [
+          "EVENT_ID_PREFIX = \"evt_\"",
+          "HEARTBEAT_EVENT_TYPE = \"server.heartbeat\"",
+          "CONNECTED_EVENT_TYPE = \"server.connected\"",
+          "DISPOSED_EVENT_TYPE = \"server.instance.disposed\""
+        ],
+        "evidence": [
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts:40",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts:12-19",
+          "packages/schema/src/event.ts:9-12",
+          "packages/schema/src/event.ts:29-40",
+          "packages/opencode/src/server/event.ts:6-9",
+          "packages/opencode/src/event-v2-bridge.ts:35-45"
+        ],
+        "quote": [
+          "Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),",
+          "function eventData(data: unknown): Sse.Event {",
+          "export const ID = Schema.String.check(Schema.isStartsWith(\"evt_\")).pipe(",
+          "export type Payload<D extends Definition = Definition> = {",
+          "export const InstanceDisposed = Schema.Struct({",
+          "const unsubscribe = yield* events.listen((event) =>"
+        ],
+        "modules": [
+          "packages/schema/src/event.ts",
+          "packages/opencode/src/server/event.ts",
+          "packages/opencode/src/event-v2-bridge.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/event.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "versioned-event-manifest",
+        "domain": "interface",
+        "what": "The set of events a renderer may receive is a compiled manifest rather than an ad-hoc union. `Event.define` declares a typed event with an optional durable {version, aggregate}, `Event.inventory` freezes a definition list, `Event.latest` rejects duplicate definitions of the same type (keeping the highest durable version) and `Event.durable` rejects duplicate type.version pairs. `packages/schema/src/event-manifest.ts` composes foundation/feature/live definitions into ServerDefinitions and Definitions (+ Latest), and the HTTP API turns Latest into its response schema union.",
+        "invariants": [
+          "Duplicate definitions of the same event type must throw unless they are durable versions of each other",
+          "Durable events must be versioned and declare a stable aggregate field name",
+          "The server-facing manifest excludes live-only definitions the server does not emit"
+        ],
+        "failurePolicy": "fail-closed - a duplicate or conflicting definition throws at module evaluation, so a bad manifest cannot boot.",
+        "constants": [
+          "DURABLE_TYPE_FORMAT = `<type>.<version>`"
+        ],
+        "evidence": [
+          "packages/schema/src/event.ts:42-70",
+          "packages/schema/src/event.ts:76-92",
+          "packages/schema/src/event.ts:94-96",
+          "packages/schema/src/event-manifest.ts:34-44",
+          "packages/schema/src/event-manifest.ts:57-61",
+          "packages/opencode/src/server/routes/instance/httpapi/api.ts:35-46"
+        ],
+        "quote": [
+          "export function define<",
+          "export function latest(definitions: ReadonlyArray<Definition>) {",
+          "export function versionedType(type: string, version: number) {",
+          "const sessionV1DurableDefinitions = SessionV1.Event.Definitions.filter((definition) => definition.durable !== undefined)",
+          "export const ServerDefinitions = Event.inventory(",
+          "const EventSchema = Schema.Union(["
+        ],
+        "modules": [
+          "packages/schema/src/event.ts",
+          "packages/schema/src/event-manifest.ts",
+          "packages/opencode/src/event-manifest.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/api.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "capability-detection-endpoint",
+        "domain": "interface",
+        "what": "Clients can ask the server which optional features are enabled instead of probing: GET /experimental/capabilities returns { backgroundSubagents } read straight from RuntimeFlags.experimentalBackgroundSubagents, so a renderer can hide UI the server would reject. Other capability-shaped facts are exposed through the same experimental group (worktrees, console org switching, tool listing with JSON schemas).",
+        "invariants": [
+          "Capabilities are derived from RuntimeFlags, not re-parsed from env in the handler",
+          "The response is additive - existing keys keep their names and meaning",
+          "Capability responses must not leak credentials or org secrets"
+        ],
+        "failurePolicy": "fail-soft - the endpoint returns booleans only and cannot fail; sibling experimental endpoints map service failures to HttpApi errors.",
+        "constants": [
+          "CAPABILITIES_PATH = /experimental/capabilities"
+        ],
+        "evidence": [
+          "packages/opencode/src/server/routes/instance/httpapi/groups/experimental.ts:90-91",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/experimental.ts:108-117",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts:39-41",
+          "packages/opencode/src/effect/runtime-flags.ts:43"
+        ],
+        "quote": [
+          "export const ExperimentalPaths = {",
+          "HttpApiEndpoint.get(\"capabilities\", ExperimentalPaths.capabilities, {",
+          "const capabilities = Effect.fn(\"ExperimentalHttpApi.capabilities\")(function* () {",
+          "experimentalBackgroundSubagents: enabledByExperimental(\"OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS\"),"
+        ],
+        "modules": [
+          "packages/opencode/src/server/routes/instance/httpapi/groups/experimental.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts",
+          "packages/opencode/src/effect/runtime-flags.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "screen-mode-policy",
+        "domain": "interface",
+        "what": "Whether presentation runs in a rich interactive layout or a plain byte stream is decided by the backend before any rendering: `opencode run` refuses --mini when stdout is not a TTY and requires a controlling terminal (falling back to CONIN$ on Windows or /dev/tty elsewhere), and the interactive path constructs the renderer with screenMode \"split-footer\", externalOutputMode \"capture-stdout\", footerHeight 4, consoleMode \"disabled\" and kitty-keyboard events on win32. Teardown restores passthrough output and main-screen mode before destroying the renderer.",
+        "invariants": [
+          "Interactive mode fails fast with a clear message when stdout is not a TTY",
+          "externalOutputMode is restored to passthrough before leaving split-footer mode",
+          "Shutdown order is footer close -> destroy -> renderer shutdown"
+        ],
+        "failurePolicy": "fail-closed - a missing TTY aborts with \"--mini requires a TTY stdout\" / \"--mini requires a controlling terminal for input\".",
+        "constants": [
+          "FOOTER_HEIGHT = 4",
+          "TARGET_FPS = 30",
+          "MAX_FPS = 60",
+          "WINDOWS_TTY_PATH = \"CONIN$\"",
+          "POSIX_TTY_PATH = \"/dev/tty\""
+        ],
+        "evidence": [
+          "packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts:35",
+          "packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts:181-195",
+          "packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts:96-102",
+          "packages/opencode/src/cli/cmd/run.ts:319-321",
+          "packages/opencode/src/cli/cmd/run/runtime.stdin.ts:20-24"
+        ],
+        "quote": [
+          "const FOOTER_HEIGHT = 4",
+          "const renderer = await createCliRenderer({",
+          "if (renderer.externalOutputMode === \"capture-stdout\") {",
+          "if (interactive && !process.stdout.isTTY) {",
+          "if (stdin.isTTY) {"
+        ],
+        "modules": [
+          "packages/opencode/src/cli/cmd/run/runtime.lifecycle.ts",
+          "packages/opencode/src/cli/cmd/run/runtime.stdin.ts",
+          "packages/opencode/src/cli/cmd/run.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "tui-control-channel",
+        "domain": "interface",
+        "what": "Attached clients drive the interactive surface through a request/response control channel instead of direct manipulation: `server/shared/tui-control.ts` holds two process-wide AsyncQueues - the server enqueues {path, body} requests via submitTuiRequest that a client polls with GET /tui/control/next, and the client submits results to POST /tui/control/response. The same /tui group exposes imperative commands (append-prompt, submit-prompt, execute-command, show-toast, select-session) and a publish endpoint restricted to declared TUI event payloads.",
+        "invariants": [
+          "Requests and responses stay FIFO - they are plain async queues with no correlation ids",
+          "Every published TUI payload must match one of the declared event data schemas",
+          "The channel must remain usable when no client is attached (next simply never resolves)"
+        ],
+        "failurePolicy": "fail-soft - a malformed publish payload is rejected with 400 while the queue state is unchanged; a missing client just leaves requests pending.",
+        "constants": [
+          "TUI_PATHS = /tui/append-prompt, open-help, open-sessions, open-themes, open-models, submit-prompt, clear-prompt, execute-command, show-toast, publish, select-session, control/next, control/response"
+        ],
+        "evidence": [
+          "packages/opencode/src/server/shared/tui-control.ts:4-27",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/tui.ts:36-50",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/tui.ts:29-34"
+        ],
+        "quote": [
+          "export const TuiRequest = Schema.Struct({",
+          "export const TuiPaths = {",
+          "export const TuiPublishPayload = Schema.Union(["
+        ],
+        "modules": [
+          "packages/opencode/src/server/shared/tui-control.ts",
+          "packages/opencode/src/server/routes/instance/httpapi/groups/tui.ts",
+          "packages/schema/src/tui-event.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "client-capability-negotiation",
+        "domain": "interface",
+        "what": "Capabilities the server cannot know are negotiated by the client at handshake. In ACP, `initialize` inspects params.clientCapabilities._meta[\"terminal-auth\"] and only then attaches _meta[\"terminal-auth\"] (command/args/label) to the advertised auth method, and the response declares protocolVersion 1 with agentCapabilities (loadSession, mcp http/sse, prompt capabilities) so the editor knows which optional methods exist before calling them.",
+        "invariants": [
+          "The server must not advertise a capability the client did not declare, and vice versa",
+          "protocolVersion changes only with a compatible capability set",
+          "Auth methods must be discoverable before authenticating"
+        ],
+        "failurePolicy": "fail-closed - an unknown auth method id raises ACPUnknownAuthMethodError and unsupported operations raise ACPUnsupportedOperationError.",
+        "constants": [
+          "ACP_PROTOCOL_VERSION = 1",
+          "CLIENT_CAPABILITY_KEY = clientCapabilities._meta[\"terminal-auth\"]"
+        ],
+        "evidence": [
+          "packages/opencode/src/acp/service.ts:102-110",
+          "packages/opencode/src/acp/service.ts:112-120",
+          "packages/opencode/src/acp/error.ts:32",
+          "packages/opencode/src/acp/error.ts:39"
+        ],
+        "quote": [
+          "if (params.clientCapabilities?._meta?.[\"terminal-auth\"] === true) {",
+          "const response = {",
+          "export class UnknownAuthMethodError extends Schema.TaggedErrorClass<UnknownAuthMethodError>()(",
+          "export class UnsupportedOperationError extends Schema.TaggedErrorClass<UnsupportedOperationError>()("
+        ],
+        "modules": [
+          "packages/opencode/src/acp/service.ts",
+          "packages/opencode/src/acp/error.ts"
+        ],
+        "verified": true
+      },
+      {
+        "name": "renderer-stream-transport",
+        "domain": "interface",
+        "what": "The interactive renderer consumes one long-lived event stream through a transport object exposing runPromptTurn, selectSubagent, replayOnResize and close; events are correlated to a session by a `sid` extractor that reads sessionID from message.updated, message.part.delta/updated, shell events, permission.*, question.*, session.error and session.status payloads. Turn completion is signalled by session.status transitioning to idle, which is why ACP's runUntilIdle and the footer turn loop both wait on that event rather than on an HTTP response.",
+        "invariants": [
+          "Every event the renderer cares about must carry a resolvable session id",
+          "A turn is finished only when the session reports idle or the turn is aborted",
+          "Re-subscription after resize replay must not lose event ordering"
+        ],
+        "failurePolicy": "mixed - a closed event stream fails the pending turn with an error (\"global event stream closed\") unless an abort or footer close was requested.",
+        "constants": [],
+        "evidence": [
+          "packages/opencode/src/cli/cmd/run/stream.transport.ts:102-107",
+          "packages/opencode/src/cli/cmd/run/stream.transport.ts:135-157",
+          "packages/opencode/src/acp/event.ts:93-106",
+          "packages/opencode/src/acp/event.ts:74-91"
+        ],
+        "quote": [
+          "export type SessionTransport = {",
+          "function sid(event: Event): string | undefined {",
+          "async handle(event: Event) {",
+          "async runUntilIdle<A>(sessionId: string, request: () => Promise<A>) {"
+        ],
+        "modules": [
+          "packages/opencode/src/cli/cmd/run/stream.transport.ts",
+          "packages/opencode/src/acp/event.ts"
+        ],
+        "verified": true
+      }
+    ]
+  }
+}
