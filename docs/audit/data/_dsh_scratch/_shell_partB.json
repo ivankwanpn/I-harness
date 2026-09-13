@@ -1,0 +1,563 @@
+{
+  "group": "subprocess/* (packages/subprocess/subprocess, packages/subprocess/subprocess-local)",
+  "mechanisms": [
+    {
+      "name": "subprocess-spawn-abstraction",
+      "what": "`SubprocessRuntime` is an abstract Cordis `Service` registered as `subprocess` (ctx.subprocess) with three abstract members: `resolveExecutable(command, env?, signal?)`, `spawn(spec): SubprocessHandle` (synchronous, returns a live handle) and `spawnTerminal(spec): Promise<SubprocessTerminalHandle>`. `SubprocessSpawnSpec` is fully explicit — `argv`, `cwd`, per-stream `stdio` (stdin: 'ignore' | 'pipe' | {data}, stdout/stderr: 'pipe' | 'inherit' | SubprocessCollect), `graceMs`, `signal`, `env` — and the seam applies NO defaults. `SubprocessHandle` exposes raw `stdin`/`stdout`/`stderr`, offset-based `collected` readers that stay readable after exit, a `done` promise of `{exitCode, signal}`, `terminate()`, and `waitForExit(signal?)`.",
+      "invariants": [
+        "This seam applies no defaults: every disposition, limit, and directory is explicit, so the caller's own config — not a hidden subprocess-service default — decides them (packages/subprocess/subprocess/src/types.ts:69-74)",
+        "Executable paths belong to one execution world shared with the mounted filesystem provider. (packages/subprocess/subprocess/src/index.ts:93-94)",
+        "Collected output remains readable after exit; piped streams belong to the caller. (packages/subprocess/subprocess/src/types.ts:160-162)"
+      ],
+      "failurePolicy": "fail-closed — one implementation per context (a second registration throws, packages/subprocess/subprocess/src/index.ts:88-90); `spawn` throws synchronously for a pre-aborted signal or invalid argv/cwd/env/grace (packages/subprocess/subprocess/src/index.ts:142); `done` rejects for spawn or provider failures.",
+      "constants": [
+        { "value": "['ignore', 'pipe', { data }]", "where": "packages/subprocess/subprocess/src/types.ts:36", "meaning": "SubprocessStdinMode union; 'ignore' leaves fd 0 on /dev/null" },
+        { "value": "['pipe', 'inherit', SubprocessCollect]", "where": "packages/subprocess/subprocess/src/types.ts:60", "meaning": "SubprocessOutputMode union" },
+        { "value": "['SIGINT','SIGTERM','SIGKILL','SIGTSTP','SIGHUP']", "where": "packages/subprocess/subprocess/src/types.ts:199", "meaning": "SubprocessTerminalSignal — member-identical to TerminalSignal in dsh-terminal, 'change both together'" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess/src/index.ts:115",
+        "packages/subprocess/subprocess/src/index.ts:117",
+        "packages/subprocess/subprocess/src/index.ts:131",
+        "packages/subprocess/subprocess/src/index.ts:144",
+        "packages/subprocess/subprocess/src/index.ts:153",
+        "packages/subprocess/subprocess/src/types.ts:36",
+        "packages/subprocess/subprocess/src/types.ts:44",
+        "packages/subprocess/subprocess/src/types.ts:60",
+        "packages/subprocess/subprocess/src/types.ts:75",
+        "packages/subprocess/subprocess/src/types.ts:90",
+        "packages/subprocess/subprocess/src/types.ts:114",
+        "packages/subprocess/subprocess/src/types.ts:140",
+        "packages/subprocess/subprocess/src/types.ts:167",
+        "packages/subprocess/subprocess/src/types.ts:183",
+        "packages/subprocess/subprocess/src/types.ts:191",
+        "packages/subprocess/subprocess/src/types.ts:233"
+      ],
+      "verified": true
+    },
+    {
+      "name": "credential-and-managed-env-scrubbing",
+      "what": "`scrubbedParentEnv()` builds the canonical base environment for every harness child: it copies `process.env` entries excluding any key matching `SENSITIVE_ENV_PATTERN` and any key whose uppercase form starts with `DSH_ENV_PREFIX`, then overlays `proxyEnvironmentForChild()` (adding the child Node proxy flag and restoring each proxy name to the user's exported value, using `undefined` to delete names the user never set). `childEnv(extra)` layers explicit caller entries on top — on win32 it first removes every inherited key whose uppercase form equals the override's uppercase form, so a lowercase `dsh_*` inherited on Windows cannot shadow the managed value. `targetEnvironment(spec)` materializes and null-byte-validates argv, cwd and every env key/value.",
+      "invariants": [
+        "Credential-shaped environment names are NOT forwarded to children ... a deliberately supplied entry survives because explicit env layers merge after the scrub. (packages/subprocess/subprocess/src/index.ts:39-43)",
+        "Windows environment names are case-insensitive, so a parent `dsh_*` entry would otherwise survive and read back as `$env:DSH_*` in the child (packages/subprocess/subprocess/src/index.ts:53-55)"
+      ],
+      "failurePolicy": "fail-closed — `targetEnvironment` throws a `TypeError` with `code: 'ERR_INVALID_ARG_VALUE'` for any null byte in argv, cwd, env key or env value (packages/subprocess/subprocess-local/src/runner-launch.ts:274-283).",
+      "constants": [
+        { "value": "/KEY|PASSWORD|SECRET|TOKEN/i", "where": "packages/subprocess/subprocess/src/index.ts:45", "meaning": "SENSITIVE_ENV_PATTERN — one heuristic for every in-repo spawner" },
+        { "value": "'DSH_'", "where": "packages/subprocess/subprocess/src/types.ts:13", "meaning": "DSH_ENV_PREFIX — reserved namespace stripped from the ambient base" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess/src/index.ts:45",
+        "packages/subprocess/subprocess/src/index.ts:64",
+        "packages/subprocess/subprocess/src/index.ts:67",
+        "packages/subprocess/subprocess/src/index.ts:73",
+        "packages/subprocess/subprocess/src/index.ts:74",
+        "packages/subprocess/subprocess/src/types.ts:13",
+        "packages/subprocess/subprocess-local/src/spawn.ts:46",
+        "packages/subprocess/subprocess-local/src/spawn.ts:48",
+        "packages/subprocess/subprocess-local/src/spawn.ts:52",
+        "packages/subprocess/subprocess-local/src/runner-launch.ts:282",
+        "packages/subprocess/subprocess-local/src/runner-launch.ts:290"
+      ],
+      "verified": true
+    },
+    {
+      "name": "subprocess-service-disposal-and-host-exit-termination",
+      "what": "`LocalSubprocessRuntime` keeps every live handle in `live: Set<LocalSubprocessHandle>` and every terminal in `terminals: Set<LocalTerminalHandle>`. Its constructor installs `ctx.effect` that registers `process.prependListener('exit', onHostExit)` and, on disposal, runs `disposeManagedProcesses()` then removes the listener. `disposeManagedProcesses` calls `handle.terminate()` on each handle then awaits BOTH `handle.done` and `handle.waitForExit()` for the same managed range (explicitly not just direct-child settlement), plus `terminal.terminate()`; it aggregates failures, and if ANY failed it falls back to the synchronous `terminateForHostExit()` before rethrowing the single failure or an `AggregateError('local subprocess teardown failed')`. Ownership is released only when the managed range is gone (`handle.waitForExit().then(() => live.delete(handle))`).",
+      "invariants": [
+        "Request termination, then await MANAGED-RANGE exit — not just the direct command's settlement — so even a surviving descendant cannot outlive the fiber. (packages/subprocess/subprocess-local/src/index.ts:95-98)",
+        "Disposal of the service terminates all still-running managed processes and awaits their exit. (packages/subprocess/subprocess/src/index.ts:107-108)",
+        "Release ownership only once the whole managed range is gone, not at direct-child settlement — a TERM-trapping helper that outlives the leader must stay owned so teardown can still escalate it. (packages/subprocess/subprocess-local/src/index.ts:179-182)"
+      ],
+      "failurePolicy": "fail-closed — disposal awaits real range quiescence and rethrows (single failure or `AggregateError`) after a synchronous force-kill fallback; the host-exit listener itself swallows per-target errors so one target cannot stop the rest.",
+      "constants": [
+        { "value": "new AggregateError(failures, 'local subprocess teardown failed')", "where": "packages/subprocess/subprocess-local/src/index.ts:119", "meaning": "thrown when more than one teardown target failed" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/index.ts:53",
+        "packages/subprocess/subprocess-local/src/index.ts:55",
+        "packages/subprocess/subprocess-local/src/index.ts:67",
+        "packages/subprocess/subprocess-local/src/index.ts:69",
+        "packages/subprocess/subprocess-local/src/index.ts:94",
+        "packages/subprocess/subprocess-local/src/index.ts:101",
+        "packages/subprocess/subprocess-local/src/index.ts:104",
+        "packages/subprocess/subprocess-local/src/index.ts:112",
+        "packages/subprocess/subprocess-local/src/index.ts:117",
+        "packages/subprocess/subprocess-local/src/index.ts:119",
+        "packages/subprocess/subprocess-local/src/index.ts:183",
+        "packages/subprocess/subprocess/src/index.ts:107"
+      ],
+      "verified": true
+    },
+    {
+      "name": "subprocess-executable-resolution",
+      "what": "`LocalSubprocessRuntime.resolveExecutable` rejects an empty command; throws for a relative command containing a separator (`/`, or `\\` on win32) because the resolution base is undefined; builds candidates via `executableCandidates` (PATH from the scrubbed env split on `path.delimiter`, joined with `process.cwd()`, and on win32 with no extension expanded over `PATHEXT`); then for each candidate `stat`s it, requires `isFile()`, and `access(candidate, constants.X_OK)`, returning the first hit. Windows paths go through `resolveWindowsExecutable`, which reimplements the libuv/Node search order (cwd root unless `NODEFAULTCURRENTDIRECTORYINEXEPATH` is set, then quoted-aware PATH directories, then `.com`/`.exe` name variants).",
+      "invariants": [
+        "Relative paths containing separators are rejected: the resolution base is undefined, so providers fail loud instead of guessing. (packages/subprocess/subprocess/src/index.ts:122-125)",
+        "Resolve the executable path with libuv/Node Windows spawn search order while preserving the caller's original command-line argv entry separately. (packages/subprocess/subprocess-local/src/runner-launch.ts:232-234)"
+      ],
+      "failurePolicy": "fail-closed — one stable Error per miss: `subprocess-local: command \"…\" is not an executable file` for absolute paths, `… was not found on PATH` for bare names; a Linux bootstrap miss throws `spawn <program> ENOENT` with `errno: -2`.",
+      "constants": [
+        { "value": "'.COM;.EXE;.BAT;.CMD'", "where": "packages/subprocess/subprocess-local/src/index.ts:158", "meaning": "default PATHEXT when the env supplies none" },
+        { "value": "['.com', '.exe']", "where": "packages/subprocess/subprocess-local/src/runner-launch.ts:227-228", "meaning": "Windows extension variants appended when the name has no extension" },
+        { "value": "errno: -2", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:125", "meaning": "synthesized ENOENT errno for a missing Linux target" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/index.ts:122",
+        "packages/subprocess/subprocess-local/src/index.ts:127",
+        "packages/subprocess/subprocess-local/src/index.ts:131",
+        "packages/subprocess/subprocess-local/src/index.ts:136",
+        "packages/subprocess/subprocess-local/src/index.ts:140",
+        "packages/subprocess/subprocess-local/src/index.ts:142",
+        "packages/subprocess/subprocess-local/src/index.ts:150",
+        "packages/subprocess/subprocess-local/src/index.ts:155",
+        "packages/subprocess/subprocess-local/src/index.ts:158",
+        "packages/subprocess/subprocess-local/src/runner-launch.ts:242",
+        "packages/subprocess/subprocess-local/src/runner-launch.ts:257",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:122"
+      ],
+      "verified": true
+    },
+    {
+      "name": "tail-keep-output-collection-with-spill",
+      "what": "`OutputCollector` implements `SubprocessCollect` semantics. `push(chunk)` adds to `total`, and if the in-memory cap would overflow (or a spill file is already open) calls `spillAll` first; it then trims whole head chunks — or `subarray`s the head of a single over-cap chunk — until `bytes <= maxBytes`, setting `dropped = true`. `spillAll` opens the file lazily with a random 6-byte-hex suffix under a 0700 `mkdtempSync(join(tmpdir(), 'dsh-subprocess-'))` directory using flag `'wx'` and mode `0o600`, then writes every already-collected chunk plus the new one; once `total > maxSpillBytes` it calls `discardSpill()` which closes and unlinks the file and disables spilling permanently. `readFrom(fromByte)` computes `windowStart = total - bytes` and reports `lossy` when the requested offset slid out of the retained window (returning the whole tail instead).",
+      "invariants": [
+        "Tail-keep rationale (pi/OpenCode): errors and final results cluster at the end of command output; the spill file covers the head. (packages/subprocess/subprocess-local/src/spawn.ts:137-138)",
+        "Trim the head so the retained window is byte-exact at the cap — a diagnostic tail (an LSP server's stderr) must hold the LAST maxBytes regardless of how the stream was chunked. (packages/subprocess/subprocess-local/src/spawn.ts:181-183)",
+        "Predictable world-readable paths would let other local users read command output or pre-create symlinks. (packages/subprocess/subprocess-local/src/spawn.ts:97-99)"
+      ],
+      "failurePolicy": "fail-soft — overflow is normal operation (tail retained, `truncated`/`lossy` flag set, spill path advertised when intact); a failed spill-file close silently stops advertising the path while in-memory reads keep working (packages/subprocess/subprocess-local/src/spawn.ts:263-273).",
+      "constants": [
+        { "value": "0o600", "where": "packages/subprocess/subprocess-local/src/spawn.ts:205", "meaning": "spill file creation mode (openSync(..., 'wx', 0o600))" },
+        { "value": "randomBytes(6)", "where": "packages/subprocess/subprocess-local/src/spawn.ts:203", "meaning": "12 hex chars of randomness in the spill file name" },
+        { "value": "'dsh-subprocess-'", "where": "packages/subprocess/subprocess-local/src/spawn.ts:104", "meaning": "mkdtemp prefix for the 0700 per-process spill directory" },
+        { "value": "Math.min(count, 1024) * 8", "where": "packages/subprocess/subprocess-local/src/process-inspector.ts:282", "meaning": "upper bound on the pollfd array memory read (unrelated to spill but the only 1024 constant in the package)" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/spawn.ts:140",
+        "packages/subprocess/subprocess-local/src/spawn.ts:167",
+        "packages/subprocess/subprocess-local/src/spawn.ts:169",
+        "packages/subprocess/subprocess-local/src/spawn.ts:173",
+        "packages/subprocess/subprocess-local/src/spawn.ts:184",
+        "packages/subprocess/subprocess-local/src/spawn.ts:193",
+        "packages/subprocess/subprocess-local/src/spawn.ts:203",
+        "packages/subprocess/subprocess-local/src/spawn.ts:205",
+        "packages/subprocess/subprocess-local/src/spawn.ts:243",
+        "packages/subprocess/subprocess-local/src/spawn.ts:246",
+        "packages/subprocess/subprocess-local/src/spawn.ts:279",
+        "packages/subprocess/subprocess-local/src/spawn.ts:104",
+        "packages/subprocess/subprocess/src/types.ts:44"
+      ],
+      "verified": true
+    },
+    {
+      "name": "subprocess-termination-escalation",
+      "what": "`bindManagedProcess` centralizes the ladder. `terminateWithReason` is one-shot (`terminationStarted` guard): it starts the range-exit observation, calls `kill('SIGTERM', reason)` on the platform owner, then arms `graceTimer = setTimeout(() => kill('SIGKILL'), spec.graceMs)`. `kill` is a no-op once `rangeExitObserved` is true. The spec's abort signal is wired through `onAbort = () => terminateWithReason(spec.signal?.reason)` with `{once:true}`. Additionally, when any output stream is being drained, `done` arms `pipeDrainTimer = setTimeout(() => settle(outcome), spec.graceMs)` so an inherited descriptor held by a survivor cannot hold the outcome open indefinitely; the grace timer is deliberately NOT cleared on settlement so forced termination still reaches range survivors.",
+      "invariants": [
+        "POSIX owners stage TERM before KILL; Windows owners terminate immediately. This layer reacts to an abort signal; callers own deadlines, teardown ladders, and cause classification. (packages/subprocess/subprocess-local/src/spawn.ts:5-7)",
+        "graceTimer deliberately NOT cleared: forced termination must still reach range survivors after the spawned command settles. (packages/subprocess/subprocess-local/src/spawn.ts:611-612)",
+        "an inherited descriptor held by a survivor cannot hold the outcome open indefinitely (packages/subprocess/subprocess/src/types.ts:85-88)"
+      ],
+      "failurePolicy": "fail-soft on signalling (delivery failures are swallowed so teardown stays idempotent) but fail-closed on validation: `validateSubprocessSpec` rejects a non-positive/over-cap grace, a pre-aborted signal, and an empty argv[0] before launch.",
+      "constants": [
+        { "value": "graceMs <= 2147483647 and > 0 and finite", "where": "packages/subprocess/subprocess-local/src/spawn.ts:362", "meaning": "validateSubprocessSpec grace check; error text names MAX_TIMER_DELAY_MS" },
+        { "value": "'subprocess terminated before target start'", "where": "packages/subprocess/subprocess-local/src/spawn.ts:564", "meaning": "cancellation reason used by the bare terminate()" },
+        { "value": "kill('SIGTERM') then setTimeout(kill('SIGKILL'), spec.graceMs)", "where": "packages/subprocess/subprocess-local/src/spawn.ts:556-560", "meaning": "the escalation ladder itself" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/spawn.ts:361",
+        "packages/subprocess/subprocess-local/src/spawn.ts:362",
+        "packages/subprocess/subprocess-local/src/spawn.ts:365",
+        "packages/subprocess/subprocess-local/src/spawn.ts:375",
+        "packages/subprocess/subprocess-local/src/spawn.ts:530",
+        "packages/subprocess/subprocess-local/src/spawn.ts:545",
+        "packages/subprocess/subprocess-local/src/spawn.ts:550",
+        "packages/subprocess/subprocess-local/src/spawn.ts:556",
+        "packages/subprocess/subprocess-local/src/spawn.ts:557",
+        "packages/subprocess/subprocess-local/src/spawn.ts:572",
+        "packages/subprocess/subprocess-local/src/spawn.ts:607",
+        "packages/subprocess/subprocess-local/src/spawn.ts:612",
+        "packages/subprocess/subprocess-local/src/spawn.ts:617"
+      ],
+      "verified": true
+    },
+    {
+      "name": "process-containment-mode-selection",
+      "what": "`selectContainmentMode(kind)` picks the managed-range owner per spawn. On linux it first tries `probeLinuxNative()` (bootstrap + transient-scope probe) and afterwards the cheaper `probeLinuxManager()` once `linuxDeepProbePassed` is latched, returning `'linux-scope'`. On win32 for ordinary spawns it tries `probeWindowsJob()` and returns `'windows-job'`. Anything else returns `'fallback'` — the detached-PGID/`taskkill` owner from `spawn.ts` — and emits exactly one provider-lifetime `ctx.logger.warn` explaining which weaker containment applies (a `fallbackWarningIssued` latch suppresses repeats).",
+      "invariants": [
+        "Positive-only cache for the expensive Linux bootstrap and scope probe. (packages/subprocess/subprocess-local/src/index.ts:60)",
+        "descendants that escape the process group or direct-parent tree are not guaranteed to terminate or delay waitForExit() (packages/subprocess/subprocess-local/src/index.ts:225)"
+      ],
+      "failurePolicy": "fail-soft — every probe returns boolean and swallows its exception (packages/subprocess/subprocess-local/src/windows-job.ts:57-66, packages/subprocess/subprocess-local/src/linux-scope.ts:96-105), degrading to weaker containment with a single warning instead of failing the spawn.",
+      "constants": [
+        { "value": "'linux-scope' | 'windows-job' | 'fallback'", "where": "packages/subprocess/subprocess-local/src/index.ts:191", "meaning": "the three containment modes" },
+        { "value": "'macOS has no supported persistent process-range owner'", "where": "packages/subprocess/subprocess-local/src/index.ts:218", "meaning": "warn reason on darwin" },
+        { "value": "'Windows ConPTY remains outside Job containment'", "where": "packages/subprocess/subprocess-local/src/index.ts:221", "meaning": "warn reason for a win32 terminal spawn" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/index.ts:167",
+        "packages/subprocess/subprocess-local/src/index.ts:169",
+        "packages/subprocess/subprocess-local/src/index.ts:189",
+        "packages/subprocess/subprocess-local/src/index.ts:194",
+        "packages/subprocess/subprocess-local/src/index.ts:196",
+        "packages/subprocess/subprocess-local/src/index.ts:198",
+        "packages/subprocess/subprocess-local/src/index.ts:203",
+        "packages/subprocess/subprocess-local/src/index.ts:206",
+        "packages/subprocess/subprocess-local/src/index.ts:216",
+        "packages/subprocess/subprocess-local/src/index.ts:224",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:56",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:152"
+      ],
+      "verified": true
+    },
+    {
+      "name": "linux-systemd-scope-containment",
+      "what": "`launchLinuxScope` writes a private launch request (0700 dir / 0600 file) and spawns `systemd-run --user --scope --quiet --collect --expand-environment=no --unit=<dsh-subprocess-<pid>-<hex>> -- <node runner> -- <target argv>` detached. The runner consumes the request and `execve`s the target; the parent learns of a pre-exec failure from a sibling `startup-error.json`. `SystemdScopeOwner` owns the range: `signal` first re-checks request consumption, signals the direct child group only while establishment is 'pending' (or as a fallback when systemctl fails), issues `systemctl --user kill --kill-whom=all --signal=<sig> <unit>`, and records a `killFailure` when a SIGKILL round fails for a reason other than a missing unit. `waitForExit` polls `systemctl show --property=LoadState --property=ActiveState` with `SCOPE_INITIAL_POLL_INTERVAL_MS` doubling up to `SYSTEMCTL_TIMEOUT_MS` once established, and strictly validates the two-line property output.",
+      "invariants": [
+        "Keep establishment responsive, then reduce systemctl process churn while systemd remains the authoritative owner of an active range. (packages/subprocess/subprocess-local/src/linux-scope.ts:325-326)",
+        "the current user-systemd scope or private bootstrap is unavailable -> weaker containment (packages/subprocess/subprocess-local/src/index.ts:200)"
+      ],
+      "failurePolicy": "mixed — probes fail soft to the fallback owner; once the scope is selected, a malformed/duplicate/unknown systemctl state throws (fail-closed, packages/subprocess/subprocess-local/src/linux-scope.ts:248, :252, :259, :278, :285), and `absentUnit()` rethrows a recorded `killFailure`.",
+      "constants": [
+        { "value": "5_000", "where": "packages/subprocess/subprocess-local/src/linux-scope.ts:51", "meaning": "SYSTEMCTL_TIMEOUT_MS — every systemctl/systemd-run exec timeout and the poll-interval ceiling" },
+        { "value": "50", "where": "packages/subprocess/subprocess-local/src/linux-scope.ts:52", "meaning": "SCOPE_INITIAL_POLL_INTERVAL_MS before the backoff doubling" },
+        { "value": "['--user','--scope','--quiet','--collect','--expand-environment=no']", "where": "packages/subprocess/subprocess-local/src/linux-scope.ts:346-350", "meaning": "scopeArgs flags for every systemd-run invocation" },
+        { "value": "'dsh-subprocess' / 'dsh-terminal' / 'dsh-subprocess-probe'", "where": "packages/subprocess/subprocess-local/src/linux-scope.ts:467, :426, :113", "meaning": "unit-name prefixes" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:51",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:52",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:53",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:112",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:162",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:180",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:185",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:226",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:264",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:317",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:328",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:344",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:460",
+        "packages/subprocess/subprocess-local/src/linux-scope.ts:478"
+      ],
+      "verified": true
+    },
+    {
+      "name": "windows-job-object-runner-containment",
+      "what": "An ordinary win32 spawn is launched through a private Node runner process that uniquely owns the Win32 Job handle. Parent side, `launchWindowsJob` spawns the runner with the private `'--'` delimiter, gives it IPC on fd 3 and target carriers on fds 4/5/6, and (for an ignored stdin) opens `devNull` to pass as fd 4 before closing it. On the runner's `'spawn'` event it `send`s `{type:'start', cwd, env}`; on `'message'` it strictly parses either `target-exit` or `error` and rejects on a second result. Runner side, `WindowsJobRunner` allocates the Job via `spawnCurrentTokenJobProcess` with `stdio: {stdin: 4, stdout: 5, stderr: 6}`, closes those three descriptors in the runner, and polls `pollProcessExit` plus `isJobEmpty` on a 10 ms interval, terminating the Job with `terminateJob(api, job, 1)` on a `{type:'terminate'}` control message or during cleanup. Clean completion requires `exitCode === 0 && signal === null && directResultType !== undefined` (i.e. the runner proved its managed range empty).",
+      "invariants": [
+        "The clean-completion condition: `const clean = exitCode === 0 && signal === null && directResultType !== undefined` — otherwise the parent reports that the runner exited 'before proving its managed range empty'. (packages/subprocess/subprocess-local/src/windows-job.ts:209-221)",
+        "Launch one target through a runner that uniquely owns its Job handle. (packages/subprocess/subprocess-local/src/windows-job.ts:118)"
+      ],
+      "failurePolicy": "fail-closed — runner start/protocol failures reject the direct outcome and the range-exit promise (`failInfrastructure`), a disconnected runner reports `finish(127, false)` and releases the Job, and the parent treats any unclean runner exit as an infrastructure error.",
+      "constants": [
+        { "value": "10", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:319", "meaning": "setInterval poll cadence for target exit and Job emptiness" },
+        { "value": "127", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:241", "meaning": "runner exit code for IPC-disconnected, failure and disconnect paths (also :273, :406, :485)" },
+        { "value": "terminateJob(api, job, 1)", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:348", "meaning": "Job termination call; the trailing 1 is the exit code passed to the Job" },
+        { "value": "stdio: { stdin: 4, stdout: 5, stderr: 6 }", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:312", "meaning": "target carrier descriptors, closed in the runner at :316-318" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/windows-job.ts:124",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:131",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:141",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:146",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:163",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:189",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:209",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:219",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:221",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:306",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:312",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:319",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:342",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:364"
+      ],
+      "verified": true
+    },
+    {
+      "name": "private-runner-transport-protocol",
+      "what": "`runner-protocol.ts` defines the closed parent<->runner transports. Linux uses files: `createLinuxLaunchFiles` creates a 0700 mkdtemp directory and a 0600 `launch-request.json` written with flag `'wx'`; the bootstrap strictly consumes it (read then `unlinkSync`) validating exact keys `['cwd','env']`, and publishes pre-exec failures to a sibling `startup-error.json` (0600, `'wx'`). `linuxLaunchFilesFromLocator` derives the error path only from an absolute path whose basename is exactly `launch-request.json`. Windows uses Node IPC: the parent's only messages are `{type:'start', cwd, env}` and `{type:'terminate'}`; the runner's result is exactly one of `{type:'target-exit', exitCode}` or `{type:'error', error}` where the error record is bounded to `name`/`message`/`code`/`syscall`/`path`. Every parse uses `hasExactKeys`, so an unknown or missing field throws rather than being ignored.",
+      "invariants": [
+        "Closed private transports shared by the native subprocess runner. (packages/subprocess/subprocess-local/src/runner-protocol.ts:1)",
+        "Strictly read and remove a one-shot Linux launch request. (packages/subprocess/subprocess-local/src/runner-protocol.ts:132)",
+        "Return true only for the exact, payload-free Windows terminate control. (packages/subprocess/subprocess-local/src/runner-protocol.ts:182)"
+      ],
+      "failurePolicy": "fail-closed — malformed payloads throw (`subprocess runner received an invalid …`, `… emitted an invalid …`); `cleanupLinuxLaunchFiles` is the only best-effort path and swallows errors so crash residue stays private.",
+      "constants": [
+        { "value": "'launch-request.json' / 'startup-error.json'", "where": "packages/subprocess/subprocess-local/src/runner-protocol.ts:105-106", "meaning": "the only two file names forming the Linux transport" },
+        { "value": "0o700 / 0o600, flag 'wx'", "where": "packages/subprocess/subprocess-local/src/runner-protocol.ts:109-110", "meaning": "directory and file modes plus exclusive-create flag" },
+        { "value": "['name','message'] required, ['code','syscall','path'] optional", "where": "packages/subprocess/subprocess-local/src/runner-protocol.ts:74-78", "meaning": "exact key set of a serialized runner error" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:36",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:43",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:48",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:63",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:101",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:110",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:123",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:136",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:152",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:186",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:195",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:220",
+        "packages/subprocess/subprocess-local/src/runner-protocol.ts:251"
+      ],
+      "verified": true
+    },
+    {
+      "name": "linux-execve-bootstrap",
+      "what": "`loadLinuxExecve()` lazily binds libc through koffi (`koffi.load(null)`) to get `execve` and `fcntl`, caching the closure. Before `execve` it clears `FD_CLOEXEC` on fds 0, 1 and 2 so the target really inherits the pipes, then calls `nativeExecve(file, [...argv, null], [...env entries + null])`; if `execve` returns, it throws a Node-shaped system error built from `koffi.errno()`. `runLinux` chdirs to the requested cwd and `execLinuxTarget` searches PATH entries (relative entries resolved against the target cwd, default `'/usr/bin:/bin'`), falling back to `/bin/sh <file>` when execve reports `ENOEXEC`, and reporting `EACCES` over `ENOENT` if any candidate was merely unexecutable.",
+      "invariants": [
+        "Replace the current process image while preserving the supplied argv and environment. (packages/subprocess/subprocess-local/src/linux-execve.ts:6)",
+        "Standard descriptors 0/1/2 must not carry FD_CLOEXEC into the target (implied by the FD_CLOEXEC clearing loop, packages/subprocess/subprocess-local/src/linux-execve.ts:55-62)"
+      ],
+      "failurePolicy": "fail-closed — any fcntl or execve failure throws a Node-style error carrying `code`, `errno: -errno`, `syscall` and `path`; the runner then publishes it to `startup-error.json` and exits 127.",
+      "constants": [
+        { "value": "[0, 1, 2]", "where": "packages/subprocess/subprocess-local/src/linux-execve.ts:21", "meaning": "STANDARD_FILE_DESCRIPTORS whose FD_CLOEXEC bit is cleared" },
+        { "value": "F_GETFD = 1, F_SETFD = 2, FD_CLOEXEC = 1", "where": "packages/subprocess/subprocess-local/src/linux-execve.ts:22-24", "meaning": "fcntl constants used by the descriptor fix-up" },
+        { "value": "'/usr/bin:/bin'", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:153", "meaning": "PATH fallback when the target env supplies none" },
+        { "value": "127", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:187", "meaning": "runner exit code after publishing a Linux startup error (also :198)" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/linux-execve.ts:21",
+        "packages/subprocess/subprocess-local/src/linux-execve.ts:45",
+        "packages/subprocess/subprocess-local/src/linux-execve.ts:47",
+        "packages/subprocess/subprocess-local/src/linux-execve.ts:55",
+        "packages/subprocess/subprocess-local/src/linux-execve.ts:59",
+        "packages/subprocess/subprocess-local/src/linux-execve.ts:63",
+        "packages/subprocess/subprocess-local/src/linux-execve.ts:68",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:132",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:142",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:153",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:175",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:187"
+      ],
+      "verified": true
+    },
+    {
+      "name": "pty-terminal-allocation",
+      "what": "`LocalSubprocessRuntime.spawnTerminal` validates argv[0], honours an already-aborted signal, materializes the target environment, builds `IPtyForkOptions {name:'dumb', rows, cols, cwd, env}`, resolves a `ProcessInspector` (cached on `this.terminalInspector`, else `createProcessInspector()`), selects the terminal containment mode (linux scope possible; win32 never uses a Job), and calls `nodePty.spawn(...)`. On linux-scope the invocation is rewritten to systemd-run + the bootstrap and cwd/env are replaced by the scope's. The resulting `LocalTerminalHandle` records the shell's `rootIdentity` from the inspector snapshot, converts `onData` UTF-8 strings into a `PassThrough` byte stream, and resolves `done` from node-pty's `onExit` (mapping signal 0/undefined to the exit code).",
+      "invariants": [
+        "Local PTY allocation is synchronous, but the provider contract permits remote asynchronous allocation. (packages/subprocess/subprocess-local/src/index.ts:229-230)",
+        "The seam's terminate() promise — no write, inspection, or signal in flight after settlement — holds here without operation tracking only because every handle call completes synchronously under the hood ... A first genuinely asynchronous step in any handle call must add the tracking a remote provider needs. (packages/subprocess/subprocess-local/src/terminal.ts:51-55)"
+      ],
+      "failurePolicy": "fail-closed — missing program, aborted signal, or a `nodePty.spawn` throw rejects `spawnTerminal` (scope cleanup runs first, packages/subprocess/subprocess-local/src/index.ts:265-268); a write after exit throws `terminal process has exited`.",
+      "constants": [
+        { "value": "name: 'dumb'", "where": "packages/subprocess/subprocess-local/src/index.ts:239", "meaning": "default TERM for an allocated terminal; the linux-scope path also injects TERM: 'dumb' and PWD at :251" },
+        { "value": "delay(Math.min(25, Math.max(1, until - Date.now())))", "where": "packages/subprocess/subprocess-local/src/terminal.ts:218", "meaning": "exit-wait poll cadence capped at 25 ms" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/index.ts:231",
+        "packages/subprocess/subprocess-local/src/index.ts:233",
+        "packages/subprocess/subprocess-local/src/index.ts:236",
+        "packages/subprocess/subprocess-local/src/index.ts:238",
+        "packages/subprocess/subprocess-local/src/index.ts:245",
+        "packages/subprocess/subprocess-local/src/index.ts:247",
+        "packages/subprocess/subprocess-local/src/index.ts:260",
+        "packages/subprocess/subprocess-local/src/index.ts:265",
+        "packages/subprocess/subprocess-local/src/index.ts:277",
+        "packages/subprocess/subprocess-local/src/terminal.ts:87",
+        "packages/subprocess/subprocess-local/src/terminal.ts:89",
+        "packages/subprocess/subprocess-local/src/terminal.ts:90",
+        "packages/subprocess/subprocess-local/src/terminal.ts:96",
+        "packages/subprocess/subprocess-local/src/terminal.ts:107",
+        "packages/subprocess/subprocess-local/src/terminal.ts:114"
+      ],
+      "verified": true
+    },
+    {
+      "name": "process-identity-fencing",
+      "what": "Every teardown/signal decision is fenced on a `ProcessIdentity {pid, started}` rather than a bare pid. On linux `started` is field 20 of `/proc/<pid>/stat`; on win32 it is the string `${dwHighDateTime}:${dwLowDateTime}` from `GetProcessTimes`. `ProcessInspector.signalProcess` re-reads liveness immediately before signalling (`if (this.isAlive(identity)) kill(...)`), and `ProcessSnapshot.alive` answers from a possibly older table. `LocalTerminalHandle.descendants` only adopts newly scanned members while the numeric root pid still carries the spawned shell's start identity, and `unionMembers` de-duplicates on `${pid}:${started}`.",
+      "invariants": [
+        "The fence reads current state immediately before the signal. An observation taken earlier in the same round cannot stand in for it: the observation preserves the original PID-to-start-time pairing, so a recycled PID would still match and take a signal meant for the process that exited. (packages/subprocess/subprocess-local/src/process-inspector.ts:86-91)",
+        "Adopt newly scanned members only while the numeric root pid provably still carries the spawned shell's start identity: after the shell dies, a recycled pid's tree and session must not donate an unrelated process's children to this session's signalling. (packages/subprocess/subprocess-local/src/terminal.ts:196-200)",
+        "PID plus start identity, preventing teardown escalation after PID reuse. (packages/subprocess/subprocess-local/src/process-inspector.ts:8)"
+      ],
+      "failurePolicy": "fail-soft on reads (an unreadable identity is a detector miss: `readLinuxStat` returns undefined, `windowsProcessState` returns undefined, and the process is simply not signalled), fail-closed on outcomes: `waitForExit` rejects when the range cannot be observed.",
+      "constants": [
+        { "value": "rest[19]", "where": "packages/subprocess/subprocess-local/src/process-inspector.ts:153", "meaning": "the starttime field of /proc/<pid>/stat used as the identity" },
+        { "value": "`${record.dwHighDateTime}:${record.dwLowDateTime}`", "where": "packages/subprocess/subprocess-local/src/windows-inspector.ts:322", "meaning": "Win32 creation-time identity string" },
+        { "value": "/^[ZXx]$/", "where": "packages/subprocess/subprocess-local/src/process-inspector.ts:380", "meaning": "zombie/dead states treated as not running (also :220)" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:8",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:86",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:153",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:220",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:360",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:379",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:399",
+        "packages/subprocess/subprocess-local/src/terminal.ts:196",
+        "packages/subprocess/subprocess-local/src/terminal.ts:205",
+        "packages/subprocess/subprocess-local/src/terminal.ts:251",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:100",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:322"
+      ],
+      "verified": true
+    },
+    {
+      "name": "platform-process-table-inspection",
+      "what": "`createProcessInspector(platform, arch, internals)` returns a `LinuxProcessInspector` (walks `/proc`, parses `/proc/<pid>/stat` with parenthesized `comm` handling, exposes parent/child walk plus POSIX session membership), a `MacProcessInspector` (parses `/bin/ps -axo pid=,ppid=,lstart=`; session and state are deliberately undefined there), or `createWindowsProcessInspector()` (Toolhelp32 `CreateToolhelp32Snapshot`/`Process32FirstW`/`Process32NextW` enumeration with identity from `OpenProcess` + `GetProcessTimes` and liveness from a zero-time `WaitForSingleObject`), and throws on any other platform. `snapshot()` reads the table at most once and later questions reuse it; Windows liveness never enumerates at all.",
+      "invariants": [
+        "The table is read at most once, on the first question that needs it ... Later questions never re-read it, which is what keeps a poll's cost independent of how many descendants the running command spawned. (packages/subprocess/subprocess-local/src/process-inspector.ts:22-28)",
+        "`ps` exposes neither the session id nor a state column in this format, so a macOS row can answer presence and parentage but never session membership. (packages/subprocess/subprocess-local/src/process-inspector.ts:480-481)"
+      ],
+      "failurePolicy": "mixed — an unsupported platform throws at creation (fail-closed, packages/subprocess/subprocess-local/src/process-inspector.ts:536); unreadable table entries are skipped (fail-soft); a Win32 struct layout mismatch throws (`PROCESSENTRY32W layout mismatch: koffi computed X, Windows headers say 568`).",
+      "constants": [
+        { "value": "0x2", "where": "packages/subprocess/subprocess-local/src/windows-inspector.ts:225", "meaning": "TH32CS_SNAPPROCESS snapshot flag" },
+        { "value": "0x1000 | 0x00100000", "where": "packages/subprocess/subprocess-local/src/windows-inspector.ts:226-227", "meaning": "PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE access rights for OpenProcess" },
+        { "value": "0 / 0x102", "where": "packages/subprocess/subprocess-local/src/windows-inspector.ts:228-229", "meaning": "WAIT_OBJECT_0 and WAIT_TIMEOUT; active === (wait === WAIT_TIMEOUT)" },
+        { "value": "568", "where": "packages/subprocess/subprocess-local/src/windows-inspector.ts:215", "meaning": "asserted x64 size of PROCESSENTRY32W" },
+        { "value": "'/bin/ps', ['-axo', 'pid=,ppid=,lstart=']", "where": "packages/subprocess/subprocess-local/src/process-inspector.ts:483", "meaning": "the macOS process-table command" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:22",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:141",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:405",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:466",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:483",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:506",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:528",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:536",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:53",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:77",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:105",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:197",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:215",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:225",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:277",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:303"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-stdin-wait-detection",
+      "what": "`LinuxProcessInspector.isStdinWaiting(pgid, shellPid)` proves whether a foreground group member is blocked reading the terminal: it reads the shell's `tty_nr`, resolves the terminal device identity (handling the `/dev/tty` alias by falling back to the owning process's `tty_nr`), then for every process in the group and every task reads `/proc/<pid>/task/<tid>/syscall` and matches the syscall number against an architecture-specific table. `read` matches when arg0 === 0; `select`/`pselect` inspect the fd_set bit for fd 0 via `/proc/<pid>/mem`; `poll`/`ppoll` scan the pollfd array; `epoll_wait`/`epoll_pwait` check `fdinfo` for `tfd: 0`. macOS and Windows hard-code `false`.",
+      "invariants": [
+        "User-mode emulation can therefore expose a supported table different from process.arch. (packages/subprocess/subprocess-local/src/process-inspector.ts:317-318)",
+        "Windows has no process-group signalling: a `\\x03` input write is the Ctrl-C delivery path (packages/subprocess/subprocess-local/src/terminal.ts:140-143)"
+      ],
+      "failurePolicy": "fail-open — every read failure returns undefined/false, so the readiness signal degrades to 'not waiting' rather than throwing; an unknown architecture yields no tables and therefore `false`.",
+      "constants": [
+        { "value": "x64 { read: 0, select: 23, pselect: 270, poll: 7, ppoll: 271, epollWait: 232, epollPwait: 281 }", "where": "packages/subprocess/subprocess-local/src/process-inspector.ts:311", "meaning": "the x86-64 syscall number table" },
+        { "value": "arm64 { read: 63, pselect: 72, ppoll: 73, epollPwait: 22 }", "where": "packages/subprocess/subprocess-local/src/process-inspector.ts:312", "meaning": "the arm64 syscall number table (no select/poll/epollWait entries)" },
+        { "value": "1024 * 8 bytes", "where": "packages/subprocess/subprocess-local/src/process-inspector.ts:282", "meaning": "cap on the pollfd array copied out of /proc/<pid>/mem" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:238",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:271",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:275",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:282",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:290",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:310",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:311",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:312",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:325",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:440",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:506",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:96"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-session-teardown",
+      "what": "`LocalTerminalHandle.terminate()` memoizes a single `closeOnce()` run. Without a managed owner it runs `stopDescendants()` (capture tree, SIGTERM all, wait up to graceMs polling at ≤25 ms, union survivors with a fresh scan, SIGKILL, wait again, then throw naming any surviving pids), then `stopShell()` (POSIX: `terminal.kill('SIGTERM')` racing `done` against a `graceMs` delay, then SIGKILL with the same race, then throw `terminal cleanup failed; surviving pid: <pid>`; Windows: taskkill-based `stopShellWindows` because node-pty's Windows kill throws), then re-checks descendants and disposes both node-pty subscriptions. With a managed owner it calls `closeManagedRange`: SIGTERM the owner, race `waitForExit()` against `graceMs`, escalate to SIGKILL on timeout, and require the top-level process to have exited.",
+      "invariants": [
+        "Already-adopted members keep their own start identities, which every signal rechecks. (packages/subprocess/subprocess-local/src/terminal.ts:200)",
+        "Each signal reads its own identity fence, inside this try: a failed read must cost one target, never the rest of a teardown round. (packages/subprocess/subprocess-local/src/terminal.ts:226-228)",
+        "taskkill termination also does not reliably fire node-pty's exit notification ... so the tiers verify the shell's absence through the inspector instead of waiting on `done` alone. (packages/subprocess/subprocess-local/src/terminal.ts:300-303)"
+      ],
+      "failurePolicy": "fail-closed — surviving members or a surviving shell throw; `Terminal.terminate()` remains idempotent (memoized promise, cleared on failure so a retry is possible at :159).",
+      "constants": [
+        { "value": "'terminal cleanup failed; surviving pids: '", "where": "packages/subprocess/subprocess-local/src/terminal.ts:346", "meaning": "thrown when descendant survivors remain (also :351)" },
+        { "value": "'refusing to SIGKILL the terminal shell; terminate the terminal session instead'", "where": "packages/subprocess/subprocess-local/src/terminal.ts:136", "meaning": "guard when the foreground group is the shell itself" },
+        { "value": "'signal SIGTSTP/SIGHUP is unsupported on Windows; only SIGINT, SIGTERM, and SIGKILL are available'", "where": "packages/subprocess/subprocess-local/src/terminal.ts:148", "meaning": "win32 signal restriction" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/terminal.ts:130",
+        "packages/subprocess/subprocess-local/src/terminal.ts:135",
+        "packages/subprocess/subprocess-local/src/terminal.ts:144",
+        "packages/subprocess/subprocess-local/src/terminal.ts:148",
+        "packages/subprocess/subprocess-local/src/terminal.ts:155",
+        "packages/subprocess/subprocess-local/src/terminal.ts:167",
+        "packages/subprocess/subprocess-local/src/terminal.ts:213",
+        "packages/subprocess/subprocess-local/src/terminal.ts:224",
+        "packages/subprocess/subprocess-local/src/terminal.ts:260",
+        "packages/subprocess/subprocess-local/src/terminal.ts:271",
+        "packages/subprocess/subprocess-local/src/terminal.ts:295",
+        "packages/subprocess/subprocess-local/src/terminal.ts:333",
+        "packages/subprocess/subprocess-local/src/terminal.ts:364",
+        "packages/subprocess/subprocess-local/src/terminal.ts:391"
+      ],
+      "verified": true
+    },
+    {
+      "name": "fallback-process-group-ownership",
+      "what": "When no native containment is available, `spawnSubprocess` spawns with `detached: platform !== 'win32'` (so the child leads a new POSIX process group) and `windowsHide: platform === 'win32'`, then `fallbackOwner` implements `BoundProcessOwner`. On POSIX `alive()` probes `process.kill(-pid, 0)` and, once the direct result has settled on linux, additionally requires `linuxProcessGroupHasLiveMembers(pid) !== false`; `ESRCH` means dead, `EPERM` means alive. `signalTree` signals the negative pgid and falls back to `child.kill(sig)`; on win32 it calls `taskkillProcessTree(pid)` = `taskkill /PID <pid> /T /F`. `waitForExit` polls with `sleepTick()` = `sleepMs(15)`; the timer stays ref'd so an awaited teardown keeps the event loop alive.",
+      "invariants": [
+        "The timer stays ref'd: an awaited teardown must keep the event loop alive until the tree really exits, or the parent can exit while claiming quiescence and orphan the survivors it promised to reap. (packages/subprocess/subprocess-local/src/spawn.ts:83-86)",
+        "Outcome deliberately unchecked: an already-absent tree (status 128), exit races, and a missing taskkill binary ... are as tolerable here as ESRCH is for a POSIX group signal. (packages/subprocess/subprocess-local/src/spawn.ts:314-316)"
+      ],
+      "failurePolicy": "fail-soft — all signalling is swallowed (`killGroup`, `signalTree`, `taskkillProcessTree` never throw); `alive()` treats an unrecognized error by falling back to `child.exitCode === null && child.signalCode === null`.",
+      "constants": [
+        { "value": "sleepMs(15)", "where": "packages/subprocess/subprocess-local/src/spawn.ts:89", "meaning": "liveness-poll cadence for tree-exit waits" },
+        { "value": "'taskkill', ['/PID', String(pid), '/T', '/F']", "where": "packages/subprocess/subprocess-local/src/spawn.ts:317", "meaning": "Windows tree termination command" },
+        { "value": "detached: platform !== 'win32'", "where": "packages/subprocess/subprocess-local/src/spawn.ts:658", "meaning": "POSIX children become their own process-group leaders" },
+        { "value": "['/PID', String(pid), '/T', ...(force ? ['/F'] : [])]", "where": "packages/subprocess/subprocess-local/src/windows-inspector.ts:148", "meaning": "inspector variant where only SIGKILL adds /F" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/spawn.ts:88",
+        "packages/subprocess/subprocess-local/src/spawn.ts:296",
+        "packages/subprocess/subprocess-local/src/spawn.ts:312",
+        "packages/subprocess/subprocess-local/src/spawn.ts:329",
+        "packages/subprocess/subprocess-local/src/spawn.ts:399",
+        "packages/subprocess/subprocess-local/src/spawn.ts:415",
+        "packages/subprocess/subprocess-local/src/spawn.ts:420",
+        "packages/subprocess/subprocess-local/src/spawn.ts:426",
+        "packages/subprocess/subprocess-local/src/spawn.ts:445",
+        "packages/subprocess/subprocess-local/src/spawn.ts:646",
+        "packages/subprocess/subprocess-local/src/spawn.ts:658",
+        "packages/subprocess/subprocess-local/src/windows-inspector.ts:144",
+        "packages/subprocess/subprocess-local/src/process-inspector.ts:204"
+      ],
+      "verified": true
+    },
+    {
+      "name": "win32-runner-error-code-translation",
+      "what": "`asSpawnError` converts a non-`Win32Error` into a Node-shaped spawn error only when it carried a `code`, keeping the `spawn <program>` syscall and the program path. A `Win32Error` is mapped through `WINDOWS_SPAWN_ERROR_CODES` (GetLastError -> Node code), and the program path is attached only for `EACCES`/`ENOENT` (the `NODE_SPAWN_DETAIL_CODES` set). Windows cancellation of a start becomes the exact serialized error `{name:'Error', message:'subprocess target start was cancelled'}` with no code/syscall/path, which the parent matches structurally to restore the original caller-owned cancellation reason.",
+      "invariants": [
+        "Every constructible spawn-failure shape carries a `code` (asserted by the parent-side structural match at packages/subprocess/subprocess-local/src/windows-job.ts:43-49)"
+      ],
+      "failurePolicy": "fail-closed — an unmapped GetLastError becomes code `'UNKNOWN'` rather than a silent success; the runner exits 127 whenever it cannot deliver a result.",
+      "constants": [
+        { "value": "{2:'ENOENT', 3:'ENOENT', 267:'ENOENT', 5:'EPERM', 193:'EFTYPE', 740:'EACCES'}", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:70-77", "meaning": "WINDOWS_SPAWN_ERROR_CODES GetLastError -> Node code map" },
+        { "value": "Set(['EACCES', 'ENOENT'])", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:69", "meaning": "NODE_SPAWN_DETAIL_CODES that additionally carry the program path" },
+        { "value": "'subprocess target start was cancelled'", "where": "packages/subprocess/subprocess-local/src/spawn-runner.ts:118", "meaning": "exact cancellation message matched by the parent" }
+      ],
+      "evidence": [
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:69",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:70",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:94",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:104",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:111",
+        "packages/subprocess/subprocess-local/src/spawn-runner.ts:115",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:43",
+        "packages/subprocess/subprocess-local/src/windows-job.ts:102"
+      ],
+      "verified": true
+    }
+  ],
+  "moduleCoverage": {
+    "subprocess/subprocess": {
+      "kind": "mechanism",
+      "note": "Real logic beyond a service class: the credential/DSH scrub + proxy overlay (`scrubbedParentEnv`, packages/subprocess/subprocess/src/index.ts:64-78) and the full provider contract in `types.ts` (collect readers, handle, terminal handle). The abstract `SubprocessRuntime` (packages/subprocess/subprocess/src/index.ts:115-154) is the seam definition. Mechanisms: subprocess-spawn-abstraction, credential-and-managed-env-scrubbing, subprocess-service-disposal-and-host-exit-termination (contract half), tail-keep-output-collection-with-spill (contract half)."
+    },
+    "subprocess/subprocess-local": {
+      "kind": "mechanism",
+      "note": "Real logic throughout, and the largest mechanism carrier in this audit. `index.ts` is the Cordis provider (constructor + ctx.effect + spawn/spawnTerminal + containment selection). The private runner subsystem (`bin.ts` -> `spawn-runner.ts`, driven by `runner-protocol.ts`/`runner-launch.ts`/`linux-execve.ts`) is the Windows Job / Linux scope containment core. `spawn.ts` is the shared stdio/collect/terminate lifecycle; `terminal.ts` + `process-inspector.ts` + `windows-inspector.ts` are the PTY and process-table layers. Mechanisms: subprocess-spawn-abstraction, subprocess-service-disposal-and-host-exit-termination, subprocess-executable-resolution, tail-keep-output-collection-with-spill, subprocess-termination-escalation, process-containment-mode-selection, linux-systemd-scope-containment, windows-job-object-runner-containment, private-runner-transport-protocol, linux-execve-bootstrap, pty-terminal-allocation, process-identity-fencing, platform-process-table-inspection, terminal-stdin-wait-detection, terminal-session-teardown, fallback-process-group-ownership, win32-runner-error-code-translation."
+    }
+  },
+  "notes": "All 15 .ts files of packages/subprocess/subprocess and packages/subprocess/subprocess-local were read in full. Observations worth carrying forward: (1) `spawnSubprocess` in spawn.ts uses the detached-PGID/taskkill fallback owner; the Windows Job Object path is reached only through `LocalSubprocessRuntime.spawn` -> `selectContainmentMode` -> `launchWindowsJob`, i.e. the Job runner is a parent+child process pair, not an in-process binding. (2) `windows-inspector.ts` also uses koffi/kernel32 directly (Toolhelp32 + GetProcessTimes + WaitForSingleObject) and does NOT use a Job Object — Job handling lives in packages/subprocess/win32-process (`spawnCurrentTokenJobProcess`, `terminateJob`, `isJobEmpty`, `probeCurrentTokenJobSupport`), which is audited separately. (3) `OutputCollector.finalize()` is exported/used by the seam path but `readFrom` is what the shell executors actually call (via `SubprocessOutputReader`). (4) The Linux `started` identity field index 19 is 0-based into the post-comm remainder, i.e. field 22 of the stat line. (5) `runner-launch.ts` reaches outside its package for `../../../../tsconfig.base.json` when running from source (line 20)."
+}

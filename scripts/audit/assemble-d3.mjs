@@ -20,7 +20,7 @@
 
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { SOURCE_PATHS, carrierClass } from "./lib-union.mjs"
+import { SOURCE_PATHS, carrierClass, coverageAccountsFor } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const DATA = (() => {
@@ -89,7 +89,7 @@ const coverageProblems = []
 for (const s of SOURCES) {
   const expected = modulesFile.sources[s.key]?.modules ?? []
   const cov = perSource[s.key].moduleCoverage ?? {}
-  const unaccounted = expected.map((m) => m.name).filter((n) => !(n in cov))
+  const unaccounted = expected.map((m) => m.name).filter((n) => !coverageAccountsFor(cov, n))
   if (unaccounted.length) {
     coverageProblems.push({ source: s.key, expected: expected.length, covered: Object.keys(cov).length, unaccounted })
   }

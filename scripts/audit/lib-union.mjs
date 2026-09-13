@@ -135,6 +135,41 @@ export function carrierClass(rel, lineText) {
 export const WEAK_CARRIERS = new Set(["manifest", "registry-listing", "alias-or-helper", "doc-comment", "type-decl", "blank"])
 
 /**
+ * Does a moduleCoverage map account for this module?
+ *
+ * Exact names are the precise case. PATTERNS are the important one: dsh ships 267
+ * leaf packages and most are Cordis plumbing, so requiring a bespoke sentence for
+ * each asks an agent to write 267 near-identical lines and buries the handful that
+ * matter. A pattern such as `client/*` covering forty packages with one honest
+ * statement is equally explicit evidence of coverage and leaves the agent's effort
+ * for the modules that carry capability.
+ *
+ * `*` matches within one path segment, `**` matches across segments.
+ */
+export function coveragePatternToRegExp(pattern) {
+  const escaped = String(pattern)
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*/g, "\u0000")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\u0000/g, ".*")
+  return new RegExp(`^${escaped}$`)
+}
+
+export function coverageAccountsFor(cov, name) {
+  if (!cov || typeof cov !== "object") return false
+  if (Object.prototype.hasOwnProperty.call(cov, name)) return true
+  for (const key of Object.keys(cov)) {
+    if (!key.includes("*")) continue
+    try {
+      if (coveragePatternToRegExp(key).test(name)) return true
+    } catch {
+      /* an unparseable pattern simply does not match */
+    }
+  }
+  return false
+}
+
+/**
  * Fold the per-source extractions into union rows.
  * Returns { rows, collisions, rejectedAdditions, interactionRows }.
  *

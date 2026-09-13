@@ -1,0 +1,1755 @@
+{
+  "tree": "D:\\agent-complete\\deepseek-harness-dsh-v0.1.5-rc.2",
+  "harness": "dsh v0.1.5-rc.2",
+  "domain": "tools / filesystem half",
+  "readOnly": true,
+  "method": "Every .ts file under the 12 listed src/ directories was read in full with the read tool (56 files). Line numbers below come from those reads; no README/doc file is used as evidence. Composition-entry lines (yaml) and production import lines outside the 12 packages were read separately and are cited only for the 'has a production caller' question.",
+  "mechanisms": [
+    {
+      "name": "fs-service-seam-and-target-identity",
+      "what": "`FileSystem` (abstract `Service`, registered as `ctx.fs` by `super(ctx, 'fs')`) is the provider-neutral seam: `resolve()` maps a model path to a stable `FsTarget { targetKey, displayPath }`, and every other operation takes that target instead of a path. `processPath`, `processPathFromHostPath` (base returns `undefined`), `fileUrl`, and `contains` are the identity/containment primitives; `stat`/`lstat` return metadata only, `readText`/`streamText`/`readBytes`/`readByteRange`/`listDir` read, and only `writeText`/`editText` mutate. `sandboxMode` is a capability fact the tool layer reads (base returns `undefined`), and per-call `SandboxExecutionPolicy` is an optional last argument on the two mutations.",
+      "invariants": [
+        "index.ts:14-15 'Consumers MUST NOT parse it or assume it is a local absolute path' (FsTargetKey doc, types.ts:13-15).",
+        "index.ts:81-84 'Targets must preserve identity across aliases; ... mutations are atomic.'",
+        "index.ts:94-99 sandboxMode is 'the capability fact the tool layer reads to advertise the escalation fields honestly', and widening is 'checked per call rather than encoded in this default-relative fact'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "FsErrorCode union has 13 literal codes: FS_NOT_FOUND, FS_NOT_DIRECTORY, FS_NOT_TEXT, FS_NOT_REGULAR_FILE, FS_TOO_LARGE, FS_PERMISSION_DENIED, FS_SANDBOX_DENIED, FS_IO_ERROR, FS_STALE_VERSION, FS_NOT_OBSERVED, FS_AMBIGUOUS_EDIT, FS_EDIT_NOT_FOUND, FS_ABORTED (types.ts:175-188)",
+        "3 declared events: 'fs/write-intent' (index.ts:58), 'fs/edit-intent' (index.ts:66), 'fs/observed' (index.ts:76)",
+        "version token format is backend-owned; local backend emits `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` (fs-local/src/fsio.ts:74-76)"
+      ],
+      "evidence": [
+        "packages/fs/fs/src/index.ts:58",
+        "packages/fs/fs/src/index.ts:66",
+        "packages/fs/fs/src/index.ts:76",
+        "packages/fs/fs/src/index.ts:86",
+        "packages/fs/fs/src/index.ts:88",
+        "packages/fs/fs/src/index.ts:103",
+        "packages/fs/fs/src/index.ts:116",
+        "packages/fs/fs/src/index.ts:126",
+        "packages/fs/fs/src/index.ts:136",
+        "packages/fs/fs/src/index.ts:157",
+        "packages/fs/fs/src/index.ts:181",
+        "packages/fs/fs/src/index.ts:212",
+        "packages/fs/fs/src/index.ts:227",
+        "packages/fs/fs/src/index.ts:250",
+        "packages/fs/fs/src/index.ts:271",
+        "packages/fs/fs/src/types.ts:60",
+        "packages/fs/fs/src/types.ts:123",
+        "packages/fs/fs/src/types.ts:175"
+      ],
+      "verified": true
+    },
+    {
+      "name": "fs-error-taxonomy-and-harness-error-codes",
+      "what": "`FsError extends HarnessError` carries a stable `FsErrorCode` plus `cause`; `dsh-fs` owns the vocabulary so the local backend, the sandbox backend, and the policy plugin raise the same codes instead of inventing message strings. `FsWriteIntent` is a two-arm union (`createIfAbsent` rejects an existing target with FS_NOT_OBSERVED; `replaceIfVersion` rejects absence or mismatch with FS_STALE_VERSION) and omission of the intent means unconditional create-or-overwrite, explicitly 'not a third union arm'. `FsObservation` is `{kind:'present',version}` or `{kind:'absent'}`, and the FsWriteOutcome/FsEditOutcome pair carries LF-normalized before/after text for a consumer-computed diff.",
+      "invariants": [
+        "types.ts:118-122 'Omitting the intent from writeText means unconditional create-or-overwrite, not a third union arm.'",
+        "types.ts:139-140 before/after are 'LF-normalized storage text (the diff basis), never a diff'.",
+        "types.ts:49-51 'an absent observation authorizes only a guarded create, never an edit'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "13 FsErrorCode literals (types.ts:175-188)",
+        "2 FsWriteIntent arms (types.ts:123-125)",
+        "2 FsObservation arms (types.ts:52-54)"
+      ],
+      "evidence": [
+        "packages/fs/fs/src/types.ts:52",
+        "packages/fs/fs/src/types.ts:118",
+        "packages/fs/fs/src/types.ts:123",
+        "packages/fs/fs/src/types.ts:128",
+        "packages/fs/fs/src/types.ts:141",
+        "packages/fs/fs/src/types.ts:171",
+        "packages/fs/fs/src/types.ts:196"
+      ],
+      "verified": true
+    },
+    {
+      "name": "fs-intent-waterfall-and-observed-events",
+      "what": "`fs/write-intent` and `fs/edit-intent` are single-slot decision waterfalls: the first listener that returns a value owns the decision and does not call `next()`, while calling `next()` yields the bare provider's unconditional behaviour. `fs/observed` is a fire-and-forget emit whose listeners must be synchronous recorders - throws fail the tool call and returned promises are not awaited. `dsh-tool-fs` dispatches both waterfalls and emits `fs/observed` after a successful read or mutation; the base default passed as `next` is `() => undefined` for write and edit.",
+      "invariants": [
+        "index.ts:50-56 'the first listener that returns an intent owns the decision rather than composing with peers'.",
+        "index.ts:67-70 'Listeners must be synchronous recorders: throws fail the tool call and returned promises are not awaited.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "write default `next` returns `undefined` (tool-fs/src/write.ts:114)",
+        "edit default `next` returns `undefined` (tool-fs/src/edit.ts:127; tool-str-replace-editor/src/index.ts:288 and :341)",
+        "str_replace_editor 'create' default `next` returns `{kind:'createIfAbsent'}` (tool-str-replace-editor/src/index.ts:253-258)"
+      ],
+      "evidence": [
+        "packages/fs/fs/src/index.ts:49",
+        "packages/fs/fs/src/index.ts:58",
+        "packages/fs/fs/src/index.ts:66",
+        "packages/fs/fs/src/index.ts:76",
+        "packages/fs/tool-fs/src/write.ts:114",
+        "packages/fs/tool-fs/src/edit.ts:127",
+        "packages/fs/tool-str-replace-editor/src/index.ts:253"
+      ],
+      "verified": true
+    },
+    {
+      "name": "fs-event-data-invariants",
+      "what": "A Cordis companion plugin (`name = 'fs-invariant'`, `inject = ['invariants']`) installs a global `internal/dispatch` check over the three `fs/*` events. On every dispatch it re-validates that the event's first argument has a non-empty `targetKey` and `displayPath`; for `fs/observed` it additionally requires a non-empty `version` for `kind: 'present'` and rejects any kind outside `present`/`absent`. Registration goes through `ctx.invariants.register('@deepseek-ai/dsh-fs', install)`.",
+      "invariants": [
+        "invariant.ts:16-17 'filesystem event targetKey must be non-empty' / 'filesystem event displayPath must be non-empty'.",
+        "invariant.ts:31 'fs/observed present version must be non-empty'.",
+        "invariant.ts:36 'fs/observed kind must be present or absent'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "PACKAGE_NAME = '@deepseek-ai/dsh-fs' (invariant.ts:7)",
+        "3 event names guarded (invariant.ts:23-25)"
+      ],
+      "evidence": [
+        "packages/fs/fs/src/invariant.ts:7",
+        "packages/fs/fs/src/invariant.ts:12",
+        "packages/fs/fs/src/invariant.ts:16",
+        "packages/fs/fs/src/invariant.ts:22",
+        "packages/fs/fs/src/invariant.ts:31",
+        "packages/fs/fs/src/invariant.ts:36",
+        "packages/fs/fs/src/invariant.ts:47"
+      ],
+      "verified": true
+    },
+    {
+      "name": "local-target-realpath-identity",
+      "what": "`resolveLocalTarget(cwd, path)` resolves a relative path against `cwd`, then prefers `fs.realpath(displayPath)` as the opaque `targetKey` so aliases/symlinks share one identity and one stale guard. When the file is absent it realpaths the nearest existing ancestor and re-appends the missing suffix (basename plus not-yet-created intermediate dirs) so the key stays stable across creation; on Windows it additionally stats the ancestor to restore the ENOTDIR semantic that Windows reports as ENOENT. `LocalFileSystem.resolve` maps the result to `{targetKey, displayPath}` and throws FS_ABORTED pre/post when the signal is already aborted; `processPath` returns the targetKey string, `contains` uses `path.relative` and rejects `..`/absolute results.",
+      "invariants": [
+        "fsio.ts:139-141 'For a missing target, realpath the nearest existing ancestor and append the missing suffix, preserving identity across symlinked ancestors before and after creation.'",
+        "fs-local/src/index.ts:60-63 '`cwd` (a resolution default, NOT a containment boundary)'.",
+        "fsio.ts:147 'empty/whitespace-only throws FS_NOT_FOUND'."
+      ],
+      "failurePolicy": "mixed",
+      "constants": [
+        "non-directory ancestor -> FS_NOT_FOUND (fsio.ts:157, :177)",
+        "Windows-only ancestor stat repair gated on process.platform === 'win32' (fsio.ts:174)",
+        "root-termination fallback returns the raw displayPath as the key (fsio.ts:189)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/fsio.ts:146",
+        "packages/fs/fs-local/src/fsio.ts:147",
+        "packages/fs/fs-local/src/fsio.ts:151",
+        "packages/fs/fs-local/src/fsio.ts:157",
+        "packages/fs/fs-local/src/fsio.ts:164",
+        "packages/fs/fs-local/src/fsio.ts:174",
+        "packages/fs/fs-local/src/fsio.ts:181",
+        "packages/fs/fs-local/src/fsio.ts:189",
+        "packages/fs/fs-local/src/index.ts:107",
+        "packages/fs/fs-local/src/index.ts:114",
+        "packages/fs/fs-local/src/index.ts:118",
+        "packages/fs/fs-local/src/index.ts:126"
+      ],
+      "verified": true
+    },
+    {
+      "name": "local-version-token-from-stat-identity",
+      "what": "`versionOf(info: BigIntStats)` builds the opaque `FsVersion` as `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` from a bigint stat, so any content, size, inode, or timestamp change moves the token. `probe` (stat, follows symlinks) and `probeNoFollow` (lstat) wrap the stat and return `null` for ENOENT and ENOTDIR only; `mode` is masked with `0o777`. A post-write probe miss falls back to the sentinel `missing:${targetKey}` rather than failing.",
+      "invariants": [
+        "fsio.ts:216-218 'ENOENT (no such file) and ENOTDIR (a parent segment is a file) both mean the target is absent; any other metadata failure is a real permission/IO fault.'",
+        "fs-local/src/index.ts:266-267 the post-write probe miss 'requires a concurrent unlink between rename and stat' (v8-ignored fallback path)."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "version string `${dev}:${ino}:${size}:${mtimeNs}:${ctimeNs}` (fsio.ts:75)",
+        "mode mask 0o777n (fsio.ts:235, :251)",
+        "sentinel `missing:${targetKey}` (fs-local/src/index.ts:270)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/fsio.ts:74",
+        "packages/fs/fs-local/src/fsio.ts:209",
+        "packages/fs/fs-local/src/fsio.ts:220",
+        "packages/fs/fs-local/src/fsio.ts:230",
+        "packages/fs/fs-local/src/fsio.ts:235",
+        "packages/fs/fs-local/src/fsio.ts:246",
+        "packages/fs/fs-local/src/index.ts:131",
+        "packages/fs/fs-local/src/index.ts:139",
+        "packages/fs/fs-local/src/index.ts:268"
+      ],
+      "verified": true
+    },
+    {
+      "name": "local-text-read-binary-rejection",
+      "what": "`readWholeText` stats for a regular file, reads the whole file with the abort signal translated to FS_ABORTED, rejects a NUL byte inside the first 8192 bytes as FS_NOT_TEXT, then decodes with `new TextDecoder('utf-8', {fatal: true})` and maps the TypeError to FS_NOT_TEXT. `streamWholeText` gives the same text semantics chunk by chunk: it scans only the first 8192 bytes for NUL and feeds a single streaming fatal decoder so a multi-byte sequence split across chunks still decodes. Neither path normalizes line endings.",
+      "invariants": [
+        "index.ts:186-188 'Read the whole regular text file as a single decoded string' (no normalization promised).",
+        "fsio.ts:2-4 'This provider layer returns validated UTF-8 text, streams large files, and rejects binary data'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "BINARY_SAMPLE_BYTES = 8192 (fsio.ts:17), NUL scan window for both whole and streamed reads",
+        "TextDecoder('utf-8', { fatal: true }) (fsio.ts:331, :478)",
+        "non-regular file -> FS_NOT_REGULAR_FILE (fsio.ts:364)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/fsio.ts:17",
+        "packages/fs/fs-local/src/fsio.ts:329",
+        "packages/fs/fs-local/src/fsio.ts:354",
+        "packages/fs/fs-local/src/fsio.ts:364",
+        "packages/fs/fs-local/src/fsio.ts:375",
+        "packages/fs/fs-local/src/fsio.ts:379",
+        "packages/fs/fs-local/src/fsio.ts:475",
+        "packages/fs/fs-local/src/fsio.ts:481",
+        "packages/fs/fs-local/src/index.ts:148",
+        "packages/fs/fs-local/src/index.ts:152"
+      ],
+      "verified": true
+    },
+    {
+      "name": "local-bounded-byte-reads",
+      "what": "`readWholeBytes(target, signal, maxBytes, internals)` first stats: a file larger than `maxBytes` fails with FS_TOO_LARGE before any content I/O, then it opens a read stream with `end: maxBytes` and re-checks the running byte count so a file that grows after the stat still cannot be buffered without bound. `readByteWindow(target, {offset, length})` opens the stream at `start: offset` with `end: offset + length - 1`, so only the window is buffered whatever the file size, and a window at/past EOF is empty. Both translate a mid-stream AbortError to FS_ABORTED and do no decoding or binary rejection.",
+      "invariants": [
+        "fs/index.ts:203-206 'The bound lives at this seam so a backend can never buffer an unbounded file: a target known or discovered to exceed maxBytes fails with FS_TOO_LARGE instead of returning a truncated result.'",
+        "fs/index.ts:218-221 'The window is the bound here, not the file' and 'the caller's cap on length is the guard against unbounded buffering'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "readWholeBytes: stat-size short-circuit `info.size > maxBytes` -> FS_TOO_LARGE (fsio.ts:403-405)",
+        "readWholeBytes stream `end: maxBytes` plus running `bytes > maxBytes` re-check (fsio.ts:407-418)",
+        "readByteWindow `start: range.offset`, `end: range.offset + range.length - 1` (fsio.ts:447-448)",
+        "readByteWindow returns empty for `range.length === 0` (fsio.ts:445)"
+      ],
+      "evidence": [
+        "packages/fs/fs/src/index.ts:203",
+        "packages/fs/fs/src/index.ts:218",
+        "packages/fs/fs-local/src/fsio.ts:396",
+        "packages/fs/fs-local/src/fsio.ts:403",
+        "packages/fs/fs-local/src/fsio.ts:408",
+        "packages/fs/fs-local/src/fsio.ts:416",
+        "packages/fs/fs-local/src/fsio.ts:439",
+        "packages/fs/fs-local/src/fsio.ts:445",
+        "packages/fs/fs-local/src/fsio.ts:447",
+        "packages/fs/fs-local/src/index.ts:156",
+        "packages/fs/fs-local/src/index.ts:160"
+      ],
+      "verified": true
+    },
+    {
+      "name": "local-atomic-staged-write-and-fsync",
+      "what": "`writeFileAtomic` (fsio.ts, exported from fs-local - a DIFFERENT implementation from `@deepseek-ai/dsh-atomic-write`) creates `<dir>/.<basename>.<pid>.<uuid>.tmpdir` with mode 0o700 (mkdir then chmod), opens `<basename>.tmp` inside it with `'wx'` and 0o600, writes the UTF-8 content, calls `handle.sync()` (fsync), optionally restores the destination's prior mode, then publishes by rename (POSIX) / `ReplaceFileW` (win32 with a prior mode) / `link()` (guarded create). The private staging directory is removed after the commit and a cleanup failure there is swallowed; any failure before the commit closes the handle and removes the staging dir, rethrowing the original FsError.",
+      "invariants": [
+        "fsio.ts:556-560 'Atomically replace a file through a private, synced staging file in the same directory.'",
+        "fsio.ts:636-637 'The target is committed; owner-only staging residue cannot turn that write into a failure.'",
+        "fsio.ts:75-77 per-target lock serializes the read-guard-write window so 'concurrent writes/edits are deterministically ordered' (fs-local/src/index.ts:75-77)."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "staging dir name `.${basename(absolutePath)}.${process.pid}.${randomUUID()}.tmpdir` (fsio.ts:584)",
+        "temp file name `${basename(absolutePath)}.tmp` (fsio.ts:586)",
+        "staging dir mode 0o700 (fsio.ts:599, :601)",
+        "temp file mode 0o600 via open flag 'wx' (fsio.ts:603-604)",
+        "handle.sync() before publication (fsio.ts:609)",
+        "diff-basis read chunk bound DIFF_BASIS_READ_CHUNK_BYTES = 64 * 1024 (fsio.ts:19)",
+        "cleanup failure produces combined FS_NOT_FOUND message (fsio.ts:514, :647)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/fsio.ts:19",
+        "packages/fs/fs-local/src/fsio.ts:505",
+        "packages/fs/fs-local/src/fsio.ts:571",
+        "packages/fs/fs-local/src/fsio.ts:581",
+        "packages/fs/fs-local/src/fsio.ts:584",
+        "packages/fs/fs-local/src/fsio.ts:586",
+        "packages/fs/fs-local/src/fsio.ts:599",
+        "packages/fs/fs-local/src/fsio.ts:603",
+        "packages/fs/fs-local/src/fsio.ts:608",
+        "packages/fs/fs-local/src/fsio.ts:609",
+        "packages/fs/fs-local/src/fsio.ts:611",
+        "packages/fs/fs-local/src/fsio.ts:632",
+        "packages/fs/fs-local/src/fsio.ts:635",
+        "packages/fs/fs-local/src/index.ts:209"
+      ],
+      "verified": true
+    },
+    {
+      "name": "local-guarded-create-no-clobber-publication",
+      "what": "For a `createIfAbsent` intent the publication step uses `link(tempPath, absolutePath)` - a hard link that cannot replace an existing file - instead of rename. On failure `throwGuardedCreateFailure` re-inspects the destination with `lstat`: an existing non-file yields FS_NOT_REGULAR_FILE, an existing file yields FS_NOT_OBSERVED, a naked EEXIST yields FS_NOT_OBSERVED, and anything else becomes FS_IO_ERROR with the original error as cause. This exists because 'Link errno values vary by platform and filesystem', so the errno alone cannot distinguish a collision from missing hard-link support.",
+      "invariants": [
+        "fsio.ts:567-569 'publish with a hard-link no-replace primitive; a concurrent creator's file is preserved and this write is rejected with FS_NOT_OBSERVED'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "FS_NOT_REGULAR_FILE when the inspected destination is not a file (fsio.ts:538)",
+        "FS_NOT_OBSERVED when the destination exists or the error is EEXIST (fsio.ts:540-551)",
+        "default inspectPublicationTarget is lstat(path, { bigint: true }) (fsio.ts:592-593)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/fsio.ts:519",
+        "packages/fs/fs-local/src/fsio.ts:536",
+        "packages/fs/fs-local/src/fsio.ts:538",
+        "packages/fs/fs-local/src/fsio.ts:546",
+        "packages/fs/fs-local/src/fsio.ts:567",
+        "packages/fs/fs-local/src/fsio.ts:591",
+        "packages/fs/fs-local/src/fsio.ts:616",
+        "packages/fs/fs-local/src/fsio.ts:618"
+      ],
+      "verified": true
+    },
+    {
+      "name": "windows-acl-preserving-file-replacement",
+      "what": "`win32.ts` lazily loads `advapi32.dll`/`kernel32.dll` through koffi and binds `GetFileSecurityW`, `SetFileSecurityW`, `ReplaceFileW`, `GetLastError`. `readFileDaclWin32` reads the destination's self-relative DACL (two-call size probe then read), `copyFileDaclWin32` writes it onto the empty temp with DACL|PROTECTED_DACL so the staging parent's inheritance cannot widen it, and `replaceFileWin32` calls `ReplaceFileW` so the replaced file's ACL and replace metadata survive. In `writeFileAtomic` the DACL copy runs only when `platform === 'win32' && mode !== undefined`, publication uses `ReplaceFileW` on the same condition, and an ENOENT from ReplaceFileW falls back to plain `rename` because the temp already carries the protected DACL.",
+      "invariants": [
+        "fsio.ts:558-560 'A new Windows file inherits the destination directory's DACL; a replacement copies the existing target's DACL onto the empty temp before writing and preserves the target descriptor at publication.'",
+        "win32.ts:104 'The destination must still be empty when confidentiality depends on this call.'",
+        "win32.ts:2-3 'Koffi loads lazily so non-Windows processes never open Win32 libraries.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "DACL_SECURITY_INFORMATION = 0x00000004 (win32.ts:38)",
+        "PROTECTED_DACL_SECURITY_INFORMATION = 0x80000000 (win32.ts:39)",
+        "ERROR_FILE_NOT_FOUND = 2 (win32.ts:40), ERROR_PATH_NOT_FOUND = 3 (win32.ts:41), ERROR_ACCESS_DENIED = 5 (win32.ts:42)",
+        "errno mapping: 2/3 -> ENOENT, 5 -> EACCES, default -> EIO (win32.ts:60-70)",
+        "ReplaceFileW called with flags 0, backup/exclude/reserved null (win32.ts:124-131)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/win32.ts:38",
+        "packages/fs/fs-local/src/win32.ts:39",
+        "packages/fs/fs-local/src/win32.ts:40",
+        "packages/fs/fs-local/src/win32.ts:46",
+        "packages/fs/fs-local/src/win32.ts:49",
+        "packages/fs/fs-local/src/win32.ts:60",
+        "packages/fs/fs-local/src/win32.ts:88",
+        "packages/fs/fs-local/src/win32.ts:104",
+        "packages/fs/fs-local/src/win32.ts:108",
+        "packages/fs/fs-local/src/win32.ts:122",
+        "packages/fs/fs-local/src/fsio.ts:605",
+        "packages/fs/fs-local/src/fsio.ts:622",
+        "packages/fs/fs-local/src/fsio.ts:628"
+      ],
+      "verified": true
+    },
+    {
+      "name": "per-target-mutation-serialization-lock",
+      "what": "`LocalFileSystem` keeps `locks: Map<string, Promise<unknown>>` keyed by `targetKey`; `withLock(targetKey, op)` chains `op` onto the previous tail promise (FIFO), stores a swallowed-result tail for the next waiter, and deletes the entry in `finally` only when it still owns the tail. Both `writeText` and `editText` run their whole probe -> guard -> read -> write -> probe sequence inside `withLock`, so the read-modify-write window cannot interleave.",
+      "invariants": [
+        "fs-local/src/index.ts:75-77 'serializes mutating ops so the read-guard-write window cannot interleave, making concurrent writes/edits deterministically ordered (one wins, the rest see the new version and reject as stale)'.",
+        "fs-local/src/index.ts:243-245 'Still inside the per-target lock, so the read-match-write window is serialized and atomic.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "lock scope is per-targetKey, in-process only (fs-local/src/index.ts:78)",
+        "the lock chain swallows a failed op for the next waiter (fs-local/src/index.ts:96)",
+        "writeText and editText both wrap in withLock (fs-local/src/index.ts:181, :236)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/index.ts:75",
+        "packages/fs/fs-local/src/index.ts:78",
+        "packages/fs/fs-local/src/index.ts:92",
+        "packages/fs/fs-local/src/index.ts:96",
+        "packages/fs/fs-local/src/index.ts:101",
+        "packages/fs/fs-local/src/index.ts:181",
+        "packages/fs/fs-local/src/index.ts:236",
+        "packages/fs/fs-local/src/index.ts:243"
+      ],
+      "verified": true
+    },
+    {
+      "name": "guarded-write-edit-stale-version-check",
+      "what": "`writeText` probes the target, rejects a non-file with FS_NOT_REGULAR_FILE, then enforces the intent: `replaceIfVersion` requires the file to still exist and its version to equal the expected one (both mismatches -> FS_STALE_VERSION), and `createIfAbsent` with an existing file is refused as a blind overwrite with FS_NOT_OBSERVED. `editText` probes first and reports FS_STALE_VERSION for a missing target, FS_NOT_REGULAR_FILE for a non-file, and checks the version guard BEFORE literal matching so a stale edit cannot be misreported as FS_EDIT_NOT_FOUND or FS_AMBIGUOUS_EDIT.",
+      "invariants": [
+        "fs-local/src/index.ts:238-241 'Stale guard before literal matching: an edit based on an old read reports FS_STALE_VERSION, not FS_EDIT_NOT_FOUND/FS_AMBIGUOUS_EDIT against newer content.'",
+        "fs-local/src/index.ts:194 'createIfAbsent onto an existing file: a blind overwrite - require a read first.'",
+        "fs-local/src/index.ts:197 'No expectation means an unconditional but still atomic write.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "replaceIfVersion on absent target -> FS_STALE_VERSION (fs-local/src/index.ts:189)",
+        "replaceIfVersion version mismatch -> FS_STALE_VERSION (fs-local/src/index.ts:190-192)",
+        "createIfAbsent on existing -> FS_NOT_OBSERVED (fs-local/src/index.ts:195)",
+        "edit on missing target -> FS_STALE_VERSION (fs-local/src/index.ts:241)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/index.ts:182",
+        "packages/fs/fs-local/src/index.ts:184",
+        "packages/fs/fs-local/src/index.ts:189",
+        "packages/fs/fs-local/src/index.ts:190",
+        "packages/fs/fs-local/src/index.ts:195",
+        "packages/fs/fs-local/src/index.ts:197",
+        "packages/fs/fs-local/src/index.ts:238",
+        "packages/fs/fs-local/src/index.ts:241",
+        "packages/fs/fs-local/src/index.ts:246"
+      ],
+      "verified": true
+    },
+    {
+      "name": "crlf-normalized-literal-edit",
+      "what": "`readForEdit` reads the file abortably, rejects any NUL byte as FS_NOT_TEXT, decodes fatally, returns LF-normalized content plus the detected line-ending style (sampled from the first 4096 characters; CRLF wins only when crlfCount > lfCount). `applyLiteralEdit` normalizes oldString/newString, rejects an empty oldString as FS_EDIT_NOT_FOUND, counts non-overlapping occurrences with indexOf, rejects zero matches as FS_EDIT_NOT_FOUND and >1 without `replaceAll` as FS_AMBIGUOUS_EDIT, and returns the text replaced via split/join. `editText` then restores the original style with `restoreLineEndings` (which re-normalizes first so CRLF is never doubled) before the atomic write, while the returned `before`/`after` stay LF-normalized as the diff basis.",
+      "invariants": [
+        "fsio.ts:660-663 'Collapse CRLF to LF - the canonical in-memory form every edit/diff basis uses. Lone \\r bytes (not followed by \\n) are left untouched.'",
+        "fsio.ts:677-681 'LF returns the content unchanged; CRLF re-normalizes first so an already-CRLF sequence is never doubled to \\r\\r\\n.'",
+        "fs-local/src/index.ts:222-224 'a CRLF overwrite must not read as every line changed'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "line-ending sample = first 4096 chars (fsio.ts:671)",
+        "empty old_string -> FS_EDIT_NOT_FOUND (fsio.ts:805-807)",
+        "zero matches -> FS_EDIT_NOT_FOUND (fsio.ts:810-812)",
+        "multiple matches without replaceAll -> FS_AMBIGUOUS_EDIT (fsio.ts:813-815)",
+        "edit read rejects NUL -> FS_NOT_TEXT (fsio.ts:716)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/fsio.ts:657",
+        "packages/fs/fs-local/src/fsio.ts:666",
+        "packages/fs/fs-local/src/fsio.ts:670",
+        "packages/fs/fs-local/src/fsio.ts:671",
+        "packages/fs/fs-local/src/fsio.ts:685",
+        "packages/fs/fs-local/src/fsio.ts:689",
+        "packages/fs/fs-local/src/fsio.ts:708",
+        "packages/fs/fs-local/src/fsio.ts:716",
+        "packages/fs/fs-local/src/fsio.ts:797",
+        "packages/fs/fs-local/src/fsio.ts:805",
+        "packages/fs/fs-local/src/fsio.ts:810",
+        "packages/fs/fs-local/src/fsio.ts:813",
+        "packages/fs/fs-local/src/index.ts:222",
+        "packages/fs/fs-local/src/index.ts:250",
+        "packages/fs/fs-local/src/index.ts:252"
+      ],
+      "verified": true
+    },
+    {
+      "name": "bounded-overwrite-diff-basis",
+      "what": "`writeText` captures a contextual-diff basis only when the outgoing content is below `diffBasisMaxBytes` and the target already existed, via `readTextForDiff`, which enforces the bound on the OPENED descriptor rather than a prior path stat: it stats the handle, returns null for a non-file or `size >= maxBytes`, allocates `openedSize + 1` bytes to detect growth after the stat, reads in 64 KiB chunks, returns null when the byte count differs from the opened size, returns null on a NUL byte or invalid UTF-8, and otherwise returns LF-normalized text. I/O failure of the optional basis returns null while cancellation (FsError) still propagates.",
+      "invariants": [
+        "fsio.ts:721-726 'The bound is enforced on the opened descriptor rather than a prior path stat, so concurrent external replacement or size changes cannot make this helper buffer more than maxBytes.'",
+        "fsio.ts:778-781 'a committed write must not fail for a presentation-only pre-read'.",
+        "fsio.ts:729 'aborts the read (FS_ABORTED); cancellation propagates, unlike I/O failure'."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "config default diffBasisMaxBytes = 10 * 1024 * 1024 (10 MiB) (fs-local/src/index.ts:53, :68)",
+        "cap MAX_DIFF_BASIS_BYTES = Math.min(bufferConstants.MAX_LENGTH, bufferConstants.MAX_STRING_LENGTH) (fs-local/src/index.ts:54-57)",
+        "exclusive bound: `info.size >= maxBytes` -> null (fsio.ts:749)",
+        "read chunk DIFF_BASIS_READ_CHUNK_BYTES = 64 * 1024 (fsio.ts:19, used at :755)",
+        "outgoing content check `Buffer.byteLength(content,'utf8') < this.config.diffBasisMaxBytes` (fs-local/src/index.ts:205)"
+      ],
+      "evidence": [
+        "packages/fs/fs-local/src/index.ts:45",
+        "packages/fs/fs-local/src/index.ts:53",
+        "packages/fs/fs-local/src/index.ts:54",
+        "packages/fs/fs-local/src/index.ts:83",
+        "packages/fs/fs-local/src/index.ts:204",
+        "packages/fs/fs-local/src/index.ts:207",
+        "packages/fs/fs-local/src/fsio.ts:19",
+        "packages/fs/fs-local/src/fsio.ts:733",
+        "packages/fs/fs-local/src/fsio.ts:740",
+        "packages/fs/fs-local/src/fsio.ts:748",
+        "packages/fs/fs-local/src/fsio.ts:749",
+        "packages/fs/fs-local/src/fsio.ts:752",
+        "packages/fs/fs-local/src/fsio.ts:755",
+        "packages/fs/fs-local/src/fsio.ts:764",
+        "packages/fs/fs-local/src/fsio.ts:766",
+        "packages/fs/fs-local/src/fsio.ts:777",
+        "packages/fs/fs-local/src/fsio.ts:781"
+      ],
+      "verified": true
+    },
+    {
+      "name": "local-directory-listing-stable-order",
+      "what": "`listDirectory` probes the target (missing -> FS_NOT_FOUND, non-directory -> FS_NOT_DIRECTORY), reads entries with `readdir(..., { withFileTypes: true, encoding: 'utf8' })`, sorts them by `name.localeCompare`, and for each child resolves a child target and probes it, emitting `{name, type, target, version?, size?}` (size only for regular files). Non-ENOENT/ENOTDIR/EPERM failures are translated by `listingIoError` into FS_IO_ERROR with the original as cause. Abort is checked before, after listing, and between children.",
+      "invariants": [
+        "fs/index.ts:230-232 'Returns resolved child targets plus cheap metadata only; never reads file contents.'",
+        "fsio.ts:277-280 'file contents are never read' and listing aborts with FS_ABORTED 'checked between children'."
+      ],
+      "failurePolicy": "mixed",
+      "constants": [
+        "sort key is name.localeCompare (fsio.ts:303)",
+        "missing -> FS_NOT_FOUND (fsio.ts:290); non-directory -> FS_NOT_DIRECTORY (fsio.ts:291)",
+        "permission errors -> FS_PERMISSION_DENIED (fsio.ts:265); anything else -> FS_IO_ERROR (fsio.ts:266)"
+      ],
+      "evidence": [
+        "packages/fs/fs/src/index.ts:230",
+        "packages/fs/fs-local/src/fsio.ts:259",
+        "packages/fs/fs-local/src/fsio.ts:265",
+        "packages/fs/fs-local/src/fsio.ts:266",
+        "packages/fs/fs-local/src/fsio.ts:282",
+        "packages/fs/fs-local/src/fsio.ts:290",
+        "packages/fs/fs-local/src/fsio.ts:291",
+        "packages/fs/fs-local/src/fsio.ts:295",
+        "packages/fs/fs-local/src/fsio.ts:303",
+        "packages/fs/fs-local/src/fsio.ts:313",
+        "packages/fs/fs-local/src/index.ts:164"
+      ],
+      "verified": true
+    },
+    {
+      "name": "read-before-write-observation-policy",
+      "what": "`fs-observation-policy` registers NO service and has no `inject`: `apply()` builds one `ObservedStateGate` per plugin instance holding `WeakMap<owner, Map<targetKey, FsObservation>>`, where the owner is derived from the opaque event actor as `actor.agent.session`. It occupies the `fs/write-intent` slot (unseen or confirmed-absent -> `createIfAbsent`, present -> `replaceIfVersion` at the observed version) and the `fs/edit-intent` slot (no owner or unseen -> FS_NOT_OBSERVED, absent -> FS_NOT_FOUND, present -> `{version}`), and it records `fs/observed` synchronously. Both waterfalls are deferred through `Promise.resolve().then` so a throw rejects rather than escaping synchronously. Disposal clears all state for HMR.",
+      "invariants": [
+        "index.ts:2-5 'Without this plugin, tools retain the bare provider's unconditional mutation behavior.'",
+        "index.ts:116 and :121 'occupy the single decision slot - do NOT call next()'.",
+        "index.ts:124-126 'fs/observed must remain synchronous and non-throwing: emit does not await promises, and successful mutations have already committed.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "owner = `actor.agent.session`, `undefined` for a direct call with no agent (index.ts:36-41)",
+        "unseen edit -> FS_NOT_OBSERVED 'edit requires reading \"...\" first' (index.ts:82)",
+        "absent edit -> FS_NOT_FOUND (index.ts:85)",
+        "no `inject` list at all (documented index.ts:101-104)"
+      ],
+      "evidence": [
+        "packages/fs/fs-observation-policy/src/index.ts:21",
+        "packages/fs/fs-observation-policy/src/index.ts:28",
+        "packages/fs/fs-observation-policy/src/index.ts:36",
+        "packages/fs/fs-observation-policy/src/index.ts:65",
+        "packages/fs/fs-observation-policy/src/index.ts:78",
+        "packages/fs/fs-observation-policy/src/index.ts:82",
+        "packages/fs/fs-observation-policy/src/index.ts:85",
+        "packages/fs/fs-observation-policy/src/index.ts:91",
+        "packages/fs/fs-observation-policy/src/index.ts:106",
+        "packages/fs/fs-observation-policy/src/index.ts:109",
+        "packages/fs/fs-observation-policy/src/index.ts:119",
+        "packages/fs/fs-observation-policy/src/index.ts:122",
+        "packages/fs/fs-observation-policy/src/index.ts:127",
+        "packages/fs/fs-observation-policy/src/types.ts:23"
+      ],
+      "verified": true
+    },
+    {
+      "name": "fs-sandbox-per-call-write-confinement",
+      "what": "`SandboxedFileSystem extends LocalFileSystem`, so all read/list/atomic-write mechanics are inherited verbatim and only `writeText`/`editText` are fenced. `checkedTarget` resolves the effective policy (per-call or `ctx.sandboxPolicy.resolve()`), returns the caller's target unfenced for `danger-full-access`, throws FS_SANDBOX_DENIED for `read-only`, and for `workspace-write` RE-canonicalizes the target with `this.resolve(displayPath)` and requires it under some root of `writableRoots(policy)`, returning the FRESH target so the checked identity is the mutated one. The class advertises `sandboxMode` from `ctx.sandboxPolicy.defaultMode` and requires that service (`inject = ['sandboxPolicy']`).",
+      "invariants": [
+        "index.ts:10-18 'The fence is a policy check in TRUSTED code over a MODEL-CONTROLLED path, NOT a kernel boundary ... containment, not a security boundary; kernel-grade isolation of untrusted CODE stays ctx.shell's job'; the residual symlink TOCTOU is 'narrowed by re-canonicalizing immediately before delegating and is accepted for this threat model'.",
+        "index.ts:111-114 'return the EXACT target the mutation must use, so the checked identity is the mutated one (no check-here-write-there TOCTOU)'.",
+        "index.ts:7-8 'Reads pass through untouched: every mode permits reading.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "read-only denial message: 'file access denied under read-only mode' (index.ts:127)",
+        "workspace-write denial message: 'file access denied under workspace-write mode' (index.ts:141)",
+        "both denials carry code FS_SANDBOX_DENIED (index.ts:127, :141)",
+        "3 handled modes: 'danger-full-access', 'read-only', 'workspace-write' (index.ts:125, :126, :129)"
+      ],
+      "evidence": [
+        "packages/fs/fs-sandbox/src/index.ts:55",
+        "packages/fs/fs-sandbox/src/index.ts:56",
+        "packages/fs/fs-sandbox/src/index.ts:61",
+        "packages/fs/fs-sandbox/src/index.ts:65",
+        "packages/fs/fs-sandbox/src/index.ts:80",
+        "packages/fs/fs-sandbox/src/index.ts:101",
+        "packages/fs/fs-sandbox/src/index.ts:122",
+        "packages/fs/fs-sandbox/src/index.ts:125",
+        "packages/fs/fs-sandbox/src/index.ts:127",
+        "packages/fs/fs-sandbox/src/index.ts:132",
+        "packages/fs/fs-sandbox/src/index.ts:134",
+        "packages/fs/fs-sandbox/src/index.ts:141"
+      ],
+      "verified": true
+    },
+    {
+      "name": "fs-containment-lexical-then-identity-check",
+      "what": "`isPathUnder(path, root, caseSensitive = process.platform !== 'win32')` first tries a purely lexical comparison (optional lowercasing, root plus separator prefix), then falls back to filesystem identity: it stats the root, walks the target's ancestors with `statIfPresent` (ENOENT/ENOTDIR -> undefined), and returns true when any ancestor has the same `dev` and `ino` as the root; the walk terminates at the filesystem root. This recognizes Windows long-name/8.3 aliases and casing differences without weakening containment to a textual approximation.",
+      "invariants": [
+        "containment.ts:2-5 'Canonical spellings take the fast lexical path; filesystem identity supplies the conservative fallback for alias-equivalent roots such as Windows 8.3 names and casing.'",
+        "containment.ts:50-51 the fallback exists to recognize aliases 'without weakening containment to a textual approximation'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "MISSING_CODES = {'ENOENT','ENOTDIR'} (containment.ts:12)",
+        "caseSensitive default = process.platform !== 'win32' (containment.ts:61)",
+        "identity comparison is dev+ino equality only (containment.ts:42-44)",
+        "ancestor walk terminates when dirname(ancestor) === ancestor (containment.ts:72-73)"
+      ],
+      "evidence": [
+        "packages/fs/fs-sandbox/src/containment.ts:12",
+        "packages/fs/fs-sandbox/src/containment.ts:19",
+        "packages/fs/fs-sandbox/src/containment.ts:23",
+        "packages/fs/fs-sandbox/src/containment.ts:31",
+        "packages/fs/fs-sandbox/src/containment.ts:42",
+        "packages/fs/fs-sandbox/src/containment.ts:58",
+        "packages/fs/fs-sandbox/src/containment.ts:61",
+        "packages/fs/fs-sandbox/src/containment.ts:63",
+        "packages/fs/fs-sandbox/src/containment.ts:66",
+        "packages/fs/fs-sandbox/src/containment.ts:68",
+        "packages/fs/fs-sandbox/src/containment.ts:72"
+      ],
+      "verified": true
+    },
+    {
+      "name": "tool-read-windowed-line-render",
+      "what": "The `read` tool validates `file_path`/`offset`/`limit` (`limit` defaults to and may not exceed the configured `readLimit`), resolves the target once via `resolveRegularReadTarget` (which emits `fs/observed absent` and throws FS_NOT_FOUND on a miss, and rejects non-regular files), and uses that single stat for type, size routing, and the observed version. It streams when `size` is undefined or `>= readStreamMinSize`, otherwise reads whole, then `buildWindow` scans to an exact total line count while keeping only the requested window, truncating each line past `maxLineLength` with a suffix and stopping at `maxBytes` with `truncatedByBytes` set; the page is rendered into a `<path>/<type>/<content>` envelope with a continuation footer, and `fs/observed present` is emitted after success.",
+      "invariants": [
+        "read.ts:139-140 'One stat: absence observation OR type check + size routing + present version. A concurrent write can only make a later guarded mutation fail stale and require reread.'",
+        "read-render.ts:2-4 'Chunk scanning caps the current line, so even one newline-free giant line cannot grow memory without bound.'",
+        "read-render.ts:117 'One char past the truncation point is enough to prove a line overflows.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "READ_LIMIT = 2000 default and maximum lines per read (read.ts:15)",
+        "STREAM_MIN_SIZE = 10 * 1024 * 1024 stream threshold (read.ts:21)",
+        "READ_MAX_LINE_LENGTH = 2000 chars per line before '... (line truncated to N chars)' (read-render.ts:11, :70)",
+        "READ_MAX_BYTES = 50 * 1024 output byte cap for the page (read-render.ts:14)",
+        "lineBufferCap = maxLineLength + 1 (read-render.ts:118)",
+        "offset past EOF -> FS_NOT_FOUND unless truncatedByBytes or (0 lines and offset 1) (read-render.ts:96-97)",
+        "offset defaults to 1 and limit to maxLimit (read.ts:57-58)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/read.ts:15",
+        "packages/fs/tool-fs/src/read.ts:21",
+        "packages/fs/tool-fs/src/read.ts:55",
+        "packages/fs/tool-fs/src/read.ts:57",
+        "packages/fs/tool-fs/src/read.ts:59",
+        "packages/fs/tool-fs/src/read.ts:139",
+        "packages/fs/tool-fs/src/read.ts:145",
+        "packages/fs/tool-fs/src/read.ts:163",
+        "packages/fs/tool-fs/src/read-render.ts:11",
+        "packages/fs/tool-fs/src/read-render.ts:14",
+        "packages/fs/tool-fs/src/read-render.ts:70",
+        "packages/fs/tool-fs/src/read-render.ts:83",
+        "packages/fs/tool-fs/src/read-render.ts:96",
+        "packages/fs/tool-fs/src/read-render.ts:118",
+        "packages/fs/tool-fs/src/read-render.ts:156",
+        "packages/fs/tool-fs/src/read-target.ts:26",
+        "packages/fs/tool-fs/src/read-target.ts:30"
+      ],
+      "verified": true
+    },
+    {
+      "name": "tool-write-atomic-outcome-and-hunk-diff",
+      "what": "The `write` tool validates a non-blank `file_path` (empty content is legitimate), resolves the per-call sandbox policy BEFORE anything executes, resolves the target with the policy workspace root as cwd, then obtains a single-slot `fs/write-intent` (bare default `undefined` = unconditional, no stat), calls `ctx.fs.writeText`, maps the error through `sandbox.mapError` + `remediateFsError`, emits `fs/observed present` with the produced version, and returns `{path, operation, before, after}`. The presentation meta carries one three-line-context hunk per applied change computed with the `diff` package's `structuredPatch`; a null `before` (create or declined basis) yields an empty diff list and the result presenter falls back to the call args.",
+      "invariants": [
+        "write.ts:112-113 'Single-slot decision: the policy plugin produces createIfAbsent/replaceIfVersion; the bare default is undefined (unconditional). No stat.'",
+        "diff.ts:40-42 'The unified-diff marker for a missing trailing newline annotates the patch, not the content - skip it so it never leaks into a diff block.'",
+        "diff.ts:31 'one diff per applied hunk, in file order; empty when the texts are identical'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "DIFF_CONTEXT = 3 context lines per hunk (diff.ts:11)",
+        "empty `before` -> `diffs: []` in presentationMeta (write.ts:99-100)",
+        "non-blank file_path required (write.ts:25)",
+        "output schema operation enum ['create','update'] (write.ts:86)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/write.ts:24",
+        "packages/fs/tool-fs/src/write.ts:86",
+        "packages/fs/tool-fs/src/write.ts:98",
+        "packages/fs/tool-fs/src/write.ts:106",
+        "packages/fs/tool-fs/src/write.ts:110",
+        "packages/fs/tool-fs/src/write.ts:111",
+        "packages/fs/tool-fs/src/write.ts:114",
+        "packages/fs/tool-fs/src/write.ts:117",
+        "packages/fs/tool-fs/src/write.ts:122",
+        "packages/fs/tool-fs/src/write.ts:124",
+        "packages/fs/tool-fs/src/write.ts:145",
+        "packages/fs/tool-fs/src/diff.ts:11",
+        "packages/fs/tool-fs/src/diff.ts:33",
+        "packages/fs/tool-fs/src/diff.ts:42",
+        "packages/fs/tool-fs/src/diff.ts:54"
+      ],
+      "verified": true
+    },
+    {
+      "name": "tool-edit-literal-replace-with-version-guard",
+      "what": "The `edit` tool rejects a blank `file_path`, an empty `old_string`, and `old_string === new_string` ('a guaranteed no-op edit'), resolves the sandbox policy first, resolves the target, and inside a try obtains the `fs/edit-intent` waterfall (which can itself throw FS_NOT_OBSERVED for an unread target) and calls `ctx.fs.editText` with `{oldString,newString,replaceAll}`. Both the intent refusal and the provider's guarded-mutation failure go through `sandbox.mapError` + `remediateFsError`, then `fs/observed present` is emitted with the edited version. The success text distinguishes single vs replace-all wording, and the presentation meta is the applied hunk diff.",
+      "invariants": [
+        "edit.ts:119-124 'the bare default never manufactures a version basis. The intent slot itself can throw FS_NOT_OBSERVED for an unread target, so it sits inside the try'.",
+        "edit.ts:41-42 'old_string !== new_string (an equal pair would be a guaranteed no-op edit)'.",
+        "edit.ts:148-149 the call-time diff card is derived from the args because a call-time presenter has no prior content."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "replaceAll defaults to false (edit.ts:54)",
+        "empty old_string rejected (edit.ts:48)",
+        "old_string === new_string rejected (edit.ts:49)",
+        "single-match wording vs 'All occurrences were successfully replaced.' (edit.ts:64-68)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/edit.ts:41",
+        "packages/fs/tool-fs/src/edit.ts:46",
+        "packages/fs/tool-fs/src/edit.ts:48",
+        "packages/fs/tool-fs/src/edit.ts:49",
+        "packages/fs/tool-fs/src/edit.ts:54",
+        "packages/fs/tool-fs/src/edit.ts:64",
+        "packages/fs/tool-fs/src/edit.ts:117",
+        "packages/fs/tool-fs/src/edit.ts:119",
+        "packages/fs/tool-fs/src/edit.ts:127",
+        "packages/fs/tool-fs/src/edit.ts:128",
+        "packages/fs/tool-fs/src/edit.ts:139",
+        "packages/fs/tool-fs/src/edit.ts:141"
+      ],
+      "verified": true
+    },
+    {
+      "name": "session-workspace-cwd-resolution",
+      "what": "`sessionCwd(exec, requestedPath)` returns the calling agent's `exec.agent.session.header.cwd`, and only when either the cwd or the requested path contains a `..` path segment does it canonicalize the cwd with `canonicalPath` so a symlinked cwd's filesystem identity becomes observable. A non-agent call returns `undefined`, deliberately leaving the fallback to the provider rather than reading `process.cwd()` at the tool boundary. `sessionResolveOptions` returns `{cwd, signal}` for every model-facing fs tool, preferring a resolved per-call `policyWorkspaceRoot` over the session cwd.",
+      "invariants": [
+        "session-cwd.ts:2-6 'each session's read/write/edit act on its workspace, not the server's launch directory. Non-agent calls return undefined, leaving the fallback in the provider rather than reading process.cwd() at the tool boundary.'",
+        "session-cwd.ts:18-19 'parent traversal makes a symlinked cwd's filesystem identity observable'."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "PARENT_PATH_SEGMENT = /(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)/ (session-cwd.ts:13)",
+        "policyWorkspaceRoot takes precedence over the session cwd (session-cwd.ts:40)",
+        "signal is always forwarded from exec.signal (session-cwd.ts:43)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/session-cwd.ts:13",
+        "packages/fs/tool-fs/src/session-cwd.ts:18",
+        "packages/fs/tool-fs/src/session-cwd.ts:22",
+        "packages/fs/tool-fs/src/session-cwd.ts:23",
+        "packages/fs/tool-fs/src/session-cwd.ts:24",
+        "packages/fs/tool-fs/src/session-cwd.ts:25",
+        "packages/fs/tool-fs/src/session-cwd.ts:35",
+        "packages/fs/tool-fs/src/session-cwd.ts:40",
+        "packages/fs/tool-fs/src/session-cwd.ts:43"
+      ],
+      "verified": true
+    },
+    {
+      "name": "guarded-mutation-error-remediation",
+      "what": "`remediateFsError(error, displayPath)` rewrites exactly two codes for the model: FS_NOT_OBSERVED becomes `cannot modify \"<path>\": file has not been read - read the file, then retry` (replacing policy/provider text) and FS_STALE_VERSION keeps the provider's reason and appends `- re-read the file, then retry`. Both preserve the original code for machine routing and keep the original error as `cause`; any other value passes through untouched. It runs after `FsSandboxController.mapError`, so a sandbox denial (already mapped to the shared `[sandbox: ...]` marker) is not rewritten.",
+      "invariants": [
+        "error.ts:12-16 'FS_STALE_VERSION keeps the provider's reason and appends its re-read remedy. FS_NOT_OBSERVED replaces operation-specific policy/provider text with one path-aware reason and read remedy.'",
+        "fs/tool-fs/src/sandbox.ts:114-117 the structured FS_SANDBOX_DENIED code must survive 'because ToolRuntime populates result.error only for HarnessError instances, so a plain Error would strip the code'."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "FS_NOT_OBSERVED text: 'cannot modify \"...\": file has not been read - read the file, then retry' (error.ts:25)",
+        "FS_STALE_VERSION suffix: ' - re-read the file, then retry' (error.ts:31)",
+        "only those 2 codes are rewritten (error.ts:23, :30)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/error.ts:12",
+        "packages/fs/tool-fs/src/error.ts:21",
+        "packages/fs/tool-fs/src/error.ts:23",
+        "packages/fs/tool-fs/src/error.ts:25",
+        "packages/fs/tool-fs/src/error.ts:30",
+        "packages/fs/tool-fs/src/error.ts:31",
+        "packages/fs/tool-fs/src/sandbox.ts:114",
+        "packages/fs/tool-fs/src/sandbox.ts:129"
+      ],
+      "verified": true
+    },
+    {
+      "name": "fs-sandbox-escalation-approval-controller",
+      "what": "`FsSandboxController` is built once per `tool-fs` apply from `ctx.fs.sandboxMode`: with no confining backend `escalationModes` is `[]`, the escalation schema fields are never spread into the `write`/`edit` parameter schemas (so the validator rejects them before execute), and the tool set is unescalatable; with a confining backend it requires `ctx.sandboxPolicy` (throwing at load otherwise). `resolvePolicy` validates the escalation argument pairing, resolves the session's standing policy, and for an escalation pair calls the shared `approveEscalation` (fail-closed approval sequence, audited under the tool name and call id) then stamps `{...policy, mode: approvedMode}` for the single call. `mapError` converts a thrown FS_SANDBOX_DENIED into an FsError whose text is the shared `[sandbox: <mode>]` marker plus the same-turn escalation hint, keeping the structured code.",
+      "invariants": [
+        "sandbox.ts:5-8 the controller delegates 'the vocabulary and the fail-closed approval sequence to @deepseek-ai/dsh-sandbox ... so bash and fs escalate identically'.",
+        "sandbox.ts:59-65 escalation fields are advertised only under a confining backend; 'the strict-wider check happens per call at execution'.",
+        "sandbox.ts:117-119 'A FS_SANDBOX_DENIED only arises under a confining backend, which always advertises the escalation fields, so the hint always applies here.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "escalationModes = [] when ctx.fs.sandboxMode is undefined, else ESCALATION_TARGETS (sandbox.ts:45)",
+        "load-time throw when the mounted fs confines but ctx.sandboxPolicy is missing (sandbox.ts:47-49)",
+        "escalating call with no confining backend throws 'sandbox_permissions is not available in this composition...' (sandbox.ts:94)",
+        "escalation argument names: sandbox_permissions, justification (sandbox.ts:22-23)",
+        "denial marker text = sandboxDenialMarker(mode) + escalationHintMarker('operation') (sandbox.ts:129)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/index.ts:76",
+        "packages/fs/tool-fs/src/sandbox.ts:21",
+        "packages/fs/tool-fs/src/sandbox.ts:37",
+        "packages/fs/tool-fs/src/sandbox.ts:45",
+        "packages/fs/tool-fs/src/sandbox.ts:47",
+        "packages/fs/tool-fs/src/sandbox.ts:59",
+        "packages/fs/tool-fs/src/sandbox.ts:87",
+        "packages/fs/tool-fs/src/sandbox.ts:88",
+        "packages/fs/tool-fs/src/sandbox.ts:94",
+        "packages/fs/tool-fs/src/sandbox.ts:97",
+        "packages/fs/tool-fs/src/sandbox.ts:107",
+        "packages/fs/tool-fs/src/sandbox.ts:124",
+        "packages/fs/tool-fs/src/sandbox.ts:129",
+        "packages/fs/tool-fs/src/write.ts:78",
+        "packages/fs/tool-fs/src/edit.ts:92"
+      ],
+      "verified": true
+    },
+    {
+      "name": "read-image-sniff-and-attachment-commit",
+      "what": "`read_image` is registered only inside `ctx.inject(['attachments'], ...)`; execution re-checks that store for direct callers and puts every gate before any filesystem I/O: an unknown non-empty extension is refused by name, the deployment's `imageLimits.mediaTypes` must accept a declared type, and `assertImageCapableRoute` resolves the session's routed provider/model (request header config, then agent options) and requires the resolved model info to declare the `image` input modality. It then reads bytes with `readBytes` bounded by `min(maxImageBytes, maxMessageImageBytes)`, sniffs the media type from the signature when the extension was absent, re-checks deployment acceptance, and commits the bytes with `attachments.saveImage` BEFORE returning so the image block references a durably committed object. AttachmentError codes are mapped to model-readable remedies; `fs/observed present` is emitted with the stat version.",
+      "invariants": [
+        "read-image.ts:244-247 'Every pre-read gate runs before any filesystem I/O so a refusal never leaks partial reads or attachment writes.'",
+        "read-image.ts:7-10 'The route gate is deliberately stricter than the host upload preflight ... unknown capability refuses instead of relying on an adapter failure after filesystem and attachment work.'",
+        "read-image.ts:278-281 'Dimension refusals stay recoverable tool errors: an oversized image must never enter durable history'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "accepted extensions .png/.jpg/.jpeg/.webp/.gif -> image/png|jpeg|webp|gif (read-image.ts:25-31)",
+        "PNG signature 89 50 4E 47 0D 0A 1A 0A (read-image.ts:33)",
+        "JPEG signature FF D8 FF (read-image.ts:34)",
+        "GIF87a/GIF89a and RIFF....WEBP ASCII checks (read-image.ts:57-58)",
+        "byte cap = Math.min(attachments.imageLimits.maxImageBytes, attachments.imageLimits.maxMessageImageBytes) (read-image.ts:264)",
+        "downscale multiplier rendered to 2 decimals (read-image.ts:173-174)",
+        "mapped AttachmentError codes: IMAGE_DIMENSION_TOO_LARGE, IMAGE_TOO_MANY_PIXELS, IMAGE_TOO_LARGE, ATTACHMENT_WRITE_FAILED (/16-bit PNG/), INVALID_IMAGE, IMAGE_TYPE_MISMATCH (read-image.ts:281-321)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/index.ts:70",
+        "packages/fs/tool-fs/src/read-image.ts:25",
+        "packages/fs/tool-fs/src/read-image.ts:33",
+        "packages/fs/tool-fs/src/read-image.ts:54",
+        "packages/fs/tool-fs/src/read-image.ts:119",
+        "packages/fs/tool-fs/src/read-image.ts:128",
+        "packages/fs/tool-fs/src/read-image.ts:134",
+        "packages/fs/tool-fs/src/read-image.ts:241",
+        "packages/fs/tool-fs/src/read-image.ts:244",
+        "packages/fs/tool-fs/src/read-image.ts:258",
+        "packages/fs/tool-fs/src/read-image.ts:264",
+        "packages/fs/tool-fs/src/read-image.ts:266",
+        "packages/fs/tool-fs/src/read-image.ts:271",
+        "packages/fs/tool-fs/src/read-image.ts:275",
+        "packages/fs/tool-fs/src/read-image.ts:281",
+        "packages/fs/tool-fs/src/read-image.ts:323"
+      ],
+      "verified": true
+    },
+    {
+      "name": "tool-result-presentation-meta-replay-safety",
+      "what": "The read/write/edit/glob/grep tools persist a JSON `presentationMeta` on the tool result (session-log persisted and re-sent on every request) because the canonical structured value never crosses the wire - only rendered text and `meta` do. Each producer narrows its own opaque shape on replay with hand-written validators that return `undefined` on any violation instead of throwing: `readMetaFromMeta` enforces 1-based strictly-increasing line numbers bounded by `totalLines`, `diffsFromMeta` rejects absent/malformed/empty diff arrays, and `searchViewFromMeta` accepts an empty but well-formed result (a zero-match grep is a legitimate card). `langFromPath` uses `Object.hasOwn` so a filename like `foo.constructor` maps to no language rather than an inherited member.",
+      "invariants": [
+        "read-render.ts:213-218 the meta 'must be JSON-serializable (the session validates this at append), so presentResult reproduces the read card on replay'.",
+        "read-render.ts:253-254 'Any violation declines to the generic fallback rather than emitting a card that misnumbers or overcounts.'",
+        "read-render.ts:205-208 'Own-property check only: a filename whose extension is an Object.prototype key ... must map to no language'."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "meta cap for search results: SEARCH_META_MAX_BYTES = 65_536 (search-core.ts:65, presentation.ts:107-117)",
+        "capMetaBytes never empties the payload: `while (files.length > 1 && ...)` / `while (paths.length > 1 && ...)` (presentation.ts:111, :115)",
+        "read meta requires Number.isInteger(offset) && offset >= 1 and totalLines >= 0 (read-render.ts:262-263)",
+        "diffsFromMeta returns undefined for an empty diffs array (diff.ts:77)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs/src/read-render.ts:205",
+        "packages/fs/tool-fs/src/read-render.ts:213",
+        "packages/fs/tool-fs/src/read-render.ts:253",
+        "packages/fs/tool-fs/src/read-render.ts:258",
+        "packages/fs/tool-fs/src/read-render.ts:262",
+        "packages/fs/tool-fs/src/diff.ts:59",
+        "packages/fs/tool-fs/src/diff.ts:74",
+        "packages/fs/tool-fs/src/diff.ts:77",
+        "packages/fs/tool-fs/src/read.ts:124",
+        "packages/fs/tool-fs/src/read.ts:173",
+        "packages/fs/tool-fs-search/src/presentation.ts:60",
+        "packages/fs/tool-fs-search/src/presentation.ts:107",
+        "packages/fs/tool-fs-search/src/presentation.ts:111",
+        "packages/fs/tool-fs-search/src/presentation.ts:181",
+        "packages/fs/tool-fs-search/src/presentation.ts:189"
+      ],
+      "verified": true
+    },
+    {
+      "name": "file-search-ripgrep-spawn-and-output-caps",
+      "what": "Both search tools run the PACKAGED ripgrep binary as an ordinary foreground `ctx.subprocess.spawn` with a plain argv vector - never `ctx.shell`, never a background task - and `--no-config` is prepended so a host `RIPGREP_CONFIG_PATH` cannot inject a `--pre` preprocessor. `resolveRgPath` memoizes a per-process promise: a pkg single-file runtime uses the `${execPath}-rg` sidecar, otherwise the platform package selected by `@vscode/ripgrep`. `runRipgrep` forwards the session cwd (falling back to `process.cwd()`) and `exec.signal`, classifies exit 0 as results, exit 1 as zero results, aborts as SEARCH_ABORTED, and other exits via a stderr regex into SEARCH_INVALID_PATTERN or SEARCH_FAILED; stdout must be COMPLETE within `rawOutputMaxBytes` or the call fails with SEARCH_RAW_OUTPUT_OVERFLOW rather than parsing a partial stream.",
+      "invariants": [
+        "index.ts:7-11 'these tools execute through ctx.subprocess.spawn() with fixed ripgrep argv templates - never ctx.shell, never ctx.shell.start(), never a model-visible background task'.",
+        "search-core.ts:191-193 '--no-config is prepended: a host RIPGREP_CONFIG_PATH ... can otherwise inject --pre and make ripgrep execute an arbitrary preprocessor for every matched file.'",
+        "search-core.ts:132-137 'A truncated result means the subprocess seam could not retain complete stdout within the requested budget, so the tool fails clearly instead of parsing a silently-partial stream.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "RAW_OUTPUT_MAX_BYTES = 20_000_000 default cap on complete raw stdout (search-core.ts:36)",
+        "SEARCH_TIMEOUT_MS = 30_000 cooperative tool-call timeout attached as ToolDefinition.timeoutMs (search-core.ts:43; glob.ts:327; grep.ts:294)",
+        "SEARCH_STDERR_MAX_BYTES = 64 * 1024 stderr tail cap (search-core.ts:50)",
+        "SEARCH_GRACE_MS = 3_000 terminate grace, validated against MAX_TIMER_DELAY_MS (search-core.ts:53; index.ts:137-139)",
+        "argv prefix `[rgPath, '--no-config', ...argv]` (search-core.ts:236)",
+        "exit 1 means noMatches, not failure (search-core.ts:282)",
+        "invalid-pattern detection regex /regex parse error|error parsing glob/i (search-core.ts:126)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs-search/src/index.ts:7",
+        "packages/fs/tool-fs-search/src/index.ts:70",
+        "packages/fs/tool-fs-search/src/index.ts:137",
+        "packages/fs/tool-fs-search/src/search-core.ts:36",
+        "packages/fs/tool-fs-search/src/search-core.ts:43",
+        "packages/fs/tool-fs-search/src/search-core.ts:50",
+        "packages/fs/tool-fs-search/src/search-core.ts:53",
+        "packages/fs/tool-fs-search/src/search-core.ts:65",
+        "packages/fs/tool-fs-search/src/search-core.ts:126",
+        "packages/fs/tool-fs-search/src/search-core.ts:139",
+        "packages/fs/tool-fs-search/src/search-core.ts:143",
+        "packages/fs/tool-fs-search/src/search-core.ts:171",
+        "packages/fs/tool-fs-search/src/search-core.ts:174",
+        "packages/fs/tool-fs-search/src/search-core.ts:177",
+        "packages/fs/tool-fs-search/src/search-core.ts:219",
+        "packages/fs/tool-fs-search/src/search-core.ts:236",
+        "packages/fs/tool-fs-search/src/search-core.ts:275",
+        "packages/fs/tool-fs-search/src/search-core.ts:278",
+        "packages/fs/tool-fs-search/src/search-core.ts:282",
+        "packages/fs/tool-fs-search/src/glob.ts:327"
+      ],
+      "verified": true
+    },
+    {
+      "name": "glob-file-discovery-tool",
+      "what": "`glob` builds a fixed `rg --files` argv: `--glob=<pattern>`, `--sort=modified`, `--no-ignore`, `--hidden`, two negated globs per VCS directory name (`--glob=!**/NAME` prunes during traversal, `--glob=!**/NAME/**` still excludes contents when the search root is at/inside that directory), and the search root after `--` so a leading-dash path is never a flag. Results are split on newlines, mapped to workdir-relative display paths, and returned as `{root, paths}`; a `tools/post-execute` hook re-renders an over-cap page and spills the complete sorted list. The inline page is the whole list when it fits, else the modification-time head or a top-level sample depending on `sampleOverCapGlobResults`.",
+      "invariants": [
+        "glob.ts:82-84 'Every model-controlled value ... is a plain argv element - no shell layer exists, so no quoting applies; the search root rides behind -- so a leading-dash path can never be parsed as a flag.'",
+        "glob.ts:233-235 'A result that fits is shown whole, untouched: modification-time order is the tool's contract'.",
+        "glob.ts:30-35 the two-negated-globs rule for each VCS name, because the prune glob 'alone never matches' when the root is inside the directory."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "GLOB_MAX_RESULTS = 100 inline path cap (glob.ts:25)",
+        "GLOB_VCS_EXCLUDES = ['.git','.svn','.hg','.bzr','.jj','.sl'] (glob.ts:37)",
+        "2 negated globs per excluded name = 12 extra argv entries (glob.ts:100-103)",
+        "spill file name 'glob-results.txt' (glob.ts:368)",
+        "spill only when paths.length > maxResults (glob.ts:367)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs-search/src/glob.ts:25",
+        "packages/fs/tool-fs-search/src/glob.ts:30",
+        "packages/fs/tool-fs-search/src/glob.ts:37",
+        "packages/fs/tool-fs-search/src/glob.ts:71",
+        "packages/fs/tool-fs-search/src/glob.ts:82",
+        "packages/fs/tool-fs-search/src/glob.ts:89",
+        "packages/fs/tool-fs-search/src/glob.ts:100",
+        "packages/fs/tool-fs-search/src/glob.ts:105",
+        "packages/fs/tool-fs-search/src/glob.ts:233",
+        "packages/fs/tool-fs-search/src/glob.ts:235",
+        "packages/fs/tool-fs-search/src/glob.ts:343",
+        "packages/fs/tool-fs-search/src/glob.ts:355",
+        "packages/fs/tool-fs-search/src/glob.ts:362",
+        "packages/fs/tool-fs-search/src/glob.ts:367",
+        "packages/fs/tool-fs-search/src/glob.ts:368"
+      ],
+      "verified": true
+    },
+    {
+      "name": "glob-over-cap-top-level-sampling",
+      "what": "When `sampleOverCapGlobResults` is true and a result exceeds `maxResults`, `sampleAcrossTopLevel` groups paths by their leading segment relative to the search root (separators normalized, absolute outside-workdir paths grouped by first real name) and round-robins one path per group per pass until the page is full, so every top-level entry receives a slot before any receives a second. The footer reports the shown vs total top-level spread and adds 'Narrow path to inspect a specific subtree.' when the sample does not reach every group; a flat result reproduces the modification-time head. The same page function feeds the search card so text and card agree.",
+      "invariants": [
+        "glob.ts:161-163 'Every top-level entry receives a slot before any receives a second; exhausted groups drop out. Group order and order within each group follow paths.'",
+        "glob.ts:240-242 'computed the SAME way renderGlobPaths computes its model-facing page so the card and the text agree on which paths survived the cap'."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "sampling switch is an explicit required deployment config `sampleOverCapGlobResults` (index.ts:98)",
+        "default in the base bundle is false (packages/bundle/base/cordis.patch.yml:266)",
+        "extra footer clause 'Narrow path to inspect a specific subtree.' only when shown < total (glob.ts:217)",
+        "guidance text differs by switch value (glob.ts:297-299)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs-search/src/glob.ts:123",
+        "packages/fs/tool-fs-search/src/glob.ts:151",
+        "packages/fs/tool-fs-search/src/glob.ts:161",
+        "packages/fs/tool-fs-search/src/glob.ts:170",
+        "packages/fs/tool-fs-search/src/glob.ts:187",
+        "packages/fs/tool-fs-search/src/glob.ts:201",
+        "packages/fs/tool-fs-search/src/glob.ts:213",
+        "packages/fs/tool-fs-search/src/glob.ts:217",
+        "packages/fs/tool-fs-search/src/glob.ts:240",
+        "packages/fs/tool-fs-search/src/glob.ts:254",
+        "packages/fs/tool-fs-search/src/index.ts:98",
+        "packages/bundle/base/cordis.patch.yml:266"
+      ],
+      "verified": true
+    },
+    {
+      "name": "grep-content-search-tool",
+      "what": "`grep` validates a non-EMPTY pattern (whitespace is a legitimate regex), a non-blank `path`, and exactly one positive `include` glob (blank, `!`-negated, and top-level comma lists are rejected; a comma inside braces is allowed), then runs fixed line-oriented `rg --json` with `--regexp=<pattern>`, optional `--glob=<include>`, and the target after `--`. `parseRecord` skips the framing record types and turns a malformed or incomplete `match` record into SEARCH_FAILED, while a match whose line is base64 `bytes` instead of `text` becomes the placeholder '(line is not valid UTF-8)' rather than failing the search. Matches are grouped by file in first-seen order for the model-facing render.",
+      "invariants": [
+        "grep.ts:5-8 the fixed 'line-oriented rg --json command so file path, line number, and line text parse without colon-splitting ambiguity'.",
+        "grep.ts:118-121 'raw rg --json is an internal transport, so missing or invalid response fields cause a search failure, not a partial result'.",
+        "grep.ts:143-145 'Non-match record types (begin/end/context/summary - and any future type) are transport framing, not results: skipped, not malformed.'"
+      ],
+      "failurePolicy": "mixed",
+      "constants": [
+        "GREP_MAX_MATCHES = 250 inline match cap (grep.ts:29)",
+        "GREP_MAX_LINE_BYTES = 2000 per-line preview byte cap (grep.ts:35)",
+        "non-UTF-8 matched line -> '(line is not valid UTF-8)' (grep.ts:157)",
+        "spill file name 'grep-results.txt' and spill triggered when matches.length > maxMatches (grep.ts:348, :355)",
+        "trailing CR/LF stripped from each matched line via /\\r?\\n$/ (grep.ts:154)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs-search/src/grep.ts:5",
+        "packages/fs/tool-fs-search/src/grep.ts:29",
+        "packages/fs/tool-fs-search/src/grep.ts:35",
+        "packages/fs/tool-fs-search/src/grep.ts:67",
+        "packages/fs/tool-fs-search/src/grep.ts:69",
+        "packages/fs/tool-fs-search/src/grep.ts:74",
+        "packages/fs/tool-fs-search/src/grep.ts:89",
+        "packages/fs/tool-fs-search/src/grep.ts:90",
+        "packages/fs/tool-fs-search/src/grep.ts:111",
+        "packages/fs/tool-fs-search/src/grep.ts:118",
+        "packages/fs/tool-fs-search/src/grep.ts:134",
+        "packages/fs/tool-fs-search/src/grep.ts:143",
+        "packages/fs/tool-fs-search/src/grep.ts:154",
+        "packages/fs/tool-fs-search/src/grep.ts:157",
+        "packages/fs/tool-fs-search/src/grep.ts:169",
+        "packages/fs/tool-fs-search/src/grep.ts:191",
+        "packages/fs/tool-fs-search/src/grep.ts:343",
+        "packages/fs/tool-fs-search/src/grep.ts:348",
+        "packages/fs/tool-fs-search/src/grep.ts:355"
+      ],
+      "verified": true
+    },
+    {
+      "name": "search-result-retention-and-formatted-spill",
+      "what": "One retention pass per result bounds what survives inline: `retainGrepMatches` previews each matched line to `grepMaxLineBytes` (UTF-8-safe head retention, suffix ' (line truncated)') and keeps the first `grepMaxMatches`; `retainGlobPaths` keeps the first `globMaxResults`. The SAME retained value feeds the model-facing render and the search card, so text and card cannot disagree. A `tools/post-execute` hook (gated by `acceptedDirectCallValue`, so it only fires on an accepted, unmodified, top-level call of that exact tool) saves the COMPLETE formatted result through the optional `ctx.spillStore.saveText()` and re-renders with the spill locator; a missing store, missing session owner, or a rejection only logs a warning and the footer says the remainder was not saved.",
+      "invariants": [
+        "search-core.ts:328-334 'The single retention pass both the model-facing render ... and the search-card projection ... consume, so text and card never disagree about which matches survived.'",
+        "search-core.ts:363-371 'search success never turns into isError because spill storage is unavailable.'",
+        "direct-call.ts:7-9 the projection requires 'this tool still owns a direct successful top-level call and no downstream policy replaced either projection'."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "preview suffix ' (line truncated)' (search-core.ts:325)",
+        "spill footer when saved: `Full <glob|grep> result stored at: <locator>. <retrievalHint>` (glob.ts:225; grep.ts:222)",
+        "unsaved footer glob: 'The complete result could not be saved; narrow pattern or path to see more.' (glob.ts:226)",
+        "unsaved footer grep: 'The complete result could not be saved; narrow pattern, path, or include to see more.' (grep.ts:223)",
+        "spill source identity {kind:'tool', toolName, callId, label:'result'} (search-core.ts:397)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs-search/src/search-core.ts:321",
+        "packages/fs/tool-fs-search/src/search-core.ts:325",
+        "packages/fs/tool-fs-search/src/search-core.ts:341",
+        "packages/fs/tool-fs-search/src/search-core.ts:356",
+        "packages/fs/tool-fs-search/src/search-core.ts:379",
+        "packages/fs/tool-fs-search/src/search-core.ts:385",
+        "packages/fs/tool-fs-search/src/search-core.ts:387",
+        "packages/fs/tool-fs-search/src/search-core.ts:392",
+        "packages/fs/tool-fs-search/src/search-core.ts:397",
+        "packages/fs/tool-fs-search/src/search-core.ts:406",
+        "packages/fs/tool-fs-search/src/direct-call.ts:17",
+        "packages/fs/tool-fs-search/src/direct-call.ts:24",
+        "packages/fs/tool-fs-search/src/glob.ts:223",
+        "packages/fs/tool-fs-search/src/glob.ts:226",
+        "packages/fs/tool-fs-search/src/grep.ts:219",
+        "packages/fs/tool-fs-search/src/grep.ts:223",
+        "packages/fs/tool-fs-search/src/grep.ts:351",
+        "packages/fs/tool-fs-search/src/grep.ts:362"
+      ],
+      "verified": true
+    },
+    {
+      "name": "search-meta-byte-bound",
+      "what": "`grepSearchMeta`/`globSearchMeta` build a `SearchMeta` (`shape:'matches'` with by-file groups, or `shape:'paths'` with a flat list) that carries the pre-cap `total` and a `truncated` flag, then `capMetaBytes` serializes it and drops trailing file groups or paths until the JSON fits `searchMetaMaxBytes`, always marking the result truncated and always keeping at least one item. This exists because the inline item caps bound the COUNT but a broad search of long lines can still serialize to hundreds of kilobytes, and `meta` is persisted with the session log and re-sent on every request while a deployment's output budget only shrinks `content`, never `meta`.",
+      "invariants": [
+        "presentation.ts:102-103 'The invariant is a bounded payload wherever droppable, never an empty card that hides a real result.'",
+        "presentation.ts:99 'total is preserved (it counts what the search found, not what meta retains).'",
+        "presentation.ts:181-184 a zero-result meta narrows to a valid empty card, unlike diffsFromMeta which rejects empty diffs."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "SEARCH_META_MAX_BYTES = 65_536 (search-core.ts:65), used as the default of searchMetaMaxBytes (index.ts:102)",
+        "drop loop keeps at least 1 group/path ('files.length > 1', 'paths.length > 1') (presentation.ts:111, :115)",
+        "meta size measured as Buffer.byteLength(JSON.stringify(meta),'utf8') (presentation.ts:93)",
+        "always sets truncated: true when anything is dropped (presentation.ts:112, :116)"
+      ],
+      "evidence": [
+        "packages/fs/tool-fs-search/src/search-core.ts:65",
+        "packages/fs/tool-fs-search/src/index.ts:102",
+        "packages/fs/tool-fs-search/src/presentation.ts:60",
+        "packages/fs/tool-fs-search/src/presentation.ts:92",
+        "packages/fs/tool-fs-search/src/presentation.ts:99",
+        "packages/fs/tool-fs-search/src/presentation.ts:102",
+        "packages/fs/tool-fs-search/src/presentation.ts:107",
+        "packages/fs/tool-fs-search/src/presentation.ts:111",
+        "packages/fs/tool-fs-search/src/presentation.ts:115",
+        "packages/fs/tool-fs-search/src/presentation.ts:130",
+        "packages/fs/tool-fs-search/src/presentation.ts:150",
+        "packages/fs/tool-fs-search/src/presentation.ts:181",
+        "packages/fs/tool-fs-search/src/presentation.ts:189"
+      ],
+      "verified": true
+    },
+    {
+      "name": "tool-present-artifact-delivery",
+      "what": "`present` declares already-existing files as final deliverables in the calling Session. Execution requires an agent Session, an OPEN turn (`ctx.sessionProjections.stateOf(session,'turnBoundary').openTurnStartSeq !== null`), a workspace cwd, and 1..`maxFiles` entries; for each file it lstat-checks the path itself (a non-file entry is refused), resolves the target against the session cwd, then stats it (absent -> FsError FS_NOT_FOUND with a create-and-retry instruction; non-file -> refused). Validated files are parked in a `WeakMap<ToolExecution, ...>`, and a `tools/result` listener appends the durable `deliverables/presented` session event with the turn and callId only when the result is not an error.",
+      "invariants": [
+        "index.ts:40-43 the model contract: 'When a file you create or update is an output the user asked to receive, you must call present after writing it and before your final response' and 'The user opens the current source files; their contents are not copied or preserved.'",
+        "types.ts:5 'A declared filesystem file whose current contents remain at its source path.'",
+        "index.ts:101-102 the durable event is skipped when there is no pending delivery or `result.isError`."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "maxFiles default 8 and must be a positive safe integer (index.ts:22, :34-35)",
+        "per-call accepted range 1..maxFiles (index.ts:79)",
+        "session event name 'deliverables/presented' (types.ts:15; index.ts:104)",
+        "turn taken from `boundary.lastTurn` (index.ts:95-96)"
+      ],
+      "evidence": [
+        "packages/fs/tool-present/src/index.ts:15",
+        "packages/fs/tool-present/src/index.ts:22",
+        "packages/fs/tool-present/src/index.ts:26",
+        "packages/fs/tool-present/src/index.ts:34",
+        "packages/fs/tool-present/src/index.ts:37",
+        "packages/fs/tool-present/src/index.ts:76",
+        "packages/fs/tool-present/src/index.ts:77",
+        "packages/fs/tool-present/src/index.ts:79",
+        "packages/fs/tool-present/src/index.ts:80",
+        "packages/fs/tool-present/src/index.ts:86",
+        "packages/fs/tool-present/src/index.ts:88",
+        "packages/fs/tool-present/src/index.ts:90",
+        "packages/fs/tool-present/src/index.ts:95",
+        "packages/fs/tool-present/src/index.ts:99",
+        "packages/fs/tool-present/src/index.ts:104",
+        "packages/fs/tool-present/src/types.ts:5",
+        "packages/fs/tool-present/src/types.ts:15"
+      ],
+      "verified": true
+    },
+    {
+      "name": "str-replace-editor-command-suite",
+      "what": "`str_replace_editor` registers one tool with four commands over `ctx.fs`: `view` (numbered file content or a shallow directory listing), `create` (refuses an existing file, then dispatches `fs/write-intent` with a `{kind:'createIfAbsent'}` default), `str_replace` (requires `old_str` non-empty and `new_str` not null, dispatches `fs/edit-intent`, reads the file, requires exactly one literal occurrence -> FS_EDIT_NOT_FOUND / FS_AMBIGUOUS_EDIT with the offending line numbers, then writes a `replaceIfVersion` at the observed version), and `insert` (validates `0 <= insert_line <= lines.length`). Paths must be ABSOLUTE or the call is refused with a leading-slash hint, and `statExisting` emits `fs/observed absent` before throwing FS_NOT_FOUND. Its `MutationPolicy` mirrors the tool-fs escalation split: it requires `ctx.sandboxPolicy` only when `ctx.fs.sandboxMode !== undefined` and maps FS_SANDBOX_DENIED to the shared denial marker.",
+      "invariants": [
+        "index.ts:22-23 the description's rule: 'If path is a file, view displays the result of applying cat -n. If path is a directory, view lists non-hidden files and directories up to 2 levels deep'.",
+        "index.ts:25 'A null placeholder for a parameter unused by the selected command is treated as omitted. Required parameters still need values'.",
+        "index.ts:28-29 'The old_str parameter should match EXACTLY one or more consecutive lines from the original file ... If the old_str parameter is not unique in the file, the replacement will not be performed.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "depth limit for the directory listing: `depth < 2` (index.ts:201)",
+        "listing filter excludes dot-prefixed names, 'node_modules', '__pycache__' (index.ts:195-198)",
+        "line numbers padded with padStart(6, ' ') (index.ts:181)",
+        "TRUNCATED_MESSAGE = '<response clipped><NOTE>To save on context only part of this file has been shown to you...' (index.ts:17)",
+        "config maxOutputChars default 16_000 (index.ts:514, and the runtime fallback at :521)",
+        "view_range second element -1 means 'to end of file' (index.ts:175-177)"
+      ],
+      "evidence": [
+        "packages/fs/tool-str-replace-editor/src/index.ts:17",
+        "packages/fs/tool-str-replace-editor/src/index.ts:22",
+        "packages/fs/tool-str-replace-editor/src/index.ts:25",
+        "packages/fs/tool-str-replace-editor/src/index.ts:28",
+        "packages/fs/tool-str-replace-editor/src/index.ts:66",
+        "packages/fs/tool-str-replace-editor/src/index.ts:70",
+        "packages/fs/tool-str-replace-editor/src/index.ts:82",
+        "packages/fs/tool-str-replace-editor/src/index.ts:95",
+        "packages/fs/tool-str-replace-editor/src/index.ts:101",
+        "packages/fs/tool-str-replace-editor/src/index.ts:109",
+        "packages/fs/tool-str-replace-editor/src/index.ts:175",
+        "packages/fs/tool-str-replace-editor/src/index.ts:181",
+        "packages/fs/tool-str-replace-editor/src/index.ts:195",
+        "packages/fs/tool-str-replace-editor/src/index.ts:201",
+        "packages/fs/tool-str-replace-editor/src/index.ts:250",
+        "packages/fs/tool-str-replace-editor/src/index.ts:253",
+        "packages/fs/tool-str-replace-editor/src/index.ts:288",
+        "packages/fs/tool-str-replace-editor/src/index.ts:298",
+        "packages/fs/tool-str-replace-editor/src/index.ts:304",
+        "packages/fs/tool-str-replace-editor/src/index.ts:313",
+        "packages/fs/tool-str-replace-editor/src/index.ts:348",
+        "packages/fs/tool-str-replace-editor/src/index.ts:502",
+        "packages/fs/tool-str-replace-editor/src/index.ts:514"
+      ],
+      "verified": true
+    },
+    {
+      "name": "str-replace-editor-output-clipping",
+      "what": "`maybeTruncate` cuts any `view` result (numbered file view or directory listing) at `maxOutputChars` characters and appends the literal `<response clipped><NOTE>...` message telling the model to grep for line numbers first. `maxOutputChars` is validated as a positive safe integer at apply time and a non-empty description is required; the tool assembles its mutation results as plain strings, so the model-facing output schema is just `{type:'string'}`.",
+      "invariants": [
+        "index.ts:24 'If a command generates a long output, it will be truncated and marked with <response clipped>' (the description states the contract the implementation enforces).",
+        "index.ts:524-525 'tool-str-replace-editor: maxOutputChars must be a positive safe integer'."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "maxOutputChars default 16_000 (index.ts:514)",
+        "CLI/SDK composition uses maxOutputChars: 16000 explicitly (snapshots/sdk/persistent-tools/cordis.yml:9)",
+        "truncation keeps the first maxOutputChars characters then appends the clip notice (index.ts:33-37)"
+      ],
+      "evidence": [
+        "packages/fs/tool-str-replace-editor/src/index.ts:17",
+        "packages/fs/tool-str-replace-editor/src/index.ts:24",
+        "packages/fs/tool-str-replace-editor/src/index.ts:33",
+        "packages/fs/tool-str-replace-editor/src/index.ts:183",
+        "packages/fs/tool-str-replace-editor/src/index.ts:213",
+        "packages/fs/tool-str-replace-editor/src/index.ts:468",
+        "packages/fs/tool-str-replace-editor/src/index.ts:513",
+        "packages/fs/tool-str-replace-editor/src/index.ts:524",
+        "snapshots/sdk/persistent-tools/cordis.yml:9"
+      ],
+      "verified": true
+    },
+    {
+      "name": "atomic-write-sibling-rename-with-windows-retry",
+      "what": "`@deepseek-ai/dsh-atomic-write`'s `writeFileAtomic(filename, content, {mode, dirMode?})` creates parent directories, writes a random-suffix sibling ``${filename}.${randomBytes(6).toString('hex')}.tmp`` with `flag:'wx'` (which refuses to follow a symlink planted at the temp path) and the caller's mode, then renames it over the target so readers see either the old or the new complete content and the replaced file ends up with exactly the stated mode. On Windows, transient `EACCES`/`EBUSY`/`EPERM` renames are retried with exponential backoff (20 ms doubling to a 200 ms cap, at most 8 retries); on any remaining failure the temp is removed and the error rethrown. Crash durability (fsync) is explicitly out of scope. This is a different implementation from `fs-local`'s synced, DACL-aware `writeFileAtomic`.",
+      "invariants": [
+        "index.ts:65-68 'the open refuses to follow a symlink planted at the temp path, and the fresh inode carries options.mode through the rename, so replacing a wider-permission file narrows it without a chmod race'.",
+        "index.ts:68-70 'The rename also replaces a symlinked target itself instead of writing through to its referent, and the same-directory sibling keeps the rename on one filesystem.'",
+        "index.ts:73 'Crash durability (fsync) is out of scope.' and the in-code TODO at :83-84"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "WINDOWS_TRANSIENT_RENAME_ERRORS = {EACCES, EBUSY, EPERM} (index.ts:17)",
+        "WINDOWS_RENAME_RETRY_INITIAL_MS = 20 (index.ts:18)",
+        "WINDOWS_RENAME_RETRY_MAX_MS = 200 (index.ts:19)",
+        "WINDOWS_RENAME_RETRY_LIMIT = 8 (index.ts:20)",
+        "random suffix is randomBytes(6).toString('hex') = 12 hex chars (index.ts:85)",
+        "`mode` is REQUIRED in WriteFileAtomicOptions (index.ts:53)",
+        "retry guard is `process.platform !== 'win32'` -> not transient (index.ts:24)"
+      ],
+      "evidence": [
+        "packages/util/atomic-write/src/index.ts:17",
+        "packages/util/atomic-write/src/index.ts:18",
+        "packages/util/atomic-write/src/index.ts:19",
+        "packages/util/atomic-write/src/index.ts:20",
+        "packages/util/atomic-write/src/index.ts:24",
+        "packages/util/atomic-write/src/index.ts:29",
+        "packages/util/atomic-write/src/index.ts:31",
+        "packages/util/atomic-write/src/index.ts:37",
+        "packages/util/atomic-write/src/index.ts:40",
+        "packages/util/atomic-write/src/index.ts:53",
+        "packages/util/atomic-write/src/index.ts:64",
+        "packages/util/atomic-write/src/index.ts:73",
+        "packages/util/atomic-write/src/index.ts:78",
+        "packages/util/atomic-write/src/index.ts:85",
+        "packages/util/atomic-write/src/index.ts:87",
+        "packages/util/atomic-write/src/index.ts:88",
+        "packages/util/atomic-write/src/index.ts:90"
+      ],
+      "verified": true
+    },
+    {
+      "name": "cross-process-file-lock",
+      "what": "`withFileLock(filename, operation, {waitMs?})` serializes cross-process writers of one file through a `wx`-created sibling ``<filename>.lock`` holding the pid; readers stay lock-free because the rename commit is atomic. Contention is `EEXIST` directly, or `EPERM` only when a fresh `lstat` confirms the lock path exists (Windows exclusive-create behaviour, without hiding an unrelated permission failure). Contention backs off exponentially from 20 ms to a 200 ms cap and fails with a timed-out error once the deadline (now + `waitMs ?? 2000`) passes. The lock is released in `finally`; a contender never removes an existing lock because file age cannot prove the owner stopped.",
+      "invariants": [
+        "index.ts:147-151 'The contender never removes an existing lock because file age cannot prove that its owner stopped; orphan recovery is an operator action. The parent directory must exist.'",
+        "index.ts:109-113 the retry cadence values 'stay robustness invariants of the cross-process write protocol rather than deployment tunables'.",
+        "index.ts:133-137 callers must state `waitMs` when the holder legitimately runs longer than file work (e.g. a network round trip)."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "LOCK_RETRY_INITIAL_MS = 20 (index.ts:114)",
+        "LOCK_RETRY_MAX_MS = 200 (index.ts:115)",
+        "DEFAULT_LOCK_WAIT_MS = 2_000 (index.ts:126)",
+        "lock file content `${process.pid}\\n`, mode 0o600, flag 'wx' (index.ts:167)",
+        "timeout error text 'atomic-write: timed out waiting for the writer lock at <lockPath>' (index.ts:173)",
+        "lock path is `${filename}.lock` (index.ts:162)"
+      ],
+      "evidence": [
+        "packages/util/atomic-write/src/index.ts:96",
+        "packages/util/atomic-write/src/index.ts:98",
+        "packages/util/atomic-write/src/index.ts:101",
+        "packages/util/atomic-write/src/index.ts:109",
+        "packages/util/atomic-write/src/index.ts:114",
+        "packages/util/atomic-write/src/index.ts:115",
+        "packages/util/atomic-write/src/index.ts:126",
+        "packages/util/atomic-write/src/index.ts:133",
+        "packages/util/atomic-write/src/index.ts:147",
+        "packages/util/atomic-write/src/index.ts:157",
+        "packages/util/atomic-write/src/index.ts:162",
+        "packages/util/atomic-write/src/index.ts:163",
+        "packages/util/atomic-write/src/index.ts:167",
+        "packages/util/atomic-write/src/index.ts:173",
+        "packages/util/atomic-write/src/index.ts:176",
+        "packages/util/atomic-write/src/index.ts:181"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-path-canonicalization",
+      "what": "`fullyQualifiedWorkspacePath` requires an absolute path that names one fixed Host location: on win32 the parsed root must not be `\\` or `/` (so a drive-relative path is rejected), on POSIX `posix.isAbsolute`. `realpathNormalize` rejects a non-fully-qualified path with a `TypeError` BEFORE `realpath` can resolve it against the process cwd or current Windows drive, then returns `fs.realpath(path)`; trailing slashes, `..` segments, and symlinks all collapse, making string equality of canonicalized paths the ONE uniqueness canon (a symlink to an existing workspace's directory collides). `defaultWorkspaceTitle` returns the final path segment, or the root spelling when there is none.",
+      "invariants": [
+        "paths.ts:41-44 'This is the ONE uniqueness canon of the package - workspace paths are stored canonicalized, uniqueness is string equality of canonicalized paths (a symlink to an existing workspace's directory collides), and attach-time session cwd checks go through the same canon.'",
+        "paths.ts:44-46 'Relative paths reject before realpath can resolve them from the Host cwd or current Windows drive.'",
+        "types.ts:13-15 'A generated uuid, never the path: path normalization rewrites paths, and a reference anchor must stay stable.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "win32 root rejection: `root !== '\\\\' && root !== '/'` (paths.ts:22)",
+        "TypeError message `Workspace path is not fully qualified: '<path>'` (paths.ts:54)",
+        "a nonexistent path rejects with the original ENOENT from realpath (paths.ts:47-48 doc, :56 call)"
+      ],
+      "evidence": [
+        "packages/workspace/workspace/src/paths.ts:16",
+        "packages/workspace/workspace/src/paths.ts:20",
+        "packages/workspace/workspace/src/paths.ts:22",
+        "packages/workspace/workspace/src/paths.ts:31",
+        "packages/workspace/workspace/src/paths.ts:36",
+        "packages/workspace/workspace/src/paths.ts:41",
+        "packages/workspace/workspace/src/paths.ts:52",
+        "packages/workspace/workspace/src/paths.ts:53",
+        "packages/workspace/workspace/src/paths.ts:56",
+        "packages/workspace/workspace/src/types.ts:13"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-registry-durable-order-and-crash-recovery",
+      "what": "`WorkspaceRegistry` (a `Service` at `ctx.workspaceRegistry`, `inject = ['storageDomain','sessionPersistence']`) opens the versioned `workspace` domain (one `workspaces` KV table plus a global state singleton) at init, completes the single mutation named by a durable `pendingMutation` marker, validates the stored state, bootstraps history from session headers exactly once (gated by `initialized`), indexes live sessions, rebuilds the entity cache, and logs filtered candidates. Create/delete are two-write operations guarded by the pending marker with explicit rollback of both the table and the registry order; `validateStoredState` fails loud on a repeated id, an order entry with no record, an orphan record when initialized, a duplicate canonical path, or a session accounted by two workspaces. All mutations are serialized on `operationTail`, which re-runs `recoverPendingMutation` before each operation.",
+      "invariants": [
+        "index.ts:85-89 'The persistence dependency is mandatory so an unavailable peer can never be mistaken for an empty history and commit the initialized marker.'",
+        "index.ts:402-405 'Unexplained order/table divergence still reaches validateStoredState and fails loud; this path never guesses which operation created a row from its shape alone.'",
+        "index.ts:228-230 'Archiving never touches workspace accounting - an archived session keeps its sessionIds slot so unarchiving restores its position.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "domain name 'workspace', version 2 (spec.ts:69-70)",
+        "initial global state {initialized:false, workspaceIds:[], archivedSessionIds:[]} (spec.ts:73)",
+        "pendingMutation is a discriminated union of exactly 'create' | 'delete' (spec.ts:38-41)",
+        "create prepends the new id to registry order (index.ts:331)",
+        "delete leaves the durable marker when marker cleanup fails and logs a warning instead of reporting failure (index.ts:391-398)"
+      ],
+      "evidence": [
+        "packages/workspace/workspace/src/index.ts:91",
+        "packages/workspace/workspace/src/index.ts:92",
+        "packages/workspace/workspace/src/index.ts:118",
+        "packages/workspace/workspace/src/index.ts:125",
+        "packages/workspace/workspace/src/index.ts:127",
+        "packages/workspace/workspace/src/index.ts:157",
+        "packages/workspace/workspace/src/index.ts:159",
+        "packages/workspace/workspace/src/index.ts:209",
+        "packages/workspace/workspace/src/index.ts:228",
+        "packages/workspace/workspace/src/index.ts:243",
+        "packages/workspace/workspace/src/index.ts:262",
+        "packages/workspace/workspace/src/index.ts:276",
+        "packages/workspace/workspace/src/index.ts:305",
+        "packages/workspace/workspace/src/index.ts:331",
+        "packages/workspace/workspace/src/index.ts:391",
+        "packages/workspace/workspace/src/index.ts:402",
+        "packages/workspace/workspace/src/index.ts:407",
+        "packages/workspace/workspace/src/index.ts:509",
+        "packages/workspace/workspace/src/index.ts:514",
+        "packages/workspace/workspace/src/index.ts:517",
+        "packages/workspace/workspace/src/index.ts:521",
+        "packages/workspace/workspace/src/index.ts:533",
+        "packages/workspace/workspace/src/index.ts:542",
+        "packages/workspace/workspace/src/index.ts:653",
+        "packages/workspace/workspace/src/index.ts:657",
+        "packages/workspace/workspace/src/spec.ts:38",
+        "packages/workspace/workspace/src/spec.ts:69",
+        "packages/workspace/workspace/src/spec.ts:73"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-header-validated-session-membership",
+      "what": "The registry builds a canonical-cwd header index (`headers`, `sessionPaths`, `invalidSessionPaths`) from persisted snapshots and live sessions; `indexHeader` records a session as invalid when its header has no cwd, when realpathNormalize/stat fails, or when the resolved path is not a directory. `WorkspaceEntity.sessionIds` then filters the durable candidate account synchronously to ids whose indexed canonical cwd equals the record's path, and every accepted mutation `mutate()` re-runs that prune durably in the same chain slot, stamping `updatedAt`. `attachSession` validates a NEW id against the immutable header cwd (required, resolvable, a directory, equal to the workspace path) before prepending it; validation is skipped for an id already accounted because both inputs are immutable. A no-op mutation throws an internal sentinel so the medium is not rewritten and no change event is emitted.",
+      "invariants": [
+        "types.ts:26-29 'Membership requires both an id in that account and a session header whose canonical cwd equals the workspace path.'",
+        "entity.ts:110-113 'Validation is skipped when the settled snapshot already accounts the id: the cwd fact was checked when it first attached and both inputs (stored header cwd, workspace path) are immutable. Membership itself is decided on the write chain inside mutate, never on this snapshot.'",
+        "entity.ts:196-200 'a fn signalling no change by returning current verbatim aborts the slot through the sentinel when pruning also finds nothing, so a no-op neither rewrites the medium nor emits a change event.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "sessionIds is filtered, never stored filtered (entity.ts:101-103)",
+        "attach rejections: no cwd / cwd does not resolve / not a directory / resolves elsewhere (entity.ts:116-143)",
+        "insertSessionBefore rejects an unaccounted session or anchor with WorkspaceMoveInvalidError (entity.ts:153-163)",
+        "status() never mutates the record and maps every stat failure to 'missing-dir' (entity.ts:180-188)"
+      ],
+      "evidence": [
+        "packages/workspace/workspace/src/entity.ts:19",
+        "packages/workspace/workspace/src/entity.ts:66",
+        "packages/workspace/workspace/src/entity.ts:101",
+        "packages/workspace/workspace/src/entity.ts:109",
+        "packages/workspace/workspace/src/entity.ts:110",
+        "packages/workspace/workspace/src/entity.ts:116",
+        "packages/workspace/workspace/src/entity.ts:124",
+        "packages/workspace/workspace/src/entity.ts:132",
+        "packages/workspace/workspace/src/entity.ts:138",
+        "packages/workspace/workspace/src/entity.ts:144",
+        "packages/workspace/workspace/src/entity.ts:151",
+        "packages/workspace/workspace/src/entity.ts:180",
+        "packages/workspace/workspace/src/entity.ts:186",
+        "packages/workspace/workspace/src/entity.ts:196",
+        "packages/workspace/workspace/src/entity.ts:202",
+        "packages/workspace/workspace/src/entity.ts:207",
+        "packages/workspace/workspace/src/entity.ts:210",
+        "packages/workspace/workspace/src/entity.ts:213",
+        "packages/workspace/workspace/src/index.ts:571",
+        "packages/workspace/workspace/src/index.ts:574",
+        "packages/workspace/workspace/src/index.ts:580",
+        "packages/workspace/workspace/src/index.ts:587",
+        "packages/workspace/workspace/src/index.ts:603",
+        "packages/workspace/workspace/src/types.ts:26"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-domain-cache-invariant",
+      "what": "A companion plugin (`name='workspace-invariant'`, `inject=['invariants']`, installer additionally `inject: ['workspaceRegistry']`) listens to `domain/changed` and fails the run when the registry's entity cache and the durable `workspaces` table diverge: a `deleted` change whose key is still published by the cache, or a put whose key the cache does not hold, both call `fail(...)`. Registration is `ctx.invariants.register('@deepseek-ai/dsh-workspace', install)`.",
+      "invariants": [
+        "invariant.ts:25-26 'deleting while the cache still publishes the entity proves a bypass'.",
+        "invariant.ts:42-44 'workspace record ... landed durably but the registry cache holds no entity for it - the cache and the domain table have diverged'.",
+        "invariant.ts:30 only the `workspace` domain's `workspaces` table is checked."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "PACKAGE_NAME = '@deepseek-ai/dsh-workspace' (invariant.ts:11)",
+        "filters on domain 'workspace' AND table 'workspaces' (invariant.ts:30)",
+        "companion inject ['invariants'] (invariant.ts:16) plus installer {inject:['workspaceRegistry']} (invariant.ts:48)"
+      ],
+      "evidence": [
+        "packages/workspace/workspace/src/invariant.ts:11",
+        "packages/workspace/workspace/src/invariant.ts:16",
+        "packages/workspace/workspace/src/invariant.ts:25",
+        "packages/workspace/workspace/src/invariant.ts:29",
+        "packages/workspace/workspace/src/invariant.ts:30",
+        "packages/workspace/workspace/src/invariant.ts:31",
+        "packages/workspace/workspace/src/invariant.ts:40",
+        "packages/workspace/workspace/src/invariant.ts:48",
+        "packages/workspace/workspace/src/invariant.ts:56"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-file-tree-api-with-page-caps",
+      "what": "`WorkspaceFiles` (a `TypertRemoteService` at `ctx.workspaceFiles`, namespace implicit) exposes read-only Remote methods over `ctx.fs`: `read` (line page from `streamText`, refused the moment the page exceeds `maxBytes`), `readBytes` (a byte window), `readAll` (complete file under `maxFileBytes`, checked twice - stat size, then `limit + 1` bytes actually read), `readRelated` (complete file resolved relative to another file's directory, with `relativePath` rejected when empty, absolute, scheme-like, or NUL-bearing), `stat`, `list` (children sliced to `maxEntries` with a `truncated` flag), and a streaming `changes`. Page and window defaults are applied host-side so 'the request never carries them implicitly', and every parameter is validated as a safe integer.",
+      "invariants": [
+        "index.ts:6-11 'File reads follow the composed filesystem's read access, including paths outside the workspace ... Directory listings and change observations remain workspace-scoped ... this service exposes no mutations.'",
+        "index.ts:8-10 the base for relative paths is the Session header, 'with the sandbox policy root as its no-cwd fallback, not a read-containment restriction'.",
+        "index.ts:76-78 'A page above this fails; it is not shortened, because a silently cut page reads as the whole page.'"
+      ],
+      "failurePolicy": "mixed",
+      "constants": [
+        "Config defaults: maxBytes 2 * 1024 * 1024, maxFileBytes 32 * 1024 * 1024, maxLines 5000, maxEntries 2000 (index.ts:186-189)",
+        "readAll reads `limit + 1` bytes to detect overflow (index.ts:284)",
+        "readAll stat pre-check `info.size > limit` (index.ts:281)",
+        "NUL check on the assembled page -> workspace-file/not-text (index.ts:95, :241-243)",
+        "entry cap slice + `truncated: children.length > maxEntries` (index.ts:350-351)",
+        "error codes: workspace-file/not-found, /not-regular-file, /not-directory, /too-large, /not-text, /outside-workspace (types.ts:146-165)"
+      ],
+      "evidence": [
+        "packages/api/workspace-files/src/index.ts:69",
+        "packages/api/workspace-files/src/index.ts:95",
+        "packages/api/workspace-files/src/index.ts:98",
+        "packages/api/workspace-files/src/index.ts:112",
+        "packages/api/workspace-files/src/index.ts:126",
+        "packages/api/workspace-files/src/index.ts:142",
+        "packages/api/workspace-files/src/index.ts:182",
+        "packages/api/workspace-files/src/index.ts:183",
+        "packages/api/workspace-files/src/index.ts:186",
+        "packages/api/workspace-files/src/index.ts:187",
+        "packages/api/workspace-files/src/index.ts:188",
+        "packages/api/workspace-files/src/index.ts:189",
+        "packages/api/workspace-files/src/index.ts:231",
+        "packages/api/workspace-files/src/index.ts:241",
+        "packages/api/workspace-files/src/index.ts:256",
+        "packages/api/workspace-files/src/index.ts:277",
+        "packages/api/workspace-files/src/index.ts:281",
+        "packages/api/workspace-files/src/index.ts:284",
+        "packages/api/workspace-files/src/index.ts:299",
+        "packages/api/workspace-files/src/index.ts:306",
+        "packages/api/workspace-files/src/index.ts:323",
+        "packages/api/workspace-files/src/index.ts:336",
+        "packages/api/workspace-files/src/index.ts:350",
+        "packages/api/workspace-files/src/index.ts:364",
+        "packages/api/workspace-files/src/index.ts:370",
+        "packages/api/workspace-files/src/index.ts:380",
+        "packages/api/workspace-files/src/types.ts:146"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-file-scope-gate-and-list-confinement",
+      "what": "A `TypertLookup` registered as `workspaceFileScope` maps a Session id recorded on the wire to `{sessionId, workspaceRoot}` without loading the event body or activating an agent: it prefers a live session header, else `sessionPersistence.stat(sessionId)`, and falls back to `ctx.sandboxPolicy.workspaceRoot` when the header has no cwd. File reads then lstat the requested path FIRST (`inspect`) so a symlink is rejected before `resolve` follows it, and `locateFile` re-checks via stat that the entry is still a regular file. Only `list` is containment-checked: `confine` resolves the path and requires `ctx.fs.contains(root, target)`, otherwise `workspace-file/outside-workspace`. The non-text refusal is recognized by the `FS_NOT_TEXT` code string alone, because the error class belongs to whichever `dsh-fs` instance the provider loaded.",
+      "invariants": [
+        "index.ts:407 'Gate on the path itself before anything follows it.'",
+        "index.ts:424-426 the stat 're-checks what lstat saw: the file may have gone or changed kind in between'.",
+        "index.ts:470-473 'the error class belongs to whichever dsh-fs instance the provider loaded, so no class identity is shared across the package boundary'."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "lookup registered under the name 'workspaceFileScope' (index.ts:202-206)",
+        "empty path -> gateway/bad-request (index.ts:404)",
+        "integerAtLeast: any non-safe-integer or below-minimum value -> gateway/bad-request (index.ts:98-103)",
+        "offset + length must stay a safe integer (index.ts:383-385)",
+        "limit above maxLines -> gateway/bad-request; length above maxBytes -> workspace-file/too-large (index.ts:373-375, :386-392)"
+      ],
+      "evidence": [
+        "packages/api/workspace-files/src/index.ts:98",
+        "packages/api/workspace-files/src/index.ts:201",
+        "packages/api/workspace-files/src/index.ts:207",
+        "packages/api/workspace-files/src/index.ts:216",
+        "packages/api/workspace-files/src/index.ts:373",
+        "packages/api/workspace-files/src/index.ts:383",
+        "packages/api/workspace-files/src/index.ts:386",
+        "packages/api/workspace-files/src/index.ts:399",
+        "packages/api/workspace-files/src/index.ts:404",
+        "packages/api/workspace-files/src/index.ts:407",
+        "packages/api/workspace-files/src/index.ts:408",
+        "packages/api/workspace-files/src/index.ts:416",
+        "packages/api/workspace-files/src/index.ts:418",
+        "packages/api/workspace-files/src/index.ts:429",
+        "packages/api/workspace-files/src/index.ts:435",
+        "packages/api/workspace-files/src/index.ts:470",
+        "packages/api/workspace-files/src/index.ts:475"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-file-observation-change-feed-host",
+      "what": "`WorkspaceChangeFeed` owns one `fs/observed` subscription per host context and fans each emission to every open `changes` generation; the OS is not watched, only instrumented filesystem operations report. `follow` registers the follower BEFORE awaiting `fs.resolve(workspaceRoot)` so nothing observed during resolution is lost, resolves under the generation's signal (a rejection caused by the abort ends quietly), yields one `{kind:'ready'}`, then yields `change` frames whose target passes `ctx.fs.contains(root, target)` and whose absolute path comes from `processPath`. Each generation has a `Deque` queue and a wake callback; the follower is removed and closed in `finally`, so anything still queued is dropped with the generation.",
+      "invariants": [
+        "changes.ts:2-5 'every fs/observed emission whose target lies inside a generation's workspace root becomes one frame of that generation. Instrumented filesystem operations emit these observations; the operating system is not watched.'",
+        "changes.ts:42-43 'Registered before the root resolves, so nothing observed while it does is missed; the root only filters at drain time.'",
+        "types.ts:117-120 'Frames report observations, not deltas: a consumer already holding version learns nothing new from the frame and can ignore it.'"
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "one `ready` frame per generation before any change frame (changes.ts:55)",
+        "abort during resolve is swallowed only when signal.aborted (changes.ts:50-53)",
+        "queued observations are dropped when the generation closes (changes.ts:94)",
+        "filter is `ctx.fs.contains(root, target)` (changes.ts:57)"
+      ],
+      "evidence": [
+        "packages/api/workspace-files/src/changes.ts:15",
+        "packages/api/workspace-files/src/changes.ts:19",
+        "packages/api/workspace-files/src/changes.ts:24",
+        "packages/api/workspace-files/src/changes.ts:40",
+        "packages/api/workspace-files/src/changes.ts:42",
+        "packages/api/workspace-files/src/changes.ts:50",
+        "packages/api/workspace-files/src/changes.ts:55",
+        "packages/api/workspace-files/src/changes.ts:57",
+        "packages/api/workspace-files/src/changes.ts:58",
+        "packages/api/workspace-files/src/changes.ts:61",
+        "packages/api/workspace-files/src/changes.ts:66",
+        "packages/api/workspace-files/src/changes.ts:74",
+        "packages/api/workspace-files/src/changes.ts:84",
+        "packages/api/workspace-files/src/changes.ts:94",
+        "packages/api/workspace-files/src/types.ts:117"
+      ],
+      "verified": true
+    },
+    {
+      "name": "client-file-resource-provider-and-change-fanout",
+      "what": "The client half registers a `file` resource provider over `remote.workspaceFiles`: `createFileResourceProvider` parses the address with `parseFileAddress`, refuses an unparsable address with `workspace-file/unsupported-address` and an `absolute` address (no Session to authorize the Host call) with `workspace-file/unknown-workspace`, then waits for the change feed's `ready` before the first `stat`, binds the feed to the Host-reported `absolutePath`, and re-stats on any notice that could mean stale content. `ChangeFeed` keeps ONE Host `changes` stream per session, opens it when the first follower arrives (after the predecessor stream has settled, so a session never has two Host streams), fans frames to followers by normalized path key, and disposes the stream when the last follower leaves; teardown awaits every stream still closing.",
+      "invariants": [
+        "provider.ts:17-21 'Failures travel as ok: false frames, never as thrown errors: the Remote face does not reject ... A failed stat does not end the stream: the next write stats again.'",
+        "change-feed.ts:119-121 'A predecessor still closing finishes first, so one session never has two Host streams open at once.'",
+        "client/index.ts:28-29 'Teardown waits for every session stream still closing, so the plugin leaves no Host stream behind.'"
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "two error codes raised by the Client and never by the Host: workspace-file/unsupported-address, workspace-file/unknown-workspace (client/types.ts:34, :40)",
+        "path key normalization replaces backslashes with '/' (change-feed.ts:22-24)",
+        "a change whose version equals the current one is skipped (provider.ts:86)",
+        "inject = ['resources','remote','remote.workspaceFiles'] (client/index.ts:17)"
+      ],
+      "evidence": [
+        "packages/api/workspace-files/src/client/index.ts:17",
+        "packages/api/workspace-files/src/client/index.ts:23",
+        "packages/api/workspace-files/src/client/index.ts:30",
+        "packages/api/workspace-files/src/client/provider.ts:17",
+        "packages/api/workspace-files/src/client/provider.ts:46",
+        "packages/api/workspace-files/src/client/provider.ts:52",
+        "packages/api/workspace-files/src/client/provider.ts:61",
+        "packages/api/workspace-files/src/client/provider.ts:69",
+        "packages/api/workspace-files/src/client/provider.ts:73",
+        "packages/api/workspace-files/src/client/provider.ts:86",
+        "packages/api/workspace-files/src/client/provider.ts:92",
+        "packages/api/workspace-files/src/client/provider.ts:115",
+        "packages/api/workspace-files/src/client/provider.ts:123",
+        "packages/api/workspace-files/src/client/change-feed.ts:22",
+        "packages/api/workspace-files/src/client/change-feed.ts:86",
+        "packages/api/workspace-files/src/client/change-feed.ts:100",
+        "packages/api/workspace-files/src/client/change-feed.ts:119",
+        "packages/api/workspace-files/src/client/change-feed.ts:148",
+        "packages/api/workspace-files/src/client/change-feed.ts:195",
+        "packages/api/workspace-files/src/client/change-feed.ts:218",
+        "packages/api/workspace-files/src/client/change-feed.ts:245",
+        "packages/api/workspace-files/src/client/change-feed.ts:267",
+        "packages/api/workspace-files/src/client/types.ts:34",
+        "packages/api/workspace-files/src/client/types.ts:40"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-controller-remote-commands",
+      "what": "`WorkspaceController` owns the `workspace` Remote namespace and delegates every verb to `WorkspaceCommands`, which serializes each mutation on its own `operationTail` so title-ownership checks cannot interleave: `create` resolves by canonical path first (idempotent, `created:false`), `rename` rejects a blank title (`gateway/bad-request`) and any title already used by another workspace (`workspace/name-conflict`), `delete` maps an unknown id to `workspace/not-found`, `insertBefore` maps `WorkspaceOrderInvalidError` to `workspace/not-found`, `insertSessionBefore` maps `WorkspaceMoveInvalidError` to `workspace/move-invalid`, and `archiveSession` maps `WorkspaceUnknownSessionError` to `session/not-found`. The controller also loads `DirectoryPickerController` as a child plugin, so a host without a picking backend registers no picking namespace.",
+      "invariants": [
+        "commands.ts:61 'Rename one Workspace after serializing title ownership checks.'",
+        "index.ts:45-48 'The child stays pending until a picking backend is composed, so a host without one registers no picking namespace instead of answering an unservable verb.'",
+        "commands.ts:49 a pre-existing RemoteError is rethrown as itself rather than re-wrapped."
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "static inject = ['typert','workspaceRegistry'] (index.ts:35)",
+        "namespace 'workspace' (index.ts:42)",
+        "error codes: workspace/invalid-path, workspace/name-conflict, workspace/move-invalid, workspace/not-found, session/not-found (commands.ts:51, :76, :133, :158, :178)",
+        "blank title -> gateway/bad-request (commands.ts:68)"
+      ],
+      "evidence": [
+        "packages/api/workspace-controller/src/index.ts:34",
+        "packages/api/workspace-controller/src/index.ts:35",
+        "packages/api/workspace-controller/src/index.ts:42",
+        "packages/api/workspace-controller/src/index.ts:49",
+        "packages/api/workspace-controller/src/index.ts:57",
+        "packages/api/workspace-controller/src/index.ts:117",
+        "packages/api/workspace-controller/src/commands.ts:28",
+        "packages/api/workspace-controller/src/commands.ts:39",
+        "packages/api/workspace-controller/src/commands.ts:42",
+        "packages/api/workspace-controller/src/commands.ts:49",
+        "packages/api/workspace-controller/src/commands.ts:51",
+        "packages/api/workspace-controller/src/commands.ts:61",
+        "packages/api/workspace-controller/src/commands.ts:68",
+        "packages/api/workspace-controller/src/commands.ts:76",
+        "packages/api/workspace-controller/src/commands.ts:116",
+        "packages/api/workspace-controller/src/commands.ts:133",
+        "packages/api/workspace-controller/src/commands.ts:158",
+        "packages/api/workspace-controller/src/commands.ts:169",
+        "packages/api/workspace-controller/src/commands.ts:178"
+      ],
+      "verified": true
+    },
+    {
+      "name": "workspace-follow-baseline-stream",
+      "what": "`WorkspaceFeed` snapshots the registry (`knownIds`, `order`, `archived`) at construction and listens to `domain/changed`. Each `follow` generation yields exactly one `baseline` frame from the live registry and then ordered increments: registry-global state puts produce `upsert` frames for newly known ids, an `order` frame when the order changed, and an `archived` frame when the archive set changed; a `workspaces`-table put produces an `upsert` only for an already-known id, and a delete produces `remove` only for a known id. A committed registry that references a missing workspace throws. Each follower queues frames in a `Deque` and waits on an abort-aware promise.",
+      "invariants": [
+        "types.ts:125 'Workspace state stream; every generation starts with exactly one baseline.'",
+        "feed.ts:19-22 'Project one authoritative Workspace entity into its Remote value' - the view is detached (sessionIds copied).",
+        "feed.ts:121-126 table deletes/puts for unknown ids are ignored rather than resurrecting removed rows."
+      ],
+      "failurePolicy": "mixed",
+      "constants": [
+        "one baseline frame per generation (feed.ts:87)",
+        "baseline is read synchronously from the registry, not from the queue (feed.ts:70-75)",
+        "unknown-but-committed workspace throws 'committed Workspace registry references missing Workspace' (feed.ts:106)",
+        "only `change.table === ''` (global) puts are treated as order/archive carriers (feed.ts:97-99)"
+      ],
+      "evidence": [
+        "packages/api/workspace-controller/src/feed.ts:23",
+        "packages/api/workspace-controller/src/feed.ts:47",
+        "packages/api/workspace-controller/src/feed.ts:55",
+        "packages/api/workspace-controller/src/feed.ts:59",
+        "packages/api/workspace-controller/src/feed.ts:70",
+        "packages/api/workspace-controller/src/feed.ts:82",
+        "packages/api/workspace-controller/src/feed.ts:87",
+        "packages/api/workspace-controller/src/feed.ts:95",
+        "packages/api/workspace-controller/src/feed.ts:97",
+        "packages/api/workspace-controller/src/feed.ts:106",
+        "packages/api/workspace-controller/src/feed.ts:112",
+        "packages/api/workspace-controller/src/feed.ts:121",
+        "packages/api/workspace-controller/src/feed.ts:126",
+        "packages/api/workspace-controller/src/feed.ts:142",
+        "packages/api/workspace-controller/src/types.ts:125"
+      ],
+      "verified": true
+    },
+    {
+      "name": "directory-picker-capability-gating",
+      "what": "`DirectoryPickerController` backs the `directoryPicker` Remote namespace over the abstract `ctx.directoryPicker` seam and refuses any verb the composed backend cannot serve: `requireCapability(kind, method)` inspects `capability().kind` and throws `directory-picker/unavailable` naming the kind the backend does serve. `createDirectory` validates a zod request first (one non-blank path segment, not '.'/'..', no slash or backslash) -> `gateway/bad-request` with the issues, then maps the seam's closed `DirectoryPickerErrorCode` vocabulary onto `directory-picker/unreadable|exists|create-failed` with the offending path. `cancellableFailure` answers `gateway/cancelled` when the caller's signal aborted BEFORE the business classification runs.",
+      "invariants": [
+        "directory-picker.ts:36-39 'this controller carries the wire verbs: one composed backend serves either the native chooser or the browse primitives, and a verb the composition cannot serve is refused rather than approximated.'",
+        "directory-picker.ts:153-154 'An abort is the caller's own timeout or disconnect, not a backend failure, so it answers gateway/cancelled before the business classification runs.'"
+      ],
+      "failurePolicy": "fail-closed",
+      "constants": [
+        "static inject = ['directoryPicker']; namespace 'directoryPicker' (directory-picker.ts:42, :46)",
+        "rejected directory names: blank/'.'/'..' or containing / or \\ (directory-picker.ts:22-24)",
+        "unavailable message names the served kind (directory-picker.ts:114)",
+        "3 mapped browse codes (directory-picker.ts:128-130)",
+        "unclassified failures -> gateway/internal (directory-picker.ts:148, :169)"
+      ],
+      "evidence": [
+        "packages/api/workspace-controller/src/directory-picker.ts:18",
+        "packages/api/workspace-controller/src/directory-picker.ts:22",
+        "packages/api/workspace-controller/src/directory-picker.ts:36",
+        "packages/api/workspace-controller/src/directory-picker.ts:41",
+        "packages/api/workspace-controller/src/directory-picker.ts:42",
+        "packages/api/workspace-controller/src/directory-picker.ts:46",
+        "packages/api/workspace-controller/src/directory-picker.ts:54",
+        "packages/api/workspace-controller/src/directory-picker.ts:71",
+        "packages/api/workspace-controller/src/directory-picker.ts:87",
+        "packages/api/workspace-controller/src/directory-picker.ts:106",
+        "packages/api/workspace-controller/src/directory-picker.ts:112",
+        "packages/api/workspace-controller/src/directory-picker.ts:127",
+        "packages/api/workspace-controller/src/directory-picker.ts:139",
+        "packages/api/workspace-controller/src/directory-picker.ts:148",
+        "packages/api/workspace-controller/src/directory-picker.ts:153",
+        "packages/api/workspace-controller/src/directory-picker.ts:161",
+        "packages/api/workspace-controller/src/directory-picker.ts:167"
+      ],
+      "verified": true
+    },
+    {
+      "name": "client-workspace-model-race-resolution",
+      "what": "`ClientWorkspaceModel` owns the Client projection: it merges unary command echoes immediately (upsert/remove/installOrder), installs a stream baseline by replacing everything, and resolves unary-vs-stream races with generation counters - a locally optimistic reorder is only reconciled when both `orderRequestGeneration` and `orderFrameGeneration` are unchanged, and an upsert whose incoming `updatedAt` is older than the installed row is dropped. Removed ids go into a `removedIds` set because Host ids are never reused, so delayed data cannot resurrect a removed row. Invalidations coalesce through a microtask with a generation guard, and `WorkspaceController` (client) exposes the command facade while `createWorkspaceStateStream` wraps the Remote stream in a `RemoteSnapshotStream` that maps `baseline` to replace and increments to update.",
+      "invariants": [
+        "model.ts:66 'Host Workspace ids are never reused, so delayed data cannot resurrect a removed row.'",
+        "model.ts:60-63 'Latest local reorder request; only its unary echo may install order' and 'Increments on stream orders so a later remote commit outranks an older unary echo.'",
+        "index.ts:82-84 a stream that ended after being accepted is treated as a retryable `RemoteStreamCarrierError`, not a terminal failure."
+      ],
+      "failurePolicy": "fail-soft",
+      "constants": [
+        "2 generation counters: orderRequestGeneration, orderFrameGeneration (model.ts:61, :63)",
+        "upsert drops an older projection via `Date.parse(view.updatedAt) < Date.parse(installed.updatedAt)` (model.ts:282)",
+        "invalidation coalesced on queueMicrotask with a generation guard (model.ts:327-331)",
+        "client inject = ['remote','remote.workspace'] (client/index.ts:38)"
+      ],
+      "evidence": [
+        "packages/api/workspace-controller/src/client/index.ts:38",
+        "packages/api/workspace-controller/src/client/index.ts:44",
+        "packages/api/workspace-controller/src/client/index.ts:75",
+        "packages/api/workspace-controller/src/client/index.ts:82",
+        "packages/api/workspace-controller/src/client/index.ts:96",
+        "packages/api/workspace-controller/src/client/model.ts:54",
+        "packages/api/workspace-controller/src/client/model.ts:60",
+        "packages/api/workspace-controller/src/client/model.ts:63",
+        "packages/api/workspace-controller/src/client/model.ts:66",
+        "packages/api/workspace-controller/src/client/model.ts:124",
+        "packages/api/workspace-controller/src/client/model.ts:132",
+        "packages/api/workspace-controller/src/client/model.ts:177",
+        "packages/api/workspace-controller/src/client/model.ts:212",
+        "packages/api/workspace-controller/src/client/model.ts:222",
+        "packages/api/workspace-controller/src/client/model.ts:277",
+        "packages/api/workspace-controller/src/client/model.ts:282",
+        "packages/api/workspace-controller/src/client/model.ts:292",
+        "packages/api/workspace-controller/src/client/model.ts:315",
+        "packages/api/workspace-controller/src/client/model.ts:327",
+        "packages/api/workspace-controller/src/client/service.ts:80",
+        "packages/api/workspace-controller/src/client/service.ts:92"
+      ],
+      "verified": true
+    }
+  ],
+  "moduleCoverage": {
+    "packages/fs/fs": {
+      "kind": "service-definition + plumbing",
+      "note": "Abstract `FileSystem` Service at `ctx.fs` plus the error/type vocabulary and one invariant companion: it declares contracts and three events but implements no filesystem I/O (all 13 abstract members).",
+      "mechanisms": ["fs-service-seam-and-target-identity", "fs-error-taxonomy-and-harness-error-codes", "fs-intent-waterfall-and-observed-events", "fs-event-data-invariants"]
+    },
+    "packages/fs/fs-local": {
+      "kind": "mechanism (the real local implementation)",
+      "note": "Owns every local mechanic: realpath identity, binary-rejecting text reads, bounded byte reads, synced staged atomic writes with Windows ACL preservation, per-target mutation lock, stale guards, CRLF-normalized literal edits, bounded diff basis, stable listings.",
+      "mechanisms": ["local-target-realpath-identity", "local-version-token-from-stat-identity", "local-text-read-binary-rejection", "local-bounded-byte-reads", "local-atomic-staged-write-and-fsync", "local-guarded-create-no-clobber-publication", "windows-acl-preserving-file-replacement", "per-target-mutation-serialization-lock", "guarded-write-edit-stale-version-check", "crlf-normalized-literal-edit", "bounded-overwrite-diff-basis", "local-directory-listing-stable-order"]
+    },
+    "packages/fs/fs-observation-policy": {
+      "kind": "mechanism (event-gate plugin, registers no service)",
+      "note": "Not plumbing: it holds the WeakMap observed-state and decides both intent waterfalls; it registers no Service and has no `inject`, so it is pure policy over `fs/*` events.",
+      "mechanisms": ["read-before-write-observation-policy"]
+    },
+    "packages/fs/fs-sandbox": {
+      "kind": "mechanism (subclass backend)",
+      "note": "Thin but substantive: `SandboxedFileSystem` overrides only the two mutations to fence them per call, and `containment.ts` implements the lexical-then-identity containment test used by that fence.",
+      "mechanisms": ["fs-sandbox-per-call-write-confinement", "fs-containment-lexical-then-identity-check"]
+    },
+    "packages/fs/tool-fs": {
+      "kind": "mechanism (model-facing tool suite)",
+      "note": "Owns schemas, validation, read windowing/rendering, the escalation+approval controller, error remediation, session-cwd resolution, image sniffing/attachment commit, and result presentation meta; it holds no filesystem implementation.",
+      "mechanisms": ["tool-read-windowed-line-render", "tool-write-atomic-outcome-and-hunk-diff", "tool-edit-literal-replace-with-version-guard", "session-workspace-cwd-resolution", "guarded-mutation-error-remediation", "fs-sandbox-escalation-approval-controller", "read-image-sniff-and-attachment-commit", "tool-result-presentation-meta-replay-safety"]
+    },
+    "packages/fs/tool-fs-search": {
+      "kind": "mechanism (spawn-backed discovery suite)",
+      "note": "Owns ripgrep argv construction, complete-stdout parsing, per-line and per-item retention, oversize-page sampling, formatted spill, presentation meta, and the timeout/grace/stderr budget declarations; deliberately does NOT inject `fs`.",
+      "mechanisms": ["file-search-ripgrep-spawn-and-output-caps", "glob-file-discovery-tool", "glob-over-cap-top-level-sampling", "grep-content-search-tool", "search-result-retention-and-formatted-spill", "search-meta-byte-bound", "tool-result-presentation-meta-replay-safety"]
+    },
+    "packages/fs/tool-present": {
+      "kind": "mechanism (scoped session delivery tool)",
+      "note": "Small but real logic: validates an open turn, cwd, and 1..maxFiles regular files, then appends a durable `deliverables/presented` session event only for a non-error result. Registers one tool and one `tools/result` listener.",
+      "mechanisms": ["tool-present-artifact-delivery"]
+    },
+    "packages/fs/tool-str-replace-editor": {
+      "kind": "mechanism (alternative single-editor tool)",
+      "note": "Registers one multi-command tool with its own absolute-path rule, unique-literal-match logic, line insertion, shallow listing, and output clipping, plus a duplicated MutationPolicy sandbox split.",
+      "mechanisms": ["str-replace-editor-command-suite", "str-replace-editor-output-clipping"]
+    },
+    "packages/util/atomic-write": {
+      "kind": "mechanism (standalone utility)",
+      "note": "Independent of the fs domain: its `writeFileAtomic` is a separate implementation from fs-local's (no fsync, no DACL handling, Windows rename retries instead) and `withFileLock` provides the cross-process writer lock. Has production callers outside this domain.",
+      "mechanisms": ["atomic-write-sibling-rename-with-windows-retry", "cross-process-file-lock"],
+      "productionCallers": [
+        "packages/boot/app-boot/src/profile.ts:33 (import), :559 (withFileLock call)",
+        "packages/settings/settings-file/src/index.ts:16 (import), :157 and :216 (withFileLock), :228 (writeFileAtomic)",
+        "packages/llm/llm-deepseek/src/upload-index.ts:6 (import)",
+        "packages/preset/agent-presets/src/authoring.ts:17 (import)",
+        "packages/credentials/credentials-local/src/index.ts:44 (import)"
+      ]
+    },
+    "packages/api/workspace-files": {
+      "kind": "mechanism (Host Remote service + Client provider)",
+      "note": "Two halves: the Host service implements read/page/window/stat/list plus the workspace-scoped observation feed with its own confinement and lstat gates; the Client half implements the `file` resource provider and the per-session change fan-out. Not plumbing.",
+      "mechanisms": ["workspace-file-tree-api-with-page-caps", "workspace-file-scope-gate-and-list-confinement", "workspace-file-observation-change-feed-host", "client-file-resource-provider-and-change-fanout"]
+    },
+    "packages/workspace/workspace": {
+      "kind": "mechanism (durable entity registry)",
+      "note": "Substantive domain logic: canonical-path canon, durable registry order with a pending-mutation marker and rollback, header-validated session membership with durable pruning, and a domain/cache invariant companion.",
+      "mechanisms": ["workspace-path-canonicalization", "workspace-registry-durable-order-and-crash-recovery", "workspace-header-validated-session-membership", "workspace-domain-cache-invariant"]
+    },
+    "packages/api/workspace-controller": {
+      "kind": "mechanism (Host Remote owner + Client model)",
+      "note": "Host side is a Remote facade over the registry with serialized commands, stable wire error mapping, the follow baseline stream, and the directory-picker capability gate (mostly delegation, but the mapping/ordering logic is real); the Client model carries the race-resolution logic and the snapshot-stream wiring.",
+      "mechanisms": ["workspace-controller-remote-commands", "workspace-follow-baseline-stream", "directory-picker-capability-gating", "client-workspace-model-race-resolution"]
+    }
+  },
+  "notes": "SCOPE/VERIFICATION: all 56 .ts files under the 12 requested src/ directories were read in full with the read tool (each read returned the whole file, and 'total lines' matched the line counts enumerated beforehand); no README, docs, or test file is used as mechanism evidence. Composition yaml and out-of-domain source lines are cited only under moduleCoverage.productionCallers and two constant entries (base-bundle sampleOverCapGlobResults, SDK snapshot maxOutputChars) and were read directly. UNCERTAINTIES: (1) Two different implementations are both named writeFileAtomic - packages/util/atomic-write/src/index.ts:78 (no fsync: 'Crash durability (fsync) is out of scope', line 73) and packages/fs/fs-local/src/fsio.ts:571 (calls handle.sync() at line 609); any statement about 'the' atomic write must name which one. (2) Whether tool-str-replace-editor and tool-present are reachable in the SHIPPED default deployment was not exhaustively established: I read packages/bundle/base/cordis.patch.yml only at lines 248-275, which contains fs-observation-policy (:258), tool-fs (:261) and tool-fs-search (:264) but not present or str_replace_editor; present appears at packages/preset/agent-presets/presets/standard/agent.cordis.yml:254-255 and str_replace_editor at snapshots/sdk/persistent-tools/cordis.yml:6-7. I did not read the whole bundle patch file, so I make no claim of absence there. (3) glob/grep and read_image execute through seams (subprocess/attachments) whose own implementations are outside the 12 packages and were not audited. (4) failurePolicy values classify the DOMINANT behaviour of each mechanism's own code path; several mechanisms deliberately mix (e.g. bounded-overwrite-diff-basis is fail-soft for I/O but propagates cancellation as FsError, recorded as fail-soft because the whole mechanism is optional presentation data). (5) Two mechanisms (tool-result-presentation-meta-replay-safety, glob-over-cap-top-level-sampling) intentionally cite evidence from more than one package because the behaviour spans a producer and a consumer."
+}

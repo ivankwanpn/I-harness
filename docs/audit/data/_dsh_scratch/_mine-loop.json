@@ -1,0 +1,317 @@
+{
+  "domain": "loop",
+  "mechanisms": [
+    {
+      "name": "in-process-delivery-tiers",
+      "what": "The Agent exposes four in-process delivery entry points that differ on exactly two axes: which durable inbox list the message lands in (`next-turn` vs `next-step`) and whether the call wakes the driver. `followup` = next-turn + wake, `steer` = next-step + wake, `inject` = next-step without wake; `send(message, target, wakeup)` is the shared primitive all three delegate to. A waking message that arrives while the current activity is already aborted is reclassified to `next-turn` BEFORE insertion, so it can never join a dead activity. `ReactLoopInbox.append/prepend/replace/remove/splice` are the durable mutation surface behind them.",
+      "invariants": [
+        "`inject` must never wake the driver; `followup`, `steer` and `send(..., true)` must",
+        "the waking-after-abort classification is captured before the inbox insertion so a reentrant cancel from a splice observer cannot reclassify it"
+      ],
+      "failurePolicy": "fail-closed - a splice that would leave the same message id pending in either list throws `message \"<id>\" is already pending` and the session event is never appended",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/agent.ts:128-147",
+        "packages/core/agent-loop/src/types.ts:29-36",
+        "packages/core/agent-loop/src/inbox.ts:123-134"
+      ],
+      "modules": ["core/agent-loop", "core/agent"],
+      "verified": true
+    },
+    {
+      "name": "durable-inbox-projection",
+      "what": "Pending agent input is not process memory: every normalized mutation appends one `agent/inbox/spliced` session event, and the `inbox` SessionProjectionDefinition folds those splices back into `{ 'next-turn', 'next-step' }`. The fold validates index bounds and rejects duplicate pending message ids, throwing `invalid persisted inbox splice at session seq N`. `claim(target, turn)` removes the entire `next-step` batch plus at most one queued `next-turn` message and emits `agent/inbox/claimed` per claimed message; `clear()` empties next-step before next-turn.",
+      "invariants": [
+        "inbox state is derived from the durable log and is never authoritative in memory",
+        "no insert or replace may produce a duplicate pending message id across the two lists"
+      ],
+      "failurePolicy": "fail-closed - a corrupt splice history makes the projection fold throw rather than silently dropping queued input",
+      "constants": ["stateVersion: 1"],
+      "evidence": [
+        "packages/core/agent-loop/src/inbox.ts:27-65",
+        "packages/core/agent-loop/src/inbox.ts:200-246",
+        "packages/core/agent/src/types.ts:80-94"
+      ],
+      "modules": ["core/agent-loop", "core/agent", "session/session-projection"],
+      "verified": true
+    },
+    {
+      "name": "turn-step-durable-machine",
+      "what": "One driver runs turn -> steps -> turn. `turn/start` is appended before the first step; each step appends `step/start`, performs the model request plus its tool calls, and appends `step/end` in a finally; `turn/end` carries a structured TurnEndReason. Steps continue while a step leaves work (tool calls that did not conclude the turn, or a non-empty next-step inbox); `max-tokens` is sticky so a later completed step cannot downgrade the turn outcome. A step decision rewritten to empty still owns the turn boundary but spends no model call.",
+      "invariants": [
+        "`step/end` is appended even when the step throws, and `turn/end` always carries exactly one reason",
+        "max-tokens stays sticky for the whole turn"
+      ],
+      "failurePolicy": "mixed - an aborted signal yields `{kind:'aborted', reason}`; any other error yields `{kind:'error', failure}` preserving LlmError facts or flattening to errorChain text under code UNKNOWN; a failure appending `turn/end` is re-reported through `agent/error`",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/agent.ts:269-350",
+        "packages/core/agent-loop/src/agent.ts:302-313",
+        "packages/core/agent-loop/src/agent.ts:336-343"
+      ],
+      "modules": ["core/agent-loop", "core/agent"],
+      "verified": true
+    },
+    {
+      "name": "driver-wake-latch-and-maintenance-phase",
+      "what": "The driver has three phases: idle, maintenance, running. A wake that arrives while maintenance or an aborted driver owns the phase is latched in `wakeRequested` and replayed at convergence instead of dropped; a `disposed` cause never latches, so teardown waits on no model turn. `runMaintenance` throws synchronously when the agent already has active work and reserves the idle phase for non-turn work (manual compaction uses it), with later waking input withheld until the maintenance task settles.",
+      "invariants": [
+        "disposal never latches a wake",
+        "runMaintenance may only be entered from the idle phase"
+      ],
+      "failurePolicy": "fail-closed - runMaintenance on a busy agent throws `agent \"<id>\" already has active work`; the maintenance job's own rejection is preserved to its caller while the phase always returns to idle",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/agent.ts:41-49",
+        "packages/core/agent-loop/src/agent.ts:157-177",
+        "packages/core/agent-loop/src/agent.ts:187-208"
+      ],
+      "modules": ["core/agent-loop", "compaction/compaction-basic"],
+      "verified": true
+    },
+    {
+      "name": "per-session-serialization-and-write-ownership",
+      "what": "One session has at most one live agent/driver, enforced at several boundaries. The agent registry rejects a duplicate id at `enter()` (`agent \"<id>\" is already registered`); resume acquires the persistence write handle BEFORE reading the log so a concurrent resume of the same id is excluded by the backend; and a config-driven restore waits for a draining same-id lifecycle to leave both the agent and session registries before creating or resuming. The persistence write handle is the cross-process claim.",
+      "invariants": [
+        "create/resume may prepare concurrently but only one exact registry entry may publish",
+        "resume must take write ownership before reading or repairing the log"
+      ],
+      "failurePolicy": "fail-closed - a second live agent or a lost write claim is an error, never merged",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent/src/index.ts:458-493",
+        "packages/core/agent-loop/src/index.ts:874-890",
+        "packages/core/agent-loop/src/index.ts:501-522"
+      ],
+      "modules": ["core/agent", "core/agent-loop", "core/session", "session/session-persistence"],
+      "verified": true
+    },
+    {
+      "name": "cancellation-and-abort-semantics",
+      "what": "`cancel(cause, options)` clears the durable inbox unless `keepInbox` is set, drops any latched wake, and aborts the phase controller with a structured `AgentCancelCause`. Disposal is modelled as a `disposed`-cause cancel followed by `whenIdle()` and scope disposal, not a bare teardown. The tool scheduler converts an abort into ordered synthetic `tool/result` errors (`tool call aborted before dispatch`) for every unstarted call so replay stays valid, and an interrupted assistant stream commits an `assistant/message` with `interrupted: true` when partial content exists, otherwise an `assistant/attempt`.",
+      "invariants": [
+        "every tool call emitted in a step has a durable result, even after cancellation",
+        "disposal is a cancel plus observed quiescence"
+      ],
+      "failurePolicy": "fail-closed for log validity (synthetic results are fabricated deliberately); the driver boundary contains and reports errors rather than propagating them to senders",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/agent.ts:149-155",
+        "packages/core/agent-loop/src/tool-calls.ts:238-247",
+        "packages/core/agent-loop/src/agent.ts:399-440",
+        "packages/core/agent-loop/src/index.ts:584-598"
+      ],
+      "modules": ["core/agent-loop", "core/agent"],
+      "verified": true
+    },
+    {
+      "name": "bounded-parallel-tool-scheduler",
+      "what": "`executeToolCalls` schedules one assistant step's calls by their live concurrency mode. An exclusive call is a one-element barrier; a parallel stretch runs through a rolling pool capped by `maxParallelToolCalls`. The mode is re-read before each start so a registry change can force a barrier mid-step. Dispatch may overlap, but `tool/result` commits, `additionalContexts` acceptance and `concludesTurn` aggregation stay in model order, and each result cites its `tool/call` seq through `sourceEventSeqs`. The cap is read through a getter at the start of each group, so a committed settings change bounds the next group without disturbing the one in flight.",
+      "invariants": [
+        "results commit in model order even when dispatch overlaps",
+        "a scheduler failure stops new dispatches and drains already-started ones without fabricating results"
+      ],
+      "failurePolicy": "mixed - abort drains started calls, records synthetic results for the rest and returns with the signal still aborted; an internal scheduler failure drains in-flight dispatches and rejects with the first failure while preserving already-recorded `tool/call` events",
+      "constants": [
+        "DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10",
+        "maxParallelToolCalls must be a positive integer; 1 means serial"
+      ],
+      "evidence": [
+        "packages/core/agent-loop/src/constants.ts:5-6",
+        "packages/core/agent-loop/src/tool-calls.ts:85-102",
+        "packages/core/agent-loop/src/tool-calls.ts:146-161",
+        "packages/core/agent-loop/src/tool-calls.ts:199-214",
+        "packages/core/agent-loop/src/index.ts:189-196",
+        "packages/core/agent-loop/src/index.ts:396-398"
+      ],
+      "modules": ["core/agent-loop", "core/tools"],
+      "verified": true
+    },
+    {
+      "name": "agent-lifecycle-transaction",
+      "what": "`AgentLoop.prepare()` constructs the driver, its scope and one memoized reverse teardown before anything is published; deactivation fuses caller cancellation, owner-fiber unload and factory teardown into a single signal registered over mutable slots, so an unload arriving while the scope is still being minted finds a working disposer. `publish` enters both registries, announces the session then the agent, and emits `agent/session-start`. Teardown collects failures, always runs session-handle close, registry detach, scope unwind and bookkeeping release to quiescence, then rethrows a single error or an AggregateError.",
+      "invariants": [
+        "nothing is observable before setup completes and registry publication begins",
+        "cleanup always runs to quiescence even when individual cleanup steps fail"
+      ],
+      "failurePolicy": "fail-closed - a setup throw, setup-commit throw, or owner disposal rolls the whole transaction back without publishing either id",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/index.ts:530-595",
+        "packages/core/agent-loop/src/index.ts:659-687",
+        "packages/core/agent-loop/src/index.ts:804-835"
+      ],
+      "modules": ["core/agent-loop", "core/agent"],
+      "verified": true
+    },
+    {
+      "name": "config-driven-agent-startup",
+      "what": "The `agent-loop` plugin config carries an `agents` array (`id`, `sessionId` or `resumeSessionId`, provider, model, reasoningEffort, maxTokens, cwd) and starts each entry at boot. `sessionId` and `resumeSessionId` are mutually exclusive and duplicate exact identities are rejected before any agent starts. `restoreOrCreateConfigured` resumes the materialized identity and falls back to fresh creation only on `SessionPersistenceNotFoundError`; corruption, ownership conflicts and backend failures stay loud. A failed start is reported through the `agent-loop/config-start-failed` event so identity-bound consumers reject buffered work instead of waiting forever. A launcher may also pin identities out-of-band through `CONFIGURED_AGENT_IDENTITIES_KEY`.",
+      "invariants": [
+        "identity conflicts are rejected before any configured agent starts",
+        "only a genuinely absent stored session falls back to first creation"
+      ],
+      "failurePolicy": "mixed - a failed configured start is contained and reported; the remaining configured agents still start",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/index.ts:317-356",
+        "packages/core/agent-loop/src/index.ts:425-454",
+        "packages/core/agent-loop/src/index.ts:479-499",
+        "packages/core/agent-loop/src/index.ts:457-477"
+      ],
+      "modules": ["core/agent-loop", "preset/agent-presets"],
+      "verified": true
+    },
+    {
+      "name": "canonical-request-epoch",
+      "what": "Before every model call the loop canonicalizes the request envelope into an `EpochHeader` and logs it as `request/header` with reason `initial` | `resume` | `change` | `series`, plus a `request/context` record whenever provider, model, contextWindow or systemPromptUpdate differ from the previous one. `startsSeries` is set when a pre-step listener declared one, the surface replacement generation advanced, or the assembled tool schemas differ from the logged header - so provider KV-cache continuity is a durable, replayable fact rather than an inference. Requests are built from `session.deriveMessages()` and deep-frozen, with a WeakSet so replaced history is not retained.",
+      "invariants": [
+        "a request/header must omit `system` and must omit empty `tools` and empty `adapterDefaults`",
+        "the assembled tool set is part of the epoch identity, not an incidental argument"
+      ],
+      "failurePolicy": "fail-closed - `validateSessionEventData` rejects a header carrying `system`, an empty tools array, or empty adapterDefaults",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/agent.ts:552-618",
+        "packages/core/session/src/surface.ts:140-167",
+        "packages/core/agent-loop/src/runtime-context.ts:34-44"
+      ],
+      "modules": ["core/agent-loop", "core/session"],
+      "verified": true
+    },
+    {
+      "name": "pre-step-waterfall",
+      "what": "At every step boundary the loop claims the inbox batch, assembles the system prompt, projects the runtime-context snapshot, and then dispatches the `agent/pre-step` waterfall whose default is an `enter` decision carrying the claimed messages. A listener may return `{kind:'reject'}` (the turn then ends with reason `blocked`) or rewrite the admitted message batch. Context plugins (time-context, tmux-context) and the compaction pruner hook here; tmux-context registers with `{prepend: true}` and prepends its snapshot to the decision's messages.",
+      "invariants": [
+        "the claimed inbox input is already durably removed before the waterfall runs",
+        "a reject decision ends the turn with reason `blocked`"
+      ],
+      "failurePolicy": "mixed - the waterfall composes listener results and propagates a throwing listener; agent-scoped `emit` notifications elsewhere are contained per listener",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent-loop/src/agent.ts:240-259",
+        "packages/core/agent-loop/src/agent.ts:286-300",
+        "packages/context/tmux-context/src/index.ts:236-264"
+      ],
+      "modules": ["core/agent-loop", "context/time-context", "context/tmux-context", "compaction/compaction-basic"],
+      "verified": true
+    },
+    {
+      "name": "request-error-recovery-waterfall",
+      "what": "A failed or aborted model attempt first commits an `assistant/attempt` record and then dispatches the `agent/request-error` waterfall carrying provider, failure, retryPolicy and signal. A listener returning `{kind:'retry'}` re-enters the attempt loop without leaving the step; any other answer raises the attempt as an `LlmError`. `compaction-basic` uses this hook to recover from a provider-confirmed context-overflow failure by compacting and retrying.",
+      "invariants": [
+        "the attempt is durably recorded before the recovery waterfall runs",
+        "without a retry decision the original failure is preserved"
+      ],
+      "failurePolicy": "fail-soft - recovery is listener-driven; the default action rethrows the original failure",
+      "constants": ["compaction-basic maxOverflowRetries default 1"],
+      "evidence": [
+        "packages/core/agent-loop/src/agent.ts:441-464",
+        "packages/compaction/compaction-basic/src/index.ts:180-224"
+      ],
+      "modules": ["core/agent-loop", "compaction/compaction-basic"],
+      "verified": true
+    },
+    {
+      "name": "turn-boundary-projection",
+      "what": "`dsh-agent-loop` registers a `turnBoundary` session projection that folds `turn/start`, `turn/end`, `step/start` and `step/end` into `{ openTurnStartSeq, lastStepStartSeq, lastStepBoundary, lastTurn }`. It is the durable answer to \"is a turn open and where is the last step boundary\", consumed by resume repair, by other plugins' step-open decisions, and by the token meter's own replay fold.",
+      "invariants": [
+        "an absent `turnBoundary` key means \"no agent loop loaded\" (capability absence), not a corrupt state",
+        "stateVersion is bumped when fold semantics change"
+      ],
+      "failurePolicy": "fail-soft - readers that have a safe fallback treat absence as capability absence; readers with no safe fallback (the step-open decision) may fail loud instead",
+      "constants": ["stateVersion: 2"],
+      "evidence": [
+        "packages/core/agent-loop/src/index.ts:55-94",
+        "packages/core/agent/src/types.ts:60-78"
+      ],
+      "modules": ["core/agent-loop", "core/agent", "session/session-projection"],
+      "verified": true
+    },
+    {
+      "name": "agent-registry-and-runtime-ownership",
+      "what": "`AgentRegistry` (`ctx.agents`) owns the live agent store, the creation-factory slot and runtime parent ownership. `enter()` inserts a prepared but unpublished agent without announcing it; `announce()` emits `agent/created` (a synchronous listener throw vetoes publication) and pairs every announced entry with a later `agent/disposed`. A detach requested during the creation dispatch is deferred until that dispatch unwinds. `isOwnedBy`, `roots` and `list` expose runtime ownership, which is deliberately independent of durable session lineage. The registry also registers the `agent` Typert lookup and context host for the wire type.",
+      "invariants": [
+        "an agent id must equal its session id",
+        "creation and disposal edges are paired; an entry rolled back before announce emits no disposed",
+        "a stale detach capability can never delete a later same-id lifecycle"
+      ],
+      "failurePolicy": "mixed - a synchronous `agent/created` listener throw vetoes publication and rolls back; `agent/disposed` listener throws and rejections are logged and contained",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent/src/index.ts:434-509",
+        "packages/core/agent/src/index.ts:526-560",
+        "packages/core/agent/src/index.ts:566-601",
+        "packages/core/agent/src/index.ts:255-270"
+      ],
+      "modules": ["core/agent", "core/agent-loop"],
+      "verified": true
+    },
+    {
+      "name": "agent-initiator-scope",
+      "what": "An AsyncLocalStorage-based causal attribution scope carries the initiating Agent through one process-local asynchronous driver chain: `withInitiator`, `withoutInitiator`, `currentInitiator`, `requireInitiator`. `wakeDriver` establishes the boundary for every driver, and `executeToolCalls` reads it with `requireInitiator()` to obtain the owning session. Live boundaries are counted so teardown drains outstanding runs before disabling the stores, while a nested lineage that itself started the owning-fiber unload is excluded from its own drain.",
+      "invariants": [
+        "ambient initiator presence is attribution only - neither liveness proof nor authorization",
+        "returned-Promise boundaries drain during teardown"
+      ],
+      "failurePolicy": "fail-closed - reads after disposal throw `agent initiator scope is disposed`, and `requireInitiator` outside a boundary throws `no initiating agent is active`",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent/src/index.ts:245-341",
+        "packages/core/agent/src/index.ts:603-654",
+        "packages/core/agent-loop/src/tool-calls.ts:68-69"
+      ],
+      "modules": ["core/agent", "core/agent-loop", "core/scope"],
+      "verified": true
+    },
+    {
+      "name": "agent-scoped-composition-at-publication",
+      "what": "`create`/`resume` accept a `setup(agentCtx, agent)` callback that composes the agent's own scoped world - scoped tools, prompt sections and variables, listeners, awaited child plugins - before either registry insertion, so observers can never see a half-configured agent. Setup may return an `AgentSetupCommit` whose synchronous `commit()` runs after the last setup await and immediately before publication, letting mutable provisioning revalidate at the exact publish boundary. Setup composes; it never drives.",
+      "invariants": [
+        "every agentCtx registration exists before session/created, agent/created, agent/session-start and the first prompt assembly",
+        "setup composes, it never drives"
+      ],
+      "failurePolicy": "fail-closed - a setup throw, a commit throw, or owner disposal rolls the scope back without publishing either id",
+      "constants": [],
+      "evidence": [
+        "packages/core/agent/src/index.ts:100-119",
+        "packages/core/agent/src/index.ts:44-53",
+        "packages/core/agent-loop/src/index.ts:824-834"
+      ],
+      "modules": ["core/agent", "core/agent-loop", "core/scope"],
+      "verified": true
+    },
+    {
+      "name": "agent-preset-composition-mounting",
+      "what": "`agent-presets` discovers preset compositions (`agent.cordis.yml` under a shipped preset root plus a user `.agent-presets` directory), validates their `preset.yml` metadata, and mounts each as a Cordis subtree under a standing scope key to which agent contexts are parented; the mounted subtree's active loader rows are the composition a session runs. Mounting is read-only by construction: the inherited loader `write()` is overridden to a no-op so a preset file is never persisted back, and mount records are pruned by observing that a fiber's `uid` cleared.",
+      "invariants": [
+        "a preset is an input, never a persistence target",
+        "a preset's composition file backs every session that names it"
+      ],
+      "failurePolicy": "mixed - a broken preset surfaces as a metadata/entry-list problem instead of being mounted; the mount set is bounded by observation-based pruning rather than a disposal hook",
+      "constants": ["COMPOSITION_FILE = 'agent.cordis.yml'", "USER_PRESET_DIR = '.agent-presets'"],
+      "evidence": [
+        "packages/preset/agent-presets/src/discovery.ts:37-60",
+        "packages/preset/agent-presets/src/mount.ts:106-123",
+        "packages/preset/agent-presets/src/mount.ts:126-177"
+      ],
+      "modules": ["preset/agent-presets", "preset/persona", "core/agent-loop"],
+      "verified": true
+    },
+    {
+      "name": "default-agent-model-selection",
+      "what": "`agent-default-model` owns the default provider/model/reasoningEffort selection for Agents created without an explicit model. It is a Cordis service reading live through a settings section in its own `agent-default-model` namespace, so the value can be changed at runtime by any settings writer while a deployment without a settings provider keeps its composition entry. `saveSelection` writes the complete triple back through the optional settings service.",
+      "invariants": [
+        "every consumer reads through `currentSelection()`, so no registration-level fact is rebuilt when the settings document changes"
+      ],
+      "failurePolicy": "fail-soft - a deployment without a settings provider simply keeps its composition entry",
+      "constants": ["settings namespace: agent-default-model"],
+      "evidence": [
+        "packages/core/agent-default-model/src/index.ts:20-57",
+        "packages/core/agent-default-model/src/index.ts:72-107"
+      ],
+      "modules": ["core/agent-default-model", "settings/settings"],
+      "verified": true
+    }
+  ]
+}
