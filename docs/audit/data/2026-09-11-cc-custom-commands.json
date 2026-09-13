@@ -1,0 +1,987 @@
+{
+  "source": "cc-custom",
+  "sourcePath": "D:/opencode-bugfix/cc-custom",
+  "sourceRev": null,
+  "version": "999.0.0-restored",
+  "versionSource": "package.json",
+  "dirName": "cc-custom",
+  "versionMismatch": false,
+  "dirVersion": null,
+  "extractedAt": "2026-09-13",
+  "commandModel": "directory+isEnabled",
+  "count": 65,
+  "commands": [
+    {
+      "rawName": "add-dir",
+      "canonical": "add-dir",
+      "aliases": [],
+      "displayName": "add-dir",
+      "description": "Add a new working directory",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/add-dir/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "agents",
+      "canonical": "agents",
+      "aliases": [],
+      "displayName": "agents",
+      "description": "Manage agent configurations",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/agents/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "agents-platform",
+      "canonical": "agents-platform",
+      "aliases": [],
+      "displayName": "agents-platform",
+      "description": "Reserved internal command. This restored build keeps the command visible but does not include the original agents platform backend.",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/agents-platform/index.ts:2"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "branch",
+      "canonical": "branch",
+      "aliases": [],
+      "displayName": "branch",
+      "description": "Create a branch of the current conversation at this point",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/branch/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "brief",
+      "canonical": "brief",
+      "aliases": [],
+      "displayName": "brief",
+      "description": "Toggle brief-only mode",
+      "kind": "local-jsx",
+      "gate": "isEnabled:() => {",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/brief.ts:49"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "btw",
+      "canonical": "btw",
+      "aliases": [],
+      "displayName": "btw",
+      "description": "Ask a quick side question without interrupting the main conversation",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/btw/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "clear",
+      "canonical": "clear",
+      "aliases": [],
+      "displayName": "clear",
+      "description": "Clear conversation history and free up context",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/clear/index.ts:12"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "code-review",
+      "canonical": "code-review",
+      "aliases": [],
+      "displayName": "code-review",
+      "description": "Review code in specified files or current changes, with analysis and suggestions",
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/code-review/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "color",
+      "canonical": "color",
+      "aliases": [],
+      "displayName": "color",
+      "description": "Set the prompt bar color for this session",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/color/index.ts:9"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "commit",
+      "canonical": "commit",
+      "aliases": [],
+      "displayName": "commit",
+      "description": "Create a git commit",
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/commit.ts:59"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "commit-push-pr",
+      "canonical": "commit-push-pr",
+      "aliases": [],
+      "displayName": "commit-push-pr",
+      "description": "Commit, push, and open a PR",
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/commit-push-pr.ts:110"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "description": "Clear conversation history but keep a summary in context. Optional: /compact [instructions for summarization]",
+      "kind": "local",
+      "gate": "isEnabled:() => !isEnvTruthy(process.env.DISABLE_COMPACT)",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/compact/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "config",
+      "canonical": "config",
+      "aliases": [],
+      "displayName": "config",
+      "description": "Open config panel",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/config/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "context",
+      "canonical": "context",
+      "aliases": [],
+      "displayName": "context",
+      "description": "Visualize current context usage as a colored grid",
+      "kind": "local-jsx",
+      "gate": "isEnabled:() => !getIsNonInteractiveSession()",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/context/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "context-window",
+      "canonical": "context-window",
+      "aliases": [],
+      "displayName": "context-window",
+      "description": "Set the effective context window token budget",
+      "kind": "text",
+      "gate": "isEnabled:() => !getIsNonInteractiveSession()",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/limit-controls.ts:222"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "copy",
+      "canonical": "copy",
+      "aliases": [],
+      "displayName": "copy",
+      "description": null,
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/copy/index.ts:9"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "cost",
+      "canonical": "cost",
+      "aliases": [],
+      "displayName": "cost",
+      "description": "Show the total cost and duration of the current session",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/cost/index.ts:9"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "diff",
+      "canonical": "diff",
+      "aliases": [],
+      "displayName": "diff",
+      "description": "View uncommitted changes and per-turn diffs",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/diff/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "doctor",
+      "canonical": "doctor",
+      "aliases": [],
+      "displayName": "doctor",
+      "description": "Diagnose and verify your Claude Code installation and settings",
+      "kind": "local-jsx",
+      "gate": "isEnabled:() => !isEnvTruthy(process.env.DISABLE_DOCTOR_COMMAND)",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/doctor/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "effort",
+      "canonical": "effort",
+      "aliases": [],
+      "displayName": "effort",
+      "description": "Set effort level for model usage",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/effort/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "exit",
+      "canonical": "exit",
+      "aliases": [],
+      "displayName": "exit",
+      "description": "Exit the REPL",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/exit/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "description": "Export the current conversation to a file or clipboard",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/export/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "fast",
+      "canonical": "fast",
+      "aliases": [],
+      "displayName": "fast",
+      "description": null,
+      "kind": "local-jsx",
+      "gate": "isEnabled:() => isFastModeEnabled()",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/fast/index.ts:10"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "files",
+      "canonical": "files",
+      "aliases": [],
+      "displayName": "files",
+      "description": "List all files currently in context",
+      "kind": "local",
+      "gate": "isEnabled:() => process.env.USER_TYPE === 'ant'",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/files/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "heapdump",
+      "canonical": "heapdump",
+      "aliases": [],
+      "displayName": "heapdump",
+      "description": "Dump the JS heap to ~/Desktop",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/heapdump/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "help",
+      "canonical": "help",
+      "aliases": [],
+      "displayName": "help",
+      "description": "Show help and available commands",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/help/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "hooks",
+      "canonical": "hooks",
+      "aliases": [],
+      "displayName": "hooks",
+      "description": "View hook configurations for tool events",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/hooks/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "ide",
+      "canonical": "ide",
+      "aliases": [],
+      "displayName": "ide",
+      "description": "Manage IDE integrations and show status",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/ide/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "init",
+      "canonical": "init",
+      "aliases": [],
+      "displayName": "init",
+      "description": null,
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/init.ts:175"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "init-verifiers",
+      "canonical": "init-verifiers",
+      "aliases": [],
+      "displayName": "init-verifiers",
+      "description": "Create verifier skill(s) for automated verification of code changes",
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/init-verifiers.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "install-slack-app",
+      "canonical": "install-slack-app",
+      "aliases": [],
+      "displayName": "install-slack-app",
+      "description": "Install the Claude Slack app",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/install-slack-app/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "keybindings",
+      "canonical": "keybindings",
+      "aliases": [],
+      "displayName": "keybindings",
+      "description": "Open or create your keybindings configuration file",
+      "kind": "local",
+      "gate": "isEnabled:() => isKeybindingCustomizationEnabled()",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/keybindings/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "loop",
+      "canonical": "loop",
+      "aliases": [],
+      "displayName": "loop",
+      "description": "Start, stop, or inspect autonomous loop mode",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/loop/index.ts:4"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "mcp",
+      "canonical": "mcp",
+      "aliases": [],
+      "displayName": "mcp",
+      "description": "Manage MCP servers",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/mcp/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "memory",
+      "canonical": "memory",
+      "aliases": [],
+      "displayName": "memory",
+      "description": "Edit Claude memory files",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/memory/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "model",
+      "canonical": "model",
+      "aliases": [],
+      "displayName": "model",
+      "description": null,
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/model/index.ts:7"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "output-style",
+      "canonical": "output-style",
+      "aliases": [],
+      "displayName": "output-style",
+      "description": "Deprecated: use /config to change output style",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/output-style/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "permissions",
+      "canonical": "permissions",
+      "aliases": [],
+      "displayName": "permissions",
+      "description": "Manage allow & deny tool permission rules",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/permissions/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "description": "Enable plan mode or view the current session plan",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/plan/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plugin",
+      "canonical": "plugin",
+      "aliases": [],
+      "displayName": "plugin",
+      "description": "Manage Claude Code plugins",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/plugin/index.tsx:4"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "pr-comments",
+      "canonical": "pr-comments",
+      "aliases": [],
+      "displayName": "pr-comments",
+      "description": "Get comments from a GitHub pull request",
+      "kind": "text",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/pr_comments/index.ts:4"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "project_areas",
+      "canonical": "project_areas",
+      "aliases": [],
+      "displayName": "project_areas",
+      "description": "Generate a report analyzing your Claude Code sessions",
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/insights.ts:1150"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "protocol",
+      "canonical": "protocol",
+      "aliases": [],
+      "displayName": "protocol",
+      "description": null,
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/protocol/index.ts:9"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "provider",
+      "canonical": "provider",
+      "aliases": [],
+      "displayName": "provider",
+      "description": null,
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/provider/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "reload-plugins",
+      "canonical": "reload-plugins",
+      "aliases": [],
+      "displayName": "reload-plugins",
+      "description": "Activate pending plugin changes in the current session",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/reload-plugins/index.ts:9"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rename",
+      "canonical": "rename",
+      "aliases": [],
+      "displayName": "rename",
+      "description": "Rename the current conversation",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/rename/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "resume",
+      "canonical": "resume",
+      "aliases": [],
+      "displayName": "resume",
+      "description": "Resume a previous conversation",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/resume/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "review",
+      "canonical": "review",
+      "aliases": [],
+      "displayName": "review",
+      "description": "Review a pull request",
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/review.ts:30"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rewind",
+      "canonical": "rewind",
+      "aliases": [],
+      "displayName": "rewind",
+      "description": null,
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/rewind/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "sandbox",
+      "canonical": "sandbox",
+      "aliases": [],
+      "displayName": "sandbox",
+      "description": null,
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/sandbox-toggle/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "security-review",
+      "canonical": "security-review",
+      "aliases": [],
+      "displayName": "security-review",
+      "description": "Complete a security review of the pending changes on the current branch",
+      "kind": "text",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/security-review.ts:199"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "skills",
+      "canonical": "skills",
+      "aliases": [],
+      "displayName": "skills",
+      "description": "List available skills",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/skills/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "stats",
+      "canonical": "stats",
+      "aliases": [],
+      "displayName": "stats",
+      "description": "Show your Claude Code usage statistics and activity",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/stats/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "status",
+      "canonical": "status",
+      "aliases": [],
+      "displayName": "status",
+      "description": "Show Claude Code status including version, model, account, API connectivity, and tool statuses",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/status/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "statusline",
+      "canonical": "statusline",
+      "aliases": [],
+      "displayName": "statusline",
+      "description": null,
+      "kind": "prompt",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/statusline.tsx:10"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "stickers",
+      "canonical": "stickers",
+      "aliases": [],
+      "displayName": "stickers",
+      "description": "Order Claude Code stickers",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/stickers/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "tag",
+      "canonical": "tag",
+      "aliases": [],
+      "displayName": "tag",
+      "description": "Toggle a searchable tag on the current session",
+      "kind": "local-jsx",
+      "gate": "isEnabled:() => process.env.USER_TYPE === 'ant'",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/tag/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "tasks",
+      "canonical": "tasks",
+      "aliases": [],
+      "displayName": "tasks",
+      "description": "List and manage background tasks",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/tasks/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "terminal-setup",
+      "canonical": "terminal-setup",
+      "aliases": [],
+      "displayName": "terminal-setup",
+      "description": null,
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/terminalSetup/index.ts:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "theme",
+      "canonical": "theme",
+      "aliases": [],
+      "displayName": "theme",
+      "description": "Change the theme",
+      "kind": "local-jsx",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/theme/index.ts:5"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "think-back",
+      "canonical": "think-back",
+      "aliases": [],
+      "displayName": "think-back",
+      "description": "Your 2025 Claude Code Year in Review",
+      "kind": "local-jsx",
+      "gate": "isEnabled:() =>",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/thinkback/index.ts:6"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "thinkback-play",
+      "canonical": "thinkback-play",
+      "aliases": [],
+      "displayName": "thinkback-play",
+      "description": "Play the thinkback animation",
+      "kind": "local",
+      "gate": "isEnabled:() =>",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/thinkback-play/index.ts:8"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "tui",
+      "canonical": "tui",
+      "aliases": [],
+      "displayName": "tui",
+      "description": "Toggle fullscreen TUI mode on/off. Accepts \"on\", \"off\", or \"toggle\" (default).",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/tui/index.ts:4"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "version",
+      "canonical": "version",
+      "aliases": [],
+      "displayName": "version",
+      "description": "Print the version this session is running (not what autoupdate downloaded)",
+      "kind": "text",
+      "gate": "isEnabled:() => process.env.USER_TYPE === 'ant'",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/version.ts:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "vim",
+      "canonical": "vim",
+      "aliases": [],
+      "displayName": "vim",
+      "description": "Toggle between Vim and Normal editing modes",
+      "kind": "local",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "src/commands/vim/index.ts:4"
+      ],
+      "verified": false
+    }
+  ],
+  "disabledStubs": [
+    {
+      "file": "src/commands/ant-trace/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/autofix-pr/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/backfill-sessions/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/break-cache/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/bughunter/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/ctx_viz/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/debug-tool-call/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/env/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/good-claude/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/issue/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/oauth-refresh/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/onboarding/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/perf-issue/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/share/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    },
+    {
+      "file": "src/commands/summary/index.js",
+      "note": "disabled stub (isEnabled:false, isHidden:true)"
+    }
+  ]
+}

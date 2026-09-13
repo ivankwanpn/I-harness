@@ -1,0 +1,828 @@
+{
+  "source": "codex",
+  "sourcePath": "D:/agent-complete/codex-rust-v0.149.1",
+  "sourceRev": null,
+  "version": "0.149.1",
+  "versionSource": "codex-rs/Cargo.toml",
+  "dirName": "codex-rust-v0.149.1",
+  "versionMismatch": false,
+  "dirVersion": "0.149.1",
+  "extractedAt": "2026-09-13",
+  "commandModel": "rust-enum",
+  "count": 58,
+  "commands": [
+    {
+      "rawName": "agents",
+      "canonical": "agents",
+      "aliases": [],
+      "displayName": "agents",
+      "variant": "Agents",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:43"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "app",
+      "canonical": "app",
+      "aliases": [],
+      "displayName": "app",
+      "variant": "App",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:38"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "apps",
+      "canonical": "apps",
+      "aliases": [],
+      "displayName": "apps",
+      "variant": "Apps",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:63"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "archive",
+      "canonical": "archive",
+      "aliases": [],
+      "displayName": "archive",
+      "variant": "Archive",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:34"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "auto-review",
+      "canonical": "auto-review",
+      "aliases": [],
+      "displayName": "approve",
+      "variant": "AutoReview",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:26"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "btw",
+      "canonical": "btw",
+      "aliases": [],
+      "displayName": "btw",
+      "variant": "Btw",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:45"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "cd",
+      "canonical": "cd",
+      "aliases": [],
+      "displayName": "cd",
+      "variant": "Cd",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:52"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "clean",
+      "canonical": "clean",
+      "aliases": [],
+      "displayName": "stop",
+      "variant": "Stop",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:72"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "clear",
+      "canonical": "clear",
+      "aliases": [],
+      "displayName": "clear",
+      "variant": "Clear",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:73"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "variant": "Compact",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:40"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "copy",
+      "canonical": "copy",
+      "aliases": [],
+      "displayName": "copy",
+      "variant": "Copy",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:9"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "cwd",
+      "canonical": "cwd",
+      "aliases": [],
+      "displayName": "pwd",
+      "variant": "Pwd",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:54"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "debug-config",
+      "canonical": "debug-config",
+      "aliases": [],
+      "displayName": "debug-config",
+      "variant": "DebugConfig",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:56"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "debug-m-drop",
+      "canonical": "debug-m-drop",
+      "aliases": [],
+      "displayName": "debug-m-drop",
+      "variant": "MemoryDrop",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:80"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "debug-m-update",
+      "canonical": "debug-m-update",
+      "aliases": [],
+      "displayName": "debug-m-update",
+      "variant": "MemoryUpdate",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:82"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "delete",
+      "canonical": "delete",
+      "aliases": [],
+      "displayName": "delete",
+      "variant": "Delete",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:35"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "diff",
+      "canonical": "diff",
+      "aliases": [],
+      "displayName": "diff",
+      "variant": "Diff",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:49"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "exit",
+      "canonical": "exit",
+      "aliases": [],
+      "displayName": "exit",
+      "variant": "Exit",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:67"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "experimental",
+      "canonical": "experimental",
+      "aliases": [],
+      "displayName": "experimental",
+      "variant": "Experimental",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:24"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "variant": "Export",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:47"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "feedback",
+      "canonical": "feedback",
+      "aliases": [],
+      "displayName": "feedback",
+      "variant": "Feedback",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:68"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "fork",
+      "canonical": "fork",
+      "aliases": [],
+      "displayName": "fork",
+      "variant": "Fork",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:37"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "goal",
+      "canonical": "goal",
+      "aliases": [],
+      "displayName": "goal",
+      "variant": "Goal",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:42"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "hooks",
+      "canonical": "hooks",
+      "aliases": [],
+      "displayName": "hooks",
+      "variant": "Hooks",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:30"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "ide",
+      "canonical": "ide",
+      "aliases": [],
+      "displayName": "ide",
+      "variant": "Ide",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "import",
+      "canonical": "import",
+      "aliases": [],
+      "displayName": "import",
+      "variant": "Import",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:29"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "init",
+      "canonical": "init",
+      "aliases": [],
+      "displayName": "init",
+      "variant": "Init",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:39"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "keymap",
+      "canonical": "keymap",
+      "aliases": [],
+      "displayName": "keymap",
+      "variant": "Keymap",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:18"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "logout",
+      "canonical": "logout",
+      "aliases": [],
+      "displayName": "logout",
+      "variant": "Logout",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:65"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "mcp",
+      "canonical": "mcp",
+      "aliases": [],
+      "displayName": "mcp",
+      "variant": "Mcp",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:62"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "memories",
+      "canonical": "memories",
+      "aliases": [],
+      "displayName": "memories",
+      "variant": "Memories",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:27"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "mention",
+      "canonical": "mention",
+      "aliases": [],
+      "displayName": "mention",
+      "variant": "Mention",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:50"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "model",
+      "canonical": "model",
+      "aliases": [],
+      "displayName": "model",
+      "variant": "Model",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:15"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "new",
+      "canonical": "new",
+      "aliases": [],
+      "displayName": "new",
+      "variant": "New",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:33"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "permissions",
+      "canonical": "permissions",
+      "aliases": [],
+      "displayName": "permissions",
+      "variant": "Permissions",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:17"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "personality",
+      "canonical": "personality",
+      "aliases": [],
+      "displayName": "personality",
+      "variant": "Personality",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:74"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "pet",
+      "canonical": "pet",
+      "aliases": [],
+      "displayName": "pets",
+      "variant": "Pets",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:61"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "variant": "Plan",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:41"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plugins",
+      "canonical": "plugins",
+      "aliases": [],
+      "displayName": "plugins",
+      "variant": "Plugins",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:64"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "ps",
+      "canonical": "ps",
+      "aliases": [],
+      "displayName": "ps",
+      "variant": "Ps",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:70"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "quit",
+      "canonical": "quit",
+      "aliases": [],
+      "displayName": "quit",
+      "variant": "Quit",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:66"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "raw",
+      "canonical": "raw",
+      "aliases": [],
+      "displayName": "raw",
+      "variant": "Raw",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:48"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rename",
+      "canonical": "rename",
+      "aliases": [],
+      "displayName": "rename",
+      "variant": "Rename",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:32"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "resume",
+      "canonical": "resume",
+      "aliases": [],
+      "displayName": "resume",
+      "variant": "Resume",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:36"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "review",
+      "canonical": "review",
+      "aliases": [],
+      "displayName": "review",
+      "variant": "Review",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:26"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rollout",
+      "canonical": "rollout",
+      "aliases": [],
+      "displayName": "rollout",
+      "variant": "Rollout",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:69"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "sandbox-add-read-dir",
+      "canonical": "sandbox-add-read-dir",
+      "aliases": [],
+      "displayName": "sandbox-add-read-dir",
+      "variant": "SandboxReadRoot",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:23"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "setup-default-sandbox",
+      "canonical": "setup-default-sandbox",
+      "aliases": [],
+      "displayName": "setup-default-sandbox",
+      "variant": "ElevateSandbox",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:21"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "side",
+      "canonical": "side",
+      "aliases": [],
+      "displayName": "side",
+      "variant": "Side",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:44"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "skills",
+      "canonical": "skills",
+      "aliases": [],
+      "displayName": "skills",
+      "variant": "Skills",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:28"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "status",
+      "canonical": "status",
+      "aliases": [],
+      "displayName": "status",
+      "variant": "Status",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:51"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "statusline",
+      "canonical": "statusline",
+      "aliases": [],
+      "displayName": "statusline",
+      "variant": "Statusline",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:58"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "subagents",
+      "canonical": "subagents",
+      "aliases": [],
+      "displayName": "subagents",
+      "variant": "MultiAgents",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:77"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "test-approval",
+      "canonical": "test-approval",
+      "aliases": [],
+      "displayName": "test-approval",
+      "variant": "TestApproval",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:75"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "theme",
+      "canonical": "theme",
+      "aliases": [],
+      "displayName": "theme",
+      "variant": "Theme",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:59"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "title",
+      "canonical": "title",
+      "aliases": [],
+      "displayName": "title",
+      "variant": "Title",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:57"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "usage",
+      "canonical": "usage",
+      "aliases": [],
+      "displayName": "usage",
+      "variant": "Usage",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:55"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "vim",
+      "canonical": "vim",
+      "aliases": [],
+      "displayName": "vim",
+      "variant": "Vim",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:19"
+      ],
+      "verified": false
+    }
+  ],
+  "enumFile": "codex-rs/tui/src/slash_command.rs:12"
+}

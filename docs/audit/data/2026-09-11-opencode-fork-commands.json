@@ -1,0 +1,48 @@
+{
+  "source": "opencode-fork",
+  "sourcePath": "D:/agent-complete/opencode-fork-private-999.0.15",
+  "sourceRev": "0241f446219e64bdc29fb70a1440b4953f77ca6e",
+  "version": "999.0.19",
+  "versionSource": "packages/opencode/package.json",
+  "dirName": "opencode-fork-private-999.0.15",
+  "versionMismatch": true,
+  "dirVersion": "999.0.15",
+  "extractedAt": "2026-09-13",
+  "commandModel": "builtin+markdown",
+  "count": 2,
+  "commands": [
+    {
+      "rawName": "init",
+      "canonical": "init",
+      "aliases": [],
+      "displayName": "init",
+      "constName": "INIT",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/core/src/command.ts:15"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "review",
+      "canonical": "review",
+      "aliases": [],
+      "displayName": "review",
+      "constName": "REVIEW",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "packages/core/src/command.ts:16"
+      ],
+      "verified": false
+    }
+  ],
+  "dynamic": true,
+  "registryFiles": [
+    "packages/core/src/command.ts"
+  ],
+  "dynamicNote": "Only the built-in commands are static. All others are user/config markdown templates discovered at runtime; there is no static registry to enumerate."
+}

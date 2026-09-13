@@ -1,0 +1,1292 @@
+{
+  "source": "grok",
+  "sourcePath": "D:/agent-complete/grok-build-main",
+  "sourceRev": null,
+  "version": "a549186d9d39311f2d3ee4208db62af8c65aa476",
+  "versionSource": "SOURCE_REV",
+  "dirName": "grok-build-main",
+  "versionMismatch": false,
+  "dirVersion": null,
+  "extractedAt": "2026-09-13",
+  "commandModel": "per-module slash_meta",
+  "count": 71,
+  "commands": [
+    {
+      "rawName": "always-approve",
+      "canonical": "always-approve",
+      "aliases": [],
+      "displayName": "always-approve",
+      "description": "Toggle always-approve mode (skip all permission prompts)",
+      "usage": "/always-approve",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/always_approve.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/always_approve.rs:18"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "announcements",
+      "canonical": "announcements",
+      "aliases": [],
+      "displayName": "announcements",
+      "description": "Show or hide announcements",
+      "usage": "/announcements hide | show",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/announcements.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/announcements.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "auto",
+      "canonical": "auto",
+      "aliases": [],
+      "displayName": "auto",
+      "description": "Toggle auto mode (classifier approves safe tools)",
+      "usage": "/auto",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/auto.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/auto.rs:20"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "btw",
+      "canonical": "btw",
+      "aliases": [],
+      "displayName": "btw",
+      "description": "Ask a side question without interrupting",
+      "usage": "/btw <question>",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/btw.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/btw.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "cd",
+      "canonical": "cd",
+      "aliases": [],
+      "displayName": "cd",
+      "description": "Change the working directory for new agents",
+      "usage": "/cd [path]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/cd.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/cd.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "description": "Compact conversation history",
+      "usage": "/compact compaction instructions",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/compact.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/compact.rs:13"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "compact-mode",
+      "canonical": "compact-mode",
+      "aliases": [],
+      "displayName": "compact-mode",
+      "description": "Toggle compact UI (less padding, more content)",
+      "usage": "/compact-mode",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/compact_mode.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/compact_mode.rs:18"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "config-agents",
+      "canonical": "config-agents",
+      "aliases": [],
+      "displayName": "config-agents",
+      "description": "Manage agent definitions",
+      "usage": "/config-agents",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/config_agents.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/config_agents.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "context",
+      "canonical": "context",
+      "aliases": [],
+      "displayName": "context",
+      "description": "View context usage",
+      "usage": "/context",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/context.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/context.rs:13"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "copy",
+      "canonical": "copy",
+      "aliases": [],
+      "displayName": "copy",
+      "description": "Copy last response to clipboard or file (/copy [N] [file])",
+      "usage": "/copy [N] [file]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:20"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "dashboard",
+      "canonical": "dashboard",
+      "aliases": [],
+      "displayName": "dashboard",
+      "description": "Open the Agent Dashboard",
+      "usage": "/dashboard",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:25"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "debug",
+      "canonical": "debug",
+      "aliases": [],
+      "displayName": "debug",
+      "description": "Toggle debug overlays",
+      "usage": "/debug [scroll|fps|log]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs:38"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "delete",
+      "canonical": "delete",
+      "aliases": [],
+      "displayName": "delete",
+      "description": "Delete this session",
+      "usage": "/delete",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/delete.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/delete.rs:12"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "docs",
+      "canonical": "docs",
+      "aliases": [],
+      "displayName": "docs",
+      "description": "Open How-to Guides or online Build docs",
+      "usage": "/docs [web|title]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs:23"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "doctor",
+      "canonical": "doctor",
+      "aliases": [],
+      "displayName": "doctor",
+      "description": "Check this session and show available fixes",
+      "usage": "/doctor [fix [FIX]]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs:48"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "edit-prompt",
+      "canonical": "edit-prompt",
+      "aliases": [],
+      "displayName": "edit-prompt",
+      "description": "Open an external editor for an empty prompt; use the command palette to preserve a draft",
+      "usage": "/edit-prompt",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/edit_prompt.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/edit_prompt.rs:15"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "effort",
+      "canonical": "effort",
+      "aliases": [],
+      "displayName": "effort",
+      "description": "Set reasoning effort for the current model",
+      "usage": "/effort <level>",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/effort.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/effort.rs:19"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "expand",
+      "canonical": "expand",
+      "aliases": [],
+      "displayName": "expand",
+      "description": "Re-print the last collapsed block, fully expanded (minimal mode)",
+      "usage": "/expand",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/expand.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/expand.rs:19"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "description": "Export the current conversation to a file or clipboard",
+      "usage": "/export [filename]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/export.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/export.rs:24"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "feedback",
+      "canonical": "feedback",
+      "aliases": [],
+      "displayName": "feedback",
+      "description": "Send feedback about the current session",
+      "usage": "/feedback [text]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/feedback.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/feedback.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "find",
+      "canonical": "find",
+      "aliases": [],
+      "displayName": "find",
+      "description": "Search the conversation scrollback",
+      "usage": "/find [text]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/find.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "fork",
+      "canonical": "fork",
+      "aliases": [],
+      "displayName": "fork",
+      "description": "Branch the current session into a peer agent",
+      "usage": "/fork [--worktree|--no-worktree] [directive]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/fork.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/fork.rs:89"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "fullscreen",
+      "canonical": "fullscreen",
+      "aliases": [],
+      "displayName": "fullscreen",
+      "description": "`/minimal` and `/fullscreen`: session-scoped in-process screen-mode switch, performed by the event loop via `app::mode_switch`.",
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs",
+      "nameSource": "module-doc-comment (hand-written impl, computed name)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:1"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "gboom",
+      "canonical": "gboom",
+      "aliases": [],
+      "displayName": "gboom",
+      "description": "Hidden easter egg",
+      "usage": "/gboom",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/gboom.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/gboom.rs:19"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "help",
+      "canonical": "help",
+      "aliases": [],
+      "displayName": "help",
+      "description": "Browse commands and keyboard shortcuts",
+      "usage": "/help",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/help.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/help.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "history",
+      "canonical": "history",
+      "aliases": [],
+      "displayName": "history",
+      "description": "Search prompt history",
+      "usage": "/history",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/history.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/history.rs:17"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "home",
+      "canonical": "home",
+      "aliases": [],
+      "displayName": "home",
+      "description": "Return to the welcome screen",
+      "usage": "/home",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/home.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/home.rs:13"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "hooks",
+      "canonical": "hooks",
+      "aliases": [],
+      "displayName": "hooks",
+      "description": "View hooks",
+      "usage": "/hooks",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:18"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "imagine",
+      "canonical": "imagine",
+      "aliases": [],
+      "displayName": "imagine",
+      "description": "Generate an image from a text description",
+      "usage": "/imagine <description>",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/imagine.rs",
+      "nameSource": "usage-literal (name constant IMAGINE_COMMAND_NAME)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "imagine-video",
+      "canonical": "imagine-video",
+      "aliases": [],
+      "displayName": "imagine-video",
+      "description": "Generate a video from a text description",
+      "usage": "/imagine-video <description>",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/imagine_video.rs",
+      "nameSource": "usage-literal (name constant IMAGINE_VIDEO_COMMAND_NAME)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine_video.rs:17"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "import-claude",
+      "canonical": "import-claude",
+      "aliases": [],
+      "displayName": "import-claude",
+      "description": "Open the Claude settings import modal",
+      "usage": "/import-claude",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs:17"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "jump",
+      "canonical": "jump",
+      "aliases": [],
+      "displayName": "jump",
+      "description": "Jump to a turn in the conversation",
+      "usage": "/jump",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:11"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "login",
+      "canonical": "login",
+      "aliases": [],
+      "displayName": "login",
+      "description": "Log in or re-authenticate with your account",
+      "usage": "/login",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/login.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/login.rs:10"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "logout",
+      "canonical": "logout",
+      "aliases": [],
+      "displayName": "logout",
+      "description": "Log out and return to the login screen",
+      "usage": "/logout",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/logout.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/logout.rs:12"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "loop",
+      "canonical": "loop",
+      "aliases": [],
+      "displayName": "loop",
+      "description": "Run a prompt on a recurring interval",
+      "usage": "/loop [interval] <prompt>",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/loop_cmd.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/loop_cmd.rs:84"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "marketplace",
+      "canonical": "marketplace",
+      "aliases": [],
+      "displayName": "marketplace",
+      "description": "View marketplace",
+      "usage": "/marketplace",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:55"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "mcps",
+      "canonical": "mcps",
+      "aliases": [],
+      "displayName": "mcps",
+      "description": "Show MCP server status",
+      "usage": "/mcps",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/mcps.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/mcps.rs:10"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "minimal",
+      "canonical": "minimal",
+      "aliases": [],
+      "displayName": "minimal",
+      "description": "`/minimal` and `/fullscreen`: session-scoped in-process screen-mode switch, performed by the event loop via `app::mode_switch`.",
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs",
+      "nameSource": "module-doc-comment (hand-written impl, computed name)",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:1"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "model",
+      "canonical": "model",
+      "aliases": [],
+      "displayName": "model",
+      "description": "Switch the active model",
+      "usage": "/model <name> [effort]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/model.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/model.rs:22"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "multiline",
+      "canonical": "multiline",
+      "aliases": [],
+      "displayName": "multiline",
+      "description": "Toggle multiline input mode (swap Enter and Shift+Enter)",
+      "usage": "/multiline",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:21"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "new",
+      "canonical": "new",
+      "aliases": [],
+      "displayName": "new",
+      "description": "Start a new session",
+      "usage": "/new",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/new.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/new.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "personas",
+      "canonical": "personas",
+      "aliases": [],
+      "displayName": "personas",
+      "description": "Manage personas (create, edit, delete)",
+      "usage": "/personas",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/personas.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/personas.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "description": "Enter plan mode",
+      "usage": "/plan [description]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/plan.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plan.rs:15"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "plugins",
+      "canonical": "plugins",
+      "aliases": [],
+      "displayName": "plugins",
+      "description": "View plugins",
+      "usage": "/plugins",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:37"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "privacy",
+      "canonical": "privacy",
+      "aliases": [],
+      "displayName": "privacy",
+      "description": "Open coding data, retention, and training settings",
+      "usage": "/privacy",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "queue",
+      "canonical": "queue",
+      "aliases": [],
+      "displayName": "queue",
+      "description": "List the prompts queued behind the running turn",
+      "usage": "/queue",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:17"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "quit",
+      "canonical": "quit",
+      "aliases": [],
+      "displayName": "quit",
+      "description": "Quit the application",
+      "usage": "/quit",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:20"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "recap",
+      "canonical": "recap",
+      "aliases": [],
+      "displayName": "recap",
+      "description": "Summarize the session so far",
+      "usage": "/recap",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/recap.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/recap.rs:17"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "release-notes",
+      "canonical": "release-notes",
+      "aliases": [],
+      "displayName": "release-notes",
+      "description": "View release notes for the current version",
+      "usage": "/release-notes",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/release_notes.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/release_notes.rs:11"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "remember",
+      "canonical": "remember",
+      "aliases": [],
+      "displayName": "remember",
+      "description": "Save a memory note",
+      "usage": "/remember [text]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:11"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rename",
+      "canonical": "rename",
+      "aliases": [],
+      "displayName": "rename",
+      "description": "Rename the current session",
+      "usage": "/rename <title> | --auto",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/rename.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/rename.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "resume",
+      "canonical": "resume",
+      "aliases": [],
+      "displayName": "resume",
+      "description": "Resume a previous session",
+      "usage": "/resume",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/resume.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/resume.rs:12"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "rewind",
+      "canonical": "rewind",
+      "aliases": [],
+      "displayName": "rewind",
+      "description": "Rewind to a previous turn",
+      "usage": "/rewind",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs:11"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "scroll-debug",
+      "canonical": "scroll-debug",
+      "aliases": [],
+      "displayName": "scroll-debug",
+      "description": "Toggle the scroll-diagnostics HUD",
+      "usage": "/scroll-debug",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/scroll_debug.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/scroll_debug.rs:17"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "session-info",
+      "canonical": "session-info",
+      "aliases": [],
+      "displayName": "session-info",
+      "description": "Show session info",
+      "usage": "/session-info",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:13"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "settings",
+      "canonical": "settings",
+      "aliases": [],
+      "displayName": "settings",
+      "description": "Open the settings modal",
+      "usage": "/settings",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "share",
+      "canonical": "share",
+      "aliases": [],
+      "displayName": "share",
+      "description": "Share this session via URL",
+      "usage": "/share",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/share.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/share.rs:10"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "skills",
+      "canonical": "skills",
+      "aliases": [],
+      "displayName": "skills",
+      "description": "View skills",
+      "usage": "/skills",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:73"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "tasks",
+      "canonical": "tasks",
+      "aliases": [],
+      "displayName": "tasks",
+      "description": "List background tasks, subagents, and scheduled tasks",
+      "usage": "/tasks",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "theme",
+      "canonical": "theme",
+      "aliases": [],
+      "displayName": "theme",
+      "description": "Switch the color theme",
+      "usage": "/theme <name>",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/theme.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/theme.rs:24"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "timeline",
+      "canonical": "timeline",
+      "aliases": [],
+      "displayName": "timeline",
+      "description": "Toggle the timeline sidebar",
+      "usage": "/timeline",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/timeline.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/timeline.rs:15"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "timestamps",
+      "canonical": "timestamps",
+      "aliases": [],
+      "displayName": "timestamps",
+      "description": "Toggle message timestamps on/off",
+      "usage": "/timestamps",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/timestamps.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/timestamps.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "toggle-mouse-reporting",
+      "canonical": "toggle-mouse-reporting",
+      "aliases": [],
+      "displayName": "toggle-mouse-reporting",
+      "description": "Toggle terminal mouse reporting (native click-drag copy/paste)",
+      "usage": "/toggle-mouse-reporting",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/toggle_mouse_reporting.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/toggle_mouse_reporting.rs:21"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "transcript",
+      "canonical": "transcript",
+      "aliases": [],
+      "displayName": "transcript",
+      "description": "View the conversation transcript in your pager ($PAGER)",
+      "usage": "/transcript",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:19"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "tutorial",
+      "canonical": "tutorial",
+      "aliases": [],
+      "displayName": "tutorial",
+      "description": "Quick tips to get the most out of Grok Build",
+      "usage": "/tutorial",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/tutorial.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/tutorial.rs:18"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "usage",
+      "canonical": "usage",
+      "aliases": [],
+      "displayName": "usage",
+      "description": "View usage",
+      "usage": "/usage [show|manage]",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:54"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "view-plan",
+      "canonical": "view-plan",
+      "aliases": [],
+      "displayName": "view-plan",
+      "description": "View the current plan",
+      "usage": "/view-plan",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/view_plan.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/view_plan.rs:14"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "vim-mode",
+      "canonical": "vim-mode",
+      "aliases": [],
+      "displayName": "vim-mode",
+      "description": "Toggle vim-style scrollback keybindings (j/k, h/l, g/G, y/Y, …)",
+      "usage": "/vim-mode",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/vim_mode.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/vim_mode.rs:16"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "voice",
+      "canonical": "voice",
+      "aliases": [],
+      "displayName": "voice",
+      "description": null,
+      "usage": "/voice",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/voice.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/voice.rs:21"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "workflow",
+      "canonical": "workflow",
+      "aliases": [],
+      "displayName": "workflow",
+      "description": "Launch a saved workflow, list runs, or manage a run (pause, resume, stop, save)",
+      "usage": "/workflow",
+      "takesArgs": true,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs:354"
+      ],
+      "verified": false
+    },
+    {
+      "rawName": "workflows",
+      "canonical": "workflows",
+      "aliases": [],
+      "displayName": "workflows",
+      "description": "Browse installed workflows",
+      "usage": "/workflows",
+      "takesArgs": false,
+      "module": "crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs",
+      "nameSource": "literal",
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs:15"
+      ],
+      "verified": false
+    }
+  ],
+  "builtinConstructors": 71,
+  "builtinList": [
+    "tutorial::TutorialCommand",
+    "settings_cmd::SettingsCommand",
+    "dashboard::DashboardCommand",
+    "workflows::WorkflowsCommand",
+    "plugin::PluginsCommand",
+    "btw::BtwCommand",
+    "voice::VoiceCommand",
+    "new::NewCommand",
+    "effort::EffortCommand",
+    "model::ModelCommand",
+    "context::ContextCommand",
+    "compact::CompactCommand",
+    "fork::ForkCommand",
+    "resume::ResumeCommand",
+    "loop_cmd::LoopCommand",
+    "plan::PlanCommand",
+    "view_plan::ViewPlanCommand",
+    "remember::RememberCommand",
+    "recap::RecapCommand",
+    "rewind::RewindCommand",
+    "jump::JumpCommand",
+    "expand::ExpandCommand",
+    "edit_prompt::EditPromptCommand",
+    "queue::QueueCommand",
+    "session_info::SessionInfoCommand",
+    "share::ShareCommand",
+    "rename::RenameCommand",
+    "history::HistoryCommand",
+    "transcript::TranscriptCommand",
+    "export::ExportCommand",
+    "copy::CopyCommand",
+    "find::FindCommand",
+    "usage::UsageCommand",
+    "tasks::TasksCommand",
+    "plugin::SkillsCommand",
+    "mcps::McpsCommand",
+    "plugin::HooksCommand",
+    "plugin::MarketplaceCommand",
+    "workflow::WorkflowCommand",
+    "personas::PersonasCommand",
+    "config_agents::ConfigAgentsCommand",
+    "theme::ThemeCommand",
+    "auto::AutoCommand",
+    "always_approve::AlwaysApproveCommand",
+    "vim_mode::VimModeCommand",
+    "multiline::MultilineCommand",
+    "compact_mode::CompactModeCommand",
+    "timestamps::TimestampsCommand",
+    "toggle_mouse_reporting::ToggleMouseReportingCommand",
+    "screen_mode_switch::ScreenModeSwitchCommand::minimal",
+    "screen_mode_switch::ScreenModeSwitchCommand::fullscreen",
+    "timeline::TimelineCommand",
+    "cd::CdCommand",
+    "imagine::ImagineCommand",
+    "imagine_video::ImagineVideoCommand",
+    "docs::DocsCommand",
+    "release_notes::ReleaseNotesCommand",
+    "announcements::AnnouncementsCommand",
+    "feedback::FeedbackCommand",
+    "privacy::PrivacyCommand",
+    "doctor::DoctorCommand",
+    "import_claude::ImportClaudeCommand",
+    "login::LoginCommand",
+    "logout::LogoutCommand",
+    "home::HomeCommand",
+    "delete::DeleteCommand",
+    "help::HelpCommand",
+    "exit::ExitCommand",
+    "gboom::GboomCommand",
+    "scroll_debug::ScrollDebugCommand",
+    "debug::DebugCommand"
+  ]
+}
