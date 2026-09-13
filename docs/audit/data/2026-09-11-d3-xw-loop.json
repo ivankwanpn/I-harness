@@ -1,0 +1,580 @@
+{
+  "domain": "loop",
+  "rows": {
+    "turn-engine-core-loop": {
+      "domain": "loop",
+      "label": "turn-engine-core-loop",
+      "members": {
+        "ih": ["session-log-driven-turn-loop"],
+        "dsh": ["turn-step-durable-machine"],
+        "codex": ["session-task-turn-loop"],
+        "opencode": ["classic-prompt-loop"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["sequential-effect-state-machine"]
+      },
+      "disposition": "improved-writing",
+      "rationale": "由日誌派生訊息並斷言"
+    },
+    "durable-turn-runner-loop": {
+      "domain": "loop",
+      "label": "durable-turn-runner-loop",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["v2-turn-runner-drain"],
+        "opencode-fork": ["classic-engine-loop", "kernel-durable-turn-coordinator"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "needsContinuation 可接近移植"
+    },
+    "per-session-serial-execution-lane": {
+      "domain": "loop",
+      "label": "per-session-serial-execution-lane",
+      "members": {
+        "ih": ["per-session-serial-lane-with-cross-session-parallelism"],
+        "dsh": ["per-session-serialization-and-write-ownership"],
+        "codex": [],
+        "opencode": ["session-runner-serialization", "session-execution-routing"],
+        "opencode-fork": ["session-serialized-runner", "engine-fixed-at-session-creation"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "每會話單一通道，跨會話並行"
+    },
+    "turn-boundary-state-projection": {
+      "domain": "loop",
+      "label": "turn-boundary-state-projection",
+      "members": {
+        "ih": [],
+        "dsh": ["turn-boundary-projection"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 以日誌重算，無投影鍵"
+    },
+    "canonical-request-epoch": {
+      "domain": "loop",
+      "label": "canonical-request-epoch",
+      "members": {
+        "ih": [],
+        "dsh": ["canonical-request-epoch"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "快取連續性可當持久事實"
+    },
+    "four-tier-input-admission-durable-inbox": {
+      "domain": "loop",
+      "label": "four-tier-input-admission-durable-inbox",
+      "members": {
+        "ih": ["four-tier-input-admission-with-durable-inbox-projection"],
+        "dsh": ["in-process-delivery-tiers"],
+        "codex": ["two-tier-input-model-queue-versus-steer"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "四級輸入且全部走日誌投影"
+    },
+    "durable-inbox-projection-and-claim": {
+      "domain": "loop",
+      "label": "durable-inbox-projection-and-claim",
+      "members": {
+        "ih": [],
+        "dsh": ["durable-inbox-projection"],
+        "codex": [],
+        "opencode": ["queued-task-dispatch"],
+        "opencode-fork": [],
+        "grok": ["turn-bound-safe-point-delivery"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "提交成功才算送達的待領佇列"
+    },
+    "agent-origin-identity-and-grant-authorization": {
+      "domain": "loop",
+      "label": "agent-origin-identity-and-grant-authorization",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["source-typed-operation-authorization", "delivery-envelope-identity-triple-check"],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "型別化主體與授權閘可直搬"
+    },
+    "mid-turn-injected-input-framing": {
+      "domain": "loop",
+      "label": "mid-turn-injected-input-framing",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["mid-turn-interjection-framing"],
+        "cc-custom": ["mid-turn-command-drain-steering"]
+      },
+      "disposition": "rewrite",
+      "rationale": "注入需具名框架與提交門檻"
+    },
+    "pending-queue-order-and-coalescing": {
+      "domain": "loop",
+      "label": "pending-queue-order-and-coalescing",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["queued-prompt-combine-with-versioned-edit"],
+        "cc-custom": ["priority-command-queue"]
+      },
+      "disposition": "reuse",
+      "rationale": "純函式合併與優先序可參考"
+    },
+    "idle-wake-and-self-tick-initiation": {
+      "domain": "loop",
+      "label": "idle-wake-and-self-tick-initiation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["idle-wake-on-pending-work"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "閒置觸發須有來源與上限"
+    },
+    "pre-step-injection-waterfall": {
+      "domain": "loop",
+      "label": "pre-step-injection-waterfall",
+      "members": {
+        "ih": [],
+        "dsh": ["pre-step-waterfall"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "步驟前可拒可改的插件縫"
+    },
+    "request-error-recovery-waterfall": {
+      "domain": "loop",
+      "label": "request-error-recovery-waterfall",
+      "members": {
+        "ih": [],
+        "dsh": ["request-error-recovery-waterfall"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["provider-attempt-retry-budget"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "重試縫與有界嘗試額度"
+    },
+    "abort-interrupt-and-cleanup-semantics": {
+      "domain": "loop",
+      "label": "abort-interrupt-and-cleanup-semantics",
+      "members": {
+        "ih": ["abort-semantics-threaded-to-the-transport"],
+        "dsh": ["cancellation-and-abort-semantics"],
+        "codex": ["graceful-abort-with-history-marker"],
+        "opencode": ["interrupt-finalization"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["effect-scoped-abort-and-cleanup", "abort-and-interrupt-semantics"]
+      },
+      "disposition": "improved-writing",
+      "rationale": "中止訊號直達傳輸，同補合成結果"
+    },
+    "tool-call-scheduling-and-commit-order": {
+      "domain": "loop",
+      "label": "tool-call-scheduling-and-commit-order",
+      "members": {
+        "ih": ["ordered-tool-batch-commit-lane-with-bounded-concurrency"],
+        "dsh": ["bounded-parallel-tool-scheduler"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["identical-tool-failure-circuit-breaker"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "IH 有閘控並行與提交游標"
+    },
+    "turn-budget-ladder": {
+      "domain": "loop",
+      "label": "turn-budget-ladder",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["session-rollout-token-budget-ladder"],
+        "opencode": ["step-budget-and-max-steps-prompt"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["turn-budget-ladder"]
+      },
+      "disposition": "reuse",
+      "rationale": "統一計數預算與階梯提醒"
+    },
+    "overflow-ladder-compact-reset-fail-closed": {
+      "domain": "loop",
+      "label": "overflow-ladder-compact-reset-fail-closed",
+      "members": {
+        "ih": ["three-layer-overflow-ladder-compact-reset-fail-closed"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "三層降級：壓縮、重置、失敗"
+    },
+    "stop-hook-continuation-loop": {
+      "domain": "loop",
+      "label": "stop-hook-continuation-loop",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["session-stop-hooks"],
+        "grok": [],
+        "cc-custom": ["stop-hook-continuation-loop"]
+      },
+      "disposition": "reuse",
+      "rationale": "結束前可續跑的掛鉤與上限"
+    },
+    "durable-turn-attempt-state-machine": {
+      "domain": "loop",
+      "label": "durable-turn-attempt-state-machine",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["durable-attempt-state-machine", "lease-generation-fencing"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "租約世代圍籬與崩潰裁決"
+    },
+    "session-resume-and-assembly": {
+      "domain": "loop",
+      "label": "session-resume-and-assembly",
+      "members": {
+        "ih": ["one-assembly-two-hosts-single-flight-get-or-create"],
+        "dsh": ["config-driven-agent-startup"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["kernel-startup-reconciliation"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "單飛組裝加啟動對帳"
+    },
+    "durable-restore-without-re-append": {
+      "domain": "loop",
+      "label": "durable-restore-without-re-append",
+      "members": {
+        "ih": ["durable-restore-without-re-append"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "續跑為純重播，不重送歷史"
+    },
+    "driver-wake-latch-and-maintenance-phase": {
+      "domain": "loop",
+      "label": "driver-wake-latch-and-maintenance-phase",
+      "members": {
+        "ih": [],
+        "dsh": ["driver-wake-latch-and-maintenance-phase"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "喚醒閂鎖與非對話維護相位"
+    },
+    "agent-lifecycle-transaction-and-registry-ownership": {
+      "domain": "loop",
+      "label": "agent-lifecycle-transaction-and-registry-ownership",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "agent-lifecycle-transaction",
+          "agent-registry-and-runtime-ownership",
+          "agent-scoped-composition-at-publication"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "發佈前交易化與登錄生命週期"
+    },
+    "initiator-causal-attribution-scope": {
+      "domain": "loop",
+      "label": "initiator-causal-attribution-scope",
+      "members": {
+        "ih": [],
+        "dsh": ["agent-initiator-scope"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "非同步因果歸屬，IH 缺"
+    },
+    "agent-preset-composition-mounting": {
+      "domain": "loop",
+      "label": "agent-preset-composition-mounting",
+      "members": {
+        "ih": [],
+        "dsh": ["agent-preset-composition-mounting"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "組合掛載屬擴展域，暫緩"
+    },
+    "default-agent-model-selection": {
+      "domain": "loop",
+      "label": "default-agent-model-selection",
+      "members": {
+        "ih": [],
+        "dsh": ["default-agent-model-selection"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "預設模型屬模型域，暫緩"
+    },
+    "canonical-turn-event-log": {
+      "domain": "loop",
+      "label": "canonical-turn-event-log",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["canonical-turn-event-log"],
+        "cc-custom": []
+      },
+      "disposition": "路線差異",
+      "rationale": "事件分類帳屬會話持久化域"
+    },
+    "pending-turn-coordinator-with-wake-coalescing": {
+      "domain": "loop",
+      "label": "pending-turn-coordinator-with-wake-coalescing",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["v2-run-coordinator-coalescing"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "喚醒合併與單一 successor"
+    },
+    "background-job-registry": {
+      "domain": "loop",
+      "label": "background-job-registry",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["background-job-registry"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "背景工作登記與取消級聯"
+    },
+    "early-stdin-capture-before-mount": {
+      "domain": "loop",
+      "label": "early-stdin-capture-before-mount",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["early-stdin-capture"]
+      },
+      "disposition": "rewrite",
+      "rationale": "掛載前先抓輸入，非 TTY 不抓"
+    },
+    "proactive-self-tick-loop": {
+      "domain": "loop",
+      "label": "proactive-self-tick-loop",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["proactive-self-tick-loop"]
+      },
+      "disposition": "rewrite",
+      "rationale": "實作完整但全站未接線"
+    },
+    "speculative-turn-execution": {
+      "domain": "loop",
+      "label": "speculative-turn-execution",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["speculative-turn-execution"]
+      },
+      "disposition": "不做",
+      "rationale": "未確認即執行，違反 IH 原則"
+    },
+    "async-session-title-generation": {
+      "domain": "loop",
+      "label": "async-session-title-generation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["turn-title-generation"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "路線差異",
+      "rationale": "非同步標題屬檢索記憶域"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": [
+        "dsh:driver-wake-latch-and-maintenance-phase",
+        "opencode:v2-run-coordinator-coalescing",
+        "opencode-fork:kernel-durable-turn-coordinator"
+      ],
+      "whyNotMerged": "三者都在協調喚醒與忙碌所有權，但 v2 協調器同時做喚醒合併與 successor 鏈接，dsh 的驅動器做喚醒閂鎖與維護相位，kernel 協調器則把釋放綁在持久結算後；同名為協調、實作單位不同，未合併。"
+    },
+    {
+      "mechanisms": [
+        "cc-custom:sequential-effect-state-machine",
+        "cc-custom:effect-scoped-abort-and-cleanup",
+        "cc-custom:abort-and-interrupt-semantics"
+      ],
+      "whyNotMerged": "cc-custom 的運行時在三列間高度耦合：每轉換一效果的約束屬迴圈本體，效果級控制器生命週期屬中止清理，abort 原因與 ownsAbort 屬中止語意；拆分是為了讓各列與其他來源對齊。"
+    },
+    {
+      "mechanisms": [
+        "opencode:session-runner-serialization",
+        "opencode:session-execution-routing",
+        "opencode-fork:session-serialized-runner",
+        "opencode-fork:engine-fixed-at-session-creation"
+      ],
+      "whyNotMerged": "上游兩列在 fork 幾乎以同名重複；因無法斷言 fork 的 routing 與 kernel 選擇與上游逐行等價，仍以不同列呈現，供人工核對。"
+    },
+    {
+      "mechanisms": [
+        "dsh:durable-inbox-projection",
+        "opencode:queued-task-dispatch",
+        "grok:turn-bound-safe-point-delivery"
+      ],
+      "whyNotMerged": "grok 的 Pending/Projecting/Delivered 三態在記憶體生命週期內運作，IH 與 dsh 是日誌投影；已合併為一列，但「提交前暫存槽」與「持久待處理列」的層級差異未被完整表達。"
+    },
+    {
+      "mechanisms": [
+        "grok:delivery-envelope-identity-triple-check",
+        "grok:source-typed-operation-authorization"
+      ],
+      "whyNotMerged": "兩者同屬輸入准入：一為來源授權，一為身分與 grant 綁定；已併為一列，但 grant 的目標會話範圍其實與每會話序列化列相關。"
+    },
+    {
+      "mechanisms": [
+        "ih:session-log-driven-turn-loop.maxTurns",
+        "cc-custom:turn-budget-ladder",
+        "codex:session-rollout-token-budget-ladder"
+      ],
+      "whyNotMerged": "IH 的 maxTurns 只是常數，未列入預算列；若日後把回合數上限視為預算的一種，這一歸屬需要重新檢視。"
+    },
+    {
+      "mechanisms": [
+        "grok:canonical-turn-event-log",
+        "opencode:turn-title-generation",
+        "dsh:default-agent-model-selection"
+      ],
+      "whyNotMerged": "三者列在 loop 陣列但語意分別屬會話持久化、檢索記憶與模型域；為保完整計數仍各成一列，並以路線差異標示，未與迴圈機制合併。"
+    },
+    {
+      "mechanisms": [
+        "opencode:v2-run-coordinator-coalescing",
+        "opencode:background-job-registry"
+      ],
+      "whyNotMerged": "兩者都在管生命週期與取消，但一個是每鍵序列化與喚醒合併，一個是工作狀態登記與升遷；opencode 自身的 interrupt-finalization 已把背景工作取消級聯算進中止語意，故此處只放登記本體以避免重複計數。"
+    },
+    {
+      "mechanisms": [
+        "cc-custom:proactive-self-tick-loop",
+        "cc-custom:speculative-turn-execution"
+      ],
+      "whyNotMerged": "兩者都是無明確使用者輸入即啟動回合，但觸發來源不同（計時器自跳與預測輸入）；且 speculative 會先寫入真實回合再注入，與 IH 的失敗關閉原則牴觸，已分別列為 rewrite 與不做。"
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 67,
+    "mechanismsPlaced": 67
+  }
+}

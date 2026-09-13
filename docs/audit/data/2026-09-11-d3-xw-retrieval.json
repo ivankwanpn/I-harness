@@ -1,0 +1,491 @@
+{
+  "domain": "retrieval",
+  "rows": {
+    "session-corpus-search-and-lineage-index": {
+      "domain": "retrieval",
+      "label": "session-corpus-search-and-lineage-index",
+      "members": {
+        "ih": ["session-search-and-lineage-over-a-rebuildable-sqlite-index"],
+        "dsh": ["session-full-text-index-and-ranked-search", "session-query-live-preferred-corpus-reads-and-traces"],
+        "codex": ["rollout-content-search-with-ripgrep-fallback", "thread-history-occurrence-search-pagination"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["bm25-fts5-session-index-with-lease-fenced-bootstrap"],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已有可重建 FTS 索引與世系"
+    },
+    "session-list-title-and-resume-surface": {
+      "domain": "retrieval",
+      "label": "session-list-title-and-resume-surface",
+      "members": {
+        "ih": ["session-listing-and-title-derivation-as-a-retrieval-surface"],
+        "dsh": ["session-title-projection-and-model-titling"],
+        "codex": ["session-index-name-lookup"],
+        "opencode": ["session-search-and-lineage"],
+        "opencode-fork": ["session-search-and-lineage"],
+        "grok": [],
+        "cc-custom": ["session-index-and-lineage", "session-titling-and-resume-routing"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已有列表、標題與續接面"
+    },
+    "model-facing-session-search-and-workspace-authorization": {
+      "domain": "retrieval",
+      "label": "model-facing-session-search-and-workspace-authorization",
+      "members": {
+        "ih": [],
+        "dsh": ["model-facing-session-search-and-workspace-authorization"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 缺模型端會話檢索工具"
+    },
+    "session-log-export-archive": {
+      "domain": "retrieval",
+      "label": "session-log-export-archive",
+      "members": {
+        "ih": [],
+        "dsh": ["session-log-export-archive"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "匯出路由可近移植"
+    },
+    "remote-session-share-upload": {
+      "domain": "retrieval",
+      "label": "remote-session-share-upload",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["session-share-upload"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "需外部共享服務，暫緩"
+    },
+    "fuzzy-file-path-search-and-completion": {
+      "domain": "retrieval",
+      "label": "fuzzy-file-path-search-and-completion",
+      "members": {
+        "ih": [],
+        "dsh": ["at-file-reference-grammar-and-fuzzy-completion-index"],
+        "codex": ["fuzzy-file-search-nucleo-session"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["fuzzy-file-search-degradation-ladder"],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無模糊排序與 @ 補全"
+    },
+    "ripgrep-backed-file-and-text-search-tools": {
+      "domain": "retrieval",
+      "label": "ripgrep-backed-file-and-text-search-tools",
+      "members": {
+        "ih": [],
+        "dsh": ["ripgrep-backed-file-search-tools"],
+        "codex": [],
+        "opencode": ["file-read-search-surface"],
+        "opencode-fork": ["workspace-file-search"],
+        "grok": [],
+        "cc-custom": ["ripgrep-backed-file-search"]
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 已於 tools 域實作"
+    },
+    "bounded-file-read-with-dedup-cache": {
+      "domain": "retrieval",
+      "label": "bounded-file-read-with-dedup-cache",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["file-read-range-and-dedup-cache"]
+      },
+      "disposition": "reuse",
+      "rationale": "讀取去重快取可近移植"
+    },
+    "session-identifier-and-protected-path-detection": {
+      "domain": "retrieval",
+      "label": "session-identifier-and-protected-path-detection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["session-identifier-and-file-detection"]
+      },
+      "disposition": "reuse",
+      "rationale": "Windows 識別可近移植"
+    },
+    "mcp-resource-retrieval-tools": {
+      "domain": "retrieval",
+      "label": "mcp-resource-retrieval-tools",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["mcp-resource-retrieval"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 缺 MCP 資源檢索工具"
+    },
+    "attachment-ingestion-and-durable-store": {
+      "domain": "retrieval",
+      "label": "attachment-ingestion-and-durable-store",
+      "members": {
+        "ih": ["image-attachments-with-an-opaque-id-and-validate-before-publish"],
+        "dsh": ["attachment-ingestion-and-durable-content-addressed-store"],
+        "codex": ["multimodal-input-snapshot-and-image-budget"],
+        "opencode": [],
+        "opencode-fork": ["attachment-materialization", "file-mention-expansion"],
+        "grok": [],
+        "cc-custom": ["multimodal-attachment-ingestion"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已有附件儲存，範圍窄"
+    },
+    "image-admission-normalization-and-request-projection": {
+      "domain": "retrieval",
+      "label": "image-admission-normalization-and-request-projection",
+      "members": {
+        "ih": [],
+        "dsh": ["image-admission-normalization-and-request-image-projection"],
+        "codex": [],
+        "opencode": ["image-attachment-normalization"],
+        "opencode-fork": ["image-normalization"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 常數已宣告但未實作"
+    },
+    "attachment-modality-gating": {
+      "domain": "retrieval",
+      "label": "attachment-modality-gating",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["attachment-modality-gating"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "依模型模態改寫可近移植"
+    },
+    "web-search-provider-selection-and-tool-bounds": {
+      "domain": "retrieval",
+      "label": "web-search-provider-selection-and-tool-bounds",
+      "members": {
+        "ih": [],
+        "dsh": ["web-search-provider-selection-and-tool-bounds"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 已於 tools 域提供"
+    },
+    "http-fetch-with-public-address-pinning": {
+      "domain": "retrieval",
+      "label": "http-fetch-with-public-address-pinning",
+      "members": {
+        "ih": [],
+        "dsh": ["http-fetch-with-public-address-pinning"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 缺位址釘選，需自建"
+    },
+    "cross-session-reference-snapshot-injection": {
+      "domain": "retrieval",
+      "label": "cross-session-reference-snapshot-injection",
+      "members": {
+        "ih": [],
+        "dsh": ["cross-session-reference-snapshot-injection"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "跨會話引用快照值得自建"
+    },
+    "request-time-and-location-context-injection": {
+      "domain": "retrieval",
+      "label": "request-time-and-location-context-injection",
+      "members": {
+        "ih": [],
+        "dsh": ["request-time-and-tmux-location-context-injection"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "時間脈絡值得自建"
+    },
+    "user-question-request-surface": {
+      "domain": "retrieval",
+      "label": "user-question-request-surface",
+      "members": {
+        "ih": [],
+        "dsh": ["user-questions-waterfall"],
+        "codex": [],
+        "opencode": ["question-answer-surface"],
+        "opencode-fork": ["question-request-roundtrip"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 已於 service 域提供"
+    },
+    "instruction-file-ingestion": {
+      "domain": "retrieval",
+      "label": "instruction-file-ingestion",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["instruction-file-ingestion"],
+        "opencode-fork": ["instruction-file-discovery"],
+        "grok": [],
+        "cc-custom": ["claudemd-instruction-memory-files"]
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 已於 context 域實作"
+    },
+    "durable-cross-session-memory-store": {
+      "domain": "retrieval",
+      "label": "durable-cross-session-memory-store",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["incremental-content-hash-reindex-over-contentless-fts"],
+        "cc-custom": ["memdir-auto-memory-store", "memory-taxonomy-and-scan-index"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無跨會話記憶儲存"
+    },
+    "background-memory-extraction-and-consolidation": {
+      "domain": "retrieval",
+      "label": "background-memory-extraction-and-consolidation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["two-phase-memory-pipeline-with-lease-queue"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["background-memory-extraction", "session-memory-transcript-notes", "auto-dream-consolidation"]
+      },
+      "disposition": "遠期",
+      "rationale": "背景記憶養護屬大型工程"
+    },
+    "memory-recall-ranking-and-freshness": {
+      "domain": "retrieval",
+      "label": "memory-recall-ranking-and-freshness",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["memory-read-tool-family-with-citation-feedback"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["hybrid-bm25-plus-vector-memory-retrieval"],
+        "cc-custom": ["memory-relevance-recall", "memory-staleness-annotation"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無記憶檢索與排序"
+    },
+    "team-shared-memory-with-secret-guard": {
+      "domain": "retrieval",
+      "label": "team-shared-memory-with-secret-guard",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["team-memory-and-secret-guard"]
+      },
+      "disposition": "遠期",
+      "rationale": "團隊共享記憶屬產品級"
+    },
+    "magic-doc-auto-update": {
+      "domain": "retrieval",
+      "label": "magic-doc-auto-update",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["magic-docs-auto-update"]
+      },
+      "disposition": "遠期",
+      "rationale": "文件自動改寫屬產品級"
+    },
+    "codebase-symbol-index": {
+      "domain": "retrieval",
+      "label": "codebase-symbol-index",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": ["tree-sitter-symbol-index-over-name-keyed-occurrence-map"],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "大型碼庫圖譜，暫緩"
+    },
+    "external-code-indexing-detection": {
+      "domain": "retrieval",
+      "label": "external-code-indexing-detection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["external-code-indexing-detection"]
+      },
+      "disposition": "路線差異",
+      "rationale": "外部索引器路線，非缺口"
+    },
+    "reverse-jsonl-tail-record-scanner": {
+      "domain": "retrieval",
+      "label": "reverse-jsonl-tail-record-scanner",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["reverse-jsonl-tail-scanner"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "反向掃描 JSONL 可自建"
+    },
+    "agentic-llm-ranked-session-search": {
+      "domain": "retrieval",
+      "label": "agentic-llm-ranked-session-search",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["agentic-session-search"]
+      },
+      "disposition": "rewrite",
+      "rationale": "模型排序會話檢索需自建"
+    },
+    "reference-source-materialization": {
+      "domain": "retrieval",
+      "label": "reference-source-materialization",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["reference-source-materialization"],
+        "opencode-fork": ["reference-source-materialization"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "外部參考庫快取需自建"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": ["session-log-export-archive", "session-share-upload"],
+      "whyNotMerged": "Both push a session out of the harness, but one is a self-contained local ZIP of the durable log streamed over a host route and the other is a debounced upload to a hosted collaboration service with account/org auth; merging would hide that dsh needs no service and opencode needs one."
+    },
+    {
+      "mechanisms": ["cross-session-reference-snapshot-injection", "reference-source-materialization"],
+      "whyNotMerged": "Name collision on 'reference' only: dsh injects a budgeted, untrusted snapshot of ANOTHER SESSION into the current step, while opencode materializes configured extra directories/git repositories into a cache the agent may read. Different objects, different trust story."
+    },
+    {
+      "mechanisms": ["tree-sitter-symbol-index-over-name-keyed-occurrence-map", "external-code-indexing-detection"],
+      "whyNotMerged": "Same subject (codebase indexing) but opposite posture: grok builds its own tree-sitter symbol index with a persisted cache, while cc-custom builds nothing and only classifies third-party indexers from bash commands and MCP tool names for analytics. Merging would erase the built-in-versus-delegated design split."
+    },
+    {
+      "mechanisms": ["agentic-session-search", "session-search-and-lineage-over-a-rebuildable-sqlite-index", "session-full-text-index-and-ranked-search", "bm25-fts5-session-index-with-lease-fenced-bootstrap", "rollout-content-search-with-ripgrep-fallback", "thread-history-occurrence-search-pagination"],
+      "whyNotMerged": "cc-custom answers 'which past session is relevant' with a small-model selector over a packed manifest (title/branch/summary/first-prompt/excerpt), not with a lexical index or a scan. Treating an LLM selection pass as the same capability as a BM25/FTS index would hide a genuinely different retrieval paradigm, so it stays single-source."
+    },
+    {
+      "mechanisms": ["attachment-modality-gating", "image-admission-normalization-and-request-image-projection"],
+      "whyNotMerged": "dsh proves the two belong together (its image mechanism gates on positive proof that the exact route accepts image input and projects otherwise), but that gating is bundled INSIDE dsh's normalization/projection mechanism in the inventory, so a gating row could only be formed by splitting a source mechanism. opencode's gating therefore stays alone here."
+    },
+    {
+      "mechanisms": ["multimodal-input-snapshot-and-image-budget", "image-admission-normalization-and-request-image-projection", "image-attachment-normalization", "image-normalization"],
+      "whyNotMerged": "codex bundles ingestion (path to portable data URL) and request-time image budgeting (detail modes, max dimension/patches) in one mechanism, so it can sit in either the ingestion row or the normalization row but not both; it is placed with ingestion and the budget half is left uncrossed."
+    },
+    {
+      "mechanisms": ["session-query-live-preferred-corpus-reads-and-traces", "session-search-and-lineage-over-a-rebuildable-sqlite-index", "session-listing-and-title-derivation-as-a-retrieval-surface"],
+      "whyNotMerged": "dsh's live-preferred corpus read/trace engine could arguable sit with the listing/lineage surface instead of the search row: it folds titles and walks ancestry. It is placed with search because it is the read model the FTS index extends in the same service, which is how IH bundles read+search+lineage in one mechanism; a reader wanting the split should note this is a judgement call."
+    },
+    {
+      "mechanisms": ["session-title-projection-and-model-titling", "session-titling-and-resume-routing"],
+      "whyNotMerged": "A standalone 'model-generated session titles' row was considered and rejected: IH's only title mechanism is bundled inside its listing/retrieval-surface mechanism, so a titles-only row would have had no ih member and could not honestly be marked 已存在 even though IH does generate titles."
+    },
+    {
+      "mechanisms": ["session-identifier-and-file-detection", "session-titling-and-resume-routing", "session-index-and-lineage"],
+      "whyNotMerged": "cc-custom's identifier parser covers the resume surface (sessionId, ingress URL, .jsonl path) but also classifies session-memory and transcript paths under the config directory for the permission layer. Folding it into the session-list row would bury a safety-facing classification inside a retrieval row."
+    },
+    {
+      "mechanisms": ["mcp-resource-retrieval", "attachment-materialization"],
+      "whyNotMerged": "Both touch MCP resources, but cc-custom exposes list/read TOOLS for resources with an LRU cache and change-notification invalidation, whereas opencode-fork only ingests an already-named resource into prompt attachments."
+    },
+    {
+      "mechanisms": ["reverse-jsonl-tail-scanner", "session-index-name-lookup", "rollout-content-search-with-ripgrep-fallback"],
+      "whyNotMerged": "The reverse scanner is the read primitive underneath codex's name lookup and search surfaces; it is kept as its own row because it is a reusable bounded-read guarantee (new_at freeze, oversized-record skip, rejected-not-fatal JSON), not a retrieval capability itself."
+    },
+    {
+      "mechanisms": ["ripgrep-backed-file-search-tools", "instruction-file-ingestion", "web-search-provider-selection-and-tool-bounds", "user-questions-waterfall"],
+      "whyNotMerged": "Cross-cutting rule-4 issue, not a merge question: IH demonstrably implements ripgrep search tools, web-search provider selection, an askUser/question-provider seam and AGENTS.md/CLAUDE.md instruction discovery, but all four sit in IH's tools/context/service domains, so rule 1 forbids citing them as ih members here and rule 4 forbids 已存在 on a row with no ih member. Those rows are marked 路線差異 (IH structures the same capability elsewhere) rather than falsely claiming a gap."
+    }
+  ],
+  "coverage": { "mechanismsSeen": 65, "mechanismsPlaced": 65 }
+}

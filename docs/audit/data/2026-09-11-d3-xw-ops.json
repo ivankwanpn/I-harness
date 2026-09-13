@@ -1,0 +1,538 @@
+{
+  "domain": "ops",
+  "notes": [
+    "grok's domains.ops array is EMPTY in its Phase 1 inventory (unlike its session/context/tools/subagent/safety/extension/retrieval/interface arrays, which are populated). This is an ABSENCE OF MATERIAL, not evidence that grok has no ops plane: grok's own moduleCoverage records xai-grok-telemetry ('Telemetry pipeline and event emission used by the shell and pager. Ops-domain.'), xai-crash-handler ('Crash-handler installation and reporting. Ops-domain.'), xai-grok-update ('Self-update machinery for the CLI. Ops-domain.'), xai-grok-version, xai-tracing-macros, xai-mixpanel ('Minimal Mixpanel track-only client ... Ops-domain analytics sink.') and xai-grok-diag-server (in-guest diagnostics HTTP server /ready /statusz /logs, assigned service). The Phase 1 agent classified these and wrote prose about them but emitted no ops mechanism entries with line citations, so no grok mechanism name exists verbatim in grok's ops array to cite. The empty grok column for every row below must therefore be read as 'not inventoried in this pass', never as 'grok lacks this capability'.",
+    "opencode is two inventories in one file: the 'upstream' half and the 'fork' half are both counted as separate sources (opencode, opencode-fork), per the brief.",
+    "ih's own domainsAbsent records ops as deliberately shallow: telemetry, feedback and the settings document are the whole surface, with no crash handler, no update/distribution mechanism, no benchmarking harness and no cost accounting beyond token estimation; GET /api/telemetry is deliberately absent from the web host, so the emitted stream has no in-repo consumer. Dispositions below judge against that surface."
+  ],
+  "rows": {
+    "session-telemetry-stream-capture-and-sink-fanout": {
+      "domain": "ops",
+      "label": "session-telemetry-stream-capture-and-sink-fanout",
+      "members": {
+        "ih": ["host-side-telemetry-stream-with-a-closed-manifest-and-sink-isolation"],
+        "dsh": ["session-telemetry-capture-seam"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 具封閉清單與 sink 隔離"
+    },
+    "per-message-feedback-ledger": {
+      "domain": "ops",
+      "label": "per-message-feedback-ledger",
+      "members": {
+        "ih": ["per-message-feedback-channel-with-verify-after-write-durability"],
+        "dsh": ["message-feedback-ledger"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已具版本衝突與寫後驗證"
+    },
+    "layered-settings-document-with-hot-reload": {
+      "domain": "ops",
+      "label": "layered-settings-document-with-hot-reload",
+      "members": {
+        "ih": ["settings-document-layered-precedence-hot-reload-comment-preservation"],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "IH 自有分層設定與熱重載"
+    },
+    "otlp-telemetry-export-with-span-attribution": {
+      "domain": "ops",
+      "label": "otlp-telemetry-export-with-span-attribution",
+      "members": {
+        "ih": [],
+        "dsh": ["otel-telemetry-export"],
+        "codex": ["otel-session-telemetry-and-metric-export"],
+        "opencode": ["otlp-telemetry-export", "ai-sdk-span-attribution"],
+        "opencode-fork": ["otlp-telemetry-export"],
+        "grok": [],
+        "cc-custom": ["otel-telemetry-export"]
+      },
+      "disposition": "rewrite",
+      "rationale": "自建 OTLP 匯出，不引 SDK"
+    },
+    "token-and-cost-accounting": {
+      "domain": "ops",
+      "label": "token-and-cost-accounting",
+      "members": {
+        "ih": [],
+        "dsh": ["token-and-cost-metering"],
+        "codex": ["turn-cost-accounting-worker"],
+        "opencode": ["token-and-cost-accounting"],
+        "opencode-fork": ["token-and-cost-accounting"],
+        "grok": [],
+        "cc-custom": ["cost-and-token-accounting"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 僅記 token，宜補計價"
+    },
+    "user-feedback-and-bug-report-channel": {
+      "domain": "ops",
+      "label": "user-feedback-and-bug-report-channel",
+      "members": {
+        "ih": [],
+        "dsh": ["session-feedback-command-and-remote"],
+        "codex": ["feedback-upload-with-diagnostic-attachments"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["feedback-channels"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 缺自由文字回報通道"
+    },
+    "anonymous-identity-attribution": {
+      "domain": "ops",
+      "label": "anonymous-identity-attribution",
+      "members": {
+        "ih": [],
+        "dsh": ["anonymous-identity-attribution"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "可加匿名 ID 供事件關聯"
+    },
+    "package-owned-runtime-invariant-checks": {
+      "domain": "ops",
+      "label": "package-owned-runtime-invariant-checks",
+      "members": {
+        "ih": [],
+        "dsh": ["invariant-runtime-diagnostics"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "套件自有不變式檢查可借"
+    },
+    "live-session-stats-projection": {
+      "domain": "ops",
+      "label": "live-session-stats-projection",
+      "members": {
+        "ih": [],
+        "dsh": ["session-stats-projection"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "即時會話統計投影可借"
+    },
+    "experimental-runtime-inspector": {
+      "domain": "ops",
+      "label": "experimental-runtime-inspector",
+      "members": {
+        "ih": [],
+        "dsh": ["runtime-inspector-diagnostics"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "實驗性外部工具，工程量大"
+    },
+    "ci-performance-benchmark-budgets": {
+      "domain": "ops",
+      "label": "ci-performance-benchmark-budgets",
+      "members": {
+        "ih": [],
+        "dsh": ["performance-benchmark-budgets"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "CI 效能預算量測值得建"
+    },
+    "fail-loud-crash-handling-and-graceful-shutdown": {
+      "domain": "ops",
+      "label": "fail-loud-crash-handling-and-graceful-shutdown",
+      "members": {
+        "ih": [],
+        "dsh": ["fail-loud-crash-handling"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["graceful-shutdown-and-crash-containment"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 無崩潰處理，宜補"
+    },
+    "profile-based-distribution-layout": {
+      "domain": "ops",
+      "label": "profile-based-distribution-layout",
+      "members": {
+        "ih": [],
+        "dsh": ["profile-distribution-and-module-fallback"],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 無外掛核心分層架構"
+    },
+    "sqlite-log-database-with-retention": {
+      "domain": "ops",
+      "label": "sqlite-log-database-with-retention",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["sqlite-log-database-and-diagnostics"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "有界佇列與保存期限可借"
+    },
+    "high-fidelity-rollout-trace-bundle": {
+      "domain": "ops",
+      "label": "high-fidelity-rollout-trace-bundle",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["rollout-trace-event-manifest-bundle"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "獨立追蹤格式，工程量高"
+    },
+    "network-proxy-policy-audit-observer": {
+      "domain": "ops",
+      "label": "network-proxy-policy-audit-observer",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["network-proxy-policy-audit-and-attribution"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "需代理架構，實驗且預設關"
+    },
+    "product-analytics-event-pipeline": {
+      "domain": "ops",
+      "label": "product-analytics-event-pipeline",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["analytics-facts-and-feature-state-metrics"],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["analytics-event-pipeline"]
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 遙測交宿主，無自家後端"
+    },
+    "in-process-diagnostics-metrics-registry": {
+      "domain": "ops",
+      "label": "in-process-diagnostics-metrics-registry",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": ["in-repo-diagnostics-gauges"],
+        "opencode": [],
+        "opencode-fork": ["kernel-diagnostics-counters-percentiles"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "計數器與百分位註冊表可自建"
+    },
+    "remote-feature-flag-and-dynamic-config-client": {
+      "domain": "ops",
+      "label": "remote-feature-flag-and-dynamic-config-client",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["feature-flag-client"]
+      },
+      "disposition": "遠期",
+      "rationale": "遠端旗標，cc 因隱私自廢"
+    },
+    "telemetry-event-manifest-and-sanitisation": {
+      "domain": "ops",
+      "label": "telemetry-event-manifest-and-sanitisation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["telemetry-event-manifest-and-sanitisation"]
+      },
+      "disposition": "rewrite",
+      "rationale": "清單已有，缺產出端淨化"
+    },
+    "local-structured-diagnostic-logging": {
+      "domain": "ops",
+      "label": "local-structured-diagnostic-logging",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["file-and-stderr-logging"],
+        "opencode-fork": ["structured-file-logging"],
+        "grok": [],
+        "cc-custom": ["local-diagnostic-logging"]
+      },
+      "disposition": "rewrite",
+      "rationale": "在地結構化日誌可自建"
+    },
+    "installation-detection-and-self-update": {
+      "domain": "ops",
+      "label": "installation-detection-and-self-update",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["installation-detection-and-auto-update"],
+        "opencode-fork": ["installation-method-detection"],
+        "grok": [],
+        "cc-custom": ["install-and-update"]
+      },
+      "disposition": "遠期",
+      "rationale": "需發佈通道，非當前重點"
+    },
+    "cli-self-diagnostics-command-surface": {
+      "domain": "ops",
+      "label": "cli-self-diagnostics-command-surface",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["debug-diagnostics-commands"],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["doctor-and-context-diagnostics"]
+      },
+      "disposition": "rewrite",
+      "rationale": "自我診斷指令面可自建"
+    },
+    "profiling-and-heap-dump-instrumentation": {
+      "domain": "ops",
+      "label": "profiling-and-heap-dump-instrumentation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["profiling-and-benchmark-instrumentation"]
+      },
+      "disposition": "rewrite",
+      "rationale": "效能取樣與堆積傾印可借"
+    },
+    "local-session-usage-stats-report": {
+      "domain": "ops",
+      "label": "local-session-usage-stats-report",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": ["session-stats-aggregation"],
+        "grok": [],
+        "cc-custom": ["local-usage-analytics-and-insights"]
+      },
+      "disposition": "rewrite",
+      "rationale": "本機用量統計報表可自建"
+    },
+    "terminal-notification-delivery": {
+      "domain": "ops",
+      "label": "terminal-notification-delivery",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["notification-delivery"]
+      },
+      "disposition": "rewrite",
+      "rationale": "通知派送宜依 IH 慣例重寫"
+    },
+    "agent-and-tool-progress-summaries": {
+      "domain": "ops",
+      "label": "agent-and-tool-progress-summaries",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["agent-and-tool-progress-summaries"]
+      },
+      "disposition": "遠期",
+      "rationale": "額外模型呼叫換進度標籤"
+    },
+    "llm-call-fixture-record-and-replay": {
+      "domain": "ops",
+      "label": "llm-call-fixture-record-and-replay",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["vcr-fixture-record-replay"]
+      },
+      "disposition": "reuse",
+      "rationale": "fixture 重播設計乾淨可仿"
+    },
+    "ant-only-internal-deployment-instrumentation": {
+      "domain": "ops",
+      "label": "ant-only-internal-deployment-instrumentation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": ["ant-only-internal-instrumentation"]
+      },
+      "disposition": "不做",
+      "rationale": "廠商內部部署觀測，不適用"
+    },
+    "heap-snapshot-on-memory-pressure": {
+      "domain": "ops",
+      "label": "heap-snapshot-on-memory-pressure",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["heap-snapshot-watchdog"],
+        "opencode-fork": ["heap-snapshot-watchdog"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "RSS 超限自動快照可借"
+    },
+    "runtime-environment-flag-registry": {
+      "domain": "ops",
+      "label": "runtime-environment-flag-registry",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": ["runtime-flag-registry"],
+        "opencode-fork": ["runtime-flags-gating"],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "路線差異",
+      "rationale": "IH 以設定文件取代旗標層"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": ["cc-custom:telemetry-event-manifest-and-sanitisation", "ih:host-side-telemetry-stream-with-a-closed-manifest-and-sink-isolation"],
+      "whyNotMerged": "Both are a closed telemetry event manifest, but cc-custom's is a generated protobuf wire contract for a product-analytics backend whose only consumer is a no-op, while ih's manifest drives a live multicast sink fan-out and is the source the emitted type union is derived from; merging them would put an inert schema in the same row as a working stream."
+    },
+    {
+      "mechanisms": ["cc-custom:feature-flag-client", "opencode:runtime-flag-registry", "opencode-fork:runtime-flags-gating"],
+      "whyNotMerged": "All three are a runtime gate layer, but cc-custom's is a remote server-driven client whose own header records that the previous implementation shipped deviceID, sessionId, email and org UUIDs to a hardcoded endpoint (which is why it was deleted), while opencode's two are locally-read OPENCODE_* env vars with typed safe defaults; the source of truth differs fundamentally."
+    },
+    {
+      "mechanisms": ["ih:settings-document-layered-precedence-hot-reload-comment-preservation", "opencode:runtime-flag-registry", "opencode-fork:runtime-flags-gating"],
+      "whyNotMerged": "A layered, comment-preserving settings document with polling hot reload and a per-section revision counter is not an env-var flag registry: one resolves a merged document with unknown-key survival, the other snapshots process.env into typed getters."
+    },
+    {
+      "mechanisms": ["codex:sqlite-log-database-and-diagnostics", "opencode:file-and-stderr-logging", "opencode-fork:structured-file-logging", "cc-custom:local-diagnostic-logging"],
+      "whyNotMerged": "All four persist the harness's own structured logs locally, but codex's is a bounded-queue batched SQLite store that also carries cross-cutting db open/migrate telemetry, partition pruning and a read-only audit API; folding it in would mislabel the row as plain file logging."
+    },
+    {
+      "mechanisms": ["cc-custom:profiling-and-benchmark-instrumentation", "opencode:heap-snapshot-watchdog", "opencode-fork:heap-snapshot-watchdog"],
+      "whyNotMerged": "The heap-dump halves genuinely match (V8 snapshot above an RSS threshold plus a manual command), but cc-custom's mechanism also carries three perf_hooks profilers, per-checkpoint memory snapshots and an FPS tracker, so either row label would misrepresent one side."
+    },
+    {
+      "mechanisms": ["dsh:performance-benchmark-budgets", "cc-custom:profiling-and-benchmark-instrumentation"],
+      "whyNotMerged": "Both measure performance, but dsh's is a CI-asserted budget suite with derived, self-re-asserting thresholds, while cc-custom's is live instrumentation for debugging a running process; a regression gate and a profiler are not the same capability."
+    },
+    {
+      "mechanisms": ["dsh:session-stats-projection", "cc-custom:local-usage-analytics-and-insights", "opencode-fork:session-stats-aggregation"],
+      "whyNotMerged": "dsh folds the CURRENT session's turn/step/wall-time buckets into a live projection unit served through the projection seam, whereas the other two aggregate the whole stored session history offline into per-model/per-tool reports; live accounting and historical analytics are different jobs."
+    },
+    {
+      "mechanisms": ["dsh:runtime-inspector-diagnostics", "cc-custom:doctor-and-context-diagnostics", "opencode:debug-diagnostics-commands"],
+      "whyNotMerged": "Both are diagnostic surfaces, but dsh's is a loopback HTTP+WebSocket inspector with a CDP-shaped protocol and live Cordis runtime-tree queries (experimental, out-of-repo), while the other two are static CLI self-inspection commands that read local state and print placeholders."
+    },
+    {
+      "mechanisms": ["dsh:invariant-runtime-diagnostics", "codex:in-repo-diagnostics-gauges", "opencode-fork:kernel-diagnostics-counters-percentiles"],
+      "whyNotMerged": "Both are in-process registries installed by packages, but dsh's registers assertions whose whole point is to throw a package-attributed InvariantError, while the other two register gauges/counters/percentiles that only observe; an assertion registry and a measurement registry fail in opposite directions."
+    },
+    {
+      "mechanisms": ["dsh:anonymous-identity-attribution", "cc-custom:ant-only-internal-instrumentation"],
+      "whyNotMerged": "Both attach an identity to telemetry, but dsh's is a random per-harness-home UUID explicitly derivable from nothing identifying, while cc-custom's collects Kubernetes namespace and container id for a vendor-internal build tier; the privacy postures are opposite."
+    },
+    {
+      "mechanisms": ["dsh:session-feedback-command-and-remote", "ih:per-message-feedback-channel-with-verify-after-write-durability", "dsh:message-feedback-ledger"],
+      "whyNotMerged": "A free-text session-level /feedback command with a category vocabulary is a different mechanism from a per-message vote ledger with optimistic concurrency and durable-target verification, so dsh's two feedback mechanisms landed in different rows."
+    },
+    {
+      "mechanisms": ["codex:rollout-trace-event-manifest-bundle", "codex:sqlite-log-database-and-diagnostics"],
+      "whyNotMerged": "Both are durable local stores for diagnostics, but one is a replayable bundle of schema-versioned raw events with payload refs and a reducer cache, the other a pruned log table with a flush interval; the replay contract is the whole point of the first and absent from the second."
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 55,
+    "mechanismsPlaced": 55,
+    "bySource": {
+      "ih": 3,
+      "dsh": 12,
+      "codex": 8,
+      "grok": 0,
+      "cc-custom": 16,
+      "opencode": 8,
+      "opencode-fork": 8
+    }
+  }
+}

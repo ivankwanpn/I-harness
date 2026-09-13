@@ -104,6 +104,25 @@ if (coverageProblems.length) {
   process.exit(1)
 }
 
+// ------------------------------------------------------------------- holes
+// (source, domain) pairs whose inventory array is EMPTY while domainsAbsent does
+// not declare the domain absent. That combination means "not inventoried this
+// pass", NOT "the source lacks the capability" -- measured case: grok's model,
+// service and ops arrays are empty, yet grok's own moduleCoverage names
+// xai-grok-models, xai-grok-http and xai-grok-telemetry as belonging there.
+const INVENTORY_HOLES = new Set()
+for (const s of SOURCES) {
+  const body = perSource[s.key]
+  if (!body) continue
+  const absentDomains = new Set((body.domainsAbsent ?? []).map((a) => a.domain ?? a))
+  for (const d of DOMAINS) {
+    const list = body.domains?.[d]
+    if (Array.isArray(list) && list.length === 0 && !absentDomains.has(d)) {
+      INVENTORY_HOLES.add(`${s.key}::${d}`)
+    }
+  }
+}
+
 // ------------------------------------------------------------------- crosswalk
 // crosswalk: { rows: { "<canonical row id>": { domain, label, members: { "<source>": ["<mechanism name>", ...] } } } }
 //
@@ -121,11 +140,18 @@ for (let i = 0; i < args.length; i++) {
 if (!crosswalkPaths.length && args.includes("--crosswalk-dir")) {
   const dir = resolve(args[args.indexOf("--crosswalk-dir") + 1])
   if (existsSync(dir)) {
-    for (const f of readdirSync(dir).filter((n) => n.endsWith(".json")).sort()) crosswalkPaths.push(join(dir, f))
+    // ONLY crosswalk files. The directory also holds the source inventories, the
+    // module map, dispositions and verification samples; reading every .json made
+    // the assembler report dozens of non-crosswalk files as rowless.
+    for (const f of readdirSync(dir)
+      .filter((n) => /-xw-.*\.json$/.test(n) && !n.includes("mechanical"))
+      .sort())
+      crosswalkPaths.push(join(dir, f))
   }
 }
 
 const crosswalk = {}
+const rowIdCollisions = []
 const crosswalkSources = []
 for (const p of crosswalkPaths) {
   const doc = readJson(p)
@@ -135,14 +161,23 @@ for (const p of crosswalkPaths) {
   }
   crosswalkSources.push({ file: p.split(/[\\/]/).pop(), rows: Object.keys(doc.rows).length })
   for (const [rowId, row] of Object.entries(doc.rows)) {
-    // A row id claimed twice means two domain agents both think they own it,
-    // which would silently drop one of their member lists.
-    if (crosswalk[rowId]) {
-      console.error(`! crosswalk row id claimed by two files: ${rowId}`)
-      process.exitCode = 1
-      continue
+    // Two domain agents can invent the SAME row id for DIFFERENT rows -- measured
+    // case: `background-job-registry`, claimed independently by the loop and the
+    // subagent domain. That is a naming collision, not a duplicate mechanism:
+    // every mechanism is still placed exactly once (verified separately by
+    // check-crosswalk-integrity.mjs). Erroring out would discard one domain's
+    // members entirely, so qualify the id by domain instead and report it.
+    let id = rowId
+    if (crosswalk[id]) {
+      id = `${row.domain ?? "?"}--${rowId}`
+      if (crosswalk[id]) {
+        console.error(`! crosswalk row id still colliding after qualification: ${id}`)
+        process.exitCode = 1
+        continue
+      }
+      rowIdCollisions.push({ original: rowId, kept: `${Object.keys(crosswalk).find((k) => crosswalk[k] === crosswalk[rowId]) ?? rowId}`, renamed: id })
     }
-    crosswalk[rowId] = row
+    crosswalk[id] = row
   }
 }
 const claimed = new Set()
@@ -174,7 +209,18 @@ for (const [rowId, row] of Object.entries(crosswalk)) {
       if (hit) members[src] = { ...hit, name: n }
     }
   }
-  rows.push({ id: rowId, domain: row.domain, label: row.label ?? rowId, members })
+  // Carry the row's OWN disposition and rationale through. The domain agent that
+  // grouped the row also judged it and recorded the rationale beside it, and
+  // dropping those two fields here is what left the disposition column empty.
+  rows.push({
+    id: rowId,
+    domain: row.domain,
+    label: row.label ?? rowId,
+    members,
+    disposition: row.disposition,
+    rationale: row.rationale,
+    _groupedBy: row._groupedBy,
+  })
 }
 const unclaimed = [...index.entries()].filter(([k]) => !claimed.has(k)).map(([, v]) => v)
 for (const m of unclaimed) {
@@ -229,6 +275,7 @@ L.push("|---|---|")
 L.push("| `✓` | 該源有此機制 |")
 L.push("| `✗` | 該源有此域，但沒有這個機制 |")
 L.push("| `—` | 該源在此域沒有對應層（見該域的說明） |")
+L.push("| `?` | 該源在此域的盤點清單為空——**「本次未盤點」而非「沒有此能力」**（見下方說明） |")
 L.push("")
 L.push(`> 每格顯示該源的機制摘要與**最佳可得**的 \`file:line\`。單源獨有的機制列於各表末尾並標 \`(單源)\`——它們未被任何 crosswalk 認領，**不表示其他源沒有等價能力**，只表示名稱未能對帳。`)
 L.push("")
@@ -246,13 +293,19 @@ for (const d of DOMAINS) {
     total++
     const cells = SOURCES.map(({ key }) => {
       const m = r.members[key]
-      if (!m) return "✗"
-      return "✓"
+      if (m) return "✓"
+      // Distinguish "this source has the domain but not this mechanism" from
+      // "this source's inventory for this domain is empty" -- the latter is a
+      // gap in the SURVEY, and rendering it as ✗ would be a false negative.
+      if (INVENTORY_HOLES.has(`${key}::${r.domain}`)) return "?"
+      return "✗"
     })
     const m = r.members.ih ?? r.members[Object.keys(r.members)[0]]
     const cite = bestCitation(m)
-    const dsp = disp[r.id]?.disposition ?? disp[r.id] ?? ""
-    const dr = disp[r.id]?.rationale ? ` — ${esc(disp[r.id].rationale)}` : ""
+    // The row's OWN disposition wins: the domain agent that grouped the row is
+    // the one that judged it, and it recorded the rationale beside it.
+    const dsp = r.disposition ?? disp[r.id]?.disposition ?? disp[r.id] ?? ""
+    const dr = r.rationale ? ` — ${esc(r.rationale)}` : disp[r.id]?.rationale ? ` — ${esc(disp[r.id].rationale)}` : ""
     L.push(
       `| \`${r.label}\`${r.single ? " **(單源)**" : ""} | ${cells.join(" | ")} | ${esc(m?.what ?? m?.mechanism).slice(0, 230)}${cite ? ` \`${esc(cite)}\`` : ""} | ${dsp ? `**${dsp}**${dr}` : ""} |`,
     )

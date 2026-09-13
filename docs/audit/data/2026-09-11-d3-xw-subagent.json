@@ -1,0 +1,824 @@
+{
+  "domain": "subagent",
+  "rows": {
+    "spawn-agent-tool-and-context-fork": {
+      "domain": "subagent",
+      "label": "spawn-agent-tool-and-context-fork",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [
+          "spawn-agent-tool-with-context-fork"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "agent-spawn-protocol"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "子代理啟動閘與fork語意"
+    },
+    "named-provider-and-capability-gate": {
+      "domain": "subagent",
+      "label": "named-provider-and-capability-gate",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "named-provider-registry-and-capability-gate"
+        ],
+        "codex": [],
+        "grok": [
+          "harness-only-subagent-capability-mode"
+        ],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "供應器能力宣告與啟動前檢查"
+    },
+    "subagent-tool-inventory-restriction": {
+      "domain": "subagent",
+      "label": "subagent-tool-inventory-restriction",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [
+          "subagent-depth-ceiling-and-unconditional-tool-stripping"
+        ],
+        "cc-custom": [],
+        "opencode": [
+          "subagent-permission-derivation"
+        ],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "子代理工具清單裁剪與封閉"
+    },
+    "structured-output-capture": {
+      "domain": "subagent",
+      "label": "structured-output-capture",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "structured-output-capture"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "子代理結構化輸出提交協定"
+    },
+    "delegation-depth-and-concurrency-quota": {
+      "domain": "subagent",
+      "label": "delegation-depth-and-concurrency-quota",
+      "members": {
+        "ih": [
+          "concurrency-and-depth-quotas"
+        ],
+        "dsh": [
+          "delegation-depth-quota"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [
+          "agent-nesting-depth-quota"
+        ],
+        "opencode": [
+          "task-tool-delegation"
+        ],
+        "opencode-fork": [
+          "durable-delegation-with-permits"
+        ]
+      },
+      "disposition": "improved-writing",
+      "rationale": "深度與並行配額，IH已持久化"
+    },
+    "admission-quota-queue-or-reject": {
+      "domain": "subagent",
+      "label": "admission-quota-queue-or-reject",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [
+          "admission-quota-with-clamped-minimum-and-workflow-bypass"
+        ],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "超限改排隊的准入策略"
+    },
+    "durable-delegated-task-state-machine": {
+      "domain": "subagent",
+      "label": "durable-delegated-task-state-machine",
+      "members": {
+        "ih": [
+          "durable-delegated-task-protocol-with-identity-cas"
+        ],
+        "dsh": [
+          "one-shot-run-lifecycle-and-settlement"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [
+          "subagent-task-state-machine"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "任務狀態機與冪等身分"
+    },
+    "durable-child-descriptor-and-cold-resume": {
+      "domain": "subagent",
+      "label": "durable-child-descriptor-and-cold-resume",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "durable-child-descriptor-and-cold-resume"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "子會話描述元與冷啟動恢復"
+    },
+    "crash-recovery-by-log-classification": {
+      "domain": "subagent",
+      "label": "crash-recovery-by-log-classification",
+      "members": {
+        "ih": [
+          "crash-recovery-by-classification-never-re-dispatch"
+        ],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "恢復時由日誌判定，不重派"
+    },
+    "resume-existing-agent-by-identity": {
+      "domain": "subagent",
+      "label": "resume-existing-agent-by-identity",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [
+          "capability-mode-meet-and-resume-identity-pin"
+        ],
+        "cc-custom": [
+          "agent-resume-from-transcript"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "以身分驗證續跑既有子代理"
+    },
+    "continuable-child-activation-residency": {
+      "domain": "subagent",
+      "label": "continuable-child-activation-residency",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "continuable-activation-residency-and-child-lock"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "常駐可續跑子代理與鎖"
+    },
+    "durable-child-catalog-and-discovery": {
+      "domain": "subagent",
+      "label": "durable-child-catalog-and-discovery",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "durable-child-catalog-and-discovery-listing"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "父子清單與後代探索投影"
+    },
+    "parent-child-topology-and-lineage": {
+      "domain": "subagent",
+      "label": "parent-child-topology-and-lineage",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [
+          "thread-spawn-topology-graph-store"
+        ],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "持久化生成邊與後代遍歷"
+    },
+    "agent-identity-and-nicknames": {
+      "domain": "subagent",
+      "label": "agent-identity-and-nicknames",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [
+          "agent-path-identity-and-nicknames"
+        ],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "代理路徑身分與可讀暱稱"
+    },
+    "subagent-coordination-control-surface": {
+      "domain": "subagent",
+      "label": "subagent-coordination-control-surface",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "subagent-control-and-messaging-surfaces"
+        ],
+        "codex": [
+          "v1-and-v2-agent-control-toolsets"
+        ],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "送訊息、等待、打斷與列舉"
+    },
+    "inter-agent-mailbox-and-messaging": {
+      "domain": "subagent",
+      "label": "inter-agent-mailbox-and-messaging",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [
+          "parent-wake-safe-point-admission"
+        ],
+        "cc-custom": [
+          "swarm-mailbox"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "代理間信箱與安全的投遞點"
+    },
+    "durable-parent-wake-delivery": {
+      "domain": "subagent",
+      "label": "durable-parent-wake-delivery",
+      "members": {
+        "ih": [
+          "durable-notification-outbox-with-injectable-admission"
+        ],
+        "dsh": [],
+        "codex": [
+          "inter-agent-mailbox-with-turn-trigger"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "background-agent-parent-wake"
+        ],
+        "opencode": [
+          "background-subagent-jobs"
+        ],
+        "opencode-fork": [
+          "parent-wake-on-task-completion"
+        ]
+      },
+      "disposition": "improved-writing",
+      "rationale": "完成通知的持久喚醒投遞"
+    },
+    "background-job-registry": {
+      "domain": "subagent",
+      "label": "background-job-registry",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "background-job-registry-and-parent-wake"
+        ],
+        "codex": [],
+        "grok": [
+          "foreground-budget-auto-backgrounding"
+        ],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "背景作業註冊、擁有者與預算"
+    },
+    "job-status-projection": {
+      "domain": "subagent",
+      "label": "job-status-projection",
+      "members": {
+        "ih": [
+          "jobs-as-a-two-source-projection"
+        ],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "作業狀態雙源投影，不另存"
+    },
+    "targeted-cancellation-and-admission-window": {
+      "domain": "subagent",
+      "label": "targeted-cancellation-and-admission-window",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [
+          "targeted-cancellation-with-closed-admission-window"
+        ],
+        "cc-custom": [
+          "agent-task-cancellation"
+        ],
+        "opencode": [],
+        "opencode-fork": [
+          "task-cancellation-by-ownership-root"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "取消目標化並在取消期關閉准入"
+    },
+    "child-first-teardown-and-ownership-gating": {
+      "domain": "subagent",
+      "label": "child-first-teardown-and-ownership-gating",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "child-first-teardown-tree-and-ownership-gating",
+          "activation-admission-cutoff-and-draining"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "先子後父拆除與擁有權閘門"
+    },
+    "child-settlement-notification-and-lifecycle-edges": {
+      "domain": "subagent",
+      "label": "child-settlement-notification-and-lifecycle-edges",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "child-settlement-notification-and-lifecycle-edges"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "子代理起訖事件與結算通知"
+    },
+    "team-roster-identity-and-authority": {
+      "domain": "subagent",
+      "label": "team-roster-identity-and-authority",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "team-roster-identity-and-provisioning"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [
+          "team-roster-and-identity"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "扁平名冊、不可變身分與權限"
+    },
+    "team-durable-mailbox-and-task-board": {
+      "domain": "subagent",
+      "label": "team-durable-mailbox-and-task-board",
+      "members": {
+        "ih": [
+          "team-scope-event-sourced-roster-task-board-and-mailbox"
+        ],
+        "dsh": [
+          "team-durable-mailbox-and-shared-task-board"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [
+          "task-list-coordination"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "事件溯源名冊、任務板與信箱"
+    },
+    "team-runtime-lifecycle-and-activity-wait": {
+      "domain": "subagent",
+      "label": "team-runtime-lifecycle-and-activity-wait",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "team-runtime-admission-cutoff-and-activity-wait"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [
+          "in-process-teammate-task"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "團隊生命週期閉鎖與非輪詢等待"
+    },
+    "delegated-policy-and-model-selection": {
+      "domain": "subagent",
+      "label": "delegated-policy-and-model-selection",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "delegated-policy-pinning-and-child-composition",
+          "subagent-model-selection-policy"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "委派策略釘選與模型白名單"
+    },
+    "out-of-process-child-teardown-ladder": {
+      "domain": "subagent",
+      "label": "out-of-process-child-teardown-ladder",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "out-of-process-child-teardown-ladder"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "跨行程子代理的分級關閉"
+    },
+    "schedule-durable-timer-wakeups": {
+      "domain": "subagent",
+      "label": "schedule-durable-timer-wakeups",
+      "members": {
+        "ih": [
+          "durable-reminders-whose-state-is-the-event-log"
+        ],
+        "dsh": [
+          "schedule-durable-timer-wakeups"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "日誌即計時器狀態與派送屏障"
+    },
+    "plan-mode-log-backed-state": {
+      "domain": "subagent",
+      "label": "plan-mode-log-backed-state",
+      "members": {
+        "ih": [
+          "plan-mode-as-log-state"
+        ],
+        "dsh": [
+          "plan-mode-logged-state-machine"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "計畫模式為日誌狀態與冪等退出"
+    },
+    "goal-durable-state-and-auto-continuation": {
+      "domain": "subagent",
+      "label": "goal-durable-state-and-auto-continuation",
+      "members": {
+        "ih": [
+          "whole-snapshot-goal-domain-with-mandatory-cas"
+        ],
+        "dsh": [
+          "goal-round-budget-and-automatic-continuation",
+          "goal-human-authority-and-command-surface"
+        ],
+        "codex": [
+          "goal-durable-continuation"
+        ],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "目標快照加CAS與回合預算"
+    },
+    "todo-whole-list-snapshot": {
+      "domain": "subagent",
+      "label": "todo-whole-list-snapshot",
+      "members": {
+        "ih": [
+          "whole-list-todo-snapshot"
+        ],
+        "dsh": [
+          "todo-list-write-and-fold"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "improved-writing",
+      "rationale": "整表覆寫取代，無合併邏輯"
+    },
+    "durable-workflow-execution": {
+      "domain": "subagent",
+      "label": "durable-workflow-execution",
+      "members": {
+        "ih": [
+          "static-yaml-workflow-runs-as-one-background-job"
+        ],
+        "dsh": [
+          "workflow-orchestration-engine-and-worker-containment"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "工作流執行與代理數上限"
+    },
+    "agent-definition-registry-and-selection": {
+      "domain": "subagent",
+      "label": "agent-definition-registry-and-selection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [
+          "agent-definition-registry",
+          "builtin-agent-catalog"
+        ],
+        "opencode": [
+          "agent-mode-taxonomy"
+        ],
+        "opencode-fork": [
+          "agent-selection-and-default"
+        ]
+      },
+      "disposition": "reuse",
+      "rationale": "定義來源合併與可選代理規則"
+    },
+    "subtask-command-dispatch": {
+      "domain": "subagent",
+      "label": "subtask-command-dispatch",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [
+          "subtask-command-dispatch"
+        ],
+        "opencode-fork": []
+      },
+      "disposition": "reuse",
+      "rationale": "指令轉子任務並回寫結果"
+    },
+    "gated-delegation-modes-and-task-stubs": {
+      "domain": "subagent",
+      "label": "gated-delegation-modes-and-task-stubs",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [
+          "gated-delegation-modes",
+          "gated-task-type-stubs"
+        ],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "不做",
+      "rationale": "整批不可達的模式與空殼任務"
+    },
+    "subagent-stop-hook": {
+      "domain": "subagent",
+      "label": "subagent-stop-hook",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": [
+          "subagent-stop-hook"
+        ]
+      },
+      "disposition": "遠期",
+      "rationale": "子代理回合停止由外掛否決"
+    },
+    "seven-input-auto-wake-suppression-gate": {
+      "domain": "subagent",
+      "label": "seven-input-auto-wake-suppression-gate",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "grok": [
+          "seven-input-auto-wake-suppression-gate"
+        ],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "rewrite",
+      "rationale": "喚醒前七項抑制條件並存疑即不喚"
+    },
+    "scoped-store-and-event-routing": {
+      "domain": "subagent",
+      "label": "scoped-store-and-event-routing",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "scoped-store-and-event-routing"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "作用域儲存與事件向上路由"
+    },
+    "turn-outline-fold": {
+      "domain": "subagent",
+      "label": "turn-outline-fold",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "turn-outline-fold"
+        ],
+        "codex": [],
+        "grok": [],
+        "cc-custom": [],
+        "opencode": [],
+        "opencode-fork": []
+      },
+      "disposition": "遠期",
+      "rationale": "回合大綱增量折疊投影"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": [
+        "ih:crash-recovery-by-classification-never-re-dispatch",
+        "dsh:durable-child-descriptor-and-cold-resume"
+      ],
+      "whyNotMerged": "Both answer \"what happened to a child that was mid-flight at restart\", but IH classifies an AMBIGUOUS in-flight attempt from the child log and never re-dispatches it, while dsh rebuilds a declared composition from a versioned descriptor and cold-resumes on purpose. One refuses to resume; the other exists to resume. Merging would hide that disagreement, so IH crash recovery stands alone (improved-writing on its own merits)."
+    },
+    {
+      "mechanisms": [
+        "dsh:structured-output-capture",
+        "ih:durable-notification-outbox-with-injectable-admission"
+      ],
+      "whyNotMerged": "Both sit between a finished child and what the parent receives. dsh guarantees the RESULT SHAPE (a schema-validated value captured by two-phase commit, not the child text); IH guarantees DELIVERY (durable outbox, status re-check, suppression on cancelled chains). Result contract vs delivery contract; no source does both."
+    },
+    {
+      "mechanisms": [
+        "dsh:subagent-control-and-messaging-surfaces",
+        "codex:v1-and-v2-agent-control-toolsets",
+        "grok:parent-wake-safe-point-admission",
+        "cc-custom:swarm-mailbox"
+      ],
+      "whyNotMerged": "I deliberately split the model-facing coordination verbs into control (send/wait/interrupt/close/resume/list) and mailbox/delivery (turn-triggered mail, safe-point steer, team messaging). Most likely wrong merge in this domain, and the split is what forced codex inter-agent-mailbox and grok parent-wake to land in different rows. A reader who thinks send_message is one thing should merge rows subagent-coordination-control-surface and inter-agent-mailbox-and-messaging."
+    },
+    {
+      "mechanisms": [
+        "ih:jobs-as-a-two-source-projection",
+        "dsh:background-job-registry-and-parent-wake"
+      ],
+      "whyNotMerged": "Same job concept from two ends. IH ships a projection with no store (durable snapshot doc + folded job/status events, plus a 409 kill vocabulary); dsh ships the registry itself (owner fencing, per-owner cap, first-wins settlement, wake budget). I kept the registry row pure, so IH background jobs have no registry member anywhere — read the two rows together."
+    },
+    {
+      "mechanisms": [
+        "ih:team-scope-event-sourced-roster-task-board-and-mailbox",
+        "dsh:team-durable-mailbox-and-shared-task-board",
+        "cc-custom:swarm-mailbox"
+      ],
+      "whyNotMerged": "I merged the team task boards (IH/dsh/cc) but NOT cc swarm-mailbox into the same row, because cc messaging is a polled file+in-process mailbox with a direct-message shortcut while IH/dsh treat the target session log or a target-side ack as the acknowledgement. Same sub-capability split as the mailbox doubt above."
+    },
+    {
+      "mechanisms": [
+        "ih:durable-delegated-task-protocol-with-identity-cas",
+        "dsh:continuable-activation-residency-and-child-lock",
+        "dsh:child-first-teardown-tree-and-ownership-gating"
+      ],
+      "whyNotMerged": "IH task records are per-DELEGATION and live in a coordinator document keyed by a three-part identity; dsh Activation owns a per-CHILD residency with a child lock and an ownedChildren settlement gate. Same nouns (task, running, cancel) different objects. Kept apart so the durable task state machine row reads as one thing."
+    },
+    {
+      "mechanisms": [
+        "grok:admission-quota-with-clamped-minimum-and-workflow-bypass",
+        "ih:concurrency-and-depth-quotas",
+        "opencode-fork:durable-delegation-with-permits"
+      ],
+      "whyNotMerged": "All three limit concurrent delegations but with different failure semantics: IH fails closed at submit, the fork acquires a permit before child creation and re-keys it, grok QUEUES by default and lets workflow-owned spawns bypass the quota entirely. The bypass is a design difference, not a gap, so grok admission stays its own row."
+    },
+    {
+      "mechanisms": [
+        "grok:harness-only-subagent-capability-mode",
+        "opencode:subagent-permission-derivation"
+      ],
+      "whyNotMerged": "Both narrow what a child may do, but one narrows the TOOL INVENTORY by kind (and deliberately does not narrow kindless MCP/custom tools) while the other narrows the PERMISSION ruleset (only deny and external_directory inherit; todowrite/task default-deny). Capability inventory vs permission derivation."
+    },
+    {
+      "mechanisms": [
+        "ih:static-yaml-workflow-runs-as-one-background-job",
+        "dsh:workflow-orchestration-engine-and-worker-containment"
+      ],
+      "whyNotMerged": "Both are named workflow and both spawn children, but IH is a static sequential YAML registry where DAG/parallel/loops are deliberately NOT implemented, and dsh is a scripted worker-thread engine with agent/parallel/pipeline and per-run caps. Only the background-job wrapper is common; I declined to reconcile them on that."
+    },
+    {
+      "mechanisms": [
+        "codex:inter-agent-mailbox-with-turn-trigger",
+        "grok:parent-wake-safe-point-admission",
+        "opencode:background-subagent-jobs"
+      ],
+      "whyNotMerged": "All deliver text into a turn. codex makes mail a distinct TurnInput tier with a liveness gauge; grok admits a parent steer only at a turn-bound lifecycle point with a 32-slot bound; opencode wakes the parent by prompting it. I merged codex into durable-parent-wake-delivery and grok into inter-agent-mailbox and opencode into durable-parent-wake-delivery, so the safe-point/tiering nuance is spread across three rows rather than reconciled."
+    },
+    {
+      "mechanisms": [
+        "dsh:scoped-store-and-event-routing",
+        "dsh:turn-outline-fold"
+      ],
+      "whyNotMerged": "Placed as required, but neither is subagent-specific: scope routing is a core composition primitive and turn outline is a session-log projection, both of which several dsh subagent registries merely happen to sit on. If the sibling domain owners also place them, these two rows are duplicated across domains rather than unreconciled here."
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 75,
+    "mechanismsPlaced": 75
+  }
+}

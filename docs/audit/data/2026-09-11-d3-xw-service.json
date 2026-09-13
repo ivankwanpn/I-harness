@@ -1,0 +1,433 @@
+{
+  "domain": "service",
+  "note": "GROK'S EMPTY CELL IS NOT A FINDING. grok's domains.service array is empty as an absence of MATERIAL, not as evidence that grok has no service plane. grok's own moduleCoverage records three service-domain modules that were read but never written up as mechanisms: xai-grok-workspace-daemon ('Service-domain process plumbing' - double-fork + setsid, single-instance pidfile lock, preview-proxy supervision, daemon-owned files opened O_NOFOLLOW mode 0600), xai-acp-lib ('The ACP transport itself: agent/client channel pair, gateway sender/receiver, message boxing, line-buffered and stdin readers, normalization ... belongs to service'), and xai-grok-http ('Infrastructure underneath the service and ops domains; contributes no mechanism of its own' - four shared reqwest clients). hintCorrections additionally remaps xai-grok-tools-api and xai-grok-voice INTO service. grok's service plane therefore demonstrably exists; it just carries no verbatim mechanism names in the inventory, so hard rule 1 forbids citing any of them in members. Read this domain's grok column as 'not inventoried', never as 'absent by design'. Note also that grok's domains.model and domains.ops are empty under the same deferral, and that the two domains.service items in the harvest file are xai-grok-pager slash-command renderings (/scroll-debug, /settings), i.e. TUI command material rather than transport, so they are not mechanisms of this domain and are excluded from the counts.",
+  "rows": {
+    "http-service-host-surface": {
+      "domain": "service",
+      "label": "HTTP 服務宿主面與路由生命週期",
+      "members": {
+        "ih": ["web-service-surface-unary-http-routes-one-websocket-mux"],
+        "dsh": ["web-host-static-and-launch", "browser-http-api-transport"],
+        "opencode": ["http-server-listener-and-lifecycle"],
+        "opencode-fork": ["http-server-and-openapi-spec"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH 一服務多路由已有；可學路由註冊表"
+    },
+    "websocket-stream-mux": {
+      "domain": "service",
+      "label": "單一 WebSocket 多工即時串流",
+      "members": {
+        "dsh": ["remote-stream-websocket-mux"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 已有會話 mux；缺 RPC 串流與心跳"
+    },
+    "session-event-stream-sse": {
+      "domain": "service",
+      "label": "SSE 會話事件串流與心跳",
+      "members": {
+        "opencode": ["sse-live-event-stream"],
+        "opencode-fork": ["sse-event-stream-with-heartbeat"]
+      },
+      "disposition": "遠期",
+      "rationale": "SSE 與 IH 的 WS 取捨不同；不急"
+    },
+    "browser-event-push-bridge": {
+      "domain": "service",
+      "label": "主機事件推送到瀏覽器消費端",
+      "members": {
+        "dsh": ["forwarded-host-event-bridge"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 缺事件推送；以 IH 慣用法補"
+    },
+    "pty-websocket-connect-ticket": {
+      "domain": "service",
+      "label": "PTY WebSocket 一次性票券升級",
+      "members": {
+        "opencode-fork": ["pty-websocket-connect-ticket"]
+      },
+      "disposition": "遠期",
+      "rationale": "IH 無 PTY 服務面；產品級，緩辦"
+    },
+    "multi-carrier-transport-service-surface": {
+      "domain": "service",
+      "label": "單一訊框協定多載體服務面",
+      "members": {
+        "codex": ["app-server-multi-transport-listen-surface"]
+      },
+      "disposition": "遠期",
+      "rationale": "UDS 與對外 WS 綁定是產品級；緩辦"
+    },
+    "connection-handshake-capability-gate": {
+      "domain": "service",
+      "label": "連線初始化握手與能力閘門",
+      "members": {
+        "codex": ["connection-initialize-handshake-and-capability-gate"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；SDK 先握手、能力閘控"
+    },
+    "outbound-backpressure-overload-control": {
+      "domain": "service",
+      "label": "連線輸出背壓與過載控制",
+      "members": {
+        "codex": ["outbound-backpressure-and-overload-control"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；慢消費者剔除與過載碼"
+    },
+    "wire-contract-vendor-and-codegen": {
+      "domain": "service",
+      "label": "對外線協議契約匯出與 SDK 產生",
+      "members": {
+        "codex": ["app-server-schema-and-sdk-contract-export", "headless-jsonl-exec-surface"],
+        "opencode": ["openapi-spec-and-sdk-codegen"],
+        "opencode-fork": ["legacy-sdk-openapi-contract"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 凍結契約已有；缺 OpenAPI 產生"
+    },
+    "bidirectional-sdk-stdio-control-protocol": {
+      "domain": "service",
+      "label": "stdio 雙向 SDK 控制協議",
+      "members": {
+        "ih": ["external-sdk-stdio-server-with-a-frozen-v0-wire-contract"],
+        "dsh": ["sdk-jsonrpc-stdio-runtime"],
+        "cc-custom": ["sdk-stdio-control-protocol"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH SDK 已有；cc 非 JSON-RPC"
+    },
+    "sdk-wire-schema-contract": {
+      "domain": "service",
+      "label": "SDK 線協議 schema 契約",
+      "members": {
+        "cc-custom": ["sdk-wire-schema-contract"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 用 TS 型別；可補執行期驗證"
+    },
+    "ndjson-stream-integrity-guard": {
+      "domain": "service",
+      "label": "NDJSON 行完整性防護",
+      "members": {
+        "cc-custom": ["ndjson-stream-integrity-guard"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；逃逸 U+2028 與 stdout 護欄",
+      "ihNote": "IH 在 SDK 面已聲明 'stdout 只載協議訊框、診斷走 stderr' 的不變式，但沒有 cc-custom 這種主動強制器（跳脫 U+2028/U+2029、包裝 write 把非 JSON 行改導 stderr），故此列不列 ih 成員。"
+    },
+    "one-way-jsonl-output-and-exit-contract": {
+      "domain": "service",
+      "label": "單向 JSONL 輸出與退出碼契約",
+      "members": {
+        "cc-custom": ["sdk-output-format-exit-and-error-surface"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；輸出格式與退出碼明定"
+    },
+    "user-message-replay-and-dedup": {
+      "domain": "service",
+      "label": "使用者訊息重播與去重",
+      "members": {
+        "cc-custom": ["user-message-replay-and-dedup"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；每 uuid 至多執行一次"
+    },
+    "host-injected-env-and-session-token": {
+      "domain": "service",
+      "label": "stdio 注入環境變數與會話權杖",
+      "members": {
+        "cc-custom": ["host-injected-env-and-session-token-channel"]
+      },
+      "disposition": "不做",
+      "rationale": "未認證改寫 process.env，違 IH 原則"
+    },
+    "remote-instance-attach-transport": {
+      "domain": "service",
+      "label": "遠端實例附加傳輸（SSH 與直連）",
+      "members": {
+        "cc-custom": ["ssh-remote-ndjson-transport", "direct-connect-http-ws-client"]
+      },
+      "disposition": "遠期",
+      "rationale": "遠端附加是產品級方向；暫緩"
+    },
+    "remote-control-relay": {
+      "domain": "service",
+      "label": "對外中繼代理連線與續傳",
+      "members": {
+        "codex": ["remote-control-relay-session"]
+      },
+      "disposition": "遠期",
+      "rationale": "需廠商後端與配對；目前緩辦"
+    },
+    "acp-server": {
+      "domain": "service",
+      "label": "ACP 代理客戶端協定服務",
+      "members": {
+        "ih": ["acp-v1-server-for-the-automation-subset"],
+        "dsh": ["acp-agent-client-protocol"],
+        "opencode": ["acp-stdio-agent-adapter"],
+        "opencode-fork": ["acp-agent-protocol"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH 有 ACP 自動化子集；權限簡化"
+    },
+    "service-self-auth": {
+      "domain": "service",
+      "label": "服務自身認證（啟動權杖）",
+      "members": {
+        "dsh": ["service-self-auth-token-cookie"]
+      },
+      "disposition": "rewrite",
+      "rationale": "可借鏡；權杖換 HMAC cookie"
+    },
+    "service-basic-auth": {
+      "domain": "service",
+      "label": "服務 Basic 認證與豁免規則",
+      "members": {
+        "opencode": ["service-basic-auth-with-ticket-bypass"],
+        "opencode-fork": ["service-basic-auth"],
+        "codex": ["websocket-listener-authentication"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；公開路徑豁免與 401 挑戰"
+    },
+    "browser-trust-fence": {
+      "domain": "service",
+      "label": "瀏覽器來源信任圍籬",
+      "members": {
+        "dsh": ["browser-trust-fence"]
+      },
+      "disposition": "rewrite",
+      "rationale": "IH 已無條件擋非 loopback；可加白名單",
+      "ihNote": "IH 的同類能力在 http-service-host-surface 列內（web-service-surface 的不變式：DNS-rebind/CORS 圍籬對每條路由與 mux 升級無條件生效，非 loopback Host/Origin -> 403 並 socket.destroy()），故不在此重複列 ih 成員。"
+    },
+    "typed-descriptor-codegen": {
+      "domain": "service",
+      "label": "型別化方法描述子建置期產生",
+      "members": {
+        "dsh": ["typert-descriptor-codegen"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；裝飾器降階加描述子碼產生"
+    },
+    "typed-remote-rpc-plane": {
+      "domain": "service",
+      "label": "型別化遠端 RPC 呼叫平面",
+      "members": {
+        "dsh": ["typert-remote-rpc-plane"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；命名空間方法取代斜線命令"
+    },
+    "config-and-credentials-rpc-plane": {
+      "domain": "service",
+      "label": "設定與憑證遠端 RPC 命名空間",
+      "members": {
+        "dsh": ["settings-and-credentials-rpc-namespace"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；讀取強制去敏與修訂號"
+    },
+    "command-catalog-rpc-and-lifecycle": {
+      "domain": "service",
+      "label": "命令目錄 RPC 與生命週期記錄",
+      "members": {
+        "dsh": ["command-catalog-rpc-and-lifecycle"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；命令成對生命週期入日誌"
+    },
+    "interaction-approval-question-seams": {
+      "domain": "service",
+      "label": "核准與提問互動接縫",
+      "members": {
+        "ih": ["interaction-seams-approval-answerer-question-provider-ui-command-plane"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已布林正規化核准與提問接縫"
+    },
+    "directory-picker-capability-seam": {
+      "domain": "service",
+      "label": "目錄選擇器能力接縫",
+      "members": {
+        "dsh": ["directory-picker-capability-seam"]
+      },
+      "disposition": "遠期",
+      "rationale": "桌面選取器是產品級；暫緩"
+    },
+    "webhook-ingress-and-verification": {
+      "domain": "service",
+      "label": "外部系統 Webhook 入口與驗簽",
+      "members": {
+        "dsh": ["webhook-ingress-and-verification"]
+      },
+      "disposition": "遠期",
+      "rationale": "外部系統入口是產品級；暫緩"
+    },
+    "mcp-server-mode-over-stdio": {
+      "domain": "service",
+      "label": "以 MCP 伺服器模式暴露自身",
+      "members": {
+        "codex": ["mcp-server-stdio-endpoint"],
+        "cc-custom": ["mcp-server-mode-over-stdio"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；IH 有 MCP 客戶端無伺服器"
+    },
+    "mcp-control-channel-bridge": {
+      "domain": "service",
+      "label": "控制通道上的 MCP 傳輸橋接",
+      "members": {
+        "cc-custom": ["in-process-sdk-mcp-bridge"]
+      },
+      "disposition": "遠期",
+      "rationale": "附屬 SDK 情境；產品級，暫緩"
+    },
+    "permission-prompt-channel": {
+      "domain": "service",
+      "label": "SDK 權限提示通道與競賽解析",
+      "members": {
+        "cc-custom": ["sdk-permission-prompt-channel"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；MCP 提示與硬失敗拒絕"
+    },
+    "service-process-launch-and-profile-composition": {
+      "domain": "service",
+      "label": "服務行程啟動與設定檔組合",
+      "members": {
+        "ih": ["cli-host-surface-with-a-split-fail-loud-silent-fallback-discipline"],
+        "dsh": ["profile-boot-and-cmdline-seam"]
+      },
+      "disposition": "已存在",
+      "rationale": "IH 已有入口；旗標失敗語意可整"
+    },
+    "single-binary-role-dispatch": {
+      "domain": "service",
+      "label": "單一二進位多角色 argv0 分派",
+      "members": {
+        "codex": ["sandbox-helper-and-arg0-dispatch"]
+      },
+      "disposition": "遠期",
+      "rationale": "單檔多角色安裝是發行決策；暫緩"
+    },
+    "durable-event-replay-and-sync": {
+      "domain": "service",
+      "label": "服務端持久事件重播與同步",
+      "members": {
+        "opencode": ["durable-event-replay-and-sync"],
+        "opencode-fork": ["workspace-event-sync-replication"]
+      },
+      "disposition": "遠期",
+      "rationale": "跨節點複製產品級；IH 已有事件日誌"
+    },
+    "workspace-routing-and-control-plane": {
+      "domain": "service",
+      "label": "工作區路由與控制平面",
+      "members": {
+        "opencode": ["control-plane-workspace-routing"],
+        "opencode-fork": ["workspace-routing-proxy"]
+      },
+      "disposition": "遠期",
+      "rationale": "遠端工作區代理是產品級；暫緩"
+    },
+    "service-daemon-process-management": {
+      "domain": "service",
+      "label": "服務常駐化與單實例鎖",
+      "members": {},
+      "disposition": "遠期",
+      "rationale": "GROK 未成機制，僅模組覆蓋記載",
+      "ihNote": "成員刻意留空：grok 的 xai-grok-workspace-daemon（double-fork + setsid、pidfile 單實例鎖、preview-proxy 監督、守護行程檔案一律 O_NOFOLLOW 且 0600）只存在於 grok 的 moduleCoverage，未寫成 domains.service 機制，硬規則 1 不允許引用。此列存在是為了不讓那塊能力在跨源表中消失。"
+    },
+    "inert-permission-context-logging": {
+      "domain": "service",
+      "label": "權限情境上報記錄（未接線）",
+      "members": {
+        "cc-custom": ["internal-permission-context-logging"]
+      },
+      "disposition": "不做",
+      "rationale": "對廠商遙測且全程未接線，不做"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": ["codex:sandbox-helper-and-arg0-dispatch", "grok:xai-grok-workspace-daemon (moduleCoverage only)"],
+      "whyNotMerged": "Both are 'one binary/process serving several service roles' and codex's modules list includes exec-server. I did not merge because the codex mechanism's four helper roles (apply-patch, linux sandbox, windows sandbox, filesystem helper) are confinement helpers owned by the safety domain, so the shared content is only the argv[0] multiplexing trick; and grok's daemon has no verbatim name in domains.service, so hard rule 1 already forbids citing it. The grok half is carried as a member-less row instead."
+    },
+    {
+      "mechanisms": ["dsh:browser-http-api-transport", "dsh:remote-stream-websocket-mux", "ih:web-service-surface-unary-http-routes-one-websocket-mux", "opencode:http-server-listener-and-lifecycle", "opencode-fork:http-server-and-openapi-spec"],
+      "whyNotMerged": "I merged dsh's HTTP carrier into the HTTP service host row because in dsh the webserver route registry IS the registration seam for the /api bridge. One consequence is recorded here: IH's single web-service mechanism describes BOTH its unary HTTP route surface and its one WebSocket mux, and rule 2 lets it appear once, so I placed it in the HTTP row and added an ihNote to the WebSocket mux row and the trust-fence row instead of citing it three times. IH's mux does carry live session streams (chunk/reasoning/agent-state), which is why the WebSocket mux and SSE rows are close cousins of the HTTP row rather than cleanly disjoint."
+    },
+    {
+      "mechanisms": ["opencode:http-server-listener-and-lifecycle", "opencode-fork:http-server-and-openapi-spec", "opencode:openapi-spec-and-sdk-codegen", "opencode-fork:legacy-sdk-openapi-contract"],
+      "whyNotMerged": "Upstream splits the listener from the OpenAPI/SDK generator, while the fork bundles listener lifecycle, route-tree composition and lazy /doc into one mechanism and then adds a separate legacy-spec-compat mechanism. I therefore placed the fork's bundle in the listener row and the fork's legacy compat transform in the vendor/codegen row, so the fork's OpenAPI code sits in one row while its listener sits in the other. A reader must not read the fork's bundle as double-counted."
+    },
+    {
+      "mechanisms": ["dsh:typert-descriptor-codegen", "dsh:typert-remote-rpc-plane", "dsh:profile-boot-and-cmdline-seam"],
+      "whyNotMerged": "The descriptor generator and the Remote plane are two halves of one design and could be one row; I kept them separate because generation is build tooling with no Cordis plugin row while the plane is the runtime dispatch surface, and merging would also have pulled in the boot/profile seam that composes them, which is a third distinct capability."
+    },
+    {
+      "mechanisms": ["dsh:forwarded-host-event-bridge", "codex:remote-control-relay-session", "dsh:webhook-ingress-and-verification"],
+      "whyNotMerged": "All three push or receive server-side state outside the request/response cycle. Not merged because dsh's bridge is an in-tree browser consumer of a Host-event allowlist, codex's relay is an outbound dial to a vendor backend with enrollment, chunking and cursor resume, and dsh's webhook ingress is HMAC-verified inbound ingress from third-party systems: three different trust directions, not one capability."
+    },
+    {
+      "mechanisms": ["cc-custom:host-injected-env-and-session-token-channel", "dsh:settings-and-credentials-rpc-namespace"],
+      "whyNotMerged": "Both propagate credentials into a live service session. Kept apart because dsh's is a redacted, revisioned, read-through RPC namespace (fail-closed, secrets never serialized) whereas cc-custom's is an unauthenticated stdin frame that mutates process.env directly (fail-open by design). The security posture is opposite, so a merge would hide the difference that matters."
+    },
+    {
+      "mechanisms": ["codex:app-server-multi-transport-listen-surface", "codex:connection-initialize-handshake-and-capability-gate", "codex:outbound-backpressure-and-overload-control"],
+      "whyNotMerged": "codex's app-server mechanism de facto covers stdio bidirectional JSON-RPC control, so it arguably belongs in the bidirectional SDK stdio row. I kept it out because its distinguishing content is carrier multiplicity (stdio + private 0600 UDS + raw WS + Off, flock-serialised startup, stale-socket unlink) over one shared framed surface, which no other source has; the handshake and backpressure clauses are separate codex mechanisms so they cannot be folded into the same citation either."
+    },
+    {
+      "mechanisms": ["codex:headless-jsonl-exec-surface", "opencode:openapi-spec-and-sdk-codegen", "cc-custom:sdk-output-format-exit-and-error-surface"],
+      "whyNotMerged": "The vendor/codegen row is built from codex's generated-contract export plus opencode's OpenAPI/SDK codegen and the fork's legacy spec transform. codex's headless JSONL exec surface names stdout JSONL among its flags, so it could have been routed to the one-way output row instead; I placed it with the export row because its differentiating capability is the --output-schema / --output-last-message machine contract rather than the line format, which is the same 'the published wire contract is a product' idea. cc-custom's output-format/exit-code mechanism stayed in its own row because it is a one-way consumer contract with no generated artifact."
+    },
+    {
+      "mechanisms": ["ih:external-sdk-stdio-server-with-a-frozen-v0-wire-contract", "cc-custom:user-message-replay-and-dedup"],
+      "whyNotMerged": "IH's frozen v0 contract carries a session/history replay surface and cc-custom's replay/dedup is an acknowledged input stream over the same stdio channel, so a merge is arguable. Kept separate because IH's is read-side history the client drives explicitly (the server never replays to a fresh subscription) while cc-custom's is write-side idempotence (one uuid executed at most once, duplicates answered with isReplay:true)."
+    },
+    {
+      "mechanisms": ["codex:app-server-schema-and-sdk-contract-export", "opencode:openapi-spec-and-sdk-codegen"],
+      "whyNotMerged": "Merged into one vendor/codegen row, but the lost detail is real: codex vendors TypeScript plus JSON Schema in two disjoint stable/experimental export sets with zstd-precomputed bundles, while opencode serves a lazily built OpenAPI document and compiles SDK clients behind a manifest. The merged label hides that codex's artifact is schema-for-SDK-authors while opencode's is a served HTTP document."
+    },
+    {
+      "mechanisms": ["opencode:control-plane-workspace-routing", "opencode-fork:workspace-routing-proxy"],
+      "whyNotMerged": "Merged into one workspace-routing/control-plane row, but the two are not the same maturity: upstream has a RequestPlan parser plus the /experimental/control-plane/move-session operation, while the fork has the full reverse proxy (HTTP and WebSocket) and the x-opencode-sync fence wait. A reader should not read the merged row as 'both do proxying'."
+    },
+    {
+      "mechanisms": ["opencode:acp-stdio-agent-adapter", "opencode-fork:acp-agent-protocol", "ih:acp-v1-server-for-the-automation-subset", "dsh:acp-agent-client-protocol"],
+      "whyNotMerged": "All four are one ACP server over stdio and are merged, which flattens two differences. (1) Maturity: upstream's adapter is initialize+prompt with runUntilIdle gating, the fork implements the full load/fork/list/resume/close lifecycle. (2) Permission philosophy: IH uses a binary autoApprove switch with no session/request_permission flow (a refused prompt never reaches the session service), dsh downgrades to one-shot allow-once/reject-once so a client response can never become a durable grant, and the opencode pair route prompts through the engine. That divergence is why the row is 已存在 rather than rewrite."
+    },
+    {
+      "mechanisms": ["dsh:service-self-auth-token-cookie", "opencode:service-basic-auth-with-ticket-bypass", "opencode-fork:service-basic-auth", "codex:websocket-listener-authentication"],
+      "whyNotMerged": "Service authentication is split into a launch-token/HMAC-cookie row (dsh) and a Basic-auth-plus-exemptions row (opencode pair, plus codex's capability-token / signed-bearer JWT upgrade gate). One row was arguable; kept apart because they differ in what they bind (an authority-bound signed cookie vs a long-lived static credential) and because codex's is an upgrade-time gate rather than a per-route middleware."
+    },
+    {
+      "mechanisms": ["codex:mcp-server-stdio-endpoint", "cc-custom:mcp-server-mode-over-stdio", "cc-custom:in-process-sdk-mcp-bridge"],
+      "whyNotMerged": "codex and cc-custom both expose the harness itself as an MCP server over stdio and are merged; cc-custom's control-channel bridge stayed separate because it carries MCP traffic in the opposite direction (servers the SDK consumer registered in-process, inside the SDK protocol). Merging would have conflated 'IH as MCP server' with 'MCP over the IH control channel'."
+    },
+    {
+      "mechanisms": ["grok:xai-acp-lib", "grok:xai-grok-http", "grok:xai-grok-tools-api", "grok:xai-grok-voice", "grok:xai-grok-workspace-daemon"],
+      "whyNotMerged": "These are the five modules grok's own moduleCoverage/hintCorrections assign to service, including the ACP wire layer, which would otherwise be the strongest candidate for the ACP row. None may be cited in members because grok's domains.service array is empty and hard rule 1 requires verbatim presence in the inventory for this domain. Recorded here so the empty grok column is read as an inventory hole, not a design choice; the daemon module is given a member-less row so it is not dropped on the floor."
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 56,
+    "mechanismsPlaced": 56,
+    "perSource": {
+      "ih": 5,
+      "dsh": 15,
+      "codex": 9,
+      "opencode": 7,
+      "opencode-fork": 8,
+      "cc-custom": 12,
+      "grok": 0
+    },
+    "note": "56 = the sum of domains.service lengths across the seven sources (ih 5, dsh 15, codex 9, opencode-upstream 7, opencode-fork 8, cc-custom 12, grok 0). Each of the 56 appears in exactly one row; every source mechanism is cited at most once. Rows carrying an ihNote describe behaviour IH does have but whose mechanism is cited in another row (IH's web-service mechanism spans HTTP surface + mux + trust fence and can only be cited once)."
+  }
+}

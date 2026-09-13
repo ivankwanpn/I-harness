@@ -1,0 +1,517 @@
+{
+  "domain": "model",
+  "rows": {
+    "wire-protocol-adapters-and-request-assembly": {
+      "domain": "model",
+      "label": "wire-protocol-adapters-and-request-assembly",
+      "members": {
+        "ih": [
+          "five-wire-adapters-with-per-generation-reasoning-translation"
+        ],
+        "dsh": [
+          "deepseek-wire-protocol-and-request-extensions"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "anthropic-messages-wire-request-assembly",
+          "openai-responses-wire-adapter"
+        ]
+      },
+      "disposition": "已存在",
+      "rationale": "五協定已上線，fast模式未接"
+    },
+    "reasoning-effort-vocabulary-and-wire-translation": {
+      "domain": "model",
+      "label": "reasoning-effort-vocabulary-and-wire-translation",
+      "members": {
+        "ih": [
+          "provider-agnostic-model-seam-with-retry-only-before-output"
+        ],
+        "dsh": [
+          "reasoning-effort-translation"
+        ],
+        "codex": [
+          "reasoning-effort-and-context-metadata-translation"
+        ],
+        "opencode": [
+          "reasoning-effort-variant-translation"
+        ],
+        "opencode-fork": [
+          "reasoning-effort-variant-translation"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "reasoning-effort-translation"
+        ]
+      },
+      "disposition": "improved-writing",
+      "rationale": "六級effort直通不夾具"
+    },
+    "provider-retry-policy-and-execution": {
+      "domain": "model",
+      "label": "provider-retry-policy-and-execution",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "provider-retry-policy-and-execution"
+        ],
+        "codex": [],
+        "opencode": [
+          "llm-request-execution-and-retry"
+        ],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "retry-backoff-and-rate-limit-policy"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "重試宜事件化，常駐未接"
+    },
+    "llm-failure-taxonomy-and-normalization": {
+      "domain": "model",
+      "label": "llm-failure-taxonomy-and-normalization",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "llm-failure-taxonomy-and-normalization"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "以錯誤碼路由，不解析訊息"
+    },
+    "provider-model-discovery-and-catalogue-acquisition": {
+      "domain": "model",
+      "label": "provider-model-discovery-and-catalogue-acquisition",
+      "members": {
+        "ih": [
+          "provider-registry-model-discovery-probe-and-adapter-dispatch"
+        ],
+        "dsh": [
+          "provider-model-discovery-service"
+        ],
+        "codex": [
+          "remote-model-catalog-with-cache-and-bundled-fallback"
+        ],
+        "opencode": [
+          "models-dev-catalogue-cache"
+        ],
+        "opencode-fork": [
+          "models-dev-catalogue-cache",
+          "live-provider-model-discovery"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "third-party-model-discovery"
+        ]
+      },
+      "disposition": "已存在",
+      "rationale": "路由探針鏈已上線，codex遠端停用"
+    },
+    "provider-registry-and-model-resolution": {
+      "domain": "model",
+      "label": "provider-registry-and-model-resolution",
+      "members": {
+        "ih": [
+          "typed-model-resolution-with-a-settings-backed-provider-runtime"
+        ],
+        "dsh": [
+          "llm-adapter-registry-and-route-resolution"
+        ],
+        "codex": [
+          "provider-registry-resolution-chain"
+        ],
+        "opencode": [
+          "provider-registry-merge-chain",
+          "provider-sdk-resolution-and-timeouts"
+        ],
+        "opencode-fork": [
+          "provider-catalog-state-availability-policy",
+          "model-resolution-chain",
+          "custom-provider-configure-rollback"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "provider-registry-and-env-activation"
+        ]
+      },
+      "disposition": "已存在",
+      "rationale": "登錄即目錄且解析已上線"
+    },
+    "model-catalogue-and-capability-metadata": {
+      "domain": "model",
+      "label": "model-catalogue-and-capability-metadata",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "model-catalogue-and-exact-model-metadata"
+        ],
+        "codex": [],
+        "opencode": [
+          "model-capability-and-limit-metadata"
+        ],
+        "opencode-fork": [
+          "models-dev-catalog-projection"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "model-catalogue-alias-and-validation"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "目錄條目驗證與別名"
+    },
+    "context-window-and-output-cap-metadata": {
+      "domain": "model",
+      "label": "context-window-and-output-cap-metadata",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "context-window-and-max-output-metadata"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "context-window-and-max-output-metadata"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "視窗與輸出上限推導，部分未接"
+    },
+    "credential-store-resolution-and-refresh": {
+      "domain": "model",
+      "label": "credential-store-resolution-and-refresh",
+      "members": {
+        "ih": [
+          "ref-based-credential-store-with-env-over-file-precedence"
+        ],
+        "dsh": [
+          "provider-credential-resolution-and-layered-sources"
+        ],
+        "codex": [
+          "provider-credential-resolution-chain",
+          "auth-persistence-backend-and-unauthorized-recovery"
+        ],
+        "opencode": [
+          "credential-store-and-oauth-lifecycle"
+        ],
+        "opencode-fork": [
+          "credential-store-with-oauth-refresh"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "client-construction-credentials-and-egress"
+        ]
+      },
+      "disposition": "已存在",
+      "rationale": "ref式憑證且環境優先"
+    },
+    "interactive-oauth-authorization-flow": {
+      "domain": "model",
+      "label": "interactive-oauth-authorization-flow",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "oauth-authorization-flow-registry"
+        ],
+        "codex": [
+          "chatgpt-oauth-pkce-loopback-login"
+        ],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "subscription-oauth-credential-lifecycle"
+        ]
+      },
+      "disposition": "遠期",
+      "rationale": "互動登入屬產品級工程"
+    },
+    "stream-chunk-assembly-and-dispatch": {
+      "domain": "model",
+      "label": "stream-chunk-assembly-and-dispatch",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "streaming-call-dispatch-and-chunk-assembly"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "streaming-wire-to-transcript-assembly"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "串流區塊組裝單一演算法"
+    },
+    "token-usage-and-cost-accounting": {
+      "domain": "model",
+      "label": "token-usage-and-cost-accounting",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "token-metering-and-usage-projection"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "model-cost-and-usage-costing"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "用量分桶計價與快取價"
+    },
+    "default-and-small-model-selection": {
+      "domain": "model",
+      "label": "default-and-small-model-selection",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "agent-default-model-resolution"
+        ],
+        "codex": [],
+        "opencode": [
+          "model-default-and-fallback-resolution"
+        ],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "rewrite",
+      "rationale": "預設與小模型選擇鏈"
+    },
+    "parallel-request-path-selection-and-fallback": {
+      "domain": "model",
+      "label": "parallel-request-path-selection-and-fallback",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [
+          "responses-websocket-transport-with-https-fallback"
+        ],
+        "opencode": [],
+        "opencode-fork": [
+          "llm-runtime-native-vs-aisdk-selection"
+        ],
+        "grok": [],
+        "cc-custom": [
+          "protocol-selection-and-capability-negotiation"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "多請求路徑需顯式回退"
+    },
+    "scripted-mock-model-client-test-seam": {
+      "domain": "model",
+      "label": "scripted-mock-model-client-test-seam",
+      "members": {
+        "ih": [
+          "scripted-mock-model-client-test-seam"
+        ],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "已存在",
+      "rationale": "腳本mock僅顯式可達"
+    },
+    "http-proxy-transport-policy": {
+      "domain": "model",
+      "label": "http-proxy-transport-policy",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "http-proxy-transport-policy"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "reuse",
+      "rationale": "undici全域代理可直抄"
+    },
+    "plugin-package-attribution-inventory": {
+      "domain": "model",
+      "label": "plugin-package-attribution-inventory",
+      "members": {
+        "ih": [],
+        "dsh": [
+          "plugin-package-attribution-inventory"
+        ],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": []
+      },
+      "disposition": "遠期",
+      "rationale": "遙測清單非核心"
+    },
+    "beta-header-negotiation": {
+      "domain": "model",
+      "label": "beta-header-negotiation",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "beta-header-negotiation"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "beta標頭需協商層"
+    },
+    "prompt-cache-break-detection": {
+      "domain": "model",
+      "label": "prompt-cache-break-detection",
+      "members": {
+        "ih": [],
+        "dsh": [],
+        "codex": [],
+        "opencode": [],
+        "opencode-fork": [],
+        "grok": [],
+        "cc-custom": [
+          "prompt-cache-break-detection"
+        ]
+      },
+      "disposition": "rewrite",
+      "rationale": "快取斷點偵測器未接通"
+    }
+  },
+  "unmergedDoubts": [
+    {
+      "mechanisms": [
+        "grok:domains.model（空陣列，無逐字機制名可引用）"
+      ],
+      "whyNotMerged": "先聲明以免空欄被誤讀：grok 的 domains.model 是空的，但這是『這一份沒有產出機制級材料』，不是『grok 沒有模型面』。grok 的 moduleCoverage 裡有 xai-grok-models（內嵌 default_models.json 的型號目錄，CLI>env>config.toml>remote settings 解析）、xai-grok-sampler（HTTP 串流取樣與重試）、xai-grok-auth（refresh-aware token 解析）與 xai-grok-secrets，harvest 也有 effort/model 指令條目（SwitchModel{model_id, effort}、catalog 精確比對）。因規則 1 要求成員名逐字存在於該源本域的 inventory，這些都無法入列，故 grok 在每一列都是空成員；缺的是材料，不是能力。"
+    },
+    {
+      "mechanisms": [
+        "dsh:llm-failure-taxonomy-and-normalization",
+        "dsh:provider-retry-policy-and-execution",
+        "cc-custom:retry-backoff-and-rate-limit-policy",
+        "opencode:llm-request-execution-and-retry"
+      ],
+      "whyNotMerged": "考慮把 dsh 的錯誤碼分類併入重試列。未併：dsh 刻意分成兩個機制——重試是註冊期凍結的不可變政策，分類是 HarnessError 上的穩定代碼且明言『絕不解析訊息文字』；cc-custom 與 opencode 把分類塞在重試包裝內，但政策與分類表是兩個決策，合併會讓『要不要再試』與『這錯是什麼』變成一列。"
+    },
+    {
+      "mechanisms": [
+        "ih:provider-agnostic-model-seam-with-retry-only-before-output",
+        "dsh:provider-retry-policy-and-execution",
+        "dsh:llm-failure-taxonomy-and-normalization"
+      ],
+      "whyNotMerged": "ih 這一個機制同時含三段可分屬別列的能力：六級 effort 詞彙（列2）、僅在尚未產出前重試且預算耗盡即硬失敗（列3；常數 5/500/10000/0.1 與 dsh 完全相同）、走 cause chain 取 err.code 的分類（列4）。規則 2 限制一個機制只能入一列，故依其主體（effort 詞彙）放入列2；列3、列4 因無 ih 成員而標 rewrite，請讀成『IH 的接縫比參考實作薄』而非『IH 完全沒有重試或錯誤分類』。"
+    },
+    {
+      "mechanisms": [
+        "dsh:model-catalogue-and-exact-model-metadata",
+        "dsh:provider-model-discovery-service",
+        "codex:remote-model-catalog-with-cache-and-bundled-fallback",
+        "opencode:models-dev-catalogue-cache"
+      ],
+      "whyNotMerged": "考慮把『取得目錄』（列5）與『目錄轉執行期中繼資料』（列7）併成一列。未併：dsh 明分 listModels 為顧問性目錄、discovery 為不落地的草稿式探詢，codex 的遠端抓取與其內建 models.json 也是兩層；合併會把『去哪拿清單』與『清單條目怎麼驗證』混為一談。"
+    },
+    {
+      "mechanisms": [
+        "opencode:model-capability-and-limit-metadata",
+        "dsh:context-window-and-max-output-metadata",
+        "cc-custom:context-window-and-max-output-metadata"
+      ],
+      "whyNotMerged": "opencode 這支同時帶 modalities/capabilities、limit.context/input/output 與 cost，既像目錄投影（列7）也像視窗與輸出上限（列8）。因主體是『catalogue 條目→執行期 Model』的正規化，放入列7；未與列8 兩支純上限解析合併。"
+    },
+    {
+      "mechanisms": [
+        "codex:reasoning-effort-and-context-metadata-translation",
+        "dsh:context-window-and-max-output-metadata",
+        "cc-custom:context-window-and-max-output-metadata"
+      ],
+      "whyNotMerged": "codex 把 effort 轉譯與 context 上限推導寫在同一個機制（Ultra→Max、resolved_context_window、auto_compact_token_limit=90%），dsh 與 cc-custom 則拆成兩支。一個機制只能入一列，故放入 effort 列2；列8 因此只剩兩個成員，未把 codex 那半邊重複計入。"
+    },
+    {
+      "mechanisms": [
+        "dsh:http-proxy-transport-policy",
+        "codex:responses-websocket-transport-with-https-fallback",
+        "opencode-fork:llm-runtime-native-vs-aisdk-selection",
+        "cc-custom:protocol-selection-and-capability-negotiation"
+      ],
+      "whyNotMerged": "四者都在決定『請求怎麼出去』，考慮併成一個出口政策列。未併：dsh 是把 HTTP_PROXY/NO_PROXY 解析成 undici 全域 dispatcher 的環境政策（純資料、可結構化複製），另三者是在兩條平行實作間選一條並回退；政策解析與路徑選擇不是同一能力，dsh 自成列16。"
+    },
+    {
+      "mechanisms": [
+        "cc-custom:protocol-selection-and-capability-negotiation",
+        "ih:five-wire-adapters-with-per-generation-reasoning-translation",
+        "cc-custom:anthropic-messages-wire-request-assembly"
+      ],
+      "whyNotMerged": "考慮把 cc-custom 的協定選擇併入列1 的線路協定面（它確實 dispatch 到 queryModelResponses 並帶 capability flags）。未併：它的主體是『這次用 messages 還是 responses』的路徑選擇與未實作組合硬拋，故放入列14；『怎麼組請求』留在列1。"
+    },
+    {
+      "mechanisms": [
+        "dsh:plugin-package-attribution-inventory",
+        "dsh:deepseek-wire-protocol-and-request-extensions"
+      ],
+      "whyNotMerged": "考慮併入列1。未併：列1 收的是擴充註冊表本身與線路協定，這支是透過該註冊表掛上去的單一頂層欄位外掛（dsh_plugin_packages 的載入清單）；基礎設施與其中一個外掛不是同一能力。"
+    },
+    {
+      "mechanisms": [
+        "dsh:agent-default-model-resolution",
+        "opencode:model-default-and-fallback-resolution",
+        "ih:typed-model-resolution-with-a-settings-backed-provider-runtime"
+      ],
+      "whyNotMerged": "考慮把預設模型選擇併入列6 的解析列（在 ih，llm.defaultModel 只是解析優先序的一層）。未併：dsh 與 opencode 都把它做成獨立服務並各自有 recent-model 檔與小模型評分（成本 0.8／年齡 0.2、18 個月上限）；『未指定時用哪個』與『指定的怎麼綁定』是兩個決策，列13 因此無 ih 成員。"
+    },
+    {
+      "mechanisms": [
+        "dsh:streaming-call-dispatch-and-chunk-assembly",
+        "cc-custom:streaming-wire-to-transcript-assembly",
+        "ih:five-wire-adapters-with-per-generation-reasoning-translation",
+        "cc-custom:anthropic-messages-wire-request-assembly"
+      ],
+      "whyNotMerged": "考慮把回應組裝（列11）併入請求組裝（列1）——兩者在 cc-custom 是同一個 services/api 目錄、在 dsh 是同一個 seam 的兩端，合併可讓 ih 的線路機制同時覆蓋兩者。未併：『把 chunk 疊成訊息』是獨立演算法（BlockAssembler 的 keep/drop 單一決策、interruptedBlocks 前綴），列11 因此無 ih 成員，其 rewrite 應讀成『把這些行為併進 IH 既有組裝器』。"
+    },
+    {
+      "mechanisms": [
+        "opencode:credential-store-and-oauth-lifecycle",
+        "opencode-fork:credential-store-with-oauth-refresh",
+        "ih:ref-based-credential-store-with-env-over-file-precedence",
+        "dsh:oauth-authorization-flow-registry",
+        "codex:chatgpt-oauth-pkce-loopback-login",
+        "cc-custom:subscription-oauth-credential-lifecycle"
+      ],
+      "whyNotMerged": "考慮把互動授權（列10）併入憑證存放與解析（列9），因為 opencode 與 fork 本來就把兩者寫成一個機制、codex 的 auth-persistence 也含 401 復原。未併：『憑證放哪、怎麼分層解析』與『人怎麼完成授權』是兩個能力，且 dsh 的 flow registry 只做生命週期不碰協定；強行合併會讓列9 變成十一成員的大列。"
+    },
+    {
+      "mechanisms": [
+        "cc-custom:client-construction-credentials-and-egress",
+        "dsh:http-proxy-transport-policy"
+      ],
+      "whyNotMerged": "這支後段（proxy、NO_PROXY、mTLS、CA、unix socket 走同一出口政策）與 dsh 的代理政策重疊，考慮放進列16。未併：它的主體是用解析出的憑證把 Anthropic/Bedrock/Vertex/Foundry 客戶端建起來（且 Bedrock/Vertex/Foundry 完全繞過直接 API 的憑證解析），故放入憑證列9。"
+    }
+  ],
+  "coverage": {
+    "mechanismsSeen": 60,
+    "mechanismsPlaced": 60
+  }
+}
