@@ -23,7 +23,13 @@
             "packages/sandbox/sandbox-policy/src/index.ts:163-170",
             "packages/sandbox/sandbox-policy/src/index.ts:177-179"
           ],
-          "modules": ["sandbox/sandbox", "sandbox/sandbox-policy", "fs/fs-sandbox", "shell/bash-sandbox", "shell/pwsh-sandbox"],
+          "modules": [
+            "sandbox/sandbox",
+            "sandbox/sandbox-policy",
+            "fs/fs-sandbox",
+            "shell/bash-sandbox",
+            "shell/pwsh-sandbox"
+          ],
           "verified": true
         },
         {
@@ -47,7 +53,10 @@
             "packages/sandbox/sandbox-local/src/index.ts:492-510",
             "packages/sandbox/sandbox-local/src/index.ts:513-539"
           ],
-          "modules": ["sandbox/sandbox-local", "sandbox/sandbox"],
+          "modules": [
+            "sandbox/sandbox-local",
+            "sandbox/sandbox"
+          ],
           "verified": true
         },
         {
@@ -71,7 +80,11 @@
             "packages/sandbox/sandbox-local/src/profiles.ts:30-36",
             "packages/sandbox/sandbox-local/src/profiles.ts:51-58"
           ],
-          "modules": ["sandbox/sandbox", "sandbox/sandbox-local", "fs/fs-sandbox"],
+          "modules": [
+            "sandbox/sandbox",
+            "sandbox/sandbox-local",
+            "fs/fs-sandbox"
+          ],
           "verified": true
         },
         {
@@ -96,7 +109,10 @@
             "packages/sandbox/sandbox-windows-acl/src/index.ts:257-270",
             "packages/sandbox/sandbox-windows-acl/src/index.ts:288-296"
           ],
-          "modules": ["sandbox/sandbox-windows-acl", "sandbox/sandbox-local"],
+          "modules": [
+            "sandbox/sandbox-windows-acl",
+            "sandbox/sandbox-local"
+          ],
           "verified": true
         },
         {
@@ -122,7 +138,10 @@
             "packages/sandbox/sandbox-local/src/index.ts:392-443",
             "packages/sandbox/sandbox-local/src/index.ts:454-477"
           ],
-          "modules": ["sandbox/sandbox-windows-acl", "sandbox/sandbox-local"],
+          "modules": [
+            "sandbox/sandbox-windows-acl",
+            "sandbox/sandbox-local"
+          ],
           "verified": true
         },
         {
@@ -147,7 +166,13 @@
             "packages/fs/tool-fs/src/sandbox.ts:87-108",
             "packages/fs/tool-fs/src/sandbox.ts:124-130"
           ],
-          "modules": ["sandbox/sandbox", "fs/fs-sandbox", "shell/bash-sandbox", "shell/pwsh-sandbox", "interaction/user-approval"],
+          "modules": [
+            "sandbox/sandbox",
+            "fs/fs-sandbox",
+            "shell/bash-sandbox",
+            "shell/pwsh-sandbox",
+            "interaction/user-approval"
+          ],
           "verified": true
         },
         {
@@ -172,7 +197,11 @@
             "packages/shell/pwsh-sandbox/src/index.ts:52-57",
             "packages/sandbox/sandbox-local/src/index.ts:205-240"
           ],
-          "modules": ["shell/bash-sandbox", "shell/pwsh-sandbox", "sandbox/sandbox-local"],
+          "modules": [
+            "shell/bash-sandbox",
+            "shell/pwsh-sandbox",
+            "sandbox/sandbox-local"
+          ],
           "verified": true
         },
         {
@@ -195,7 +224,11 @@
             "packages/fs/fs-sandbox/src/containment.ts:58-75",
             "packages/fs/tool-fs/src/sandbox.ts:110-130"
           ],
-          "modules": ["fs/fs-sandbox", "sandbox/sandbox", "fs/tool-fs"],
+          "modules": [
+            "fs/fs-sandbox",
+            "sandbox/sandbox",
+            "fs/tool-fs"
+          ],
           "verified": true
         },
         {
@@ -218,7 +251,11 @@
             "packages/interaction/user-approval/src/index.ts:258-298",
             "packages/interaction/user-approval/src/types.ts:32"
           ],
-          "modules": ["interaction/user-approval", "client/ui-approval", "sandbox/sandbox"],
+          "modules": [
+            "interaction/user-approval",
+            "client/ui-approval",
+            "sandbox/sandbox"
+          ],
           "verified": true
         },
         {
@@ -242,7 +279,12 @@
             "packages/interaction/permission-presets/src/index.ts:379-396",
             "packages/interaction/permission-presets/src/index.ts:404-429"
           ],
-          "modules": ["interaction/permission-presets", "sandbox/sandbox-policy", "interaction/user-approval", "client/ui-permission-presets"],
+          "modules": [
+            "interaction/permission-presets",
+            "sandbox/sandbox-policy",
+            "interaction/user-approval",
+            "client/ui-permission-presets"
+          ],
           "verified": true
         },
         {
@@ -266,7 +308,10 @@
             "packages/sandbox/sandbox-policy/src/index.ts:177-179",
             "packages/sandbox/sandbox-policy/src/invariant.ts:18-20"
           ],
-          "modules": ["sandbox/sandbox-policy", "sandbox/sandbox"],
+          "modules": [
+            "sandbox/sandbox-policy",
+            "sandbox/sandbox"
+          ],
           "verified": true
         },
         {
@@ -294,7 +339,11 @@
             "packages/hooks/hooks-claude-code/src/index.ts:269-276",
             "packages/hooks/hooks-codex/src/index.ts:223-230"
           ],
-          "modules": ["hooks/hook-protocol", "hooks/hooks-claude-code", "hooks/hooks-codex"],
+          "modules": [
+            "hooks/hook-protocol",
+            "hooks/hooks-claude-code",
+            "hooks/hooks-codex"
+          ],
           "verified": true
         },
         {
@@ -319,7 +368,12 @@
             "packages/client/ui-permission-presets/src/client/index.ts:145-166",
             "packages/client/ui-permission-presets/src/client/presentation.ts:4"
           ],
-          "modules": ["client/ui-approval", "client/ui-permission-presets", "interaction/user-approval", "interaction/permission-presets"],
+          "modules": [
+            "client/ui-approval",
+            "client/ui-permission-presets",
+            "interaction/user-approval",
+            "interaction/permission-presets"
+          ],
           "verified": true
         },
         {
@@ -336,7 +390,10 @@
             "packages/interaction/user-questions/src/index.ts:41-47",
             "packages/interaction/user-questions/src/index.ts:70-90"
           ],
-          "modules": ["interaction/tool-ask-user", "interaction/user-approval"],
+          "modules": [
+            "interaction/tool-ask-user",
+            "interaction/user-approval"
+          ],
           "verified": true
         },
         {
@@ -360,7 +417,9 @@
             "packages/guard/repeat-tool-reminder/src/index.ts:189-207",
             "packages/guard/repeat-tool-reminder/src/index.ts:209-232"
           ],
-          "modules": ["guard/repeat-tool-reminder"],
+          "modules": [
+            "guard/repeat-tool-reminder"
+          ],
           "verified": true
         },
         {
@@ -378,7 +437,9 @@
             "packages/preset/agent-presets/src/mount.ts:396-413",
             "packages/preset/agent-presets/src/mount.ts:415-424"
           ],
-          "modules": ["preset/agent-presets"],
+          "modules": [
+            "preset/agent-presets"
+          ],
           "verified": true
         }
       ],
@@ -425,7 +486,10 @@
             "packages/llm/llm/src/index.ts:481-543",
             "packages/llm/llm/src/index.ts:964-968"
           ],
-          "modules": ["llm/llm", "core/agent-default-model"],
+          "modules": [
+            "llm/llm",
+            "core/agent-default-model"
+          ],
           "verified": true
         },
         {
@@ -450,7 +514,11 @@
             "packages/llm/llm-deepseek/src/adapter.ts:400-438",
             "packages/llm/llm-pi-ai/src/catalog.ts:901-930"
           ],
-          "modules": ["llm/llm", "llm/llm-deepseek", "llm/llm-pi-ai"],
+          "modules": [
+            "llm/llm",
+            "llm/llm-deepseek",
+            "llm/llm-pi-ai"
+          ],
           "verified": true
         },
         {
@@ -474,7 +542,10 @@
             "packages/llm/llm/src/types.ts:274-298",
             "packages/llm/llm-pi-ai/src/discovery.ts:30-58"
           ],
-          "modules": ["llm/llm", "llm/llm-pi-ai"],
+          "modules": [
+            "llm/llm",
+            "llm/llm-pi-ai"
+          ],
           "verified": true
         },
         {
@@ -499,7 +570,11 @@
             "packages/llm/llm-deepseek/src/adapter.ts:418-436",
             "packages/llm/llm-deepseek/src/index.ts:311-315"
           ],
-          "modules": ["llm/llm", "llm/llm-deepseek", "llm/llm-pi-ai"],
+          "modules": [
+            "llm/llm",
+            "llm/llm-deepseek",
+            "llm/llm-pi-ai"
+          ],
           "verified": true
         },
         {
@@ -525,7 +600,12 @@
             "packages/llm/llm-deepseek/src/adapter.ts:400-417",
             "packages/llm/llm-deepseek/src/index.ts:195-205"
           ],
-          "modules": ["llm/llm", "llm/llm-deepseek", "llm/llm-pi-ai", "llm/token-meter"],
+          "modules": [
+            "llm/llm",
+            "llm/llm-deepseek",
+            "llm/llm-pi-ai",
+            "llm/token-meter"
+          ],
           "verified": true
         },
         {
@@ -558,7 +638,13 @@
             "packages/llm/llm-deepseek/src/adapter.ts:539-541",
             "packages/llm/llm-pi-ai/src/index.ts:168-191"
           ],
-          "modules": ["credentials/credentials", "credentials/credentials-local", "llm/llm", "llm/llm-deepseek", "llm/llm-pi-ai"],
+          "modules": [
+            "credentials/credentials",
+            "credentials/credentials-local",
+            "llm/llm",
+            "llm/llm-deepseek",
+            "llm/llm-pi-ai"
+          ],
           "verified": true
         },
         {
@@ -582,7 +668,11 @@
             "packages/credentials/authorization/src/index.ts:327-347",
             "packages/llm/llm-pi-ai/src/auth.ts:64-100"
           ],
-          "modules": ["credentials/authorization", "credentials/credentials", "llm/llm-pi-ai"],
+          "modules": [
+            "credentials/authorization",
+            "credentials/credentials",
+            "llm/llm-pi-ai"
+          ],
           "verified": true
         },
         {
@@ -612,7 +702,12 @@
             "packages/llm/llm-retry/src/index.ts:123-138",
             "packages/llm/llm-retry/src/index.ts:194-241"
           ],
-          "modules": ["llm/llm", "llm/llm-retry", "llm/llm-deepseek", "llm/llm-pi-ai"],
+          "modules": [
+            "llm/llm",
+            "llm/llm-retry",
+            "llm/llm-deepseek",
+            "llm/llm-pi-ai"
+          ],
           "verified": true
         },
         {
@@ -637,7 +732,10 @@
             "packages/llm/llm/src/assembler.ts:130-150",
             "packages/llm/llm/src/assembler.ts:169-179"
           ],
-          "modules": ["llm/llm", "llm/token-meter"],
+          "modules": [
+            "llm/llm",
+            "llm/token-meter"
+          ],
           "verified": true
         },
         {
@@ -660,7 +758,11 @@
             "packages/llm/llm/src/adapter-failure.ts:40-88",
             "packages/llm/llm/src/adapter-failure.ts:101-104"
           ],
-          "modules": ["llm/llm", "llm/llm-retry", "llm/llm-deepseek"],
+          "modules": [
+            "llm/llm",
+            "llm/llm-retry",
+            "llm/llm-deepseek"
+          ],
           "verified": true
         },
         {
@@ -687,7 +789,12 @@
             "packages/llm/deepseek-llm-api-extensions/src/index.ts:79-99",
             "packages/llm/deepseek-llm-api-extensions/src/index.ts:101-129"
           ],
-          "modules": ["llm/llm-deepseek", "llm/llm", "llm/deepseek-llm-api-extensions", "identity/anonymous-user-id"],
+          "modules": [
+            "llm/llm-deepseek",
+            "llm/llm",
+            "llm/deepseek-llm-api-extensions",
+            "identity/anonymous-user-id"
+          ],
           "verified": true
         },
         {
@@ -707,7 +814,10 @@
             "packages/llm/plugin-package-inventory-deepseek/src/index.ts:131-179",
             "packages/llm/plugin-package-inventory-deepseek/src/index.ts:186-198"
           ],
-          "modules": ["llm/plugin-package-inventory-deepseek", "llm/deepseek-llm-api-extensions"],
+          "modules": [
+            "llm/plugin-package-inventory-deepseek",
+            "llm/deepseek-llm-api-extensions"
+          ],
           "verified": true
         },
         {
@@ -732,7 +842,10 @@
             "packages/llm/llm/src/index.ts:219-230",
             "packages/llm/llm/src/index.ts:666-668"
           ],
-          "modules": ["llm/token-meter", "llm/llm"],
+          "modules": [
+            "llm/token-meter",
+            "llm/llm"
+          ],
           "verified": true
         },
         {
@@ -754,7 +867,9 @@
             "packages/core/agent-default-model/src/index.ts:64-92",
             "packages/core/agent-default-model/src/index.ts:94-106"
           ],
-          "modules": ["core/agent-default-model"],
+          "modules": [
+            "core/agent-default-model"
+          ],
           "verified": true
         },
         {
@@ -780,7 +895,9 @@
             "packages/util/http-proxy/src/install.ts:207-222",
             "packages/util/http-proxy/src/install.ts:296-314"
           ],
-          "modules": ["util/http-proxy"],
+          "modules": [
+            "util/http-proxy"
+          ],
           "verified": true
         }
       ],
@@ -800,19 +917,5 @@
       }
     }
   },
-  "notes": "Scope: source-only audit of D:\\agent-complete\\deepseek-harness-dsh-v0.1.5-rc.2 at v0.1.5-rc.2 (read-only; nothing in that tree was modified). Every evidence line above was opened with the read tool in this session; `verified` is true for all 31 mechanisms (16 safety, 15 model). Paths are relative to the source root.",
-  "notesDetail": {
-    "method": "Files were located by directory walk over packages/, then read directly (src/ only, never README or docs). Line ranges cited are exactly the ranges returned by the read tool; where a citation is a doc comment inside src/ it is labelled as such in the `what` text where that matters.",
-    "cordisPlumbing": "Several modules in the requested list are Cordis plumbing or seams with no safety/model policy of their own and are called out as such in moduleCoverage: preset/agent-presets is a generic per-agent composition loader (its only gate is preset-scope-isolation-gate), preset/persona only registers systemPrompt sections (contributes no mechanism), interaction/tool-ask-user is a thin model-facing consumer of ctx.userQuestions (human-question-tool-seam), and util/http-proxy is an explicit non-plugin library. The service seams themselves (sandbox/sandbox, sandbox/sandbox-policy, interaction/user-approval, credentials/credentials, credentials/authorization, llm/llm) are Service Definition packages with real mechanism content, not plumbing.",
-    "rpcVsCommands": "Command surface is not slash-centric. The permission switch does have a /permission command (registered by interaction/permission-presets and decorated by client/ui-permission-presets as a popupSelect), but everything else in these two domains is exposed on seams and the Typert @Remote RPC plane: llm.listProviders (packages/llm/llm/src/index.ts:468), llm.listConfigurableProviders (line 540) and Remote('discoverModels') remoteDiscoverModels (line 627, error code 'llm/model-discovery-rejected'); agent-presets discovery/authoring is reached through RemoteError codes ('agent-preset/invalid', 'gateway/bad-request') in preset/agent-presets/src/index.ts and authoring.ts; approval and permission state travel as session projections ('approval/asked'+'approval/decided' events, 'permissions' projection stateVersion 2, 'sandboxMode' stateVersion 1) consumed by clients over the Remote Event waterfall (ctx.remote.$on('approval/request')). No capability was treated as absent merely because it has no slash command.",
-    "readVsWriteIsolation": "Read vs write is asymmetric by design and each backend states its own boundary: fs-sandbox fences ONLY the two mutations and lets reads pass because every mode permits reading; Landlock grants readOnly ['/'] with a readWrite list; bwrap ro-binds / and only adds a writable bind under workspace-write; Seatbelt emits '(deny file-write*)' with narrow allows; windows-acl restricts WRITE only and explicitly documents that reads, network and process visibility are not restricted. No read-side confinement mechanism exists in these packages.",
-    "dangerClassification": "There is no separately named 'danger classification' service. Danger is expressed as (a) the closed SandboxMode union where danger-full-access means the fs sandbox 'does not restrict file modifications' (renderPolicyContext, packages/sandbox/sandbox-policy/src/index.ts:41-55), (b) the strictly-wider escalation table in packages/sandbox/sandbox/src/escalation.ts, and (c) the client-side explicit risk gate on the 'danger-full-access' preset (packages/client/ui-permission-presets/src/client/presentation.ts:4 plus the confirmation block in that package's client/index.ts:67-77).",
-    "unverifiedOrPartial": [
-      "No claim in this file is uncited, but three evidence sets are partial reads rather than whole-file reads: packages/llm/llm/src/index.ts (lines 130-1147 read; 1-129 not), packages/llm/llm/src/types.ts (190-429), packages/llm/llm-deepseek/src/index.ts (1-90, 90-269, 300-429 of 514), packages/llm/llm-deepseek/src/adapter.ts (160-279, 375-454, 460-579 of 715), packages/llm/llm-pi-ai/src/catalog.ts (888-932 of 957), packages/llm/llm-pi-ai/src/discovery.ts (1-120 of 362), packages/llm/llm-pi-ai/src/auth.ts (1-110 of 231), packages/llm/llm-pi-ai/src/index.ts (60-199 of 337), packages/credentials/credentials-local/src/index.ts (1-130, 600-659 of 935), packages/credentials/authorization/src/index.ts (1-349 of 437), packages/util/http-proxy/src/policy.ts (1-140 of 343), packages/util/http-proxy/src/install.ts (1-120, 185-254, 290-314 of 315), packages/llm/token-meter/src/index.ts (1-150 of 328), packages/preset/agent-presets/src/mount.ts (365-424 of 433), packages/shell/pwsh-sandbox/src/index.ts (1-90 of 190), packages/hooks/hooks-codex/src/index.ts (220-239 of 327), packages/interaction/user-questions/src/index.ts (1-90 of 154). Each cited line lies inside a range actually read.",
-      "two client-side mechanisms are described from their client entry points only: neither packages/client/ui-approval nor packages/client/ui-permission-presets was traced into the shared slot/popup shells it renders through (those live in other client packages outside this module list).",
-      "windows-acl confinement is documented by its own module as partial enforcement (Everyone stays in the restricting list; NTFS hard links alias one file object), and the code reports that honestly as STATIC_ENFORCEMENT['windows-acl'] = 'partial' rather than claiming full coverage.",
-      "hooks-as-permission-gates records two capabilities the code itself marks incomplete: merged.stop (continue:false) is logged but has no run-level halt (TODO(hook-continue-false) at packages/hooks/hooks-claude-code/src/index.ts:188), and Claude hook updatedInput/systemMessage are logged and warned but not honored (lines 174-179). Codex additionally honors deny only, not allow/ask (packages/hooks/hooks-codex/src/index.ts:223-230).",
-      "preset/agent-presets is mounted through a Loader entry tree whose per-preset composition files were not enumerated in this pass; the isolation gate above is the part of that package that bears on confinement, and its roster/discovery half contributes no safety mechanism."
-    ]
-  }
+  "notes": "Scope: source-only audit of D:\\agent-complete\\deepseek-harness-dsh-v0.1.5-rc.2 at v0.1.5-rc.2 (read-only; nothing in that tree was modified). Every evidence line above was opened with the read tool in this session; `verified` is true for all 31 mechanisms (16 safety, 15 model). Paths are relative to the source root.  method: Files were located by directory walk over packages/, then read directly (src/ only, never README or docs). Line ranges cited are exactly the ranges returned by the read tool; where a citation is a doc comment inside src/ it is labelled as such in the `what` text where that matters.  cordisPlumbing: Several modules in the requested list are Cordis plumbing or seams with no safety/model policy of their own and are called out as such in moduleCoverage: preset/agent-presets is a generic per-agent composition loader (its only gate is preset-scope-isolation-gate), preset/persona only registers systemPrompt sections (contributes no mechanism), interaction/tool-ask-user is a thin model-facing consumer of ctx.userQuestions (human-question-tool-seam), and util/http-proxy is an explicit non-plugin library. The service seams themselves (sandbox/sandbox, sandbox/sandbox-policy, interaction/user-approval, credentials/credentials, credentials/authorization, llm/llm) are Service Definition packages with real mechanism content, not plumbing.  rpcVsCommands: Command surface is not slash-centric. The permission switch does have a /permission command (registered by interaction/permission-presets and decorated by client/ui-permission-presets as a popupSelect), but everything else in these two domains is exposed on seams and the Typert @Remote RPC plane: llm.listProviders (packages/llm/llm/src/index.ts:468), llm.listConfigurableProviders (line 540) and Remote('discoverModels') remoteDiscoverModels (line 627, error code 'llm/model-discovery-rejected'); agent-presets discovery/authoring is reached through RemoteError codes ('agent-preset/invalid', 'gateway/bad-request') in preset/agent-presets/src/index.ts and authoring.ts; approval and permission state travel as session projections ('approval/asked'+'approval/decided' events, 'permissions' projection stateVersion 2, 'sandboxMode' stateVersion 1) consumed by clients over the Remote Event waterfall (ctx.remote.$on('approval/request')). No capability was treated as absent merely because it has no slash command.  readVsWriteIsolation: Read vs write is asymmetric by design and each backend states its own boundary: fs-sandbox fences ONLY the two mutations and lets reads pass because every mode permits reading; Landlock grants readOnly ['/'] with a readWrite list; bwrap ro-binds / and only adds a writable bind under workspace-write; Seatbelt emits '(deny file-write*)' with narrow allows; windows-acl restricts WRITE only and explicitly documents that reads, network and process visibility are not restricted. No read-side confinement mechanism exists in these packages.  dangerClassification: There is no separately named 'danger classification' service. Danger is expressed as (a) the closed SandboxMode union where danger-full-access means the fs sandbox 'does not restrict file modifications' (renderPolicyContext, packages/sandbox/sandbox-policy/src/index.ts:41-55), (b) the strictly-wider escalation table in packages/sandbox/sandbox/src/escalation.ts, and (c) the client-side explicit risk gate on the 'danger-full-access' preset (packages/client/ui-permission-presets/src/client/presentation.ts:4 plus the confirmation block in that package's client/index.ts:67-77).  unverifiedOrPartial: No claim in this file is uncited, but three evidence sets are partial reads rather than whole-file reads: packages/llm/llm/src/index.ts (lines 130-1147 read; 1-129 not), packages/llm/llm/src/types.ts (190-429), packages/llm/llm-deepseek/src/index.ts (1-90, 90-269, 300-429 of 514), packages/llm/llm-deepseek/src/adapter.ts (160-279, 375-454, 460-579 of 715), packages/llm/llm-pi-ai/src/catalog.ts (888-932 of 957), packages/llm/llm-pi-ai/src/discovery.ts (1-120 of 362), packages/llm/llm-pi-ai/src/auth.ts (1-110 of 231), packages/llm/llm-pi-ai/src/index.ts (60-199 of 337), packages/credentials/credentials-local/src/index.ts (1-130, 600-659 of 935), packages/credentials/authorization/src/index.ts (1-349 of 437), packages/util/http-proxy/src/policy.ts (1-140 of 343), packages/util/http-proxy/src/install.ts (1-120, 185-254, 290-314 of 315), packages/llm/token-meter/src/index.ts (1-150 of 328), packages/preset/agent-presets/src/mount.ts (365-424 of 433), packages/shell/pwsh-sandbox/src/index.ts (1-90 of 190), packages/hooks/hooks-codex/src/index.ts (220-239 of 327), packages/interaction/user-questions/src/index.ts (1-90 of 154). Each cited line lies inside a range actually read. two client-side mechanisms are described from their client entry points only: neither packages/client/ui-approval nor packages/client/ui-permission-presets was traced into the shared slot/popup shells it renders through (those live in other client packages outside this module list). windows-acl confinement is documented by its own module as partial enforcement (Everyone stays in the restricting list; NTFS hard links alias one file object), and the code reports that honestly as STATIC_ENFORCEMENT['windows-acl'] = 'partial' rather than claiming full coverage. hooks-as-permission-gates records two capabilities the code itself marks incomplete: merged.stop (continue:false) is logged but has no run-level halt (TODO(hook-continue-false) at packages/hooks/hooks-claude-code/src/index.ts:188), and Claude hook updatedInput/systemMessage are logged and warned but not honored (lines 174-179). Codex additionally honors deny only, not allow/ask (packages/hooks/hooks-codex/src/index.ts:223-230). preset/agent-presets is mounted through a Loader entry tree whose per-preset composition files were not enumerated in this pass; the isolation gate above is the part of that package that bears on confinement, and its roster/discovery half contributes no safety mechanism."
 }

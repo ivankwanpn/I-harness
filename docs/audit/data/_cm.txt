@@ -1,0 +1,17 @@
+audit(d3-phase3): per-domain crosswalk brief
+
+The highest-judgement step of D3, written once so the twelve domain agents can be
+dispatched with short prompts. It states the failure mode in both directions:
+over-merging silently claims two different designs are one and HIDES a real
+difference; under-merging scatters one capability across seven rows and hides
+that anyone agrees. Neither is a cosmetic error -- both make the matrix lie.
+
+The instruction when unsure is explicit: do not merge, and the pair lands in the
+unreconciled appendix. A row left separate out of caution costs the reader a
+little; a wrong merge costs them the truth.
+
+It also carries the rule that matters most for honesty: 已存在 and
+improved-writing are FORBIDDEN without an ih member, so a row cannot claim
+I-harness already has something it does not. And where a source's mechanism is
+present-but-unwired -- as I-harness's own compaction is -- the disposition must
+reflect that rather than reading as a working feature.
