@@ -21,7 +21,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { SOURCES, buildUnion, loadSources, norm } from "./lib-union.mjs"
+import { SOURCES, SOURCE_PATHS, buildUnion, loadSources, norm, carrierClass } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const DATA = join(ROOT, "docs/audit/data")
@@ -104,8 +104,14 @@ if (missingDisp.length || badDisp.length) {
  * first. Adversarial verification found real cases where evidence[0] was a
  * peripheral location (a bundle manifest, a registry vec entry, a path helper)
  * even though the claim itself was well supported elsewhere in the same array.
- * Choose the entry sharing the most vocabulary with the claim text; ties go to
- * the earliest, which keeps the output deterministic.
+ *
+ * Selection order: (1) prefer a citation whose line is an IMPLEMENTATION rather
+ * than a listing/comment/alias, because that is what a mechanism claim needs;
+ * (2) among those, the entry sharing the most vocabulary with the claim text;
+ * (3) earliest, so the output stays deterministic. This chooses the best
+ * AVAILABLE evidence for display -- it does not hide the fact that 37% of the
+ * underlying leading citations are listings, which the verification section
+ * reports separately as a data-quality measure.
  */
 function bestCitation(entry) {
   const ev = entry?.evidence ?? []
@@ -117,15 +123,31 @@ function bestCitation(entry) {
       .filter((t) => t.length >= 4),
   )
   let best = ev[0]
+  let bestRank = -1
   let bestScore = -1
   for (const cite of ev) {
+    const m = String(cite).match(/^(.*?):(\d+)(?:-(\d+))?$/)
+    let cls = "implementation"
+    if (m) {
+      const abs = join(SOURCE_PATHS[m[1]] ?? "", m[1])
+      let text = ""
+      try {
+        const ls = readFileSync(abs, "utf8").split(/\r?\n/)
+        text = ls[Number(m[2]) - 1] ?? ""
+      } catch {
+        text = ""
+      }
+      cls = carrierClass(m[1], text)
+    }
+    const rank = cls === "implementation" ? 1 : 0
     const toks = String(cite)
       .toLowerCase()
       .split(/[^a-z0-9_$-]+/)
       .filter((t) => t.length >= 4)
     let score = 0
     for (const t of toks) if (claimTokens.has(t)) score++
-    if (score > bestScore) {
+    if (rank > bestRank || (rank === bestRank && score > bestScore)) {
+      bestRank = rank
       bestScore = score
       best = cite
     }

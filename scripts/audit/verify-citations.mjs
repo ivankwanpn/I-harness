@@ -30,6 +30,7 @@
 
 import { readFileSync, existsSync, readdirSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
+import { carrierClass } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const DATA = join(ROOT, "docs/audit/data")
@@ -110,6 +111,11 @@ const lineUse = new Map()
 const cells = []
 const docOnly = []
 
+
+const LEADING_CLASSES = ["implementation", "manifest", "registry-listing", "alias-or-helper", "doc-comment", "type-decl", "blank"]
+const leadingTally = Object.fromEntries(LEADING_CLASSES.map((c) => [c, 0]))
+const weakLeaders = []
+
 function checkClaim(source, cmd, field, claimText, citations) {
   stats.claims++
   if (!citations || citations.length === 0) {
@@ -185,6 +191,19 @@ function checkClaim(source, cmd, field, claimText, citations) {
   // as such: the audit's whole point is that claims trace to implementation.
   if (field === "mechanism" && anyResolved && !anyCode) {
     problems.push({ source, cmd: cmd.rawName, kind: "COMMENT_ONLY_MECHANISM", detail: `no code line cited for a mechanism claim` })
+  }
+
+  // Carrier class of the LEADING citation: the one the matrix will show.
+  if (field === "mechanism" && citations.length > 0 && String(claimText ?? "").trim().length > 40) {
+    const lead = parseCitation(citations[0])
+    const abs = join(root, lead.path)
+    const ls = existsSync(abs) ? lines(abs) : null
+    const text = ls && lead.line && lead.line <= ls.length ? ls[lead.line - 1] : ""
+    const cls = carrierClass(lead.path, text)
+    leadingTally[cls] = (leadingTally[cls] ?? 0) + 1
+    if (cls !== "implementation") {
+      weakLeaders.push({ source, cmd: cmd.rawName, cite: citations[0], class: cls, lineText: text.trim().slice(0, 110) })
+    }
   }
 }
 
@@ -285,6 +304,23 @@ if (SAMPLE_N > 0) {
   if (reused.length) {
     console.log(`\nlines cited by more than 3 distinct claims (possible lazy citation):`)
     for (const [k, n] of reused.slice(0, 15)) console.log(`  ${String(n).padStart(3)}x  ${k}`)
+  }
+
+  const totalLeads = Object.values(leadingTally).reduce((a, b) => a + b, 0)
+  if (totalLeads > 0) {
+    console.log(`\ncarrier class of the LEADING citation (${totalLeads} mechanism claims):`)
+    for (const c of LEADING_CLASSES) {
+      if (!leadingTally[c]) continue
+      const pct = ((leadingTally[c] / totalLeads) * 100).toFixed(0)
+      console.log(`  ${c.padEnd(18)} ${String(leadingTally[c]).padStart(4)}  ${pct.padStart(3)}%${c === "implementation" ? "" : "   <- weak carrier for a mechanism claim"}`)
+    }
+    if (weakLeaders.length) {
+      console.log(`\nmechanism claims leading with a weak carrier (${weakLeaders.length}), first 25:`)
+      for (const w of weakLeaders.slice(0, 25)) {
+        console.log(`  [${w.class}] ${w.source}/${w.cmd}  ${w.cite}`)
+        console.log(`      ${w.lineText}`)
+      }
+    }
   }
   if (problems.length) {
     console.log(`\nproblems (${problems.length}), first 30:`)

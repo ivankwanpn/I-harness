@@ -36,6 +36,17 @@ export const SOURCES = [
   { key: "cc-custom", label: "cc-custom" },
 ]
 
+/** Absolute roots, used to resolve a citation's line for carrier classification. */
+export const SOURCE_PATHS = {
+  ih: "D:/I-harness-main",
+  dsh: "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
+  codex: "D:/agent-complete/codex-rust-v0.149.1",
+  opencode: "D:/agent-complete/opencode-1.18.30",
+  "opencode-fork": "D:/agent-complete/opencode-fork-private-999.0.15",
+  grok: "D:/agent-complete/grok-build-main",
+  "cc-custom": "D:/opencode-bugfix/cc-custom",
+}
+
 export const norm = (s) =>
   String(s ?? "")
     .trim()
@@ -81,6 +92,38 @@ export function isCommandName(s) {
   if (/[/\\.(){}[\],;:'"`*]/.test(t)) return false
   return /^[a-z0-9][a-z0-9-]*$/i.test(t)
 }
+
+/**
+ * Classify what KIND of thing a cited line is.
+ *
+ * Two rounds of adversarial verification found ZERO stale or invented line
+ * numbers, yet 11 claims whose citation could not carry them. Every one was a
+ * CARRIER failure, recurring in exactly three shapes: a bundle/manifest entry, a
+ * registry or exports listing, and a sibling-file helper or bare alias
+ * expression. Naming the class mechanically turns a finding that had to be
+ * re-discovered each round into a number the document can report.
+ *
+ * Lives here, not in a script, because BOTH verify-citations.mjs (measuring the
+ * data) and assemble-d2.mjs (choosing which citation to display) need it, and
+ * hand-synced copies in this audit have already drifted once.
+ *
+ * This is a heuristic on the LINE, not a judgement about the claim.
+ */
+export function carrierClass(rel, lineText) {
+  const t = (lineText ?? "").trim()
+  const ext = (String(rel).match(/\.([a-z0-9]+)$/i) ?? [])[1]?.toLowerCase()
+  if (["yml", "yaml", "toml", "json", "jsonl", "lock", "txt"].includes(ext)) return "manifest"
+  if (/^(\/\/!|\/\/\/|\/\*\*|\*|#)/.test(t)) return "doc-comment"
+  if (/^(pub )?(struct|enum|trait|type|interface)\b/.test(t)) return "type-decl"
+  if (/^Arc::new\(|^-\s*id:|^\s*name:\s*["']|^\s*["'][^"']+["']\s*:|^export\s|"exports"|^\s*\.\.\.[A-Za-z]/.test(t))
+    return "registry-listing"
+  if (/^\s*(if|else|\})\s|^\s*&\[|^\s*self\.[a-z_]+\.[a-z_]+\(|^\s*return\s+self\./.test(t)) return "alias-or-helper"
+  if (/^\s*$/.test(t)) return "blank"
+  return "implementation"
+}
+
+/** Carrier classes that should not LEAD a mechanism claim (weak evidence). */
+export const WEAK_CARRIERS = new Set(["manifest", "registry-listing", "alias-or-helper", "doc-comment", "type-decl", "blank"])
 
 /**
  * Fold the per-source extractions into union rows.

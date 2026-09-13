@@ -1,0 +1,39 @@
+add-dir|路線差異|cc 以權限規則擴目錄；IH 單根
+always-approve|已存在|IH 已實作；guardian 閘未開
+approve|rewrite|codex 列近期拒絕並注入重試
+auto|已存在|IH 已實作；同 always-approve
+permission|rewrite|dsh preset 一命令切政策
+permissions|rewrite|codex 綁審批與 profile
+privacy|不做|IH 無帳戶面；明示不註冊
+sandbox-add-read-dir|遠期|需 elevated 讀隔離後端
+sandbox-toggle|rewrite|cc 寫入 sandbox.* 設定
+security-review|路線差異|IH 不內建 prompt；走 skill
+setup-default-sandbox|遠期|IH 無 elevated 後端
+test-approval|rewrite|以既有 approval seam 送假請求
+agents-platform|不做|原後端缺席的內部 stub
+apps|路線差異|IH 以 MCP 為整合面
+config-agents|已存在|IH 已實作（builtinRoles）
+hooks|已存在|IH 已實作（含 sha256 驗證）
+import|遠期|產品級遷移；含對話匯入
+import-claude|遠期|同 import；掃 .claude 設定
+init-verifiers|路線差異|內部 prompt；IH 走 skill
+marketplace|improved-writing|IH 真掃描目錄；勿退化
+mcp|rewrite|cc 可 toggle MCP 伺服器
+mcps|已存在|IH 已實作；不捏造掛載態
+personas|不做|IH 明示不註冊：無 preset 目錄
+plugin|rewrite|cc 四頁管理；IH 後端已有
+plugins|已存在|IH 已實作（四態目錄）
+reload-plugins|rewrite|cc refresh 後即時套用
+skills|已存在|IH 已實作（registry 掃描）
+think-back|不做|遠端旗標動畫；本 build no-op
+thinkback-play|不做|同 think-back；隱藏 no-op
+workflows|路線差異|IH workflow 別名即此
+agents|遠期|IH dashboard 已有；編輯遠期
+btw|已存在|IH 已實作；走 steer 進對話
+dashboard|improved-writing|IH 每列真值；勿退化
+install-slack-app|不做|開瀏覽器的產品推廣面
+pr-comments|路線差異|同 moved-to-plugin 路徑
+share|不做|IH 明示不做共享；grok 僅 stub
+side|路線差異|codex /side≡/btw；IH 單一
+subagents|rewrite|codex 以 root 過濾挑選
+tasks|已存在|IH 已實作（live 投影）

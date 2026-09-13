@@ -979,9 +979,21 @@
           "decision": "The section is rendered with a per-file `### <workspace-relative path>` header, joined blank-line separated, and hard-capped at maxBytes with a `(truncated)` suffix.",
           "rationale": "Bounded prompt cost for an unbounded set of on-disk files.",
           "evidence": [
+            "packages/instructions/src/index.ts:24",
+            "packages/instructions/src/index.ts:9",
+            "packages/instructions/src/index.ts:47-50",
             "packages/instructions/src/files.ts:64",
             "packages/instructions/src/index.ts:48"
-          ]
+          ],
+          "citationCorrected": {
+            "prepended": [
+              "packages/instructions/src/index.ts:24",
+              "packages/instructions/src/index.ts:9",
+              "packages/instructions/src/index.ts:47-50"
+            ],
+            "reason": "renderInstructions (files.ts:64-67) only emits `### <path>` headers joined by blank lines -- it has no maxBytes parameter and no truncation. The cap and the literal '(truncated)' suffix are in the sibling src/index.ts (:24, default 24_000 at :9, applied :47-50). Substantive correction: the cap counts UTF-16 code units (.length), NOT bytes.",
+            "by": "adversarial verification sample 2 (2026-09-12)"
+          }
         },
         {
           "decision": "The getter is SYNCHRONOUS because the runtime-context pre-step render seam is sync, and it caches by (file list | max mtimeMs | total size): an unchanged tree costs one stat per file per step boundary and no re-read.",
