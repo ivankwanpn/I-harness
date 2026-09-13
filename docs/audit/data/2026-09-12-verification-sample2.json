@@ -1,0 +1,222 @@
+{
+  "sampleSize": 22,
+  "verdicts": [
+    {
+      "source": "cc-custom",
+      "cmd": "brief",
+      "cite": "src/bootstrap/state.ts:1049",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 1049 is `export function setUserMsgOptIn(value: boolean): void {` writing `STATE.userMsgOptIn = value` (:1050), and the comment block at :1042-1044 states the field name deliberately avoids the 'BriefTool'/'SendUserMessage' substrings. The real caller is brief.ts:87 inside the /brief `call` (brief.ts:64 reads `context.getAppState().isBriefOnly`, :65 flips it, :82-87 does the two-way userMsgOptIn sync, :108-119 builds the inline <system-reminder>, :116-119 returns via onDone with metaMessages). So 'flips the flag / routes output through the Brief tool / injects a transition reminder' is carried by the cited setter plus its single caller. The claim's 'The `load` returns an inline component with no separate module (brief.ts:58-122)' is imprecise but harmless: brief.ts is self-contained, `load` (:58-122) returns a Promise resolving to an object literal whose `call` is defined inline — not a React component. Provenance caveat: this file is NOT one of the 101 `// @ts-nocheck -- restored transpiled artifact` files in this tree, and it uses .ts import specifiers, so it reads as source; brief.ts itself is only lightly rewritten (indentation at :108-114).",
+      "correction": ""
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "exit",
+      "cite": "src/commands/exit/exit.tsx:30",
+      "verdict": "PARTIAL",
+      "evidenceClass": "transpiled-artifact",
+      "why": "Line 30 is `await gracefulShutdown(0, 'prompt_input_exit')` — real and the actual terminal exit, but by construction it is reached ONLY when BOTH special branches are skipped: the bg-session detach branch (:18 `if (feature('BG_SESSIONS') && isBgSession())` -> onDone() + `spawnSync('tmux',['detach-client'],{stdio:'ignore'})` at :20-22 -> return null at :23) and the worktree branch (:25-28 -> `<ExitFlow .../>`, which is the 'prompt'). The two mechanisms the claim leads with are therefore not carried by the cited line. The claim's file-level facts are otherwise exactly right: `call` is at :14 (matching 'line 14'), the tmux detach (:20-22) and worktree prompt (:25-28) are real. Evidence class: this file IS transpiled output (trailing `//# sourceMappingURL=data:...` with the original TSX embedded, and `.js` import specifiers at :5-9), so line contents are authoritative but provenance is a transpile — it is not marked `@ts-nocheck`.",
+      "correction": "Cited location is the default-path exit only; the claim's distinctive branches live at src/commands/exit/exit.tsx:18-24 (bg-session tmux detach, feature('BG_SESSIONS') && isBgSession()) and :25-28 (worktree ExitFlow prompt)."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "plan",
+      "cite": "src/commands/plan/plan.tsx:70",
+      "verdict": "PARTIAL",
+      "evidenceClass": "transpiled-artifact",
+      "why": "Line 70 is exactly `const currentMode = appState.toolPermissionContext.mode;` inside `call` (:64), so the cited read is faithful. The claim is also externally correct: not-in-plan -> :73-92 enables plan, and the already-in-plan path :94-120 shows/opens the plan (`getPlan()`/`getPlanFilePath()` at :95-96, `/plan open` -> editFileInEditor at :104-111, PlanDisplay rendered via renderToString at :115-119). But the citation is a single read of a state field; it carries neither the enable branch nor the display branch. One claim detail is wrong on the source: it says `handlePlanModeTransition(currentMode, 'plan')` (line 74) 'only toggles the mode', whereas the actual mode write is the separate `setAppState` at :75-82 (`applyPermissionUpdate(prepareContextForPlanMode(...), {type:'setMode', mode:'plan', destination:'session'})`) with handlePlanModeTransition imported from ../../bootstrap/state.js (:3). Evidence class: transpiled output (React-compiler `_c(11)` memo cache at :14-62, `react/compiler-runtime` import at :1, sourceMappingURL tail).",
+      "correction": "The mode flip is src/commands/plan/plan.tsx:75-82 (setAppState + applyPermissionUpdate setMode:'plan'), not handlePlanModeTransition at :74; the plan display/open path is :94-120."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "version",
+      "cite": "src/commands/version.ts:19",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 19 is `load: () => Promise.resolve({ call }),` inside the `version` command object (:12-20) — exactly the 'self-contained, no import' shape claimed. `call` is an in-file `LocalCommandCall` (:3-10) returning `{type:'text', value: MACRO.BUILD_TIME ? `${MACRO.VERSION} (built ${MACRO.BUILD_TIME})` : MACRO.VERSION}` (:4-9), i.e. a compile-time-baked version — which is what makes the description at :15-16, 'Print the version this session is running (not what autoupdate downloaded)', true. Note the command is gated: `isEnabled: () => process.env.USER_TYPE === 'ant'` (:17). Evidence class: this file is a bundler-substituted artifact (MACRO.* macros) but is NOT marked @ts-nocheck and has no sourceMappingURL, so it reads as restored source; the mechanism is nonetheless in a transpiled/macro-substituted context.",
+      "correction": ""
+    },
+    {
+      "source": "codex",
+      "cmd": "compact",
+      "cite": "codex-rs/core/src/compact.rs:143",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 143 is `pub(crate) async fn run_compact_task(` — the manual entry point. Its body confirms the whole claim: it emits TurnStarted (:148-155) then calls run_compact_task_inner with `CompactionTrigger::Manual, CompactionReason::UserRequested, CompactionPhase::StandaloneTurn` (:156-165), which reaches run_compact_task_inner_impl (:240) that clones history (:252), sends the summary prompt through the model client (:271-289), and installs the summary as the replacement history (inner_impl takes ownership of the compacted turn). The claim's sub-citations also resolve: TUI slash_dispatch.rs:264-275 is the `SlashCommand::Compact` arm (clear_token_usage :269, set_task_running(true) :270-272, `input_queue.user_turn_pending_start = true` :273, `self.app_event_tx.compact()` :274); app_event_sender.rs:49-51 is `pub(crate) fn compact()` sending `AppEvent::CodexOp(AppCommand::compact())`; app_command.rs:226-227 is `pub(crate) fn compact() -> Self { Self::Compact }`; session/handlers.rs:635 is the `Op::Compact` arm and tasks/compact.rs:76 is `crate::compact::run_compact_task(session.clone(), ctx, input).await` inside `CompactTask::run`. The TUI 'clear_token_usage first / set_task_running' sequence is accurate.",
+      "correction": ""
+    },
+    {
+      "source": "codex",
+      "cmd": "copy",
+      "cite": "codex-rs/tui/src/chatwidget/interaction.rs:299",
+      "verdict": "PARTIAL",
+      "evidenceClass": "doc-comment",
+      "why": "Line 299 is a doc comment (`/// Copy the last agent response (raw markdown) to the system clipboard.`) — a comment, not the mechanism. The mechanism is one line below: `copy_last_agent_markdown` (:300-302) delegating to `copy_last_agent_markdown_with(crate::clipboard_copy::copy_to_clipboard)` (:301), whose body (:305-327) reads `self.transcript.last_agent_markdown` (:309), stores `self.clipboard_lease = lease` on Ok (:312) and writes a history cell on success (:313-316), on Err (:318-320) and for the empty/no-response case (:322-324), then request_redraw (:326) — so the claim's substance is true and well-evidenced. Per the evidence-class rule a mechanism claim resting on a comment is PARTIAL even though the adjacent implementation corroborates it. The rest of the claim checks out: slash_dispatch.rs:404-406 is `SlashCommand::Copy => { self.copy_last_agent_markdown(); }`; clipboard_copy.rs:40 returns `Result<Option<ClipboardLease>, String>` and :63 declares the lease type; slash_command.rs:269 `SlashCommand::Copy => !cfg!(target_os = \"android\")` in `is_visible` confirms Android hides it; and 'usable in a side conversation' is real via the drain classification at slash_dispatch.rs:1122-1142 (Copy listed under `QueueDrain::Continue`).",
+      "correction": "Cited line is the doc comment; the implementation it describes begins at codex-rs/tui/src/chatwidget/interaction.rs:300 (body :305-327)."
+    },
+    {
+      "source": "codex",
+      "cmd": "status",
+      "cite": "codex-rs/tui/src/chatwidget/slash_dispatch.rs:453",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 453 is `SlashCommand::Status => {` and the arm :454-466 is exactly the claim: `if self.should_prefetch_rate_limits()` (:454) mints a request id (:455-457), calls `add_status_output(true, Some(request_id))` (:458) and sends `AppEvent::RefreshRateLimits { origin: RateLimitRefreshOrigin::StatusCommand { request_id } }` (:459-461); the else branch (:462-466) calls `add_status_output(false, None)` — the static status. `should_prefetch_rate_limits` exists at chatwidget/rate_limits.rs:330, and `add_status_output` at chatwidget/status_controls.rs:194-219+ collects `self.token_info` (:200) / `total_token_usage` (:201-203) plus model/collaboration-mode fields, matching 'token_info/token usage' in the claim.",
+      "correction": ""
+    },
+    {
+      "source": "codex",
+      "cmd": "logout",
+      "cite": "codex-rs/tui/src/slash_command.rs:225",
+      "verdict": "PARTIAL",
+      "evidenceClass": "registry-listing",
+      "why": "Line 225 is `| SlashCommand::Logout` inside the `available_during_task` match arm that returns `false` (:206 `pub fn available_during_task(self) -> bool {` ... :227 `=> false`) — so the claim's parenthetical is accurate: Logout is indeed unavailable during a task. But the cited line is a registry/behaviour listing; the claim's mechanism ('dispatch sends AppEvent::Logout', 'executed by app_server.logout_account() at app/event_dispatch.rs:661') is NOT here. Both mechanism citations are nonetheless exactly right: slash_dispatch.rs:401-403 is `SlashCommand::Logout => { self.app_event_tx.send(AppEvent::Logout); }` and tui/src/app/event_dispatch.rs:661 is `AppEvent::Logout => match app_server.logout_account().await {` (Ok -> show_shutdown_feedback + handle_exit_mode(ShutdownFirst)). Per the rule, a mechanism claim resting only on a listing is PARTIAL at best.",
+      "correction": "Mechanism lives at codex-rs/tui/src/chatwidget/slash_dispatch.rs:401-403 and codex-rs/tui/src/app/event_dispatch.rs:661; the cited slash_command.rs:225 only carries the available-during-task=false fact."
+    },
+    {
+      "source": "dsh",
+      "cmd": "goal",
+      "cite": "packages/bundle/web-app/cordis.patch.yml:411",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "config",
+      "why": "The cited location is the DISABLE entry of the very plugin the claim describes: cordis.patch.yml:411 is `- id: command-goal` immediately followed by :412 `disabled: true`, under the comment at :408-409 'The goal service and session driver stay on the host plane... Presets own the human command and model-facing tool.' It carries none of the claim (no `name = 'command-goal'`, no `inject = ['commands','goals']`, no `/goal` registration, no input hint). The claim's content is real but lives in packages/goal/command-goal/src/index.ts: :12 `export const name = 'command-goal'`, :13 `export const inject = ['commands', 'goals']`, :15 the USAGE string with the same grammar as the claimed hint, and :189-196 `apply()` registering `{ name:'goal', description:'set or view the goal for a long-running task', input: { hint:'[<objective>|clear|edit <objective>|pause|resume]', attachments: true }, handler: ... }` — the hint and `attachments: true` match the claim verbatim. Create/edit/pause/resume/clear/inspect are all handled in the same file (:34-44 parse; :147-176 cases). So the claim is true and a bundle manifest entry is the wrong carrier for it.",
+      "correction": "Registration/identity: dsh packages/goal/command-goal/src/index.ts:12-15 and apply() at :189-196. The cited cordis.patch.yml:411-412 is a `disabled: true` manifest entry (the plugin is turned OFF in the web-app bundle) — it asserts the opposite of the claim."
+    },
+    {
+      "source": "dsh",
+      "cmd": "compact",
+      "cite": "packages/compaction/compaction-basic/src/index.ts:369",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Line 369 is `override compactNow(` — real, and it is the manual/on-demand compaction implementation: the doc comment :361-368 says 'Force one useful idle-session compaction below the pressure threshold', the body :373-421 selects a range via `selectCompactableRange(..., 0)` (:380-384), returns null when no safe range exists (:385), runs `compactSurfaceRegion` with `owner: null, stability: 'selected-span'` (:386-400), and throws `ManualCompactionError('busy', ...)` when the agent is not idle (:415-419). That supports the claim's first sentence. It does NOT support the claim's plugin-identity sentence: this file exports no `name`/`inject` and registers no command (only `export default BasicCompactionEngine` at :432). The `/compact` plugin is a DIFFERENT package: packages/compaction/command-compact/src/index.ts:10-11 exports `name = 'command-compact'` / `inject = ['commands','compaction']`, and :100-104 registers `/compact` whose handler calls `ctx.compaction.compactNow(...)` (:66). So the cited file gives the mechanism but not the declared plugin identity, and the claim conflates engine and command plugin.",
+      "correction": "Plugin identity (`name`/`inject`/`/compact` registration) is dsh packages/compaction/command-compact/src/index.ts:10-11 and :100-104; compaction-basic/src/index.ts:369 is the engine method the command invokes."
+    },
+    {
+      "source": "dsh",
+      "cmd": "feedback",
+      "cite": "packages/feedback/command-feedback/src/index.ts:59",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 59 is `session.append('feedback/record', {` inside `recordFeedback` (:57-63), which trims text (:58) and records a log-only event carrying text/category — 'record a session-level remark without starting model work' is exactly right (the module doc at :1-9 says 'appends one authoritative log-only event and does not start model work'). The registration facts also check out: :39 `export const name = 'command-feedback'`, :40 `export const inject = ['commands']` (no 'goals' etc.), :118-124 `apply()` registering `{ name:'feedback', description:'record feedback about this session', input: { hint: '<text>' }, recordInput: false, handler: executeFeedbackCommand }` — the hint matches the claim. `recordInput: false` really does suppress duplication: dsh packages/interaction/commands/src/index.ts:371 spreads `{ args: parsed.rawInput }` only when `definition.recordInput !== false` for the `command/run` lifecycle event, and types.ts:100 documents 'args is absent when the definition sets recordInput: false'.",
+      "correction": ""
+    },
+    {
+      "source": "dsh",
+      "cmd": "permission",
+      "cite": "packages/interaction/permission-presets/src/index.ts:255",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 255 is `ctx.inject(['commands'], (commandCtx) => {` and the registration it guards is :256-274: `name: 'permission'` (:257), description 'Switch the permission preset (sandbox mode + approval policy)' (:258), `input: { hint: '<preset>' }` (:259), handler (:263-273) that reads the preset name, returns the current preset when blank (:265-267), errors on unknown (:268-270), and otherwise calls `this.apply(agent.session, name, policy => this.ctx.approval.setPolicy(agent, policy))` (:271). `apply` (:384-396) writes BOTH knobs: the sandbox mode via `setSandboxMode(session, spec.sandbox)` when it differs (:390-392) and the approval policy via the callback / `session.append('permission/preset', {preset})` (:386-388, :393-395). The claim's structural point is right too: the command is registered by the permission-presets package itself (no `dsh-command-permission` package exists), and the comment at :252-254 states the child activates only when a command registry is composed. Note the handler intentionally returns no settlement text labelling the value with the command name (:260-262).",
+      "correction": ""
+    },
+    {
+      "source": "grok",
+      "cmd": "remember",
+      "cite": "crates/codegen/xai-grok-memory/src/storage.rs:113",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "The cited line is a path helper, not the command: storage.rs:112-114 is `pub fn global_memory_file(&self) -> PathBuf { self.global_dir.join(\"MEMORY.md\") }` under the doc comment at :111 'Path to the global `MEMORY.md`'. It shows nothing about `/remember`, inline vs remember-mode, or the note dispatch. The claim's actual content is elsewhere and is accurate: crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:16-23 is `run()` returning `CommandResult::Action(Action::EnterRememberMode)` when the trimmed arg is empty (:18-19) and `Action::SendRememberNote(trimmed.to_string())` otherwise (:20-22), with the doc at :4 'Save a memory note inline or enter remember mode'. The dispatch side matches the claim as well: app/dispatch/router.rs:1043-1044 routes both actions, and app/dispatch/notes.rs:363-367 `dispatch_send_remember_note_from_command` -> `send_remember_note(app, text, false)` (:454) which opens `ActiveModal::RememberNoteReview` (:486, :502). So the mechanism is real; the citation carries only a memory-file path constructor.",
+      "correction": "Command logic: grok crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:16-23; dispatch: crates/codegen/xai-grok-pager/src/app/dispatch/router.rs:1043-1044 and app/dispatch/notes.rs:363-367/454-502 (RememberNoteReview). The cited xai-grok-memory/src/storage.rs:113 only builds the global MEMORY.md path."
+    },
+    {
+      "source": "grok",
+      "cmd": "docs",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs:14",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 14 is `pub const BUILD_DOCS_URL: &str = \"https://docs.x.ai/build/overview\";` (:13 doc comment 'The online Build docs landing page, hardcoded like other TUI deep-links'), which is exactly the hardcoded URL the claim names. The three-way resolution is in the same file: `run` (:53) returns `Action::OpenHowtoGuides` for empty or how-to synonyms (:55-57, synonym list at :73-78 includes how-to/howto/guides/guide/list/tui), `Action::OpenUrl(BUILD_DOCS_URL.into())` for web synonyms (:58-60, list at :80-85), and `Action::ShowReleaseNotes{title, content}` for a known title via `find_doc` (:61-65), with an Error for unknown targets (:66-69). The in-TUI claim is corroborated by the tests (:120-170). Caveat: the cited line is the constant, so the dispatch behaviour itself is evidenced by :53-70.",
+      "correction": ""
+    },
+    {
+      "source": "grok",
+      "cmd": "multiline",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:128",
+      "verdict": "PARTIAL",
+      "evidenceClass": "registry-listing",
+      "why": "Line 128 is `Arc::new(multiline::MultilineCommand),` — the registry entry (inside the builtin vec, under the comment 'Settings and display.' at :123). It establishes that the command exists and is registered, nothing more. The claim's mechanism is real and precise in the module itself: multiline.rs:27-30 `run` computes `let new = !ctx.pager_state.multiline_mode;` and returns `CommandResult::Action(Action::SetMultilineMode(new))` (exactly the claim's 'multiline.rs:27-30'), and the dispatcher-is-single-source-of-truth assertion checks out: app/dispatch/router.rs:1081 `Action::SetMultilineMode(v) => set_multiline_mode(app, v)`, implemented at app/dispatch/settings/setters.rs:13-42 (idempotent, writes `agent.multiline_mode` for the agent view). The 'Enter inserts a newline and Shift+Enter sends' half is stated in the module doc (:3-4) and implemented in the prompt key handling (app/agent_view/prompt.rs:509-537, comment ':509 Multiline mode: Shift+Enter (or Alt+Enter) sends', ':537 bare Enter inserts a newline'). Per the evidence rule, a mechanism claim resting on a registry listing is PARTIAL at best — and note the mutating source of truth (`ctx.pager_state`) is read in multiline.rs while the write happens a level away in the dispatcher.",
+      "correction": "Behaviour is at grok crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:27-30, dispatched at src/app/dispatch/router.rs:1081 and applied at src/app/dispatch/settings/setters.rs:13-42; the cited mod.rs:128 is only the registry vec entry."
+    },
+    {
+      "source": "grok",
+      "cmd": "fullscreen",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:39",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Line 39 is `if self.to_minimal { &[] } else { &[\"full\"] }` — the alias arm of `aliases()`, so the cited line literally carries only the `[\"full\"]` alias and the `else` (i.e. non-minimal/fullscreen) branch. The claim's other cited facts are correct in the same file: `fullscreen()` at :20-22 returns `Self { to_minimal: false }`, `name()` returns `target_label()` = 'fullscreen' for that variant (:24-30, :34-36), and `mode_support()` marks it `ModeSupport::MinimalOnly(Remedy::AlreadyInMode)` (:62-68), matching 'switches this session from minimal rendering back to the alt-screen full TUI'. But the actual switching is NOT in the alias line or even in `run`: `run` (:70-80) errors without a session id (:71-76) and returns `CommandResult::Action(Action::RelaunchInScreenMode { minimal: self.to_minimal })` (:77-79); the real work is app/dispatch/router.rs:182-195, which for a live session sets `pending_screen_mode_switch` (:184-189) or `app.relaunch = Some(ScreenModeRelaunch { minimal, session_id })` (:191-195). Mechanism is genuinely implemented, but the cited line is a one-line alias expression inside a metadata method — PARTIAL for carrying the claim.",
+      "correction": "Switch mechanism: grok crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77-79 (RelaunchInScreenMode) and src/app/dispatch/router.rs:182-195; the cited :39 carries only the `[\"full\"]` alias."
+    },
+    {
+      "source": "ih",
+      "cmd": "quit",
+      "cite": "apps/tui/src/index.ts:199",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "The cited line is the shutdown-controller factory, which carries none of the claim's operative facts. apps/tui/src/index.ts:199 is `export function createTuiShutdownController(options: { close: () => Promise<void>; stop: () => void; teardown: () => void })` whose body (:200-202) memoizes stop() -> await close() -> finally teardown(). It is not the quit command, not the registration, and not the key binding. The claim's real content is elsewhere and is true: packages/tui/src/app/slash/impl/tools.ts:77-83 registers `{ name: 'quit', description: 'Quit the TUI', run(ctx) { ctx.quitApp() } }` (quitApp at :81) with no visible() gate, in the file set registered ungated at packages/tui/src/app/slash/registry.ts:46; `quitApp: () => this.requestQuit()` is loop.ts:2496; the key binding reaches the same call (loop.ts:1560 `case \"quit\": this.requestQuit()`); and requestQuit (:3933-3937) fires `quitNow()` (:3922-3929) which does `await this.opts.backend.close()` then stop(). The claim's last clause is also imprecise: the /quit path does NOT 'tear the terminal down through the host's shutdown controller' — the host controller (wired at apps/tui/src/index.ts:954-962, teardown -> terminal?.teardown() + restoreConsole()) serves the signal/lifecycle path (:964-972); /quit closes the backend and stops the Loop, after which the host's start() returns and lifecycle teardown runs.",
+      "correction": "Registration/call: ih packages/tui/src/app/slash/impl/tools.ts:77-83 (ctx.quitApp() at :81); wiring: packages/tui/src/app/loop.ts:2496 (quitApp -> requestQuit), :3933-3937 requestQuit, :3922-3929 quitNow (backend.close() then stop()); key path: loop.ts:1560. apps/tui/src/index.ts:954-962 is the separate host shutdown controller used by the SIGINT/SIGTERM path."
+    },
+    {
+      "source": "ih",
+      "cmd": "instructions:decision",
+      "cite": "packages/instructions/src/files.ts:64",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "The cited function does the header half and NOT the cap half. files.ts:64-67 `renderInstructions(files)` returns `files.map(f => `### ${f.displayPath}\\n\\n${f.content.trim()}`).join(\"\\n\\n\")` (with an early `if (files.length === 0) return \"\"` at :65) — so the per-file workspace-relative header and blank-line join are exactly as claimed (displayPath is computed relative to the workspace at :56). But there is NO maxBytes parameter and NO truncation anywhere in this file: the byte cap and the literal '(truncated)' suffix live in the sibling index.ts: `createInstructionsSection` (:23) resolves `config.maxBytes ?? DEFAULT_INSTRUCTIONS_MAX_BYTES` (:24, default 24_000 at :9) and does `if (text.length > maxBytes) text = text.slice(0, maxBytes) + \"(truncated)\"` (:48-50). Also note the cap is by UTF-16 code units (`.length`), not bytes, despite the config name. So the claim's final sentence rests entirely on the sibling module, and the closing rationale ('bounded prompt cost for an unbounded set of on-disk files') is a design assertion the cited function does not enforce.",
+      "correction": "Cap + suffix: ih packages/instructions/src/index.ts:24 with :47-50 (`DEFAULT_INSTRUCTIONS_MAX_BYTES = 24_000` at :9). The cited files.ts:64-67 only renders headers/joins; verification test is packages/instructions/test/instructions.test.ts:68-75."
+    },
+    {
+      "source": "ih",
+      "cmd": "sdk:package",
+      "cite": "packages/sdk/package.json:7",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "config",
+      "why": "Line 7 is `\".\": \"./src/index.ts\",` inside the exports map (:6-9), which also declares `\"./server\": \"./src/server.ts\"` (:8) — exactly the claimed subpath. The cited config line is thin, but every other part of the claim is verifiable in the package: protocol.ts:1-3 documents 'NDJSON JSON-RPC 2.0 line framing' (v0 frozen contract :13-48, PROTOCOL_VERSION 2 :53); client.ts has the low-level `request(method, params, timeoutMs)` (:146) plus the high-level `async run(input: RunInput): Promise<RunResult>` (:203-215, streaming session/event notifications :207-213); server.ts is the in-process SessionService-backed JSON-RPC handler (:1-3 'The CLI wires it to stdio (`i-harness sdk`)'); index.ts:1-3 states the split explicitly, exporting protocol + client and pointing at the ./server entry; and apps/cli/src/index.ts:129-131 dispatches `args[0] === 'sdk'` to runSdkCommand, with the comment at :126-128 describing it as the NDJSON JSON-RPC 2.0 stdio server carrying only protocol frames on stdout.",
+      "correction": ""
+    },
+    {
+      "source": "ih",
+      "cmd": "hooks",
+      "cite": "packages/tui/src/app/slash/impl/eco.ts:78",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Line 78 is `const handlers = await loadHooksConfig(configPath, dirname(configPath))` inside the `hooks` command's run (:75-84) — the cited call, with `resolveHooksConfigPath()` at :77 and the panel opened from `hooksRows(handlers, HOOK_EVENTS)` at :79, and the imports from '@i-harness/hooks' at :17 are exactly as the claim states ('imports at eco.ts:17'). The registration claim holds: eco.ts:72-85 defines the command and `ecoCommands` (:41) is spread into the builtin list at packages/tui/src/app/slash/registry.ts:48 with no visible() gate. The '9 events with a per-handler sha256 validity verdict' claim is also real, though its strongest evidence is elsewhere: packages/hooks/src/types.ts:8-19 declares the 9-event HOOK_EVENTS array, packages/hooks/src/index.ts:117 pushes `{ spec, valid: trustError === undefined, trustError }` per handler, packages/hooks/src/trust.ts:28-30 recomputes sha256File and compares against `spec.trust.sha256`, and the TUI view renders `${hash} · ${verdict}` with verdict invalid/untrusted/ok at packages/tui/src/views/light-hooks.ts:20-24.",
+      "correction": ""
+    },
+    {
+      "source": "opencode-fork",
+      "cmd": "init",
+      "cite": "packages/core/src/command.ts:15",
+      "verdict": "UNCERTAIN",
+      "evidenceClass": "implementation",
+      "why": "Ungradeable: the cell's claim is blank (\" \"), so there is no mechanism to judge. For completeness the cited line is accurate as recorded — command.ts:15 is `export const INIT = \"init\"` — and it is a real constant consumed by packages/core/src/plugin/command.ts:15-18 (`draft.update(CommandV2.INIT, ...)`, template from ./command/initialize.txt, description 'guided AGENTS.md setup') and packages/opencode/src/project/project.ts:393. No verdict on claim support is possible without a claim.",
+      "correction": ""
+    },
+    {
+      "source": "opencode-fork",
+      "cmd": "review",
+      "cite": "packages/core/src/command.ts:16",
+      "verdict": "UNCERTAIN",
+      "evidenceClass": "implementation",
+      "why": "Ungradeable: blank claim (\" \"). The cited line is accurate as recorded — command.ts:16 is `export const REVIEW = \"review\"` — and it is consumed at packages/core/src/plugin/command.ts:19-23 (`draft.update(CommandV2.REVIEW, ...)`, template from ./command/review.txt, description 'review changes [commit|branch|pr], defaults to uncommitted', `command.subtask = true`). No claim exists to falsify.",
+      "correction": ""
+    }
+  ],
+  "tally": {
+    "SUPPORTED": 9,
+    "PARTIAL": 7,
+    "WRONG_LINE": 4,
+    "UNSUPPORTED": 0,
+    "UNCERTAIN": 2
+  },
+  "notable": [
+    "Every one of the 22 cited lines/ranges contains the recorded lineText — zero invented or stale line numbers in this round (consistent with round 1). All failures are carrier failures: the line exists but does not carry the claim.",
+    "dsh:goal cites an inverted entry: packages/bundle/web-app/cordis.patch.yml:411-412 is `- id: command-goal` + `disabled: true`. The cited line asserts the plugin is TURNED OFF in the web-app bundle, while the claim describes its registration. Registration is at packages/goal/command-goal/src/index.ts:12-15 and :189-196.",
+    "Two claims cite pure helpers instead of the mechanism: grok:remember cites xai-grok-memory/src/storage.rs:113 (a MEMORY.md path constructor; the command is xai-grok-pager/src/slash/commands/remember.rs:16-23) and ih:quit cites apps/tui/src/index.ts:199 (the shutdown-controller factory; the command is packages/tui/src/app/slash/impl/tools.ts:77-83 with quitApp at :81).",
+    "ih:instructions:decision cites a function that contains no cap: packages/instructions/src/files.ts:64-67 only renders `### <path>` headers joined by blank lines. The asserted maxBytes cap and '(truncated)' suffix are in the sibling packages/instructions/src/index.ts:24 and :47-50 (default 24_000 at :9), and the cap counts UTF-16 code units, not bytes.",
+    "dsh:compact conflates two packages at one cite: packages/compaction/compaction-basic/src/index.ts:369 is the engine's `override compactNow` (real manual compaction), but the claimed `name = 'command-compact'` / `inject = ['commands','compaction']` / `/compact` registration belong to packages/compaction/command-compact/src/index.ts:10-11 and :100-104.",
+    "Three cells rest on listings/comments rather than mechanism: codex:copy (doc comment at interaction.rs:299; body :300-327), codex:logout (slash_command.rs:225 is an available_during_task=false arm; mechanism at slash_dispatch.rs:401-403 and app/event_dispatch.rs:661), grok:multiline (mod.rs:128 is a registry vec entry; behaviour at multiline.rs:27-30, dispatched at app/dispatch/router.rs:1081 and applied at app/dispatch/settings/setters.rs:13-42).",
+    "grok:fullscreen's cited line is a one-line alias expression (screen_mode_switch.rs:39); the switch is a relaunch action returned at :77-79 and executed at src/app/dispatch/router.rs:182-195 (pending_screen_mode_switch / app.relaunch), not an in-place flip at the cited location.",
+    "cc-custom provenance is mixed: exit.tsx and plan.tsx ARE transpiled output (sourceMappingURL data-URI tails, `.js` import specifiers, React-compiler `_c()` memo cache), while state.ts and version.ts lack both the tail and the `@ts-nocheck -- restored transpiled artifact` marker used by the other 101 files in that tree, so they read as restored source. cc-custom:plan also gets a mechanism detail wrong: the mode write is setAppState + applyPermissionUpdate setMode:'plan' at plan.tsx:75-82, not handlePlanModeTransition at :74.",
+    "The two opencode-fork cells (init, review) have empty claims and are ungradeable; both cited constants are accurate and are consumed at packages/core/src/plugin/command.ts:15-23.",
+    "No claim in this sample asserted a security property, an order guarantee, or a negative that failed; the highest-risk shapes present (codex:status conditional prefetch, codex:copy Android visibility via `!cfg!(target_os = \"android\")`, dsh:feedback recordInput:false, dsh:permission two-knob write) were each confirmed in implementation, not just prose."
+  ]
+}

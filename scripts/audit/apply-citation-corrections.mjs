@@ -37,9 +37,9 @@ const CORRECTIONS = [
   {
     file: "2026-09-11-dsh-enriched.json",
     command: "compact",
-    prepend: "packages/compaction/command-compact/src/index.ts:57-105",
+    prepend: "packages/compaction/command-compact/src/index.ts:10-11",
     reason:
-      "the sampled cite packages/core/session/src/types.ts:427 is a SurfaceOp doc comment, not the command's implementation",
+      "packages/compaction/compaction-basic/src/index.ts:369 is the ENGINE's compactNow, but the claim is about the command's identity (name/inject) and its /compact registration, which live in command-compact; the cited file exports no name/inject at all",
   },
   {
     file: "2026-09-11-grok-enriched.json",
@@ -70,6 +70,68 @@ const CORRECTIONS = [
     reason:
       "the sampled cite backend/embedded.ts:559 is the optional backend member; the registration, visible() gate and guard live in sessions.ts",
   },
+  // Round 2 findings: mechanism true, carrier too weak.
+  {
+    file: "2026-09-11-codex-enriched.json",
+    command: "copy",
+    prepend: "codex-rs/tui/src/chatwidget/interaction.rs:300-327",
+    reason: "the sampled cite is the doc comment at :299; the body that does last_agent_markdown -> copy_to_clipboard starts at :300",
+  },
+  {
+    file: "2026-09-11-codex-enriched.json",
+    command: "logout",
+    // NOTE the `chatwidget/` segment. The verifier reported this locus as
+    // `slash_dispatch.rs:401-403`, which does not resolve -- the file is at
+    // tui/src/chatwidget/slash_dispatch.rs. A verifier's suggested correction is
+    // ITSELF a claim, and the mechanical citation check is what caught this one.
+    prepend: "codex-rs/tui/src/chatwidget/slash_dispatch.rs:401-403",
+    removeCite: "codex-rs/tui/src/slash_dispatch.rs:401-403",
+    reason:
+      "the sampled cite slash_command.rs:225 is an available_during_task=false match arm (a gating listing), not the logout mechanism",
+  },
+  {
+    file: "2026-09-11-grok-enriched.json",
+    command: "multiline",
+    prepend: "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:27-30",
+    reason: "the sampled cite slash/commands/mod.rs:128 is a registry vec entry; the behaviour lives in multiline.rs",
+  },
+  {
+    file: "2026-09-11-grok-enriched.json",
+    command: "fullscreen",
+    prepend: "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77-79",
+    reason:
+      "the sampled cite :39 is the `[\"full\"]` alias expression only; the switch itself is the RelaunchInScreenMode result, executed in app/dispatch/router.rs:182-195 -- and it is a relaunch, not an in-place flip",
+  },
+  {
+    file: "2026-09-11-cc-custom-enriched.json",
+    command: "plan",
+    prepend: "src/commands/plan/plan.tsx:75-82",
+    reason: "the sampled cite :70 reads the current mode; the mode is actually WRITTEN via setAppState + applyPermissionUpdate setMode:'plan' at :75-82",
+  },
+  {
+    file: "2026-09-11-cc-custom-enriched.json",
+    command: "exit",
+    prepend: "src/commands/exit/exit.tsx:18-30",
+    reason:
+      "the sampled cite :30 is reached only after the bg-session detach (:18-24) and worktree ExitFlow (:25-28) branches are skipped; the range shows the actual decision",
+  },
+]
+
+/**
+ * Corrections to PACKAGE design-decision citations (the backend inventory, not
+ * the command matrix). `matchCause` selects the decision by a substring of its
+ * evidence, because decision text is long and would make a brittle key.
+ */
+const PACKAGE_CORRECTIONS = [
+  {
+    file: "2026-09-11-ih-backend-engine.json",
+    pkg: "instructions",
+    matchCause: "packages/instructions/src/files.ts:64",
+    prepend: "packages/instructions/src/index.ts:24",
+    alsoAdd: ["packages/instructions/src/index.ts:9", "packages/instructions/src/index.ts:47-50"],
+    reason:
+      "renderInstructions (files.ts:64-67) only emits `### <path>` headers joined by blank lines -- it has no maxBytes parameter and no truncation. The cap and the literal '(truncated)' suffix are in the sibling src/index.ts (:24, default 24_000 at :9, applied :47-50). Substantive correction: the cap counts UTF-16 code units (.length), NOT bytes.",
+  },
 ]
 
 const byFile = new Map()
@@ -89,11 +151,20 @@ for (const [file, corrections] of byFile) {
       const c = corrections.find((x) => x.command === cmd.rawName)
       if (!c) continue
       const ev = cmd.evidence ?? []
-      if (ev.includes(c.prepend)) {
-        report.push(`SKIP  ${file} /${c.command}: already leads with the implementing citation`)
+      // A correction can supersede an earlier one that named a path which does
+      // not resolve; drop that dead reference rather than leave it behind.
+      const cleaned = c.removeCite ? ev.filter((e) => e !== c.removeCite) : ev
+      if (cleaned.includes(c.prepend)) {
+        if (cleaned.length !== ev.length) {
+          cmd.evidence = cleaned
+          applied++
+          report.push(`FIX   ${file} /${c.command}: removed dead citation ${c.removeCite}`)
+        } else {
+          report.push(`SKIP  ${file} /${c.command}: already leads with the implementing citation`)
+        }
         continue
       }
-      cmd.evidence = [c.prepend, ...ev]
+      cmd.evidence = [c.prepend, ...cleaned]
       cmd.citationCorrected = {
         prepended: c.prepend,
         reason: c.reason,
@@ -103,6 +174,32 @@ for (const [file, corrections] of byFile) {
       report.push(`FIX   ${file} /${c.command}: prepended ${c.prepend}`)
     }
   }
+  if (!dry) writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf8")
+}
+
+// ---- package design-decision corrections (the backend inventory) ------------
+for (const c of PACKAGE_CORRECTIONS) {
+  const path = join(DATA, c.file)
+  const data = JSON.parse(readFileSync(path, "utf8"))
+  const pkg = (data.packages ?? []).find((p) => p.name === c.pkg)
+  if (!pkg) {
+    console.error(`MISS  ${c.file} has no package '${c.pkg}' -- correction not applied`)
+    continue
+  }
+  const decision = (pkg.designDecisions ?? []).find((d) => (d.evidence ?? []).some((e) => e.includes(c.matchCause)))
+  if (!decision) {
+    console.error(`MISS  ${c.pkg} has no decision citing ${c.matchCause} -- correction not applied`)
+    continue
+  }
+  const added = [c.prepend, ...(c.alsoAdd ?? [])].filter((e) => !(decision.evidence ?? []).includes(e))
+  if (added.length === 0) {
+    report.push(`SKIP  ${c.file} /${c.pkg}: already carries the implementing citations`)
+    continue
+  }
+  decision.evidence = [...added, ...(decision.evidence ?? [])]
+  decision.citationCorrected = { prepended: added, reason: c.reason, by: "adversarial verification sample 2 (2026-09-12)" }
+  applied++
+  report.push(`FIX   ${c.file} /${c.pkg} decision: prepended ${added.join(", ")}`)
   if (!dry) writeFileSync(path, JSON.stringify(data, null, 2) + "\n", "utf8")
 }
 

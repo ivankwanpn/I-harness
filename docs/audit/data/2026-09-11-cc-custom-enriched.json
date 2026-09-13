@@ -545,6 +545,7 @@
       "commandKind": "local-jsx",
       "backendModule": "src/commands/exit/exit.tsx (`call`); src/components/ExitFlow.tsx (`ExitFlow`); src/utils/gracefulShutdown.ts (`gracefulShutdown` at :391)",
       "evidence": [
+        "src/commands/exit/exit.tsx:18-30",
         "src/commands/exit/index.ts:4",
         "src/commands/exit/index.ts:6",
         "src/commands/exit/exit.tsx:20",
@@ -556,7 +557,12 @@
       "verified": true,
       "crossSourceHints": [
         "canonical: exit — REPL exit; distinct from the CLI exit helpers in src/cli/exit.ts (`cliOk`/`cliError`), which belong to the commander subcommand layer"
-      ]
+      ],
+      "citationCorrected": {
+        "prepended": "src/commands/exit/exit.tsx:18-30",
+        "reason": "the sampled cite :30 is reached only after the bg-session detach (:18-24) and worktree ExitFlow (:25-28) branches are skipped; the range shows the actual decision",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     },
     {
       "rawName": "export",
@@ -1040,6 +1046,7 @@
       "commandKind": "local-jsx",
       "backendModule": "src/commands/plan/plan.tsx (`call`, `PlanDisplay`); src/utils/permissions/permissionSetup.ts (`prepareContextForPlanMode` at :1448); src/bootstrap/state.ts (`handlePlanModeTransition` at :1258); plan storage src/utils/plans.ts (`getPlan`, `getPlanFilePath`)",
       "evidence": [
+        "src/commands/plan/plan.tsx:75-82",
         "src/commands/plan/index.ts:5",
         "src/commands/plan/plan.tsx:70",
         "src/commands/plan/plan.tsx:74",
@@ -1052,7 +1059,12 @@
       "verified": true,
       "crossSourceHints": [
         "canonical: plan — plan mode; I-harness implements plan mode as a capability with an exit-plan tool"
-      ]
+      ],
+      "citationCorrected": {
+        "prepended": "src/commands/plan/plan.tsx:75-82",
+        "reason": "the sampled cite :70 reads the current mode; the mode is actually WRITTEN via setAppState + applyPermissionUpdate setMode:'plan' at :75-82",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     },
     {
       "rawName": "plugin",

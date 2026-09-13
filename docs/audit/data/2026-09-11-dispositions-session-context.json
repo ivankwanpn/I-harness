@@ -1,0 +1,205 @@
+{
+  "subset": "session+context+plan+execution+model",
+  "rows": {
+    "archive": {
+      "disposition": "rewrite",
+      "rationale": "仿 codex 歸檔退出；後端已有"
+    },
+    "cd": {
+      "disposition": "不做",
+      "rationale": "§10.3 明文排除 /cd"
+    },
+    "clear": {
+      "disposition": "路線差異",
+      "rationale": "IH 以 /new 表達，不設別名"
+    },
+    "delete": {
+      "disposition": "不做",
+      "rationale": "無 durable delete API，排除"
+    },
+    "exit": {
+      "disposition": "路線差異",
+      "rationale": "IH 以 /quit 表達，不設別名"
+    },
+    "feedback": {
+      "disposition": "rewrite",
+      "rationale": "仿 dsh 日誌級回饋，不外送"
+    },
+    "fork": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "home": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "login": {
+      "disposition": "不做",
+      "rationale": "§10.3 排除；無帳號層"
+    },
+    "logout": {
+      "disposition": "不做",
+      "rationale": "§10.3 排除；無帳號層"
+    },
+    "new": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "quit": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "rename": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "resume": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "rewind": {
+      "disposition": "improved-writing",
+      "rationale": "IH 還原檔案＋對話，優於 grok"
+    },
+    "session-create": {
+      "disposition": "路線差異",
+      "rationale": "IH 以 /new 直建，非 RPC"
+    },
+    "session-followup": {
+      "disposition": "路線差異",
+      "rationale": "IH delivery=queue 已同層"
+    },
+    "session-fork": {
+      "disposition": "路線差異",
+      "rationale": "IH /fork 取完成回合前綴"
+    },
+    "session-prompt": {
+      "disposition": "路線差異",
+      "rationale": "IH web-host 有 prompt 路由"
+    },
+    "session-rename": {
+      "disposition": "路線差異",
+      "rationale": "IH /rename 已持久化標題"
+    },
+    "session-send": {
+      "disposition": "路線差異",
+      "rationale": "IH InputSubmit 為同一原語"
+    },
+    "session-steer": {
+      "disposition": "路線差異",
+      "rationale": "IH delivery=steer 步驟界"
+    },
+    "session-update-queue": {
+      "disposition": "rewrite",
+      "rationale": "仿 dsh：編輯/移除/轉 steer"
+    },
+    "compact": {
+      "disposition": "improved-writing",
+      "rationale": "append-only 投影，優於改寫"
+    },
+    "context": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "ide": {
+      "disposition": "遠期",
+      "rationale": "需編輯器擴充，規模大"
+    },
+    "init": {
+      "disposition": "rewrite",
+      "rationale": "仿 codex 送提示生成 AGENTS.md"
+    },
+    "memories": {
+      "disposition": "不做",
+      "rationale": "記憶族為 §10.3 排除項"
+    },
+    "mention": {
+      "disposition": "rewrite",
+      "rationale": "仿 codex：@ 觸發檔案選單"
+    },
+    "recap": {
+      "disposition": "不做",
+      "rationale": "§10.3 明文排除 /recap"
+    },
+    "remember": {
+      "disposition": "不做",
+      "rationale": "§10.3 明文排除 /remember"
+    },
+    "session-inject": {
+      "disposition": "reuse",
+      "rationale": "仿 dsh 加 wake=false 靜默層"
+    },
+    "transcript": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "goal": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（事件＋面板）"
+    },
+    "plan": {
+      "disposition": "rewrite",
+      "rationale": "引擎已有，缺 TUI 模式切換"
+    },
+    "view-plan": {
+      "disposition": "已存在",
+      "rationale": "IH 已有計畫面板（chip）"
+    },
+    "imagine": {
+      "disposition": "不做",
+      "rationale": "IH 無影像生成，明文排除"
+    },
+    "imagine-video": {
+      "disposition": "不做",
+      "rationale": "IH 無影像生成，明文排除"
+    },
+    "loop": {
+      "disposition": "不做",
+      "rationale": "§10.3 明文排除 /loop"
+    },
+    "ps": {
+      "disposition": "rewrite",
+      "rationale": "仿 codex：列已追蹤程序"
+    },
+    "queue": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "review": {
+      "disposition": "rewrite",
+      "rationale": "仿 codex：子代理審查變更"
+    },
+    "session-cancel": {
+      "disposition": "路線差異",
+      "rationale": "IH cancel 保留 inbox"
+    },
+    "stop": {
+      "disposition": "rewrite",
+      "rationale": "仿 codex：停背景程序並清單"
+    },
+    "workflow": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "effort": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "model": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
+    },
+    "model-catalog": {
+      "disposition": "路線差異",
+      "rationale": "IH provider 已探測模型目錄"
+    },
+    "model-select": {
+      "disposition": "路線差異",
+      "rationale": "IH 有 session 模型選擇"
+    },
+    "personality": {
+      "disposition": "路線差異",
+      "rationale": "IH 走 preset，非執行期切換"
+    }
+  }
+}

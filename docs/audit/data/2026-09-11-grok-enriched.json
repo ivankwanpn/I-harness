@@ -799,6 +799,7 @@
       "gate": "session-scoped with `offered_when_session_less: true` (multiline.rs:22-24), so the dashboard can toggle its own compose flag",
       "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs",
       "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:27-30",
         "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:18",
         "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:24",
         "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:29",
@@ -807,7 +808,12 @@
       "verified": true,
       "crossSourceHints": [
         "canonical: multiline-input"
-      ]
+      ],
+      "citationCorrected": {
+        "prepended": "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:27-30",
+        "reason": "the sampled cite slash/commands/mod.rs:128 is a registry vec entry; the behaviour lives in multiline.rs",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     },
     {
       "rawName": "new",
@@ -1618,6 +1624,7 @@
       "gate": "session-scoped plus `ModeSupport::MinimalOnly(Remedy::AlreadyInMode)` (screen_mode_switch.rs:62-68): offered only in minimal, refused with \"You're already in fullscreen mode.\" elsewhere",
       "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs + crates/codegen/xai-grok-pager/src/app/mode_switch.rs",
       "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77-79",
         "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:20",
         "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:39",
         "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:50",
@@ -1629,7 +1636,12 @@
       "verified": true,
       "crossSourceHints": [
         "canonical: fullscreen (I-harness registers a same-named command; grok's carries the `full` alias and is minimal-only)"
-      ]
+      ],
+      "citationCorrected": {
+        "prepended": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77-79",
+        "reason": "the sampled cite :39 is the `[\"full\"]` alias expression only; the switch itself is the RelaunchInScreenMode result, executed in app/dispatch/router.rs:182-195 -- and it is a relaunch, not an in-place flip",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     }
   ],
   "mechanisms": {
