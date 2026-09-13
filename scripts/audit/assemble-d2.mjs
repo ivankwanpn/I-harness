@@ -99,6 +99,40 @@ if (missingDisp.length || badDisp.length) {
   process.exit(1)
 }
 
+/**
+ * Pick the citation that best supports a claim, rather than blindly taking the
+ * first. Adversarial verification found real cases where evidence[0] was a
+ * peripheral location (a bundle manifest, a registry vec entry, a path helper)
+ * even though the claim itself was well supported elsewhere in the same array.
+ * Choose the entry sharing the most vocabulary with the claim text; ties go to
+ * the earliest, which keeps the output deterministic.
+ */
+function bestCitation(entry) {
+  const ev = entry?.evidence ?? []
+  if (ev.length <= 1) return ev[0] ?? ""
+  const claimTokens = new Set(
+    `${entry.mechanism ?? ""} ${entry.summary ?? ""}`
+      .toLowerCase()
+      .split(/[^a-z0-9_$-]+/)
+      .filter((t) => t.length >= 4),
+  )
+  let best = ev[0]
+  let bestScore = -1
+  for (const cite of ev) {
+    const toks = String(cite)
+      .toLowerCase()
+      .split(/[^a-z0-9_$-]+/)
+      .filter((t) => t.length >= 4)
+    let score = 0
+    for (const t of toks) if (claimTokens.has(t)) score++
+    if (score > bestScore) {
+      bestScore = score
+      best = cite
+    }
+  }
+  return best
+}
+
 // ------------------------------------------------------------------- emit
 const L = []
 const esc = (s) => String(s ?? "").replace(/\|/g, "\\|").replace(/\n+/g, " ").trim()
@@ -134,8 +168,9 @@ for (const [fam, label] of FAMILIES) {
   for (const r of inFam) {
     // mechanism: prefer the IH entry, else the first source that has it
     const mechSrc = r.perSource.ih ?? r.perSource[Object.keys(r.perSource)[0]]
+    const mechCite = bestCitation(mechSrc)
     const mech = mechSrc
-      ? `${mechSrc.mechanism ? esc(mechSrc.mechanism).slice(0, 200) : esc(mechSrc.summary).slice(0, 200)}${mechSrc.evidence?.length ? ` \`${esc(mechSrc.evidence[0])}\`` : ""}`
+      ? `${mechSrc.mechanism ? esc(mechSrc.mechanism).slice(0, 200) : esc(mechSrc.summary).slice(0, 200)}${mechCite ? ` \`${esc(mechCite)}\`` : ""}`
       : ""
     const d = dispOf(r.key)
     const dv = d.disposition ?? d
