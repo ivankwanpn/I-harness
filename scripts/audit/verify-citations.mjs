@@ -209,6 +209,41 @@ function checkClaim(source, cmd, field, claimText, citations) {
 
 // ------------------------------------------------------------------- run all
 
+/**
+ * Find every evidence-bearing object anywhere in a document.
+ *
+ * D3's files have a shape unlike D1's and D2's -- nested by domain, with
+ * opencode's file nesting two entire sources plus a fork-delta list -- so rather
+ * than grow a third shape-specific branch, this walks the tree and treats ANY
+ * object carrying an `evidence` array as a claim. The nearest enclosing `source`
+ * string wins, which is what makes opencode's `upstream`/`fork` subtrees resolve
+ * to the right repository root without the caller knowing the schema.
+ */
+function walkEvidence(node, ctx = { source: null, label: null }, out = []) {
+  if (Array.isArray(node)) {
+    for (const x of node) walkEvidence(x, ctx, out)
+    return out
+  }
+  if (!node || typeof node !== "object") return out
+  const source = typeof node.source === "string" ? node.source : ctx.source
+  if (Array.isArray(node.evidence) && node.evidence.length) {
+    const claim = [node.name, node.what, node.mechanism, node.summary, node.decision, node.rationale, node.change, node.reason]
+      .filter((x) => typeof x === "string")
+      .join(" ")
+    out.push({
+      source,
+      label: node.name ?? node.rawName ?? node.mechanism ?? node.change ?? ctx.label ?? "?",
+      claim,
+      evidence: node.evidence,
+    })
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (k === "evidence") continue
+    walkEvidence(v, { source, label: ctx.label ?? k }, out)
+  }
+  return out
+}
+
 const files = readdirSync(DATA).filter((f) => f.endsWith(".json") && !f.includes("-surface"))
 for (const f of files) {
   // An enriched file SUPERSEDES its raw extraction; reading both would verify
@@ -245,6 +280,19 @@ for (const f of files) {
     for (const cmd of all) {
       const claimText = `${cmd.summary ?? ""} ${cmd.mechanism ?? ""}`
       checkClaim(source, cmd, "mechanism", claimText, cmd.evidence)
+    }
+  }
+
+  // (c) D3 mechanism files. Their shape differs from everything above -- nested
+  // by domain, and opencode's file nests two whole sources plus a delta list --
+  // so rather than adding a third shape-specific branch, walk the document for
+  // ANY object carrying an `evidence` array. That covers domain mechanisms,
+  // forkDeltas, inertMechanisms and whatever a future phase adds, without this
+  // function needing to know the schema.
+  if (f.includes("-d3-")) {
+    for (const found of walkEvidence(data)) {
+      if (!found.source || !SOURCE_PATHS[found.source]) continue
+      checkClaim(found.source, { rawName: found.label }, "mechanism", found.claim, found.evidence)
     }
   }
 }
