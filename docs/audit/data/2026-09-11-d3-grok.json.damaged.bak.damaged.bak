@@ -1,8 +1,10 @@
 {
   "source": "grok",
   "sourcePath": "D:/agent-complete/grok-build-main",
-  "version": "a549186d9d39311f2d3ee4208db62af8c65aa476",
+  "revision": "a549186d9d39311f2d3ee4208db62af8c65aa476",
   "moduleCount": 82,
+  "revisionNote": "The checkout at D:/agent-complete/grok-build-main has no .git directory, so the revision string could not be independently re-verified in-tree; it is carried from the task brief. All evidence below was read from the working tree as it stands.",
+  "scopeNote": "The 82-module checklist is crates/codegen only. The repo also contains crates/common (12 crates: xai-grok-compaction, xai-interjection-core, xai-message-delivery-core, xai-tool-protocol, xai-tool-runtime, xai-tool-types, xai-tracing, xai-circuit-breaker, xai-computer-hub-*) and crates/build. Three mechanisms the brief named as grok's richest - prompt queue, message delivery, interjection - resolve to crates/codegen/xai-prompt-queue and crates/common/xai-message-delivery-core + crates/common/xai-interjection-core, i.e. one inside the checklist and two outside it.",
   "domains": {
     "loop": [
       {
@@ -15,16 +17,8 @@
         ],
         "failurePolicy": "fail-closed - authorize_operation returns Err(UnsupportedOperation) and the shell maps that to HumanDeliveryError::Unsupported / ActiveMessageAdmission::Unsupported, refusing the input rather than downgrading it to a weaker operation.",
         "constants": [
-          {
-            "name": "OperationSet::QUEUE",
-            "value": "1<<0 (Queue only)",
-            "evidence": "crates/common/xai-message-delivery-core/src/envelope.rs:90"
-          },
-          {
-            "name": "OperationSet::QUEUE_AND_STEER",
-            "value": "(1<<0)|(1<<1)",
-            "evidence": "crates/common/xai-message-delivery-core/src/envelope.rs:91"
-          }
+          {"name": "OperationSet::QUEUE", "value": "1<<0 (Queue only)", "evidence": "crates/common/xai-message-delivery-core/src/envelope.rs:90"},
+          {"name": "OperationSet::QUEUE_AND_STEER", "value": "(1<<0)|(1<<1)", "evidence": "crates/common/xai-message-delivery-core/src/envelope.rs:91"}
         ],
         "evidence": [
           "crates/common/xai-message-delivery-core/src/envelope.rs:4-16",
@@ -32,10 +26,7 @@
           "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:135-144",
           "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:159-174"
         ],
-        "modules": [
-          "crates/common/xai-message-delivery-core",
-          "xai-grok-shell"
-        ],
+        "modules": ["crates/common/xai-message-delivery-core", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -53,10 +44,7 @@
           "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:135-140",
           "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:159-174"
         ],
-        "modules": [
-          "crates/common/xai-message-delivery-core",
-          "xai-grok-shell"
-        ],
+        "modules": ["crates/common/xai-message-delivery-core", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -70,11 +58,7 @@
         ],
         "failurePolicy": "fail-closed - an uncommitted batch stays Projecting (neither delivered nor dropped) and terminal settlement routes it either to fallbacks (re-queue) or to an explicit error completion; nothing is silently discarded.",
         "constants": [
-          {
-            "name": "MAX_PARENT_STEER_SLOTS",
-            "value": "32",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:47"
-          }
+          {"name": "MAX_PARENT_STEER_SLOTS", "value": "32", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:47"}
         ],
         "evidence": [
           "crates/common/xai-message-delivery-core/src/lifecycle.rs:90-108",
@@ -83,10 +67,7 @@
           "crates/common/xai-message-delivery-core/src/lifecycle.rs:256-287",
           "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:83-97"
         ],
-        "modules": [
-          "crates/common/xai-message-delivery-core",
-          "xai-grok-shell"
-        ],
+        "modules": ["crates/common/xai-message-delivery-core", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -99,31 +80,16 @@
         ],
         "failurePolicy": "fail-soft - oversize text is truncated with a visible marker rather than rejected; an empty buffer drains to an empty vec, and sanitization is a caller-supplied function whose absence is spelled as `std::convert::identity`.",
         "constants": [
-          {
-            "name": "LARGE_PROMPT_THRESHOLD",
-            "value": "25_000 (bytes)",
-            "evidence": "crates/common/xai-interjection-core/src/format.rs:2"
-          },
-          {
-            "name": "INTERJECTION_NOTE",
-            "value": "\"The user sent a message while you were working:\"",
-            "evidence": "crates/common/xai-interjection-core/src/format.rs:4"
-          },
-          {
-            "name": "INTERRUPT_NOTE",
-            "value": "\"The user interrupted the previous turn:\"",
-            "evidence": "crates/common/xai-interjection-core/src/format.rs:5"
-          }
+          {"name": "LARGE_PROMPT_THRESHOLD", "value": "25_000 (bytes)", "evidence": "crates/common/xai-interjection-core/src/format.rs:2"},
+          {"name": "INTERJECTION_NOTE", "value": "\"The user sent a message while you were working:\"", "evidence": "crates/common/xai-interjection-core/src/format.rs:4"},
+          {"name": "INTERRUPT_NOTE", "value": "\"The user interrupted the previous turn:\"", "evidence": "crates/common/xai-interjection-core/src/format.rs:5"}
         ],
         "evidence": [
           "crates/common/xai-interjection-core/src/format.rs:1-51",
           "crates/common/xai-interjection-core/src/buffer.rs:24-42",
           "crates/codegen/xai-grok-shell/src/session/acp_session.rs:821"
         ],
-        "modules": [
-          "crates/common/xai-interjection-core",
-          "xai-grok-shell"
-        ],
+        "modules": ["crates/common/xai-interjection-core", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -137,21 +103,9 @@
         ],
         "failurePolicy": "fail-soft - an ineligible front yields prefix length 1 (take the front alone), so combining simply does not happen; an unknown extra field deserializes and is ignored for forward compatibility.",
         "constants": [
-          {
-            "name": "TEXT_SEPARATOR",
-            "value": "\"\\n\\n\"",
-            "evidence": "crates/codegen/xai-prompt-queue/src/combine.rs:9"
-          },
-          {
-            "name": "COMBINED_DISPLAY_TEXTS_META",
-            "value": "\"combinedDisplayTexts\"",
-            "evidence": "crates/codegen/xai-prompt-queue/src/types.rs:5"
-          },
-          {
-            "name": "combine_combined_wire_threshold",
-            "value": "len >= 2 segments",
-            "evidence": "crates/codegen/xai-prompt-queue/src/combine.rs:72-74"
-          }
+          {"name": "TEXT_SEPARATOR", "value": "\"\\n\\n\"", "evidence": "crates/codegen/xai-prompt-queue/src/combine.rs:9"},
+          {"name": "COMBINED_DISPLAY_TEXTS_META", "value": "\"combinedDisplayTexts\"", "evidence": "crates/codegen/xai-prompt-queue/src/types.rs:5"},
+          {"name": "combine_combined_wire_threshold", "value": "len >= 2 segments", "evidence": "crates/codegen/xai-prompt-queue/src/combine.rs:72-74"}
         ],
         "evidence": [
           "crates/codegen/xai-prompt-queue/src/combine.rs:29-68",
@@ -159,10 +113,7 @@
           "crates/codegen/xai-prompt-queue/src/types.rs:10-26",
           "crates/codegen/xai-prompt-queue/src/types.rs:53-76"
         ],
-        "modules": [
-          "xai-prompt-queue",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-prompt-queue", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -175,26 +126,15 @@
         ],
         "failurePolicy": "fail-soft - the writer holds `Mutex<Option<File>>` and swallows open and write failures after logging once behind an AtomicBool error_logged latch; `EventWriter::noop()` exists so an unwritable session still runs (log.rs:28-81).",
         "constants": [
-          {
-            "name": "EVENT_SCHEMA_VERSION",
-            "value": "\"1.0\"",
-            "evidence": "crates/codegen/xai-grok-session-events/src/types.rs:3"
-          },
-          {
-            "name": "EVENTS_FILE",
-            "value": "\"events.jsonl\"",
-            "evidence": "crates/codegen/xai-grok-session-events/src/log.rs:19"
-          }
+          {"name": "EVENT_SCHEMA_VERSION", "value": "\"1.0\"", "evidence": "crates/codegen/xai-grok-session-events/src/types.rs:3"},
+          {"name": "EVENTS_FILE", "value": "\"events.jsonl\"", "evidence": "crates/codegen/xai-grok-session-events/src/log.rs:19"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-session-events/src/types.rs:3-62",
           "crates/codegen/xai-grok-session-events/src/log.rs:19-81",
           "crates/codegen/xai-grok-session-events/src/tracker.rs:84-183"
         ],
-        "modules": [
-          "xai-grok-session-events",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-session-events", "xai-grok-shell"],
         "verified": true
       }
     ],
@@ -211,26 +151,10 @@
         ],
         "failurePolicy": "mixed - detection fails OPEN to WAL (`is_network_fs` returns false on any statfs error), the env kill-switch fails loud-but-open (an invalid value warns and falls through to detection), and mode application fails CLOSED after a bounded retry whose error is re-wrapped with the elapsed time.",
         "constants": [
-          {
-            "name": "BUSY_TIMEOUT",
-            "value": "5000 ms",
-            "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:19"
-          },
-          {
-            "name": "BUSY_RETRY_BUDGET",
-            "value": "10 s (inner retries share one deadline)",
-            "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:23"
-          },
-          {
-            "name": "RETRY_PAUSE",
-            "value": "20 ms, with a per-attempt busy clamp of 20 ms..1000 ms",
-            "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:236-240"
-          },
-          {
-            "name": "host tag / hostname cap",
-            "value": "\".h-{host}\" / 24 chars",
-            "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:121, :306"
-          }
+          {"name": "BUSY_TIMEOUT", "value": "5000 ms", "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:19"},
+          {"name": "BUSY_RETRY_BUDGET", "value": "10 s (inner retries share one deadline)", "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:23"},
+          {"name": "RETRY_PAUSE", "value": "20 ms, with a per-attempt busy clamp of 20 ms..1000 ms", "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:236-240"},
+          {"name": "host tag / hostname cap", "value": "\".h-{host}\" / 24 chars", "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:121, :306"}
         ],
         "evidence": [
           "crates/codegen/xai-sqlite-journal/src/lib.rs:1-13",
@@ -240,9 +164,7 @@
           "crates/codegen/xai-sqlite-journal/src/lib.rs:197-241",
           "crates/codegen/xai-sqlite-journal/src/lib.rs:341-396"
         ],
-        "modules": [
-          "xai-sqlite-journal"
-        ],
+        "modules": ["xai-sqlite-journal"],
         "verified": true
       },
       {
@@ -256,29 +178,15 @@
         ],
         "failurePolicy": "mixed - the registry read is fail-open (a missing file, an empty file, or corrupt JSON all yield an empty list, with a warning only for corruption), IO errors other than NotFound propagate, lock contention in the non-blocking path is a soft `Ok(false)`/`Ok(None)`, and PID probing degrades to 'assume alive' on unsupported platforms.",
         "constants": [
-          {
-            "name": "DATA_FILENAME",
-            "value": "\"active_sessions.json\"",
-            "evidence": "crates/codegen/xai-grok-active-sessions/src/lib.rs:22"
-          },
-          {
-            "name": "LOCK_FILENAME",
-            "value": "\"active_sessions.lock\"",
-            "evidence": "crates/codegen/xai-grok-active-sessions/src/lib.rs:23"
-          },
-          {
-            "name": "TMP_FILENAME",
-            "value": "\"active_sessions.json.tmp\"",
-            "evidence": "crates/codegen/xai-grok-active-sessions/src/lib.rs:24"
-          }
+          {"name": "DATA_FILENAME", "value": "\"active_sessions.json\"", "evidence": "crates/codegen/xai-grok-active-sessions/src/lib.rs:22"},
+          {"name": "LOCK_FILENAME", "value": "\"active_sessions.lock\"", "evidence": "crates/codegen/xai-grok-active-sessions/src/lib.rs:23"},
+          {"name": "TMP_FILENAME", "value": "\"active_sessions.json.tmp\"", "evidence": "crates/codegen/xai-grok-active-sessions/src/lib.rs:24"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-active-sessions/src/lib.rs:81-130",
           "crates/codegen/xai-grok-active-sessions/src/lib.rs:141-204"
         ],
-        "modules": [
-          "xai-grok-active-sessions"
-        ],
+        "modules": ["xai-grok-active-sessions"],
         "verified": true,
         "wiringNote": "Wired, but thin: `collect_crashed()` runs at process start (xai-grok-pager-bin/src/main.rs:1973) and only logs the count. The returned Vec<ActiveSession> has no consumer beyond that log line."
       },
@@ -293,26 +201,15 @@
         ],
         "failurePolicy": "fail-soft with an explicit distinction - a failed fetch does not populate the cache and does not read as an empty catalog; waiters are released through a Notify rather than polling.",
         "constants": [
-          {
-            "name": "GATEWAY_TOOL_CALL_TIMEOUT",
-            "value": "75 s",
-            "evidence": "crates/codegen/xai-grok-shell-session-support/src/managed_mcp.rs:186"
-          },
-          {
-            "name": "catalog fetch timeout",
-            "value": "10 s",
-            "evidence": "crates/codegen/xai-grok-shell-session-support/src/managed_mcp.rs:154"
-          }
+          {"name": "GATEWAY_TOOL_CALL_TIMEOUT", "value": "75 s", "evidence": "crates/codegen/xai-grok-shell-session-support/src/managed_mcp.rs:186"},
+          {"name": "catalog fetch timeout", "value": "10 s", "evidence": "crates/codegen/xai-grok-shell-session-support/src/managed_mcp.rs:154"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-shell-session-support/src/managed_mcp.rs:43-87",
           "crates/codegen/xai-grok-shell-session-support/src/managed_mcp.rs:131",
           "crates/codegen/xai-grok-shell-session-support/src/managed_mcp.rs:304-355"
         ],
-        "modules": [
-          "xai-grok-shell-session-support",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-shell-session-support", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -326,30 +223,16 @@
         ],
         "failurePolicy": "fail-closed on capacity (refuse with `AllPinned` rather than violate the bound) and fail-safe on schema version (read-only open instead of a downgrade).",
         "constants": [
-          {
-            "name": "WORKSPACE_CAPACITY",
-            "value": "256",
-            "evidence": "crates/codegen/xai-grok-dashboard-store/src/types.rs:13"
-          },
-          {
-            "name": "RANK_GAP / USER_VERSION / MAX_SESSION_ID_BYTES",
-            "value": "1024 / 1 / 255",
-            "evidence": "crates/codegen/xai-grok-dashboard-store/src/types.rs:17, :20; src/schema.rs:25"
-          },
-          {
-            "name": "store file mode / path",
-            "value": "0o600 / <grok_home>/dashboard/workspace.db",
-            "evidence": "crates/codegen/xai-grok-dashboard-store/src/owner_only.rs:40; src/lib.rs:54"
-          }
+          {"name": "WORKSPACE_CAPACITY", "value": "256", "evidence": "crates/codegen/xai-grok-dashboard-store/src/types.rs:13"},
+          {"name": "RANK_GAP / USER_VERSION / MAX_SESSION_ID_BYTES", "value": "1024 / 1 / 255", "evidence": "crates/codegen/xai-grok-dashboard-store/src/types.rs:17, :20; src/schema.rs:25"},
+          {"name": "store file mode / path", "value": "0o600 / <grok_home>/dashboard/workspace.db", "evidence": "crates/codegen/xai-grok-dashboard-store/src/owner_only.rs:40; src/lib.rs:54"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-dashboard-store/src/lib.rs:1-14",
           "crates/codegen/xai-grok-dashboard-store/src/store.rs:212-248",
           "crates/codegen/xai-grok-dashboard-store/src/store_open.rs:97"
         ],
-        "modules": [
-          "xai-grok-dashboard-store"
-        ],
+        "modules": ["xai-grok-dashboard-store"],
         "verified": true,
         "wiringNote": "The entire store is host-gated OFF BY DEFAULT behind `GROK_WORKSPACE_DASHBOARD` (xai-grok-pager/src/app/event_loop.rs:1257). `remove_member`, `set_pin_rank`, `rekey` and `data_version()` have no shipped callers - tests only."
       },
@@ -363,24 +246,13 @@
         ],
         "failurePolicy": "fail-open and silent by design - an open failure, a poisoned mutex and a serialization failure all return without emitting.",
         "constants": [
-          {
-            "name": "EVENTS_FILE",
-            "value": "\"events.jsonl\"",
-            "evidence": "crates/codegen/xai-grok-session-events/src/log.rs:19"
-          },
-          {
-            "name": "timestamp format",
-            "value": "RFC3339, SecondsFormat::Millis, use_z=true",
-            "evidence": "crates/codegen/xai-grok-session-events/src/log.rs:64"
-          }
+          {"name": "EVENTS_FILE", "value": "\"events.jsonl\"", "evidence": "crates/codegen/xai-grok-session-events/src/log.rs:19"},
+          {"name": "timestamp format", "value": "RFC3339, SecondsFormat::Millis, use_z=true", "evidence": "crates/codegen/xai-grok-session-events/src/log.rs:64"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-session-events/src/log.rs:34-81"
         ],
-        "modules": [
-          "xai-grok-session-events",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-session-events", "xai-grok-shell"],
         "verified": true,
         "wiringNote": "Wired for the local TUI - `EventTracker::new` is called with no env gate at xai-grok-shell/src/session/acp_session_impl/spawn.rs:1864. The WORKSPACE host is gated off by default: `get_or_open_session_writer(enabled=false)` returns a noop writer and creates no directory (xai-grok-workspace/src/session/mod.rs:1026-1028), where enabled is `GROK_WORKSPACE_EVENTS_ENABLED == \"true\"` (xai-grok-workspace/src/handle.rs:4585). A repo-wide search for `events.jsonl` finds writers and tests only - no non-test reader exists in this tree. Treat the 'write-only' characterisation as grep-derived: a reader that builds the filename dynamically would not have been caught."
       },
@@ -394,35 +266,17 @@
         ],
         "failurePolicy": "fail-soft - bounded listing degrades to fewer rows; a foreign store that cannot be read contributes nothing rather than failing the caller.",
         "constants": [
-          {
-            "name": "MAX_SESSIONS_PER_TOOL",
-            "value": "50",
-            "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:20"
-          },
-          {
-            "name": "MAX_SESSION_AGE",
-            "value": "30 days (30 * 24 * 60 * 60 s)",
-            "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:21"
-          },
-          {
-            "name": "MAX_TITLE_CHARS",
-            "value": "200",
-            "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:22"
-          },
-          {
-            "name": "MAX_FUTURE_SKEW",
-            "value": "5 min",
-            "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:23"
-          }
+          {"name": "MAX_SESSIONS_PER_TOOL", "value": "50", "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:20"},
+          {"name": "MAX_SESSION_AGE", "value": "30 days (30 * 24 * 60 * 60 s)", "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:21"},
+          {"name": "MAX_TITLE_CHARS", "value": "200", "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:22"},
+          {"name": "MAX_FUTURE_SKEW", "value": "5 min", "evidence": "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:23"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:1-6",
           "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:20-23",
           "crates/codegen/xai-grok-foreign-sessions/src/lib.rs:96-103"
         ],
-        "modules": [
-          "xai-grok-foreign-sessions"
-        ],
+        "modules": ["xai-grok-foreign-sessions"],
         "verified": true
       }
     ],
@@ -437,24 +291,14 @@
         ],
         "failurePolicy": "fail-soft - the estimate is a heuristic that under- or over-counts; the fail-safe direction is supplied by the headroom variant rather than by the estimator, which has no error path at all (the functions are total).",
         "constants": [
-          {
-            "name": "BYTES_PER_TOKEN",
-            "value": "4",
-            "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:9"
-          },
-          {
-            "name": "IMAGE_TOKEN_ESTIMATE",
-            "value": "765 (flat, per image)",
-            "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:13"
-          }
+          {"name": "BYTES_PER_TOKEN", "value": "4", "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:9"},
+          {"name": "IMAGE_TOKEN_ESTIMATE", "value": "765 (flat, per image)", "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:13"}
         ],
         "evidence": [
           "crates/codegen/xai-token-estimation/src/lib.rs:1-31",
           "crates/codegen/xai-token-estimation/src/lib.rs:38-89"
         ],
-        "modules": [
-          "xai-token-estimation"
-        ],
+        "modules": ["xai-token-estimation"],
         "verified": true
       },
       {
@@ -468,35 +312,17 @@
         ],
         "failurePolicy": "fail-soft - over-budget content is truncated with a notice; the crate has no failure path because it performs no I/O.",
         "constants": [
-          {
-            "name": "SEGMENT_MAX_BYTES",
-            "value": "512 * 1024",
-            "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:21"
-          },
-          {
-            "name": "BALANCED_TEXT_CHARS",
-            "value": "2000",
-            "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:25"
-          },
-          {
-            "name": "BALANCED_RESPONSE_CHARS",
-            "value": "500",
-            "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:26"
-          },
-          {
-            "name": "INDEX_FILE",
-            "value": "\"INDEX.md\"",
-            "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:17"
-          }
+          {"name": "SEGMENT_MAX_BYTES", "value": "512 * 1024", "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:21"},
+          {"name": "BALANCED_TEXT_CHARS", "value": "2000", "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:25"},
+          {"name": "BALANCED_RESPONSE_CHARS", "value": "500", "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:26"},
+          {"name": "INDEX_FILE", "value": "\"INDEX.md\"", "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:17"}
         ],
         "evidence": [
           "crates/codegen/xai-compaction-transcript/src/lib.rs:1-6",
           "crates/codegen/xai-compaction-transcript/src/lib.rs:16-30",
           "crates/codegen/xai-compaction-transcript/src/lib.rs:76-86"
         ],
-        "modules": [
-          "xai-compaction-transcript"
-        ],
+        "modules": ["xai-compaction-transcript"],
         "verified": true
       },
       {
@@ -510,21 +336,9 @@
         ],
         "failurePolicy": "fail-closed to the caller - a typed terminal error and no partially applied compaction; individual transient attempts are retried after a delay.",
         "constants": [
-          {
-            "name": "FullReplaceConfig defaults",
-            "value": "max_attempts=3, retry_delay_secs=3, sampling_timeout_secs=120",
-            "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:33-40"
-          },
-          {
-            "name": "MIN_SUMMARY_SEED_CHARS",
-            "value": "500 (doc note: smallest healthy prod summary observed was ~3,242 chars)",
-            "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:20"
-          },
-          {
-            "name": "DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT",
-            "value": "85",
-            "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:13"
-          }
+          {"name": "FullReplaceConfig defaults", "value": "max_attempts=3, retry_delay_secs=3, sampling_timeout_secs=120", "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:33-40"},
+          {"name": "MIN_SUMMARY_SEED_CHARS", "value": "500 (doc note: smallest healthy prod summary observed was ~3,242 chars)", "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:20"},
+          {"name": "DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT", "value": "85", "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:13"}
         ],
         "evidence": [
           "crates/common/xai-grok-compaction/src/code_compaction/compact.rs:53-98",
@@ -532,12 +346,7 @@
           "crates/codegen/xai-chat-state/src/compaction_mode.rs:12-83",
           "crates/codegen/xai-grok-shell/src/session/compaction.rs:1124-1138"
         ],
-        "modules": [
-          "crates/common/xai-grok-compaction",
-          "xai-chat-state",
-          "xai-compaction-transcript",
-          "xai-grok-shell"
-        ],
+        "modules": ["crates/common/xai-grok-compaction", "xai-chat-state", "xai-compaction-transcript", "xai-grok-shell"],
         "verified": true,
         "wiringNote": "Mostly INERT in this tree. The crate is a real engine (36 src files, no cargo features) and the shell does call `sample_full_replace_summary` (xai-grok-shell/src/session/compaction.rs:1138), but `apply_intra_compaction`, `should_compact`, `inter_compaction`, `history::filter`/`history::validate`, `select.rs`, `fit.rs`, `assemble_compacted_history`, `apply_full_replace_compaction`, `wrap_user_query` and `validate_compaction_text` have callers only inside the crate's own tests - the shell uses xai-chat-state's duplicated `compaction_utils` copies instead. `IntraCompactionConfig::default()` sets `enabled: false` (crates/common/xai-grok-compaction/src/intra_compaction/config.rs:227). The tool-pair-safe split selector in particular is UNWIRED: `select_turns_to_compact` walks backward accumulating keep-tokens and `snap_to_safe_boundary` advances past a contiguous run of tool results so a split can never orphan a tool result, returning None rather than 'compact everything' when nothing should move (crates/common/xai-grok-compaction/src/select.rs:60-147) - but its only callers are intra_compaction/compact.rs:505 and fit.rs:148, in the unwired chain."
       },
@@ -553,26 +362,10 @@
         ],
         "failurePolicy": "mixed. The token gate is pure and total (zero window returns false, overflow saturates, no error path). The image budget fails soft in the under-measuring direction: if serialization fails the byte counter keeps what it counted so far - a lower bound - and warns, so a measurement bug cannot force a needless eviction.",
         "constants": [
-          {
-            "name": "MAX_REQUEST_BYTES",
-            "value": "50 MiB (doc note: proxy nginx proxy-body-size)",
-            "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:20"
-          },
-          {
-            "name": "IMAGE_COMPACT_TRIGGER_BYTES",
-            "value": "MAX_REQUEST_BYTES - 3 MiB = 47 MiB",
-            "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:41"
-          },
-          {
-            "name": "IMAGE_COMPACT_RECLAIM_TARGET_BYTES",
-            "value": "MAX_REQUEST_BYTES / 2 = 25 MiB",
-            "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:54"
-          },
-          {
-            "name": "BYTES_PER_TOKEN / IMAGE_TOKEN_ESTIMATE",
-            "value": "4 / 765",
-            "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:9, :13"
-          }
+          {"name": "MAX_REQUEST_BYTES", "value": "50 MiB (doc note: proxy nginx proxy-body-size)", "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:20"},
+          {"name": "IMAGE_COMPACT_TRIGGER_BYTES", "value": "MAX_REQUEST_BYTES - 3 MiB = 47 MiB", "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:41"},
+          {"name": "IMAGE_COMPACT_RECLAIM_TARGET_BYTES", "value": "MAX_REQUEST_BYTES / 2 = 25 MiB", "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:54"},
+          {"name": "BYTES_PER_TOKEN / IMAGE_TOKEN_ESTIMATE", "value": "4 / 765", "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:9, :13"}
         ],
         "evidence": [
           "crates/codegen/xai-token-estimation/src/lib.rs:48-102",
@@ -580,10 +373,7 @@
           "crates/codegen/xai-chat-state/src/image_budget.rs:244-321",
           "crates/codegen/xai-chat-state/src/actor/request_builder.rs:63"
         ],
-        "modules": [
-          "xai-token-estimation",
-          "xai-chat-state"
-        ],
+        "modules": ["xai-token-estimation", "xai-chat-state"],
         "verified": true,
         "wiringNote": "Both wired on every request build; the image budget emits a `ChatStateEvent::ImageBudget` for observability. Note a real boundary asymmetry rather than a defect: this helper fires at `used == threshold`, while the intra-compaction trigger uses strict `>` (crates/common/xai-grok-compaction/src/intra_compaction/trigger.rs:143)."
       },
@@ -597,26 +387,15 @@
         ],
         "failurePolicy": "fail-open in the safe direction - an unmatched message is treated as transient and retried, while a false positive is deterministic and suppresses retry. Pure function, no IO, no error path.",
         "constants": [
-          {
-            "name": "anchored slugs",
-            "value": "context_length_exceeded | exceed_context_size_error | payload_too_large",
-            "evidence": "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:34-38"
-          },
-          {
-            "name": "anchor separator",
-            "value": "\": \"",
-            "evidence": "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:29"
-          }
+          {"name": "anchored slugs", "value": "context_length_exceeded | exceed_context_size_error | payload_too_large", "evidence": "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:34-38"},
+          {"name": "anchor separator", "value": "\": \"", "evidence": "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:29"}
         ],
         "evidence": [
           "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:9-58",
           "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:66-117",
           "crates/codegen/xai-grok-shell/src/session/helpers/session_compact.rs:122"
         ],
-        "modules": [
-          "crates/common/xai-grok-compaction",
-          "xai-grok-shell"
-        ],
+        "modules": ["crates/common/xai-grok-compaction", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -629,24 +408,14 @@
         ],
         "failurePolicy": "fail-soft - an unreadable candidate is dropped through a `filter_map` over `read_to_string(...).ok()`, and an empty set renders to None rather than an empty reminder block.",
         "constants": [
-          {
-            "name": "HOME_RULES_DIRS",
-            "value": "[\"rules\"]",
-            "evidence": "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:164"
-          },
-          {
-            "name": "LEGACY_AGENTS_MD_REMINDER_PREFIX",
-            "value": "leading-bytes compatibility contract",
-            "evidence": "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:306"
-          }
+          {"name": "HOME_RULES_DIRS", "value": "[\"rules\"]", "evidence": "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:164"},
+          {"name": "LEGACY_AGENTS_MD_REMINDER_PREFIX", "value": "leading-bytes compatibility contract", "evidence": "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:306"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:140",
           "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:300-332"
         ],
-        "modules": [
-          "xai-grok-agent"
-        ],
+        "modules": ["xai-grok-agent"],
         "verified": true
       }
     ],
@@ -662,27 +431,15 @@
         ],
         "failurePolicy": "fail-closed - any RequirementError makes finalize return Err and no toolset is produced.",
         "constants": [
-          {
-            "name": "error categories",
-            "value": "\"behavior_preset\", \"tool_not_found\", \"behavior_version\", \"duplicate_client_name\", \"file_toolset_conflict\"",
-            "evidence": "crates/codegen/xai-grok-tools/src/registry/types.rs:808-911"
-          },
-          {
-            "name": "standard file bundle",
-            "value": "GrokBuild:read_file | search_replace | grep; hashline bundle GrokBuildHashline:hashline_read | hashline_edit | hashline_grep",
-            "evidence": "crates/codegen/xai-grok-tools/src/registry/types.rs:883-892"
-          }
+          {"name": "error categories", "value": "\"behavior_preset\", \"tool_not_found\", \"behavior_version\", \"duplicate_client_name\", \"file_toolset_conflict\"", "evidence": "crates/codegen/xai-grok-tools/src/registry/types.rs:808-911"},
+          {"name": "standard file bundle", "value": "GrokBuild:read_file | search_replace | grep; hashline bundle GrokBuildHashline:hashline_read | hashline_edit | hashline_grep", "evidence": "crates/codegen/xai-grok-tools/src/registry/types.rs:883-892"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/registry/types.rs:27-51",
           "crates/codegen/xai-grok-tools/src/registry/types.rs:795-938",
           "crates/codegen/xai-grok-tools/src/registry/types.rs:963-973"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "crates/common/xai-tool-runtime",
-          "crates/common/xai-tool-types"
-        ],
+        "modules": ["xai-grok-tools", "crates/common/xai-tool-runtime", "crates/common/xai-tool-types"],
         "verified": true
       },
       {
@@ -695,20 +452,14 @@
         ],
         "failurePolicy": "fail-closed - an unsatisfied requirement yields an `unsatisfied requirements` error and blocks finalization.",
         "constants": [
-          {
-            "name": "params error categories",
-            "value": "params_unknown_field, params_missing_field, params_unknown_variant, params_type, params_invalid",
-            "evidence": "crates/codegen/xai-grok-tools/src/types/params_validation.rs:120-130"
-          }
+          {"name": "params error categories", "value": "params_unknown_field, params_missing_field, params_unknown_variant, params_type, params_invalid", "evidence": "crates/codegen/xai-grok-tools/src/types/params_validation.rs:120-130"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/types/requirements.rs:110-198",
           "crates/codegen/xai-grok-tools/src/types/params_validation.rs:44-73",
           "crates/codegen/xai-grok-tools/src/registry/types.rs:928-936"
         ],
-        "modules": [
-          "xai-grok-tools"
-        ],
+        "modules": ["xai-grok-tools"],
         "verified": true
       },
       {
@@ -722,26 +473,10 @@
         ],
         "failurePolicy": "fail-soft - content is degraded with an explicit footer rather than silently dropped, and a missing session folder simply omits the spill file.",
         "constants": [
-          {
-            "name": "DEFAULT_TOOL_OUTPUT_BYTES",
-            "value": "40_000",
-            "evidence": "crates/codegen/xai-grok-tools/src/lib.rs:7"
-          },
-          {
-            "name": "DEFAULT_TOOL_OUTPUT_CHARS",
-            "value": "20_000",
-            "evidence": "crates/codegen/xai-grok-tools/src/lib.rs:11"
-          },
-          {
-            "name": "MCP_MAX_OUTPUT_BYTES",
-            "value": "20_000",
-            "evidence": "crates/codegen/xai-grok-tools/src/util/mcp_truncate.rs:34"
-          },
-          {
-            "name": "LONG_LINE_BYTES / DEFAULT_SOFT_WRAP_WIDTH / PREVIEW_SIZE",
-            "value": "2_000 each",
-            "evidence": "crates/codegen/xai-grok-tools/src/util/mcp_truncate.rs:84; crates/codegen/xai-grok-tools/src/util/truncate.rs:4-7"
-          }
+          {"name": "DEFAULT_TOOL_OUTPUT_BYTES", "value": "40_000", "evidence": "crates/codegen/xai-grok-tools/src/lib.rs:7"},
+          {"name": "DEFAULT_TOOL_OUTPUT_CHARS", "value": "20_000", "evidence": "crates/codegen/xai-grok-tools/src/lib.rs:11"},
+          {"name": "MCP_MAX_OUTPUT_BYTES", "value": "20_000", "evidence": "crates/codegen/xai-grok-tools/src/util/mcp_truncate.rs:34"},
+          {"name": "LONG_LINE_BYTES / DEFAULT_SOFT_WRAP_WIDTH / PREVIEW_SIZE", "value": "2_000 each", "evidence": "crates/codegen/xai-grok-tools/src/util/mcp_truncate.rs:84; crates/codegen/xai-grok-tools/src/util/truncate.rs:4-7"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/util/mcp_truncate.rs:34-55",
@@ -749,10 +484,7 @@
           "crates/codegen/xai-grok-tools/src/util/truncate.rs:12-21",
           "crates/codegen/xai-grok-tools/src/util/truncate.rs:129-158"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-tools", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -766,21 +498,9 @@
         ],
         "failurePolicy": "mixed - the stream-drain barrier before emitting calls is fail-open on timeout (proceed) but a revoked boundary aborts the turn; a permission reject fails the batch closed while still pairing every tool_result.",
         "constants": [
-          {
-            "name": "STREAM_DRAIN_TIMEOUT",
-            "value": "5 s",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:263"
-          },
-          {
-            "name": "BASH_MODE_TIMEOUT",
-            "value": "3600 s",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs:9"
-          },
-          {
-            "name": "lock path keys",
-            "value": "file_path | path | target_file",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs:54"
-          }
+          {"name": "STREAM_DRAIN_TIMEOUT", "value": "5 s", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:263"},
+          {"name": "BASH_MODE_TIMEOUT", "value": "3600 s", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs:9"},
+          {"name": "lock path keys", "value": "file_path | path | target_file", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs:54"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs:384-437",
@@ -788,10 +508,7 @@
           "crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs:53-86",
           "crates/codegen/xai-grok-tools/src/implementations/editor_infra/file_operation_lock.rs:1-114"
         ],
-        "modules": [
-          "xai-grok-shell",
-          "xai-grok-tools"
-        ],
+        "modules": ["xai-grok-shell", "xai-grok-tools"],
         "verified": true
       },
       {
@@ -805,26 +522,10 @@
         ],
         "failurePolicy": "fail-soft - an unparseable or unconfident signal degrades to no recovery; transient turn retries are bounded by both a count and a wall-clock window so retries cannot continue indefinitely.",
         "constants": [
-          {
-            "name": "DOOM_LOOP_CHECK_EVENT_TYPE",
-            "value": "\"response.doom_loop_check\"",
-            "evidence": "crates/codegen/xai-grok-sampling-types/src/doom_loop.rs:33"
-          },
-          {
-            "name": "MAX_TRANSIENT_TURN_RETRIES",
-            "value": "3",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:19"
-          },
-          {
-            "name": "MAX_TRANSIENT_RETRIES_PER_PROMPT",
-            "value": "10",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:25"
-          },
-          {
-            "name": "TRANSIENT_TURN_RETRY_BACKOFF",
-            "value": "[2 s, 10 s, 30 s]",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:66-69"
-          }
+          {"name": "DOOM_LOOP_CHECK_EVENT_TYPE", "value": "\"response.doom_loop_check\"", "evidence": "crates/codegen/xai-grok-sampling-types/src/doom_loop.rs:33"},
+          {"name": "MAX_TRANSIENT_TURN_RETRIES", "value": "3", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:19"},
+          {"name": "MAX_TRANSIENT_RETRIES_PER_PROMPT", "value": "10", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:25"},
+          {"name": "TRANSIENT_TURN_RETRY_BACKOFF", "value": "[2 s, 10 s, 30 s]", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:66-69"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/retry.rs:11-95",
@@ -832,12 +533,7 @@
           "crates/codegen/xai-grok-sampling-types/src/doom_loop.rs:169-195",
           "crates/codegen/xai-grok-shell/src/session/acp_session_impl/sampler_turn.rs:19-30"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "xai-grok-sampling-types",
-          "xai-grok-sampler",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-tools", "xai-grok-sampling-types", "xai-grok-sampler", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -853,11 +549,7 @@
         "evidence": [
           "crates/codegen/xai-grok-tools/src/types/tool_index.rs:29-74"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "xai-grok-shell",
-          "xai-grok-mcp"
-        ],
+        "modules": ["xai-grok-tools", "xai-grok-shell", "xai-grok-mcp"],
         "verified": true
       },
       {
@@ -871,26 +563,10 @@
         ],
         "failurePolicy": "mixed - a timeout returns a synthetic result marked `timed_out: true` with signal \"timeout\"; an unreapable uninterruptible child is abandoned to the runtime's orphan reaper rather than hanging the call.",
         "constants": [
-          {
-            "name": "DEFAULT_TIMEOUT",
-            "value": "10 s",
-            "evidence": "crates/codegen/xai-grok-shell-terminal/src/lib.rs:38"
-          },
-          {
-            "name": "DEFAULT_OUTPUT_BYTE_LIMIT",
-            "value": "30_000",
-            "evidence": "crates/codegen/xai-grok-shell-terminal/src/lib.rs:39"
-          },
-          {
-            "name": "DEFAULT_MAX_BACKGROUND_TASKS",
-            "value": "10",
-            "evidence": "crates/codegen/xai-grok-shell-terminal/src/background_task.rs:59"
-          },
-          {
-            "name": "OUTPUT_RING_BUFFER_SIZE / OUTPUT_BATCH_INTERVAL_MS",
-            "value": "256*1024 bytes / 16 ms",
-            "evidence": "crates/codegen/xai-grok-shell-terminal/src/pty_session.rs:52-53"
-          }
+          {"name": "DEFAULT_TIMEOUT", "value": "10 s", "evidence": "crates/codegen/xai-grok-shell-terminal/src/lib.rs:38"},
+          {"name": "DEFAULT_OUTPUT_BYTE_LIMIT", "value": "30_000", "evidence": "crates/codegen/xai-grok-shell-terminal/src/lib.rs:39"},
+          {"name": "DEFAULT_MAX_BACKGROUND_TASKS", "value": "10", "evidence": "crates/codegen/xai-grok-shell-terminal/src/background_task.rs:59"},
+          {"name": "OUTPUT_RING_BUFFER_SIZE / OUTPUT_BATCH_INTERVAL_MS", "value": "256*1024 bytes / 16 ms", "evidence": "crates/codegen/xai-grok-shell-terminal/src/pty_session.rs:52-53"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-shell-terminal/src/lib.rs:38-39",
@@ -898,11 +574,7 @@
           "crates/codegen/xai-grok-shell-terminal/src/streaming_local_terminal.rs:517-519",
           "crates/codegen/xai-grok-shell-terminal/src/pty_session.rs:52-53"
         ],
-        "modules": [
-          "xai-grok-shell-terminal",
-          "xai-grok-shell",
-          "ptyctl"
-        ],
+        "modules": ["xai-grok-shell-terminal", "xai-grok-shell", "ptyctl"],
         "verified": true
       }
     ],
@@ -917,11 +589,7 @@
         ],
         "failurePolicy": "fail-closed on inventory (the tool config is narrowed before the subagent starts) but with an explicit fail-open carve-out for kindless MCP/custom tools.",
         "constants": [
-          {
-            "name": "SubagentCapabilityMode variants",
-            "value": "read-only | read-write | execute | all",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1870-1877"
-          }
+          {"name": "SubagentCapabilityMode variants", "value": "read-only | read-write | execute | all", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1870-1877"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:239-305",
@@ -929,11 +597,7 @@
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1842-1864",
           "crates/codegen/xai-grok-shell/src/session/goal_summarizer.rs:140-160"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "crates/common/xai-tool-types",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-tools", "crates/common/xai-tool-types", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -946,11 +610,7 @@
         ],
         "failurePolicy": "fail-closed - Rejected / Unsupported / ChannelClosed are returned to the caller and the message is not queued; the Drop impl settles stranded slots with an explicit error rather than leaving the parent awaiting.",
         "constants": [
-          {
-            "name": "MAX_PARENT_STEER_SLOTS",
-            "value": "32",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:47"
-          }
+          {"name": "MAX_PARENT_STEER_SLOTS", "value": "32", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:47"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:45-47",
@@ -958,10 +618,7 @@
           "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:98-103",
           "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:146-192"
         ],
-        "modules": [
-          "xai-grok-shell",
-          "crates/common/xai-message-delivery-core"
-        ],
+        "modules": ["xai-grok-shell", "crates/common/xai-message-delivery-core"],
         "verified": true
       },
       {
@@ -981,10 +638,7 @@
           "crates/codegen/xai-grok-subagent-resolution/src/resume.rs:41-60",
           "crates/codegen/xai-grok-subagent-resolution/src/lib.rs:4-7"
         ],
-        "modules": [
-          "xai-grok-subagent-resolution",
-          "xai-grok-tools"
-        ],
+        "modules": ["xai-grok-subagent-resolution", "xai-grok-tools"],
         "verified": true
       },
       {
@@ -998,32 +652,16 @@
         ],
         "failurePolicy": "fail-closed - an over-depth spawn loses the task tool rather than being refused outright, and an unparseable capability mode is simply absent so the definition's own ceiling applies.",
         "constants": [
-          {
-            "name": "MAX_SUBAGENT_DEPTH",
-            "value": "1",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/mod.rs:40"
-          },
-          {
-            "name": "SubagentsConfig DEFAULT_MAX_DEPTH / env",
-            "value": "1 / GROK_SUBAGENTS_MAX_DEPTH",
-            "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:241-242"
-          },
-          {
-            "name": "MAX_SUBAGENT_SAMPLING_LIMIT",
-            "value": "512",
-            "evidence": "crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs:66"
-          }
+          {"name": "MAX_SUBAGENT_DEPTH", "value": "1", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/mod.rs:40"},
+          {"name": "SubagentsConfig DEFAULT_MAX_DEPTH / env", "value": "1 / GROK_SUBAGENTS_MAX_DEPTH", "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:241-242"},
+          {"name": "MAX_SUBAGENT_SAMPLING_LIMIT", "value": "512", "evidence": "crates/codegen/xai-grok-shell/src/agent/subagent/mod.rs:66"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-subagent-resolution/src/definition.rs:221",
           "crates/codegen/xai-grok-shell/src/agent/subagent/handle_request.rs:598-604",
           "crates/codegen/xai-grok-shell/src/config/mod.rs:241-242"
         ],
-        "modules": [
-          "xai-grok-subagent-resolution",
-          "xai-grok-shell",
-          "xai-grok-tools"
-        ],
+        "modules": ["xai-grok-subagent-resolution", "xai-grok-shell", "xai-grok-tools"],
         "verified": true
       },
       {
@@ -1036,25 +674,14 @@
         ],
         "failurePolicy": "fail-soft by default (queue) and fail-closed only under an operator opt-in; an unparseable behaviour value warns and keeps queueing.",
         "constants": [
-          {
-            "name": "DEFAULT_MAX_CONCURRENT",
-            "value": "32",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/admission.rs:6"
-          },
-          {
-            "name": "env vars",
-            "value": "GROK_MAX_CONCURRENT_SUBAGENTS, GROK_SUBAGENT_LIMIT_BEHAVIOR, GROK_SUBAGENT_SAMPLING_LIMIT",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/admission.rs:43-47; xai-grok-shell/src/config/mod.rs:292"
-          }
+          {"name": "DEFAULT_MAX_CONCURRENT", "value": "32", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/admission.rs:6"},
+          {"name": "env vars", "value": "GROK_MAX_CONCURRENT_SUBAGENTS, GROK_SUBAGENT_LIMIT_BEHAVIOR, GROK_SUBAGENT_SAMPLING_LIMIT", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/admission.rs:43-47; xai-grok-shell/src/config/mod.rs:292"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/admission.rs:6-107",
           "crates/codegen/xai-grok-shell/src/agent/mvp_agent/subagent_spawn.rs:19"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-tools", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1068,31 +695,16 @@
         ],
         "failurePolicy": "fail-soft with explicit backstops - a cancelled child that never finishes force-reopens admission after the drain cap with a warning rather than blocking spawns for the process lifetime, and a panicking run future is caught.",
         "constants": [
-          {
-            "name": "TEARDOWN_DRAIN_MAX",
-            "value": "30 s",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator.rs:106"
-          },
-          {
-            "name": "MAX_COMPLETED_ENTRIES",
-            "value": "1024",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:18"
-          },
-          {
-            "name": "active-message admission caps",
-            "value": "8 per child, 64 total; timeouts 5 s admit, 120 s spawn-ready, 6 s finalization",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:39-54"
-          }
+          {"name": "TEARDOWN_DRAIN_MAX", "value": "30 s", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator.rs:106"},
+          {"name": "MAX_COMPLETED_ENTRIES", "value": "1024", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:18"},
+          {"name": "active-message admission caps", "value": "8 per child, 64 total; timeouts 5 s admit, 120 s spawn-ready, 6 s finalization", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:39-54"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator.rs:53-106",
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:39-54",
           "crates/codegen/xai-grok-shell/src/agent/subagent/spawn.rs:284"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-tools", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1105,25 +717,14 @@
         ],
         "failurePolicy": "fail-soft - budget expiry never kills the child; the failure mode is that the model loses the synchronous result, which the auto-wake path recovers.",
         "constants": [
-          {
-            "name": "shell foreground budget",
-            "value": "GROK_SUBAGENT_AWAIT_BUDGET_MS, default 600 s",
-            "evidence": "crates/codegen/xai-grok-shell/src/agent/subagent/spawn.rs:295-299"
-          },
-          {
-            "name": "coordinator default foreground_budget",
-            "value": "45 s",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:226"
-          }
+          {"name": "shell foreground budget", "value": "GROK_SUBAGENT_AWAIT_BUDGET_MS, default 600 s", "evidence": "crates/codegen/xai-grok-shell/src/agent/subagent/spawn.rs:295-299"},
+          {"name": "coordinator default foreground_budget", "value": "45 s", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:226"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:606-639",
           "crates/codegen/xai-grok-shell/src/agent/subagent/spawn.rs:295-299"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-tools", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1143,10 +744,7 @@
           "crates/codegen/xai-grok-shell/src/agent/subagent/spawn.rs:429",
           "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/coordinator_state.rs:115"
         ],
-        "modules": [
-          "xai-grok-shell",
-          "xai-grok-tools"
-        ],
+        "modules": ["xai-grok-shell", "xai-grok-tools"],
         "verified": true
       }
     ],
@@ -1161,25 +759,15 @@
         ],
         "failurePolicy": "mixed - by itself `SandboxManager::apply` degrades gracefully (an unsupported platform or a failed apply logs, records and returns Ok while leaving `applied = false`, lib.rs:196-240); the fail-closed decision is taken by the caller, which refuses to start (see the next mechanism).",
         "constants": [
-          {
-            "name": "BWRAP_ENV_VAR",
-            "value": "\"__GROK_INSIDE_BWRAP\"",
-            "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:75"
-          },
-          {
-            "name": "enforce feature",
-            "value": "on by default; without it the crate is helpers-only and nothing is kernel-enforced",
-            "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:13-15"
-          }
+          {"name": "BWRAP_ENV_VAR", "value": "\"__GROK_INSIDE_BWRAP\"", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:75"},
+          {"name": "enforce feature", "value": "on by default; without it the crate is helpers-only and nothing is kernel-enforced", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:13-15"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-sandbox/src/lib.rs:8-15",
           "crates/codegen/xai-grok-sandbox/src/lib.rs:100-106",
           "crates/codegen/xai-grok-sandbox/src/lib.rs:179-262"
         ],
-        "modules": [
-          "xai-grok-sandbox"
-        ],
+        "modules": ["xai-grok-sandbox"],
         "verified": true
       },
       {
@@ -1193,16 +781,8 @@
         ],
         "failurePolicy": "fail-closed - the process calls std::process::exit(1) rather than continuing unprotected; the only degrade path is an optional-bwrap profile, which warns and falls back to Landlock.",
         "constants": [
-          {
-            "name": "exit code on refusal",
-            "value": "1",
-            "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:1534"
-          },
-          {
-            "name": "refusal message",
-            "value": "\"Refusing to start with denied paths unprotected.\"",
-            "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:1521-1522"
-          }
+          {"name": "exit code on refusal", "value": "1", "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:1534"},
+          {"name": "refusal message", "value": "\"Refusing to start with denied paths unprotected.\"", "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:1521-1522"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-shell/src/config/mod.rs:1448-1470",
@@ -1211,11 +791,7 @@
           "crates/codegen/xai-grok-sandbox/src/lib.rs:441-467",
           "crates/codegen/xai-grok-sandbox/src/lib.rs:497-506"
         ],
-        "modules": [
-          "xai-grok-sandbox",
-          "xai-grok-shell",
-          "xai-grok-config"
-        ],
+        "modules": ["xai-grok-sandbox", "xai-grok-shell", "xai-grok-config"],
         "verified": true
       },
       {
@@ -1228,16 +804,8 @@
         ],
         "failurePolicy": "fail-closed on policy composition (a conflicting project definition is ignored, keeping the trusted global body) and fail-soft on device enumeration (unopenable device nodes are skipped rather than aborting the ruleset); an unparsable sandbox.toml warns and is treated as absent (profiles.rs:169-181).",
         "constants": [
-          {
-            "name": "built-in profiles",
-            "value": "workspace (default) | devbox | read-only | strict | off",
-            "evidence": "crates/codegen/xai-grok-sandbox/src/profiles.rs:1-2, :69-78"
-          },
-          {
-            "name": "network-restricting built-ins",
-            "value": "read-only, strict",
-            "evidence": "crates/codegen/xai-grok-sandbox/src/profiles.rs:81-83"
-          }
+          {"name": "built-in profiles", "value": "workspace (default) | devbox | read-only | strict | off", "evidence": "crates/codegen/xai-grok-sandbox/src/profiles.rs:1-2, :69-78"},
+          {"name": "network-restricting built-ins", "value": "read-only, strict", "evidence": "crates/codegen/xai-grok-sandbox/src/profiles.rs:81-83"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-sandbox/src/profiles.rs:1-3",
@@ -1245,9 +813,7 @@
           "crates/codegen/xai-grok-sandbox/src/profiles.rs:114-167",
           "crates/codegen/xai-grok-sandbox/src/profiles.rs:183-200"
         ],
-        "modules": [
-          "xai-grok-sandbox"
-        ],
+        "modules": ["xai-grok-sandbox"],
         "verified": true
       },
       {
@@ -1260,25 +826,15 @@
         ],
         "failurePolicy": "fail-closed at plan construction (any missing placeholder or unencodable handoff returns None with an explanation, and the caller's Refuse arm exits 1); Windows/macOS compile to a None return since the path is Linux-only.",
         "constants": [
-          {
-            "name": "placeholder mode",
-            "value": "0o000 (chmod 000)",
-            "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:385-392"
-          },
-          {
-            "name": "bwrap flags",
-            "value": "--cap-drop ALL; --bind / /; --dev-bind /dev /dev; --proc /proc",
-            "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:320-354"
-          }
+          {"name": "placeholder mode", "value": "0o000 (chmod 000)", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:385-392"},
+          {"name": "bwrap flags", "value": "--cap-drop ALL; --bind / /; --dev-bind /dev /dev; --proc /proc", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:320-354"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-sandbox/src/lib.rs:302-369",
           "crates/codegen/xai-grok-sandbox/src/lib.rs:333-352",
           "crates/codegen/xai-grok-sandbox/src/lib.rs:385-428"
         ],
-        "modules": [
-          "xai-grok-sandbox"
-        ],
+        "modules": ["xai-grok-sandbox"],
         "verified": true
       },
       {
@@ -1297,11 +853,7 @@
           "crates/codegen/xai-grok-sandbox/src/lib.rs:187-192",
           "crates/codegen/xai-grok-shell/src/config/mod.rs:1545-1555"
         ],
-        "modules": [
-          "xai-grok-sandbox",
-          "xai-grok-config",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-sandbox", "xai-grok-config", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1314,11 +866,7 @@
         ],
         "failurePolicy": "fail-closed with a soft projection - the gate either refuses the mode change outright (managed policy lock) or degrades Auto to Ask; pending requests are always answered (AllowOnce or Cancelled), so nothing is left hanging.",
         "constants": [
-          {
-            "name": "canonical permission modes",
-            "value": "default | ask | auto | always-approve",
-            "evidence": "crates/codegen/xai-grok-pager/src/app/actions.rs:967-979"
-          }
+          {"name": "canonical permission modes", "value": "default | ask | auto | always-approve", "evidence": "crates/codegen/xai-grok-pager/src/app/actions.rs:967-979"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-pager/src/app/actions.rs:951-979",
@@ -1326,11 +874,7 @@
           "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:284-317",
           "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:353-420"
         ],
-        "modules": [
-          "xai-grok-pager",
-          "xai-grok-workspace",
-          "xai-grok-config"
-        ],
+        "modules": ["xai-grok-pager", "xai-grok-workspace", "xai-grok-config"],
         "verified": true
       },
       {
@@ -1344,26 +888,10 @@
         ],
         "failurePolicy": "fail-open on hook faults (an erroring or timing-out hook contributes nothing) but fail-closed on hook decisions (a healthy deny with exit code 2 blocks regardless of JSON); the combination means only a positive, successful deny stops a call.",
         "constants": [
-          {
-            "name": "DEFAULT_TIMEOUT_SECS",
-            "value": "5 (observe/tool gates)",
-            "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:122"
-          },
-          {
-            "name": "DEFAULT_VERIFICATION_GATE_TIMEOUT_SECS",
-            "value": "600 (stop/post-tool gates)",
-            "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:127"
-          },
-          {
-            "name": "DEFAULT_PROMPT_GATE_TIMEOUT_SECS",
-            "value": "30",
-            "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:133"
-          },
-          {
-            "name": "SESSION_END_HOOK_BUDGET_DEFAULT_MS / MAX",
-            "value": "1500 ms default, 60000 ms ceiling",
-            "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:137-138"
-          }
+          {"name": "DEFAULT_TIMEOUT_SECS", "value": "5 (observe/tool gates)", "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:122"},
+          {"name": "DEFAULT_VERIFICATION_GATE_TIMEOUT_SECS", "value": "600 (stop/post-tool gates)", "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:127"},
+          {"name": "DEFAULT_PROMPT_GATE_TIMEOUT_SECS", "value": "30", "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:133"},
+          {"name": "SESSION_END_HOOK_BUDGET_DEFAULT_MS / MAX", "value": "1500 ms default, 60000 ms ceiling", "evidence": "crates/codegen/xai-grok-hooks/src/config.rs:137-138"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-hooks/src/lib.rs:11-17",
@@ -1372,9 +900,7 @@
           "crates/codegen/xai-grok-hooks/src/config.rs:122-178",
           "crates/codegen/xai-grok-hooks/src/config.rs:608-609"
         ],
-        "modules": [
-          "xai-grok-hooks"
-        ],
+        "modules": ["xai-grok-hooks"],
         "verified": true
       },
       {
@@ -1389,9 +915,7 @@
         "evidence": [
           "crates/codegen/xai-grok-secrets/src/lib.rs:1-6"
         ],
-        "modules": [
-          "xai-grok-secrets"
-        ],
+        "modules": ["xai-grok-secrets"],
         "verified": true
       },
       {
@@ -1404,26 +928,10 @@
         ],
         "failurePolicy": "fail-closed - `fail_closed = true` in a requirements layer turns an invalid `[[version_overrides]]` for this build into a startup error (RequirementsError::InvalidVersionOverrides) rather than a skipped layer, and an unreadable requirements.toml is treated as fail_closed armed (xai-grok-config/src/managed_cache.rs:180-194).",
         "constants": [
-          {
-            "name": "REQUIREMENTS_FILENAME",
-            "value": "\"requirements.toml\"",
-            "evidence": "crates/codegen/xai-grok-config/src/loader.rs:95"
-          },
-          {
-            "name": "layer order (lowest to highest)",
-            "value": "/etc/grok/managed_config.toml, $GROK_HOME/managed_config.toml, $GROK_HOME/config.toml, $GROK_HOME/requirements.toml, /etc/grok/requirements.toml, macOS MDM",
-            "evidence": "crates/codegen/xai-grok-config/src/lib.rs:3-9"
-          },
-          {
-            "name": "always-approve pin keys",
-            "value": "[ui] disable_bypass_permissions_mode = true (current); [ui] yolo = false (legacy alias)",
-            "evidence": "crates/codegen/xai-grok-workspace/src/permission/resolution.rs:918-932"
-          },
-          {
-            "name": "FAIL_CLOSED_ENV",
-            "value": "\"GROK_MANAGED_CONFIG_FAIL_CLOSED\"",
-            "evidence": "crates/codegen/xai-grok-config/src/validation.rs:30"
-          }
+          {"name": "REQUIREMENTS_FILENAME", "value": "\"requirements.toml\"", "evidence": "crates/codegen/xai-grok-config/src/loader.rs:95"},
+          {"name": "layer order (lowest to highest)", "value": "/etc/grok/managed_config.toml, $GROK_HOME/managed_config.toml, $GROK_HOME/config.toml, $GROK_HOME/requirements.toml, /etc/grok/requirements.toml, macOS MDM", "evidence": "crates/codegen/xai-grok-config/src/lib.rs:3-9"},
+          {"name": "always-approve pin keys", "value": "[ui] disable_bypass_permissions_mode = true (current); [ui] yolo = false (legacy alias)", "evidence": "crates/codegen/xai-grok-workspace/src/permission/resolution.rs:918-932"},
+          {"name": "FAIL_CLOSED_ENV", "value": "\"GROK_MANAGED_CONFIG_FAIL_CLOSED\"", "evidence": "crates/codegen/xai-grok-config/src/validation.rs:30"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-config/src/validation.rs:30-106",
@@ -1431,12 +939,7 @@
           "crates/codegen/xai-grok-config/src/loader.rs:186-188",
           "crates/codegen/xai-grok-workspace/src/permission/resolution.rs:918-952"
         ],
-        "modules": [
-          "xai-grok-config",
-          "xai-grok-config-types",
-          "xai-grok-workspace",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-config", "xai-grok-config-types", "xai-grok-workspace", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1449,16 +952,8 @@
         ],
         "failurePolicy": "fail-closed in effect - a broken MDM read removes the admin layer rather than installing a wrong one, but because the layer is admin-forced this also means policy is absent; the read itself is gated on an explicit `Some`.",
         "constants": [
-          {
-            "name": "MDM preferences domain",
-            "value": "ai.x.grok (admin-forced managed preferences)",
-            "evidence": "crates/codegen/xai-grok-config/src/lib.rs:9"
-          },
-          {
-            "name": "MDM_REQUIREMENTS_SOURCE",
-            "value": "synthetic label `ai.x.grok:...`",
-            "evidence": "crates/codegen/xai-grok-config/src/validation.rs:41-48"
-          }
+          {"name": "MDM preferences domain", "value": "ai.x.grok (admin-forced managed preferences)", "evidence": "crates/codegen/xai-grok-config/src/lib.rs:9"},
+          {"name": "MDM_REQUIREMENTS_SOURCE", "value": "synthetic label `ai.x.grok:...`", "evidence": "crates/codegen/xai-grok-config/src/validation.rs:41-48"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-config/src/validation.rs:32-49",
@@ -1466,10 +961,7 @@
           "crates/codegen/xai-grok-config/src/macos_managed.rs:22-29",
           "crates/codegen/xai-grok-config/src/lib.rs:9"
         ],
-        "modules": [
-          "xai-grok-config",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-config", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1482,21 +974,14 @@
         ],
         "failurePolicy": "fail-closed - an unreadable or tampered policy file arms fail-closed rather than disabling policy.",
         "constants": [
-          {
-            "name": "signature scheme",
-            "value": "Ed25519 at rest",
-            "evidence": "crates/codegen/xai-grok-config/src/lib.rs:7"
-          }
+          {"name": "signature scheme", "value": "Ed25519 at rest", "evidence": "crates/codegen/xai-grok-config/src/lib.rs:7"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-config/src/lib.rs:7",
           "crates/codegen/xai-grok-config/src/signed_policy.rs:375-389",
           "crates/codegen/xai-grok-config/src/managed_cache.rs:180-194"
         ],
-        "modules": [
-          "xai-grok-config",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-config", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1510,21 +995,9 @@
         ],
         "failurePolicy": "mixed - the egress gate fails OPEN on genuinely absent policy (it defaults to enabled), and the user config tier is fail-open by design, while a requirement pin always wins. The feature registry itself defaults per row with six rows deliberately defaulting OFF, including LSP tools, web fetch and write-file.",
         "constants": [
-          {
-            "name": "registry size",
-            "value": "21 feature specs",
-            "evidence": "crates/codegen/xai-grok-config-types/src/registry.rs:86-240"
-          },
-          {
-            "name": "REMOTE_FETCH_CONFIG_PATH / MANAGED_WINS_OVER_USER",
-            "value": "\"features.remote_fetch\" / [\"features.remote_fetch\"]",
-            "evidence": "crates/codegen/xai-grok-shell/src/util/config/resolve/features.rs:109, :113"
-          },
-          {
-            "name": "default-off rows",
-            "value": "6 specs with default_enabled: false",
-            "evidence": "crates/codegen/xai-grok-config-types/src/registry.rs:100, :108, :156, :213, :221, :237"
-          }
+          {"name": "registry size", "value": "21 feature specs", "evidence": "crates/codegen/xai-grok-config-types/src/registry.rs:86-240"},
+          {"name": "REMOTE_FETCH_CONFIG_PATH / MANAGED_WINS_OVER_USER", "value": "\"features.remote_fetch\" / [\"features.remote_fetch\"]", "evidence": "crates/codegen/xai-grok-shell/src/util/config/resolve/features.rs:109, :113"},
+          {"name": "default-off rows", "value": "6 specs with default_enabled: false", "evidence": "crates/codegen/xai-grok-config-types/src/registry.rs:100, :108, :156, :213, :221, :237"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-config-types/src/flags.rs:107-135",
@@ -1532,11 +1005,7 @@
           "crates/codegen/xai-grok-config-types/src/registry.rs:296-304",
           "crates/codegen/xai-grok-shell/src/util/config/resolve/features.rs:97-148"
         ],
-        "modules": [
-          "xai-grok-config-types",
-          "xai-grok-config",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-config-types", "xai-grok-config", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1549,24 +1018,14 @@
         ],
         "failurePolicy": "fail-closed - anything not explicitly allowlisted is dropped from the overlay rather than passed through.",
         "constants": [
-          {
-            "name": "OVERLAY_ALLOW_PATHS",
-            "value": "models, features, toolset.bash.login_shell_capture, two web-search domain lists, four shell_environment_policy filter fields",
-            "evidence": "crates/codegen/xai-grok-config/src/config_override.rs:108-127"
-          },
-          {
-            "name": "PATCH_STRIP_KEYS",
-            "value": "version_overrides, campaigns, auth_provider, model_providers",
-            "evidence": "crates/codegen/xai-grok-config/src/config_override.rs:77-98"
-          }
+          {"name": "OVERLAY_ALLOW_PATHS", "value": "models, features, toolset.bash.login_shell_capture, two web-search domain lists, four shell_environment_policy filter fields", "evidence": "crates/codegen/xai-grok-config/src/config_override.rs:108-127"},
+          {"name": "PATCH_STRIP_KEYS", "value": "version_overrides, campaigns, auth_provider, model_providers", "evidence": "crates/codegen/xai-grok-config/src/config_override.rs:77-98"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-config/src/config_override.rs:77-132",
           "crates/codegen/xai-grok-config/src/config_layers.rs:150-153"
         ],
-        "modules": [
-          "xai-grok-config"
-        ],
+        "modules": ["xai-grok-config"],
         "verified": true
       },
       {
@@ -1580,27 +1039,15 @@
         ],
         "failurePolicy": "fail-closed for an untrusted folder in a release build (project hooks, MCP, LSP and plugins do not load) and deliberately inert in a local build (project scope always allowed, no store I/O at all).",
         "constants": [
-          {
-            "name": "TRUSTED_FOLDERS_FILENAME",
-            "value": "\"trusted_folders.toml\"",
-            "evidence": "crates/codegen/xai-grok-config/src/loader.rs:98"
-          },
-          {
-            "name": "local-build predicate",
-            "value": "option_env!(\"GROK_VERSION\").is_none()",
-            "evidence": "crates/codegen/xai-grok-workspace/src/folder_trust.rs:118-125"
-          }
+          {"name": "TRUSTED_FOLDERS_FILENAME", "value": "\"trusted_folders.toml\"", "evidence": "crates/codegen/xai-grok-config/src/loader.rs:98"},
+          {"name": "local-build predicate", "value": "option_env!(\"GROK_VERSION\").is_none()", "evidence": "crates/codegen/xai-grok-workspace/src/folder_trust.rs:118-125"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-workspace/src/folder_trust.rs:111-157",
           "crates/codegen/xai-grok-hooks/src/trust.rs:11-53",
           "crates/codegen/xai-grok-hooks/src/dispatcher.rs:26"
         ],
-        "modules": [
-          "xai-grok-workspace",
-          "xai-grok-hooks",
-          "xai-grok-config"
-        ],
+        "modules": ["xai-grok-workspace", "xai-grok-hooks", "xai-grok-config"],
         "verified": true
       },
       {
@@ -1614,16 +1061,8 @@
         ],
         "failurePolicy": "mixed but deny-biased - a layer whose config-to-JSON conversion fails is skipped and its pins are NOT applied, which is a genuine fail-open path on a malformed layer, while a dropped marketplace entry warns rather than silently allowing.",
         "constants": [
-          {
-            "name": "MANAGED_MCP_PREFIX / NAME_MAX_CHARS",
-            "value": "\"grok_com_\" / 39",
-            "evidence": "crates/codegen/xai-grok-workspace/src/permission/managed_policy/mcp.rs:245, :250"
-          },
-          {
-            "name": "vendor managed-settings paths",
-            "value": "/Library/Application Support/ClaudeCode/managed-settings.json (macOS), /etc/claude-code/managed-settings.json (Linux)",
-            "evidence": "crates/codegen/xai-grok-config/src/paths.rs:5-9"
-          }
+          {"name": "MANAGED_MCP_PREFIX / NAME_MAX_CHARS", "value": "\"grok_com_\" / 39", "evidence": "crates/codegen/xai-grok-workspace/src/permission/managed_policy/mcp.rs:245, :250"},
+          {"name": "vendor managed-settings paths", "value": "/Library/Application Support/ClaudeCode/managed-settings.json (macOS), /etc/claude-code/managed-settings.json (Linux)", "evidence": "crates/codegen/xai-grok-config/src/paths.rs:5-9"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-workspace/src/permission/managed_policy/layer.rs:16-25",
@@ -1631,11 +1070,7 @@
           "crates/codegen/xai-grok-workspace/src/permission/managed_policy/mcp.rs:353-366",
           "crates/codegen/xai-grok-pager/src/plugin_cmd.rs:875-880"
         ],
-        "modules": [
-          "xai-grok-workspace",
-          "xai-grok-pager",
-          "xai-grok-config"
-        ],
+        "modules": ["xai-grok-workspace", "xai-grok-pager", "xai-grok-config"],
         "verified": true
       },
       {
@@ -1649,21 +1084,9 @@
         ],
         "failurePolicy": "mixed - a provider that fails or times out returns nothing and the flow falls back rather than persisting a partial credential, while the principal check and the API-key kill switch are fail-closed.",
         "constants": [
-          {
-            "name": "EXTERNAL_AUTH_REFRESH_TIMEOUT",
-            "value": "7 s",
-            "evidence": "crates/codegen/xai-grok-shell/src/auth/external_auth.rs:44"
-          },
-          {
-            "name": "interactive provider timeout",
-            "value": "300 s",
-            "evidence": "crates/codegen/xai-grok-shell/src/auth/flow.rs:229"
-          },
-          {
-            "name": "env vars",
-            "value": "GROK_AUTH_PROVIDER_COMMAND, GROK_AUTH_PROVIDER_LABEL, GROK_AUTH_TOKEN_TTL, GROK_DISABLE_API_KEY_AUTH, GROK_FORCE_LOGIN_TEAM_ID",
-            "evidence": "crates/codegen/xai-grok-shell/src/auth/config.rs:266-271, :298"
-          }
+          {"name": "EXTERNAL_AUTH_REFRESH_TIMEOUT", "value": "7 s", "evidence": "crates/codegen/xai-grok-shell/src/auth/external_auth.rs:44"},
+          {"name": "interactive provider timeout", "value": "300 s", "evidence": "crates/codegen/xai-grok-shell/src/auth/flow.rs:229"},
+          {"name": "env vars", "value": "GROK_AUTH_PROVIDER_COMMAND, GROK_AUTH_PROVIDER_LABEL, GROK_AUTH_TOKEN_TTL, GROK_DISABLE_API_KEY_AUTH, GROK_FORCE_LOGIN_TEAM_ID", "evidence": "crates/codegen/xai-grok-shell/src/auth/config.rs:266-271, :298"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-shell/src/auth/config.rs:64-77",
@@ -1671,10 +1094,7 @@
           "crates/codegen/xai-grok-shell/src/auth/oidc/protocol.rs:162-194",
           "crates/codegen/xai-grok-shell/src/auth/flow.rs:176-245"
         ],
-        "modules": [
-          "xai-grok-shell",
-          "xai-grok-auth"
-        ],
+        "modules": ["xai-grok-shell", "xai-grok-auth"],
         "verified": true
       },
       {
@@ -1687,16 +1107,8 @@
         ],
         "failurePolicy": "mixed - fail-open on unknown tier names and fail-closed on the zero-data-retention gate, which blocks the session until the access flag is on.",
         "constants": [
-          {
-            "name": "restricted tier spellings",
-            "value": "\"\", \"free\", \"x basic\", \"x_basic\" (case- and whitespace-insensitive)",
-            "evidence": "crates/codegen/xai-grok-shell/src/tier.rs:18"
-          },
-          {
-            "name": "GROK_ZDR_ACCESS_ENABLED",
-            "value": "env override for the zero-data-retention access flag",
-            "evidence": "crates/codegen/xai-grok-shell/src/util/config/resolve/features.rs:17"
-          }
+          {"name": "restricted tier spellings", "value": "\"\", \"free\", \"x basic\", \"x_basic\" (case- and whitespace-insensitive)", "evidence": "crates/codegen/xai-grok-shell/src/tier.rs:18"},
+          {"name": "GROK_ZDR_ACCESS_ENABLED", "value": "env override for the zero-data-retention access flag", "evidence": "crates/codegen/xai-grok-shell/src/util/config/resolve/features.rs:17"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-shell/src/tier.rs:6-19",
@@ -1704,10 +1116,7 @@
           "crates/codegen/xai-grok-pager/src/app/app_view.rs:1240-1242",
           "crates/codegen/xai-grok-shell/src/extensions/share.rs:49-50"
         ],
-        "modules": [
-          "xai-grok-shell",
-          "xai-grok-pager"
-        ],
+        "modules": ["xai-grok-shell", "xai-grok-pager"],
         "verified": true
       },
       {
@@ -1720,25 +1129,34 @@
         ],
         "failurePolicy": "fail-soft throughout - an unreadable, oversized, block-less or zero-certificate bundle warns and contributes zero extra roots while the client is still built.",
         "constants": [
-          {
-            "name": "MAX_EXTRA_CA_BUNDLE_BYTES",
-            "value": "1048576 (1 MiB)",
-            "evidence": "crates/codegen/xai-grok-extra-ca/src/lib.rs:14"
-          },
-          {
-            "name": "GROK_EXTRA_CA_BUNDLE / SSL_CERT_FILE",
-            "value": "primary / fallback",
-            "evidence": "crates/codegen/xai-grok-extra-ca/src/lib.rs:16, :18"
-          }
+          {"name": "MAX_EXTRA_CA_BUNDLE_BYTES", "value": "1048576 (1 MiB)", "evidence": "crates/codegen/xai-grok-extra-ca/src/lib.rs:14"},
+          {"name": "GROK_EXTRA_CA_BUNDLE / SSL_CERT_FILE", "value": "primary / fallback", "evidence": "crates/codegen/xai-grok-extra-ca/src/lib.rs:16, :18"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-extra-ca/src/lib.rs:14-18",
           "crates/codegen/xai-grok-extra-ca/src/lib.rs:187-209",
           "crates/codegen/xai-grok-extra-ca/src/lib.rs:275-326"
         ],
-        "modules": [
-          "xai-grok-extra-ca"
+        "modules": ["xai-grok-extra-ca"],
+        "verified": true
+      }
+    ],
+        "what": "Policy-tier hooks are exempt from user control by construction. `HookProvenance` carries a `is_managed_policy` classification whose documented meaning is that the user cannot disable or skip those hooks, and the loader root-owned tiers qualify while `$GROK_HOME` tiers deliberately never do - the comment states the reason plainly: the user owns that directory and can rewrite or repoint it (xai-grok-config/src/loader.rs:210-219). Because the exemption assumes admin ownership, the loader probes the system hooks file and warns separately when it is a symlink, when it is not root-owned, or when it is group- or world-writable, each warning naming the reduced enforcement assumption (loader.rs:323-343). Hook provenance also drives a rank ordering for duplicates: byte-identical hooks arriving from several tiers resolve to the highest-ranked copy, so the root-owned copy's pinned timeout and no-disable rule survive (loader.rs:217-219; xai-grok-hooks/src/discovery.rs:222, :764).",
+        "invariants": [
+          "`is_managed_policy` must stay tied to root-owned tiers only; marking a `$GROK_HOME` tier as managed policy would exempt a user-writable file from user control.",
+          "The no-disable exemption is an assumption about file ownership, so the symlink / non-root-owned / writable probes are part of the mechanism rather than diagnostics.",
+          "Duplicate resolution keeps the higher-authority copy whole - provenance, pinned timeout and pinned env travel together."
         ],
+        "failurePolicy": "fail-closed on the exemption (the hook stays non-disableable) while emitting an explicit warning that the assumption may be violated; the hook is not silently downgraded to disableable.",
+        "constants": [
+          {"name": "policy tiers", "value": "root-owned /etc/grok tier; MDM tier; $GROK_HOME tiers excluded", "evidence": "crates/codegen/xai-grok-config/src/loader.rs:210-219"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-config/src/loader.rs:210-219",
+          "crates/codegen/xai-grok-config/src/loader.rs:323-343",
+          "crates/codegen/xai-grok-hooks/src/discovery.rs:217-248"
+        ],
+        "modules": ["xai-grok-config", "xai-grok-hooks"],
         "verified": true
       }
     ],
@@ -1754,21 +1172,9 @@
         ],
         "failurePolicy": "mixed - a bridge reverse-call failure is fail-closed by design (a missing tool server is a real error), while a serve failure records an init-failed marker and surfaces the server as unavailable rather than aborting the session.",
         "constants": [
-          {
-            "name": "DEFAULT_STARTUP_TIMEOUT_SECS / DEFAULT_TOOL_TIMEOUT_SECS",
-            "value": "30 / 6000",
-            "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:1124, :1127"
-          },
-          {
-            "name": "HTTP_CONNECT_TIMEOUT / STDIO_SHUTDOWN_GRACE",
-            "value": "10 s / 3 s",
-            "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:1129, :1132"
-          },
-          {
-            "name": "BRIDGE_BUF / RESPONSE_CHANNEL_CAP",
-            "value": "256*1024 / 128",
-            "evidence": "crates/codegen/xai-grok-mcp/src/acp_transport.rs:48, :52"
-          }
+          {"name": "DEFAULT_STARTUP_TIMEOUT_SECS / DEFAULT_TOOL_TIMEOUT_SECS", "value": "30 / 6000", "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:1124, :1127"},
+          {"name": "HTTP_CONNECT_TIMEOUT / STDIO_SHUTDOWN_GRACE", "value": "10 s / 3 s", "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:1129, :1132"},
+          {"name": "BRIDGE_BUF / RESPONSE_CHANNEL_CAP", "value": "256*1024 / 128", "evidence": "crates/codegen/xai-grok-mcp/src/acp_transport.rs:48, :52"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-mcp/src/acp_transport.rs:44",
@@ -1776,9 +1182,7 @@
           "crates/codegen/xai-grok-mcp/src/servers.rs:2577",
           "crates/codegen/xai-grok-mcp/src/wire.rs:10-33"
         ],
-        "modules": [
-          "xai-grok-mcp"
-        ],
+        "modules": ["xai-grok-mcp"],
         "verified": true
       },
       {
@@ -1793,21 +1197,9 @@
         ],
         "failurePolicy": "fail-soft throughout - a send failure during teardown logs at debug and exits without retry, non-Ready states exit silently, and an unreachable server degrades to unavailable with a scheduled retry rather than to permanent tool loss.",
         "constants": [
-          {
-            "name": "DEFAULT_POLL_INTERVAL",
-            "value": "500 ms (MissedTickBehavior::Skip)",
-            "evidence": "crates/codegen/xai-grok-mcp/src/liveness.rs:53, :135"
-          },
-          {
-            "name": "UNREACHABLE_RETRY_COOLDOWN / ATTEMPT_LEASE",
-            "value": "60 s / 600 s",
-            "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:856, :860"
-          },
-          {
-            "name": "ANONYMOUS_ACCESS_PROBE_TIMEOUT",
-            "value": "3 s",
-            "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:1134"
-          }
+          {"name": "DEFAULT_POLL_INTERVAL", "value": "500 ms (MissedTickBehavior::Skip)", "evidence": "crates/codegen/xai-grok-mcp/src/liveness.rs:53, :135"},
+          {"name": "UNREACHABLE_RETRY_COOLDOWN / ATTEMPT_LEASE", "value": "60 s / 600 s", "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:856, :860"},
+          {"name": "ANONYMOUS_ACCESS_PROBE_TIMEOUT", "value": "3 s", "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:1134"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-mcp/src/liveness.rs:53",
@@ -1815,10 +1207,7 @@
           "crates/codegen/xai-grok-mcp/src/servers.rs:856-896",
           "crates/codegen/xai-grok-mcp/src/servers.rs:949"
         ],
-        "modules": [
-          "xai-grok-mcp",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-mcp", "xai-grok-shell"],
         "verified": true
       },
       {
@@ -1832,21 +1221,9 @@
         ],
         "failurePolicy": "mixed but scoped - a failure to construct the auth manager degrades to no-OAuth-support and falls through to the anonymous path (which is separately probed), while a hung authorization server is timeout-bounded rather than wedging the manager lock.",
         "constants": [
-          {
-            "name": "BROWSER_AUTH_TIMEOUT / AUTH_LOCK_WAIT",
-            "value": "600 s / 660 s (unix only)",
-            "evidence": "crates/codegen/xai-grok-mcp/src/oauth.rs:17, :20"
-          },
-          {
-            "name": "OAUTH_DISCOVERY_TIMEOUT / CREDENTIAL_POLL_INTERVAL",
-            "value": "5 s / 2 s",
-            "evidence": "crates/codegen/xai-grok-mcp/src/oauth.rs:24, :15"
-          },
-          {
-            "name": "CREDENTIALS_FILENAME",
-            "value": "\"mcp_credentials.json\"",
-            "evidence": "crates/codegen/xai-grok-mcp/src/credentials.rs:60"
-          }
+          {"name": "BROWSER_AUTH_TIMEOUT / AUTH_LOCK_WAIT", "value": "600 s / 660 s (unix only)", "evidence": "crates/codegen/xai-grok-mcp/src/oauth.rs:17, :20"},
+          {"name": "OAUTH_DISCOVERY_TIMEOUT / CREDENTIAL_POLL_INTERVAL", "value": "5 s / 2 s", "evidence": "crates/codegen/xai-grok-mcp/src/oauth.rs:24, :15"},
+          {"name": "CREDENTIALS_FILENAME", "value": "\"mcp_credentials.json\"", "evidence": "crates/codegen/xai-grok-mcp/src/credentials.rs:60"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-mcp/src/oauth.rs:15-24",
@@ -1854,9 +1231,7 @@
           "crates/codegen/xai-grok-mcp/src/oauth.rs:224",
           "crates/codegen/xai-grok-mcp/src/auth_status.rs:42"
         ],
-        "modules": [
-          "xai-grok-mcp"
-        ],
+        "modules": ["xai-grok-mcp"],
         "verified": true
       },
       {
@@ -1870,26 +1245,10 @@
         ],
         "failurePolicy": "fail-soft and closed toward the server, never toward the user - an unsupported mode declines, a missing bridge declines, a closed channel cancels, and a dropped oneshot cancels.",
         "constants": [
-          {
-            "name": "MAX_ELICIT_MESSAGE_CHARS",
-            "value": "4096",
-            "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:9"
-          },
-          {
-            "name": "MAX_ELICIT_URL_CHARS",
-            "value": "2048",
-            "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:10"
-          },
-          {
-            "name": "MAX_ELICIT_ID_CHARS",
-            "value": "128",
-            "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:11"
-          },
-          {
-            "name": "MAX_ELICIT_SCHEMA_BYTES",
-            "value": "64 * 1024 (65536)",
-            "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:17"
-          }
+          {"name": "MAX_ELICIT_MESSAGE_CHARS", "value": "4096", "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:9"},
+          {"name": "MAX_ELICIT_URL_CHARS", "value": "2048", "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:10"},
+          {"name": "MAX_ELICIT_ID_CHARS", "value": "128", "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:11"},
+          {"name": "MAX_ELICIT_SCHEMA_BYTES", "value": "64 * 1024 (65536)", "evidence": "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:17"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-mcp/src/elicitation.rs:63",
@@ -1897,10 +1256,7 @@
           "crates/codegen/xai-grok-mcp/src/elicitation.rs:178-181",
           "crates/codegen/xai-grok-tools/src/mcp_elicitation/schema.rs:9-17"
         ],
-        "modules": [
-          "xai-grok-mcp",
-          "xai-grok-tools"
-        ],
+        "modules": ["xai-grok-mcp", "xai-grok-tools"],
         "verified": true
       },
       {
@@ -1913,29 +1269,15 @@
         ],
         "failurePolicy": "fail-closed on an invalid tool name (that tool is rejected) and fail-soft on icons (oversized or unknown entries are dropped while the server still loads).",
         "constants": [
-          {
-            "name": "MAX_MCP_ICONS_PER_ENTITY / MAX_MCP_ICON_SIZES",
-            "value": "8 / 8",
-            "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:100, :109"
-          },
-          {
-            "name": "MAX_MCP_ICON_SRC_BYTES",
-            "value": "65536",
-            "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:103"
-          },
-          {
-            "name": "MAX_MCP_ICON_MIME_TYPE_BYTES / SIZE_TOKEN_BYTES",
-            "value": "128 / 32",
-            "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:106, :112"
-          }
+          {"name": "MAX_MCP_ICONS_PER_ENTITY / MAX_MCP_ICON_SIZES", "value": "8 / 8", "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:100, :109"},
+          {"name": "MAX_MCP_ICON_SRC_BYTES", "value": "65536", "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:103"},
+          {"name": "MAX_MCP_ICON_MIME_TYPE_BYTES / SIZE_TOKEN_BYTES", "value": "128 / 32", "evidence": "crates/codegen/xai-grok-mcp/src/servers.rs:106, :112"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-mcp/src/servers.rs:82-86",
           "crates/codegen/xai-grok-mcp/src/servers.rs:100-127"
         ],
-        "modules": [
-          "xai-grok-mcp"
-        ],
+        "modules": ["xai-grok-mcp"],
         "verified": true
       },
       {
@@ -1948,21 +1290,9 @@
         ],
         "failurePolicy": "fail-soft - a server crash, retry or startup is surfaced as a telemetry event and the tool returns error text, and diagnostics use short bounded waits rather than blocking a turn.",
         "constants": [
-          {
-            "name": "DEFAULT_STARTUP_TIMEOUT_MS / SHUTDOWN_TIMEOUT_MS / REQUEST_TIMEOUT",
-            "value": "15000 / 5000 / 30 s",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/lsp/config.rs:8-10"
-          },
-          {
-            "name": "DIAGNOSTICS_DRAIN_TIMEOUT",
-            "value": "500 ms",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/lsp/mod.rs:42"
-          },
-          {
-            "name": "MAX_PER_FILE / MAX_PER_SUMMARY",
-            "value": "10 / 30",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/lsp/manager.rs:29, :36"
-          }
+          {"name": "DEFAULT_STARTUP_TIMEOUT_MS / SHUTDOWN_TIMEOUT_MS / REQUEST_TIMEOUT", "value": "15000 / 5000 / 30 s", "evidence": "crates/codegen/xai-grok-tools/src/implementations/lsp/config.rs:8-10"},
+          {"name": "DIAGNOSTICS_DRAIN_TIMEOUT", "value": "500 ms", "evidence": "crates/codegen/xai-grok-tools/src/implementations/lsp/mod.rs:42"},
+          {"name": "MAX_PER_FILE / MAX_PER_SUMMARY", "value": "10 / 30", "evidence": "crates/codegen/xai-grok-tools/src/implementations/lsp/manager.rs:29, :36"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-tools/src/implementations/lsp/client.rs:221",
@@ -1970,11 +1300,7 @@
           "crates/codegen/xai-grok-tools/src/implementations/lsp/config.rs:8-33",
           "crates/codegen/xai-grok-tools/src/implementations/lsp/mod.rs:42"
         ],
-        "modules": [
-          "xai-grok-tools",
-          "xai-grok-shell",
-          "xai-grok-agent"
-        ],
+        "modules": ["xai-grok-tools", "xai-grok-shell", "xai-grok-agent"],
         "verified": true,
         "wiringNote": "The dependency is `async-lsp` 0.2.3; tower-lsp and lsp-server are absent. Do not conflate this with xai-codebase-graph: the ACP methods `x.ai/code/goto-definition`, `goto-references`, `find-definitions` and `find-references` (xai-grok-shell/src/extensions/code_nav.rs:178-265) route to the tree-sitter index."
       },
@@ -1989,16 +1315,8 @@
         ],
         "failurePolicy": "fail-soft - an unreadable or over-cap SKILL.md is skipped, an over-long description is capped rather than rejected, and a body that cannot be read falls back to frontmatter-only metadata.",
         "constants": [
-          {
-            "name": "MAX_DESCRIPTION_LEN / MAX_NAME_LEN",
-            "value": "1024 / 64",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/skills/discovery.rs:15-19"
-          },
-          {
-            "name": "MAX_FRONTMATTER_BYTES / MAX_BODY_PEEK_BYTES / MAX_SKILL_WALK_DEPTH",
-            "value": "4096 / 2048 / 5",
-            "evidence": "crates/codegen/xai-grok-tools/src/implementations/skills/discovery.rs:15-19"
-          }
+          {"name": "MAX_DESCRIPTION_LEN / MAX_NAME_LEN", "value": "1024 / 64", "evidence": "crates/codegen/xai-grok-tools/src/implementations/skills/discovery.rs:15-19"},
+          {"name": "MAX_FRONTMATTER_BYTES / MAX_BODY_PEEK_BYTES / MAX_SKILL_WALK_DEPTH", "value": "4096 / 2048 / 5", "evidence": "crates/codegen/xai-grok-tools/src/implementations/skills/discovery.rs:15-19"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-agent/src/prompt/skills.rs:21",
@@ -2006,10 +1324,7 @@
           "crates/codegen/xai-grok-agent/src/prompt/skills.rs:138",
           "crates/codegen/xai-grok-tools/src/implementations/skills/discovery.rs:15-19"
         ],
-        "modules": [
-          "xai-grok-agent",
-          "xai-grok-tools"
-        ],
+        "modules": ["xai-grok-agent", "xai-grok-tools"],
         "verified": true,
         "wiringNote": "There is NO `[skills] enabled` flag - the feature is always on, and the config surface is paths, ignore, disabled, server directories and bundled directories only. Live mid-session rediscovery comes from a file watcher over the skills, commands and workflow directories (xai-grok-shell/src/config/watcher.rs:476)."
       },
@@ -2024,16 +1339,8 @@
         ],
         "failurePolicy": "mixed - `require_sha` fails an unpinned remote install closed, a hung git network operation is killed at a timeout and reported, and a malformed marketplace source entry warns and is skipped while the rest of the file still parses.",
         "constants": [
-          {
-            "name": "CACHE_TTL / NETWORK_OP_TIMEOUT / LOCK_TIMEOUT / LOCK_POLL_INTERVAL",
-            "value": "300 s / 15 s / 30 s / 100 ms",
-            "evidence": "crates/codegen/xai-grok-plugin-marketplace/src/git.rs:16-20"
-          },
-          {
-            "name": "STDERR_DIAGNOSTIC_CAP",
-            "value": "64 KiB",
-            "evidence": "crates/codegen/xai-grok-plugin-marketplace/src/git.rs:21"
-          }
+          {"name": "CACHE_TTL / NETWORK_OP_TIMEOUT / LOCK_TIMEOUT / LOCK_POLL_INTERVAL", "value": "300 s / 15 s / 30 s / 100 ms", "evidence": "crates/codegen/xai-grok-plugin-marketplace/src/git.rs:16-20"},
+          {"name": "STDERR_DIAGNOSTIC_CAP", "value": "64 KiB", "evidence": "crates/codegen/xai-grok-plugin-marketplace/src/git.rs:21"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-plugin-marketplace/src/config.rs:34",
@@ -2041,10 +1348,7 @@
           "crates/codegen/xai-grok-plugin-marketplace/src/git.rs:240",
           "crates/codegen/xai-grok-plugin-marketplace/src/installer.rs:104"
         ],
-        "modules": [
-          "xai-grok-plugin-marketplace",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-plugin-marketplace", "xai-grok-shell"],
         "verified": true,
         "wiringNote": "Adding a source is additionally gated by the managed-settings marketplace allowlist: when restricted, a non-matching identity is a validation error and local paths never match a git-URL allowlist so they are blocked - intentionally fail-closed (xai-grok-shell/src/extensions/marketplace.rs:825-835). A URL is also probed with a timed `git ls-remote` before being persisted (git.rs:250). `require_sha` defaults OFF, with the stated reason that existing unpinned catalogs keep installing."
       },
@@ -2059,26 +1363,10 @@
         ],
         "failurePolicy": "fail-closed on journal integrity (an unsafe restore, a sequence gap or a divergence all abort the run) and fail-soft on a live host call, which is recorded as a sentinel so a resume can retry it.",
         "constants": [
-          {
-            "name": "MAX_AGENT_BUDGET / DEFAULT_AGENT_BUDGET / MAX_HOST_CALLS / MAX_PARALLEL",
-            "value": "1024 / 128 / 10000 / 1024",
-            "evidence": "crates/codegen/xai-workflow/src/lib.rs:8-17"
-          },
-          {
-            "name": "MAX_WORKFLOW_NAME_LEN / PHASES / PHASE_TITLE_LEN",
-            "value": "64 / 64 / 128",
-            "evidence": "crates/codegen/xai-workflow/src/lib.rs:8-17"
-          },
-          {
-            "name": "MAX_JOURNAL_BYTES",
-            "value": "64 MiB",
-            "evidence": "crates/codegen/xai-workflow/src/journal.rs:6"
-          },
-          {
-            "name": "host caps",
-            "value": "WORKFLOW_MAX_ACTIVE_RUNS_PER_SESSION=4, DEFAULT_WORKFLOW_MAX_CONCURRENT_AGENTS=32, WORKFLOW_CHILD_DRAIN_TIMEOUT=20 s",
-            "evidence": "crates/codegen/xai-grok-shell/src/session/workflow/manager.rs:19; src/session/workflow/host_service.rs:21-23"
-          }
+          {"name": "MAX_AGENT_BUDGET / DEFAULT_AGENT_BUDGET / MAX_HOST_CALLS / MAX_PARALLEL", "value": "1024 / 128 / 10000 / 1024", "evidence": "crates/codegen/xai-workflow/src/lib.rs:8-17"},
+          {"name": "MAX_WORKFLOW_NAME_LEN / PHASES / PHASE_TITLE_LEN", "value": "64 / 64 / 128", "evidence": "crates/codegen/xai-workflow/src/lib.rs:8-17"},
+          {"name": "MAX_JOURNAL_BYTES", "value": "64 MiB", "evidence": "crates/codegen/xai-workflow/src/journal.rs:6"},
+          {"name": "host caps", "value": "WORKFLOW_MAX_ACTIVE_RUNS_PER_SESSION=4, DEFAULT_WORKFLOW_MAX_CONCURRENT_AGENTS=32, WORKFLOW_CHILD_DRAIN_TIMEOUT=20 s", "evidence": "crates/codegen/xai-grok-shell/src/session/workflow/manager.rs:19; src/session/workflow/host_service.rs:21-23"}
         ],
         "evidence": [
           "crates/codegen/xai-workflow/src/engine.rs:492-511",
@@ -2086,10 +1374,7 @@
           "crates/codegen/xai-workflow/src/lib.rs:8-17",
           "crates/codegen/xai-workflow/src/run.rs:5"
         ],
-        "modules": [
-          "xai-workflow",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-workflow", "xai-grok-shell"],
         "verified": true,
         "wiringNote": "Wired and DEFAULT-ON: the resolver defaults true and the env var, config key and remote setting are kill-switches only (xai-grok-shell/src/agent/config.rs:2689-2702)."
       },
@@ -2106,9 +1391,7 @@
         "evidence": [
           "crates/codegen/xai-grok-bundle/src/lib.rs:1-6"
         ],
-        "modules": [
-          "xai-grok-bundle"
-        ],
+        "modules": ["xai-grok-bundle"],
         "verified": true
       }
     ],
@@ -2125,35 +1408,17 @@
         ],
         "failurePolicy": "mixed. Ranking degrades fail-open (FTS errors become empty via `unwrap_or_default()`, vector errors log and set `is_vector_degraded` while reporting an FTS-only mode, and a failed query embedding yields an embedding-fallback marker). Opening the index is the one hard error. Scoping a credential to an embedding endpoint fails CLOSED: an untrusted or mismatched endpoint drops the scoped credential rather than sending it.",
         "constants": [
-          {
-            "name": "candidate_limit",
-            "value": "max_results * 3",
-            "evidence": "crates/codegen/xai-grok-memory/src/search.rs:183"
-          },
-          {
-            "name": "MAX_L2_DISTANCE / access-boost scale",
-            "value": "2.0 / 0.05",
-            "evidence": "crates/codegen/xai-grok-memory/src/search.rs:256, :323"
-          },
-          {
-            "name": "defaults",
-            "value": "max_results=6, min_score=0.7, vector_weight=0.7, text_weight=0.3; decay half_life_days=30.0; mmr enabled with lambda=0.7; dimensions=1024",
-            "evidence": "crates/codegen/xai-grok-config-types/src/memory.rs:198-208, :231-238, :261-267, :155-162"
-          },
-          {
-            "name": "embedding retry",
-            "value": "MAX_RETRIES=3, INITIAL_BACKOFF_MS=1000, max_batch_size=32",
-            "evidence": "crates/codegen/xai-grok-memory/src/embedding.rs:8-10, :48"
-          }
+          {"name": "candidate_limit", "value": "max_results * 3", "evidence": "crates/codegen/xai-grok-memory/src/search.rs:183"},
+          {"name": "MAX_L2_DISTANCE / access-boost scale", "value": "2.0 / 0.05", "evidence": "crates/codegen/xai-grok-memory/src/search.rs:256, :323"},
+          {"name": "defaults", "value": "max_results=6, min_score=0.7, vector_weight=0.7, text_weight=0.3; decay half_life_days=30.0; mmr enabled with lambda=0.7; dimensions=1024", "evidence": "crates/codegen/xai-grok-config-types/src/memory.rs:198-208, :231-238, :261-267, :155-162"},
+          {"name": "embedding retry", "value": "MAX_RETRIES=3, INITIAL_BACKOFF_MS=1000, max_batch_size=32", "evidence": "crates/codegen/xai-grok-memory/src/embedding.rs:8-10, :48"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-memory/src/search.rs:183",
           "crates/codegen/xai-grok-memory/src/search.rs:274-331",
           "crates/codegen/xai-grok-memory/src/mmr.rs:52-62"
         ],
-        "modules": [
-          "xai-grok-memory"
-        ],
+        "modules": ["xai-grok-memory"],
         "verified": true,
         "wiringNote": "Wired at three call sites distinguished by a search-source enum (Tool, Injection, CompactionRecovery), but THE WHOLE SUBSYSTEM IS FLAG-GATED OFF BY DEFAULT: `enabled` is a BoolFlag whose final tier is `.default(false)` (crates/codegen/xai-grok-config-types/src/memory.rs:596-602), with `--experimental-memory`/`--no-memory` as the CLI surfaces (xai-grok-pager/src/app/cli.rs:637-650)."
       },
@@ -2167,30 +1432,16 @@
         ],
         "failurePolicy": "fail-soft - an unreadable file warns and returns a default result, per-chunk vector deletes and upserts discard their errors, unresolvable FTS rowids are silently dropped, and a failed embedding batch is logged and skipped. Only SQL errors propagate.",
         "constants": [
-          {
-            "name": "chunk id",
-            "value": "\"{path}:{i}\"",
-            "evidence": "crates/codegen/xai-grok-memory/src/index.rs:247"
-          },
-          {
-            "name": "chunk sizing",
-            "value": "max_chunk_chars=1600, chunk_overlap_chars=320",
-            "evidence": "crates/codegen/xai-grok-config-types/src/memory.rs:134-141"
-          },
-          {
-            "name": "embedding batch / schema version",
-            "value": "32 / 1",
-            "evidence": "crates/codegen/xai-grok-memory/src/lib.rs:73; src/schema.rs:12"
-          }
+          {"name": "chunk id", "value": "\"{path}:{i}\"", "evidence": "crates/codegen/xai-grok-memory/src/index.rs:247"},
+          {"name": "chunk sizing", "value": "max_chunk_chars=1600, chunk_overlap_chars=320", "evidence": "crates/codegen/xai-grok-config-types/src/memory.rs:134-141"},
+          {"name": "embedding batch / schema version", "value": "32 / 1", "evidence": "crates/codegen/xai-grok-memory/src/lib.rs:73; src/schema.rs:12"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-memory/src/index.rs:244-271",
           "crates/codegen/xai-grok-memory/src/index.rs:617",
           "crates/codegen/xai-grok-memory/src/chunker.rs:141"
         ],
-        "modules": [
-          "xai-grok-memory"
-        ],
+        "modules": ["xai-grok-memory"],
         "verified": true,
         "wiringNote": "Wired (startup bulk reindex, per-file reindex after flush and session end, deletions after dream cleanup). sqlite-vec is registered once via `sqlite3_auto_extension`; if `SELECT vec_version()` fails the index logs once and runs FTS-only, and an embedding-dimension mismatch drops and recreates the vector table. Two sub-APIs are UNWIRED: `get_reindex_claim` and `all_indexed_paths` have zero callers, so the `memory doctor`/`reindex` flows their doc comments describe are absent (the CLI implements only `clear`), and `schema::SCHEMA_VERSION` is never read - there is no version check or rebuild path. Inherits the `GROK_MEMORY` default-false gate."
       },
@@ -2206,26 +1457,10 @@
         ],
         "failurePolicy": "mixed - fail-open at the API edge (no manager or a blank query yields an empty response), fail-closed on real query errors (they propagate), and fail-soft for bootstrap (a failed or lost bootstrap only logs, rate-limited, and the completion marker is withheld so a later search retries).",
         "constants": [
-          {
-            "name": "SCHEMA_VERSION",
-            "value": "\"4\"",
-            "evidence": "crates/codegen/xai-grok-session-search/src/fts.rs:26"
-          },
-          {
-            "name": "bm25 weights / snippet tokens",
-            "value": "10.0 title, 1.0 body / 18 tokens",
-            "evidence": "crates/codegen/xai-grok-session-search/src/fts.rs:577, :565"
-          },
-          {
-            "name": "id-like threshold",
-            "value": ">= 8 hex chars",
-            "evidence": "crates/codegen/xai-grok-session-search/src/fts.rs:705"
-          },
-          {
-            "name": "bootstrap lease / refresh / peer wait / poll",
-            "value": "300 s / 30 s / 60 s / 1 s",
-            "evidence": "crates/codegen/xai-grok-session-search/src/bootstrap.rs:36-41"
-          }
+          {"name": "SCHEMA_VERSION", "value": "\"4\"", "evidence": "crates/codegen/xai-grok-session-search/src/fts.rs:26"},
+          {"name": "bm25 weights / snippet tokens", "value": "10.0 title, 1.0 body / 18 tokens", "evidence": "crates/codegen/xai-grok-session-search/src/fts.rs:577, :565"},
+          {"name": "id-like threshold", "value": ">= 8 hex chars", "evidence": "crates/codegen/xai-grok-session-search/src/fts.rs:705"},
+          {"name": "bootstrap lease / refresh / peer wait / poll", "value": "300 s / 30 s / 60 s / 1 s", "evidence": "crates/codegen/xai-grok-session-search/src/bootstrap.rs:36-41"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-session-search/src/fts.rs:26",
@@ -2233,9 +1468,7 @@
           "crates/codegen/xai-grok-session-search/src/fts.rs:705",
           "crates/codegen/xai-grok-session-search/src/bootstrap.rs:23-41"
         ],
-        "modules": [
-          "xai-grok-session-search"
-        ],
+        "modules": ["xai-grok-session-search"],
         "verified": true,
         "wiringNote": "Wired into the shell and enabled by default: the `SessionSearch` feature spec has `default_enabled: true` with env `GROK_SESSION_SEARCH` (crates/codegen/xai-grok-config-types/src/registry.rs:88-94). The index lives at `<grok home>/sessions/session_search.sqlite` under a per-host effective path on network mounts. A corrupt index self-heals by QUARANTINE rather than deletion: `heal_unusable` confirms corruption with `PRAGMA integrity_check`, renames the DB and its wal/shm/journal siblings to `<name>.corrupt.<unix_nanos>` under a `<db>.lock` exclusive lock, recreates empty, bumps a cache epoch, and retries the operation exactly once (src/recovery.rs:106-170). Sessions over 30 MiB get a title-only placeholder row so title search still works and an existing fuller row is never clobbered (src/bootstrap.rs:509-535)."
       },
@@ -2250,26 +1483,10 @@
         ],
         "failurePolicy": "mixed - build-level fail-closed (a thread-pool creation failure is an error), per-file fail-soft (unsupported extension, empty or oversized file, a NUL byte in the first 8000 bytes, an unreadable file or a parse failure all simply leave that file absent), and manager fail-open (a builder error logs and yields an EMPTY index).",
         "constants": [
-          {
-            "name": "MAX_INDEXABLE_FILE_SIZE",
-            "value": "5 * 1024 * 1024 bytes",
-            "evidence": "crates/codegen/xai-codebase-graph/src/index_manager.rs:42"
-          },
-          {
-            "name": "build_batch_size / chunk_size",
-            "value": "5_000 / 100",
-            "evidence": "crates/codegen/xai-codebase-graph/src/manager/builder.rs:100-101"
-          },
-          {
-            "name": "cache magic / version / file",
-            "value": "b\"SGIX\" / 1 / \".goto_index.bin\"",
-            "evidence": "crates/codegen/xai-codebase-graph/src/scope_graph/graph.rs:636-638; src/manager/cache.rs:11"
-          },
-          {
-            "name": "binary probe",
-            "value": "first 8000 bytes",
-            "evidence": "crates/codegen/xai-codebase-graph/src/index_manager.rs:1589"
-          }
+          {"name": "MAX_INDEXABLE_FILE_SIZE", "value": "5 * 1024 * 1024 bytes", "evidence": "crates/codegen/xai-codebase-graph/src/index_manager.rs:42"},
+          {"name": "build_batch_size / chunk_size", "value": "5_000 / 100", "evidence": "crates/codegen/xai-codebase-graph/src/manager/builder.rs:100-101"},
+          {"name": "cache magic / version / file", "value": "b\"SGIX\" / 1 / \".goto_index.bin\"", "evidence": "crates/codegen/xai-codebase-graph/src/scope_graph/graph.rs:636-638; src/manager/cache.rs:11"},
+          {"name": "binary probe", "value": "first 8000 bytes", "evidence": "crates/codegen/xai-codebase-graph/src/index_manager.rs:1589"}
         ],
         "evidence": [
           "crates/codegen/xai-codebase-graph/src/languages/mod.rs:36-76",
@@ -2277,9 +1494,7 @@
           "crates/codegen/xai-codebase-graph/src/index_manager.rs:42",
           "crates/codegen/xai-codebase-graph/src/scope_graph/graph.rs:636-638"
         ],
-        "modules": [
-          "xai-codebase-graph"
-        ],
+        "modules": ["xai-codebase-graph"],
         "verified": true,
         "wiringNote": "Wired only through a channel actor (`IndexManager`/`IndexManagerHandle`), spawned lazily on the first eligible code-navigation request, with a full-tree build running eagerly inside the actor while queries queue. THE SCOPE/EDGE GRAPH IS UNWIRED DEAD CODE: `build_scope_graph` and the only populator of the graphs map have ZERO call sites repository-wide, and the graphs map is never serialized. The shipped graph is a name-keyed occurrence map (symbol to list of relative-path and line) with bidirectional alias expansion. Host-side gating requires a web client, `x.ai/codeNavigation.enabled`, `features.codebase_indexing` (default enabled) and a git root. Note this is NOT the LSP path - the `x.ai/code/*` navigation methods route here, to tree-sitter, not to a language server."
       },
@@ -2294,26 +1509,10 @@
         ],
         "failurePolicy": "fail-soft, degrading rather than aborting - which is load-bearing because the process is built with `panic = \"abort\"`. An empty browse still returns results, a fully refused matcher returns empty, and a walk-thread spawn failure logs and yields no results for that walk. Errors are only ever tracing events; the public API has no error channel.",
         "constants": [
-          {
-            "name": "NUM_NUCLEO_THREADS / NUM_IGNORE_THREADS",
-            "value": "2 / 8",
-            "evidence": "crates/codegen/xai-fuzzy-file-search/src/lib.rs:28-29"
-          },
-          {
-            "name": "min match score",
-            "value": "7 + len*14",
-            "evidence": "crates/codegen/xai-fuzzy-file-search/src/lib.rs:483"
-          },
-          {
-            "name": "daemon channel capacity / idle recv timeout / tick budget",
-            "value": "1024 / 250 us / 10 ms",
-            "evidence": "crates/codegen/xai-fuzzy-file-search/src/lib.rs:609-651"
-          },
-          {
-            "name": "host DEFAULT_TOP_K",
-            "value": "1000",
-            "evidence": "crates/codegen/xai-grok-workspace/src/file_system/mod.rs:112"
-          }
+          {"name": "NUM_NUCLEO_THREADS / NUM_IGNORE_THREADS", "value": "2 / 8", "evidence": "crates/codegen/xai-fuzzy-file-search/src/lib.rs:28-29"},
+          {"name": "min match score", "value": "7 + len*14", "evidence": "crates/codegen/xai-fuzzy-file-search/src/lib.rs:483"},
+          {"name": "daemon channel capacity / idle recv timeout / tick budget", "value": "1024 / 250 us / 10 ms", "evidence": "crates/codegen/xai-fuzzy-file-search/src/lib.rs:609-651"},
+          {"name": "host DEFAULT_TOP_K", "value": "1000", "evidence": "crates/codegen/xai-grok-workspace/src/file_system/mod.rs:112"}
         ],
         "evidence": [
           "crates/codegen/xai-fuzzy-file-search/src/lib.rs:28-29",
@@ -2321,9 +1520,7 @@
           "crates/codegen/xai-fuzzy-file-search/src/lib.rs:277-315",
           "crates/codegen/xai-fuzzy-file-search/src/lib.rs:483"
         ],
-        "modules": [
-          "xai-fuzzy-file-search"
-        ],
+        "modules": ["xai-fuzzy-file-search"],
         "verified": true,
         "wiringNote": "Wired: the single dependent is xai-grok-workspace, exposing it as a `workspace.fuzzy_search` RPC driven through a manager (xai-grok-workspace/src/file_system/mod.rs:143-166). The degradation ladder is regression-guarded by a unix child-re-exec test that caps the process-count rlimit and asserts the process degrades instead of aborting (lib.rs:843-890)."
       }
@@ -2344,10 +1541,7 @@
           "crates/codegen/xai-grok-shell/src/session/slash_commands.rs:391-429",
           "crates/codegen/xai-grok-shell/src/session/slash_commands.rs:445-453"
         ],
-        "modules": [
-          "xai-grok-shell",
-          "xai-grok-pager"
-        ],
+        "modules": ["xai-grok-shell", "xai-grok-pager"],
         "verified": true
       },
       {
@@ -2364,11 +1558,7 @@
           "crates/codegen/xai-prompt-queue/src/types.rs:28-76",
           "crates/codegen/xai-prompt-queue/src/types.rs:124-166"
         ],
-        "modules": [
-          "xai-prompt-queue",
-          "xai-grok-shell",
-          "xai-grok-pager"
-        ],
+        "modules": ["xai-prompt-queue", "xai-grok-shell", "xai-grok-pager"],
         "verified": true
       },
       {
@@ -2381,22 +1571,14 @@
         ],
         "failurePolicy": "fail-soft - the terminal transition performs rollback on failure and the in-process path degrades to an exec relaunch when unavailable, rather than refusing the switch.",
         "constants": [
-          {
-            "name": "fullscreen alias",
-            "value": "[\"full\"]",
-            "evidence": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:38-40"
-          }
+          {"name": "fullscreen alias", "value": "[\"full\"]", "evidence": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:38-40"}
         ],
         "evidence": [
           "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:8-80",
           "crates/codegen/xai-grok-pager/src/app/dispatch/router.rs:182-200",
           "crates/codegen/xai-grok-pager/src/app/mode_switch.rs:15-48"
         ],
-        "modules": [
-          "xai-grok-pager",
-          "xai-grok-pager-minimal",
-          "xai-grok-shell"
-        ],
+        "modules": ["xai-grok-pager", "xai-grok-pager-minimal", "xai-grok-shell"],
         "verified": true
       }
     ]
@@ -2613,6 +1795,5 @@
       "domain": "retrieval",
       "why": "Not absent - deliberately deferred rather than claimed hollow. The three retrieval crates are real and were read: `xai-grok-session-search` (FTS5 cache with BM25, quarantine-and-recreate recovery, one-process reindex lease), `xai-codebase-graph` (tree-sitter go-to-definition and go-to-references over a full repo index) and `xai-fuzzy-file-search` (ignore-walk plus nucleo matcher on a background thread, degrading per stage rather than aborting). Evidence for all three is in `moduleCoverage`, but a second research pass over their internals (schema, lease mechanics, ranking, reindex triggers) had not returned when this file was written, so no mechanism entries with verified line citations were emitted. Reading these three crates fully is the highest-value next step for this source."
     }
-  ],
-  "_rebuiltBy": "scripts/audit/rebuild-json-from-sections.mjs after the assembled file ended at depth -2; a mechanism object inside one domain array was missing its closing brace, which leaked its own fields as domain names"
+  ]
 }
