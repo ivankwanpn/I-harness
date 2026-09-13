@@ -935,13 +935,13 @@
           "Feature::UseLinuxSandboxBwrap is Stage::Removed; Feature::UseLegacyLandlock is Stage::Deprecated default false (features/src/lib.rs:1051-1059)"
         ],
         "evidence": [
+          "codex-rs/vendor/bubblewrap/bubblewrap.c:1",
           "codex-rs/linux-sandbox/src/lib.rs:1-39",
           "codex-rs/linux-sandbox/src/bwrap.rs:45-56",
           "codex-rs/linux-sandbox/src/linux_run_main.rs:41-49",
           "codex-rs/sandboxing/src/seatbelt.rs:22-26",
           "codex-rs/sandboxing/src/seatbelt.rs:251-363",
-          "codex-rs/sandboxing/src/seatbelt.rs:420-530",
-          "codex-rs/vendor/bubblewrap"
+          "codex-rs/sandboxing/src/seatbelt.rs:420-530"
         ],
         "modules": [
           "sandboxing",
@@ -950,7 +950,17 @@
           "vendor",
           "core"
         ],
-        "verified": true
+        "verified": true,
+        "citationCorrected": {
+          "replaced": [
+            "codex-rs/vendor/bubblewrap"
+          ],
+          "with": [
+            "codex-rs/vendor/bubblewrap/bubblewrap.c:1"
+          ],
+          "reason": "a directory is a real location but cannot show which file carries the claim; each directory has an unambiguous entry point",
+          "by": "mechanical citation check (2026-09-14)"
+        }
       },
       {
         "name": "windows-sandbox-three-levels-with-wfp",
@@ -1557,12 +1567,12 @@
           "`Feature::Personality` is Stable default true (features/src/lib.rs:1451-1453)"
         ],
         "evidence": [
+          "codex-rs/collaboration-mode-templates/src/lib.rs:1",
           "codex-rs/core/src/context/world_state/collaboration_mode.rs:54-143",
           "codex-rs/core/src/tools/handlers/plan.rs:84-88",
           "codex-rs/protocol/src/plan_tool.rs:17-28",
           "codex-rs/models-manager/src/collaboration_mode_presets.rs:16-28",
-          "codex-rs/features/src/lib.rs:1432-1437",
-          "codex-rs/collaboration-mode-templates"
+          "codex-rs/features/src/lib.rs:1432-1437"
         ],
         "modules": [
           "collaboration-mode-templates",
@@ -1571,7 +1581,17 @@
           "models-manager",
           "features"
         ],
-        "verified": true
+        "verified": true,
+        "citationCorrected": {
+          "replaced": [
+            "codex-rs/collaboration-mode-templates"
+          ],
+          "with": [
+            "codex-rs/collaboration-mode-templates/src/lib.rs:1"
+          ],
+          "reason": "a directory is a real location but cannot show which file carries the claim; each directory has an unambiguous entry point",
+          "by": "mechanical citation check (2026-09-14)"
+        }
       },
       {
         "name": "extension-registry-contributor-seams",
@@ -1588,9 +1608,9 @@
           "13 first-party extension crates under codex-rs/ext/"
         ],
         "evidence": [
+          "codex-rs/ext/extension-api/src/contributors/context.rs:1",
           "codex-rs/ext/extension-api/src/registry.rs:27-84",
-          "codex-rs/core/src/tasks/lifecycle.rs:11-68",
-          "codex-rs/ext/extension-api/src/contributors"
+          "codex-rs/core/src/tasks/lifecycle.rs:11-68"
         ],
         "modules": [
           "ext/extension-api",
@@ -1607,7 +1627,17 @@
           "ext/web-search",
           "ext/goal"
         ],
-        "verified": true
+        "verified": true,
+        "citationCorrected": {
+          "replaced": [
+            "codex-rs/ext/extension-api/src/contributors"
+          ],
+          "with": [
+            "codex-rs/ext/extension-api/src/contributors/context.rs:1"
+          ],
+          "reason": "a directory is a real location but cannot show which file carries the claim; each directory has an unambiguous entry point",
+          "by": "mechanical citation check (2026-09-14)"
+        }
       }
     ],
     "service": [
