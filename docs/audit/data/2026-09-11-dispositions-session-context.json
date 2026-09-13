@@ -5,6 +5,10 @@
       "disposition": "rewrite",
       "rationale": "仿 codex 歸檔退出；後端已有"
     },
+    "branch": {
+      "disposition": "路線差異",
+      "rationale": "IH /fork 已做同一件事"
+    },
     "cd": {
       "disposition": "不做",
       "rationale": "§10.3 明文排除 /cd"
@@ -61,57 +65,41 @@
       "disposition": "improved-writing",
       "rationale": "IH 還原檔案＋對話，優於 grok"
     },
-    "session-create": {
-      "disposition": "路線差異",
-      "rationale": "IH 以 /new 直建，非 RPC"
-    },
-    "session-followup": {
-      "disposition": "路線差異",
-      "rationale": "IH delivery=queue 已同層"
-    },
-    "session-fork": {
-      "disposition": "路線差異",
-      "rationale": "IH /fork 取完成回合前綴"
-    },
-    "session-prompt": {
-      "disposition": "路線差異",
-      "rationale": "IH web-host 有 prompt 路由"
-    },
-    "session-rename": {
-      "disposition": "路線差異",
-      "rationale": "IH /rename 已持久化標題"
-    },
-    "session-send": {
-      "disposition": "路線差異",
-      "rationale": "IH InputSubmit 為同一原語"
-    },
-    "session-steer": {
-      "disposition": "路線差異",
-      "rationale": "IH delivery=steer 步驟界"
-    },
-    "session-update-queue": {
+    "tag": {
       "disposition": "rewrite",
-      "rationale": "仿 dsh：編輯/移除/轉 steer"
+      "rationale": "日誌加 tag 事件並可篩選"
+    },
+    "auto-compact-window": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc：設定自動壓縮窗"
     },
     "compact": {
-      "disposition": "improved-writing",
-      "rationale": "append-only 投影，優於改寫"
+      "disposition": "rewrite",
+      "rationale": "引擎 append-only，缺 host 接線"
     },
     "context": {
       "disposition": "已存在",
       "rationale": "IH 已實作"
+    },
+    "files": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc 列已讀檔，日誌推導"
     },
     "ide": {
       "disposition": "遠期",
       "rationale": "需編輯器擴充，規模大"
     },
     "init": {
-      "disposition": "rewrite",
-      "rationale": "仿 codex 送提示生成 AGENTS.md"
+      "disposition": "reuse",
+      "rationale": "仿 codex：內建提示直接送"
     },
     "memories": {
       "disposition": "不做",
       "rationale": "記憶族為 §10.3 排除項"
+    },
+    "memory": {
+      "disposition": "不做",
+      "rationale": "§10.3 排除 /memory 編輯"
     },
     "mention": {
       "disposition": "rewrite",
@@ -124,10 +112,6 @@
     "remember": {
       "disposition": "不做",
       "rationale": "§10.3 明文排除 /remember"
-    },
-    "session-inject": {
-      "disposition": "reuse",
-      "rationale": "仿 dsh 加 wake=false 靜默層"
     },
     "transcript": {
       "disposition": "已存在",
@@ -144,6 +128,18 @@
     "view-plan": {
       "disposition": "已存在",
       "rationale": "IH 已有計畫面板（chip）"
+    },
+    "code-review": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc：送審查提示（diff）"
+    },
+    "commit": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc：提示走既有審批"
+    },
+    "commit-push-pr": {
+      "disposition": "遠期",
+      "rationale": "需 gh/GitHub 整合，暫緩"
     },
     "imagine": {
       "disposition": "不做",
@@ -169,10 +165,6 @@
       "disposition": "rewrite",
       "rationale": "仿 codex：子代理審查變更"
     },
-    "session-cancel": {
-      "disposition": "路線差異",
-      "rationale": "IH cancel 保留 inbox"
-    },
     "stop": {
       "disposition": "rewrite",
       "rationale": "仿 codex：停背景程序並清單"
@@ -181,25 +173,37 @@
       "disposition": "已存在",
       "rationale": "IH 已實作"
     },
+    "context-window": {
+      "disposition": "路線差異",
+      "rationale": "IH 於 settings 設每模型窗"
+    },
     "effort": {
       "disposition": "已存在",
       "rationale": "IH 已實作"
+    },
+    "fast": {
+      "disposition": "遠期",
+      "rationale": "需供應商分層支援，暫緩"
+    },
+    "max-output": {
+      "disposition": "路線差異",
+      "rationale": "IH 於 settings 設每模型上限"
     },
     "model": {
       "disposition": "已存在",
       "rationale": "IH 已實作"
     },
-    "model-catalog": {
-      "disposition": "路線差異",
-      "rationale": "IH provider 已探測模型目錄"
-    },
-    "model-select": {
-      "disposition": "路線差異",
-      "rationale": "IH 有 session 模型選擇"
-    },
     "personality": {
       "disposition": "路線差異",
       "rationale": "IH 走 preset，非執行期切換"
+    },
+    "protocol": {
+      "disposition": "路線差異",
+      "rationale": "IH 協定屬 provider 設定"
+    },
+    "provider": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作"
     }
   }
 }

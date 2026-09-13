@@ -54,9 +54,9 @@
 - **「已知缺口」全部來自原始碼內的標記**（註解、未接線的匯出、宣告未實作），**不是推測**。沒標記的包就寫「無」。
 - 出處採 `path:line` 或 `path:line-line`。範圍形式代表該決策由一段程式碼共同承載。
 
-## 跨包主線（讀細節前先知道的八件事）
+## 跨包主線（讀細節前先知道的九件事）
 
-這八條是橫切 65 包、在單包視角下看不到的結構性事實。
+這九條是橫切 65 包、在單包視角下看不到的結構性事實。
 
 ### 1. 沙箱隔離**只覆蓋 shell，而且只是「請求」**
 
@@ -76,9 +76,28 @@
 
 `shell` 不接 `SandboxUnavailableError`：例外離開 tool body → `core-agent` 記 `tool/error` 後 rethrow 並**丟棄整個 tool batch**（`packages/core-agent/src/execute-tool-calls.ts:125-133,223-227`）。背景變體則變成 `status:"error"` 的 job（`packages/exec/src/index.ts:262-267`）。這是刻意的 fail-closed，代價是一條被拒絕的命令會殺掉整個 turn。
 
-### 4. 壓縮是**全程 append-only**，歷史永不改寫
+### 4. 壓縮是**全程 append-only**，歷史永不改寫——**但在出貨的宿主裡根本沒接上**
 
 `deriveMessages` 以**聯集**隱藏：summary 遮蔽 ∪ `compaction/reset` 的 `removedSeqs` ∪ rewind 的 cut 窗口 ∪ prune 的替身投影（`packages/core-session/src/index.ts:315,411-438`；`packages/compaction/src/index.ts:233-263`）。`seq` 由 append 指派，**無 key 的事件永遠無法被隱藏**。這是七源中唯一持久層不改寫的設計——codex、opencode、cc-custom、grok 都在某種程度上替換或改寫，dsh 用 `surfaceOp` 遮蔽但仍以 append 為本。
+
+> **⚠ 本次盤點最嚴重的產品級發現：這套引擎在出貨路徑上沒有被接線。**
+>
+> `packages/tui/src/backend/embedded.ts:969` 是全 repo **唯一**一個非測試的 `createSessionService` 呼叫（我在 `packages/`＋`apps/` 全樹確認過），它傳了 `workspace`、`sessionId`、`modelPolicy`、`sessionFor`、`coordinator`、`beforeDispose`、`loadMeta`、`approveAll`、`mockCycles`、`modelBindingFor`、`rewindStoreRoot`——**沒有 `compact`**。
+>
+> 連鎖後果（每一環都有出處）：
+>
+> | 環節 | 出處 | 結果 |
+> |---|---|---|
+> | 服務層閘門 | `packages/session-executor/src/service.ts:256-258` | `opts.compact === undefined` → `compact = undefined` |
+> | 組裝層 | `packages/session-executor/src/assembly.ts:621-629` | `opts.compact !== undefined` 為假 → 不建構 compactor |
+> | 引擎層 | `packages/core-agent/src/index.ts:324-325` | `compactor` 未定義 → `compact()` 回 `{compacted:false, shadowedSeqs:[]}` |
+> | 命令層 | `packages/tui/src/backend/embedded.ts:822-825` | `assembly.compactNow()` 回 `{compacted:false}` |
+>
+> 淨效果：**出貨的 TUI 中 `/compact` 會 toast「nothing to compact」，自動壓縮永不觸發**——而**預算階梯是有裝上的**（`assembly.ts:632-635` 只要 `contextWindow` 已知就供給 `budget`）。所以過長的 session 不會被壓縮，而是直接走到 fail-closed 的 `prompt_too_long`。
+>
+> 這個矛盾在本次盤點中**由兩個子代理各自給出相反結論**（IH 命令面代理說「出貨 TUI 中行為是真的，toast 只是降級路徑」；命令對比代理說「沒有任何出貨宿主傳 `compact`」）。我逐環回溯原始碼判定**後者正確**。記錄這件事本身就是重點：兩個都讀了程式碼的代理可以得出相反結論，而只有把整條鏈走完才能定案。
+>
+> 也解釋了本 session 稍早調查的 `case-027` 停滯與 `compact: backend seam absent` toast 的來源。
 
 ### 5. 「能力閘」是**硬閘**，不是 UI 過濾
 
