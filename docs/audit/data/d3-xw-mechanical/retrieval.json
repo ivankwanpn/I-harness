@@ -1,0 +1,570 @@
+{
+  "domain": "retrieval",
+  "rows": {
+    "session-search-and-lineage-over-a-rebuildable-sqlite-index": {
+      "domain": "retrieval",
+      "label": "session-search-and-lineage-over-a-rebuildable-sqlite-index",
+      "members": {
+        "ih": [
+          "session-search-and-lineage-over-a-rebuildable-sqlite-index"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "image-attachments-with-an-opaque-id-and-validate-before-publish": {
+      "domain": "retrieval",
+      "label": "image-attachments-with-an-opaque-id-and-validate-before-publish",
+      "members": {
+        "ih": [
+          "image-attachments-with-an-opaque-id-and-validate-before-publish"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-listing-and-title-derivation-as-a-retrieval-surface": {
+      "domain": "retrieval",
+      "label": "session-listing-and-title-derivation-as-a-retrieval-surface",
+      "members": {
+        "ih": [
+          "session-listing-and-title-derivation-as-a-retrieval-surface"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-query-live-preferred-corpus-reads-and-traces": {
+      "domain": "retrieval",
+      "label": "session-query-live-preferred-corpus-reads-and-traces",
+      "members": {
+        "dsh": [
+          "session-query-live-preferred-corpus-reads-and-traces"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-full-text-index-and-ranked-search": {
+      "domain": "retrieval",
+      "label": "session-full-text-index-and-ranked-search",
+      "members": {
+        "dsh": [
+          "session-full-text-index-and-ranked-search"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "model-facing-session-search-and-workspace-authorization": {
+      "domain": "retrieval",
+      "label": "model-facing-session-search-and-workspace-authorization",
+      "members": {
+        "dsh": [
+          "model-facing-session-search-and-workspace-authorization",
+          "ripgrep-backed-file-search-tools"
+        ],
+        "codex": [
+          "fuzzy-file-search-nucleo-session"
+        ],
+        "opencode": [
+          "file-read-search-surface"
+        ],
+        "opencode-fork": [
+          "workspace-file-search"
+        ],
+        "grok": [
+          "fuzzy-file-search-degradation-ladder"
+        ],
+        "cc-custom": [
+          "ripgrep-backed-file-search"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-log-export-archive": {
+      "domain": "retrieval",
+      "label": "session-log-export-archive",
+      "members": {
+        "dsh": [
+          "session-log-export-archive"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "attachment-ingestion-and-durable-content-addressed-store": {
+      "domain": "retrieval",
+      "label": "attachment-ingestion-and-durable-content-addressed-store",
+      "members": {
+        "dsh": [
+          "attachment-ingestion-and-durable-content-addressed-store"
+        ],
+        "cc-custom": [
+          "multimodal-attachment-ingestion"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "image-admission-normalization-and-request-image-projection": {
+      "domain": "retrieval",
+      "label": "image-admission-normalization-and-request-image-projection",
+      "members": {
+        "dsh": [
+          "image-admission-normalization-and-request-image-projection"
+        ],
+        "opencode": [
+          "image-attachment-normalization"
+        ],
+        "opencode-fork": [
+          "image-normalization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "at-file-reference-grammar-and-fuzzy-completion-index": {
+      "domain": "retrieval",
+      "label": "at-file-reference-grammar-and-fuzzy-completion-index",
+      "members": {
+        "dsh": [
+          "at-file-reference-grammar-and-fuzzy-completion-index"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "cross-session-reference-snapshot-injection": {
+      "domain": "retrieval",
+      "label": "cross-session-reference-snapshot-injection",
+      "members": {
+        "dsh": [
+          "cross-session-reference-snapshot-injection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "request-time-and-tmux-location-context-injection": {
+      "domain": "retrieval",
+      "label": "request-time-and-tmux-location-context-injection",
+      "members": {
+        "dsh": [
+          "request-time-and-tmux-location-context-injection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "web-search-provider-selection-and-tool-bounds": {
+      "domain": "retrieval",
+      "label": "web-search-provider-selection-and-tool-bounds",
+      "members": {
+        "dsh": [
+          "web-search-provider-selection-and-tool-bounds"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "http-fetch-with-public-address-pinning": {
+      "domain": "retrieval",
+      "label": "http-fetch-with-public-address-pinning",
+      "members": {
+        "dsh": [
+          "http-fetch-with-public-address-pinning"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-title-projection-and-model-titling": {
+      "domain": "retrieval",
+      "label": "session-title-projection-and-model-titling",
+      "members": {
+        "dsh": [
+          "session-title-projection-and-model-titling"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "user-questions-waterfall": {
+      "domain": "retrieval",
+      "label": "user-questions-waterfall",
+      "members": {
+        "dsh": [
+          "user-questions-waterfall"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "two-phase-memory-pipeline-with-lease-queue": {
+      "domain": "retrieval",
+      "label": "two-phase-memory-pipeline-with-lease-queue",
+      "members": {
+        "codex": [
+          "two-phase-memory-pipeline-with-lease-queue"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "memory-read-tool-family-with-citation-feedback": {
+      "domain": "retrieval",
+      "label": "memory-read-tool-family-with-citation-feedback",
+      "members": {
+        "codex": [
+          "memory-read-tool-family-with-citation-feedback"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "reverse-jsonl-tail-scanner": {
+      "domain": "retrieval",
+      "label": "reverse-jsonl-tail-scanner",
+      "members": {
+        "codex": [
+          "reverse-jsonl-tail-scanner"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-index-name-lookup": {
+      "domain": "retrieval",
+      "label": "session-index-name-lookup",
+      "members": {
+        "codex": [
+          "session-index-name-lookup"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "rollout-content-search-with-ripgrep-fallback": {
+      "domain": "retrieval",
+      "label": "rollout-content-search-with-ripgrep-fallback",
+      "members": {
+        "codex": [
+          "rollout-content-search-with-ripgrep-fallback"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "thread-history-occurrence-search-pagination": {
+      "domain": "retrieval",
+      "label": "thread-history-occurrence-search-pagination",
+      "members": {
+        "codex": [
+          "thread-history-occurrence-search-pagination"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "multimodal-input-snapshot-and-image-budget": {
+      "domain": "retrieval",
+      "label": "multimodal-input-snapshot-and-image-budget",
+      "members": {
+        "codex": [
+          "multimodal-input-snapshot-and-image-budget"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-search-and-lineage": {
+      "domain": "retrieval",
+      "label": "session-search-and-lineage",
+      "members": {
+        "opencode": [
+          "session-search-and-lineage"
+        ],
+        "opencode-fork": [
+          "session-search-and-lineage"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "reference-source-materialization": {
+      "domain": "retrieval",
+      "label": "reference-source-materialization",
+      "members": {
+        "opencode": [
+          "reference-source-materialization"
+        ],
+        "opencode-fork": [
+          "reference-source-materialization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "question-answer-surface": {
+      "domain": "retrieval",
+      "label": "question-answer-surface",
+      "members": {
+        "opencode": [
+          "question-answer-surface"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-share-upload": {
+      "domain": "retrieval",
+      "label": "session-share-upload",
+      "members": {
+        "opencode": [
+          "session-share-upload"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "attachment-modality-gating": {
+      "domain": "retrieval",
+      "label": "attachment-modality-gating",
+      "members": {
+        "opencode": [
+          "attachment-modality-gating"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "instruction-file-ingestion": {
+      "domain": "retrieval",
+      "label": "instruction-file-ingestion",
+      "members": {
+        "opencode": [
+          "instruction-file-ingestion"
+        ],
+        "opencode-fork": [
+          "instruction-file-discovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-mention-expansion": {
+      "domain": "retrieval",
+      "label": "file-mention-expansion",
+      "members": {
+        "opencode-fork": [
+          "file-mention-expansion"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "attachment-materialization": {
+      "domain": "retrieval",
+      "label": "attachment-materialization",
+      "members": {
+        "opencode-fork": [
+          "attachment-materialization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "question-request-roundtrip": {
+      "domain": "retrieval",
+      "label": "question-request-roundtrip",
+      "members": {
+        "opencode-fork": [
+          "question-request-roundtrip"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hybrid-bm25-plus-vector-memory-retrieval": {
+      "domain": "retrieval",
+      "label": "hybrid-bm25-plus-vector-memory-retrieval",
+      "members": {
+        "grok": [
+          "hybrid-bm25-plus-vector-memory-retrieval"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "incremental-content-hash-reindex-over-contentless-fts": {
+      "domain": "retrieval",
+      "label": "incremental-content-hash-reindex-over-contentless-fts",
+      "members": {
+        "grok": [
+          "incremental-content-hash-reindex-over-contentless-fts"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bm25-fts5-session-index-with-lease-fenced-bootstrap": {
+      "domain": "retrieval",
+      "label": "bm25-fts5-session-index-with-lease-fenced-bootstrap",
+      "members": {
+        "grok": [
+          "bm25-fts5-session-index-with-lease-fenced-bootstrap"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tree-sitter-symbol-index-over-name-keyed-occurrence-map": {
+      "domain": "retrieval",
+      "label": "tree-sitter-symbol-index-over-name-keyed-occurrence-map",
+      "members": {
+        "grok": [
+          "tree-sitter-symbol-index-over-name-keyed-occurrence-map"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "memdir-auto-memory-store": {
+      "domain": "retrieval",
+      "label": "memdir-auto-memory-store",
+      "members": {
+        "cc-custom": [
+          "memdir-auto-memory-store"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "memory-taxonomy-and-scan-index": {
+      "domain": "retrieval",
+      "label": "memory-taxonomy-and-scan-index",
+      "members": {
+        "cc-custom": [
+          "memory-taxonomy-and-scan-index"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "memory-relevance-recall": {
+      "domain": "retrieval",
+      "label": "memory-relevance-recall",
+      "members": {
+        "cc-custom": [
+          "memory-relevance-recall"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "memory-staleness-annotation": {
+      "domain": "retrieval",
+      "label": "memory-staleness-annotation",
+      "members": {
+        "cc-custom": [
+          "memory-staleness-annotation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "background-memory-extraction": {
+      "domain": "retrieval",
+      "label": "background-memory-extraction",
+      "members": {
+        "cc-custom": [
+          "background-memory-extraction"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-memory-transcript-notes": {
+      "domain": "retrieval",
+      "label": "session-memory-transcript-notes",
+      "members": {
+        "cc-custom": [
+          "session-memory-transcript-notes"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "team-memory-and-secret-guard": {
+      "domain": "retrieval",
+      "label": "team-memory-and-secret-guard",
+      "members": {
+        "cc-custom": [
+          "team-memory-and-secret-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "magic-docs-auto-update": {
+      "domain": "retrieval",
+      "label": "magic-docs-auto-update",
+      "members": {
+        "cc-custom": [
+          "magic-docs-auto-update"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "auto-dream-consolidation": {
+      "domain": "retrieval",
+      "label": "auto-dream-consolidation",
+      "members": {
+        "cc-custom": [
+          "auto-dream-consolidation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-index-and-lineage": {
+      "domain": "retrieval",
+      "label": "session-index-and-lineage",
+      "members": {
+        "cc-custom": [
+          "session-index-and-lineage"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agentic-session-search": {
+      "domain": "retrieval",
+      "label": "agentic-session-search",
+      "members": {
+        "cc-custom": [
+          "agentic-session-search"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-titling-and-resume-routing": {
+      "domain": "retrieval",
+      "label": "session-titling-and-resume-routing",
+      "members": {
+        "cc-custom": [
+          "session-titling-and-resume-routing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-read-range-and-dedup-cache": {
+      "domain": "retrieval",
+      "label": "file-read-range-and-dedup-cache",
+      "members": {
+        "cc-custom": [
+          "file-read-range-and-dedup-cache"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-resource-retrieval": {
+      "domain": "retrieval",
+      "label": "mcp-resource-retrieval",
+      "members": {
+        "cc-custom": [
+          "mcp-resource-retrieval"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "claudemd-instruction-memory-files": {
+      "domain": "retrieval",
+      "label": "claudemd-instruction-memory-files",
+      "members": {
+        "cc-custom": [
+          "claudemd-instruction-memory-files"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "external-code-indexing-detection": {
+      "domain": "retrieval",
+      "label": "external-code-indexing-detection",
+      "members": {
+        "cc-custom": [
+          "external-code-indexing-detection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-identifier-and-file-detection": {
+      "domain": "retrieval",
+      "label": "session-identifier-and-file-detection",
+      "members": {
+        "cc-custom": [
+          "session-identifier-and-file-detection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

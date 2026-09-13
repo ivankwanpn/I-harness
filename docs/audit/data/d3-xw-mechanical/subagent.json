@@ -1,0 +1,707 @@
+{
+  "domain": "subagent",
+  "rows": {
+    "durable-delegated-task-protocol-with-identity-cas": {
+      "domain": "subagent",
+      "label": "durable-delegated-task-protocol-with-identity-cas",
+      "members": {
+        "ih": [
+          "durable-delegated-task-protocol-with-identity-cas"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-notification-outbox-with-injectable-admission": {
+      "domain": "subagent",
+      "label": "durable-notification-outbox-with-injectable-admission",
+      "members": {
+        "ih": [
+          "durable-notification-outbox-with-injectable-admission"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "crash-recovery-by-classification-never-re-dispatch": {
+      "domain": "subagent",
+      "label": "crash-recovery-by-classification-never-re-dispatch",
+      "members": {
+        "ih": [
+          "crash-recovery-by-classification-never-re-dispatch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "concurrency-and-depth-quotas": {
+      "domain": "subagent",
+      "label": "concurrency-and-depth-quotas",
+      "members": {
+        "ih": [
+          "concurrency-and-depth-quotas"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "team-scope-event-sourced-roster-task-board-and-mailbox": {
+      "domain": "subagent",
+      "label": "team-scope-event-sourced-roster-task-board-and-mailbox",
+      "members": {
+        "ih": [
+          "team-scope-event-sourced-roster-task-board-and-mailbox"
+        ],
+        "dsh": [
+          "team-durable-mailbox-and-shared-task-board"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "static-yaml-workflow-runs-as-one-background-job": {
+      "domain": "subagent",
+      "label": "static-yaml-workflow-runs-as-one-background-job",
+      "members": {
+        "ih": [
+          "static-yaml-workflow-runs-as-one-background-job"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-reminders-whose-state-is-the-event-log": {
+      "domain": "subagent",
+      "label": "durable-reminders-whose-state-is-the-event-log",
+      "members": {
+        "ih": [
+          "durable-reminders-whose-state-is-the-event-log"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "whole-list-todo-snapshot": {
+      "domain": "subagent",
+      "label": "whole-list-todo-snapshot",
+      "members": {
+        "ih": [
+          "whole-list-todo-snapshot"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plan-mode-as-log-state": {
+      "domain": "subagent",
+      "label": "plan-mode-as-log-state",
+      "members": {
+        "ih": [
+          "plan-mode-as-log-state"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "whole-snapshot-goal-domain-with-mandatory-cas": {
+      "domain": "subagent",
+      "label": "whole-snapshot-goal-domain-with-mandatory-cas",
+      "members": {
+        "ih": [
+          "whole-snapshot-goal-domain-with-mandatory-cas"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "jobs-as-a-two-source-projection": {
+      "domain": "subagent",
+      "label": "jobs-as-a-two-source-projection",
+      "members": {
+        "ih": [
+          "jobs-as-a-two-source-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "named-provider-registry-and-capability-gate": {
+      "domain": "subagent",
+      "label": "named-provider-registry-and-capability-gate",
+      "members": {
+        "dsh": [
+          "named-provider-registry-and-capability-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "one-shot-run-lifecycle-and-settlement": {
+      "domain": "subagent",
+      "label": "one-shot-run-lifecycle-and-settlement",
+      "members": {
+        "dsh": [
+          "one-shot-run-lifecycle-and-settlement"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "delegation-depth-quota": {
+      "domain": "subagent",
+      "label": "delegation-depth-quota",
+      "members": {
+        "dsh": [
+          "delegation-depth-quota"
+        ],
+        "cc-custom": [
+          "agent-nesting-depth-quota"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-child-descriptor-and-cold-resume": {
+      "domain": "subagent",
+      "label": "durable-child-descriptor-and-cold-resume",
+      "members": {
+        "dsh": [
+          "durable-child-descriptor-and-cold-resume"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-child-catalog-and-discovery-listing": {
+      "domain": "subagent",
+      "label": "durable-child-catalog-and-discovery-listing",
+      "members": {
+        "dsh": [
+          "durable-child-catalog-and-discovery-listing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "continuable-activation-residency-and-child-lock": {
+      "domain": "subagent",
+      "label": "continuable-activation-residency-and-child-lock",
+      "members": {
+        "dsh": [
+          "continuable-activation-residency-and-child-lock"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "activation-admission-cutoff-and-draining": {
+      "domain": "subagent",
+      "label": "activation-admission-cutoff-and-draining",
+      "members": {
+        "dsh": [
+          "activation-admission-cutoff-and-draining"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "child-first-teardown-tree-and-ownership-gating": {
+      "domain": "subagent",
+      "label": "child-first-teardown-tree-and-ownership-gating",
+      "members": {
+        "dsh": [
+          "child-first-teardown-tree-and-ownership-gating"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "child-settlement-notification-and-lifecycle-edges": {
+      "domain": "subagent",
+      "label": "child-settlement-notification-and-lifecycle-edges",
+      "members": {
+        "dsh": [
+          "child-settlement-notification-and-lifecycle-edges"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-control-and-messaging-surfaces": {
+      "domain": "subagent",
+      "label": "subagent-control-and-messaging-surfaces",
+      "members": {
+        "dsh": [
+          "subagent-control-and-messaging-surfaces"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "structured-output-capture": {
+      "domain": "subagent",
+      "label": "structured-output-capture",
+      "members": {
+        "dsh": [
+          "structured-output-capture"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "delegated-policy-pinning-and-child-composition": {
+      "domain": "subagent",
+      "label": "delegated-policy-pinning-and-child-composition",
+      "members": {
+        "dsh": [
+          "delegated-policy-pinning-and-child-composition"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-model-selection-policy": {
+      "domain": "subagent",
+      "label": "subagent-model-selection-policy",
+      "members": {
+        "dsh": [
+          "subagent-model-selection-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "out-of-process-child-teardown-ladder": {
+      "domain": "subagent",
+      "label": "out-of-process-child-teardown-ladder",
+      "members": {
+        "dsh": [
+          "out-of-process-child-teardown-ladder"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "background-job-registry-and-parent-wake": {
+      "domain": "subagent",
+      "label": "background-job-registry-and-parent-wake",
+      "members": {
+        "dsh": [
+          "background-job-registry-and-parent-wake"
+        ],
+        "opencode-fork": [
+          "parent-wake-on-task-completion"
+        ],
+        "cc-custom": [
+          "background-agent-parent-wake"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "workflow-orchestration-engine-and-worker-containment": {
+      "domain": "subagent",
+      "label": "workflow-orchestration-engine-and-worker-containment",
+      "members": {
+        "dsh": [
+          "workflow-orchestration-engine-and-worker-containment"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "goal-round-budget-and-automatic-continuation": {
+      "domain": "subagent",
+      "label": "goal-round-budget-and-automatic-continuation",
+      "members": {
+        "dsh": [
+          "goal-round-budget-and-automatic-continuation"
+        ],
+        "codex": [
+          "goal-durable-continuation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "goal-human-authority-and-command-surface": {
+      "domain": "subagent",
+      "label": "goal-human-authority-and-command-surface",
+      "members": {
+        "dsh": [
+          "goal-human-authority-and-command-surface"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "schedule-durable-timer-wakeups": {
+      "domain": "subagent",
+      "label": "schedule-durable-timer-wakeups",
+      "members": {
+        "dsh": [
+          "schedule-durable-timer-wakeups"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plan-mode-logged-state-machine": {
+      "domain": "subagent",
+      "label": "plan-mode-logged-state-machine",
+      "members": {
+        "dsh": [
+          "plan-mode-logged-state-machine"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "team-roster-identity-and-provisioning": {
+      "domain": "subagent",
+      "label": "team-roster-identity-and-provisioning",
+      "members": {
+        "dsh": [
+          "team-roster-identity-and-provisioning"
+        ],
+        "cc-custom": [
+          "team-roster-and-identity"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "team-runtime-admission-cutoff-and-activity-wait": {
+      "domain": "subagent",
+      "label": "team-runtime-admission-cutoff-and-activity-wait",
+      "members": {
+        "dsh": [
+          "team-runtime-admission-cutoff-and-activity-wait"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "todo-list-write-and-fold": {
+      "domain": "subagent",
+      "label": "todo-list-write-and-fold",
+      "members": {
+        "dsh": [
+          "todo-list-write-and-fold"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "scoped-store-and-event-routing": {
+      "domain": "subagent",
+      "label": "scoped-store-and-event-routing",
+      "members": {
+        "dsh": [
+          "scoped-store-and-event-routing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "turn-outline-fold": {
+      "domain": "subagent",
+      "label": "turn-outline-fold",
+      "members": {
+        "dsh": [
+          "turn-outline-fold"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "spawn-agent-tool-with-context-fork": {
+      "domain": "subagent",
+      "label": "spawn-agent-tool-with-context-fork",
+      "members": {
+        "codex": [
+          "spawn-agent-tool-with-context-fork"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "v1-and-v2-agent-control-toolsets": {
+      "domain": "subagent",
+      "label": "v1-and-v2-agent-control-toolsets",
+      "members": {
+        "codex": [
+          "v1-and-v2-agent-control-toolsets"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "inter-agent-mailbox-with-turn-trigger": {
+      "domain": "subagent",
+      "label": "inter-agent-mailbox-with-turn-trigger",
+      "members": {
+        "codex": [
+          "inter-agent-mailbox-with-turn-trigger"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "thread-spawn-topology-graph-store": {
+      "domain": "subagent",
+      "label": "thread-spawn-topology-graph-store",
+      "members": {
+        "codex": [
+          "thread-spawn-topology-graph-store"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-path-identity-and-nicknames": {
+      "domain": "subagent",
+      "label": "agent-path-identity-and-nicknames",
+      "members": {
+        "codex": [
+          "agent-path-identity-and-nicknames"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "task-tool-delegation": {
+      "domain": "subagent",
+      "label": "task-tool-delegation",
+      "members": {
+        "opencode": [
+          "task-tool-delegation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-permission-derivation": {
+      "domain": "subagent",
+      "label": "subagent-permission-derivation",
+      "members": {
+        "opencode": [
+          "subagent-permission-derivation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "background-subagent-jobs": {
+      "domain": "subagent",
+      "label": "background-subagent-jobs",
+      "members": {
+        "opencode": [
+          "background-subagent-jobs"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subtask-command-dispatch": {
+      "domain": "subagent",
+      "label": "subtask-command-dispatch",
+      "members": {
+        "opencode": [
+          "subtask-command-dispatch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-mode-taxonomy": {
+      "domain": "subagent",
+      "label": "agent-mode-taxonomy",
+      "members": {
+        "opencode": [
+          "agent-mode-taxonomy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-delegation-with-permits": {
+      "domain": "subagent",
+      "label": "durable-delegation-with-permits",
+      "members": {
+        "opencode-fork": [
+          "durable-delegation-with-permits"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "task-cancellation-by-ownership-root": {
+      "domain": "subagent",
+      "label": "task-cancellation-by-ownership-root",
+      "members": {
+        "opencode-fork": [
+          "task-cancellation-by-ownership-root"
+        ],
+        "cc-custom": [
+          "agent-task-cancellation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-selection-and-default": {
+      "domain": "subagent",
+      "label": "agent-selection-and-default",
+      "members": {
+        "opencode-fork": [
+          "agent-selection-and-default"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-stop-hook": {
+      "domain": "subagent",
+      "label": "subagent-stop-hook",
+      "members": {
+        "opencode-fork": [
+          "subagent-stop-hook"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "harness-only-subagent-capability-mode": {
+      "domain": "subagent",
+      "label": "harness-only-subagent-capability-mode",
+      "members": {
+        "grok": [
+          "harness-only-subagent-capability-mode"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "parent-wake-safe-point-admission": {
+      "domain": "subagent",
+      "label": "parent-wake-safe-point-admission",
+      "members": {
+        "grok": [
+          "parent-wake-safe-point-admission"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "capability-mode-meet-and-resume-identity-pin": {
+      "domain": "subagent",
+      "label": "capability-mode-meet-and-resume-identity-pin",
+      "members": {
+        "grok": [
+          "capability-mode-meet-and-resume-identity-pin"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-depth-ceiling-and-unconditional-tool-stripping": {
+      "domain": "subagent",
+      "label": "subagent-depth-ceiling-and-unconditional-tool-stripping",
+      "members": {
+        "grok": [
+          "subagent-depth-ceiling-and-unconditional-tool-stripping"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "admission-quota-with-clamped-minimum-and-workflow-bypass": {
+      "domain": "subagent",
+      "label": "admission-quota-with-clamped-minimum-and-workflow-bypass",
+      "members": {
+        "grok": [
+          "admission-quota-with-clamped-minimum-and-workflow-bypass"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "targeted-cancellation-with-closed-admission-window": {
+      "domain": "subagent",
+      "label": "targeted-cancellation-with-closed-admission-window",
+      "members": {
+        "grok": [
+          "targeted-cancellation-with-closed-admission-window"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "foreground-budget-auto-backgrounding": {
+      "domain": "subagent",
+      "label": "foreground-budget-auto-backgrounding",
+      "members": {
+        "grok": [
+          "foreground-budget-auto-backgrounding"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "seven-input-auto-wake-suppression-gate": {
+      "domain": "subagent",
+      "label": "seven-input-auto-wake-suppression-gate",
+      "members": {
+        "grok": [
+          "seven-input-auto-wake-suppression-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-definition-registry": {
+      "domain": "subagent",
+      "label": "agent-definition-registry",
+      "members": {
+        "cc-custom": [
+          "agent-definition-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "builtin-agent-catalog": {
+      "domain": "subagent",
+      "label": "builtin-agent-catalog",
+      "members": {
+        "cc-custom": [
+          "builtin-agent-catalog"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-spawn-protocol": {
+      "domain": "subagent",
+      "label": "agent-spawn-protocol",
+      "members": {
+        "cc-custom": [
+          "agent-spawn-protocol"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-task-state-machine": {
+      "domain": "subagent",
+      "label": "subagent-task-state-machine",
+      "members": {
+        "cc-custom": [
+          "subagent-task-state-machine"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-resume-from-transcript": {
+      "domain": "subagent",
+      "label": "agent-resume-from-transcript",
+      "members": {
+        "cc-custom": [
+          "agent-resume-from-transcript"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "in-process-teammate-task": {
+      "domain": "subagent",
+      "label": "in-process-teammate-task",
+      "members": {
+        "cc-custom": [
+          "in-process-teammate-task"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "swarm-mailbox": {
+      "domain": "subagent",
+      "label": "swarm-mailbox",
+      "members": {
+        "cc-custom": [
+          "swarm-mailbox"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "task-list-coordination": {
+      "domain": "subagent",
+      "label": "task-list-coordination",
+      "members": {
+        "cc-custom": [
+          "task-list-coordination"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "gated-delegation-modes": {
+      "domain": "subagent",
+      "label": "gated-delegation-modes",
+      "members": {
+        "cc-custom": [
+          "gated-delegation-modes"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "gated-task-type-stubs": {
+      "domain": "subagent",
+      "label": "gated-task-type-stubs",
+      "members": {
+        "cc-custom": [
+          "gated-task-type-stubs"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

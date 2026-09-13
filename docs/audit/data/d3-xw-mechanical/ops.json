@@ -1,0 +1,479 @@
+{
+  "domain": "ops",
+  "rows": {
+    "host-side-telemetry-stream-with-a-closed-manifest-and-sink-isolation": {
+      "domain": "ops",
+      "label": "host-side-telemetry-stream-with-a-closed-manifest-and-sink-isolation",
+      "members": {
+        "ih": [
+          "host-side-telemetry-stream-with-a-closed-manifest-and-sink-isolation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "per-message-feedback-channel-with-verify-after-write-durability": {
+      "domain": "ops",
+      "label": "per-message-feedback-channel-with-verify-after-write-durability",
+      "members": {
+        "ih": [
+          "per-message-feedback-channel-with-verify-after-write-durability"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "settings-document-layered-precedence-hot-reload-comment-preservation": {
+      "domain": "ops",
+      "label": "settings-document-layered-precedence-hot-reload-comment-preservation",
+      "members": {
+        "ih": [
+          "settings-document-layered-precedence-hot-reload-comment-preservation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-telemetry-capture-seam": {
+      "domain": "ops",
+      "label": "session-telemetry-capture-seam",
+      "members": {
+        "dsh": [
+          "session-telemetry-capture-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "otel-telemetry-export": {
+      "domain": "ops",
+      "label": "otel-telemetry-export",
+      "members": {
+        "dsh": [
+          "otel-telemetry-export"
+        ],
+        "codex": [
+          "otel-session-telemetry-and-metric-export"
+        ],
+        "opencode": [
+          "otlp-telemetry-export"
+        ],
+        "opencode-fork": [
+          "otlp-telemetry-export"
+        ],
+        "cc-custom": [
+          "otel-telemetry-export"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "anonymous-identity-attribution": {
+      "domain": "ops",
+      "label": "anonymous-identity-attribution",
+      "members": {
+        "dsh": [
+          "anonymous-identity-attribution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "invariant-runtime-diagnostics": {
+      "domain": "ops",
+      "label": "invariant-runtime-diagnostics",
+      "members": {
+        "dsh": [
+          "invariant-runtime-diagnostics"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-stats-projection": {
+      "domain": "ops",
+      "label": "session-stats-projection",
+      "members": {
+        "dsh": [
+          "session-stats-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "token-and-cost-metering": {
+      "domain": "ops",
+      "label": "token-and-cost-metering",
+      "members": {
+        "dsh": [
+          "token-and-cost-metering"
+        ],
+        "codex": [
+          "turn-cost-accounting-worker"
+        ],
+        "opencode": [
+          "token-and-cost-accounting"
+        ],
+        "opencode-fork": [
+          "token-and-cost-accounting"
+        ],
+        "cc-custom": [
+          "cost-and-token-accounting"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "message-feedback-ledger": {
+      "domain": "ops",
+      "label": "message-feedback-ledger",
+      "members": {
+        "dsh": [
+          "message-feedback-ledger"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-feedback-command-and-remote": {
+      "domain": "ops",
+      "label": "session-feedback-command-and-remote",
+      "members": {
+        "dsh": [
+          "session-feedback-command-and-remote"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "runtime-inspector-diagnostics": {
+      "domain": "ops",
+      "label": "runtime-inspector-diagnostics",
+      "members": {
+        "dsh": [
+          "runtime-inspector-diagnostics"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "performance-benchmark-budgets": {
+      "domain": "ops",
+      "label": "performance-benchmark-budgets",
+      "members": {
+        "dsh": [
+          "performance-benchmark-budgets"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "fail-loud-crash-handling": {
+      "domain": "ops",
+      "label": "fail-loud-crash-handling",
+      "members": {
+        "dsh": [
+          "fail-loud-crash-handling"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "profile-distribution-and-module-fallback": {
+      "domain": "ops",
+      "label": "profile-distribution-and-module-fallback",
+      "members": {
+        "dsh": [
+          "profile-distribution-and-module-fallback"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sqlite-log-database-and-diagnostics": {
+      "domain": "ops",
+      "label": "sqlite-log-database-and-diagnostics",
+      "members": {
+        "codex": [
+          "sqlite-log-database-and-diagnostics"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "rollout-trace-event-manifest-bundle": {
+      "domain": "ops",
+      "label": "rollout-trace-event-manifest-bundle",
+      "members": {
+        "codex": [
+          "rollout-trace-event-manifest-bundle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "feedback-upload-with-diagnostic-attachments": {
+      "domain": "ops",
+      "label": "feedback-upload-with-diagnostic-attachments",
+      "members": {
+        "codex": [
+          "feedback-upload-with-diagnostic-attachments"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "network-proxy-policy-audit-and-attribution": {
+      "domain": "ops",
+      "label": "network-proxy-policy-audit-and-attribution",
+      "members": {
+        "codex": [
+          "network-proxy-policy-audit-and-attribution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "analytics-facts-and-feature-state-metrics": {
+      "domain": "ops",
+      "label": "analytics-facts-and-feature-state-metrics",
+      "members": {
+        "codex": [
+          "analytics-facts-and-feature-state-metrics"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "in-repo-diagnostics-gauges": {
+      "domain": "ops",
+      "label": "in-repo-diagnostics-gauges",
+      "members": {
+        "codex": [
+          "in-repo-diagnostics-gauges"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-and-stderr-logging": {
+      "domain": "ops",
+      "label": "file-and-stderr-logging",
+      "members": {
+        "opencode": [
+          "file-and-stderr-logging"
+        ],
+        "opencode-fork": [
+          "structured-file-logging"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ai-sdk-span-attribution": {
+      "domain": "ops",
+      "label": "ai-sdk-span-attribution",
+      "members": {
+        "opencode": [
+          "ai-sdk-span-attribution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "installation-detection-and-auto-update": {
+      "domain": "ops",
+      "label": "installation-detection-and-auto-update",
+      "members": {
+        "opencode": [
+          "installation-detection-and-auto-update"
+        ],
+        "opencode-fork": [
+          "installation-method-detection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "heap-snapshot-watchdog": {
+      "domain": "ops",
+      "label": "heap-snapshot-watchdog",
+      "members": {
+        "opencode": [
+          "heap-snapshot-watchdog"
+        ],
+        "opencode-fork": [
+          "heap-snapshot-watchdog"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "runtime-flag-registry": {
+      "domain": "ops",
+      "label": "runtime-flag-registry",
+      "members": {
+        "opencode": [
+          "runtime-flag-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "debug-diagnostics-commands": {
+      "domain": "ops",
+      "label": "debug-diagnostics-commands",
+      "members": {
+        "opencode": [
+          "debug-diagnostics-commands"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "kernel-diagnostics-counters-percentiles": {
+      "domain": "ops",
+      "label": "kernel-diagnostics-counters-percentiles",
+      "members": {
+        "opencode-fork": [
+          "kernel-diagnostics-counters-percentiles"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-stats-aggregation": {
+      "domain": "ops",
+      "label": "session-stats-aggregation",
+      "members": {
+        "opencode-fork": [
+          "session-stats-aggregation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "runtime-flags-gating": {
+      "domain": "ops",
+      "label": "runtime-flags-gating",
+      "members": {
+        "opencode-fork": [
+          "runtime-flags-gating"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "analytics-event-pipeline": {
+      "domain": "ops",
+      "label": "analytics-event-pipeline",
+      "members": {
+        "cc-custom": [
+          "analytics-event-pipeline"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "feature-flag-client": {
+      "domain": "ops",
+      "label": "feature-flag-client",
+      "members": {
+        "cc-custom": [
+          "feature-flag-client"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "telemetry-event-manifest-and-sanitisation": {
+      "domain": "ops",
+      "label": "telemetry-event-manifest-and-sanitisation",
+      "members": {
+        "cc-custom": [
+          "telemetry-event-manifest-and-sanitisation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "local-diagnostic-logging": {
+      "domain": "ops",
+      "label": "local-diagnostic-logging",
+      "members": {
+        "cc-custom": [
+          "local-diagnostic-logging"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "graceful-shutdown-and-crash-containment": {
+      "domain": "ops",
+      "label": "graceful-shutdown-and-crash-containment",
+      "members": {
+        "cc-custom": [
+          "graceful-shutdown-and-crash-containment"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "install-and-update": {
+      "domain": "ops",
+      "label": "install-and-update",
+      "members": {
+        "cc-custom": [
+          "install-and-update"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "doctor-and-context-diagnostics": {
+      "domain": "ops",
+      "label": "doctor-and-context-diagnostics",
+      "members": {
+        "cc-custom": [
+          "doctor-and-context-diagnostics"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "profiling-and-benchmark-instrumentation": {
+      "domain": "ops",
+      "label": "profiling-and-benchmark-instrumentation",
+      "members": {
+        "cc-custom": [
+          "profiling-and-benchmark-instrumentation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "local-usage-analytics-and-insights": {
+      "domain": "ops",
+      "label": "local-usage-analytics-and-insights",
+      "members": {
+        "cc-custom": [
+          "local-usage-analytics-and-insights"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "notification-delivery": {
+      "domain": "ops",
+      "label": "notification-delivery",
+      "members": {
+        "cc-custom": [
+          "notification-delivery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "feedback-channels": {
+      "domain": "ops",
+      "label": "feedback-channels",
+      "members": {
+        "cc-custom": [
+          "feedback-channels"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-and-tool-progress-summaries": {
+      "domain": "ops",
+      "label": "agent-and-tool-progress-summaries",
+      "members": {
+        "cc-custom": [
+          "agent-and-tool-progress-summaries"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "vcr-fixture-record-replay": {
+      "domain": "ops",
+      "label": "vcr-fixture-record-replay",
+      "members": {
+        "cc-custom": [
+          "vcr-fixture-record-replay"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ant-only-internal-instrumentation": {
+      "domain": "ops",
+      "label": "ant-only-internal-instrumentation",
+      "members": {
+        "cc-custom": [
+          "ant-only-internal-instrumentation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

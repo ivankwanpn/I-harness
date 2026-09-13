@@ -1,0 +1,603 @@
+{
+  "domain": "context",
+  "rows": {
+    "single-projection-token-accounting": {
+      "domain": "context",
+      "label": "single-projection-token-accounting",
+      "members": {
+        "ih": [
+          "single-projection-token-accounting"
+        ],
+        "opencode": [
+          "token-accounting"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "append-only-shadow-projection-compaction-never-rewrites-the-log": {
+      "domain": "context",
+      "label": "append-only-shadow-projection-compaction-never-rewrites-the-log",
+      "members": {
+        "ih": [
+          "append-only-shadow-projection-compaction-never-rewrites-the-log"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "auto-compaction-gate-stack-with-hysteresis-and-breaker": {
+      "domain": "context",
+      "label": "auto-compaction-gate-stack-with-hysteresis-and-breaker",
+      "members": {
+        "ih": [
+          "auto-compaction-gate-stack-with-hysteresis-and-breaker"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "model-free-prune-pass-auto-path-only": {
+      "domain": "context",
+      "label": "model-free-prune-pass-auto-path-only",
+      "members": {
+        "ih": [
+          "model-free-prune-pass-auto-path-only"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "anchored-incremental-summarization-with-verbatim-sensitive-instructions": {
+      "domain": "context",
+      "label": "anchored-incremental-summarization-with-verbatim-sensitive-instructions",
+      "members": {
+        "ih": [
+          "anchored-incremental-summarization-with-verbatim-sensitive-instructions"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "compaction-engine-is-not-wired-in-any-shipped-host-inert": {
+      "domain": "context",
+      "label": "compaction-engine-is-not-wired-in-any-shipped-host-inert",
+      "members": {
+        "ih": [
+          "compaction-engine-is-not-wired-in-any-shipped-host-inert"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "runtime-context-as-durable-log-snapshots": {
+      "domain": "context",
+      "label": "runtime-context-as-durable-log-snapshots",
+      "members": {
+        "ih": [
+          "runtime-context-as-durable-log-snapshots"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "instruction-file-discovery-with-a-sync-stat-keyed-cache": {
+      "domain": "context",
+      "label": "instruction-file-discovery-with-a-sync-stat-keyed-cache",
+      "members": {
+        "ih": [
+          "instruction-file-discovery-with-a-sync-stat-keyed-cache"
+        ],
+        "opencode": [
+          "instruction-file-discovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "two-layer-output-retention-and-spill": {
+      "domain": "context",
+      "label": "two-layer-output-retention-and-spill",
+      "members": {
+        "ih": [
+          "two-layer-output-retention-and-spill"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-window-resolution-chain": {
+      "domain": "context",
+      "label": "context-window-resolution-chain",
+      "members": {
+        "ih": [
+          "context-window-resolution-chain"
+        ],
+        "dsh": [
+          "context-window-resolution"
+        ],
+        "cc-custom": [
+          "context-window-resolution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "compaction-engine-seam": {
+      "domain": "context",
+      "label": "compaction-engine-seam",
+      "members": {
+        "dsh": [
+          "compaction-engine-seam"
+        ],
+        "opencode-fork": [
+          "compaction-engine-v2"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "compaction-durable-bracket-transaction": {
+      "domain": "context",
+      "label": "compaction-durable-bracket-transaction",
+      "members": {
+        "dsh": [
+          "compaction-durable-bracket-transaction"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "surface-replace-projection": {
+      "domain": "context",
+      "label": "surface-replace-projection",
+      "members": {
+        "dsh": [
+          "surface-replace-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pressure-threshold-compaction-policy": {
+      "domain": "context",
+      "label": "pressure-threshold-compaction-policy",
+      "members": {
+        "dsh": [
+          "pressure-threshold-compaction-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-overflow-recovery": {
+      "domain": "context",
+      "label": "context-overflow-recovery",
+      "members": {
+        "dsh": [
+          "context-overflow-recovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-result-pruner": {
+      "domain": "context",
+      "label": "tool-result-pruner",
+      "members": {
+        "dsh": [
+          "tool-result-pruner"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "replay-aware-token-meter": {
+      "domain": "context",
+      "label": "replay-aware-token-meter",
+      "members": {
+        "dsh": [
+          "replay-aware-token-meter"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "system-prompt-assembly": {
+      "domain": "context",
+      "label": "system-prompt-assembly",
+      "members": {
+        "dsh": [
+          "system-prompt-assembly"
+        ],
+        "opencode": [
+          "model-family-system-prompt"
+        ],
+        "opencode-fork": [
+          "kernel-system-prompt-composition"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "runtime-context-snapshot-projection": {
+      "domain": "context",
+      "label": "runtime-context-snapshot-projection",
+      "members": {
+        "dsh": [
+          "runtime-context-snapshot-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "prompt-series-and-surface-generation-tracking": {
+      "domain": "context",
+      "label": "prompt-series-and-surface-generation-tracking",
+      "members": {
+        "dsh": [
+          "prompt-series-and-surface-generation-tracking"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-instructions-discovery": {
+      "domain": "context",
+      "label": "agent-instructions-discovery",
+      "members": {
+        "dsh": [
+          "agent-instructions-discovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-reference-seam": {
+      "domain": "context",
+      "label": "file-reference-seam",
+      "members": {
+        "dsh": [
+          "file-reference-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tmux-location-context-injection": {
+      "domain": "context",
+      "label": "tmux-location-context-injection",
+      "members": {
+        "dsh": [
+          "tmux-location-context-injection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "time-context-injection": {
+      "domain": "context",
+      "label": "time-context-injection",
+      "members": {
+        "dsh": [
+          "time-context-injection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pre-sampling-compaction-with-provider-routing": {
+      "domain": "context",
+      "label": "pre-sampling-compaction-with-provider-routing",
+      "members": {
+        "codex": [
+          "pre-sampling-compaction-with-provider-routing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-window-token-status-and-compact-scope": {
+      "domain": "context",
+      "label": "context-window-token-status-and-compact-scope",
+      "members": {
+        "codex": [
+          "context-window-token-status-and-compact-scope"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "token-budget-reminder-and-compact-fallback": {
+      "domain": "context",
+      "label": "token-budget-reminder-and-compact-fallback",
+      "members": {
+        "codex": [
+          "token-budget-reminder-and-compact-fallback"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "world-state-section-diffing": {
+      "domain": "context",
+      "label": "world-state-section-diffing",
+      "members": {
+        "codex": [
+          "world-state-section-diffing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "contextual-fragment-injection-primitive": {
+      "domain": "context",
+      "label": "contextual-fragment-injection-primitive",
+      "members": {
+        "codex": [
+          "contextual-fragment-injection-primitive"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "system-context-source-registry": {
+      "domain": "context",
+      "label": "system-context-source-registry",
+      "members": {
+        "opencode": [
+          "system-context-source-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "builtin-context-sources": {
+      "domain": "context",
+      "label": "builtin-context-sources",
+      "members": {
+        "opencode": [
+          "builtin-context-sources"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "compaction-summarisation": {
+      "domain": "context",
+      "label": "compaction-summarisation",
+      "members": {
+        "opencode": [
+          "compaction-summarisation"
+        ],
+        "cc-custom": [
+          "legacy-summarisation-compaction"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-result-pruning": {
+      "domain": "context",
+      "label": "tool-result-pruning",
+      "members": {
+        "opencode": [
+          "tool-result-pruning"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-overflow-detection": {
+      "domain": "context",
+      "label": "context-overflow-detection",
+      "members": {
+        "opencode": [
+          "context-overflow-detection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plan-mode-reminders": {
+      "domain": "context",
+      "label": "plan-mode-reminders",
+      "members": {
+        "opencode": [
+          "plan-mode-reminders"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "fenced-compaction-under-lease": {
+      "domain": "context",
+      "label": "fenced-compaction-under-lease",
+      "members": {
+        "opencode-fork": [
+          "fenced-compaction-under-lease"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "kernel-tool-output-bounding": {
+      "domain": "context",
+      "label": "kernel-tool-output-bounding",
+      "members": {
+        "opencode-fork": [
+          "kernel-tool-output-bounding"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "request-option-partitioning": {
+      "domain": "context",
+      "label": "request-option-partitioning",
+      "members": {
+        "opencode-fork": [
+          "request-option-partitioning"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-result-preparation": {
+      "domain": "context",
+      "label": "tool-result-preparation",
+      "members": {
+        "opencode-fork": [
+          "tool-result-preparation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-epoch-and-system-context": {
+      "domain": "context",
+      "label": "context-epoch-and-system-context",
+      "members": {
+        "opencode-fork": [
+          "context-epoch-and-system-context"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "deferred-tool-context-economy": {
+      "domain": "context",
+      "label": "deferred-tool-context-economy",
+      "members": {
+        "opencode-fork": [
+          "deferred-tool-context-economy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "single-source-token-estimation": {
+      "domain": "context",
+      "label": "single-source-token-estimation",
+      "members": {
+        "grok": [
+          "single-source-token-estimation"
+        ],
+        "cc-custom": [
+          "token-estimation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "compaction-transcript-rendering-with-byte-caps": {
+      "domain": "context",
+      "label": "compaction-transcript-rendering-with-byte-caps",
+      "members": {
+        "grok": [
+          "compaction-transcript-rendering-with-byte-caps"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "full-replace-compaction-rather-than-tail-retention": {
+      "domain": "context",
+      "label": "full-replace-compaction-rather-than-tail-retention",
+      "members": {
+        "grok": [
+          "full-replace-compaction-rather-than-tail-retention"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "boundary-exact-token-gate-and-image-budget-hysteresis": {
+      "domain": "context",
+      "label": "boundary-exact-token-gate-and-image-budget-hysteresis",
+      "members": {
+        "grok": [
+          "boundary-exact-token-gate-and-image-budget-hysteresis"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "structured-context-length-error-classifier": {
+      "domain": "context",
+      "label": "structured-context-length-error-classifier",
+      "members": {
+        "grok": [
+          "structured-context-length-error-classifier"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "project-instruction-injection-into-user-message": {
+      "domain": "context",
+      "label": "project-instruction-injection-into-user-message",
+      "members": {
+        "grok": [
+          "project-instruction-injection-into-user-message"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "auto-compact-threshold-and-circuit-breaker": {
+      "domain": "context",
+      "label": "auto-compact-threshold-and-circuit-breaker",
+      "members": {
+        "cc-custom": [
+          "auto-compact-threshold-and-circuit-breaker"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-memory-compaction": {
+      "domain": "context",
+      "label": "session-memory-compaction",
+      "members": {
+        "cc-custom": [
+          "session-memory-compaction"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "time-based-microcompact": {
+      "domain": "context",
+      "label": "time-based-microcompact",
+      "members": {
+        "cc-custom": [
+          "time-based-microcompact"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "api-side-context-management": {
+      "domain": "context",
+      "label": "api-side-context-management",
+      "members": {
+        "cc-custom": [
+          "api-side-context-management"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "post-compact-cache-invalidation": {
+      "domain": "context",
+      "label": "post-compact-cache-invalidation",
+      "members": {
+        "cc-custom": [
+          "post-compact-cache-invalidation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "max-output-token-recovery-and-escalation": {
+      "domain": "context",
+      "label": "max-output-token-recovery-and-escalation",
+      "members": {
+        "cc-custom": [
+          "max-output-token-recovery-and-escalation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "token-budget-continuation": {
+      "domain": "context",
+      "label": "token-budget-continuation",
+      "members": {
+        "cc-custom": [
+          "token-budget-continuation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "reactive-compact-on-overflow": {
+      "domain": "context",
+      "label": "reactive-compact-on-overflow",
+      "members": {
+        "cc-custom": [
+          "reactive-compact-on-overflow"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-collapse-and-history-snip": {
+      "domain": "context",
+      "label": "context-collapse-and-history-snip",
+      "members": {
+        "cc-custom": [
+          "context-collapse-and-history-snip"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "cached-microcompact": {
+      "domain": "context",
+      "label": "cached-microcompact",
+      "members": {
+        "cc-custom": [
+          "cached-microcompact"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

@@ -1,0 +1,135 @@
+[
+  {
+    "name": "permission-rule-engine",
+    "what": "Permission.evaluate(permission, pattern, ...rulesets) flattens the rulesets and takes the LAST rule whose permission and pattern both wildcard-match the request; with no match it returns {action:'ask', permission, pattern:'*'}. fromConfig turns config entries into rules (a bare string becomes pattern '*', a record maps expanded patterns - ~/, $HOME and ~ expansions - to actions). disabled() hides a tool when the last matching rule is pattern '*' with action deny, mapping edit/write/apply_patch onto the 'edit' permission and the MCP resource tools onto 'read'; visibleTools filters a tool map through it.",
+    "invariants": [
+      "Rule resolution is last-match-wins over a flattened list, so ordering of the merged ruleset is part of the policy.",
+      "An unmatched request must default to 'ask', never to 'allow'.",
+      "A blanket deny (pattern '*') removes the tool from the model's tool list entirely."
+    ],
+    "failurePolicy": "fail-closed - the absence of a rule is an ask, and a blanket deny removes the capability.",
+    "constants": [
+      "edit-family tools mapped to the 'edit' permission: edit, write, apply_patch (packages/opencode/src/permission/index.ts:205)",
+      "MCP resource tools mapped to the 'read' permission (packages/opencode/src/permission/index.ts:206)"
+    ],
+    "evidence": [
+      "packages/opencode/src/permission/index.ts:28-38",
+      "packages/opencode/src/permission/index.ts:178-198",
+      "packages/opencode/src/permission/index.ts:200-202",
+      "packages/opencode/src/permission/index.ts:204-219"
+    ],
+    "modules": [
+      "opencode/permission",
+      "core/permission"
+    ],
+    "verified": true
+  },
+  {
+    "name": "permission-ask-queue",
+    "what": "The permission service keeps a per-instance state of pending requests (Map<ID, {info, Deferred}>) plus an 'approved' rule list accumulated from 'always' replies. ask() evaluates every requested pattern; a deny fails immediately with DeniedError, an allow continues, and any 'ask' result inserts a pending entry, publishes Event.Asked and waits on the Deferred (registered so the entry is deleted on exit). reply('reject') fails the request and cascades a rejection to every other pending request of the same session; reply('always') records the request's always-patterns as approved rules and then auto-approves any other pending request of that session whose patterns are all allow under the new rule set.",
+    "invariants": [
+      "A pending request must be removed from the map in all exit paths (ensuring) or the permission service leaks and blocks.",
+      "Rejecting one request must reject the other pending requests of the same session, so a user cannot be asked again for the same batch."
+    ],
+    "failurePolicy": "fail-closed - on instance finalization every pending request is failed with RejectedError, so nothing is silently approved; a reject reply is a hard failure of the tool call.",
+    "constants": [],
+    "evidence": [
+      "packages/opencode/src/permission/index.ts:18-26",
+      "packages/opencode/src/permission/index.ts:46-64",
+      "packages/opencode/src/permission/index.ts:67-107",
+      "packages/opencode/src/permission/index.ts:109-167"
+    ],
+    "modules": [
+      "opencode/permission"
+    ],
+    "verified": true
+  },
+  {
+    "name": "session-permission-persistence",
+    "what": "The session row stores a permission ruleset in a JSON column typed PermissionV1.Ruleset (permission/pattern/action). Session.setPermission writes it, and SessionPrompt.prompt derives allow/deny rules with pattern '*' from the request's per-tool overrides before storing them, so a later turn is evaluated against the stored ruleset merged with the agent's.",
+    "invariants": [
+      "The stored session ruleset participates in every tool evaluation (merged with the agent ruleset), so writing it changes what the agent can do for the rest of the session."
+    ],
+    "failurePolicy": "fail-closed - an unmatched request still evaluates to 'ask' even after a session ruleset is stored.",
+    "constants": [],
+    "evidence": [
+      "packages/core/src/session/sql.ts:50",
+      "packages/opencode/src/session/prompt.ts:1060-1067",
+      "packages/opencode/src/session/session.ts:778",
+      "packages/opencode/src/session/tools.ts:82-99"
+    ],
+    "modules": [
+      "core/session",
+      "opencode/permission"
+    ],
+    "verified": true
+  },
+  {
+    "name": "core-permission-service-v2",
+    "what": "The v2 core permission service uses rules shaped {action, resource, effect} from the shared schema. A missing agent presents deny-all rules (const missingAgentPermissions, [{action:'*', resource:'*', effect:'deny'}]). evaluate() is the same last-match wildcard lookup defaulting to effect 'ask'; evaluateInput short-circuits to deny when any relevant rule denies, otherwise combines per-resource effects with deny > ask > allow; ask() only creates a pending request when the combined effect is 'ask', and assert() runs inside uninterruptibleMask so a permission decision cannot be abandoned mid-flight.",
+    "invariants": [
+      "Effect combination across multiple resources must be deny > ask > allow.",
+      "The agent's own rules can never be widened by another ruleset: a deny in the relevant rules wins before any merge.",
+      "assert() must be uninterruptible."
+    ],
+    "failurePolicy": "fail-closed - a missing agent means deny-all; DeclinedError/CorrectedError/BlockedError are distinct failures and pending requests are declined on finalization.",
+    "constants": [
+      "missing agent rules = [{action:'*', resource:'*', effect:'deny'}] (packages/core/src/permission.ts:15)"
+    ],
+    "evidence": [
+      "packages/core/src/permission.ts:14-15",
+      "packages/core/src/permission.ts:76-90",
+      "packages/core/src/permission.ts:147-161",
+      "packages/core/src/permission.ts:190-201"
+    ],
+    "modules": [
+      "core/permission"
+    ],
+    "verified": true
+  },
+  {
+    "name": "no-os-level-sandbox",
+    "what": "REFUTED that a sandbox exists: the only confinement is the permission model. Commands are built with ChildProcess.make and spawned through ChildProcessSpawner with no wrapper process, no namespace, no seatbelt/bwrap/landlock or seccomp layer; the only identifiers matching 'sandbox' in the tree are project git-worktree path bookkeeping (a project row column) and the codemode package's JS-level interpreter types. The model is told the same thing in prompt text: 'The operating environment is not in a sandbox'. A session's permission ruleset is policy, not confinement - an allowed shell command runs with the user's full OS privileges.",
+    "invariants": [
+      "Because there is no OS confinement, a permission 'allow' is the ONLY gate between the model and the host; the permission layer must therefore never default to allow.",
+      "Anything relying on filesystem isolation (e.g. write-then-revert) must be implemented at the tool/permission level, not assumed from the OS."
+    ],
+    "failurePolicy": "fail-open with respect to the OS - once a permission is allowed (statically or by the user) nothing prevents the process from touching arbitrary paths, so failures of the permission layer have host-level consequences.",
+    "constants": [],
+    "evidence": [
+      "packages/opencode/src/tool/shell.ts:293-310",
+      "packages/opencode/src/tool/shell.ts:484",
+      "packages/opencode/src/session/prompt/kimi.txt:62",
+      "packages/core/src/project/sql.ts:16"
+    ],
+    "modules": [
+      "opencode/tool",
+      "opencode/permission",
+      "opencode/project"
+    ],
+    "verified": true
+  },
+  {
+    "name": "mcp-and-external-directory-gates",
+    "what": "Beyond the per-tool ask, two finer-grained gates exist. The shell tool asks for 'external_directory' with the scanned out-of-instance paths before asking for the shell itself. The MCP resource tools ask with permission 'read' and patterns of the form mcp:<server>:* (or the exact URI for a read), so an MCP server's resources are addressable by wildcard rules. Task delegation asks with permission 'task' and the subagent type as pattern.",
+    "invariants": [
+      "MCP resources must be gated by the server-qualified pattern so one server can be allowed without allowing another.",
+      "Reading outside the instance directory must be a distinct permission from running a command."
+    ],
+    "failurePolicy": "fail-closed - the ask is suspended until a reply; a deny fails the call before any read or spawn happens.",
+    "constants": [],
+    "evidence": [
+      "packages/opencode/src/session/tools.ts:172-184",
+      "packages/opencode/src/session/tools.ts:255-267",
+      "packages/opencode/src/session/tools.ts:344-347",
+      "packages/opencode/src/tool/shell.ts:263-292",
+      "packages/opencode/src/tool/task.ts:120-127"
+    ],
+    "modules": [
+      "opencode/session",
+      "opencode/tool",
+      "opencode/mcp"
+    ],
+    "verified": true
+  }
+]

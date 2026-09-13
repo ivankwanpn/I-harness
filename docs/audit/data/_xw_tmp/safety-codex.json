@@ -1,0 +1,176 @@
+[
+  {
+    "name": "permission-profile-model-with-requirement-allowed-catalog",
+    "what": "Permissions are a resolved profile, not a mode enum. `PermissionProfile` is `Managed { file_system, network, enforcement }`, `Disabled`, or `External { .. }`; the filesystem half is a `FileSystemSandboxPolicy` of explicit read/write entries over absolute paths and *special* paths, with per-entry mode, a per-entry missing-path behaviour, a skip-missing flag and a `ReadDenyMatcher` supporting deny-read globs. Three built-in profiles are always offered (read-only, workspace-write, danger-full-access); user-defined profiles from `permissions` config are appended, and each entry's `allowed` flag is computed from three requirement sources — the allowed-profile-names list, the sandbox-mode requirement, and a deny-read compatibility check that refuses a danger-full-access or external profile when requirements declare deny-read paths. Approval granularity is a five-flag `GranularApprovalConfig` (sandbox_approval, rules, skill_approval, request_permissions, mcp_elicitations), where a false flag means the request is auto-rejected rather than shown to the user.",
+    "invariants": [
+      "A profile may only be offered if all three requirement checks agree; the catalog computes `allowed` rather than trusting the config (core/src/config/permission_profile_catalog.rs:98-122).",
+      "A deny-read requirement must not be satisfied by a danger-full-access or external profile — that combination is a hard constraint error listing the allowed values (core/src/config/permission_profile_catalog.rs:124-139).",
+      "Under `Granular`, a false flag must reject the request instead of prompting, so the flags are fail-closed by construction (protocol/src/protocol.rs:928-938).",
+      "`AskForApproval` has removed variants that must not be reintroduced: the active set is `UnlessTrusted | OnRequest | Granular | Never`, with `on-failure` accepted only as a serde alias for OnRequest (protocol/src/protocol.rs:914-939)."
+    ],
+    "failurePolicy": "fail-closed",
+    "constants": [
+      "Built-in profile ids: BUILT_IN_READ_ONLY_PROFILE, BUILT_IN_WORKSPACE_PROFILE, BUILT_IN_DANGER_FULL_ACCESS_PROFILE (core/src/config/permission_profile_catalog.rs:13-15, :53-70)",
+      "GranularApprovalConfig fields and their `allows_*` accessors (protocol/src/protocol.rs:941-978)",
+      "`ReviewDecision` variants: Approved, ApprovedExecpolicyAmendment, ApprovedForSession, ApprovedMcpPolicyAmendment, NetworkPolicyAmendment, Denied{rejection}, TimedOut, Abort; `Default` is `Denied { rejection: \"denied\" }` (protocol/src/protocol.rs:3868-3912)"
+    ],
+    "evidence": [
+      "codex-rs/protocol/src/permissions.rs:80-260",
+      "codex-rs/core/src/config/permission_profile_catalog.rs:20-140",
+      "codex-rs/protocol/src/protocol.rs:912-978",
+      "codex-rs/protocol/src/protocol.rs:3868-3912"
+    ],
+    "modules": [
+      "protocol",
+      "core",
+      "config",
+      "sandboxing"
+    ],
+    "verified": true
+  },
+  {
+    "name": "session-scoped-approval-cache",
+    "what": "Approvals are cached per session keyed by a serialized *set* of keys, because one tool call can touch several resources (apply_patch may modify multiple files). `with_cached_approval` short-circuits to `ApprovedForSession` only when every key in the request is already approved; otherwise it fetches a fresh decision, emits a `codex.approval.requested` counter tagged with tool and outcome, and stores `ApprovedForSession` for each key individually, so a later request touching any subset also skips prompting. An empty key set deliberately bypasses the cache entirely rather than being treated as pre-approved.",
+    "invariants": [
+      "All keys must be approved for the cache to hit — a partial match must still prompt (core/src/tools/sandboxing.rs:87-95).",
+      "An empty key vector must not hit the cache; it fetches unconditionally as a defensive measure (core/src/tools/sandboxing.rs:82-85).",
+      "A session decision is stored per key, not per request, so it generalizes to subsets (core/src/tools/sandboxing.rs:108-113)."
+    ],
+    "failurePolicy": "fail-closed",
+    "constants": [
+      "Cache key is the JSON serialization of the caller's key value (core/src/tools/sandboxing.rs:46-61)",
+      "Metric name `codex.approval.requested` tagged (tool, approved) (core/src/tools/sandboxing.rs:99-106)"
+    ],
+    "evidence": [
+      "codex-rs/core/src/tools/sandboxing.rs:39-116"
+    ],
+    "modules": [
+      "core",
+      "protocol"
+    ],
+    "verified": true
+  },
+  {
+    "name": "platform-sandbox-selection-and-transform",
+    "what": "`SandboxManager` owns selection and command transformation. `should_sandbox` returns false for `SandboxablePreference::Forbid`, true for `Require`, and for `Auto` defers to the filesystem/network policy plus whether managed network requirements are active; `select_initial` then asks `get_platform_sandbox` for the host's concrete backend, which is seatbelt on macOS, seccomp/landlock on Linux, and the Windows restricted-token backend only when the Windows sandbox level is not `Disabled`. `transform` rewrites argv per backend: seatbelt prepends `/usr/bin/sandbox-exec` with a generated profile; Linux prepends the `codex-linux-sandbox` helper with an arg0 override and a serialized permission profile, and refuses to run on WSL1 when bubblewrap is required; Windows returns the argv unchanged here and is wrapped later by `transform_for_direct_spawn`, which additionally refuses managed networking unless the elevated backend is selected.",
+    "invariants": [
+      "Managed networking on Windows requires the elevated backend — a restricted-token transform returns a preparation error instead of proceeding (sandboxing/src/manager.rs:440-446).",
+      "A missing Linux sandbox executable is an error, not a silent unsandboxed fallback (sandboxing/src/manager.rs:408-410).",
+      "The effective permission profile must be carried through the transform result so downstream code sees what was actually enforced, not what was requested (sandboxing/src/manager.rs:461-481)."
+    ],
+    "failurePolicy": "fail-closed",
+    "constants": [
+      "SandboxType = { None, MacosSeatbelt, LinuxSeccomp, WindowsRestrictedToken } (sandboxing/src/manager.rs:36-42)",
+      "MACOS_PATH_TO_SEATBELT_EXECUTABLE = \"/usr/bin/sandbox-exec\" (sandboxing/src/seatbelt.rs:56)",
+      "CODEX_LINUX_SANDBOX_ARG0 = \"codex-linux-sandbox\" (sandboxing/src/landlock.rs:6)",
+      "WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST = [\"USERNAME\", \"USERPROFILE\"] (sandboxing/src/manager.rs:34)"
+    ],
+    "evidence": [
+      "codex-rs/sandboxing/src/manager.rs:36-76",
+      "codex-rs/sandboxing/src/manager.rs:293-482",
+      "codex-rs/sandboxing/src/manager.rs:522-628",
+      "codex-rs/sandboxing/src/landlock.rs:6-60",
+      "codex-rs/sandboxing/src/seatbelt.rs:22-56"
+    ],
+    "modules": [
+      "sandboxing",
+      "core",
+      "protocol",
+      "network-proxy"
+    ],
+    "verified": true
+  },
+  {
+    "name": "seatbelt-and-bubblewrap-backends",
+    "what": "macOS confinement generates a Seatbelt profile per invocation from four bundled `.sbpl` sources (base policy, network policy, restricted read-only platform defaults, process-applications read policy) plus dynamically built allow/deny entries: access roots with per-root read/write kinds, protected-metadata-name regexes for writable roots, unreadable glob policies converted to Seatbelt regexes, and a dynamic network policy that allows only the loopback ports of the managed proxy and the Unix socket paths that the proxy needs. Linux confinement invokes a `codex-linux-sandbox` helper that applies in-process `no_new_privs` plus seccomp and uses bubblewrap for filesystem isolation, with a bundled bubblewrap that is digest-verified. On WSL1 the transform is refused rather than degraded.",
+    "invariants": [
+      "The bundled bubblewrap must be digest-verified; a verification failure exits with a dedicated code instead of running an unverified helper (linux-sandbox/src/lib.rs:27-29).",
+      "Unreadable-glob expansion is capped so a glob cannot be turned into an unbounded profile (linux-sandbox/src/bwrap.rs:56).",
+      "Seatbelt network policy must be derived from the actual proxy configuration, not a static allow-all (sandboxing/src/seatbelt.rs:288-363)."
+    ],
+    "failurePolicy": "fail-closed",
+    "constants": [
+      "MAX_UNREADABLE_GLOB_MATCHES = 8192 (linux-sandbox/src/bwrap.rs:56)",
+      "BUNDLED_BWRAP_DIGEST_VERIFICATION_FAILURE_EXIT_CODE = 8 (linux-sandbox/src/lib.rs:29)",
+      "LINUX_PLATFORM_DEFAULT_READ_ROOTS (linux-sandbox/src/bwrap.rs:45)",
+      "FORWARDED_SIGNALS list plus BWRAP_CHILD_PID / PENDING_FORWARDED_SIGNAL atomics (linux-sandbox/src/linux_run_main.rs:41-44)",
+      "Feature::UseLinuxSandboxBwrap is Stage::Removed; Feature::UseLegacyLandlock is Stage::Deprecated default false (features/src/lib.rs:1051-1059)"
+    ],
+    "evidence": [
+      "codex-rs/linux-sandbox/src/lib.rs:1-39",
+      "codex-rs/linux-sandbox/src/bwrap.rs:45-56",
+      "codex-rs/linux-sandbox/src/linux_run_main.rs:41-49",
+      "codex-rs/sandboxing/src/seatbelt.rs:22-26",
+      "codex-rs/sandboxing/src/seatbelt.rs:251-363",
+      "codex-rs/sandboxing/src/seatbelt.rs:420-530",
+      "codex-rs/vendor/bubblewrap"
+    ],
+    "modules": [
+      "sandboxing",
+      "linux-sandbox",
+      "bwrap",
+      "vendor",
+      "core"
+    ],
+    "verified": true
+  },
+  {
+    "name": "windows-sandbox-three-levels-with-wfp",
+    "what": "Windows has two concrete backends behind a three-valued `WindowsSandboxLevel { Disabled, RestrictedToken, Elevated }`. The restricted-token backend creates a WRITE_RESTRICTED token for spawn; the code is explicit about what it cannot do — its capability SIDs do not participate in read access checks, so it refuses (with 'refusing to run unsandboxed') to handle split read restrictions, deny-read paths, differing writable-root sets, or writable descendants reopened under a read-only carveout, and it can only layer deny-write carveouts on top of the legacy writable allow set. The elevated backend uses a separate offline local user identity plus ACLs and WFP network filters, supports explicit read/write root overrides and deny-read paths, and is required for managed networking and for a proxy restricting SID. The startup dispatch is one match on the sandbox level.",
+    "invariants": [
+      "The restricted-token backend must refuse rather than run unsandboxed whenever it cannot enforce the requested policy; the failure strings are literal and load-bearing (sandboxing/src/windows.rs:96-102, :113-129, :147-169).",
+      "Managed networking must not be attempted on the restricted-token backend — the spawner bails, and the transform errors earlier (windows-sandbox-rs/src/unified_exec/mod.rs:74-79).",
+      "Skip-missing path entries must be removed before computing overrides, so a not-yet-existing path is not turned into a deny-write sentinel (sandboxing/src/windows.rs:104-107)."
+    ],
+    "failurePolicy": "fail-closed",
+    "constants": [
+      "WindowsSandboxLevel = { Disabled, RestrictedToken, Elevated }",
+      "WFP filters defined statically: ICMP connect/assign v4+v6, DNS 53 v4+v6, DNS-over-TLS 853 v4+v6, SMB 445 v4+v6, SMB 139 v4+v6, all scoped by the sandbox user (windows-sandbox-rs/src/wfp/filter_specs.rs:25-124)",
+      "NAME_RESOLUTION_CACHE filters are deliberately omitted because their static shapes failed validation with FWP_E_OUT_OF_BOUNDS (windows-sandbox-rs/src/wfp/filter_specs.rs:66-67)",
+      "Feature::WindowsSandbox (key experimental_windows_sandbox) and Feature::WindowsSandboxElevated (elevated_windows_sandbox) are BOTH Stage::Removed, default false (features/src/lib.rs:1069-1079)"
+    ],
+    "evidence": [
+      "codex-rs/sandboxing/src/windows.rs:14-45",
+      "codex-rs/sandboxing/src/windows.rs:72-211",
+      "codex-rs/sandboxing/src/windows.rs:213-358",
+      "codex-rs/windows-sandbox-rs/src/unified_exec/mod.rs:48-96",
+      "codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs:1-124",
+      "codex-rs/features/src/lib.rs:1069-1079"
+    ],
+    "modules": [
+      "windows-sandbox-rs",
+      "sandboxing",
+      "core",
+      "protocol",
+      "features"
+    ],
+    "verified": true
+  },
+  {
+    "name": "sandbox-violation-classification",
+    "what": "A denied command is turned back into structured evidence rather than an opaque failure. `classify_filesystem_sandbox_violation` only considers a non-zero exit, maps the backend from the sandbox type, and first tries keyword matching over stderr/stdout/aggregated output against seven ordered `(reason, needle)` pairs (operation not permitted, permission denied, read-only file system, seccomp, sandbox, landlock, failed to write file). A curated quick-reject list of well-known non-sandbox shell exit codes is excluded before the last heuristic: on Linux, exit code 128+SIGSYS is classified as a syscall-signal violation. The denied path is extracted from the output text by matching the three colon-prefixed reason markers and accepting only absolute or ./ ../ prefixed candidates, and the snippet is capped. Network denials take a separate path built from the managed proxy's `BlockedRequest`.",
+    "invariants": [
+      "Exit codes 2, 126 and 127 must be rejected as non-sandbox failures before any denial is reported, or ordinary shell misuse would be misclassified (sandboxing/src/violation.rs:33-37, :157-159).",
+      "Exit code 0 must never produce a violation (sandboxing/src/violation.rs:138-140).",
+      "Extracted paths must be absolute or explicitly relative; a bare word must not be reported as a denied path (sandboxing/src/violation.rs:275-280)."
+    ],
+    "failurePolicy": "fail-soft",
+    "constants": [
+      "OUTPUT_SNIPPET_MAX_CHARS = 512 (sandboxing/src/violation.rs:9)",
+      "EXIT_CODE_SIGNAL_BASE = 128, SIGSYS check (sandboxing/src/violation.rs:8, :161-180)",
+      "SANDBOX_DENIED_KEYWORDS has 7 entries (sandboxing/src/violation.rs:11-31)",
+      "QUICK_REJECT_EXIT_CODES = [2, 126, 127] (sandboxing/src/violation.rs:37)"
+    ],
+    "evidence": [
+      "codex-rs/sandboxing/src/violation.rs:7-53",
+      "codex-rs/sandboxing/src/violation.rs:133-200",
+      "codex-rs/sandboxing/src/violation.rs:232-293"
+    ],
+    "modules": [
+      "sandboxing",
+      "network-proxy",
+      "protocol"
+    ],
+    "verified": true
+  }
+]

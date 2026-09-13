@@ -1,0 +1,510 @@
+{
+  "domain": "service",
+  "rows": {
+    "web-service-surface-unary-http-routes-one-websocket-mux": {
+      "domain": "service",
+      "label": "web-service-surface-unary-http-routes-one-websocket-mux",
+      "members": {
+        "ih": [
+          "web-service-surface-unary-http-routes-one-websocket-mux"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "external-sdk-stdio-server-with-a-frozen-v0-wire-contract": {
+      "domain": "service",
+      "label": "external-sdk-stdio-server-with-a-frozen-v0-wire-contract",
+      "members": {
+        "ih": [
+          "external-sdk-stdio-server-with-a-frozen-v0-wire-contract"
+        ],
+        "codex": [
+          "app-server-schema-and-sdk-contract-export"
+        ],
+        "cc-custom": [
+          "sdk-wire-schema-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "acp-v1-server-for-the-automation-subset": {
+      "domain": "service",
+      "label": "acp-v1-server-for-the-automation-subset",
+      "members": {
+        "ih": [
+          "acp-v1-server-for-the-automation-subset"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "interaction-seams-approval-answerer-question-provider-ui-command-plane": {
+      "domain": "service",
+      "label": "interaction-seams-approval-answerer-question-provider-ui-command-plane",
+      "members": {
+        "ih": [
+          "interaction-seams-approval-answerer-question-provider-ui-command-plane"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "cli-host-surface-with-a-split-fail-loud-silent-fallback-discipline": {
+      "domain": "service",
+      "label": "cli-host-surface-with-a-split-fail-loud-silent-fallback-discipline",
+      "members": {
+        "ih": [
+          "cli-host-surface-with-a-split-fail-loud-silent-fallback-discipline"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "typert-descriptor-codegen": {
+      "domain": "service",
+      "label": "typert-descriptor-codegen",
+      "members": {
+        "dsh": [
+          "typert-descriptor-codegen"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "typert-remote-rpc-plane": {
+      "domain": "service",
+      "label": "typert-remote-rpc-plane",
+      "members": {
+        "dsh": [
+          "typert-remote-rpc-plane"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "browser-http-api-transport": {
+      "domain": "service",
+      "label": "browser-http-api-transport",
+      "members": {
+        "dsh": [
+          "browser-http-api-transport"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "service-self-auth-token-cookie": {
+      "domain": "service",
+      "label": "service-self-auth-token-cookie",
+      "members": {
+        "dsh": [
+          "service-self-auth-token-cookie"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "browser-trust-fence": {
+      "domain": "service",
+      "label": "browser-trust-fence",
+      "members": {
+        "dsh": [
+          "browser-trust-fence"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "remote-stream-websocket-mux": {
+      "domain": "service",
+      "label": "remote-stream-websocket-mux",
+      "members": {
+        "dsh": [
+          "remote-stream-websocket-mux"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "forwarded-host-event-bridge": {
+      "domain": "service",
+      "label": "forwarded-host-event-bridge",
+      "members": {
+        "dsh": [
+          "forwarded-host-event-bridge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sdk-jsonrpc-stdio-runtime": {
+      "domain": "service",
+      "label": "sdk-jsonrpc-stdio-runtime",
+      "members": {
+        "dsh": [
+          "sdk-jsonrpc-stdio-runtime"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "acp-agent-client-protocol": {
+      "domain": "service",
+      "label": "acp-agent-client-protocol",
+      "members": {
+        "dsh": [
+          "acp-agent-client-protocol"
+        ],
+        "opencode-fork": [
+          "acp-agent-protocol"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "web-host-static-and-launch": {
+      "domain": "service",
+      "label": "web-host-static-and-launch",
+      "members": {
+        "dsh": [
+          "web-host-static-and-launch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "profile-boot-and-cmdline-seam": {
+      "domain": "service",
+      "label": "profile-boot-and-cmdline-seam",
+      "members": {
+        "dsh": [
+          "profile-boot-and-cmdline-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "settings-and-credentials-rpc-namespace": {
+      "domain": "service",
+      "label": "settings-and-credentials-rpc-namespace",
+      "members": {
+        "dsh": [
+          "settings-and-credentials-rpc-namespace"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "command-catalog-rpc-and-lifecycle": {
+      "domain": "service",
+      "label": "command-catalog-rpc-and-lifecycle",
+      "members": {
+        "dsh": [
+          "command-catalog-rpc-and-lifecycle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "directory-picker-capability-seam": {
+      "domain": "service",
+      "label": "directory-picker-capability-seam",
+      "members": {
+        "dsh": [
+          "directory-picker-capability-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "webhook-ingress-and-verification": {
+      "domain": "service",
+      "label": "webhook-ingress-and-verification",
+      "members": {
+        "dsh": [
+          "webhook-ingress-and-verification"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "app-server-multi-transport-listen-surface": {
+      "domain": "service",
+      "label": "app-server-multi-transport-listen-surface",
+      "members": {
+        "codex": [
+          "app-server-multi-transport-listen-surface"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "websocket-listener-authentication": {
+      "domain": "service",
+      "label": "websocket-listener-authentication",
+      "members": {
+        "codex": [
+          "websocket-listener-authentication"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "connection-initialize-handshake-and-capability-gate": {
+      "domain": "service",
+      "label": "connection-initialize-handshake-and-capability-gate",
+      "members": {
+        "codex": [
+          "connection-initialize-handshake-and-capability-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "outbound-backpressure-and-overload-control": {
+      "domain": "service",
+      "label": "outbound-backpressure-and-overload-control",
+      "members": {
+        "codex": [
+          "outbound-backpressure-and-overload-control"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "remote-control-relay-session": {
+      "domain": "service",
+      "label": "remote-control-relay-session",
+      "members": {
+        "codex": [
+          "remote-control-relay-session"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-server-stdio-endpoint": {
+      "domain": "service",
+      "label": "mcp-server-stdio-endpoint",
+      "members": {
+        "codex": [
+          "mcp-server-stdio-endpoint"
+        ],
+        "cc-custom": [
+          "mcp-server-mode-over-stdio"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "headless-jsonl-exec-surface": {
+      "domain": "service",
+      "label": "headless-jsonl-exec-surface",
+      "members": {
+        "codex": [
+          "headless-jsonl-exec-surface"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sandbox-helper-and-arg0-dispatch": {
+      "domain": "service",
+      "label": "sandbox-helper-and-arg0-dispatch",
+      "members": {
+        "codex": [
+          "sandbox-helper-and-arg0-dispatch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "http-server-listener-and-lifecycle": {
+      "domain": "service",
+      "label": "http-server-listener-and-lifecycle",
+      "members": {
+        "opencode": [
+          "http-server-listener-and-lifecycle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "service-basic-auth-with-ticket-bypass": {
+      "domain": "service",
+      "label": "service-basic-auth-with-ticket-bypass",
+      "members": {
+        "opencode": [
+          "service-basic-auth-with-ticket-bypass"
+        ],
+        "opencode-fork": [
+          "service-basic-auth"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "openapi-spec-and-sdk-codegen": {
+      "domain": "service",
+      "label": "openapi-spec-and-sdk-codegen",
+      "members": {
+        "opencode": [
+          "openapi-spec-and-sdk-codegen"
+        ],
+        "opencode-fork": [
+          "http-server-and-openapi-spec"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sse-live-event-stream": {
+      "domain": "service",
+      "label": "sse-live-event-stream",
+      "members": {
+        "opencode": [
+          "sse-live-event-stream"
+        ],
+        "opencode-fork": [
+          "sse-event-stream-with-heartbeat"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-event-replay-and-sync": {
+      "domain": "service",
+      "label": "durable-event-replay-and-sync",
+      "members": {
+        "opencode": [
+          "durable-event-replay-and-sync"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "acp-stdio-agent-adapter": {
+      "domain": "service",
+      "label": "acp-stdio-agent-adapter",
+      "members": {
+        "opencode": [
+          "acp-stdio-agent-adapter"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "control-plane-workspace-routing": {
+      "domain": "service",
+      "label": "control-plane-workspace-routing",
+      "members": {
+        "opencode": [
+          "control-plane-workspace-routing"
+        ],
+        "opencode-fork": [
+          "workspace-routing-proxy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "legacy-sdk-openapi-contract": {
+      "domain": "service",
+      "label": "legacy-sdk-openapi-contract",
+      "members": {
+        "opencode-fork": [
+          "legacy-sdk-openapi-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pty-websocket-connect-ticket": {
+      "domain": "service",
+      "label": "pty-websocket-connect-ticket",
+      "members": {
+        "opencode-fork": [
+          "pty-websocket-connect-ticket"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "workspace-event-sync-replication": {
+      "domain": "service",
+      "label": "workspace-event-sync-replication",
+      "members": {
+        "opencode-fork": [
+          "workspace-event-sync-replication"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sdk-stdio-control-protocol": {
+      "domain": "service",
+      "label": "sdk-stdio-control-protocol",
+      "members": {
+        "cc-custom": [
+          "sdk-stdio-control-protocol"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ndjson-stream-integrity-guard": {
+      "domain": "service",
+      "label": "ndjson-stream-integrity-guard",
+      "members": {
+        "cc-custom": [
+          "ndjson-stream-integrity-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sdk-permission-prompt-channel": {
+      "domain": "service",
+      "label": "sdk-permission-prompt-channel",
+      "members": {
+        "cc-custom": [
+          "sdk-permission-prompt-channel"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sdk-output-format-exit-and-error-surface": {
+      "domain": "service",
+      "label": "sdk-output-format-exit-and-error-surface",
+      "members": {
+        "cc-custom": [
+          "sdk-output-format-exit-and-error-surface"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "user-message-replay-and-dedup": {
+      "domain": "service",
+      "label": "user-message-replay-and-dedup",
+      "members": {
+        "cc-custom": [
+          "user-message-replay-and-dedup"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "direct-connect-http-ws-client": {
+      "domain": "service",
+      "label": "direct-connect-http-ws-client",
+      "members": {
+        "cc-custom": [
+          "direct-connect-http-ws-client"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ssh-remote-ndjson-transport": {
+      "domain": "service",
+      "label": "ssh-remote-ndjson-transport",
+      "members": {
+        "cc-custom": [
+          "ssh-remote-ndjson-transport"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "in-process-sdk-mcp-bridge": {
+      "domain": "service",
+      "label": "in-process-sdk-mcp-bridge",
+      "members": {
+        "cc-custom": [
+          "in-process-sdk-mcp-bridge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "host-injected-env-and-session-token-channel": {
+      "domain": "service",
+      "label": "host-injected-env-and-session-token-channel",
+      "members": {
+        "cc-custom": [
+          "host-injected-env-and-session-token-channel"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "internal-permission-context-logging": {
+      "domain": "service",
+      "label": "internal-permission-context-logging",
+      "members": {
+        "cc-custom": [
+          "internal-permission-context-logging"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

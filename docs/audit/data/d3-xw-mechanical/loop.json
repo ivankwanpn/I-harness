@@ -1,0 +1,627 @@
+{
+  "domain": "loop",
+  "rows": {
+    "session-log-driven-turn-loop": {
+      "domain": "loop",
+      "label": "session-log-driven-turn-loop",
+      "members": {
+        "ih": [
+          "session-log-driven-turn-loop"
+        ],
+        "codex": [
+          "session-task-turn-loop"
+        ],
+        "grok": [
+          "canonical-turn-event-log"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "four-tier-input-admission-with-durable-inbox-projection": {
+      "domain": "loop",
+      "label": "four-tier-input-admission-with-durable-inbox-projection",
+      "members": {
+        "ih": [
+          "four-tier-input-admission-with-durable-inbox-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "per-session-serial-lane-with-cross-session-parallelism": {
+      "domain": "loop",
+      "label": "per-session-serial-lane-with-cross-session-parallelism",
+      "members": {
+        "ih": [
+          "per-session-serial-lane-with-cross-session-parallelism"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ordered-tool-batch-commit-lane-with-bounded-concurrency": {
+      "domain": "loop",
+      "label": "ordered-tool-batch-commit-lane-with-bounded-concurrency",
+      "members": {
+        "ih": [
+          "ordered-tool-batch-commit-lane-with-bounded-concurrency"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "three-layer-overflow-ladder-compact-reset-fail-closed": {
+      "domain": "loop",
+      "label": "three-layer-overflow-ladder-compact-reset-fail-closed",
+      "members": {
+        "ih": [
+          "three-layer-overflow-ladder-compact-reset-fail-closed"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "abort-semantics-threaded-to-the-transport": {
+      "domain": "loop",
+      "label": "abort-semantics-threaded-to-the-transport",
+      "members": {
+        "ih": [
+          "abort-semantics-threaded-to-the-transport"
+        ],
+        "dsh": [
+          "cancellation-and-abort-semantics"
+        ],
+        "cc-custom": [
+          "abort-and-interrupt-semantics"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "one-assembly-two-hosts-single-flight-get-or-create": {
+      "domain": "loop",
+      "label": "one-assembly-two-hosts-single-flight-get-or-create",
+      "members": {
+        "ih": [
+          "one-assembly-two-hosts-single-flight-get-or-create"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-restore-without-re-append": {
+      "domain": "loop",
+      "label": "durable-restore-without-re-append",
+      "members": {
+        "ih": [
+          "durable-restore-without-re-append"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "in-process-delivery-tiers": {
+      "domain": "loop",
+      "label": "in-process-delivery-tiers",
+      "members": {
+        "dsh": [
+          "in-process-delivery-tiers"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-inbox-projection": {
+      "domain": "loop",
+      "label": "durable-inbox-projection",
+      "members": {
+        "dsh": [
+          "durable-inbox-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "turn-step-durable-machine": {
+      "domain": "loop",
+      "label": "turn-step-durable-machine",
+      "members": {
+        "dsh": [
+          "turn-step-durable-machine"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "driver-wake-latch-and-maintenance-phase": {
+      "domain": "loop",
+      "label": "driver-wake-latch-and-maintenance-phase",
+      "members": {
+        "dsh": [
+          "driver-wake-latch-and-maintenance-phase"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "per-session-serialization-and-write-ownership": {
+      "domain": "loop",
+      "label": "per-session-serialization-and-write-ownership",
+      "members": {
+        "dsh": [
+          "per-session-serialization-and-write-ownership"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bounded-parallel-tool-scheduler": {
+      "domain": "loop",
+      "label": "bounded-parallel-tool-scheduler",
+      "members": {
+        "dsh": [
+          "bounded-parallel-tool-scheduler"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-lifecycle-transaction": {
+      "domain": "loop",
+      "label": "agent-lifecycle-transaction",
+      "members": {
+        "dsh": [
+          "agent-lifecycle-transaction"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "config-driven-agent-startup": {
+      "domain": "loop",
+      "label": "config-driven-agent-startup",
+      "members": {
+        "dsh": [
+          "config-driven-agent-startup"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "canonical-request-epoch": {
+      "domain": "loop",
+      "label": "canonical-request-epoch",
+      "members": {
+        "dsh": [
+          "canonical-request-epoch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pre-step-waterfall": {
+      "domain": "loop",
+      "label": "pre-step-waterfall",
+      "members": {
+        "dsh": [
+          "pre-step-waterfall"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "request-error-recovery-waterfall": {
+      "domain": "loop",
+      "label": "request-error-recovery-waterfall",
+      "members": {
+        "dsh": [
+          "request-error-recovery-waterfall"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "turn-boundary-projection": {
+      "domain": "loop",
+      "label": "turn-boundary-projection",
+      "members": {
+        "dsh": [
+          "turn-boundary-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-registry-and-runtime-ownership": {
+      "domain": "loop",
+      "label": "agent-registry-and-runtime-ownership",
+      "members": {
+        "dsh": [
+          "agent-registry-and-runtime-ownership"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-initiator-scope": {
+      "domain": "loop",
+      "label": "agent-initiator-scope",
+      "members": {
+        "dsh": [
+          "agent-initiator-scope"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-scoped-composition-at-publication": {
+      "domain": "loop",
+      "label": "agent-scoped-composition-at-publication",
+      "members": {
+        "dsh": [
+          "agent-scoped-composition-at-publication"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-preset-composition-mounting": {
+      "domain": "loop",
+      "label": "agent-preset-composition-mounting",
+      "members": {
+        "dsh": [
+          "agent-preset-composition-mounting"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "default-agent-model-selection": {
+      "domain": "loop",
+      "label": "default-agent-model-selection",
+      "members": {
+        "dsh": [
+          "default-agent-model-selection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "two-tier-input-model-queue-versus-steer": {
+      "domain": "loop",
+      "label": "two-tier-input-model-queue-versus-steer",
+      "members": {
+        "codex": [
+          "two-tier-input-model-queue-versus-steer"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "idle-wake-on-pending-work": {
+      "domain": "loop",
+      "label": "idle-wake-on-pending-work",
+      "members": {
+        "codex": [
+          "idle-wake-on-pending-work"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "graceful-abort-with-history-marker": {
+      "domain": "loop",
+      "label": "graceful-abort-with-history-marker",
+      "members": {
+        "codex": [
+          "graceful-abort-with-history-marker"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-rollout-token-budget-ladder": {
+      "domain": "loop",
+      "label": "session-rollout-token-budget-ladder",
+      "members": {
+        "codex": [
+          "session-rollout-token-budget-ladder"
+        ],
+        "cc-custom": [
+          "turn-budget-ladder"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-runner-serialization": {
+      "domain": "loop",
+      "label": "session-runner-serialization",
+      "members": {
+        "opencode": [
+          "session-runner-serialization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "v2-run-coordinator-coalescing": {
+      "domain": "loop",
+      "label": "v2-run-coordinator-coalescing",
+      "members": {
+        "opencode": [
+          "v2-run-coordinator-coalescing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-execution-routing": {
+      "domain": "loop",
+      "label": "session-execution-routing",
+      "members": {
+        "opencode": [
+          "session-execution-routing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "classic-prompt-loop": {
+      "domain": "loop",
+      "label": "classic-prompt-loop",
+      "members": {
+        "opencode": [
+          "classic-prompt-loop"
+        ],
+        "opencode-fork": [
+          "classic-engine-loop"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "v2-turn-runner-drain": {
+      "domain": "loop",
+      "label": "v2-turn-runner-drain",
+      "members": {
+        "opencode": [
+          "v2-turn-runner-drain"
+        ],
+        "cc-custom": [
+          "mid-turn-command-drain-steering"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "step-budget-and-max-steps-prompt": {
+      "domain": "loop",
+      "label": "step-budget-and-max-steps-prompt",
+      "members": {
+        "opencode": [
+          "step-budget-and-max-steps-prompt"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "queued-task-dispatch": {
+      "domain": "loop",
+      "label": "queued-task-dispatch",
+      "members": {
+        "opencode": [
+          "queued-task-dispatch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "interrupt-finalization": {
+      "domain": "loop",
+      "label": "interrupt-finalization",
+      "members": {
+        "opencode": [
+          "interrupt-finalization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "background-job-registry": {
+      "domain": "loop",
+      "label": "background-job-registry",
+      "members": {
+        "opencode": [
+          "background-job-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "turn-title-generation": {
+      "domain": "loop",
+      "label": "turn-title-generation",
+      "members": {
+        "opencode": [
+          "turn-title-generation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "engine-fixed-at-session-creation": {
+      "domain": "loop",
+      "label": "engine-fixed-at-session-creation",
+      "members": {
+        "opencode-fork": [
+          "engine-fixed-at-session-creation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "kernel-durable-turn-coordinator": {
+      "domain": "loop",
+      "label": "kernel-durable-turn-coordinator",
+      "members": {
+        "opencode-fork": [
+          "kernel-durable-turn-coordinator"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lease-generation-fencing": {
+      "domain": "loop",
+      "label": "lease-generation-fencing",
+      "members": {
+        "opencode-fork": [
+          "lease-generation-fencing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "kernel-startup-reconciliation": {
+      "domain": "loop",
+      "label": "kernel-startup-reconciliation",
+      "members": {
+        "opencode-fork": [
+          "kernel-startup-reconciliation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-attempt-state-machine": {
+      "domain": "loop",
+      "label": "durable-attempt-state-machine",
+      "members": {
+        "opencode-fork": [
+          "durable-attempt-state-machine"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-attempt-retry-budget": {
+      "domain": "loop",
+      "label": "provider-attempt-retry-budget",
+      "members": {
+        "opencode-fork": [
+          "provider-attempt-retry-budget"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "identical-tool-failure-circuit-breaker": {
+      "domain": "loop",
+      "label": "identical-tool-failure-circuit-breaker",
+      "members": {
+        "opencode-fork": [
+          "identical-tool-failure-circuit-breaker"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-stop-hooks": {
+      "domain": "loop",
+      "label": "session-stop-hooks",
+      "members": {
+        "opencode-fork": [
+          "session-stop-hooks"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-serialized-runner": {
+      "domain": "loop",
+      "label": "session-serialized-runner",
+      "members": {
+        "opencode-fork": [
+          "session-serialized-runner"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "source-typed-operation-authorization": {
+      "domain": "loop",
+      "label": "source-typed-operation-authorization",
+      "members": {
+        "grok": [
+          "source-typed-operation-authorization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "delivery-envelope-identity-triple-check": {
+      "domain": "loop",
+      "label": "delivery-envelope-identity-triple-check",
+      "members": {
+        "grok": [
+          "delivery-envelope-identity-triple-check"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "turn-bound-safe-point-delivery": {
+      "domain": "loop",
+      "label": "turn-bound-safe-point-delivery",
+      "members": {
+        "grok": [
+          "turn-bound-safe-point-delivery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mid-turn-interjection-framing": {
+      "domain": "loop",
+      "label": "mid-turn-interjection-framing",
+      "members": {
+        "grok": [
+          "mid-turn-interjection-framing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "queued-prompt-combine-with-versioned-edit": {
+      "domain": "loop",
+      "label": "queued-prompt-combine-with-versioned-edit",
+      "members": {
+        "grok": [
+          "queued-prompt-combine-with-versioned-edit"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sequential-effect-state-machine": {
+      "domain": "loop",
+      "label": "sequential-effect-state-machine",
+      "members": {
+        "cc-custom": [
+          "sequential-effect-state-machine"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "effect-scoped-abort-and-cleanup": {
+      "domain": "loop",
+      "label": "effect-scoped-abort-and-cleanup",
+      "members": {
+        "cc-custom": [
+          "effect-scoped-abort-and-cleanup"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "priority-command-queue": {
+      "domain": "loop",
+      "label": "priority-command-queue",
+      "members": {
+        "cc-custom": [
+          "priority-command-queue"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "stop-hook-continuation-loop": {
+      "domain": "loop",
+      "label": "stop-hook-continuation-loop",
+      "members": {
+        "cc-custom": [
+          "stop-hook-continuation-loop"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "early-stdin-capture": {
+      "domain": "loop",
+      "label": "early-stdin-capture",
+      "members": {
+        "cc-custom": [
+          "early-stdin-capture"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "proactive-self-tick-loop": {
+      "domain": "loop",
+      "label": "proactive-self-tick-loop",
+      "members": {
+        "cc-custom": [
+          "proactive-self-tick-loop"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "speculative-turn-execution": {
+      "domain": "loop",
+      "label": "speculative-turn-execution",
+      "members": {
+        "cc-custom": [
+          "speculative-turn-execution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

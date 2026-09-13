@@ -1,0 +1,192 @@
+=== [cc-custom] agent-definition-registry
+WHAT: Agent definitions come from six sources merged into one active list by precedence: built-in < plugin < userSettings < projectSettings < flagSettings < policySettings, later winning per agentType via a Map (src/tools/AgentTool/loadAgentsDir.ts:186-235, 296). Definitions parse from JSON (parseAgentFromJson) and markdown frontmatter (parseAgentFromMarkdown), validating permissionMode against PERMISSION_MODES and isolation against VALID_ISOLATION_MODES, and agents whose requiredMcpServers are unavailable are filtered out (loadAgentsDir.ts:445, 541, 609-616). The resolved list is memoized with a clearable cache that resume paths invalidate after a mode switch.
+INVARIANTS: later sources override earlier ones per agentType | an invalid permissionMode or isolation logs an error rather than silently defaulting | the definitions cache must be cleared when the mode changes
+FAILURE: fail-soft: a bad agent file is recorded in failedFiles and skipped, not fatal
+CONSTANTS: 
+MODULES: tools
+VERIFIED: True
+
+=== [cc-custom] builtin-agent-catalog
+WHAT: getBuiltInAgents() always registers GENERAL_PURPOSE_AGENT and STATUSLINE_SETUP_AGENT, and adds CLAUDE_CODE_GUIDE_AGENT only for non-SDK entrypoints; the whole catalog can be emptied via CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS in non-interactive mode (src/tools/AgentTool/builtInAgents.ts:13-58). Two arms are INERT: areExplorePlanAgentsEnabled() is feature('BUILTIN_EXPLORE_PLAN_AGENTS') ? GrowthBook : false, and the VERIFICATION_AGENT arm requires feature('VERIFICATION_AGENT') plus a GrowthBook default of false, so EXPLORE_AGENT, PLAN_AGENT and VERIFICATION_AGENT are never registered here (builtInAgents.ts:22-58). Consequently ONE_SHOT_BUILTIN_AGENT_TYPES = {Explore, Plan}, the set that suppresses the agentId/SendMessage/usage trailer, can never match a live built-in (src/tools/AgentTool/constants.ts:1-12).
+INVARIANTS: built-ins are the lowest-precedence definition source | the SDK blank-slate env var applies only in non-interactive sessions | feature-gated agents append to the catalog, never replace it
+FAILURE: fail-soft: a disabled gate simply yields a shorter agent list
+CONSTANTS: {"name":"ONE_SHOT_BUILTIN_AGENT_TYPES","value":"{Explore, Plan}"}
+MODULES: tools
+VERIFIED: True
+
+=== [cc-custom] agent-spawn-protocol
+WHAT: The Agent tool's delegation entry point splits its schema into a base (description, prompt, subagent_type, model, run_in_background) plus a multi-agent extension (name, team_name, mode), isolation:'worktree' and cwd, stripping optional fields with .omit() when the backing feature is off so the model never sees them (src/tools/AgentTool/AgentTool.tsx:95-115). Guards before spawn: team_name without isAgentSwarmsEnabled() throws, a teammate passing name throws because TeamFile.members is a flat array with one leadAgentId, and an in-process teammate requesting run_in_background=true (or selecting a definition with background:true) throws because its lifecycle is bound to the leader's process (AgentTool.tsx:256-302, 574). The sync/async decision is a single conjunction: run_in_background || agent.background || isCoordinator || forceAsync || proactive active, AND NOT isBackgroundTasksDisabled (AgentTool.tsx:83-90, 401-403).
+INVARIANTS: the team roster is flat — teammates cannot spawn teammates | in-process teammates cannot spawn background agents | cwd and isolation:'worktree' are mutually exclusive | the async decision is one conjunction including the disable flag
+FAILURE: fail-closed for invalid spawns (throws before side effects); fail-open otherwise
+CONSTANTS: [{"name":"MAX_WAIT_MS","value":30000},{"name":"PROGRESS_THRESHOLD_MS","value":2000},{"name":"auto-background delay","value":120000}]
+MODULES: tools
+VERIFIED: True
+
+=== [cc-custom] agent-nesting-depth-quota
+WHAT: Nesting depth is a single monotonic quota of 5 carried through the process environment rather than a counter object: getAgentDepth() parses CLAUDE_CODE_AGENT_DEPTH (default 0, rejecting non-finite or negative), the handler throws once currentDepth >= MAX_AGENT_DEPTH, and the parent's saved depth is restored in a finally so siblings never inherit inflated nesting (src/tools/AgentTool/AgentTool.tsx:63-76, 256-272). This is the only depth/concurrency quota in the delegation path — no concurrency cap or teammate-count limit exists anywhere in src/.
+INVARIANTS: depth accrues monotonically down the tree | parent depth is restored on all exit paths including throws | depth travels via env so it survives a detached async context
+FAILURE: fail-closed: at the limit the spawn is refused with an instructive error rather than queued
+CONSTANTS: {"name":"MAX_AGENT_DEPTH","value":5}
+MODULES: tools
+VERIFIED: True
+
+=== [cc-custom] subagent-task-state-machine
+WHAT: LocalAgentTask is the durable task record for delegated agents: type 'local_agent' with status running -> completed|failed|killed, plus isBackgrounded, pendingMessages, retain, diskLoaded, abortController, unregisterCleanup and lastReported counters (src/tasks/LocalAgentTask/LocalAgentTask.tsx:270-303). registerAsyncAgent creates a child abort controller when parentAbortController is supplied so a teammate's abort cascades, while registerAgentForeground registers immediately with isBackgrounded:false plus a backgroundSignal and an optional auto-background timer (LocalAgentTask.tsx:412-479). completeAgentTask/failAgentTask no-op unless status is 'running', clear the controller and schedule eviction at now+PANEL_GRACE_MS unless retain is set; registerTask emits the task_started SDK event but skips it on re-register so resume does not double-emit, carrying forward UI-held state (src/utils/task/framework.ts:22-117).
+INVARIANTS: terminal transitions are guarded on status==='running' and are idempotent | foreground tasks are registered immediately so they can be backgrounded at any time | re-register (resume) preserves UI state and suppresses task_started | retain suppresses eviction
+FAILURE: fail-soft: duplicate kill/complete/fail calls are no-ops
+CONSTANTS: [{"name":"PANEL_GRACE_MS","value":30000},{"name":"POLL_INTERVAL_MS","value":1000},{"name":"STOPPED_DISPLAY_MS","value":3000}]
+MODULES: tasks,utils
+VERIFIED: True
+
+=== [cc-custom] agent-task-cancellation
+WHAT: stopTask() is the shared kill path used by both TaskStopTool and the SDK stop_task control request: it looks the task up in AppState, rejects non-running tasks with a typed StopTaskError code ('not_found' | 'not_running' | 'unsupported_type'), dispatches to the per-type Task impl's kill(), then marks notified (src/tasks/stopTask.ts:10-100). killAsyncAgent aborts the controller, runs unregisterCleanup, sets status 'killed', schedules eviction and evicts the on-disk task output; killAllRunningAgentTasks sweeps every running local_agent for ESC cancellation (LocalAgentTask.tsx:281-315). For shell tasks the 'exit code 137' notification is suppressed via the notified flag, but for agent tasks suppression is deliberately NOT applied — the AbortError catch sends a notification carrying extractPartialResult(agentMessages) — and because suppression bypasses print.ts's XML parser, stopTask calls emitTaskTerminatedSdk directly so the task_notification still reaches SDK consumers (src/utils/sdkEventQueue.ts:103-133).
+INVARIANTS: kill is status-guarded and idempotent | an agent kill always notifies, with the partial result as payload | suppressing the XML notification requires an explicit SDK event emit
+FAILURE: mixed: fail-closed on validation (typed throw, no partial kill), fail-soft on notification dedup
+CONSTANTS: 
+MODULES: tasks,tools
+VERIFIED: True
+
+=== [cc-custom] background-agent-parent-wake
+WHAT: A backgrounded agent wakes its parent through the command queue: enqueueAgentNotification atomically checks-and-sets the task's notified flag (so a prior TaskStopTool mark suppresses a duplicate), builds a <task-notification> XML block carrying task-id, output_file, status, summary and optional result/usage/worktree sections, queues it via enqueuePendingNotification in 'task-notification' mode, and aborts any active prompt speculation because the background state change invalidates speculated output (src/tasks/LocalAgentTask/LocalAgentTask.tsx:197-262). The message surfaces to the model as a user-role turn, and in headless mode the engine holds the main result back while background agents run, so the notification is what closes the turn rather than a poll (src/cli/print.ts:2062-2074).
+INVARIANTS: exactly one notification per task (atomic notified flag) | the notification must carry the partial result, not just a status | speculation is invalidated when background state changes
+FAILURE: fail-soft: duplicate notifications are dropped and the output path is best-effort
+CONSTANTS: 
+MODULES: tasks,cli
+VERIFIED: True
+
+=== [cc-custom] agent-resume-from-transcript
+WHAT: resumeAgentBackground continues an existing agent by ID instead of spawning fresh: it reads the on-disk agent transcript plus metadata in parallel, sanitizes the resumed history (filterUnresolvedToolUses, filterOrphanedThinkingOnlyMessages, filterWhitespaceOnlyAssistantMessages) and reconstructs content-replacement state (src/tools/AgentTool/resumeAgent.ts:42-79, 198-258). A removed worktree falls back to the parent cwd rather than crashing and its mtime is bumped so stale-worktree cleanup does not delete a just-resumed worktree; fork resumes reconstruct the parent system prompt while non-fork resumes re-derive the definition from metadata or fall back to GENERAL_PURPOSE_AGENT. It re-registers via registerAsyncAgent (preserving prior UI state and skipping the duplicate task_started) and deliberately passes forkContextMessages: undefined because the transcript already holds the parent slice and re-supplying it would duplicate tool_use IDs (src/utils/task/framework.ts:82-102).
+INVARIANTS: resumed history must be sanitized of unresolved tool_uses before reuse | no duplicate tool_use IDs on fork resume | a worktree resume bumps mtime | re-register must not double-emit task_started
+FAILURE: mixed: fail-closed when no transcript exists; fail-soft (cwd fallback) when the worktree is gone
+CONSTANTS: 
+MODULES: tools,utils
+VERIFIED: True
+
+=== [cc-custom] in-process-teammate-task
+WHAT: The in-process teammate task type stores identity as plain data (agentId 'name@team', agentName, teamName, color, planModeRequired, parentSessionId) rather than an AsyncLocalStorage reference, so it survives AppState serialization (src/tasks/InProcessTeammateTask/types.ts:13-27, 36-37). It carries TWO abort controllers — abortController kills the whole teammate, currentWorkAbortController aborts only the current turn — with lifecycle isIdle + shutdownRequested + awaitingPlanApproval and onIdleCallbacks so the leader can wait without polling (types.ts:66-121). task.messages is an AppState UI mirror capped at 50 entries via appendCappedMessage, because analysis found ~20MB RSS per agent at 500+ turns and ~125MB per concurrent agent in swarm bursts (src/utils/teammate.ts:238-274).
+INVARIANTS: task state must be serializable plain data | whole-teammate abort and current-turn abort are separate controls | the UI message mirror is capped; the full conversation lives in allMessages and on disk
+FAILURE: fail-soft: the UI cap drops oldest entries rather than growing unbounded
+CONSTANTS: {"name":"TEAMMATE_MESSAGES_UI_CAP","value":50}
+MODULES: tasks,utils
+VERIFIED: True
+
+=== [cc-custom] swarm-mailbox
+WHAT: Teammate messaging has three coupled layers: an in-process Mailbox (ordered queue with predicate-based waiters, poll()/receive(), a monotonic revision counter and a change signal); a file-backed team mailbox read by useInboxPoller, which polls every 1000ms for unread messages addressed to this agent or lead, submits them immediately as a new turn when idle, queues them in AppState.inbox when busy, and accepts plan approvals ONLY from the team lead; and useMailboxBridge, which subscribes to the mailbox revision via useSyncExternalStore (src/utils/mailbox.ts:19-73, src/hooks/useInboxPoller.ts:107-159, src/hooks/useMailboxBridge.ts:9-20). A direct-message shortcut (@name message) bypasses the model entirely: parseDirectMemberMessage matches /^@([\w-]+)\s+(.+)$/s and sendDirectMemberMessage resolves the recipient against teamContext.teammates and writes to their mailbox, returning typed errors rather than throwing (src/utils/directMemberMessage.ts:6-68).
+INVARIANTS: only the team lead may approve a plan | receive() resolves the first matching waiter, else enqueues | the mailbox revision drives the React subscription | the poll interval is fixed at 1s
+FAILURE: fail-soft: direct messages return typed errors (no_team_context / unknown_recipient) instead of throwing
+CONSTANTS: {"name":"INBOX_POLL_INTERVAL_MS","value":1000}
+MODULES: utils,hooks
+VERIFIED: True
+
+=== [cc-custom] team-roster-and-identity
+WHAT: Agent identity is derived, not allocated: formatAgentId gives 'agentName@teamName' and parseAgentId splits on the FIRST '@' (so names must not contain '@'), while generateRequestId/parseRequestId give '{requestType}-{timestamp}@{agentId}' (src/utils/agentId.ts:38-68). TeamCreateTool generates a unique team name, computes leadAgentId = formatAgentId('team-lead', teamName), writes a TeamFile {name, description, createdAt, leadAgentId, leadSessionId, members[]} via writeTeamFileAsync, registers the team for session-end cleanup and resets the matching task-list directory so task numbering restarts at 1 per swarm (src/tools/TeamCreateTool/TeamCreateTool.ts:140-180). The roster is deliberately flat — members is an array with exactly one leadAgentId — which is why nested teammates are rejected at spawn; teammate identity is read from environment variables for out-of-process tmux teammates and from AppState for in-process ones (src/utils/teammate.ts:88-138).
+INVARIANTS: agent names must not contain '@' | one leadAgentId per team; the roster is flat | the team file is the durable cross-process registry | session cleanup is registered at create time
+FAILURE: fail-soft: an existing team yields a unique-name variant rather than a failure
+CONSTANTS: 
+MODULES: utils,tools
+VERIFIED: True
+
+=== [cc-custom] task-list-coordination
+WHAT: A filesystem-backed shared work queue the LLM and external processes can both drive: TaskSchema is {id, subject, description, activeForm, owner, status, blocks, blockedBy} with status a strict enum of pending|in_progress|completed plus a 'deleted' pseudo-status handled specially in TaskUpdateTool (src/utils/tasks.ts:69-84; src/tools/TaskUpdateTool/TaskUpdateTool.ts:185-197). TaskUpdateTool enforces the interactions: owners are auto-set to the calling teammate when it marks a task in_progress without an owner, a new owner is notified via mailbox when isAgentSwarmsEnabled(), blocks/blockedBy are de-duplicated, and completing a task runs the TaskCompleted hooks and returns a nudge to call TaskList for the next available or newly unblocked task (TaskUpdateTool.ts:212-322). useTasksV2 owns a SINGLETON fs.watch over the tasks directory with a 5000ms fallback poll and a debounced fetch, and useTaskListWatcher implements 'tasks mode' by claiming the first pending unowned task whose blockers are all completed, releasing the claim if submission is rejected (src/hooks/useTasksV2.ts:18, 90-117; src/hooks/useTaskListWatcher.ts:133-208).
+INVARIANTS: status is a 3-value enum; deletion is a separate pseudo-status | a task is available only if pending AND unowned AND all blockers completed | one shared watcher for all hook instances | a claim is released on failed submission
+FAILURE: fail-soft: a failed fs.watch is logged and the hook continues via the fallback poll; failed claims are released
+CONSTANTS: [{"name":"FALLBACK_POLL_MS","value":5000},{"name":"useTaskListWatcher DEBOUNCE_MS","value":1000}]
+MODULES: utils,tools,hooks
+VERIFIED: True
+
+=== [cc-custom] gated-delegation-modes
+WHAT: Two entire delegation models exist in source but cannot activate. Fork-subagent: isForkSubagentEnabled() returns feature('FORK_SUBAGENT') ? (not coordinator, not non-interactive) : false, so the implicit fork path, the FORK_AGENT synthetic definition (tools ['*'], maxTurns 200, model inherit, permissionMode bubble), buildForkedMessages' cache-identical prefix construction and the isInForkChild recursion guard are all unreachable (src/tools/AgentTool/forkSubagent.ts:32-93). Coordinator mode: isCoordinatorMode() returns feature('COORDINATOR_MODE') ? isEnvTruthy(CLAUDE_CODE_COORDINATOR_MODE) : false, so the coordinator system prompt, the worker-tool advertisement and every coordinator arm in print.ts are dead even with the env var set (src/coordinator/coordinatorMode.ts:36-41, src/cli/print.ts:4211).
+INVARIANTS: fork and coordinator are mutually exclusive by design | both hard-fail to false when the flag is off, ignoring their env vars
+FAILURE: fail-closed to the default single-agent behaviour
+CONSTANTS: {"name":"FORK_AGENT maxTurns","value":200}
+MODULES: tools,coordinator,cli
+VERIFIED: True
+
+=== [cc-custom] gated-task-type-stubs
+WHAT: Auxiliary task types in the TaskState union are partly stubbed and partly opt-in. LocalWorkflowTask ('local_workflow') is only a state type plus a guard, and killWorkflowTask/skipWorkflowAgent/retryWorkflowAgent are all empty bodies, gated on feature('WORKFLOW_SCRIPTS') at their registration sites (src/tasks/LocalWorkflowTask/LocalWorkflowTask.ts:18-33). MonitorMcpTask ('monitor_mcp') has the same shape with no-op killMonitorMcp/killMonitorMcpTasksForAgent, gated on feature('MONITOR_TOOL') (src/tasks/MonitorMcpTask/MonitorMcpTask.ts:17-26). DreamTask is different: it is fully implemented (registerDreamTask/addDreamTurn with a 30-turn ring, complete/fail, and a real kill() that aborts and rolls back the consolidation-lock mtime) but isAutoDreamEnabled() resolves through the GrowthBook no-op stub to null unless the user explicitly sets autoDreamEnabled, so it is opt-in rather than dead (src/tasks/DreamTask/DreamTask.ts:52-156; src/services/autoDream/config.ts:13-21).
+INVARIANTS: stub task types still satisfy the TaskState union and their guards | dream eviction requires a terminal status and the notified flag
+FAILURE: fail-soft: no-op kills mean these tasks cannot actually be cancelled
+CONSTANTS: {"name":"DreamTask MAX_TURNS","value":30}
+MODULES: tasks,tools,services
+VERIFIED: True
+
+=== [opencode-upstream] task-tool-delegation
+WHAT: The task tool creates a child session (parentID = calling session, title '<description> (@<agent> subagent)', agent = the requested subagent type) and prompts it through promptOps, returning the child's last text as the tool output. It computes depth by walking parentID links and refuses when depth >= cfg.subagent_depth, resolves resumable sessions through task_id (a failed lookup is tolerated), and derives the child's permission ruleset via deriveSubagentSessionPermission.
+INVARIANTS: Delegation depth must be measured by walking the parent chain, and the limit default is 1 (no nested subagents unless configured). | A resumed task_id must not be allowed to escape to an unrelated session - a missing session falls back to creating a new child.
+FAILURE: fail-closed - depth exceeded, unknown agent type, missing promptOps and subagent failure all fail the tool call with an explicit message; a failed child session surfaces its error text to the parent.
+CONSTANTS: ["subagent depth limit = cfg.subagent_depth ?? 1 (packages/opencode/src/tool/task.ts:111)","background subagents require the experimental flag OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS (packages/opencode/src/tool/task.ts:98-100)"]
+MODULES: opencode/tool
+VERIFIED: True
+
+=== [opencode-upstream] subagent-permission-derivation
+WHAT: deriveSubagentSessionPermission builds the child session's ruleset from exactly two sources: the parent session's rules filtered down to external_directory rules and deny actions, plus default denies for todowrite and task when the subagent's own ruleset does not mention them. The parent agent's own restrictions are deliberately NOT inherited as capabilities.
+INVARIANTS: Only deny and external_directory rules may be inherited from the parent session; allow rules must not leak. | A subagent that does not declare todowrite/task must have them denied.
+FAILURE: fail-closed - the derived ruleset adds explicit denies, and evaluate() defaults unmatched rules to 'ask'.
+CONSTANTS: 
+MODULES: opencode/agent
+VERIFIED: True
+
+=== [opencode-upstream] background-subagent-jobs
+WHAT: With background=true the task tool registers the child session as a BackgroundJob, returns immediately with a 'started' message, and later notifies the parent by prompting the parent session with a <task id state summary> block. A second task call for the same child extends the running job (sending additional context) instead of starting a duplicate. An abort listener cancels the job when the parent tool call's AbortSignal fires; a foreground call instead waits on the job and renders completed/error state.
+INVARIANTS: A background task must be registered in the job registry under the child session id so SessionRunState.cancel can find it. | The parent must only be woken through the notification prompt, never by polling.
+FAILURE: fail-soft - job status is rendered into the tool output/summary; cancelling the parent cancels the job, and the child's failure is reported as an error state rather than an exception.
+CONSTANTS: 
+MODULES: opencode/tool,opencode/background
+VERIFIED: True
+
+=== [opencode-upstream] subtask-command-dispatch
+WHAT: A command whose target agent has mode 'subagent' (or that sets subtask: true) is turned into a single subtask part by SessionPrompt.command rather than ordinary prompt parts; the loop's handleSubtask then creates an assistant message, resolves the task agent and model (task.model wins), invokes the same task tool implementation, and writes the child's result back as an assistant summary part of the subtask. The bundled 'review' command ships with subtask: true.
+INVARIANTS: A subtask command must execute in a child session; only its result may be appended to the caller's transcript. | Model resolution order is cmd.model, then the target agent's model, then the caller-provided model, then the session's current model.
+FAILURE: fail-soft - a missing task agent throws with the list of available agents; a child defect is converted into the assistant message's result text.
+CONSTANTS: 
+MODULES: opencode/session,opencode/command
+VERIFIED: True
+
+=== [opencode-upstream] agent-mode-taxonomy
+WHAT: Agent.Info carries mode 'subagent'|'primary'|'all', hidden, model, variant, temperature, topP, steps, permission ruleset and description. Builtins are build (default, mode primary), plan (primary), general and explore (subagent), plus hidden compaction/title/summary agents written into the same map. Config entries merge per field (variant/temperature/top_p/hidden/steps override, permissions merge) and can create new agents with mode 'all'; defaultInfo refuses a hidden default_agent and otherwise picks the first non-subagent, non-hidden agent.
+INVARIANTS: Only agents with mode 'primary' or 'all' may be selected as the session's agent; subagents are reachable only through the task tool. | A hidden agent must never become the default agent.
+FAILURE: fail-closed - an unknown agent name resolves to undefined and callers throw with the list of available non-hidden agents.
+CONSTANTS: "builtin hidden agents: compaction, title (temperature 0.5), summary (packages/opencode/src/agent/agent.ts:220-256)"
+MODULES: opencode/agent
+VERIFIED: True
+
+=== [opencode-fork] durable-delegation-with-permits
+WHAT: The fork's task tool delegates through TaskSubmission (durable row per invocation) and a SubagentPermit budget: permissions are acquired under a key before the child session is created, re-keyed to the child session id afterwards, and released on settle or by the job scope for background runs. Config controls the budget ('subagent_max_concurrency') and nesting ('subagent_depth', default 1). Child sessions of a kernel parent are created with engine 'kernel'.
+INVARIANTS: A permit must be acquired before the child is created and re-keyed to the child id, or the concurrency budget leaks. | The depth limit is measured by walking the parent chain and defaults to 1. | A child of a kernel session must be a kernel session.
+FAILURE: fail-closed - acquiring beyond the limit fails the tool call with 'Subagent concurrency limit reached'; depth exceeded fails with the limit in the message.
+CONSTANTS: ["subagent_max_concurrency from location config, undefined = unlimited (packages/core/src/tool/task.ts:175-176)","subagent_depth default 1 (packages/core/src/tool/task.ts:224)","completionDelivery = runInBackground ? 'parent' : 'tool' (packages/core/src/tool/task.ts:416)"]
+MODULES: core/tool,core/session
+VERIFIED: True
+
+=== [opencode-fork] parent-wake-on-task-completion
+WHAT: Background delegation notifies the parent automatically: completionDelivery 'parent' means the child's terminal state is written to the notification outbox and the parent session is woken, while 'tool' returns the result to the waiting tool call. The task tool description tells the model that asynchronous delegation is the default when available, that the parent is woken on completion, and that it must never poll.
+INVARIANTS: A background task's completion must be delivered through the durable outbox, not by the parent polling. | Foreground (completionDelivery 'tool') tasks must still register their result on the tool call.
+FAILURE: fail-soft with durable backstop - a missed in-process wakeup leaves the outbox row for the next drain.
+CONSTANTS: 
+MODULES: core/tool,core/session
+VERIFIED: True
+
+=== [opencode-fork] task-cancellation-by-ownership-root
+WHAT: Cancelling a delegation cancels the whole tree from its ownership root: TaskCancellation.cancelTree settles submissions, outbox rows, cancellation rows and attempts durably in one transaction, then signals notifications and interrupts/waits for every affected session. SessionRunState.cancel calls cancelTree with hooks that cancel the child's background job and then wait for it, and only falls back to the legacy per-job walk over the session's running background jobs when the durable submission row is missing (TaskCancellation.Missing). The stop_task tool feeds the same path.
+INVARIANTS: Cancellation must be durable before any session is interrupted. | Every descendant session named by the cancellation must be interrupted and awaited.
+FAILURE: fail-closed - state is recorded as cancelled/abandoned; no descendant is left running.
+CONSTANTS: 
+MODULES: core/session,core/tool
+VERIFIED: True
+
+=== [opencode-fork] agent-selection-and-default
+WHAT: Agents live in core as AgentV2 with a Draft/State.Transformable surface; defaultID is 'build', and selection requires the agent to exist, have mode !== 'subagent' and not be hidden. The host keeps a generator for agent files (packages/opencode/src/agent/generator.ts) instead of the upstream builtin agent map.
+INVARIANTS: A subagent or hidden agent must never be selectable as the session agent. | The default agent is 'build' when present.
+FAILURE: fail-closed - an ineligible agent is rejected and the caller falls back to the default before failing.
+CONSTANTS: "defaultID = 'build' (packages/core/src/agent.ts:10)"
+MODULES: core,opencode/agent
+VERIFIED: True
+
+=== [opencode-fork] subagent-stop-hook
+WHAT: Subagent turns evaluate the same stop-hook protocol under the distinct hook name 'session.subagent.stop', so a plugin can decide whether a subagent turn may finish (with MAX_BLOCKS_PER_TURN shared per turn) independently of a top-level turn's 'session.stop'.
+INVARIANTS: The subagent hook name must be selected by whether an agent was supplied to the evaluation. | The same per-turn block cap applies to subagent stops.
+FAILURE: fail-open - hook failures degrade to 'stop'.
+CONSTANTS: "MAX_BLOCKS_PER_TURN = 3 (packages/core/src/session/stop-hook.ts:6)"
+MODULES: core/session,core/plugin
+VERIFIED: True
+

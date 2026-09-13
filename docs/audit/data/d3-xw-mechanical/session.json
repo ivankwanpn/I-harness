@@ -1,0 +1,621 @@
+{
+  "domain": "session",
+  "rows": {
+    "append-only-event-log-with-seq-by-append": {
+      "domain": "session",
+      "label": "append-only-event-log-with-seq-by-append",
+      "members": {
+        "ih": [
+          "append-only-event-log-with-seq-by-append"
+        ],
+        "dsh": [
+          "append-only-jsonl-event-log"
+        ],
+        "grok": [
+          "append-only-jsonl-session-event-log"
+        ],
+        "cc-custom": [
+          "jsonl-transcript-append-log"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "derivemessages-wire-shape-enforcement": {
+      "domain": "session",
+      "label": "derivemessages-wire-shape-enforcement",
+      "members": {
+        "ih": [
+          "derivemessages-wire-shape-enforcement"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "jsonl-backend-with-atomic-rewrite-and-torn-tail-recovery": {
+      "domain": "session",
+      "label": "jsonl-backend-with-atomic-rewrite-and-torn-tail-recovery",
+      "members": {
+        "ih": [
+          "jsonl-backend-with-atomic-rewrite-and-torn-tail-recovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "coordinator-load-gate-version-refusal-before-repair": {
+      "domain": "session",
+      "label": "coordinator-load-gate-version-refusal-before-repair",
+      "members": {
+        "ih": [
+          "coordinator-load-gate-version-refusal-before-repair"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "write-behind-with-failure-retention-and-quiescence-barrier": {
+      "domain": "session",
+      "label": "write-behind-with-failure-retention-and-quiescence-barrier",
+      "members": {
+        "ih": [
+          "write-behind-with-failure-retention-and-quiescence-barrier"
+        ],
+        "dsh": [
+          "write-behind-batching-and-flush-barrier"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tail-only-log-semantic-crash-repair": {
+      "domain": "session",
+      "label": "tail-only-log-semantic-crash-repair",
+      "members": {
+        "ih": [
+          "tail-only-log-semantic-crash-repair"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-ownership-lease-os-byte-range-lock": {
+      "domain": "session",
+      "label": "session-ownership-lease-os-byte-range-lock",
+      "members": {
+        "ih": [
+          "session-ownership-lease-os-byte-range-lock"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "fork-with-source-coordinate-marker-remapping": {
+      "domain": "session",
+      "label": "fork-with-source-coordinate-marker-remapping",
+      "members": {
+        "ih": [
+          "fork-with-source-coordinate-marker-remapping"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-listing-blank-probe-and-title-projection": {
+      "domain": "session",
+      "label": "session-listing-blank-probe-and-title-projection",
+      "members": {
+        "ih": [
+          "session-listing-blank-probe-and-title-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "seq-contiguity-and-branded-sequence-types": {
+      "domain": "session",
+      "label": "seq-contiguity-and-branded-sequence-types",
+      "members": {
+        "dsh": [
+          "seq-contiguity-and-branded-sequence-types"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "surface-projection-and-derived-history-cache": {
+      "domain": "session",
+      "label": "surface-projection-and-derived-history-cache",
+      "members": {
+        "dsh": [
+          "surface-projection-and-derived-history-cache"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-fork-inherited-prefix": {
+      "domain": "session",
+      "label": "session-fork-inherited-prefix",
+      "members": {
+        "dsh": [
+          "session-fork-inherited-prefix"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "crash-repair-torn-tail-and-interrupted-turn-closers": {
+      "domain": "session",
+      "label": "crash-repair-torn-tail-and-interrupted-turn-closers",
+      "members": {
+        "dsh": [
+          "crash-repair-torn-tail-and-interrupted-turn-closers"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "write-lease-and-lazy-materialization": {
+      "domain": "session",
+      "label": "write-lease-and-lazy-materialization",
+      "members": {
+        "dsh": [
+          "write-lease-and-lazy-materialization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "semantic-checkpoint-policy": {
+      "domain": "session",
+      "label": "semantic-checkpoint-policy",
+      "members": {
+        "dsh": [
+          "semantic-checkpoint-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-format-adjacent-migration-chain": {
+      "domain": "session",
+      "label": "session-format-adjacent-migration-chain",
+      "members": {
+        "dsh": [
+          "session-format-adjacent-migration-chain"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "generation-migration-publication": {
+      "domain": "session",
+      "label": "generation-migration-publication",
+      "members": {
+        "dsh": [
+          "generation-migration-publication"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "unknown-event-vocabulary-refusal": {
+      "domain": "session",
+      "label": "unknown-event-vocabulary-refusal",
+      "members": {
+        "dsh": [
+          "unknown-event-vocabulary-refusal"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "projection-registry-checkpoint-restore": {
+      "domain": "session",
+      "label": "projection-registry-checkpoint-restore",
+      "members": {
+        "dsh": [
+          "projection-registry-checkpoint-restore"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "projection-cache-write-behind": {
+      "domain": "session",
+      "label": "projection-cache-write-behind",
+      "members": {
+        "dsh": [
+          "projection-cache-write-behind"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-lifecycle-ownership": {
+      "domain": "session",
+      "label": "session-lifecycle-ownership",
+      "members": {
+        "dsh": [
+          "session-lifecycle-ownership"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "versioned-kv-storage-domain": {
+      "domain": "session",
+      "label": "versioned-kv-storage-domain",
+      "members": {
+        "dsh": [
+          "versioned-kv-storage-domain"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-telemetry-record-capture": {
+      "domain": "session",
+      "label": "session-telemetry-record-capture",
+      "members": {
+        "dsh": [
+          "session-telemetry-record-capture"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "llm-backed-session-title": {
+      "domain": "session",
+      "label": "llm-backed-session-title",
+      "members": {
+        "dsh": [
+          "llm-backed-session-title"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-controller-remote-facade": {
+      "domain": "session",
+      "label": "session-controller-remote-facade",
+      "members": {
+        "dsh": [
+          "session-controller-remote-facade"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "cross-session-reference-snapshot": {
+      "domain": "session",
+      "label": "cross-session-reference-snapshot",
+      "members": {
+        "dsh": [
+          "cross-session-reference-snapshot"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "deepseek-session-log-contribution": {
+      "domain": "session",
+      "label": "deepseek-session-log-contribution",
+      "members": {
+        "dsh": [
+          "deepseek-session-log-contribution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "append-only-rollout-with-compacted-projection": {
+      "domain": "session",
+      "label": "append-only-rollout-with-compacted-projection",
+      "members": {
+        "codex": [
+          "append-only-rollout-with-compacted-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "rollout-reconstruction-on-resume": {
+      "domain": "session",
+      "label": "rollout-reconstruction-on-resume",
+      "members": {
+        "codex": [
+          "rollout-reconstruction-on-resume"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "six-database-sqlite-state-runtime": {
+      "domain": "session",
+      "label": "six-database-sqlite-state-runtime",
+      "members": {
+        "codex": [
+          "six-database-sqlite-state-runtime"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "rollout-lineage-and-compression": {
+      "domain": "session",
+      "label": "rollout-lineage-and-compression",
+      "members": {
+        "codex": [
+          "rollout-lineage-and-compression"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-queued-user-submissions": {
+      "domain": "session",
+      "label": "durable-queued-user-submissions",
+      "members": {
+        "codex": [
+          "durable-queued-user-submissions"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "global-message-history-jsonl": {
+      "domain": "session",
+      "label": "global-message-history-jsonl",
+      "members": {
+        "codex": [
+          "global-message-history-jsonl"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-event-log": {
+      "domain": "session",
+      "label": "durable-event-log",
+      "members": {
+        "opencode": [
+          "durable-event-log"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-projection-tables": {
+      "domain": "session",
+      "label": "session-projection-tables",
+      "members": {
+        "opencode": [
+          "session-projection-tables"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-sql-schema": {
+      "domain": "session",
+      "label": "session-sql-schema",
+      "members": {
+        "opencode": [
+          "session-sql-schema"
+        ],
+        "opencode-fork": [
+          "durable-session-schema"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-epoch-persistence": {
+      "domain": "session",
+      "label": "context-epoch-persistence",
+      "members": {
+        "opencode": [
+          "context-epoch-persistence"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "input-admission-and-steering": {
+      "domain": "session",
+      "label": "input-admission-and-steering",
+      "members": {
+        "opencode": [
+          "input-admission-and-steering"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-lifecycle-and-forking": {
+      "domain": "session",
+      "label": "session-lifecycle-and-forking",
+      "members": {
+        "opencode": [
+          "session-lifecycle-and-forking"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "conversation-revert-and-snapshot": {
+      "domain": "session",
+      "label": "conversation-revert-and-snapshot",
+      "members": {
+        "opencode": [
+          "conversation-revert-and-snapshot"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "todo-durable-store": {
+      "domain": "session",
+      "label": "todo-durable-store",
+      "members": {
+        "opencode": [
+          "todo-durable-store"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-command-durable-admission": {
+      "domain": "session",
+      "label": "session-command-durable-admission",
+      "members": {
+        "opencode-fork": [
+          "session-command-durable-admission"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-task-submission-protocol": {
+      "domain": "session",
+      "label": "durable-task-submission-protocol",
+      "members": {
+        "opencode-fork": [
+          "durable-task-submission-protocol"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "task-notification-outbox": {
+      "domain": "session",
+      "label": "task-notification-outbox",
+      "members": {
+        "opencode-fork": [
+          "task-notification-outbox"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "task-cancellation-tree": {
+      "domain": "session",
+      "label": "task-cancellation-tree",
+      "members": {
+        "opencode-fork": [
+          "task-cancellation-tree"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-projection-repair": {
+      "domain": "session",
+      "label": "session-projection-repair",
+      "members": {
+        "opencode-fork": [
+          "session-projection-repair"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "legacy-transcript-retirement-migration": {
+      "domain": "session",
+      "label": "legacy-transcript-retirement-migration",
+      "members": {
+        "opencode-fork": [
+          "legacy-transcript-retirement-migration"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-lifecycle-settlement": {
+      "domain": "session",
+      "label": "session-lifecycle-settlement",
+      "members": {
+        "opencode-fork": [
+          "session-lifecycle-settlement"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-input-promotion-and-startup-candidates": {
+      "domain": "session",
+      "label": "session-input-promotion-and-startup-candidates",
+      "members": {
+        "opencode-fork": [
+          "session-input-promotion-and-startup-candidates"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "filesystem-probed-journal-mode-with-per-host-db": {
+      "domain": "session",
+      "label": "filesystem-probed-journal-mode-with-per-host-db",
+      "members": {
+        "grok": [
+          "filesystem-probed-journal-mode-with-per-host-db"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pid-liveness-active-session-registry-with-atomic-replace": {
+      "domain": "session",
+      "label": "pid-liveness-active-session-registry-with-atomic-replace",
+      "members": {
+        "grok": [
+          "pid-liveness-active-session-registry-with-atomic-replace"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "epoch-versioned-single-flight-gateway-catalog": {
+      "domain": "session",
+      "label": "epoch-versioned-single-flight-gateway-catalog",
+      "members": {
+        "grok": [
+          "epoch-versioned-single-flight-gateway-catalog"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "dashboard-capacity-eviction-with-schema-gate": {
+      "domain": "session",
+      "label": "dashboard-capacity-eviction-with-schema-gate",
+      "members": {
+        "grok": [
+          "dashboard-capacity-eviction-with-schema-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bounded-metadata-only-foreign-session-scan": {
+      "domain": "session",
+      "label": "bounded-metadata-only-foreign-session-scan",
+      "members": {
+        "grok": [
+          "bounded-metadata-only-foreign-session-scan"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "parent-uuid-conversation-chain": {
+      "domain": "session",
+      "label": "parent-uuid-conversation-chain",
+      "members": {
+        "cc-custom": [
+          "parent-uuid-conversation-chain"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "buffered-transcript-write-pipeline": {
+      "domain": "session",
+      "label": "buffered-transcript-write-pipeline",
+      "members": {
+        "cc-custom": [
+          "buffered-transcript-write-pipeline"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tombstone-rewrite-guard": {
+      "domain": "session",
+      "label": "tombstone-rewrite-guard",
+      "members": {
+        "cc-custom": [
+          "tombstone-rewrite-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-pid-registry-and-reaper": {
+      "domain": "session",
+      "label": "session-pid-registry-and-reaper",
+      "members": {
+        "cc-custom": [
+          "session-pid-registry-and-reaper"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "config-migration-ladder": {
+      "domain": "session",
+      "label": "config-migration-ladder",
+      "members": {
+        "cc-custom": [
+          "config-migration-ladder"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-checkpoint-snapshot-and-rewind": {
+      "domain": "session",
+      "label": "file-checkpoint-snapshot-and-rewind",
+      "members": {
+        "cc-custom": [
+          "file-checkpoint-snapshot-and-rewind"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

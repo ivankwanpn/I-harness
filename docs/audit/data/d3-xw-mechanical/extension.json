@@ -1,0 +1,714 @@
+{
+  "domain": "extension",
+  "rows": {
+    "plugin-event-kernel-with-four-extension-channels": {
+      "domain": "extension",
+      "label": "plugin-event-kernel-with-four-extension-channels",
+      "members": {
+        "ih": [
+          "plugin-event-kernel-with-four-extension-channels"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-client-with-generation-based-reconnection-and-oauth": {
+      "domain": "extension",
+      "label": "mcp-client-with-generation-based-reconnection-and-oauth",
+      "members": {
+        "ih": [
+          "mcp-client-with-generation-based-reconnection-and-oauth"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-lifecycle-that-never-executes-plugin-code": {
+      "domain": "extension",
+      "label": "plugin-lifecycle-that-never-executes-plugin-code",
+      "members": {
+        "ih": [
+          "plugin-lifecycle-that-never-executes-plugin-code"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "skill-md-deferred-retrieval-with-a-shadow-selector": {
+      "domain": "extension",
+      "label": "skill-md-deferred-retrieval-with-a-shadow-selector",
+      "members": {
+        "ih": [
+          "skill-md-deferred-retrieval-with-a-shadow-selector"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lsp-integration-with-one-server-per-run-scheduling": {
+      "domain": "extension",
+      "label": "lsp-integration-with-one-server-per-run-scheduling",
+      "members": {
+        "ih": [
+          "lsp-integration-with-one-server-per-run-scheduling"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "model-facing-hook-and-extension-surfaces-over-the-plugin-seams": {
+      "domain": "extension",
+      "label": "model-facing-hook-and-extension-surfaces-over-the-plugin-seams",
+      "members": {
+        "ih": [
+          "model-facing-hook-and-extension-surfaces-over-the-plugin-seams"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-client-connection-supervision-and-reconnect": {
+      "domain": "extension",
+      "label": "mcp-client-connection-supervision-and-reconnect",
+      "members": {
+        "dsh": [
+          "mcp-client-connection-supervision-and-reconnect"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-tool-bridging-and-namespace-isolation": {
+      "domain": "extension",
+      "label": "mcp-tool-bridging-and-namespace-isolation",
+      "members": {
+        "dsh": [
+          "mcp-tool-bridging-and-namespace-isolation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lsp-provider-registry-and-extension-routing": {
+      "domain": "extension",
+      "label": "lsp-provider-registry-and-extension-routing",
+      "members": {
+        "dsh": [
+          "lsp-provider-registry-and-extension-routing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lsp-stdio-server-pooling-and-transient-document-lifecycle": {
+      "domain": "extension",
+      "label": "lsp-stdio-server-pooling-and-transient-document-lifecycle",
+      "members": {
+        "dsh": [
+          "lsp-stdio-server-pooling-and-transient-document-lifecycle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lsp-model-facing-tool-and-result-caps": {
+      "domain": "extension",
+      "label": "lsp-model-facing-tool-and-result-caps",
+      "members": {
+        "dsh": [
+          "lsp-model-facing-tool-and-result-caps"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "skill-registry-layered-precedence-and-caching": {
+      "domain": "extension",
+      "label": "skill-registry-layered-precedence-and-caching",
+      "members": {
+        "dsh": [
+          "skill-registry-layered-precedence-and-caching"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "filesystem-skill-discovery-and-watch-invalidation": {
+      "domain": "extension",
+      "label": "filesystem-skill-discovery-and-watch-invalidation",
+      "members": {
+        "dsh": [
+          "filesystem-skill-discovery-and-watch-invalidation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "skill-catalog-injection-and-model-facing-loader": {
+      "domain": "extension",
+      "label": "skill-catalog-injection-and-model-facing-loader",
+      "members": {
+        "dsh": [
+          "skill-catalog-injection-and-model-facing-loader"
+        ],
+        "codex": [
+          "layered-skill-catalog-developer-injection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hook-protocol-execution-and-vendor-dialect-bridges": {
+      "domain": "extension",
+      "label": "hook-protocol-execution-and-vendor-dialect-bridges",
+      "members": {
+        "dsh": [
+          "hook-protocol-execution-and-vendor-dialect-bridges"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "dynamic-cordis-package-sandbox-approval-and-client-execution": {
+      "domain": "extension",
+      "label": "dynamic-cordis-package-sandbox-approval-and-client-execution",
+      "members": {
+        "dsh": [
+          "dynamic-cordis-package-sandbox-approval-and-client-execution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-inventory-rpc-and-configurable-settings-surfaces": {
+      "domain": "extension",
+      "label": "plugin-inventory-rpc-and-configurable-settings-surfaces",
+      "members": {
+        "dsh": [
+          "plugin-inventory-rpc-and-configurable-settings-surfaces"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "workspace-instruction-baseline-and-change-projection": {
+      "domain": "extension",
+      "label": "workspace-instruction-baseline-and-change-projection",
+      "members": {
+        "dsh": [
+          "workspace-instruction-baseline-and-change-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "settings-namespace-registry-and-file-backed-persistence": {
+      "domain": "extension",
+      "label": "settings-namespace-registry-and-file-backed-persistence",
+      "members": {
+        "dsh": [
+          "settings-namespace-registry-and-file-backed-persistence"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-todo-goal-schedule-and-workflow-extension-state": {
+      "domain": "extension",
+      "label": "durable-todo-goal-schedule-and-workflow-extension-state",
+      "members": {
+        "dsh": [
+          "durable-todo-goal-schedule-and-workflow-extension-state"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hook-lifecycle-event-engine": {
+      "domain": "extension",
+      "label": "hook-lifecycle-event-engine",
+      "members": {
+        "codex": [
+          "hook-lifecycle-event-engine"
+        ],
+        "cc-custom": [
+          "hook-execution-engine"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hook-mode-gating-and-output-spill": {
+      "domain": "extension",
+      "label": "hook-mode-gating-and-output-spill",
+      "members": {
+        "codex": [
+          "hook-mode-gating-and-output-spill"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hook-trust-ledger": {
+      "domain": "extension",
+      "label": "hook-trust-ledger",
+      "members": {
+        "codex": [
+          "hook-trust-ledger"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "explicit-mention-and-implicit-skill-invocation": {
+      "domain": "extension",
+      "label": "explicit-mention-and-implicit-skill-invocation",
+      "members": {
+        "codex": [
+          "explicit-mention-and-implicit-skill-invocation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-client-transport-and-startup-budget": {
+      "domain": "extension",
+      "label": "mcp-client-transport-and-startup-budget",
+      "members": {
+        "codex": [
+          "mcp-client-transport-and-startup-budget"
+        ],
+        "cc-custom": [
+          "mcp-transport-negotiation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-tool-catalog-exposure-and-elicitation-roundtrip": {
+      "domain": "extension",
+      "label": "mcp-tool-catalog-exposure-and-elicitation-roundtrip",
+      "members": {
+        "codex": [
+          "mcp-tool-catalog-exposure-and-elicitation-roundtrip"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-manifest-and-marketplace-distribution": {
+      "domain": "extension",
+      "label": "plugin-manifest-and-marketplace-distribution",
+      "members": {
+        "codex": [
+          "plugin-manifest-and-marketplace-distribution"
+        ],
+        "opencode-fork": [
+          "claude-plugin-marketplace"
+        ],
+        "cc-custom": [
+          "plugin-marketplace-management"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "code-mode-javascript-host": {
+      "domain": "extension",
+      "label": "code-mode-javascript-host",
+      "members": {
+        "codex": [
+          "code-mode-javascript-host"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "collaboration-mode-and-personality-templates": {
+      "domain": "extension",
+      "label": "collaboration-mode-and-personality-templates",
+      "members": {
+        "codex": [
+          "collaboration-mode-and-personality-templates"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "extension-registry-contributor-seams": {
+      "domain": "extension",
+      "label": "extension-registry-contributor-seams",
+      "members": {
+        "codex": [
+          "extension-registry-contributor-seams"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-hook-runtime": {
+      "domain": "extension",
+      "label": "plugin-hook-runtime",
+      "members": {
+        "opencode": [
+          "plugin-hook-runtime"
+        ],
+        "opencode-fork": [
+          "named-plugin-hook-runtime",
+          "plugin-runtime-readiness"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-client-lifecycle": {
+      "domain": "extension",
+      "label": "mcp-client-lifecycle",
+      "members": {
+        "opencode": [
+          "mcp-client-lifecycle"
+        ],
+        "cc-custom": [
+          "mcp-connection-lifecycle-and-recovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "skill-discovery-and-injection": {
+      "domain": "extension",
+      "label": "skill-discovery-and-injection",
+      "members": {
+        "opencode": [
+          "skill-discovery-and-injection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lsp-diagnostics-and-navigation": {
+      "domain": "extension",
+      "label": "lsp-diagnostics-and-navigation",
+      "members": {
+        "opencode": [
+          "lsp-diagnostics-and-navigation"
+        ],
+        "cc-custom": [
+          "lsp-passive-diagnostics"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "custom-command-registry": {
+      "domain": "extension",
+      "label": "custom-command-registry",
+      "members": {
+        "opencode": [
+          "custom-command-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-plugin-hooks": {
+      "domain": "extension",
+      "label": "provider-plugin-hooks",
+      "members": {
+        "opencode": [
+          "provider-plugin-hooks"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "codemode-execute-tool": {
+      "domain": "extension",
+      "label": "codemode-execute-tool",
+      "members": {
+        "opencode": [
+          "codemode-execute-tool"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "v1-plugin-compatibility-bridge": {
+      "domain": "extension",
+      "label": "v1-plugin-compatibility-bridge",
+      "members": {
+        "opencode-fork": [
+          "v1-plugin-compatibility-bridge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "source-composed-command-registry": {
+      "domain": "extension",
+      "label": "source-composed-command-registry",
+      "members": {
+        "opencode-fork": [
+          "source-composed-command-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-runtime-in-core": {
+      "domain": "extension",
+      "label": "mcp-runtime-in-core",
+      "members": {
+        "opencode-fork": [
+          "mcp-runtime-in-core"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lsp-runtime-in-core": {
+      "domain": "extension",
+      "label": "lsp-runtime-in-core",
+      "members": {
+        "opencode-fork": [
+          "lsp-runtime-in-core"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "direct-extension-capability-approval": {
+      "domain": "extension",
+      "label": "direct-extension-capability-approval",
+      "members": {
+        "opencode-fork": [
+          "direct-extension-capability-approval"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "skills-and-context-guidance": {
+      "domain": "extension",
+      "label": "skills-and-context-guidance",
+      "members": {
+        "opencode-fork": [
+          "skills-and-context-guidance"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-provider-and-live-model-plugins": {
+      "domain": "extension",
+      "label": "plugin-provider-and-live-model-plugins",
+      "members": {
+        "opencode-fork": [
+          "plugin-provider-and-live-model-plugins"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-multi-transport-with-in-process-acp-bridge": {
+      "domain": "extension",
+      "label": "mcp-multi-transport-with-in-process-acp-bridge",
+      "members": {
+        "grok": [
+          "mcp-multi-transport-with-in-process-acp-bridge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-liveness-probe-and-token-fenced-retry": {
+      "domain": "extension",
+      "label": "mcp-liveness-probe-and-token-fenced-retry",
+      "members": {
+        "grok": [
+          "mcp-liveness-probe-and-token-fenced-retry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-oauth-consent-with-in-and-cross-process-dedup": {
+      "domain": "extension",
+      "label": "mcp-oauth-consent-with-in-and-cross-process-dedup",
+      "members": {
+        "grok": [
+          "mcp-oauth-consent-with-in-and-cross-process-dedup"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-elicitation-single-slot-rendezvous": {
+      "domain": "extension",
+      "label": "mcp-elicitation-single-slot-rendezvous",
+      "members": {
+        "grok": [
+          "mcp-elicitation-single-slot-rendezvous"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-tool-name-and-icon-ingest-hardening": {
+      "domain": "extension",
+      "label": "mcp-tool-name-and-icon-ingest-hardening",
+      "members": {
+        "grok": [
+          "mcp-tool-name-and-icon-ingest-hardening"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "language-server-client-with-inert-by-default-backend": {
+      "domain": "extension",
+      "label": "language-server-client-with-inert-by-default-backend",
+      "members": {
+        "grok": [
+          "language-server-client-with-inert-by-default-backend"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "skill-discovery-with-ignore-versus-disabled": {
+      "domain": "extension",
+      "label": "skill-discovery-with-ignore-versus-disabled",
+      "members": {
+        "grok": [
+          "skill-discovery-with-ignore-versus-disabled"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-marketplace-install-with-tighten-only-sha-pinning": {
+      "domain": "extension",
+      "label": "plugin-marketplace-install-with-tighten-only-sha-pinning",
+      "members": {
+        "grok": [
+          "plugin-marketplace-install-with-tighten-only-sha-pinning"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "workflow-rhai-engine-with-journal-replay": {
+      "domain": "extension",
+      "label": "workflow-rhai-engine-with-journal-replay",
+      "members": {
+        "grok": [
+          "workflow-rhai-engine-with-journal-replay"
+        ],
+        "cc-custom": [
+          "workflow-engine"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-bundle-cache-with-user-edit-preservation": {
+      "domain": "extension",
+      "label": "subagent-bundle-cache-with-user-edit-preservation",
+      "members": {
+        "grok": [
+          "subagent-bundle-cache-with-user-edit-preservation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-oauth-and-xaa-auth": {
+      "domain": "extension",
+      "label": "mcp-oauth-and-xaa-auth",
+      "members": {
+        "cc-custom": [
+          "mcp-oauth-and-xaa-auth"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-config-resolution-and-policy": {
+      "domain": "extension",
+      "label": "mcp-config-resolution-and-policy",
+      "members": {
+        "cc-custom": [
+          "mcp-config-resolution-and-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-instructions-and-tool-identity": {
+      "domain": "extension",
+      "label": "mcp-instructions-and-tool-identity",
+      "members": {
+        "cc-custom": [
+          "mcp-instructions-and-tool-identity"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-result-transformation-and-spill": {
+      "domain": "extension",
+      "label": "mcp-result-transformation-and-spill",
+      "members": {
+        "cc-custom": [
+          "mcp-result-transformation-and-spill"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-elicitation-bridge": {
+      "domain": "extension",
+      "label": "mcp-elicitation-bridge",
+      "members": {
+        "cc-custom": [
+          "mcp-elicitation-bridge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lsp-server-lifecycle": {
+      "domain": "extension",
+      "label": "lsp-server-lifecycle",
+      "members": {
+        "cc-custom": [
+          "lsp-server-lifecycle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "skills-discovery-and-precedence": {
+      "domain": "extension",
+      "label": "skills-discovery-and-precedence",
+      "members": {
+        "cc-custom": [
+          "skills-discovery-and-precedence"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bundled-skills-registry": {
+      "domain": "extension",
+      "label": "bundled-skills-registry",
+      "members": {
+        "cc-custom": [
+          "bundled-skills-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hook-config-sources-and-policy": {
+      "domain": "extension",
+      "label": "hook-config-sources-and-policy",
+      "members": {
+        "cc-custom": [
+          "hook-config-sources-and-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-install-and-component-integration": {
+      "domain": "extension",
+      "label": "plugin-install-and-component-integration",
+      "members": {
+        "cc-custom": [
+          "plugin-install-and-component-integration"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "cron-scheduling": {
+      "domain": "extension",
+      "label": "cron-scheduling",
+      "members": {
+        "cc-custom": [
+          "cron-scheduling"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "todo-durable-state": {
+      "domain": "extension",
+      "label": "todo-durable-state",
+      "members": {
+        "cc-custom": [
+          "todo-durable-state"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plan-mode-and-plan-files": {
+      "domain": "extension",
+      "label": "plan-mode-and-plan-files",
+      "members": {
+        "cc-custom": [
+          "plan-mode-and-plan-files"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-search-deferred-tools": {
+      "domain": "extension",
+      "label": "tool-search-deferred-tools",
+      "members": {
+        "cc-custom": [
+          "tool-search-deferred-tools"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}
