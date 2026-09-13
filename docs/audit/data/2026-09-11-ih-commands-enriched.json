@@ -296,6 +296,7 @@
       "backendModule": "packages/tui/src/backend/embedded.ts:559 (member) and :1012 (defaultEmbeddedFactory's forkSessionForBackend -> @i-harness/session-persistence forkSession)",
       "backendStatus": "optional-seam",
       "evidence": [
+        "packages/tui/src/app/slash/impl/sessions.ts:56-72",
         "packages/tui/src/app/slash/impl/sessions.ts:60",
         "packages/tui/src/app/slash/impl/sessions.ts:63",
         "packages/tui/src/app/slash/impl/sessions.ts:65",
@@ -306,7 +307,12 @@
         "packages/tui/src/backend/embedded.ts:1012",
         "packages/tui/src/contracts.ts:200"
       ],
-      "verified": true
+      "verified": true,
+      "citationCorrected": {
+        "prepended": "packages/tui/src/app/slash/impl/sessions.ts:56-72",
+        "reason": "the sampled cite backend/embedded.ts:559 is the optional backend member; the registration, visible() gate and guard live in sessions.ts",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     },
     {
       "rawName": "fullscreen",
@@ -652,13 +658,19 @@
       "backendModule": "Loop SlashContext.quitApp (packages/tui/src/app/loop.ts:2496) -> Loop.requestQuit + the host shutdown controller (apps/tui/src/index.ts:199)",
       "backendStatus": "implemented",
       "evidence": [
+        "packages/tui/src/app/slash/impl/tools.ts:77-83",
         "packages/tui/src/app/slash/impl/tools.ts:78",
         "packages/tui/src/app/slash/impl/tools.ts:81",
         "packages/tui/src/app/loop.ts:2496",
         "packages/tui/src/app/slash/types.ts:147",
         "apps/tui/src/index.ts:199"
       ],
-      "verified": true
+      "verified": true,
+      "citationCorrected": {
+        "prepended": "packages/tui/src/app/slash/impl/tools.ts:77-83",
+        "reason": "the sampled cite apps/tui/src/index.ts:199 is a generic shutdown controller; the command's registration lives in tools.ts and its dispatch in loop.ts:2496",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     },
     {
       "rawName": "rename",
@@ -1327,25 +1339,101 @@
     }
   ],
   "cliExitCodes": [
-    { "code": 0, "when": "--version/-v prints the version (apps/cli/src/index.ts:156-159); help/--help/-h prints USAGE to stderr (apps/cli/src/index.ts:160-163).", "evidence": "apps/cli/src/index.ts:158" },
-    { "code": 0, "when": "run success: runHeadless resolves exitCode 0 (apps/cli/src/run.ts:372), which main returns (apps/cli/src/index.ts:316-320) and the entry guard assigns to process.exitCode (apps/cli/src/index.ts:657-659).", "evidence": "apps/cli/src/run.ts:372" },
-    { "code": 0, "when": "sessions list/show success and `sessions help` (stdout) (apps/cli/src/sessions.ts:175, :194, :197, :202, :205).", "evidence": "apps/cli/src/sessions.ts:174" },
-    { "code": 0, "when": "sdk clean shutdown when the client ends stdin or on SIGINT/SIGTERM (apps/cli/src/index.ts:565-572).", "evidence": "apps/cli/src/index.ts:569" },
-    { "code": 0, "when": "acp normal end AND acp connection error: the error is written to stderr and finish() still resolves 0 (apps/cli/src/index.ts:641-646).", "evidence": "apps/cli/src/index.ts:639" },
-    { "code": 0, "when": "tui normal exit (apps/tui/src/index.ts:982) and tui --help via process.exit(0) (apps/tui/src/index.ts:463).", "evidence": "apps/tui/src/index.ts:982" },
-    { "code": 1, "when": "--session-backend anywhere in argv (apps/cli/src/index.ts:96).", "evidence": "apps/cli/src/index.ts:96" },
-    { "code": 1, "when": "web server startup/runtime failure: the error message is printed and 1 is returned (apps/cli/src/index.ts:121-124).", "evidence": "apps/cli/src/index.ts:123" },
-    { "code": 1, "when": "run: invalid/missing --sandbox value (:190); --resume without --session-dir (:221); --session-dir without a value (:232); --resume without an id (:243); coordinator create failure including a lock conflict (:256); --model without --api-key (:279); unknown model provider (:285); empty task (:298).", "evidence": "apps/cli/src/index.ts:189" },
-    { "code": 1, "when": "sdk and acp: --session-dir with no value (apps/cli/src/index.ts:418 and :588).", "evidence": "apps/cli/src/index.ts:418" },
-    { "code": 1, "when": "sessions show <unknown id>: 'session not found: <id> (<reason>)' (apps/cli/src/sessions.ts:186-191).", "evidence": "apps/cli/src/sessions.ts:190" },
-    { "code": 1, "when": "run failures inside runHeadless: resume load failure (apps/cli/src/run.ts:177), assembly build failure (apps/cli/src/run.ts:278), turn/durability failure (apps/cli/src/run.ts:377).", "evidence": "apps/cli/src/run.ts:177" },
-    { "code": 1, "when": "tui shutdown failure (apps/tui/src/index.ts:978-981).", "evidence": "apps/tui/src/index.ts:980" },
-    { "code": 1, "when": "__dist-selfcheck when any probe fails (apps/cli/src/index.ts:375-376).", "evidence": "apps/cli/src/index.ts:376" },
-    { "code": 1, "when": "unhandled rejection out of main(): the message is printed and process.exitCode = 1 (apps/cli/src/index.ts:659-662); also the bin shim's bootstrap/spawn failures (apps/cli/bin/i-harness.js:21, :34).", "evidence": "apps/cli/src/index.ts:661" },
-    { "code": 2, "when": "'i-harness sessions show' with no id: SESSIONS_USAGE printed to STDERR and return 2 (apps/cli/src/sessions.ts:180-183) — the only code-2 path found.", "evidence": "apps/cli/src/sessions.ts:182" },
-    { "code": 130, "when": "tui receives SIGINT: onSigint -> process.exit(130) (apps/tui/src/index.ts:969).", "evidence": "apps/tui/src/index.ts:969" },
-    { "code": 143, "when": "tui receives SIGTERM: onSigterm -> process.exit(143) (apps/tui/src/index.ts:970).", "evidence": "apps/tui/src/index.ts:970" },
-    { "code": "<port number>", "when": "web after a normal shutdown: main returns result.port (apps/cli/src/index.ts:119-120) and the entry guard assigns it to process.exitCode (apps/cli/src/index.ts:657-659), so the port itself (e.g. 4310) becomes the process exit code rather than 0.", "evidence": "apps/cli/src/index.ts:120" }
+    {
+      "code": 0,
+      "when": "--version/-v prints the version (apps/cli/src/index.ts:156-159); help/--help/-h prints USAGE to stderr (apps/cli/src/index.ts:160-163).",
+      "evidence": "apps/cli/src/index.ts:158"
+    },
+    {
+      "code": 0,
+      "when": "run success: runHeadless resolves exitCode 0 (apps/cli/src/run.ts:372), which main returns (apps/cli/src/index.ts:316-320) and the entry guard assigns to process.exitCode (apps/cli/src/index.ts:657-659).",
+      "evidence": "apps/cli/src/run.ts:372"
+    },
+    {
+      "code": 0,
+      "when": "sessions list/show success and `sessions help` (stdout) (apps/cli/src/sessions.ts:175, :194, :197, :202, :205).",
+      "evidence": "apps/cli/src/sessions.ts:174"
+    },
+    {
+      "code": 0,
+      "when": "sdk clean shutdown when the client ends stdin or on SIGINT/SIGTERM (apps/cli/src/index.ts:565-572).",
+      "evidence": "apps/cli/src/index.ts:569"
+    },
+    {
+      "code": 0,
+      "when": "acp normal end AND acp connection error: the error is written to stderr and finish() still resolves 0 (apps/cli/src/index.ts:641-646).",
+      "evidence": "apps/cli/src/index.ts:639"
+    },
+    {
+      "code": 0,
+      "when": "tui normal exit (apps/tui/src/index.ts:982) and tui --help via process.exit(0) (apps/tui/src/index.ts:463).",
+      "evidence": "apps/tui/src/index.ts:982"
+    },
+    {
+      "code": 1,
+      "when": "--session-backend anywhere in argv (apps/cli/src/index.ts:96).",
+      "evidence": "apps/cli/src/index.ts:96"
+    },
+    {
+      "code": 1,
+      "when": "web server startup/runtime failure: the error message is printed and 1 is returned (apps/cli/src/index.ts:121-124).",
+      "evidence": "apps/cli/src/index.ts:123"
+    },
+    {
+      "code": 1,
+      "when": "run: invalid/missing --sandbox value (:190); --resume without --session-dir (:221); --session-dir without a value (:232); --resume without an id (:243); coordinator create failure including a lock conflict (:256); --model without --api-key (:279); unknown model provider (:285); empty task (:298).",
+      "evidence": "apps/cli/src/index.ts:189"
+    },
+    {
+      "code": 1,
+      "when": "sdk and acp: --session-dir with no value (apps/cli/src/index.ts:418 and :588).",
+      "evidence": "apps/cli/src/index.ts:418"
+    },
+    {
+      "code": 1,
+      "when": "sessions show <unknown id>: 'session not found: <id> (<reason>)' (apps/cli/src/sessions.ts:186-191).",
+      "evidence": "apps/cli/src/sessions.ts:190"
+    },
+    {
+      "code": 1,
+      "when": "run failures inside runHeadless: resume load failure (apps/cli/src/run.ts:177), assembly build failure (apps/cli/src/run.ts:278), turn/durability failure (apps/cli/src/run.ts:377).",
+      "evidence": "apps/cli/src/run.ts:177"
+    },
+    {
+      "code": 1,
+      "when": "tui shutdown failure (apps/tui/src/index.ts:978-981).",
+      "evidence": "apps/tui/src/index.ts:980"
+    },
+    {
+      "code": 1,
+      "when": "__dist-selfcheck when any probe fails (apps/cli/src/index.ts:375-376).",
+      "evidence": "apps/cli/src/index.ts:376"
+    },
+    {
+      "code": 1,
+      "when": "unhandled rejection out of main(): the message is printed and process.exitCode = 1 (apps/cli/src/index.ts:659-662); also the bin shim's bootstrap/spawn failures (apps/cli/bin/i-harness.js:21, :34).",
+      "evidence": "apps/cli/src/index.ts:661"
+    },
+    {
+      "code": 2,
+      "when": "'i-harness sessions show' with no id: SESSIONS_USAGE printed to STDERR and return 2 (apps/cli/src/sessions.ts:180-183) — the only code-2 path found.",
+      "evidence": "apps/cli/src/sessions.ts:182"
+    },
+    {
+      "code": 130,
+      "when": "tui receives SIGINT: onSigint -> process.exit(130) (apps/tui/src/index.ts:969).",
+      "evidence": "apps/tui/src/index.ts:969"
+    },
+    {
+      "code": 143,
+      "when": "tui receives SIGTERM: onSigterm -> process.exit(143) (apps/tui/src/index.ts:970).",
+      "evidence": "apps/tui/src/index.ts:970"
+    },
+    {
+      "code": "<port number>",
+      "when": "web after a normal shutdown: main returns result.port (apps/cli/src/index.ts:119-120) and the entry guard assigns it to process.exitCode (apps/cli/src/index.ts:657-659), so the port itself (e.g. 4310) becomes the process exit code rather than 0.",
+      "evidence": "apps/cli/src/index.ts:120"
+    }
   ],
   "cliNotes": [
     "apps/cli/src contains only index.ts, run.ts, web.ts, sessions.ts and provider-runtime.ts; there is no acp.ts/sdk.ts/tui.ts. runSdkCommand and runAcpCommand are inline in apps/cli/src/index.ts (declared at :410 and :580), and the tui flag parser is apps/tui/src/index.ts:438 (the package @i-harness/tui-app, imported at apps/cli/src/index.ts:29).",

@@ -15,6 +15,7 @@
       "gate": "requires a composed `commands` registry AND a composed `compaction` service (`inject = ['commands', 'compaction']`); in the shipped web-app bundle the host-plane row is explicitly disabled and the plugin is mounted per agent preset instead, so the command is scoped to the preset's agent rather than global",
       "backendModule": "packages/compaction/command-compact/src/index.ts (command plugin) -> packages/compaction/compaction/src/index.ts (CompactionEngine seam) -> packages/compaction/compaction-basic/src/index.ts + src/region.ts (provider/transaction)",
       "evidence": [
+        "packages/compaction/command-compact/src/index.ts:57-105",
         "packages/compaction/command-compact/src/index.ts:10",
         "packages/compaction/command-compact/src/index.ts:11",
         "packages/compaction/command-compact/src/index.ts:23",
@@ -39,7 +40,12 @@
       "verified": true,
       "crossSourceHints": [
         "canonical: compact — same capability as I-harness `/compact`, grok-build `compact`, cc-custom `/compact` and the codex SlashCommand::Compact variant; dsh's distinct name form is the plugin package `command-compact`"
-      ]
+      ],
+      "citationCorrected": {
+        "prepended": "packages/compaction/command-compact/src/index.ts:57-105",
+        "reason": "the sampled cite packages/core/session/src/types.ts:427 is a SurfaceOp doc comment, not the command's implementation",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     },
     {
       "rawName": "feedback",
@@ -79,6 +85,7 @@
       "gate": "requires a composed `commands` registry AND a composed `goals` service (`inject = ['commands', 'goals']`); in the web-app bundle the host-plane row is disabled and the preset mounts it into the preset's scoped command layer",
       "backendModule": "packages/goal/command-goal/src/index.ts (command) -> packages/goal/goal/src/index.ts (goal domain, Typert @Remote get/edit/pause/resume/complete/clear/create)",
       "evidence": [
+        "packages/goal/command-goal/src/index.ts:189-195",
         "packages/goal/command-goal/src/index.ts:12",
         "packages/goal/command-goal/src/index.ts:13",
         "packages/goal/command-goal/src/index.ts:15",
@@ -96,7 +103,12 @@
       "verified": true,
       "crossSourceHints": [
         "canonical: goal — dsh's own registration comment calls this the 'Codex-shaped /goal command' (packages/goal/command-goal/src/index.ts:188), so it is a crosswalk candidate for a codex-family /goal rather than a dsh invention"
-      ]
+      ],
+      "citationCorrected": {
+        "prepended": "packages/goal/command-goal/src/index.ts:189-195",
+        "reason": "the sampled cite packages/bundle/web-app/cordis.patch.yml:411 is a bundle manifest entry whose next line is `disabled: true`; it cannot support a mechanism claim",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
     }
   ],
   "interactionCommands": [

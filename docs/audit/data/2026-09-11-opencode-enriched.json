@@ -1,0 +1,452 @@
+{
+  "upstream": {
+    "source": "opencode",
+    "version": "1.18.30",
+    "sourcePath": "D:/agent-complete/opencode-1.18.30",
+    "commandModelNote": "Only 2 commands are statically registered (init, review); the rest of the command surface is data, not code: user/config markdown files under {command,commands}/**/*.md in the global config dir, project .opencode dirs and $OPENCODE_CONFIG_DIR, plus inline `command` entries in opencode.json, plus MCP prompts, plus skills. All of them are merged at runtime into ONE registry (`@opencode/Command`) whose Info carries {name, description, agent, model, source:'command'|'mcp'|'skill', template, subtask, hints}; template bodies are plain prompt text with $1..$n / $ARGUMENTS substitution and !`shell` pre-expansion, and a command can be forced to run as a subagent subtask. This is a design difference (config/user-defined command plane), not a missing builtin list.",
+    "commands": [
+      {
+        "rawName": "init",
+        "canonical": "init",
+        "aliases": [],
+        "family": "setup",
+        "summary": "guided AGENTS.md setup",
+        "mechanism": "Registered unconditionally into the registry state at instance init as commands[Default.INIT] with source 'command', description 'guided AGENTS.md setup' and a lazy `template` getter that returns the bundled template packages/opencode/src/command/template/initialize.txt with '${path}' replaced by ctx.worktree. It is not code-driven: dispatching /init resolves the entry in the registry, expands the template text and submits it as an ordinary user prompt (SessionPrompt.command). No permission check happens at dispatch time; the resulting agent turn is gated only by the normal tool permission model.",
+        "gate": "none",
+        "backendModule": "packages/opencode/src/command/index.ts (Service \"@opencode/Command\"), consumed by packages/opencode/src/session/prompt.ts",
+        "evidence": [
+          "packages/opencode/src/command/index.ts:46",
+          "packages/opencode/src/command/index.ts:70",
+          "packages/opencode/src/command/index.ts:74",
+          "packages/opencode/src/command/template/initialize.txt:6",
+          "packages/opencode/src/session/prompt.ts:1362",
+          "packages/opencode/src/session/prompt.ts:1391"
+        ],
+        "verified": true
+      },
+      {
+        "rawName": "review",
+        "canonical": "review",
+        "aliases": [],
+        "family": "code-review",
+        "summary": "review changes [commit|branch|pr], defaults to uncommitted",
+        "mechanism": "Registered next to init as commands[Default.REVIEW] with the bundled review.txt template ('${path}' -> worktree) and, unlike init, with `subtask: true`. Because the subtask flag is set, SessionPrompt.command builds a `subtask` part instead of plain prompt parts, so the review prompt is executed by a child/subagent session rather than by the calling agent, and the same $1..$n / $ARGUMENTS expansion runs over the template first. The template's own text then tells the agent to run git show / git diff / gh pr view with $ARGUMENTS.",
+        "gate": "none",
+        "backendModule": "packages/opencode/src/command/index.ts (Service \"@opencode/Command\"), consumed by packages/opencode/src/session/prompt.ts",
+        "evidence": [
+          "packages/opencode/src/command/index.ts:48",
+          "packages/opencode/src/command/index.ts:79",
+          "packages/opencode/src/command/index.ts:86",
+          "packages/opencode/src/session/prompt.ts:1439",
+          "packages/opencode/src/session/prompt.ts:1440",
+          "packages/opencode/src/command/template/review.txt:5"
+        ],
+        "verified": true
+      }
+    ],
+    "commandModel": {
+      "model": "runtime-merged registry of 4 source kinds: 2 static builtins + config/user markdown + inline config entries, MCP prompts, skills",
+      "staticBuiltinCount": 2,
+      "declaration": {
+        "markdownFiles": "Markdown under `{command,commands}/**/*.md` inside every discovered config directory; YAML frontmatter becomes the command fields and the markdown body (trimmed) becomes `template`.",
+        "frontmatterFields": "template (required; body), description?, agent?, model?, variant?, subtask? (see packages/core/src/v1/config/command.ts:5-12)",
+        "inlineConfig": "opencode.json / opencode.jsonc `command` is a Record<string, ConfigCommandV1.Info> (packages/core/src/v1/config/config.ts:41), merged into the same registry at packages/opencode/src/command/index.ts:90-103.",
+        "frontmatterTolerance": "gray-matter is used, with a sanitize() fallback that re-quotes unquoted-colon values as YAML block scalars so other agents' markdown keeps parsing (packages/core/src/config/markdown.ts:3-10, :22-35)",
+        "evidence": [
+          "packages/opencode/src/config/command.ts:13",
+          "packages/opencode/src/config/command.ts:15",
+          "packages/opencode/src/config/command.ts:26",
+          "packages/opencode/src/config/command.ts:31",
+          "packages/core/src/v1/config/command.ts:5",
+          "packages/core/src/v1/config/config.ts:41",
+          "packages/core/src/config/markdown.ts:3",
+          "packages/opencode/src/command/index.ts:90"
+        ]
+      },
+      "discovery": {
+        "directories": "ConfigPaths.directories = global config dir (Global.Path.config) + every ancestor `.opencode` up to the worktree + `$HOME/.opencode` + $OPENCODE_CONFIG_DIR, in that order (deduped); each directory is scanned for commands and agents.",
+        "naming": "name = path relative to the scanned dir, stripping a leading `command/` or `commands/` and the `.md` extension, so nested paths are preserved (command/git/commit.md -> `git/commit`).",
+        "mergeOrder": "result.command = mergeDeep(config command map, ConfigCommand.load(dir)) per directory, so later directories (project .opencode) override earlier (global) entries.",
+        "reload": "registry state is per-instance (InstanceState.make) and rebuilt from config on reload; there is no watcher-driven re-scan of command files beyond config reload.",
+        "evidence": [
+          "packages/opencode/src/config/paths.ts:23",
+          "packages/opencode/src/config/paths.ts:26",
+          "packages/opencode/src/config/entry-name.ts:15",
+          "packages/opencode/src/config/entry-name.ts:16",
+          "packages/opencode/src/config/config.ts:438",
+          "packages/opencode/src/config/config.ts:473",
+          "packages/opencode/src/command/index.ts:159"
+        ]
+      },
+      "expansion": {
+        "arguments": "input.arguments is tokenized with /(?:\\[Image\\s+\\d+\\]|\"[^\"]*\"|'[^']*'|[^\\s\"']+)/gi and quote-trimmed; `$n` placeholders are replaced positionally, and the HIGHEST $n present swallows all remaining args (args.slice(argIndex).join(' ')); `$ARGUMENTS` is replaced by the raw argument string; if neither form is present and arguments were given, the raw arguments are appended to the template as a new paragraph.",
+        "shell": "Before the prompt is built, ``!`cmd` `` blocks in the template are executed and replaced in-place by their combined stdout/stderr, using the configured preferred shell.",
+        "fileMentions": "`@path` tokens in a template become file parts via ConfigMarkdown.files (/@(\\.?[^\\s`,.]*(?:\\.[^\\s`,.]+)*)/g) in resolvePromptParts.",
+        "hints": "the registry precomputes `hints` per command: sorted unique `$n` matches plus '$ARGUMENTS' if present (MCP prompts synthesize $1..$n from the prompt's declared arguments) - these drive the argument UI.",
+        "evidence": [
+          "packages/opencode/src/session/prompt.ts:1372",
+          "packages/opencode/src/session/prompt.ts:1376",
+          "packages/opencode/src/session/prompt.ts:1383",
+          "packages/opencode/src/session/prompt.ts:1387",
+          "packages/opencode/src/session/prompt.ts:1391",
+          "packages/opencode/src/session/prompt.ts:1393",
+          "packages/opencode/src/session/prompt.ts:1397",
+          "packages/opencode/src/session/prompt.ts:1407",
+          "packages/opencode/src/config/markdown.ts:5",
+          "packages/opencode/src/config/markdown.ts:6",
+          "packages/opencode/src/command/index.ts:36",
+          "packages/opencode/src/command/index.ts:130"
+        ]
+      },
+      "sources": {
+        "builtin": "2 entries written directly into the map before anything else (packages/opencode/src/command/index.ts:70-88)",
+        "configMarkdownAndInline": "loaded from config dirs and the `command` config field; assigned source:'command' (packages/opencode/src/command/index.ts:90-103)",
+        "mcpPrompts": "every MCP prompt across connected servers is injected as a command with source:'mcp'; the template is a lazy Promise that calls getPrompt on demand, mapping the prompt's declared arguments to $1..$n (packages/opencode/src/command/index.ts:105-132, MCP.prompts at packages/opencode/src/mcp/index.ts:169 and :716)",
+        "skills": "every discovered skill is ALSO injected as a command (source:'skill') unless a command of the same name already exists; the template is the skill body plus a 'Base directory for this skill:' note (packages/opencode/src/command/index.ts:134-152)",
+        "pluginProvided": "plugins do not get a dedicated command-registration API in the v1 registry; two plugin paths exist: (a) the legacy `config` hook can mutate the config object (including its `command` map) before the registry reads it (packages/opencode/src/plugin/index.ts:244-253), and (b) the V2 plugin API exposes a CommandDraft {list,get,update,remove} transform (packages/plugin/src/v2/effect/command.ts:4-13) wired for CoreV2 via packages/core/src/plugin/promise.ts:61-64; plugins can also observe/rewrite an executing command through the 'command.execute.before' hook (packages/plugin/src/index.ts:262-263, triggered at packages/opencode/src/session/prompt.ts:1460-1464)",
+        "precedence": "builtins first, then config entries overwrite by name, then MCP prompts overwrite, then skills fill only names not already taken (explicit `if (commands[item.name]) continue`)",
+        "evidence": [
+          "packages/opencode/src/command/index.ts:70",
+          "packages/opencode/src/command/index.ts:90",
+          "packages/opencode/src/command/index.ts:105",
+          "packages/opencode/src/command/index.ts:134",
+          "packages/opencode/src/command/index.ts:135",
+          "packages/opencode/src/mcp/index.ts:169",
+          "packages/opencode/src/mcp/index.ts:716",
+          "packages/opencode/src/plugin/index.ts:244",
+          "packages/plugin/src/v2/effect/command.ts:4",
+          "packages/core/src/plugin/promise.ts:61",
+          "packages/plugin/src/index.ts:262",
+          "packages/opencode/src/session/prompt.ts:1460"
+        ]
+      },
+      "commandVsSubtaskVsAgent": {
+        "command": "a named prompt template in the registry (Info at packages/opencode/src/command/index.ts:22-32); it contributes text/file parts to a user message, optionally naming an agent and model.",
+        "agent": "a model/permission/mode profile: Info.mode is 'subagent' | 'primary' | 'all' (packages/opencode/src/agent/agent.ts:38), defined by builtins and by config/markdown under {agent,agents}/**/*.md (packages/core/src/config/plugin/agent.ts:21); agents are the unit that owns tools/permissions/model.",
+        "subtaskCommand": "a command whose target agent is mode 'subagent' (unless subtask:false) or which sets subtask:true becomes a single `subtask` part - i.e. the command text is executed in a CHILD session by that agent and only the result returns to the caller; otherwise the expanded template is submitted in the current session (packages/opencode/src/session/prompt.ts:1439-1453). `review` ships with subtask:true (packages/opencode/src/command/index.ts:86).",
+        "modelResolution": "cmd.model wins, else the targeted agent's model, else the caller-provided model, else the session's current model (packages/opencode/src/session/prompt.ts:1411-1419).",
+        "evidence": [
+          "packages/opencode/src/command/index.ts:22",
+          "packages/opencode/src/agent/agent.ts:38",
+          "packages/core/src/config/plugin/agent.ts:21",
+          "packages/opencode/src/session/prompt.ts:1439",
+          "packages/opencode/src/session/prompt.ts:1441",
+          "packages/opencode/src/session/prompt.ts:1453",
+          "packages/opencode/src/session/prompt.ts:1411"
+        ]
+      },
+      "builtinTemplates": {
+        "location": "packages/opencode/src/command/template/initialize.txt and review.txt, imported as raw text at packages/opencode/src/command/index.ts:10-11",
+        "injection": "not copied into config: the registry exposes a lazy `template` getter that substitutes the literal token '${path}' with ctx.worktree at read time (and separately the expansion stage replaces $ARGUMENTS/$n at execution time)",
+        "secondCopy": "the CoreV2 registry has its own copy at packages/core/src/plugin/command/initialize.txt and review.txt, injected by a CoreV2 plugin with the strings 'init'/'review' (packages/core/src/plugin/command.ts:14-22); the two copies are NOT byte-identical to the v1 ones (upstream v1 initialize.txt=3492B vs core 3420B)",
+        "evidence": [
+          "packages/opencode/src/command/index.ts:10",
+          "packages/opencode/src/command/index.ts:11",
+          "packages/opencode/src/command/index.ts:74",
+          "packages/core/src/plugin/command.ts:14",
+          "packages/core/src/plugin/command.ts:18"
+        ]
+      },
+      "surfacing": {
+        "service": "Command.Service.get/list (packages/opencode/src/command/index.ts:51-54, :161-169)",
+        "acp": "ACP detects a leading slash command in the prompt, looks it up in the directory snapshot's availableCommands, and dispatches via the SDK session.command endpoint; 'compact' is special-cased to the summarize path; the available-commands list merges registry commands with skills (name-deduped) and is pushed as an available_commands_update",
+        "cli": "opencode run supports --command for slash-command execution (packages/opencode/src/cli/cmd/run.ts:13)",
+        "events": "a successful dispatch publishes Command.Event.Executed (LegacyEvent.CommandExecuted) with {name, sessionID, arguments, messageID}",
+        "evidence": [
+          "packages/opencode/src/command/index.ts:161",
+          "packages/opencode/src/command/index.ts:166",
+          "packages/opencode/src/acp/service.ts:504",
+          "packages/opencode/src/acp/service.ts:531",
+          "packages/opencode/src/acp/service.ts:555",
+          "packages/opencode/src/acp/service.ts:761",
+          "packages/opencode/src/acp/service.ts:947",
+          "packages/opencode/src/acp/directory.ts:121",
+          "packages/opencode/src/cli/cmd/run.ts:13",
+          "packages/opencode/src/session/prompt.ts:1474"
+        ]
+      }
+    },
+    "sandbox": "NO OS-level sandbox/confinement exists. The only confinement is the permission model: a rule engine that wildcard-matches (permission, pattern) against rulesets and otherwise returns action 'ask' (packages/opencode/src/permission/index.ts:28-38), with a pending ask/reply deferred queue (packages/opencode/src/permission/index.ts:12-26); every sensitive tool calls ctx.ask before acting (e.g. shell at packages/opencode/src/tool/shell.ts:270 and :283, edit at packages/opencode/src/tool/edit.ts:102 and :145, read/write/grep/glob/webfetch/task likewise). The shell tool builds the command with ChildProcess.make and spawns it through the ChildProcessSpawner with no wrapper process, namespace, seatbelt/bwrap/landlock or seccomp layer anywhere (packages/opencode/src/tool/shell.ts:295, :303, :484); no sandbox crate/module exists in the source tree (the only 'sandbox' identifiers in packages/opencode/src are project git-worktree bookkeeping, e.g. packages/opencode/src/project/project.ts:90 and :402). Corroborating prompt text states the same for the model's benefit: packages/opencode/src/session/prompt/kimi.txt:62 ('The operating environment is not in a sandbox'). A session row stores a permission ruleset column (PermissionV1.Ruleset, packages/core/src/session/sql.ts:50), which is still a policy, not confinement.",
+    "compaction": "Two mechanisms, both driven from the main loop when it detects overflow (packages/opencode/src/session/prompt.ts:1161-1168 -> compaction.create/process). (1) Summarisation: process() creates a NEW assistant message with `summary: true` (packages/opencode/src/session/compaction.ts:393-419), asks the dedicated 'compaction' agent to summarise a selected head of the conversation (select returns {head, tail_start_id} at :264-269), writes the summary as that assistant message, and records the surviving tail boundary on the user message's compaction part; completed compaction pairs are then located and hidden by index so later prompts exclude them (completedCompactions :97-115, hidden-set filtering at :364-371). (2) Pruning: when cfg.compaction.prune is on, older completed tool parts beyond PRUNE_PROTECT tokens have `state.time.compacted = Date.now()` written back through session.updatePart (packages/opencode/src/session/compaction.ts:273-317), and serialisation then renders those outputs as '[Old tool result content cleared]' (:76-78). Stored history IS therefore mutated in place, but only in that bounded way: compaction does not delete messages or parts - it adds a summary message, hides prior compaction pairs from context selection, and stamps tool parts as compacted (the newest assistant summary is also what stops the prune scan, :292).",
+    "agentLoop": "Classic single-process loop only. SessionPrompt.runLoop is a `while (true)` that: sets status busy, re-reads the message list through MessageV2.filterCompactedEffect, exits when the last assistant turn finished without pending tool calls, pops the next queued task, and branches - a 'subtask' task runs handleSubtask (child session), a 'compaction' task runs compaction.process, an overflow check creates an auto compaction task, otherwise it resolves the agent, applies reminders, creates the assistant message and streams one model turn; agent.steps caps the iteration count (packages/opencode/src/session/prompt.ts:1081-1168). There is no second engine: grep for `engine`/`session_execution` across packages/core/src finds only unrelated strings (an agent prompt sentence), and the session table has no engine column (packages/core/src/session/sql.ts:22-66). Fork adds a kernel engine (see fork deltas)."
+  },
+  "fork": {
+    "source": "opencode-fork",
+    "dirName": "opencode-fork-private-999.0.15",
+    "version": "999.0.19",
+    "versionNote": "Directory name says 999.0.15 but packages/opencode/package.json declares \"version\": \"999.0.19\" (packages/opencode/package.json:3). 999.0.19 is used as the version; the discrepancy is recorded, not resolved. The tree is a superset of upstream core: 0 files removed from packages/core/src, 129 changed, ~100 added.",
+    "sourcePath": "D:/agent-complete/opencode-fork-private-999.0.15",
+    "sourceRev": "0241f446219e64bdc29fb70a1440b4953f77ca6e",
+    "commandModelNote": "Same command model as upstream (2 static builtins + config/user markdown + inline config + MCP prompts + skills in one runtime registry), but the CoreV2 registry became source-composed: it holds an ordered Source[] whose get() wins over the base map, projects skills with a `slash` opt-out, and exposes a beforeExecute hook that runs the plugin 'command.execute.before' hook on the projected parts; init/review are injected by a CoreV2 plugin through exported INIT/REVIEW constants, config markdown enters through the config-command plugin, MCP prompts register themselves as a Source, and the duplicate v1 registry under packages/opencode/src/command (index.ts + template/*.txt) was deleted.",
+    "commands": [
+      {
+        "rawName": "init",
+        "canonical": "init",
+        "aliases": [],
+        "family": "setup",
+        "summary": "guided AGENTS.md setup",
+        "mechanism": "The constant INIT = \"init\" is exported from the CoreV2 command module, and the 'command' CoreV2 plugin transforms the registry draft to set that entry's template from packages/core/src/plugin/command/initialize.txt with '${path}' replaced by location.project.directory, plus description 'guided AGENTS.md setup'. Dispatch goes through SessionPromptExpansion.command, which resolves the definition from CommandV2, expands $n/$ARGUMENTS, pre-expands !`shell` blocks, resolves @file/@agent mentions, projects the durable prompt, runs commands.beforeExecute (plugin 'command.execute.before') and returns the prompt for the runner. No permission gate at dispatch; the resulting turn is gated by the tool permission model.",
+        "gate": "none",
+        "backendModule": "packages/core/src/command.ts (Service \"@opencode/v2/Command\"), consumed by packages/core/src/session/prompt-expansion.ts",
+        "evidence": [
+          "packages/core/src/command.ts:15",
+          "packages/core/src/plugin/command.ts:15",
+          "packages/core/src/plugin/command.ts:16",
+          "packages/core/src/session/prompt-expansion.ts:268",
+          "packages/core/src/session/prompt-expansion.ts:284",
+          "packages/core/src/session/prompt-expansion.ts:307"
+        ],
+        "verified": true
+      },
+      {
+        "rawName": "review",
+        "canonical": "review",
+        "aliases": [],
+        "family": "code-review",
+        "summary": "review changes [commit|branch|pr], defaults to uncommitted",
+        "mechanism": "REVIEW = \"review\" is exported beside INIT and injected by the same CoreV2 plugin from packages/core/src/plugin/command/review.txt (identical bytes to upstream's core copy), with description 'review changes [commit|branch|pr], defaults to uncommitted' and subtask:true. In prompt-expansion the subtask decision is `(targetAgent.mode === 'subagent' && definition.subtask !== false) || definition.subtask === true`; when true the expanded prompt is dispatched as a task to the child agent (target agent id is appended to the prompt's agents list) instead of the current session.",
+        "gate": "none",
+        "backendModule": "packages/core/src/command.ts (Service \"@opencode/v2/Command\"), consumed by packages/core/src/session/prompt-expansion.ts",
+        "evidence": [
+          "packages/core/src/command.ts:16",
+          "packages/core/src/plugin/command.ts:19",
+          "packages/core/src/plugin/command.ts:20",
+          "packages/core/src/plugin/command.ts:22",
+          "packages/core/src/session/prompt-expansion.ts:278",
+          "packages/core/src/session/prompt-expansion.ts:292"
+        ],
+        "verified": true
+      }
+    ],
+    "deltas": [
+      {
+        "area": "command-registry (CoreV2)",
+        "change": "The CoreV2 Command service is no longer a plain map: it keeps `commands` plus an ordered `sources: Source[]`, resolves get() by walking sources in reverse before the base map, merges all sources in list(), projects skills into commands honouring a `slash` opt-out, and exposes a beforeExecute hook that runs the plugin 'command.execute.before' hook over the projected parts. For contrast, the upstream tree's equivalent file (packages/core/src/command.ts:11-25 in the upstream source root) declares only a `commands` map with get/list and has no Source, no skills and no hook; upstream's plugin draft type is otherwise the same shape (packages/plugin/src/v2/effect/command.ts:4).",
+        "evidence": [
+          "packages/core/src/command.ts:18",
+          "packages/core/src/command.ts:23",
+          "packages/core/src/command.ts:39",
+          "packages/core/src/command.ts:79",
+          "packages/core/src/command.ts:85",
+          "packages/core/src/command.ts:88",
+          "packages/core/src/command.ts:100",
+          "packages/core/src/command.ts:116",
+          "packages/core/src/command.ts:15",
+          "packages/core/src/command.ts:16",
+          "packages/core/src/plugin/command.ts:14",
+          "packages/plugin/src/v2/effect/command.ts:4",
+          "packages/core/src/plugin/promise.ts:85"
+        ]
+      },
+      {
+        "area": "builtin-command-injection",
+        "change": "init/review are injected as exported constants from the CoreV2 command module and used by the plugin, instead of being hardcoded string literals in the plugin (upstream's same plugin file passes the literals \"init\"/\"review\" at packages/core/src/plugin/command.ts:14-22 in the upstream source root).",
+        "evidence": [
+          "packages/core/src/command.ts:15",
+          "packages/core/src/command.ts:16",
+          "packages/core/src/plugin/command.ts:15",
+          "packages/core/src/plugin/command.ts:19"
+        ]
+      },
+      {
+        "area": "builtin-templates / duplicate v1 registry removal",
+        "change": "Only one copy of the builtin templates remains. The fork's packages/core/src/plugin/command/{initialize.txt,review.txt} are byte-identical (SHA256 BC5243883CDCC4C5E73E98604B3E3D263FE0FBCCC0FC38140B650873C7FD175A and 7E32F34643877DB0D3690FF3CDCD29F3CD5EDB6D2A07286A9471BBBC0417A46A) to upstream's core copies, while upstream's second, textually different v1 copies under packages/opencode/src/command/template/ plus the whole v1 runtime registry packages/opencode/src/command/index.ts (upstream source root, e.g. its Default map at :46 and template imports at :10-11) were deleted; only an empty packages/opencode/src/command/template/ directory is left in the fork.",
+        "evidence": [
+          "packages/core/src/plugin/command/initialize.txt:1",
+          "packages/core/src/plugin/command/review.txt:1",
+          "packages/core/src/plugin/command.ts:7",
+          "packages/core/src/plugin/command.ts:8"
+        ]
+      },
+      {
+        "area": "config-defined commands",
+        "change": "Unchanged mechanism, re-homed and re-wired: the config-command plugin that globs `{command,commands}/**/*.md` per config directory and pushes entries into the CoreV2 command draft is present identically in both trees (same path and same 83-line body in the upstream source root, packages/core/src/config/plugin/command.ts:15-83 there), so this is NOT a fork delta - recorded here so it is not mistaken for one. What the fork changes is only its target registry: upstream's transform writes into the no-source Command map, the fork's into the source-aware registry consumed by prompt-expansion.",
+        "evidence": [
+          "packages/core/src/config/plugin/command.ts:15",
+          "packages/core/src/config/plugin/command.ts:20",
+          "packages/core/src/config/plugin/command.ts:55",
+          "packages/core/src/config/plugin/command.ts:70",
+          "packages/core/src/config/command.ts:5"
+        ]
+      },
+      {
+        "area": "mcp-commands",
+        "change": "MCP prompts now enter the registry as a registered Source (list() returns stub commands, get() lazily calls getPrompt and maps declared arguments to $1..$n) rather than being enumerated inline by the v1 command service (the upstream source root lists them inside its command registry at packages/opencode/src/command/index.ts:105-132, reading MCP.prompts at packages/opencode/src/mcp/index.ts:169); MCP itself moved out of packages/opencode/src/mcp into packages/core/src/mcp.",
+        "evidence": [
+          "packages/core/src/mcp/runtime.ts:931",
+          "packages/core/src/mcp/runtime.ts:935",
+          "packages/core/src/mcp/runtime.ts:938",
+          "packages/core/src/mcp/runtime.ts:946",
+          "packages/core/src/mcp/runtime.ts:953",
+          "packages/core/src/mcp/runtime.ts:970"
+        ]
+      },
+      {
+        "area": "skills-as-commands",
+        "change": "Skills are projected into commands only when `skill.slash !== false` (both in get() and list()); upstream's registry adds every skill unconditionally (upstream source root, packages/opencode/src/command/index.ts:134-152) and its ACP command list dedupes skills by name only (upstream source root, packages/opencode/src/acp/service.ts:763), so upstream parses the `slash` frontmatter field (upstream source root, packages/core/src/skill.ts:98) but never consults it on these paths.",
+        "evidence": [
+          "packages/core/src/command.ts:85",
+          "packages/core/src/command.ts:97",
+          "packages/core/src/command.ts:118",
+          "packages/core/src/skill.ts:57",
+          "packages/core/src/skill.ts:119"
+        ]
+      },
+      {
+        "area": "command-execution-path",
+        "change": "Command execution was extracted out of the monolithic session prompt into SessionPromptExpansion (expandArguments / expandShell / resolve / materializeAgents / command) with typed errors CommandNotFoundError and AgentNotFoundError, and it returns a durable prompt through SessionCommand.projectPrompt/restorePrompt plus a beforeExecute plugin pass; upstream performs the same expansion inline inside SessionPrompt.command (upstream source root, packages/opencode/src/session/prompt.ts:1356-1395) and throws NamedError.Unknown there.",
+        "evidence": [
+          "packages/core/src/session/prompt-expansion.ts:25",
+          "packages/core/src/session/prompt-expansion.ts:82",
+          "packages/core/src/session/prompt-expansion.ts:254",
+          "packages/core/src/session/prompt-expansion.ts:267",
+          "packages/core/src/session/prompt-expansion.ts:299",
+          "packages/core/src/session/prompt-expansion.ts:307",
+          "packages/core/src/session/command.ts:530",
+          "packages/core/src/session/command.ts:630"
+        ]
+      },
+      {
+        "area": "session-engines",
+        "change": "Two execution engines exist per session - 'classic' and 'kernel' - fixed at session creation in the session.engine column and dispatched by a router that reads the stored engine and fails with KernelUnavailableError instead of ever falling back; the kernel engine is a durable turn coordinator with a lifecycle store, lease/generation records, startup reconciliation and a recovery planner/executor, and compaction is fenced through the same coordinator. New sessions default to 'classic'; children of a kernel parent are created with engine 'kernel'. For contrast, the upstream tree has one in-process loop (upstream source root, packages/opencode/src/session/prompt.ts:1081-1168) and its session table has no engine column (upstream source root, packages/core/src/session/sql.ts:22-66).",
+        "evidence": [
+          "packages/core/src/session/sql.ts:51",
+          "packages/core/src/session/sql.ts:52",
+          "packages/core/src/session/sql.ts:292",
+          "packages/core/src/session/sql.ts:299",
+          "packages/core/src/session/execution/router.ts:12",
+          "packages/core/src/session/execution/router.ts:40",
+          "packages/core/src/session/execution/router.ts:48",
+          "packages/core/src/session/kernel/index.ts:19",
+          "packages/core/src/session/kernel/index.ts:22",
+          "packages/core/src/session/kernel/index.ts:65",
+          "packages/core/src/session/kernel/index.ts:118",
+          "packages/core/src/session/kernel/lifecycle-store.ts:37",
+          "packages/core/src/database/migration/20260821010000_session_execution_engine.ts:5",
+          "packages/core/src/database/migration/20260821020000_session_execution.ts:5",
+          "packages/core/src/database/migration/20260821020000_session_execution.ts:9",
+          "packages/core/src/session/command.ts:66",
+          "packages/core/src/tool/task.ts:298"
+        ]
+      },
+      {
+        "area": "durable-task-protocol",
+        "change": "Subagent delegation became a durable, resumable protocol instead of an in-process call: task_submission rows carry parent session/message/tool-call identity, child session+input, agent, agent_path, model, status and outcome (including 'recovery-required') plus a completion delivery mode ('tool' | 'parent'); task_notification_outbox is the durable source of truth for completion notifications with a process-local wakeup signal and a single-flight drain; session_cancellation records cancellations; subagent permits and stop-task/task-output tools exist. Upstream has none of these tables - its core session SQL declares only session, message, part, todo, session_message, session_input and session_context_epoch (upstream source root, packages/core/src/session/sql.ts:22,68,82,100,119,140,168) - and delegates in-process.",
+        "evidence": [
+          "packages/core/src/session/task-submission.ts:23",
+          "packages/core/src/session/task-submission.ts:30",
+          "packages/core/src/session/task-submission.ts:41",
+          "packages/core/src/session/task-submission.ts:56",
+          "packages/core/src/session/task-notification.ts:12",
+          "packages/core/src/session/task-notification.ts:30",
+          "packages/core/src/session/task-notification.ts:34",
+          "packages/core/src/session/sql.ts:153",
+          "packages/core/src/session/sql.ts:196",
+          "packages/core/src/session/sql.ts:222",
+          "packages/core/src/database/migration/20260729102613_durable_task_lifecycle.ts:5",
+          "packages/core/src/database/migration/20260729102613_durable_task_lifecycle.ts:9",
+          "packages/core/src/database/migration/20260729102613_durable_task_lifecycle.ts:34",
+          "packages/core/src/database/migration/20260803144306_task_completion_delivery.ts:5",
+          "packages/core/src/database/migration/20260803200310_task_requested_completion_delivery.ts:5"
+        ]
+      },
+      {
+        "area": "transcript-storage",
+        "change": "The legacy transcript tables were retired: the fork first adds a session_message_tombstone table and then drops it together with the `message` and `part` tables (and their indexes); messages now live in session_message. Upstream still stores messages in message + part (upstream source root, packages/core/src/session/sql.ts:68 MessageTable and :82 PartTable).",
+        "evidence": [
+          "packages/core/src/database/migration/20260812063844_session-message-tombstone.ts:9",
+          "packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:12",
+          "packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:13",
+          "packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:14",
+          "packages/core/src/session/sql.ts:90"
+        ]
+      },
+      {
+        "area": "session-command-durability",
+        "change": "Prompt/command submission to a session is a durable, conflict-checked command protocol: SessionCommand exposes typed conflicts (PromptConflictError, ActiveAttemptConflictError, TurnConflictError), resolves/projects/restores prompts around message persistence, and the classic engine recovers unfinished work at startup from attempt/input/turn rows (scheduled attempts, startup candidates, open turns). Upstream has no such protocol module; its loop is driven directly from SessionPrompt.runLoop (upstream source root, packages/opencode/src/session/prompt.ts:1081).",
+        "evidence": [
+          "packages/core/src/session/command.ts:37",
+          "packages/core/src/session/command.ts:41",
+          "packages/core/src/session/command.ts:46",
+          "packages/core/src/session/command.ts:55",
+          "packages/core/src/session/command.ts:703",
+          "packages/core/src/session/execution/local.ts:52",
+          "packages/core/src/session/attempt.ts:15",
+          "packages/core/src/session/turn.ts:92"
+        ]
+      },
+      {
+        "area": "session-permission-shape",
+        "change": "The stored session permission ruleset was migrated in place from the V1 shape {permission, pattern, action} to the V2 shape {action, resource, effect}, and the permission module now lives in core as PermissionV2 with the runner consuming the session column; upstream stores PermissionV1.Ruleset in the same column (upstream source root, packages/core/src/session/sql.ts:50) and keeps its permission service in packages/opencode/src/permission (index/evaluate/arity there, e.g. evaluate at packages/opencode/src/permission/index.ts:28), which the fork deletes in favour of a core module plus a legacy-rules shim.",
+        "evidence": [
+          "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:4",
+          "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:13",
+          "packages/core/src/session/sql.ts:50",
+          "packages/core/src/permission.ts:1",
+          "packages/opencode/src/permission/legacy-rules.ts:1"
+        ]
+      },
+      {
+        "area": "v1-plugin-compatibility",
+        "change": "The fork adds a full legacy-plugin compatibility layer: plugin/v1-compat.ts declares the legacy V1 Hooks surface (dispose, event, auth, provider, chat.message/params/headers, permission.ask, command.execute.before, tool.execute.before/after, shell.env, experimental.chat.*/session.compacting/compaction.autocontinue/text.complete, tool.definition, experimental.provider.small_model) and adapts each hook onto the CoreV2 Effect host via define() and host.<domain>.hook(...) with mutable get/set outputs; plugin/v1-projection.ts converts V2 model/provider/auth/credential values into the legacy SDK shapes. Upstream's equivalent bridge is only a Promise->Effect adapter exposing domain transforms (upstream source root, packages/core/src/plugin/promise.ts:20-93, with the command transform at :61-64).",
+        "evidence": [
+          "packages/core/src/plugin/v1-compat.ts:54",
+          "packages/core/src/plugin/v1-compat.ts:62",
+          "packages/core/src/plugin/v1-compat.ts:66",
+          "packages/core/src/plugin/v1-compat.ts:104",
+          "packages/core/src/plugin/v1-compat.ts:388",
+          "packages/core/src/plugin/v1-compat.ts:494",
+          "packages/core/src/plugin/v1-projection.ts:15",
+          "packages/core/src/plugin/v1-projection.ts:94",
+          "packages/core/src/plugin/v1-projection.ts:159",
+          "packages/core/src/plugin/v1-projection.ts:235"
+        ]
+      },
+      {
+        "area": "plugin-runtime-hooks",
+        "change": "Plugin hooks are first-class and named: a PluginRuntime service registers callbacks under a HookName constant union (including 'command.execute.before', 'permission.ask', 'session.compacting', 'session.stop', 'session.subagent.stop'), orders them by owner order then registration sequence, and disposes them through the registering scope; hook callbacks may be Effect or plain values and run sequentially around a mutable event. Upstream dispatches legacy hooks through a per-instance hooks array with plugin.trigger(...) (upstream source root, packages/opencode/src/plugin/index.ts:41-56 and :284-308) and has no scoped, ordered, named runtime.",
+        "evidence": [
+          "packages/core/src/plugin/runtime.ts:6",
+          "packages/core/src/plugin/runtime.ts:20",
+          "packages/core/src/plugin/runtime.ts:74",
+          "packages/core/src/plugin/runtime.ts:84",
+          "packages/core/src/plugin/runtime.ts:94",
+          "packages/core/src/plugin/runtime.ts:116"
+        ]
+      },
+      {
+        "area": "package-layout / engine relocation",
+        "change": "The backend was re-layered: the tool registry, session engine (prompt loop, processor, tools, compaction), MCP and LSP were moved from packages/opencode/src into packages/core/src (core gains session/, session/runner/, session/kernel/, tool/, mcp/, lsp/; the upstream tree has none of those directories under packages/core/src), while packages/opencode keeps host concerns and gains compat/ wire adapters (agent/auth/provider/session/transcript) and legacy-* shims. Concretely, upstream's packages/opencode/src/session/prompt.ts, session/processor.ts, session/tools.ts, tool/registry.ts and mcp/index.ts have no counterpart path in the fork; the fork's equivalents live under packages/core/src.",
+        "evidence": [
+          "packages/core/src/session/prompt-expansion.ts:1",
+          "packages/core/src/tool/catalog.ts:7",
+          "packages/core/src/mcp/runtime.ts:1",
+          "packages/core/src/session/runner/system.ts:1",
+          "packages/opencode/src/compat/native-v1-session.ts:1"
+        ]
+      }
+    ]
+  },
+  "unverified": [
+    {
+      "item": "fork kernel engine selection surface",
+      "note": "Kernel sessions are durable and routed by the stored `engine` column (packages/core/src/session/sql.ts:52,299), new sessions default to 'classic' (packages/core/src/session/command.ts:66), and children of a kernel parent are created with engine 'kernel' (packages/core/src/tool/task.ts:298). Whether a user/config/CLI surface can also request engine 'kernel' for a fresh top-level session was not established; no such entry point was traced.",
+      "verified": false
+    },
+    {
+      "item": "skill `slash` flag consumers outside the command registry",
+      "note": "Upstream parses `slash` from skill frontmatter (packages/core/src/skill.ts:98) but neither the v1 command registry (packages/opencode/src/command/index.ts:134-152) nor the ACP command list (packages/opencode/src/acp/service.ts:761-772) filters on it. TUI / session-ui display paths were not exhaustively traced, so an additional consumer there is not excluded.",
+      "verified": false
+    },
+    {
+      "item": "v1-compat hook coverage vs upstream Hooks",
+      "note": "The fork's legacy Hooks interface (packages/core/src/plugin/v1-compat.ts:54-80) was read and each declared hook is mapped in fromHooks; an exhaustive hook-by-hook diff against upstream's Hooks type (packages/plugin/src/index.ts) was not performed, so complete parity of the legacy hook set is not asserted.",
+      "verified": false
+    },
+    {
+      "item": "fork MCP plugin/tool surface beyond commands",
+      "note": "Only the MCP command Source was traced in the fork (packages/core/src/mcp/runtime.ts:931-974); the fork's MCP tools layer (packages/core/src/mcp/runtime.ts:976+) and resource-tools were not read, so no claim is made about MCP tool-side deltas.",
+      "verified": false
+    }
+  ]
+}

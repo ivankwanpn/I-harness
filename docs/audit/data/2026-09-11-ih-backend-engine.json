@@ -79,7 +79,7 @@
           ]
         }
       ],
-      "failurePolicy": "Mixed by layer. Turn/tool integrity is fail-closed: maxTurns exceeded throws (src/index.ts:192), budget cap throws `prompt_too_long` (src/index.ts:169), a model stream `error` event throws (src/index.ts:264-266), the tool batch rethrows the first failure (src/execute-tool-calls.ts:224-228). The compaction layer is fail-soft by contract: with no compact config the agent returns a no-op `{compacted:false}` (src/index.ts:324-326) and the engine itself never throws. Configuration is fail-closed at creation (src/index.ts:114-127).",
+      "failurePolicy": "Mixed by layer. Turn/tool integrity is fail-closed: maxTurns exceeded throws (packages/core-agent/src/index.ts:192), budget cap throws `prompt_too_long` (packages/core-agent/src/index.ts:169), a model stream `error` event throws (packages/core-agent/src/index.ts:264), the tool batch rethrows the first failure (packages/core-agent/src/execute-tool-calls.ts:224). The compaction layer is fail-soft by contract: with no compact config the agent returns a no-op `{compacted:false}` (packages/core-agent/src/index.ts:324) and the engine itself never throws. Configuration is fail-closed at creation (packages/core-agent/src/index.ts:114).",
       "events": [
         "turn/start",
         "user/message",
@@ -124,8 +124,8 @@
         }
       ],
       "gaps": [
-        "Retry observability is explicitly deferred: M12 guard-retry and M20 provider retry are silent by design and expose no callback/event seam, so core-agent emits NO retry/start telemetry; the comment calls adding a retry hook to those packages 'follow-up' (packages/core-agent/src/index.ts:229-235).",
-        "The string model selector was dropped for M1: because `model?: string` would collide with AgentDeps.model (the ModelClient) under AgentDeps & AgentConfig, LLMRequest.model is never populated by the loop (packages/core-agent/src/index.ts:45-49)."
+        "Retry observability is explicitly deferred: M12 guard-retry and M20 provider retry are silent by design and expose no callback/event seam, so core-agent emits NO retry/start telemetry; the comment calls adding a retry hook to those packages 'follow-up' (packages/core-agent/src/index.ts:229).",
+        "The string model selector was dropped for M1: because `model?: string` would collide with AgentDeps.model (the ModelClient) under AgentDeps & AgentConfig, LLMRequest.model is never populated by the loop (packages/core-agent/src/index.ts:45)."
       ],
       "evidence": [
         "packages/core-agent/src/index.ts:100",
@@ -194,8 +194,10 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed on protocol violations (waterfall forgot/double next throws at src/index.ts:186-197, duplicate service registration throws at src/index.ts:294, unknown service throws at src/index.ts:300), but fail-open on teardown: a disposer that exceeds the 5s cap logs via console.error and the unmount completes anyway (src/index.ts:437-451).",
-      "events": [],
+      "failurePolicy": "Fail-closed on protocol violations (waterfall forgot/double next throws at packages/core-plugin/src/index.ts:186, duplicate service registration throws at packages/core-plugin/src/index.ts:294, unknown service throws at packages/core-plugin/src/index.ts:300), but fail-open on teardown: a disposer that exceeds the 5s cap logs via console.error and the unmount completes anyway (packages/core-plugin/src/index.ts:437).",
+      "events": [
+        "none (the kernel is string-keyed; it declares no SessionEvent vocabulary of its own)"
+      ],
       "keyConstants": [
         {
           "name": "UNMOUNT_TIMEOUT_MS",
@@ -316,9 +318,9 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed at the write/parse boundary (append throws on a foreign `source` on assistant/message src/index.ts:316-318, on non-canonical base64/unsupported media type/oversize aggregates src/index.ts:349-372; fromJSONL throws on an empty log or a version mismatch src/index.ts:669-680), deliberately fail-safe on read: every projection degrades instead of throwing on malformed persisted events (src/index.ts:219-221, 487-506, 522-527). No try/catch swallow anywhere; the split is by direction.",
+      "failurePolicy": "Fail-closed at the write/parse boundary (append throws on a foreign `source` on assistant/message packages/core-session/src/index.ts:316, on non-canonical base64/unsupported media type/oversize aggregates packages/core-session/src/index.ts:349; fromJSONL throws on an empty log or a version mismatch packages/core-session/src/index.ts:669), deliberately fail-safe on read: every projection degrades instead of throwing on malformed persisted events (packages/core-session/src/index.ts:219). No try/catch swallow anywhere; the split is by direction.",
       "events": [
-        "defines the whole SessionEvent union (packages/core-session/src/index.ts:5-133)",
+        "defines the whole SessionEvent union (packages/core-session/src/index.ts:5)",
         "produces via Inbox: agent/input/admitted, agent/input/promoted, agent/input/cancelled",
         "produces via Inbox.claimAtStepBoundary: user/message",
         "consumes: all types (deriveMessages / deriveSearchText / reference derivation)"
@@ -351,9 +353,9 @@
         }
       ],
       "gaps": [
-        "migrate() is an explicit no-op placeholder: only v1 exists, so it throws for any other target and otherwise returns the session unchanged (packages/core-session/src/index.ts:682-687).",
-        "Goal round admission is declared out of scope and the seam is empty: no `blocked` phase, no blockedReason, no maxGoalRounds default, no roundsStarted (packages/core-session/src/index.ts:144-152).",
-        "Image byte migration out of the log is explicitly not done in v0: attachmentId coexists with inline bytes and dataBase64 stays required (packages/core-session/src/index.ts:181-185)."
+        "migrate() is an explicit no-op placeholder: only v1 exists, so it throws for any other target and otherwise returns the session unchanged (packages/core-session/src/index.ts:682).",
+        "Goal round admission is declared out of scope and the seam is empty: no `blocked` phase, no blockedReason, no maxGoalRounds default, no roundsStarted (packages/core-session/src/index.ts:144).",
+        "Image byte migration out of the log is explicitly not done in v0: attachmentId coexists with inline bytes and dataBase64 stays required (packages/core-session/src/index.ts:181)."
       ],
       "evidence": [
         "packages/core-session/src/index.ts:283",
@@ -380,7 +382,7 @@
         "AgentTaskStatus (re-export)",
         "AgentTaskView (re-export)",
         "ReasoningEffort (re-export)",
-        "not re-exported from src/index.ts but exported by src/assembly.ts: estimateAssemblyOverhead, bindAuthRefreshStatus, RewindAssemblyHandle"
+        "not re-exported from packages/session-executor/src/index.ts but exported by packages/session-executor/src/assembly.ts: estimateAssemblyOverhead, bindAuthRefreshStatus, RewindAssemblyHandle"
       ],
       "designDecisions": [
         {
@@ -436,7 +438,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed at the boundaries: missing/unconfigured model throws ModelUnavailableError (assembly.ts:262-267), submit rejects when the service is closed or the session is closing (service.ts:316-317), an unknown task id throws instead of silently succeeding (service.ts:594-598), and a lane drain rejection becomes the submit rejection (service.ts:397-411). Fail-open only for teardown: every unmount/dispose is individually try/catch'd and never throws (assembly.ts:702-733, service.ts:542).",
+      "failurePolicy": "Fail-closed at the boundaries: missing/unconfigured model throws ModelUnavailableError (packages/session-executor/src/assembly.ts:262), submit rejects when the service is closed or the session is closing (packages/session-executor/src/service.ts:316), an unknown task id throws instead of silently succeeding (packages/session-executor/src/service.ts:594), and a lane drain rejection becomes the submit rejection (packages/session-executor/src/service.ts:397). Fail-open only for teardown: every unmount/dispose is individually try/catch'd and never throws (packages/session-executor/src/assembly.ts:702, packages/session-executor/src/service.ts:542).",
       "events": [
         "user/message (CONSUMED via subscribe — rewind recorder anchor)",
         "turn/end (CONSUMED via subscribe — rewind finalize + coordinator flush trigger)",
@@ -460,9 +462,9 @@
         }
       ],
       "gaps": [
-        "Rewind recording is append-onward only: the recorder subscription is wired after the live session exists, so host-seeded history is not recorded — documented in-code as 'a documented v1 scope' (packages/session-executor/src/assembly.ts:311-315).",
-        "A journal bound to another workspace leaves rewind entirely OFF (no recorder, no fs pre-image sink), and the assembly.rewind handle stays absent — the host renders 'not enabled' (packages/session-executor/src/assembly.ts:325-339).",
-        "estimateAssemblyOverhead and bindAuthRefreshStatus are exported from src/assembly.ts but NOT re-exported by src/index.ts, and package.json exposes only \".\": a host outside the package cannot reach them (packages/session-executor/src/assembly.ts:212, 226; packages/session-executor/src/index.ts:1-22)."
+        "Rewind recording is append-onward only: the recorder subscription is wired after the live session exists, so host-seeded history is not recorded — documented in-code as 'a documented v1 scope' (packages/session-executor/src/assembly.ts:311).",
+        "A journal bound to another workspace leaves rewind entirely OFF (no recorder, no fs pre-image sink), and the assembly.rewind handle stays absent — the host renders 'not enabled' (packages/session-executor/src/assembly.ts:325).",
+        "estimateAssemblyOverhead and bindAuthRefreshStatus are exported from packages/session-executor/src/assembly.ts but NOT re-exported by packages/session-executor/src/index.ts, and package.json exposes only \".\": a host outside the package cannot reach them (packages/session-executor/src/assembly.ts:212; packages/session-executor/src/index.ts:1)."
       ],
       "evidence": [
         "packages/session-executor/src/assembly.ts:85",
@@ -562,7 +564,7 @@
           ]
         }
       ],
-      "failurePolicy": "Mixed and deliberate. Fail-closed: unsupported/newer format and missing upgrade path throw SessionFormatUnsupportedError (src/index.ts:360-390), unknown event types without the ignorable marker are refused (src/index.ts:392-403), a lock conflict throws SessionLockConflictError rather than queueing (src/index.ts:236-249), and loadOwned fails closed when the backend lacks replaceEvents (src/index.ts:525-530). Fail-open/by-report: documents report but never reject the caller (src/index.ts:573-577), close() is best-effort allSettled (src/index.ts:558-572), and background flush failures go to reportBackgroundFailure (src/index.ts:324-344).",
+      "failurePolicy": "Mixed and deliberate. Fail-closed: unsupported/newer format and missing upgrade path throw SessionFormatUnsupportedError (packages/session-persistence/src/index.ts:360), unknown event types without the ignorable marker are refused (packages/session-persistence/src/index.ts:392), a lock conflict throws SessionLockConflictError rather than queueing (packages/session-persistence/src/index.ts:236), and loadOwned fails closed when the backend lacks replaceEvents (packages/session-persistence/src/index.ts:525). Fail-open/by-report: documents report but never reject the caller (packages/session-persistence/src/index.ts:573), close() is best-effort allSettled (packages/session-persistence/src/index.ts:558), and background flush failures go to reportBackgroundFailure (packages/session-persistence/src/index.ts:324).",
       "events": [
         "tool/result (synthetic TOOL_ABORTED_BEFORE_DISPATCH recovery result, PRODUCED by repair)",
         "step/end (synthetic closer, PRODUCED by repair)",
@@ -592,9 +594,9 @@
         }
       ],
       "gaps": [
-        "The upgrade chain is empty by design: registerUpgrade is exported but nothing in-tree registers an upgrade, because only v1 exists (packages/session-persistence/src/index.ts:150-155).",
-        "SessionWriteBehind is exported but only used inside this package (packages/session-persistence/src/index.ts:324-344); no other src consumer in-tree.",
-        "Ownership-lease support is Windows-only in M23: SessionLockUnsupportedError is thrown off-Windows (packages/session-persistence/src/index.ts:129-135)."
+        "The upgrade chain is empty by design: registerUpgrade is exported but nothing in-tree registers an upgrade, because only v1 exists (packages/session-persistence/src/index.ts:150).",
+        "SessionWriteBehind is exported but only used inside this package (packages/session-persistence/src/index.ts:324); no other src consumer in-tree.",
+        "Ownership-lease support is Windows-only in M23: SessionLockUnsupportedError is thrown off-Windows (packages/session-persistence/src/index.ts:129)."
       ],
       "evidence": [
         "packages/session-persistence/src/index.ts:224",
@@ -656,7 +658,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed on writes: an append failure rolls back to the committed byte length and rethrows (src/index.ts:82-88), create uses flag wx so an existing session file is never overwritten (src/index.ts:67-71), an empty/headerless file throws (src/index.ts:96, 156-158), and an out-of-root id throws (src/index.ts:53-55). Reads are tolerant by design (torn tail truncated to the committed prefix) and the blank probe never guesses.",
+      "failurePolicy": "Fail-closed on writes: an append failure rolls back to the committed byte length and rethrows (packages/session-persistence-jsonl/src/index.ts:82), create uses flag wx so an existing session file is never overwritten (packages/session-persistence-jsonl/src/index.ts:67), an empty/headerless file throws (packages/session-persistence-jsonl/src/index.ts:96), and an out-of-root id throws (packages/session-persistence-jsonl/src/index.ts:53). Reads are tolerant by design (torn tail truncated to the committed prefix) and the blank probe never guesses.",
       "events": [
         "step/end (synthetic closer PRODUCED by repair)",
         "turn/end (synthetic closer PRODUCED by repair)"
@@ -679,7 +681,7 @@
         }
       ],
       "gaps": [
-        "None marked in code. The 1024-byte blank-probe boundary is a deliberate approximation, stated in-code as honest-bounding (packages/session-persistence-jsonl/src/index.ts:8-11) rather than as unfinished work."
+        "None marked in code. The 1024-byte blank-probe boundary is a deliberate approximation, stated in-code as honest-bounding (packages/session-persistence-jsonl/src/index.ts:8) rather than as unfinished work."
       ],
       "evidence": [
         "packages/session-persistence-jsonl/src/index.ts:42",
@@ -751,7 +753,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed: stale rows are never served — observe failures and foreign/ newer index files throw typed errors (src/file-backed.ts:48-71, 156-161, 301-306), an unknown session in lineage/search-with-sessionId throws (src/file-backed.ts:419-425), a lineage cycle throws (src/file-backed.ts:520-522), and the legacy opener throws when the events_fts schema is absent (src/index.ts:93-96). The only fail-open cases are a missing store directory (ENOENT → empty result, src/file-backed.ts:266-269) and a zero-byte file (skipped until its header is written, src/file-backed.ts:283).",
+      "failurePolicy": "Fail-closed: stale rows are never served — observe failures and foreign/ newer index files throw typed errors (packages/session-query/src/file-backed.ts:48), an unknown session in lineage/search-with-sessionId throws (packages/session-query/src/file-backed.ts:419), a lineage cycle throws (packages/session-query/src/file-backed.ts:520), and the legacy opener throws when the events_fts schema is absent (packages/session-query/src/index.ts:93). The only fail-open cases are a missing store directory (ENOENT → empty result, packages/session-query/src/file-backed.ts:266) and a zero-byte file (skipped until its header is written, packages/session-query/src/file-backed.ts:283).",
       "events": [
         "all event types are CONSUMED as text through core-session's deriveSearchText (index only); produces no SessionEvents"
       ],
@@ -793,9 +795,9 @@
         }
       ],
       "gaps": [
-        "The SQLite persistence backend is gone; createSessionQuery(dbPath) survives only as a READ-ONLY opener for existing/legacy index files over the old events_fts+sessions schema, and has no in-tree production caller (only packages/session-query/test/query.test.ts) — packages/session-query/src/index.ts:241-246.",
-        "closeSessionQueries is declared as a host/test handle-release surface; its only in-tree callers are this package's own tests (packages/session-query/src/index.ts:48-56).",
-        "SearchHit.time is NOT a recency signal: the JSONL log carries no per-event timestamp, so the file-backed index records the INDEX-REBUILD time for every row, and an unchanged row gets a new value on every re-index (packages/session-query/src/index.ts:12-17, packages/session-query/src/file-backed.ts:326)."
+        "The SQLite persistence backend is gone; createSessionQuery(dbPath) survives only as a READ-ONLY opener for existing/legacy index files over the old events_fts+sessions schema, and has no in-tree production caller (only packages/session-query/test/query.test.ts) — packages/session-query/src/index.ts:241.",
+        "closeSessionQueries is declared as a host/test handle-release surface; its only in-tree callers are this package's own tests (packages/session-query/src/index.ts:48).",
+        "SearchHit.time is NOT a recency signal: the JSONL log carries no per-event timestamp, so the file-backed index records the INDEX-REBUILD time for every row, and an unchanged row gets a new value on every re-index (packages/session-query/src/index.ts:12, packages/session-query/src/file-backed.ts:326)."
       ],
       "evidence": [
         "packages/session-query/src/file-backed.ts:15",
@@ -849,7 +851,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-soft throughout: provider failure → deterministic fallback (src/index.ts:63-65); the coordinator document write is `.catch(() => {})` and session-persistence's putDocument itself reports rather than rejects (src/index.ts:86-89, 96-102). No throwing path except the underlying append validation of the session/title event.",
+      "failurePolicy": "Fail-soft throughout: provider failure → deterministic fallback (packages/session-title/src/index.ts:63); the coordinator document write is `.catch(() => {})` and session-persistence's putDocument itself reports rather than rejects (packages/session-title/src/index.ts:86). No throwing path except the underlying append validation of the session/title event.",
       "events": [
         "session/title (PRODUCED by applyTitle)"
       ],
@@ -928,7 +930,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed only on duplicate section names (src/index.ts:63-66); the render path itself is append-only and has no swallow — a failing section getter or an invalid append propagates. No try/catch in the module.",
+      "failurePolicy": "Fail-closed only on duplicate section names (packages/runtime-context/src/index.ts:63); the render path itself is append-only and has no swallow — a failing section getter or an invalid append propagates. No try/catch in the module.",
       "events": [
         "user/message (PRODUCED, with source { kind: \"plugin\", plugin: \"i-harness/runtime-context\" })",
         "agent/pre-step (CONSUMED — PluginContext event, not a SessionEvent)"
@@ -989,8 +991,10 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed on real read errors: loadInstructionFiles rethrows anything that is not ENOENT/ENOTDIR (src/files.ts:57-59). Fail-open on stat: a statSync failure is swallowed and falls through to a full re-read on the next call (src/index.ts:35-37). Discovery uses existsSync, so a file that vanishes between stat and read is skipped, not fatal.",
-      "events": [],
+      "failurePolicy": "Fail-closed on real read errors: loadInstructionFiles rethrows anything that is not ENOENT/ENOTDIR (packages/instructions/src/files.ts:57). Fail-open on stat: a statSync failure is swallowed and falls through to a full re-read on the next call (packages/instructions/src/index.ts:35). Discovery uses existsSync, so a file that vanishes between stat and read is skipped, not fatal.",
+      "events": [
+        "none (consumed only as a runtime-context section getter; produces no SessionEvents)"
+      ],
       "keyConstants": [
         {
           "name": "DEFAULT_INSTRUCTIONS_MAX_BYTES",
@@ -1004,8 +1008,8 @@
         }
       ],
       "gaps": [
-        "Change detection is acknowledged as a future item in-code: the mtime/size compare is described as covering 'the roadmap's 變更檢測可後補 note' via runtime-context's snapshot-diff dedupe (packages/instructions/src/index.ts:20-22) — i.e. a content change that preserves mtime AND total size is not detected.",
-        "The package declares no dedicated context-section event; it is consumed only as a runtime-context section getter from the assembly (packages/session-executor/src/assembly.ts:445-448)."
+        "Change detection is acknowledged as a future item in-code: the mtime/size compare is described as covering 'the roadmap's 變更檢測可後補 note' via runtime-context's snapshot-diff dedupe (packages/instructions/src/index.ts:20) — i.e. a content change that preserves mtime AND total size is not detected.",
+        "The package declares no dedicated context-section event; it is consumed only as a runtime-context section getter from the assembly (packages/session-executor/src/assembly.ts:445)."
       ],
       "evidence": [
         "packages/instructions/src/index.ts:23",
@@ -1070,9 +1074,9 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed: a missing question provider throws synchronously (NO_PROVIDER, src/index.ts:49-56), registerCommand throws TypeError on a bad name (src/index.ts:84-86), runCommand throws on an unknown command (src/index.ts:102-105), and the approval answerer is boolean-normalized (src/index.ts:26-28). Fail-open only for discovery/listing, which returns [] rather than throwing (src/index.ts:167-192).",
+      "failurePolicy": "Fail-closed: a missing question provider throws synchronously (NO_PROVIDER, packages/interaction/src/index.ts:49), registerCommand throws TypeError on a bad name (packages/interaction/src/index.ts:84), runCommand throws on an unknown command (packages/interaction/src/index.ts:102), and the approval answerer is boolean-normalized (packages/interaction/src/index.ts:26). Fail-open only for discovery/listing, which returns [] rather than throwing (packages/interaction/src/index.ts:167).",
       "events": [
-        "consumes no SessionEvents; core-session declares command/run and command/done as appended by the EXECUTING HOST, not by this package (packages/core-session/src/index.ts:113-118)"
+        "consumes no SessionEvents; core-session declares command/run and command/done as appended by the EXECUTING HOST, not by this package (packages/core-session/src/index.ts:113)"
       ],
       "keyConstants": [
         {
@@ -1092,7 +1096,7 @@
         }
       ],
       "gaps": [
-        "listCommandNames has no in-tree src caller (only packages/interaction/test/commands.test.ts:3) — it is a host-facing discovery surface (packages/interaction/src/index.ts:184-192)."
+        "listCommandNames has no in-tree src caller (only packages/interaction/test/commands.test.ts:3) — it is a host-facing discovery surface (packages/interaction/src/index.ts:184)."
       ],
       "evidence": [
         "packages/interaction/src/index.ts:26",
@@ -1145,7 +1149,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-soft: no throw anywhere except the underlying append validation (invalid session event). exitPlanMode answers false instead of raising (src/index.ts:15-19).",
+      "failurePolicy": "Fail-soft: no throw anywhere except the underlying append validation (invalid session event). exitPlanMode answers false instead of raising (packages/plan-mode/src/index.ts:15).",
       "events": [
         "plan/mode (PRODUCED, mode on|off)",
         "user/message (PRODUCED on enter — the proposal text)"
@@ -1155,7 +1159,10 @@
         "withdrawPlanModeTool has no in-tree caller (only the declaration at packages/plan-mode/src/index.ts:36); plan mode is mounted by the assembly but never withdrawn there."
       ],
       "evidence": [
-        "packages/plan-mode/src/index.ts:5"
+        "packages/plan-mode/src/index.ts:5",
+        "packages/plan-mode/src/index.ts:10",
+        "packages/plan-mode/src/index.ts:21",
+        "packages/plan-mode/src/index.ts:31"
       ]
     },
     {
@@ -1205,14 +1212,14 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed for mutations: every invalid request throws a typed GoalStateError (src/index.ts:152-164, 192-265). Fail-safe for projection: malformed events return `undefined` and are skipped, a malformed clear tombstone keeps the previous view (src/index.ts:108-124).",
+      "failurePolicy": "Fail-closed for mutations: every invalid request throws a typed GoalStateError (packages/goal/src/index.ts:152). Fail-safe for projection: malformed events return `undefined` and are skipped, a malformed clear tombstone keeps the previous view (packages/goal/src/index.ts:108).",
       "events": [
         "goal/change (PRODUCED as the returned event to append; CONSUMED by foldGoal)"
       ],
       "keyConstants": [],
       "gaps": [
-        "Goal round admission is declared NOT implemented in v0: no goal enforcement, no turn-count logic; GoalView.round exists only as a wire-vocabulary seam and is never populated (packages/goal/src/index.ts:35-43, 8-11).",
-        "The domain is a documented simplification of DSH: no `blocked` phase / blockedReason and no mandatory maxGoalRounds (packages/goal/src/index.ts:6-11)."
+        "Goal round admission is declared NOT implemented in v0: no goal enforcement, no turn-count logic; GoalView.round exists only as a wire-vocabulary seam and is never populated (packages/goal/src/index.ts:35).",
+        "The domain is a documented simplification of DSH: no `blocked` phase / blockedReason and no mandatory maxGoalRounds (packages/goal/src/index.ts:6)."
       ],
       "evidence": [
         "packages/goal/src/index.ts:28",
@@ -1269,8 +1276,10 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed on parameters: checkBudget throws when reserveRatio is outside (0,1] or overheadTokens is not a non-negative integer (src/budget.ts:15-16). The measurement itself is NOT defensive — callers wrap it (compaction's safeActiveTokens, packages/compaction/src/index.ts:271-277).",
-      "events": [],
+      "failurePolicy": "Fail-closed on parameters: checkBudget throws when reserveRatio is outside (0,1] or overheadTokens is not a non-negative integer (packages/token-meter/src/budget.ts:15). The measurement itself is NOT defensive — callers wrap it (compaction's safeActiveTokens, packages/compaction/src/index.ts:271).",
+      "events": [
+        "none (consumes the deriveMessages LLMMessage projection; produces no SessionEvents)"
+      ],
       "keyConstants": [
         {
           "name": "CHARS_PER_TOKEN",
@@ -1304,7 +1313,7 @@
         }
       ],
       "gaps": [
-        "Image pricing is a flat constant, stated as having no re-encode/pixel math in v0 (packages/token-meter/src/estimate.ts:8-10)."
+        "Image pricing is a flat constant, stated as having no re-encode/pixel math in v0 (packages/token-meter/src/estimate.ts:8)."
       ],
       "evidence": [
         "packages/token-meter/src/index.ts:1",
@@ -1386,7 +1395,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-soft at runtime, fail-closed at configuration. Runtime: a summarizer failure warns and returns compacted:false (index.ts:124-130), prune stringify failure degrades to 'not prunable' (index.ts:382-388), the analytics meter read degrades to undefined (index.ts:271-277), deriveSearchText failure degrades to '' inside renderShadowed (index.ts:432-437), and resetWindow returns { compacted:false } when nothing is removable (index.ts:259). Configuration: every bound is validated and throws at resolveConfig/resolvePrune time (config.ts:83-149), so a bad override fails at load, never mid-compaction.",
+      "failurePolicy": "Fail-soft at runtime, fail-closed at configuration. Runtime: a summarizer failure warns and returns compacted:false (packages/compaction/src/index.ts:124), prune stringify failure degrades to 'not prunable' (packages/compaction/src/index.ts:382), the analytics meter read degrades to undefined (packages/compaction/src/index.ts:271), deriveSearchText failure degrades to '' inside renderShadowed (packages/compaction/src/index.ts:432), and resetWindow returns { compacted:false } when nothing is removable (packages/compaction/src/index.ts:259). Configuration: every bound is validated and throws at resolveConfig/resolvePrune time (packages/compaction/src/config.ts:83), so a bad override fails at load, never mid-compaction.",
       "events": [
         "compaction/start (PRODUCED)",
         "compaction/summary (PRODUCED, carries shadowedSeqs)",
@@ -1443,9 +1452,9 @@
         }
       ],
       "gaps": [
-        "Image-aware summarization is deferred: a pruned tool/result renders as its substitute and drops the image bytes entirely on the summary-input surface ('v0 carve; image-aware summarize is still deferred'), and the real byte-level replay needs a multimodal summarizer plus store refs — only a descriptor path exists (packages/compaction/src/index.ts:403-417, 445-454).",
-        "The M20 image-descriptor rule explicitly REPLACES the descriptor union for a pruned event: the narrowed input drops the images along with the rest of the output (packages/compaction/src/index.ts:403-412).",
-        "The comment on the model-free prune-pass defaults states the defaults are 'the recommended carving (aligned with the retention caps)' — a stated recommendation, not an enforced relation; only headChars+tailChars <= thresholdChars is enforced (packages/compaction/src/config.ts:5-6, 145-147)."
+        "Image-aware summarization is deferred: a pruned tool/result renders as its substitute and drops the image bytes entirely on the summary-input surface ('v0 carve; image-aware summarize is still deferred'), and the real byte-level replay needs a multimodal summarizer plus store refs — only a descriptor path exists (packages/compaction/src/index.ts:403).",
+        "The M20 image-descriptor rule explicitly REPLACES the descriptor union for a pruned event: the narrowed input drops the images along with the rest of the output (packages/compaction/src/index.ts:403).",
+        "The comment on the model-free prune-pass defaults states the defaults are 'the recommended carving (aligned with the retention caps)' — a stated recommendation, not an enforced relation; only headChars+tailChars <= thresholdChars is enforced (packages/compaction/src/config.ts:5)."
       ],
       "evidence": [
         "packages/compaction/src/index.ts:49",
