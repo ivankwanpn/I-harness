@@ -18,8 +18,19 @@
           "Turn kinds: TaskKind::{Regular, Review, Compact} + UserShellCommandTask (core/src/tasks/mod.rs:59-64)",
           "Per-turn OTel span attributes include model, reasoning effort and seven token-usage fields (core/src/tasks/mod.rs:367-381)"
         ],
-        "evidence": ["codex-rs/core/src/tasks/mod.rs:291-432", "codex-rs/core/src/tasks/mod.rs:571-846", "codex-rs/core/src/tasks/regular.rs:76-91", "codex-rs/core/src/session/turn.rs:153-159", "codex-rs/core/src/session/turn.rs:396-554"],
-        "modules": ["core", "protocol", "otel", "analytics"],
+        "evidence": [
+          "codex-rs/core/src/tasks/mod.rs:291-432",
+          "codex-rs/core/src/tasks/mod.rs:571-846",
+          "codex-rs/core/src/tasks/regular.rs:76-91",
+          "codex-rs/core/src/session/turn.rs:153-159",
+          "codex-rs/core/src/session/turn.rs:396-554"
+        ],
+        "modules": [
+          "core",
+          "protocol",
+          "otel",
+          "analytics"
+        ],
         "verified": true
       },
       {
@@ -35,8 +46,16 @@
           "`NotSubmittedReason` variants include NoActiveTurn, ExpectedTurnMismatch, ActiveTurnNotSteerable, EmptyInput, ActiveTurnOutputSchemaMismatch (core/src/session/turn_input.rs:488-531)",
           "`TurnInput` has exactly three tiers: UserInput, ResponseItem, InterAgentCommunication (core/src/session/input_queue.rs:21-30)"
         ],
-        "evidence": ["codex-rs/core/src/session/turn_input.rs:478-565", "codex-rs/core/src/session/input_queue.rs:19-30", "codex-rs/core/src/session/input_queue.rs:77-137", "codex-rs/core/src/tasks/regular.rs:86-89"],
-        "modules": ["core", "protocol"],
+        "evidence": [
+          "codex-rs/core/src/session/turn_input.rs:478-565",
+          "codex-rs/core/src/session/input_queue.rs:19-30",
+          "codex-rs/core/src/session/input_queue.rs:77-137",
+          "codex-rs/core/src/tasks/regular.rs:86-89"
+        ],
+        "modules": [
+          "core",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -52,8 +71,16 @@
           "Synthetic turn sub-id is a fresh `uuid::Uuid::new_v4()` (core/src/tasks/mod.rs:453)",
           "Durable-sleep marker is `codex_extension_items::sleep::SleepItem` (core/src/tasks/mod.rs:435-440)"
         ],
-        "evidence": ["codex-rs/core/src/tasks/mod.rs:434-492", "codex-rs/core/src/tasks/mod.rs:519-521", "codex-rs/core/src/tasks/mod.rs:843-845"],
-        "modules": ["core", "ext/extension-api", "ext/items"],
+        "evidence": [
+          "codex-rs/core/src/tasks/mod.rs:434-492",
+          "codex-rs/core/src/tasks/mod.rs:519-521",
+          "codex-rs/core/src/tasks/mod.rs:843-845"
+        ],
+        "modules": [
+          "core",
+          "ext/extension-api",
+          "ext/items"
+        ],
         "verified": true
       },
       {
@@ -69,8 +96,15 @@
           "GRACEFULL_INTERRUPTION_TIMEOUT_MS = 100 (core/src/tasks/mod.rs:66)",
           "Markers: InterruptedTurnHistoryMarker::{Disabled, ContextualUser, Developer} (core/src/tasks/mod.rs:77-98)"
         ],
-        "evidence": ["codex-rs/core/src/tasks/mod.rs:494-522", "codex-rs/core/src/tasks/mod.rs:880-973", "codex-rs/core/src/tasks/mod.rs:100-125"],
-        "modules": ["core", "protocol"],
+        "evidence": [
+          "codex-rs/core/src/tasks/mod.rs:494-522",
+          "codex-rs/core/src/tasks/mod.rs:880-973",
+          "codex-rs/core/src/tasks/mod.rs:100-125"
+        ],
+        "modules": [
+          "core",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -87,8 +121,18 @@
           "Configurable: limit_tokens, sampling_token_weight, prefill_token_weight, reminder_at_remaining_tokens[] (core/src/rollout_budget.rs:60-64, :77-81)",
           "Unconfigured budget is a no-op (`state.get()` is None -> Ok(false)) (core/src/rollout_budget.rs:120-126)"
         ],
-        "evidence": ["codex-rs/core/src/rollout_budget.rs:11-127", "codex-rs/core/src/session/rollout_budget.rs:8-37", "codex-rs/core/src/session/turn.rs:326-331", "codex-rs/features/src/lib.rs:1420-1425"],
-        "modules": ["core", "features", "protocol", "agent-control"],
+        "evidence": [
+          "codex-rs/core/src/rollout_budget.rs:11-127",
+          "codex-rs/core/src/session/rollout_budget.rs:8-37",
+          "codex-rs/core/src/session/turn.rs:326-331",
+          "codex-rs/features/src/lib.rs:1420-1425"
+        ],
+        "modules": [
+          "core",
+          "features",
+          "protocol",
+          "agent-control"
+        ],
         "verified": true
       }
     ],
@@ -106,8 +150,18 @@
           "Filename shape `rollout-<timestamp>-<conversation_id>.jsonl`, with an optional `_<rollout_id>` suffix when `thread/revert` keeps the thread id but starts a new immutable rollout (rollout/src/recorder.rs:99-104)",
           "Subdirs: SESSIONS_SUBDIR / ARCHIVED_SESSIONS_SUBDIR (rollout/src/recorder.rs:38-39)"
         ],
-        "evidence": ["codex-rs/rollout/src/recorder.rs:77-142", "codex-rs/rollout/src/policy.rs:8-60", "codex-rs/rollout/src/policy.rs:86-183", "codex-rs/core/src/session/mod.rs:3357-3406", "codex-rs/core/src/session/mod.rs:3717-3725"],
-        "modules": ["rollout", "core", "protocol"],
+        "evidence": [
+          "codex-rs/rollout/src/recorder.rs:77-142",
+          "codex-rs/rollout/src/policy.rs:8-60",
+          "codex-rs/rollout/src/policy.rs:86-183",
+          "codex-rs/core/src/session/mod.rs:3357-3406",
+          "codex-rs/core/src/session/mod.rs:3717-3725"
+        ],
+        "modules": [
+          "rollout",
+          "core",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -122,8 +176,16 @@
         "constants": [
           "fallback_window_number is derived by counting Compacted items, saturating to u64::MAX (core/src/session/rollout_reconstruction.rs:312-318)"
         ],
-        "evidence": ["codex-rs/core/src/session/rollout_reconstruction.rs:310-389", "codex-rs/core/src/compact.rs:581-637", "codex-rs/core/src/compact.rs:639-718"],
-        "modules": ["core", "rollout", "protocol"],
+        "evidence": [
+          "codex-rs/core/src/session/rollout_reconstruction.rs:310-389",
+          "codex-rs/core/src/compact.rs:581-637",
+          "codex-rs/core/src/compact.rs:639-718"
+        ],
+        "modules": [
+          "core",
+          "rollout",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -141,8 +203,18 @@
           "SqliteJournalMode::Wal; busy_timeout = 5 s (state/src/sqlite.rs:282-285)",
           "50 state migrations + 2 queue + 4 thread_history + 2 goals + 1 memory + 2 logs (state/*_migrations/)"
         ],
-        "evidence": ["codex-rs/state/src/sqlite.rs:29-99", "codex-rs/state/src/sqlite.rs:275-305", "codex-rs/state/src/migrations.rs:1-21", "codex-rs/state/src/migrations.rs:56-118"],
-        "modules": ["state", "rollout", "thread-store", "core"],
+        "evidence": [
+          "codex-rs/state/src/sqlite.rs:29-99",
+          "codex-rs/state/src/sqlite.rs:275-305",
+          "codex-rs/state/src/migrations.rs:1-21",
+          "codex-rs/state/src/migrations.rs:56-118"
+        ],
+        "modules": [
+          "state",
+          "rollout",
+          "thread-store",
+          "core"
+        ],
         "verified": true
       },
       {
@@ -157,8 +229,18 @@
         "constants": [
           "compression::WORKER_MAX_RUNTIME = 5 h, RUN_MARKER_STALE_AFTER = 6 h, COMPRESSION_LEVEL = 3, COMPRESSED_SUFFIX = .zst, RUN_MARKER_FILE_NAME = rollout-compression.lock (rollout/src/compression.rs:24-31, :183-186)"
         ],
-        "evidence": ["codex-rs/rollout/src/compression.rs:24-31", "codex-rs/rollout/src/compression.rs:183-186", "codex-rs/thread-store/src/local/rollout_lineage.rs:14-30", "codex-rs/thread-store/src/local/rollout_lineage.rs:55-120", "codex-rs/rollout/src/rollout_reference_index.rs:19-90"],
-        "modules": ["rollout", "thread-store", "state"],
+        "evidence": [
+          "codex-rs/rollout/src/compression.rs:24-31",
+          "codex-rs/rollout/src/compression.rs:183-186",
+          "codex-rs/thread-store/src/local/rollout_lineage.rs:14-30",
+          "codex-rs/thread-store/src/local/rollout_lineage.rs:55-120",
+          "codex-rs/rollout/src/rollout_reference_index.rs:19-90"
+        ],
+        "modules": [
+          "rollout",
+          "thread-store",
+          "state"
+        ],
         "verified": true
       },
       {
@@ -175,8 +257,20 @@
           "watch_external_messages interval = 10 s; per-thread dispatch retry sleep = 10 s (ext/queue/src/service.rs:88-95, :238)",
           "Only user-message input may be enqueued; QueueServiceError::InvalidInput otherwise (ext/queue/src/service.rs:56-61)"
         ],
-        "evidence": ["codex-rs/state/queue_migrations/0001_queued_items.sql:1-11", "codex-rs/state/queue_migrations/0002_queued_thread_revisions.sql:1-34", "codex-rs/ext/queue/src/service.rs:39-95", "codex-rs/ext/queue/src/service.rs:216-240", "codex-rs/cli/src/queue_cmd.rs:12-62"],
-        "modules": ["ext/queue", "state", "thread-store", "cli", "core"],
+        "evidence": [
+          "codex-rs/state/queue_migrations/0001_queued_items.sql:1-11",
+          "codex-rs/state/queue_migrations/0002_queued_thread_revisions.sql:1-34",
+          "codex-rs/ext/queue/src/service.rs:39-95",
+          "codex-rs/ext/queue/src/service.rs:216-240",
+          "codex-rs/cli/src/queue_cmd.rs:12-62"
+        ],
+        "modules": [
+          "ext/queue",
+          "state",
+          "thread-store",
+          "cli",
+          "core"
+        ],
         "verified": true
       },
       {
@@ -187,9 +281,15 @@
           "The record schema is fixed at {session_id, ts, text}; appending a field requires a reader-side story because the file is never rewritten (message-history/src/lib.rs:6-9)."
         ],
         "failurePolicy": "fail-soft",
-        "constants": ["Path: ~/.codex/history.jsonl (message-history/src/lib.rs:3)"],
-        "evidence": ["codex-rs/message-history/src/lib.rs:1-35"],
-        "modules": ["message-history"],
+        "constants": [
+          "Path: ~/.codex/history.jsonl (message-history/src/lib.rs:3)"
+        ],
+        "evidence": [
+          "codex-rs/message-history/src/lib.rs:1-35"
+        ],
+        "modules": [
+          "message-history"
+        ],
         "verified": true
       }
     ],
@@ -209,8 +309,21 @@
           "Feature::RemoteCompactionV2 key 'remote_compaction_v2', Stage::Stable, default_enabled true (features/src/lib.rs:1529-1534)",
           "Feature::CompactionImageBudget, Stage::UnderDevelopment, default_enabled false (features/src/lib.rs:1534-1539)"
         ],
-        "evidence": ["codex-rs/core/src/session/turn.rs:165-190", "codex-rs/core/src/session/turn.rs:460-500", "codex-rs/core/src/compact.rs:57", "codex-rs/core/src/compact.rs:111-141", "codex-rs/core/src/compact.rs:639-718", "codex-rs/core/src/session/mod.rs:3357-3406"],
-        "modules": ["core", "prompts", "codex-api", "model-provider", "features"],
+        "evidence": [
+          "codex-rs/core/src/session/turn.rs:165-190",
+          "codex-rs/core/src/session/turn.rs:460-500",
+          "codex-rs/core/src/compact.rs:57",
+          "codex-rs/core/src/compact.rs:111-141",
+          "codex-rs/core/src/compact.rs:639-718",
+          "codex-rs/core/src/session/mod.rs:3357-3406"
+        ],
+        "modules": [
+          "core",
+          "prompts",
+          "codex-api",
+          "model-provider",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -227,8 +340,17 @@
           "Auto-compact derivation from the catalogue = context_window * 9 / 10 (protocol/src/openai_models.rs, cited via the model domain)",
           "Window ids are UUIDv7 with first/previous/current chained across compaction (core/src/state/auto_compact_window.rs:1-20, :77-80)"
         ],
-        "evidence": ["codex-rs/core/src/session/context_window.rs:5-91", "codex-rs/core/src/session/turn.rs:413-500", "codex-rs/core/src/state/auto_compact_window.rs:1-80", "codex-rs/core/src/session/mod.rs:1258"],
-        "modules": ["core", "protocol", "models-manager"],
+        "evidence": [
+          "codex-rs/core/src/session/context_window.rs:5-91",
+          "codex-rs/core/src/session/turn.rs:413-500",
+          "codex-rs/core/src/state/auto_compact_window.rs:1-80",
+          "codex-rs/core/src/session/mod.rs:1258"
+        ],
+        "modules": [
+          "core",
+          "protocol",
+          "models-manager"
+        ],
         "verified": true
       },
       {
@@ -244,8 +366,17 @@
           "Feature::TokenBudget key 'token_budget', Stage::UnderDevelopment, default_enabled false (features/src/lib.rs:1414-1419)",
           "TokenBudgetConfig fields: reminder_threshold_tokens, reminder_message_template, guidance_message, auto_compact_fallback_prompt, auto_compact_fallback_buffer_tokens (core/src/session/token_budget.rs:36-44)"
         ],
-        "evidence": ["codex-rs/core/src/session/token_budget.rs:9-113", "codex-rs/core/src/session/turn.rs:463-469", "codex-rs/features/src/lib.rs:1414-1419"],
-        "modules": ["core", "features", "protocol", "models-manager"],
+        "evidence": [
+          "codex-rs/core/src/session/token_budget.rs:9-113",
+          "codex-rs/core/src/session/turn.rs:463-469",
+          "codex-rs/features/src/lib.rs:1414-1419"
+        ],
+        "modules": [
+          "core",
+          "features",
+          "protocol",
+          "models-manager"
+        ],
         "verified": true
       },
       {
@@ -262,8 +393,18 @@
           "Fragment hash domain separator `codex-world-state-fragment-v1\\0`, CRLF normalized to LF, length-prefixed components (core/src/context/world_state/mod.rs:252-266)",
           "15 world-state sections registered (core/src/context/world_state/mod.rs:1-50)"
         ],
-        "evidence": ["codex-rs/core/src/context/world_state/mod.rs:52-65", "codex-rs/core/src/context/world_state/mod.rs:202-266", "codex-rs/core/src/context/world_state/mod.rs:268-330", "codex-rs/core/src/session/mod.rs:3829-3879"],
-        "modules": ["core", "context-fragments", "ext/extension-api", "protocol"],
+        "evidence": [
+          "codex-rs/core/src/context/world_state/mod.rs:52-65",
+          "codex-rs/core/src/context/world_state/mod.rs:202-266",
+          "codex-rs/core/src/context/world_state/mod.rs:268-330",
+          "codex-rs/core/src/session/mod.rs:3829-3879"
+        ],
+        "modules": [
+          "core",
+          "context-fragments",
+          "ext/extension-api",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -279,8 +420,16 @@
           "`requires_separate_message()` defaults to false, letting a fragment share a message with others unless it opts out (context-fragments/src/fragment.rs:17-20)",
           "35 fragment modules registered in core/src/context/mod.rs:3-40"
         ],
-        "evidence": ["codex-rs/context-fragments/src/fragment.rs:5-70", "codex-rs/core/src/context/mod.rs:1-70"],
-        "modules": ["context-fragments", "core", "protocol", "ext/extension-api"],
+        "evidence": [
+          "codex-rs/context-fragments/src/fragment.rs:5-70",
+          "codex-rs/core/src/context/mod.rs:1-70"
+        ],
+        "modules": [
+          "context-fragments",
+          "core",
+          "protocol",
+          "ext/extension-api"
+        ],
         "verified": true
       }
     ],
@@ -299,8 +448,19 @@
           "TOOL_SEARCH_DEFAULT_LIMIT = 8; TOOL_SEARCH_TOOL_NAME = \"tool_search\" (tools/src/tool_discovery.rs:6-7)",
           "Feature::ToolSearch and Feature::ToolSearchAlwaysDeferMcpTools are both Stage::Removed (features/src/lib.rs:1169-1177); Feature::ToolSuggest is Stable default true (features/src/lib.rs:1199-1201)"
         ],
-        "evidence": ["codex-rs/core/src/tools/registry.rs:270-384", "codex-rs/core/src/tools/registry.rs:474-482", "codex-rs/core/src/tools/spec_plan.rs:222-246", "codex-rs/core/src/tools/spec_plan.rs:582-588", "codex-rs/tools/src/tool_discovery.rs:1-12"],
-        "modules": ["core", "tools", "codex-mcp", "features"],
+        "evidence": [
+          "codex-rs/core/src/tools/registry.rs:270-384",
+          "codex-rs/core/src/tools/registry.rs:474-482",
+          "codex-rs/core/src/tools/spec_plan.rs:222-246",
+          "codex-rs/core/src/tools/spec_plan.rs:582-588",
+          "codex-rs/tools/src/tool_discovery.rs:1-12"
+        ],
+        "modules": [
+          "core",
+          "tools",
+          "codex-mcp",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -316,8 +476,17 @@
           "A tool failure becomes a model-visible `FunctionCallOutput` with `success: Some(false)` for payloads other than ToolSearch/Custom, which get their own output shapes (core/src/tools/parallel.rs:230-255)",
           "Aborted-output text is `aborted by user after {secs:.1}s`, or `Wall time: {secs:.1} seconds\\naborted by user` for shell_command/unified_exec (core/src/tools/parallel.rs:268-279)"
         ],
-        "evidence": ["codex-rs/core/src/tools/parallel.rs:40-61", "codex-rs/core/src/tools/parallel.rs:92-222", "codex-rs/core/src/tools/parallel.rs:230-279", "codex-rs/core/src/tools/registry.rs:474-477"],
-        "modules": ["core", "tools", "protocol"],
+        "evidence": [
+          "codex-rs/core/src/tools/parallel.rs:40-61",
+          "codex-rs/core/src/tools/parallel.rs:92-222",
+          "codex-rs/core/src/tools/parallel.rs:230-279",
+          "codex-rs/core/src/tools/registry.rs:474-477"
+        ],
+        "modules": [
+          "core",
+          "tools",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -334,8 +503,19 @@
           "Network escalation reason is `Network access to \"{host}\" is blocked by policy.` (core/src/tools/orchestrator.rs:381-389)",
           "Sandbox outcome tags recorded: denied / timed_out / signal / escalated (core/src/tools/orchestrator.rs:515-525)"
         ],
-        "evidence": ["codex-rs/core/src/tools/orchestrator.rs:1-8", "codex-rs/core/src/tools/orchestrator.rs:135-253", "codex-rs/core/src/tools/orchestrator.rs:291-512", "codex-rs/core/src/tools/sandboxing.rs:150-171"],
-        "modules": ["core", "sandboxing", "protocol", "otel", "network-proxy"],
+        "evidence": [
+          "codex-rs/core/src/tools/orchestrator.rs:1-8",
+          "codex-rs/core/src/tools/orchestrator.rs:135-253",
+          "codex-rs/core/src/tools/orchestrator.rs:291-512",
+          "codex-rs/core/src/tools/sandboxing.rs:150-171"
+        ],
+        "modules": [
+          "core",
+          "sandboxing",
+          "protocol",
+          "otel",
+          "network-proxy"
+        ],
         "verified": true
       },
       {
@@ -356,8 +536,18 @@
           "LATE_NETWORK_DENIAL_GRACE_PERIOD = 100 ms (core/src/unified_exec/process_manager.rs:97)",
           "Feature::UnifiedExec key 'unified_exec', Stage::Stable, default_enabled true (features/src/lib.rs:853-857)"
         ],
-        "evidence": ["codex-rs/core/src/unified_exec/mod.rs:66-75", "codex-rs/core/src/unified_exec/head_tail_buffer.rs:5-98", "codex-rs/core/src/unified_exec/process_manager.rs:83-104", "codex-rs/features/src/lib.rs:853-857"],
-        "modules": ["core", "utils/pty", "protocol", "features"],
+        "evidence": [
+          "codex-rs/core/src/unified_exec/mod.rs:66-75",
+          "codex-rs/core/src/unified_exec/head_tail_buffer.rs:5-98",
+          "codex-rs/core/src/unified_exec/process_manager.rs:83-104",
+          "codex-rs/features/src/lib.rs:853-857"
+        ],
+        "modules": [
+          "core",
+          "utils/pty",
+          "protocol",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -373,8 +563,19 @@
           "Rejection reasons: \"writing outside of the project; rejected by user approval settings\" and \"writing is blocked by read-only sandbox; rejected by user approval settings\" (core/src/safety.rs:14-17)",
           "Feature::ApplyPatchStreamingEvents and Feature::ApplyPatchPreserveLineEndings both UnderDevelopment/OFF (features/src/lib.rs:1021-1031); Feature::ApplyPatchFreeform is Stage::Removed (features/src/lib.rs:1015-1017)"
         ],
-        "evidence": ["codex-rs/core/src/safety.rs:26-98", "codex-rs/core/src/safety.rs:123-191", "codex-rs/core/src/tools/registry.rs:179-190", "codex-rs/features/src/lib.rs:1021-1031", "codex-rs/core/src/tools/handlers/apply_patch.rs:1-40"],
-        "modules": ["apply-patch", "core", "protocol", "features"],
+        "evidence": [
+          "codex-rs/core/src/safety.rs:26-98",
+          "codex-rs/core/src/safety.rs:123-191",
+          "codex-rs/core/src/tools/registry.rs:179-190",
+          "codex-rs/features/src/lib.rs:1021-1031",
+          "codex-rs/core/src/tools/handlers/apply_patch.rs:1-40"
+        ],
+        "modules": [
+          "apply-patch",
+          "core",
+          "protocol",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -391,8 +592,19 @@
           "Decision wire strings allow / prompt / deny (execpolicy/src/amend.rs:106-111)",
           "Feature::RequestRule is Stage::Removed (features/src/lib.rs:1063-1065), so the model-facing rule-request path is dead; the amendment path itself is live"
         ],
-        "evidence": ["codex-rs/execpolicy/src/amend.rs:63-120", "codex-rs/execpolicy/src/decision.rs:1-27", "codex-rs/protocol/src/approvals.rs:40-61", "codex-rs/protocol/src/protocol.rs:3876-3893", "codex-rs/features/src/lib.rs:1063-1065"],
-        "modules": ["execpolicy", "core", "protocol", "features"],
+        "evidence": [
+          "codex-rs/execpolicy/src/amend.rs:63-120",
+          "codex-rs/execpolicy/src/decision.rs:1-27",
+          "codex-rs/protocol/src/approvals.rs:40-61",
+          "codex-rs/protocol/src/protocol.rs:3876-3893",
+          "codex-rs/features/src/lib.rs:1063-1065"
+        ],
+        "modules": [
+          "execpolicy",
+          "core",
+          "protocol",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -409,8 +621,21 @@
           "Walker cancellation CHECK_INTERVAL = 1024 entries (file-search/src/lib.rs:455)",
           "Truncation policy multiplier used for historical function outputs is 1.2x (core/src/tools/context.rs:140-145)"
         ],
-        "evidence": ["codex-rs/file-search/src/lib.rs:96-133", "codex-rs/file-search/src/lib.rs:405-447", "codex-rs/sandboxing/src/manager.rs:285-291", "codex-rs/core/src/tools/context.rs:1-23", "codex-rs/core/src/tools/context.rs:409-438"],
-        "modules": ["file-search", "file-system", "file-watcher", "utils/output-truncation", "core", "sandboxing"],
+        "evidence": [
+          "codex-rs/file-search/src/lib.rs:96-133",
+          "codex-rs/file-search/src/lib.rs:405-447",
+          "codex-rs/sandboxing/src/manager.rs:285-291",
+          "codex-rs/core/src/tools/context.rs:1-23",
+          "codex-rs/core/src/tools/context.rs:409-438"
+        ],
+        "modules": [
+          "file-search",
+          "file-system",
+          "file-watcher",
+          "utils/output-truncation",
+          "core",
+          "sandboxing"
+        ],
         "verified": true
       },
       {
@@ -424,8 +649,12 @@
         "constants": [
           "PRCTL_FAILED_EXIT_CODE = 5; PTRACE_DENY_ATTACH_FAILED_EXIT_CODE = 6; SET_RLIMIT_CORE_FAILED_EXIT_CODE = 7 (process-hardening/src/lib.rs:28-41)"
         ],
-        "evidence": ["codex-rs/process-hardening/src/lib.rs:1-60"],
-        "modules": ["process-hardening"],
+        "evidence": [
+          "codex-rs/process-hardening/src/lib.rs:1-60"
+        ],
+        "modules": [
+          "process-hardening"
+        ],
         "verified": true
       }
     ],
@@ -446,8 +675,19 @@
           "MAX_REASONING_EFFORT_CHARS_IN_SPAWN_AGENT_DESCRIPTION = 64 (core/src/tools/handlers/multi_agents_spec.rs:23)",
           "Feature::Collab key 'multi_agent', Stage::Stable, default_enabled true (features/src/lib.rs:1115-1117)"
         ],
-        "evidence": ["codex-rs/core/src/tools/handlers/multi_agents/spawn.rs:44-221", "codex-rs/core/src/tools/handlers/multi_agents/spawn.rs:229-239", "codex-rs/core/src/agent/registry.rs:79-93", "codex-rs/core/src/config/mod.rs:219-229", "codex-rs/features/src/lib.rs:1115-1117"],
-        "modules": ["core", "protocol", "agent-graph-store", "features"],
+        "evidence": [
+          "codex-rs/core/src/tools/handlers/multi_agents/spawn.rs:44-221",
+          "codex-rs/core/src/tools/handlers/multi_agents/spawn.rs:229-239",
+          "codex-rs/core/src/agent/registry.rs:79-93",
+          "codex-rs/core/src/config/mod.rs:219-229",
+          "codex-rs/features/src/lib.rs:1115-1117"
+        ],
+        "modules": [
+          "core",
+          "protocol",
+          "agent-graph-store",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -465,8 +705,18 @@
           "Feature::MultiAgentV2 key 'multi_agent_v2', Stage::Stable, default_enabled false (features/src/lib.rs:1121-1123)",
           "Features MultiAgentMode and SpawnCsv (key 'enable_fanout') are Stage::Removed (features/src/lib.rs:1127-1135)"
         ],
-        "evidence": ["codex-rs/core/src/tools/handlers/multi_agents/wait.rs:21-93", "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs:13-53", "codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs:53-54", "codex-rs/core/src/config/mod.rs:221-223", "codex-rs/features/src/lib.rs:1121-1135"],
-        "modules": ["core", "protocol", "features"],
+        "evidence": [
+          "codex-rs/core/src/tools/handlers/multi_agents/wait.rs:21-93",
+          "codex-rs/core/src/tools/handlers/multi_agents_v2/wait.rs:13-53",
+          "codex-rs/core/src/tools/handlers/multi_agents/resume_agent.rs:53-54",
+          "codex-rs/core/src/config/mod.rs:221-223",
+          "codex-rs/features/src/lib.rs:1121-1135"
+        ],
+        "modules": [
+          "core",
+          "protocol",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -482,8 +732,18 @@
           "Gauge `core.mailbox.pending` tracks queued mail (core/src/session/input_queue.rs:17)",
           "Activity signal is a `watch::Sender<InputQueueActivity>` (core/src/session/input_queue.rs:78)"
         ],
-        "evidence": ["codex-rs/core/src/session/input_queue.rs:17-30", "codex-rs/core/src/session/input_queue.rs:77-140", "codex-rs/core/src/session/turn.rs:402-409", "codex-rs/core/src/session/turn_input.rs:546-563", "codex-rs/core/src/context/inter_agent_message.rs:1-40"],
-        "modules": ["core", "protocol", "ext/extension-api"],
+        "evidence": [
+          "codex-rs/core/src/session/input_queue.rs:17-30",
+          "codex-rs/core/src/session/input_queue.rs:77-140",
+          "codex-rs/core/src/session/turn.rs:402-409",
+          "codex-rs/core/src/session/turn_input.rs:546-563",
+          "codex-rs/core/src/context/inter_agent_message.rs:1-40"
+        ],
+        "modules": [
+          "core",
+          "protocol",
+          "ext/extension-api"
+        ],
         "verified": true
       },
       {
@@ -499,8 +759,18 @@
           "ThreadSpawnEdgeStatus = { Open, Closed } (agent-graph-store/src/types.rs)",
           "AgentRegistry total-count reservation errors with `CodexErrorDetails::AgentLimitReached { max_threads }` (core/src/agent/registry.rs:96-115)"
         ],
-        "evidence": ["codex-rs/agent-graph-store/src/lib.rs:1-13", "codex-rs/agent-graph-store/src/store.rs:13-59", "codex-rs/agent-graph-store/src/local.rs:10-40", "codex-rs/core/src/agent/registry.rs:18-36", "codex-rs/core/src/agent/registry.rs:96-115"],
-        "modules": ["agent-graph-store", "core", "state"],
+        "evidence": [
+          "codex-rs/agent-graph-store/src/lib.rs:1-13",
+          "codex-rs/agent-graph-store/src/store.rs:13-59",
+          "codex-rs/agent-graph-store/src/local.rs:10-40",
+          "codex-rs/core/src/agent/registry.rs:18-36",
+          "codex-rs/core/src/agent/registry.rs:96-115"
+        ],
+        "modules": [
+          "agent-graph-store",
+          "core",
+          "state"
+        ],
         "verified": true
       },
       {
@@ -517,8 +787,21 @@
           "AGENT_TASK_REGISTRATION_TIMEOUT = 30 s; AGENT_IDENTITY_JWKS_TIMEOUT = 10 s; AGENT_IDENTITY_JWT_AUDIENCE = \"codex-app-server\" (agent-identity/src/lib.rs:38-40)",
           "Feature::UseAgentIdentity key 'use_agent_identity', Stage::UnderDevelopment, default_enabled false (features/src/lib.rs:1546-1551)"
         ],
-        "evidence": ["codex-rs/protocol/src/agent_path.rs:9-60", "codex-rs/core/src/agent/registry.rs:60-77", "codex-rs/core/src/agent/control.rs:384-403", "codex-rs/agent-identity/src/lib.rs:38-40", "codex-rs/agent-identity/src/lib.rs:247-315", "codex-rs/features/src/lib.rs:1546-1551"],
-        "modules": ["agent-identity", "protocol", "core", "login", "features"],
+        "evidence": [
+          "codex-rs/protocol/src/agent_path.rs:9-60",
+          "codex-rs/core/src/agent/registry.rs:60-77",
+          "codex-rs/core/src/agent/control.rs:384-403",
+          "codex-rs/agent-identity/src/lib.rs:38-40",
+          "codex-rs/agent-identity/src/lib.rs:247-315",
+          "codex-rs/features/src/lib.rs:1546-1551"
+        ],
+        "modules": [
+          "agent-identity",
+          "protocol",
+          "core",
+          "login",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -536,8 +819,20 @@
           "Feature::Goals key 'goals', Stage::Stable, default_enabled true (features/src/lib.rs:1408-1413)",
           "No enforced auto-continuation round counter exists in code; the nearest construct is prompt-level policy text in ext/goal/templates/goals/continuation.md"
         ],
-        "evidence": ["codex-rs/ext/goal/src/runtime.rs:338-411", "codex-rs/ext/goal/src/extension.rs:97-160", "codex-rs/state/goals_migrations/0001_thread_goals.sql:1-18", "codex-rs/state/src/runtime/goals.rs:499-531", "codex-rs/features/src/lib.rs:1408-1413"],
-        "modules": ["ext/goal", "state", "core", "protocol", "features"],
+        "evidence": [
+          "codex-rs/ext/goal/src/runtime.rs:338-411",
+          "codex-rs/ext/goal/src/extension.rs:97-160",
+          "codex-rs/state/goals_migrations/0001_thread_goals.sql:1-18",
+          "codex-rs/state/src/runtime/goals.rs:499-531",
+          "codex-rs/features/src/lib.rs:1408-1413"
+        ],
+        "modules": [
+          "ext/goal",
+          "state",
+          "core",
+          "protocol",
+          "features"
+        ],
         "verified": true
       }
     ],
@@ -557,8 +852,18 @@
           "GranularApprovalConfig fields and their `allows_*` accessors (protocol/src/protocol.rs:941-978)",
           "`ReviewDecision` variants: Approved, ApprovedExecpolicyAmendment, ApprovedForSession, ApprovedMcpPolicyAmendment, NetworkPolicyAmendment, Denied{rejection}, TimedOut, Abort; `Default` is `Denied { rejection: \"denied\" }` (protocol/src/protocol.rs:3868-3912)"
         ],
-        "evidence": ["codex-rs/protocol/src/permissions.rs:80-260", "codex-rs/core/src/config/permission_profile_catalog.rs:20-140", "codex-rs/protocol/src/protocol.rs:912-978", "codex-rs/protocol/src/protocol.rs:3868-3912"],
-        "modules": ["protocol", "core", "config", "sandboxing"],
+        "evidence": [
+          "codex-rs/protocol/src/permissions.rs:80-260",
+          "codex-rs/core/src/config/permission_profile_catalog.rs:20-140",
+          "codex-rs/protocol/src/protocol.rs:912-978",
+          "codex-rs/protocol/src/protocol.rs:3868-3912"
+        ],
+        "modules": [
+          "protocol",
+          "core",
+          "config",
+          "sandboxing"
+        ],
         "verified": true
       },
       {
@@ -574,8 +879,13 @@
           "Cache key is the JSON serialization of the caller's key value (core/src/tools/sandboxing.rs:46-61)",
           "Metric name `codex.approval.requested` tagged (tool, approved) (core/src/tools/sandboxing.rs:99-106)"
         ],
-        "evidence": ["codex-rs/core/src/tools/sandboxing.rs:39-116"],
-        "modules": ["core", "protocol"],
+        "evidence": [
+          "codex-rs/core/src/tools/sandboxing.rs:39-116"
+        ],
+        "modules": [
+          "core",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -593,8 +903,19 @@
           "CODEX_LINUX_SANDBOX_ARG0 = \"codex-linux-sandbox\" (sandboxing/src/landlock.rs:6)",
           "WINDOWS_SANDBOX_WRAPPER_SETUP_ENV_ALLOWLIST = [\"USERNAME\", \"USERPROFILE\"] (sandboxing/src/manager.rs:34)"
         ],
-        "evidence": ["codex-rs/sandboxing/src/manager.rs:36-76", "codex-rs/sandboxing/src/manager.rs:293-482", "codex-rs/sandboxing/src/manager.rs:522-628", "codex-rs/sandboxing/src/landlock.rs:6-60", "codex-rs/sandboxing/src/seatbelt.rs:22-56"],
-        "modules": ["sandboxing", "core", "protocol", "network-proxy"],
+        "evidence": [
+          "codex-rs/sandboxing/src/manager.rs:36-76",
+          "codex-rs/sandboxing/src/manager.rs:293-482",
+          "codex-rs/sandboxing/src/manager.rs:522-628",
+          "codex-rs/sandboxing/src/landlock.rs:6-60",
+          "codex-rs/sandboxing/src/seatbelt.rs:22-56"
+        ],
+        "modules": [
+          "sandboxing",
+          "core",
+          "protocol",
+          "network-proxy"
+        ],
         "verified": true
       },
       {
@@ -613,8 +934,22 @@
           "FORWARDED_SIGNALS list plus BWRAP_CHILD_PID / PENDING_FORWARDED_SIGNAL atomics (linux-sandbox/src/linux_run_main.rs:41-44)",
           "Feature::UseLinuxSandboxBwrap is Stage::Removed; Feature::UseLegacyLandlock is Stage::Deprecated default false (features/src/lib.rs:1051-1059)"
         ],
-        "evidence": ["codex-rs/linux-sandbox/src/lib.rs:1-39", "codex-rs/linux-sandbox/src/bwrap.rs:45-56", "codex-rs/linux-sandbox/src/linux_run_main.rs:41-49", "codex-rs/sandboxing/src/seatbelt.rs:22-26", "codex-rs/sandboxing/src/seatbelt.rs:251-363", "codex-rs/sandboxing/src/seatbelt.rs:420-530", "codex-rs/vendor/bubblewrap"],
-        "modules": ["sandboxing", "linux-sandbox", "bwrap", "vendor", "core"],
+        "evidence": [
+          "codex-rs/linux-sandbox/src/lib.rs:1-39",
+          "codex-rs/linux-sandbox/src/bwrap.rs:45-56",
+          "codex-rs/linux-sandbox/src/linux_run_main.rs:41-49",
+          "codex-rs/sandboxing/src/seatbelt.rs:22-26",
+          "codex-rs/sandboxing/src/seatbelt.rs:251-363",
+          "codex-rs/sandboxing/src/seatbelt.rs:420-530",
+          "codex-rs/vendor/bubblewrap"
+        ],
+        "modules": [
+          "sandboxing",
+          "linux-sandbox",
+          "bwrap",
+          "vendor",
+          "core"
+        ],
         "verified": true
       },
       {
@@ -632,8 +967,21 @@
           "NAME_RESOLUTION_CACHE filters are deliberately omitted because their static shapes failed validation with FWP_E_OUT_OF_BOUNDS (windows-sandbox-rs/src/wfp/filter_specs.rs:66-67)",
           "Feature::WindowsSandbox (key experimental_windows_sandbox) and Feature::WindowsSandboxElevated (elevated_windows_sandbox) are BOTH Stage::Removed, default false (features/src/lib.rs:1069-1079)"
         ],
-        "evidence": ["codex-rs/sandboxing/src/windows.rs:14-45", "codex-rs/sandboxing/src/windows.rs:72-211", "codex-rs/sandboxing/src/windows.rs:213-358", "codex-rs/windows-sandbox-rs/src/unified_exec/mod.rs:48-96", "codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs:1-124", "codex-rs/features/src/lib.rs:1069-1079"],
-        "modules": ["windows-sandbox-rs", "sandboxing", "core", "protocol", "features"],
+        "evidence": [
+          "codex-rs/sandboxing/src/windows.rs:14-45",
+          "codex-rs/sandboxing/src/windows.rs:72-211",
+          "codex-rs/sandboxing/src/windows.rs:213-358",
+          "codex-rs/windows-sandbox-rs/src/unified_exec/mod.rs:48-96",
+          "codex-rs/windows-sandbox-rs/src/wfp/filter_specs.rs:1-124",
+          "codex-rs/features/src/lib.rs:1069-1079"
+        ],
+        "modules": [
+          "windows-sandbox-rs",
+          "sandboxing",
+          "core",
+          "protocol",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -651,8 +999,16 @@
           "SANDBOX_DENIED_KEYWORDS has 7 entries (sandboxing/src/violation.rs:11-31)",
           "QUICK_REJECT_EXIT_CODES = [2, 126, 127] (sandboxing/src/violation.rs:37)"
         ],
-        "evidence": ["codex-rs/sandboxing/src/violation.rs:7-53", "codex-rs/sandboxing/src/violation.rs:133-200", "codex-rs/sandboxing/src/violation.rs:232-293"],
-        "modules": ["sandboxing", "network-proxy", "protocol"],
+        "evidence": [
+          "codex-rs/sandboxing/src/violation.rs:7-53",
+          "codex-rs/sandboxing/src/violation.rs:133-200",
+          "codex-rs/sandboxing/src/violation.rs:232-293"
+        ],
+        "modules": [
+          "sandboxing",
+          "network-proxy",
+          "protocol"
+        ],
         "verified": true
       }
     ],
@@ -670,8 +1026,19 @@
           "default provider id = openai",
           "ChatGPT auth base URL = https://chatgpt.com/backend-api/codex; API-key base URL = https://api.openai.com/v1"
         ],
-        "evidence": ["codex-rs/model-provider-info/src/lib.rs:487-526", "codex-rs/model-provider-info/src/lib.rs:533-573", "codex-rs/model-provider/src/provider.rs:301-319", "codex-rs/core/src/config/mod.rs:3642-3659", "codex-rs/model-provider-info/src/lib.rs:289-326"],
-        "modules": ["model-provider", "model-provider-info", "config", "core"],
+        "evidence": [
+          "codex-rs/model-provider-info/src/lib.rs:487-526",
+          "codex-rs/model-provider-info/src/lib.rs:533-573",
+          "codex-rs/model-provider/src/provider.rs:301-319",
+          "codex-rs/core/src/config/mod.rs:3642-3659",
+          "codex-rs/model-provider-info/src/lib.rs:289-326"
+        ],
+        "modules": [
+          "model-provider",
+          "model-provider-info",
+          "config",
+          "core"
+        ],
         "verified": true
       },
       {
@@ -686,8 +1053,23 @@
           "aws.auth_refresh.command must be exactly `aws`; DEFAULT_AWS_AUTH_REFRESH_TIMEOUT_MS = 300000",
           "AWS_BEARER_TOKEN_BEDROCK env var name; SigV4 settings = SigningSettings::default()"
         ],
-        "evidence": ["codex-rs/model-provider/src/auth.rs:197-219", "codex-rs/model-provider/src/auth.rs:289-320", "codex-rs/model-provider-info/src/lib.rs:191-260", "codex-rs/model-provider-info/src/lib.rs:328-347", "codex-rs/model-provider/src/amazon_bedrock/auth.rs:49-97", "codex-rs/aws-auth/src/signing.rs:17-68", "codex-rs/login/src/auth/external_bearer.rs:21-63"],
-        "modules": ["model-provider", "model-provider-info", "login", "aws-auth", "workload-identity", "protocol"],
+        "evidence": [
+          "codex-rs/model-provider/src/auth.rs:197-219",
+          "codex-rs/model-provider/src/auth.rs:289-320",
+          "codex-rs/model-provider-info/src/lib.rs:191-260",
+          "codex-rs/model-provider-info/src/lib.rs:328-347",
+          "codex-rs/model-provider/src/amazon_bedrock/auth.rs:49-97",
+          "codex-rs/aws-auth/src/signing.rs:17-68",
+          "codex-rs/login/src/auth/external_bearer.rs:21-63"
+        ],
+        "modules": [
+          "model-provider",
+          "model-provider-info",
+          "login",
+          "aws-auth",
+          "workload-identity",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -705,8 +1087,22 @@
           "DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300000; DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 15000",
           "Feature::RemoteModels (key remote_models) is Stage::Removed, default false (features/src/lib.rs:1081-1083)"
         ],
-        "evidence": ["codex-rs/models-manager/src/manager.rs:29-30", "codex-rs/models-manager/src/manager.rs:340-354", "codex-rs/models-manager/src/manager.rs:375-516", "codex-rs/models-manager/src/manager.rs:593-595", "codex-rs/models-manager/src/cache.rs:170-213", "codex-rs/model-provider/src/models_endpoint.rs:39-117", "codex-rs/features/src/lib.rs:1081-1083"],
-        "modules": ["models-manager", "model-provider", "protocol", "http-client", "features"],
+        "evidence": [
+          "codex-rs/models-manager/src/manager.rs:29-30",
+          "codex-rs/models-manager/src/manager.rs:340-354",
+          "codex-rs/models-manager/src/manager.rs:375-516",
+          "codex-rs/models-manager/src/manager.rs:593-595",
+          "codex-rs/models-manager/src/cache.rs:170-213",
+          "codex-rs/model-provider/src/models_endpoint.rs:39-117",
+          "codex-rs/features/src/lib.rs:1081-1083"
+        ],
+        "modules": [
+          "models-manager",
+          "model-provider",
+          "protocol",
+          "http-client",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -723,8 +1119,21 @@
           "auto-compact derivation = context_window * 9 / 10",
           "verbosity wire enum = low|medium(default)|high"
         ],
-        "evidence": ["codex-rs/protocol/src/openai_models.rs:50-79", "codex-rs/protocol/src/openai_models.rs:129-146", "codex-rs/protocol/src/openai_models.rs:386-499", "codex-rs/core/src/client.rs:178-183", "codex-rs/core/src/client.rs:825-843", "codex-rs/codex-api/src/common.rs:140-167", "codex-rs/codex-api/src/common.rs:251-269"],
-        "modules": ["protocol", "core", "codex-api", "models-manager"],
+        "evidence": [
+          "codex-rs/protocol/src/openai_models.rs:50-79",
+          "codex-rs/protocol/src/openai_models.rs:129-146",
+          "codex-rs/protocol/src/openai_models.rs:386-499",
+          "codex-rs/core/src/client.rs:178-183",
+          "codex-rs/core/src/client.rs:825-843",
+          "codex-rs/codex-api/src/common.rs:140-167",
+          "codex-rs/codex-api/src/common.rs:251-269"
+        ],
+        "modules": [
+          "protocol",
+          "core",
+          "codex-api",
+          "models-manager"
+        ],
         "verified": true
       },
       {
@@ -735,9 +1144,24 @@
           "The PKCE verifier must be 64 random bytes encoded URL-safe without padding, with the challenge being its SHA-256."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["DEFAULT_ISSUER = https://auth.openai.com", "DEFAULT_PORT = 1455; FALLBACK_PORT = 1457", "CLIENT_ID = app_EMoamEEZ73f0CkXaXp7hrann", "PKCE verifier entropy = 64 bytes; callback channel capacity = 16"],
-        "evidence": ["codex-rs/login/src/pkce.rs:6-27", "codex-rs/login/src/server.rs:59-62", "codex-rs/login/src/server.rs:159-188", "codex-rs/login/src/server.rs:343-375", "codex-rs/login/src/auth/manager.rs:194-198"],
-        "modules": ["login", "chatgpt", "http-client"],
+        "constants": [
+          "DEFAULT_ISSUER = https://auth.openai.com",
+          "DEFAULT_PORT = 1455; FALLBACK_PORT = 1457",
+          "CLIENT_ID = app_EMoamEEZ73f0CkXaXp7hrann",
+          "PKCE verifier entropy = 64 bytes; callback channel capacity = 16"
+        ],
+        "evidence": [
+          "codex-rs/login/src/pkce.rs:6-27",
+          "codex-rs/login/src/server.rs:59-62",
+          "codex-rs/login/src/server.rs:159-188",
+          "codex-rs/login/src/server.rs:343-375",
+          "codex-rs/login/src/auth/manager.rs:194-198"
+        ],
+        "modules": [
+          "login",
+          "chatgpt",
+          "http-client"
+        ],
         "verified": true
       },
       {
@@ -753,8 +1177,24 @@
           "auth.json mode = 0o600; KEYRING_SERVICE = 'Codex Auth'; REFRESH_TOKEN_URL = https://auth.openai.com/oauth/token",
           "Feature::SecretAuthStorage is Stage::Stable with default_enabled = cfg!(windows) (features/src/lib.rs:846-851) — OFF by default on macOS/Linux"
         ],
-        "evidence": ["codex-rs/login/src/auth/storage.rs:150-152", "codex-rs/login/src/auth/storage.rs:202-223", "codex-rs/login/src/auth/storage.rs:336-351", "codex-rs/login/src/auth/manager.rs:185-198", "codex-rs/login/src/auth/manager.rs:1933-1988", "codex-rs/login/src/auth/manager.rs:2285-2314", "codex-rs/core/src/config/auth_keyring.rs:110-118", "codex-rs/features/src/lib.rs:846-851"],
-        "modules": ["login", "secrets", "keyring-store", "config", "core", "features"],
+        "evidence": [
+          "codex-rs/login/src/auth/storage.rs:150-152",
+          "codex-rs/login/src/auth/storage.rs:202-223",
+          "codex-rs/login/src/auth/storage.rs:336-351",
+          "codex-rs/login/src/auth/manager.rs:185-198",
+          "codex-rs/login/src/auth/manager.rs:1933-1988",
+          "codex-rs/login/src/auth/manager.rs:2285-2314",
+          "codex-rs/core/src/config/auth_keyring.rs:110-118",
+          "codex-rs/features/src/lib.rs:846-851"
+        ],
+        "modules": [
+          "login",
+          "secrets",
+          "keyring-store",
+          "config",
+          "core",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -770,8 +1210,21 @@
           "Feature::UnboundedConnectionRetries = Stage::Stable, default_enabled true (features/src/lib.rs:1092-1097)",
           "Feature::ResponsesWebsockets and Feature::ResponsesWebsocketsV2 are both Stage::Removed (features/src/lib.rs:1516-1527)"
         ],
-        "evidence": ["codex-rs/core/src/client.rs:952-963", "codex-rs/core/src/client.rs:524-543", "codex-rs/core/src/client.rs:1920-1930", "codex-rs/core/src/responses_retry.rs:17-100", "codex-rs/codex-api/src/endpoint/responses_websocket.rs:49-80", "codex-rs/features/src/lib.rs:1092-1097"],
-        "modules": ["core", "codex-api", "websocket-client", "codex-client", "features"],
+        "evidence": [
+          "codex-rs/core/src/client.rs:952-963",
+          "codex-rs/core/src/client.rs:524-543",
+          "codex-rs/core/src/client.rs:1920-1930",
+          "codex-rs/core/src/responses_retry.rs:17-100",
+          "codex-rs/codex-api/src/endpoint/responses_websocket.rs:49-80",
+          "codex-rs/features/src/lib.rs:1092-1097"
+        ],
+        "modules": [
+          "core",
+          "codex-api",
+          "websocket-client",
+          "codex-client",
+          "features"
+        ],
         "verified": true
       }
     ],
@@ -792,8 +1245,21 @@
           "11 hook events, 9 of which honour matchers (hooks/src/lib.rs:23-52)",
           "Feature::CodexHooks key 'hooks', Stage::Stable, default_enabled true (features/src/lib.rs:1039-1041)"
         ],
-        "evidence": ["codex-rs/hooks/src/lib.rs:23-52", "codex-rs/hooks/src/engine/mod.rs:110-202", "codex-rs/hooks/src/events/pre_tool_use.rs:115-284", "codex-rs/hooks/src/events/stop.rs:361-395", "codex-rs/core/src/hook_runtime.rs:171-228", "codex-rs/core/src/tools/registry.rs:576-628", "codex-rs/core/src/session/turn.rs:504-537"],
-        "modules": ["hooks", "core", "protocol", "app-server-protocol"],
+        "evidence": [
+          "codex-rs/hooks/src/lib.rs:23-52",
+          "codex-rs/hooks/src/engine/mod.rs:110-202",
+          "codex-rs/hooks/src/events/pre_tool_use.rs:115-284",
+          "codex-rs/hooks/src/events/stop.rs:361-395",
+          "codex-rs/core/src/hook_runtime.rs:171-228",
+          "codex-rs/core/src/tools/registry.rs:576-628",
+          "codex-rs/core/src/session/turn.rs:504-537"
+        ],
+        "modules": [
+          "hooks",
+          "core",
+          "protocol",
+          "app-server-protocol"
+        ],
         "verified": true
       },
       {
@@ -811,8 +1277,21 @@
           "additionalContextLimit = 0 disables spilling entirely (hooks/src/output_spill.rs:70)",
           "Spill directory 'hook_outputs' under the OS temp dir, per thread id (hooks/src/output_spill.rs:11, :45-51)"
         ],
-        "evidence": ["codex-rs/hooks/src/engine/mod.rs:87-99", "codex-rs/hooks/src/engine/command_runner.rs:44", "codex-rs/hooks/src/engine/command_runner.rs:137-163", "codex-rs/hooks/src/engine/discovery.rs:536-555", "codex-rs/hooks/src/output_spill.rs:11-91", "codex-rs/core/src/hook_runtime.rs:615-651", "codex-rs/core/src/hook_runtime.rs:682-754"],
-        "modules": ["hooks", "core", "protocol", "utils/output-truncation"],
+        "evidence": [
+          "codex-rs/hooks/src/engine/mod.rs:87-99",
+          "codex-rs/hooks/src/engine/command_runner.rs:44",
+          "codex-rs/hooks/src/engine/command_runner.rs:137-163",
+          "codex-rs/hooks/src/engine/discovery.rs:536-555",
+          "codex-rs/hooks/src/output_spill.rs:11-91",
+          "codex-rs/core/src/hook_runtime.rs:615-651",
+          "codex-rs/core/src/hook_runtime.rs:682-754"
+        ],
+        "modules": [
+          "hooks",
+          "core",
+          "protocol",
+          "utils/output-truncation"
+        ],
         "verified": true
       },
       {
@@ -829,8 +1308,21 @@
           "Persisted key format <key_source>:<event_label>:<group_index>:<handler_index> (hooks/src/lib.rs:109-118)",
           "an additionalContextLimit equal to the default is normalized away so explicit-default and omitted hashes match (hooks/src/engine/discovery.rs:554-555)"
         ],
-        "evidence": ["codex-rs/hooks/src/engine/discovery.rs:36-113", "codex-rs/hooks/src/engine/discovery.rs:676-795", "codex-rs/hooks/src/config_rules.rs:8-29", "codex-rs/hooks/src/registry.rs:78-84", "codex-rs/tui/src/hooks_rpc.rs:58-92"],
-        "modules": ["hooks", "config", "core", "app-server", "app-server-protocol", "tui"],
+        "evidence": [
+          "codex-rs/hooks/src/engine/discovery.rs:36-113",
+          "codex-rs/hooks/src/engine/discovery.rs:676-795",
+          "codex-rs/hooks/src/config_rules.rs:8-29",
+          "codex-rs/hooks/src/registry.rs:78-84",
+          "codex-rs/tui/src/hooks_rpc.rs:58-92"
+        ],
+        "modules": [
+          "hooks",
+          "config",
+          "core",
+          "app-server",
+          "app-server-protocol",
+          "tui"
+        ],
         "verified": true
       },
       {
@@ -847,8 +1339,21 @@
           "MAX_SKILL_PROMPT_BYTES = 8_000; MAX_CATALOG_SKILL_DESCRIPTION_CHARS = 1_024; MAX_SKILL_NAME_BYTES/MAX_SKILL_PATH_BYTES = 256/1_024 (ext/skills/src/render.rs:19-29)",
           "MAX_SCAN_DEPTH = 6; MAX_SKILLS_DIRS_PER_ROOT = 2000 (ext/skills/src/loader/mod.rs:31-32)"
         ],
-        "evidence": ["codex-rs/ext/skills/src/fragments.rs:38-54", "codex-rs/ext/skills/src/world_state.rs:86-121", "codex-rs/ext/skills/src/loader/host_merge.rs:232-269", "codex-rs/ext/skills/src/render.rs:17-29", "codex-rs/ext/skills/src/tools/mod.rs:63-70", "codex-rs/ext/skills/src/loader/mod.rs:18-32"],
-        "modules": ["skills", "ext/skills", "core", "config", "protocol"],
+        "evidence": [
+          "codex-rs/ext/skills/src/fragments.rs:38-54",
+          "codex-rs/ext/skills/src/world_state.rs:86-121",
+          "codex-rs/ext/skills/src/loader/host_merge.rs:232-269",
+          "codex-rs/ext/skills/src/render.rs:17-29",
+          "codex-rs/ext/skills/src/tools/mod.rs:63-70",
+          "codex-rs/ext/skills/src/loader/mod.rs:18-32"
+        ],
+        "modules": [
+          "skills",
+          "ext/skills",
+          "core",
+          "config",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -867,8 +1372,23 @@
           "SCRIPT_RUNNERS = 10; SCRIPT_EXTENSIONS = 7 (skills/src/invocation.rs:80-83)",
           "Feature::SkillSearch is Stable default true but only enables shadow-mode metric selection; Feature::MentionsV2 is Stable default true and only drives the TUI popup; Feature::SkillMcpDependencyInstall is Stable default true (features/src/lib.rs:1331-1351)"
         ],
-        "evidence": ["codex-rs/skills/src/mentions.rs:41-60", "codex-rs/skills/src/mentions.rs:205-225", "codex-rs/skills/src/selection.rs:42-197", "codex-rs/skills/src/invocation.rs:79-109", "codex-rs/ext/skills/src/fragments.rs:71-89", "codex-rs/ext/skills/src/host_prompt.rs:47-96", "codex-rs/core/src/skills.rs:83-160"],
-        "modules": ["skills", "ext/skills", "core", "shell-command", "analytics", "features"],
+        "evidence": [
+          "codex-rs/skills/src/mentions.rs:41-60",
+          "codex-rs/skills/src/mentions.rs:205-225",
+          "codex-rs/skills/src/selection.rs:42-197",
+          "codex-rs/skills/src/invocation.rs:79-109",
+          "codex-rs/ext/skills/src/fragments.rs:71-89",
+          "codex-rs/ext/skills/src/host_prompt.rs:47-96",
+          "codex-rs/core/src/skills.rs:83-160"
+        ],
+        "modules": [
+          "skills",
+          "ext/skills",
+          "core",
+          "shell-command",
+          "analytics",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -888,9 +1408,36 @@
           "OPTIONAL_MCP_STARTUP_GRACE = 1 s before optional servers are omitted from the catalog (codex-mcp/src/connection_manager/tool_catalog.rs:35)",
           "Feature::Mcp20260728 key 'mcp_2026_07_28' is Stage::UnderDevelopment, default_enabled FALSE (features/src/lib.rs:1156-1161)"
         ],
-        "evidence": ["codex-rs/codex-mcp/src/rmcp_client.rs:92-96", "codex-rs/codex-mcp/src/connection_manager/startup.rs:112-125", "codex-rs/rmcp-client/src/streamable_http_retry.rs:22-40", "codex-rs/rmcp-client/src/streamable_http_retry.rs:60-207", "codex-rs/rmcp-client/src/protocol_mode.rs:19-51", "codex-rs/rmcp-client/src/stdio_server_launcher.rs:80-113", "codex-rs/rmcp-client/src/local_stdio_transport.rs:27", "codex-rs/features/src/lib.rs:1156-1161"],
-        "modules": ["rmcp-client", "codex-mcp", "core", "config", "features"],
-        "verified": true
+        "evidence": [
+          "codex-rs/rmcp-client/src/rmcp_client.rs:103-120",
+          "codex-rs/rmcp-client/src/rmcp_client.rs:133-156",
+          "codex-rs/rmcp-client/src/rmcp_client.rs:158-166",
+          "codex-rs/codex-mcp/src/rmcp_client.rs:92-96",
+          "codex-rs/codex-mcp/src/connection_manager/startup.rs:112-125",
+          "codex-rs/rmcp-client/src/streamable_http_retry.rs:22-40",
+          "codex-rs/rmcp-client/src/streamable_http_retry.rs:60-207",
+          "codex-rs/rmcp-client/src/protocol_mode.rs:19-51",
+          "codex-rs/rmcp-client/src/stdio_server_launcher.rs:80-113",
+          "codex-rs/rmcp-client/src/local_stdio_transport.rs:27",
+          "codex-rs/features/src/lib.rs:1156-1161"
+        ],
+        "modules": [
+          "rmcp-client",
+          "codex-mcp",
+          "core",
+          "config",
+          "features"
+        ],
+        "verified": true,
+        "citationCorrected": {
+          "prepended": [
+            "codex-rs/rmcp-client/src/rmcp_client.rs:103-120",
+            "codex-rs/rmcp-client/src/rmcp_client.rs:133-156",
+            "codex-rs/rmcp-client/src/rmcp_client.rs:158-166"
+          ],
+          "reason": "the cited features/lib.rs:1156-1161 is a feature-flag registry entry (id Mcp20260728, stage UnderDevelopment, default_enabled false) -- a registry listing cannot carry a transport claim. The five transport variants are real and exact, in rmcp-client.",
+          "by": "D3 adversarial verification (2026-09-13)"
+        }
       },
       {
         "name": "mcp-tool-catalog-exposure-and-elicitation-roundtrip",
@@ -909,8 +1456,24 @@
           "Feature::NonPrefixedMcpToolNames is UnderDevelopment/OFF, so MCP model-visible names keep the legacy mcp__ prefix (features/src/lib.rs:1186-1191)",
           "Feature::TokenCallMcpElicitation (key tool_call_mcp_elicitation) and Feature::AuthElicitation are both Stable default true (features/src/lib.rs:1439-1447)"
         ],
-        "evidence": ["codex-rs/codex-mcp/src/pagination.rs:9-25", "codex-rs/codex-mcp/src/tool_catalog_cache.rs:32-33", "codex-rs/codex-mcp/src/tool_catalog_cache.rs:162-167", "codex-rs/codex-mcp/src/elicitation.rs:42-45", "codex-rs/codex-mcp/src/elicitation.rs:220-247", "codex-rs/rmcp-client/src/rmcp_client.rs:175-259", "codex-rs/features/src/lib.rs:1186-1191", "codex-rs/features/src/lib.rs:1439-1447"],
-        "modules": ["codex-mcp", "rmcp-client", "core", "connectors", "protocol", "features"],
+        "evidence": [
+          "codex-rs/codex-mcp/src/pagination.rs:9-25",
+          "codex-rs/codex-mcp/src/tool_catalog_cache.rs:32-33",
+          "codex-rs/codex-mcp/src/tool_catalog_cache.rs:162-167",
+          "codex-rs/codex-mcp/src/elicitation.rs:42-45",
+          "codex-rs/codex-mcp/src/elicitation.rs:220-247",
+          "codex-rs/rmcp-client/src/rmcp_client.rs:175-259",
+          "codex-rs/features/src/lib.rs:1186-1191",
+          "codex-rs/features/src/lib.rs:1439-1447"
+        ],
+        "modules": [
+          "codex-mcp",
+          "rmcp-client",
+          "core",
+          "connectors",
+          "protocol",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -928,8 +1491,21 @@
           "Feature::Plugins key 'plugins' is Stable default TRUE; Feature::RecommendedPlugins is Stable but default_enabled FALSE (features/src/lib.rs:1204-1215)",
           "Feature::PluginHooks (key 'plugin_hooks') is Stage::Removed and has no runtime consumer (features/src/lib.rs:1222-1227)"
         ],
-        "evidence": ["codex-rs/plugin/src/manifest.rs:8-48", "codex-rs/core-plugins/src/marketplace.rs:115-181", "codex-rs/core-plugins/src/manager.rs:325-381", "codex-rs/core-plugins/src/manager.rs:763-781", "codex-rs/features/src/lib.rs:1204-1227"],
-        "modules": ["plugin", "core-plugins", "config", "hooks", "codex-mcp", "features"],
+        "evidence": [
+          "codex-rs/plugin/src/manifest.rs:8-48",
+          "codex-rs/core-plugins/src/marketplace.rs:115-181",
+          "codex-rs/core-plugins/src/manager.rs:325-381",
+          "codex-rs/core-plugins/src/manager.rs:763-781",
+          "codex-rs/features/src/lib.rs:1204-1227"
+        ],
+        "modules": [
+          "plugin",
+          "core-plugins",
+          "config",
+          "hooks",
+          "codex-mcp",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -947,8 +1523,23 @@
           "Feature::CodeModeInterrupt and CodeModeOnly are UnderDevelopment/OFF; CodeModeBufferedExec and JsRepl/JsReplToolsOnly are Stage::Removed (features/src/lib.rs:907-935, :919-928)",
           "Install-context binary name: codex-code-mode-host[.exe] (install-context/src/lib.rs:10-15)"
         ],
-        "evidence": ["codex-rs/features/src/lib.rs:900-935", "codex-rs/features/src/lib.rs:618-620", "codex-rs/core/src/tools/spec_plan.rs:240-246", "codex-rs/install-context/src/lib.rs:10-15", "codex-rs/core/src/session/code_mode_warning.rs:1-27"],
-        "modules": ["code-mode", "code-mode-host", "code-mode-protocol", "code-mode-runtime", "core", "app-server", "install-context", "features"],
+        "evidence": [
+          "codex-rs/features/src/lib.rs:900-935",
+          "codex-rs/features/src/lib.rs:618-620",
+          "codex-rs/core/src/tools/spec_plan.rs:240-246",
+          "codex-rs/install-context/src/lib.rs:10-15",
+          "codex-rs/core/src/session/code_mode_warning.rs:1-27"
+        ],
+        "modules": [
+          "code-mode",
+          "code-mode-host",
+          "code-mode-protocol",
+          "code-mode-runtime",
+          "core",
+          "app-server",
+          "install-context",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -965,8 +1556,21 @@
           "Plan preset uses reasoning effort Medium plus the PLAN template (models-manager/src/collaboration_mode_presets.rs:16-28)",
           "`Feature::Personality` is Stable default true (features/src/lib.rs:1451-1453)"
         ],
-        "evidence": ["codex-rs/core/src/context/world_state/collaboration_mode.rs:54-143", "codex-rs/core/src/tools/handlers/plan.rs:84-88", "codex-rs/protocol/src/plan_tool.rs:17-28", "codex-rs/models-manager/src/collaboration_mode_presets.rs:16-28", "codex-rs/features/src/lib.rs:1432-1437", "codex-rs/collaboration-mode-templates"],
-        "modules": ["collaboration-mode-templates", "core", "protocol", "models-manager", "features"],
+        "evidence": [
+          "codex-rs/core/src/context/world_state/collaboration_mode.rs:54-143",
+          "codex-rs/core/src/tools/handlers/plan.rs:84-88",
+          "codex-rs/protocol/src/plan_tool.rs:17-28",
+          "codex-rs/models-manager/src/collaboration_mode_presets.rs:16-28",
+          "codex-rs/features/src/lib.rs:1432-1437",
+          "codex-rs/collaboration-mode-templates"
+        ],
+        "modules": [
+          "collaboration-mode-templates",
+          "core",
+          "protocol",
+          "models-manager",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -983,8 +1587,26 @@
           "NoopExtensionEventSink is used when no host sink is installed (ext/extension-api/src/registry.rs:31)",
           "13 first-party extension crates under codex-rs/ext/"
         ],
-        "evidence": ["codex-rs/ext/extension-api/src/registry.rs:27-84", "codex-rs/core/src/tasks/lifecycle.rs:11-68", "codex-rs/ext/extension-api/src/contributors"],
-        "modules": ["ext/extension-api", "core", "ext/agent", "ext/connectors", "ext/git-attribution", "ext/image-generation", "ext/items", "ext/mcp", "ext/queue", "ext/skills", "ext/guardian-v2", "ext/web-search", "ext/goal"],
+        "evidence": [
+          "codex-rs/ext/extension-api/src/registry.rs:27-84",
+          "codex-rs/core/src/tasks/lifecycle.rs:11-68",
+          "codex-rs/ext/extension-api/src/contributors"
+        ],
+        "modules": [
+          "ext/extension-api",
+          "core",
+          "ext/agent",
+          "ext/connectors",
+          "ext/git-attribution",
+          "ext/image-generation",
+          "ext/items",
+          "ext/mcp",
+          "ext/queue",
+          "ext/skills",
+          "ext/guardian-v2",
+          "ext/web-search",
+          "ext/goal"
+        ],
         "verified": true
       }
     ],
@@ -997,9 +1619,28 @@
           "Stdio, Unix-socket and raw WebSocket connections must share the identical framed JSON-RPC surface so per-connection state stays transport-agnostic."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["DEFAULT_LISTEN_URL = stdio://", "CHANNEL_CAPACITY = 128", "WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY = 32768", "CONTROL_SOCKET_MODE = 0o600", "control socket accept retry sleep = 1 s"],
-        "evidence": ["codex-rs/app-server-transport/src/transport/mod.rs:74-80", "codex-rs/app-server-transport/src/transport/mod.rs:114-168", "codex-rs/app-server-transport/src/transport/stdio.rs:24-101", "codex-rs/app-server-transport/src/transport/unix_socket.rs:21-44", "codex-rs/app-server-transport/src/transport/unix_socket.rs:138-156", "codex-rs/app-server/src/lib.rs:728-759"],
-        "modules": ["app-server", "app-server-transport", "uds", "stdio-to-uds", "codex-home"],
+        "constants": [
+          "DEFAULT_LISTEN_URL = stdio://",
+          "CHANNEL_CAPACITY = 128",
+          "WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY = 32768",
+          "CONTROL_SOCKET_MODE = 0o600",
+          "control socket accept retry sleep = 1 s"
+        ],
+        "evidence": [
+          "codex-rs/app-server-transport/src/transport/mod.rs:74-80",
+          "codex-rs/app-server-transport/src/transport/mod.rs:114-168",
+          "codex-rs/app-server-transport/src/transport/stdio.rs:24-101",
+          "codex-rs/app-server-transport/src/transport/unix_socket.rs:21-44",
+          "codex-rs/app-server-transport/src/transport/unix_socket.rs:138-156",
+          "codex-rs/app-server/src/lib.rs:728-759"
+        ],
+        "modules": [
+          "app-server",
+          "app-server-transport",
+          "uds",
+          "stdio-to-uds",
+          "codex-home"
+        ],
         "verified": true
       },
       {
@@ -1010,9 +1651,21 @@
           "A `signed-bearer-token` secret shorter than 32 bytes must be rejected at policy construction, not at request time."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["DEFAULT_MAX_CLOCK_SKEW_SECONDS = 30", "MIN_SIGNED_BEARER_SECRET_BYTES = 32"],
-        "evidence": ["codex-rs/app-server-transport/src/transport/auth.rs:23-25", "codex-rs/app-server-transport/src/transport/auth.rs:266-304", "codex-rs/app-server-transport/src/transport/auth.rs:388-398", "codex-rs/app-server-transport/src/transport/websocket.rs:89-103", "codex-rs/app-server-transport/src/transport/websocket.rs:135-156"],
-        "modules": ["app-server-transport", "app-server"],
+        "constants": [
+          "DEFAULT_MAX_CLOCK_SKEW_SECONDS = 30",
+          "MIN_SIGNED_BEARER_SECRET_BYTES = 32"
+        ],
+        "evidence": [
+          "codex-rs/app-server-transport/src/transport/auth.rs:23-25",
+          "codex-rs/app-server-transport/src/transport/auth.rs:266-304",
+          "codex-rs/app-server-transport/src/transport/auth.rs:388-398",
+          "codex-rs/app-server-transport/src/transport/websocket.rs:89-103",
+          "codex-rs/app-server-transport/src/transport/websocket.rs:135-156"
+        ],
+        "modules": [
+          "app-server-transport",
+          "app-server"
+        ],
         "verified": true
       },
       {
@@ -1023,9 +1676,23 @@
           "A closed RPC gate must drop queued handlers without polling them, while letting already-acquired handlers finish."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["experimental_required_message format = \"{reason} requires experimentalApi capability\""],
-        "evidence": ["codex-rs/app-server/src/message_processor.rs:163-201", "codex-rs/app-server/src/message_processor.rs:878-894", "codex-rs/app-server/src/connection_rpc_gate.rs:6-50", "codex-rs/app-server/src/lib.rs:1012-1017", "codex-rs/app-server/src/transport.rs:100-123", "codex-rs/app-server-protocol/src/experimental_api.rs:5-32"],
-        "modules": ["app-server", "app-server-protocol", "app-server-protocol-noop-macros", "codex-experimental-api-macros"],
+        "constants": [
+          "experimental_required_message format = \"{reason} requires experimentalApi capability\""
+        ],
+        "evidence": [
+          "codex-rs/app-server/src/message_processor.rs:163-201",
+          "codex-rs/app-server/src/message_processor.rs:878-894",
+          "codex-rs/app-server/src/connection_rpc_gate.rs:6-50",
+          "codex-rs/app-server/src/lib.rs:1012-1017",
+          "codex-rs/app-server/src/transport.rs:100-123",
+          "codex-rs/app-server-protocol/src/experimental_api.rs:5-32"
+        ],
+        "modules": [
+          "app-server",
+          "app-server-protocol",
+          "app-server-protocol-noop-macros",
+          "codex-experimental-api-macros"
+        ],
         "verified": true
       },
       {
@@ -1036,9 +1703,24 @@
           "A broadcast notification must never be delivered to a connection that has not completed initialize."
         ],
         "failurePolicy": "fail-soft",
-        "constants": ["OVERLOADED_ERROR_CODE = -32001", "INTERNAL_ERROR_CODE = -32603", "CHANNEL_CAPACITY = 128", "WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY = 32768"],
-        "evidence": ["codex-rs/app-server-transport/src/transport/mod.rs:22-25", "codex-rs/app-server-transport/src/transport/mod.rs:51-52", "codex-rs/app-server-transport/src/transport/mod.rs:219-258", "codex-rs/app-server-transport/src/transport/websocket.rs:46-49", "codex-rs/app-server/src/transport.rs:136-174", "codex-rs/app-server/src/transport.rs:200-239"],
-        "modules": ["app-server", "app-server-transport"],
+        "constants": [
+          "OVERLOADED_ERROR_CODE = -32001",
+          "INTERNAL_ERROR_CODE = -32603",
+          "CHANNEL_CAPACITY = 128",
+          "WEBSOCKET_OUTBOUND_CHANNEL_CAPACITY = 32768"
+        ],
+        "evidence": [
+          "codex-rs/app-server-transport/src/transport/mod.rs:22-25",
+          "codex-rs/app-server-transport/src/transport/mod.rs:51-52",
+          "codex-rs/app-server-transport/src/transport/mod.rs:219-258",
+          "codex-rs/app-server-transport/src/transport/websocket.rs:46-49",
+          "codex-rs/app-server/src/transport.rs:136-174",
+          "codex-rs/app-server/src/transport.rs:200-239"
+        ],
+        "modules": [
+          "app-server",
+          "app-server-transport"
+        ],
         "verified": true
       },
       {
@@ -1054,8 +1736,23 @@
           "REMOTE_CONTROL_SEGMENT_TARGET_BYTES = 102400; SEGMENT_MAX_BYTES = 153600; REASSEMBLED_MAX_BYTES = 104857600; SEGMENT_COUNT_MAX = 1024",
           "Feature::RemoteControl (key 'remote_control') is Stage::Removed, default false (features/src/lib.rs:1474-1479) — the relay that exists is gated by the managed-requirement policy, not this flag"
         ],
-        "evidence": ["codex-rs/app-server-transport/src/transport/remote_control/mod.rs:66-97", "codex-rs/app-server-transport/src/transport/remote_control/mod.rs:933-965", "codex-rs/app-server-transport/src/transport/remote_control/websocket.rs:72-136", "codex-rs/app-server-transport/src/transport/remote_control/websocket.rs:1302-1321", "codex-rs/app-server-transport/src/transport/remote_control/segment.rs:19-23", "codex-rs/app-server/src/lib.rs:767-803", "codex-rs/features/src/lib.rs:1474-1479"],
-        "modules": ["app-server-transport", "app-server", "app-server-daemon", "app-server-client", "state", "features"],
+        "evidence": [
+          "codex-rs/app-server-transport/src/transport/remote_control/mod.rs:66-97",
+          "codex-rs/app-server-transport/src/transport/remote_control/mod.rs:933-965",
+          "codex-rs/app-server-transport/src/transport/remote_control/websocket.rs:72-136",
+          "codex-rs/app-server-transport/src/transport/remote_control/websocket.rs:1302-1321",
+          "codex-rs/app-server-transport/src/transport/remote_control/segment.rs:19-23",
+          "codex-rs/app-server/src/lib.rs:767-803",
+          "codex-rs/features/src/lib.rs:1474-1479"
+        ],
+        "modules": [
+          "app-server-transport",
+          "app-server",
+          "app-server-daemon",
+          "app-server-client",
+          "state",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -1067,9 +1764,27 @@
           "A pending server-to-client request id must be removed from the callback map exactly once; an unknown id must only warn (mcp-server/src/outgoing_message.rs:42-80)."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["CHANNEL_CAPACITY = 128", "DEFAULT_ANALYTICS_ENABLED = true", "OTEL_SERVICE_NAME = codex_mcp_server", "MAX_EXTENSION_WARNING_BYTES = 256"],
-        "evidence": ["codex-rs/mcp-server/src/lib.rs:53-58", "codex-rs/mcp-server/src/lib.rs:126-219", "codex-rs/mcp-server/src/message_processor.rs:336-424", "codex-rs/mcp-server/src/codex_tool_runner.rs:66-134", "codex-rs/mcp-server/src/exec_approval.rs:110-144", "codex-rs/mcp-server/src/patch_approval.rs:101-139", "codex-rs/mcp-server/src/active_turn_registry.rs:9-17"],
-        "modules": ["mcp-server", "core", "protocol", "ext/extension-api"],
+        "constants": [
+          "CHANNEL_CAPACITY = 128",
+          "DEFAULT_ANALYTICS_ENABLED = true",
+          "OTEL_SERVICE_NAME = codex_mcp_server",
+          "MAX_EXTENSION_WARNING_BYTES = 256"
+        ],
+        "evidence": [
+          "codex-rs/mcp-server/src/lib.rs:53-58",
+          "codex-rs/mcp-server/src/lib.rs:126-219",
+          "codex-rs/mcp-server/src/message_processor.rs:336-424",
+          "codex-rs/mcp-server/src/codex_tool_runner.rs:66-134",
+          "codex-rs/mcp-server/src/exec_approval.rs:110-144",
+          "codex-rs/mcp-server/src/patch_approval.rs:101-139",
+          "codex-rs/mcp-server/src/active_turn_registry.rs:9-17"
+        ],
+        "modules": [
+          "mcp-server",
+          "core",
+          "protocol",
+          "ext/extension-api"
+        ],
         "verified": true
       },
       {
@@ -1080,9 +1795,24 @@
           "Stable and experimental export sets must stay disjoint so an experimental type cannot leak into the stable contract."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["GENERATED_TS_HEADER = '// GENERATED CODE! DO NOT MODIFY BY HAND!'", "IGNORED_DEFINITIONS = [\"Option<()>\"]", "JSON_V1_ALLOWLIST = [\"InitializeParams\", \"InitializeResponse\"]", "EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON = [\"rawResponseItem/completed\", \"rawResponse/completed\"]"],
-        "evidence": ["codex-rs/app-server-protocol/src/precomputed_exports.rs:14-37", "codex-rs/app-server-protocol/src/precomputed_exports.rs:62-73", "codex-rs/app-server-protocol/src/export.rs:43-68", "codex-rs/app-server-protocol/src/schema_fixtures.rs:32-45", "codex-rs/app-server-protocol/src/schema_fixtures.rs:86-90", "codex-rs/app-server-protocol/src/rpc.rs:1-11"],
-        "modules": ["app-server-protocol", "app-server-protocol-noop-macros"],
+        "constants": [
+          "GENERATED_TS_HEADER = '// GENERATED CODE! DO NOT MODIFY BY HAND!'",
+          "IGNORED_DEFINITIONS = [\"Option<()>\"]",
+          "JSON_V1_ALLOWLIST = [\"InitializeParams\", \"InitializeResponse\"]",
+          "EXCLUDED_SERVER_NOTIFICATION_METHODS_FOR_JSON = [\"rawResponseItem/completed\", \"rawResponse/completed\"]"
+        ],
+        "evidence": [
+          "codex-rs/app-server-protocol/src/precomputed_exports.rs:14-37",
+          "codex-rs/app-server-protocol/src/precomputed_exports.rs:62-73",
+          "codex-rs/app-server-protocol/src/export.rs:43-68",
+          "codex-rs/app-server-protocol/src/schema_fixtures.rs:32-45",
+          "codex-rs/app-server-protocol/src/schema_fixtures.rs:86-90",
+          "codex-rs/app-server-protocol/src/rpc.rs:1-11"
+        ],
+        "modules": [
+          "app-server-protocol",
+          "app-server-protocol-noop-macros"
+        ],
         "verified": true
       },
       {
@@ -1097,8 +1827,17 @@
           "serialize failure fallback unwraps to a JSON error object (exec/src/event_processor_with_jsonl_output.rs:107-110)",
           "Flags: --json / --experimental-json, --output-schema, --output-last-message, --ephemeral, --strict-config, --thread-source, --skip-git-repo-check, --ignore-user-config, --ignore-rules (exec/src/cli.rs:21-79)"
         ],
-        "evidence": ["codex-rs/exec/src/cli.rs:21-79", "codex-rs/exec/src/event_processor_with_jsonl_output.rs:58-110", "codex-rs/exec/src/event_processor.rs:1-48"],
-        "modules": ["exec", "core", "protocol", "cli"],
+        "evidence": [
+          "codex-rs/exec/src/cli.rs:21-79",
+          "codex-rs/exec/src/event_processor_with_jsonl_output.rs:58-110",
+          "codex-rs/exec/src/event_processor.rs:1-48"
+        ],
+        "modules": [
+          "exec",
+          "core",
+          "protocol",
+          "cli"
+        ],
         "verified": true
       },
       {
@@ -1114,8 +1853,17 @@
           "TOKIO_WORKER_STACK_SIZE_BYTES = 16 MiB (arg0/src/lib.rs:25)",
           "Helper arg1 constants: CODEX_CORE_APPLY_PATCH_ARG1, CODEX_ARG0_EXEC_HELPER_ARG1, CODEX_FS_HELPER_ARG1, CODEX_LINUX_SANDBOX_ARG0, CODEX_WINDOWS_SANDBOX_ARG1 (arg0/src/lib.rs:7-15)"
         ],
-        "evidence": ["codex-rs/arg0/src/lib.rs:1-31"],
-        "modules": ["arg0", "apply-patch", "linux-sandbox", "windows-sandbox-rs", "exec-server", "install-context"],
+        "evidence": [
+          "codex-rs/arg0/src/lib.rs:1-31"
+        ],
+        "modules": [
+          "arg0",
+          "apply-patch",
+          "linux-sandbox",
+          "windows-sandbox-rs",
+          "exec-server",
+          "install-context"
+        ],
         "verified": true
       }
     ],
@@ -1137,8 +1885,22 @@
           "PHASE2_SUCCESS_COOLDOWN_SECONDS = 6 h; PHASE2_INPUT_SELECTION_PAGE_SIZE = 512; DEFAULT_RETRY_REMAINING = 3",
           "Feature::MemoryTool key 'memories' = Stage::Stable, default_enabled FALSE (features/src/lib.rs:984-989)"
         ],
-        "evidence": ["codex-rs/memories/write/src/start.rs:24-81", "codex-rs/memories/write/src/lib.rs:78-108", "codex-rs/memories/write/src/phase1.rs:149-428", "codex-rs/memories/write/src/phase2.rs:49-487", "codex-rs/memories/write/src/guard.rs:38-59", "codex-rs/state/src/runtime/memories.rs:396-429", "codex-rs/features/src/lib.rs:984-989"],
-        "modules": ["memories", "state", "config", "secrets", "features"],
+        "evidence": [
+          "codex-rs/memories/write/src/start.rs:24-81",
+          "codex-rs/memories/write/src/lib.rs:78-108",
+          "codex-rs/memories/write/src/phase1.rs:149-428",
+          "codex-rs/memories/write/src/phase2.rs:49-487",
+          "codex-rs/memories/write/src/guard.rs:38-59",
+          "codex-rs/state/src/runtime/memories.rs:396-429",
+          "codex-rs/features/src/lib.rs:984-989"
+        ],
+        "modules": [
+          "memories",
+          "state",
+          "config",
+          "secrets",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -1156,8 +1918,21 @@
           "DEFAULT_SEARCH_MAX_RESULTS = 200; DEFAULT_LIST_MAX_RESULTS = 2_000; DEFAULT_READ_MAX_TOKENS = 20_000 (ext/memories/src/local)",
           "Requires `memories.dedicated_tools` to register the tools; MemoriesConfig defaults dedicated_tools=false, use_memories=true, generate_memories=true (config/src/types.rs:339-345; ext/memories/src/tools/mod.rs:40-78)"
         ],
-        "evidence": ["codex-rs/ext/memories/src/lib.rs:11-22", "codex-rs/ext/memories/src/prompts.rs:23-51", "codex-rs/ext/memories/src/local/search.rs:17-89", "codex-rs/memories/read/src/citations.rs:6-51", "codex-rs/memories/read/src/usage.rs:27-59", "codex-rs/state/src/runtime/memories.rs:55-86"],
-        "modules": ["memories", "ext/memories", "core", "protocol", "state"],
+        "evidence": [
+          "codex-rs/ext/memories/src/lib.rs:11-22",
+          "codex-rs/ext/memories/src/prompts.rs:23-51",
+          "codex-rs/ext/memories/src/local/search.rs:17-89",
+          "codex-rs/memories/read/src/citations.rs:6-51",
+          "codex-rs/memories/read/src/usage.rs:27-59",
+          "codex-rs/state/src/runtime/memories.rs:55-86"
+        ],
+        "modules": [
+          "memories",
+          "ext/memories",
+          "core",
+          "protocol",
+          "state"
+        ],
         "verified": true
       },
       {
@@ -1169,9 +1944,18 @@
           "Oversized records must be dropped without accumulating their bytes (rollout/src/reverse_jsonl_scanner.rs:62-66, :98-102)."
         ],
         "failurePolicy": "fail-soft",
-        "constants": ["READ_CHUNK_SIZE = 64 * 1024 (rollout/src/reverse_jsonl_scanner.rs:8)"],
-        "evidence": ["codex-rs/rollout/src/reverse_jsonl_scanner.rs:8", "codex-rs/rollout/src/reverse_jsonl_scanner.rs:19-60", "codex-rs/rollout/src/reverse_jsonl_scanner.rs:62-129", "codex-rs/rollout/src/session_index.rs:286-296"],
-        "modules": ["rollout"],
+        "constants": [
+          "READ_CHUNK_SIZE = 64 * 1024 (rollout/src/reverse_jsonl_scanner.rs:8)"
+        ],
+        "evidence": [
+          "codex-rs/rollout/src/reverse_jsonl_scanner.rs:8",
+          "codex-rs/rollout/src/reverse_jsonl_scanner.rs:19-60",
+          "codex-rs/rollout/src/reverse_jsonl_scanner.rs:62-129",
+          "codex-rs/rollout/src/session_index.rs:286-296"
+        ],
+        "modules": [
+          "rollout"
+        ],
         "verified": true
       },
       {
@@ -1183,9 +1967,18 @@
           "Name resolution must keep walking after a match until an id resolves to a loadable rollout (rollout/src/session_index.rs:194-208)."
         ],
         "failurePolicy": "fail-soft",
-        "constants": ["SESSION_INDEX_FILE = \"session_index.jsonl\" (rollout/src/session_index.rs:21-22)"],
-        "evidence": ["codex-rs/rollout/src/session_index.rs:21-71", "codex-rs/rollout/src/session_index.rs:74-153", "codex-rs/rollout/src/session_index.rs:178-233", "codex-rs/rollout/src/session_index.rs:251-296"],
-        "modules": ["rollout"],
+        "constants": [
+          "SESSION_INDEX_FILE = \"session_index.jsonl\" (rollout/src/session_index.rs:21-22)"
+        ],
+        "evidence": [
+          "codex-rs/rollout/src/session_index.rs:21-71",
+          "codex-rs/rollout/src/session_index.rs:74-153",
+          "codex-rs/rollout/src/session_index.rs:178-233",
+          "codex-rs/rollout/src/session_index.rs:251-296"
+        ],
+        "modules": [
+          "rollout"
+        ],
         "verified": true
       },
       {
@@ -1197,9 +1990,21 @@
           "Snippets come only from user/agent message text; images and audio contribute no text (rollout/src/search.rs:256-305)."
         ],
         "failurePolicy": "mixed",
-        "constants": ["MATCH_CONTEXT_BEFORE_CHARS = 48; MATCH_CONTEXT_AFTER_CHARS = 96", "scan page size = page_size * 8 clamped to [256, 2048]"],
-        "evidence": ["codex-rs/rollout/src/search.rs:23-24", "codex-rs/rollout/src/search.rs:43-118", "codex-rs/rollout/src/search.rs:178-254", "codex-rs/rollout/src/search.rs:256-333", "codex-rs/thread-store/src/local/search_threads.rs:75-147"],
-        "modules": ["rollout", "thread-store"],
+        "constants": [
+          "MATCH_CONTEXT_BEFORE_CHARS = 48; MATCH_CONTEXT_AFTER_CHARS = 96",
+          "scan page size = page_size * 8 clamped to [256, 2048]"
+        ],
+        "evidence": [
+          "codex-rs/rollout/src/search.rs:23-24",
+          "codex-rs/rollout/src/search.rs:43-118",
+          "codex-rs/rollout/src/search.rs:178-254",
+          "codex-rs/rollout/src/search.rs:256-333",
+          "codex-rs/thread-store/src/local/search_threads.rs:75-147"
+        ],
+        "modules": [
+          "rollout",
+          "thread-store"
+        ],
         "verified": true
       },
       {
@@ -1211,9 +2016,21 @@
           "Snippet highlight ranges are UTF-16 offsets and must be computed from the same slicing used to build the snippet (thread-store/src/local/thread_history/search.rs:445-475)."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["SNIPPET_CONTEXT_BEFORE_CHARS = 48; SNIPPET_CONTEXT_AFTER_CHARS = 96", "page size must be > 0; empty or whitespace search_term is rejected with InvalidRequest"],
-        "evidence": ["codex-rs/thread-store/src/local/thread_history/search.rs:30-31", "codex-rs/thread-store/src/local/thread_history/search.rs:50-165", "codex-rs/thread-store/src/local/thread_history/search.rs:275-351", "codex-rs/thread-store/src/local/thread_history/search.rs:392-475", "codex-rs/thread-store/src/local/thread_history/read.rs:30-50"],
-        "modules": ["thread-store", "state"],
+        "constants": [
+          "SNIPPET_CONTEXT_BEFORE_CHARS = 48; SNIPPET_CONTEXT_AFTER_CHARS = 96",
+          "page size must be > 0; empty or whitespace search_term is rejected with InvalidRequest"
+        ],
+        "evidence": [
+          "codex-rs/thread-store/src/local/thread_history/search.rs:30-31",
+          "codex-rs/thread-store/src/local/thread_history/search.rs:50-165",
+          "codex-rs/thread-store/src/local/thread_history/search.rs:275-351",
+          "codex-rs/thread-store/src/local/thread_history/search.rs:392-475",
+          "codex-rs/thread-store/src/local/thread_history/read.rs:30-50"
+        ],
+        "modules": [
+          "thread-store",
+          "state"
+        ],
         "verified": true
       },
       {
@@ -1225,9 +2042,20 @@
           "limit and threads are NonZero, so a session cannot be constructed with zero threads or zero results (file-search/src/lib.rs:105-133)."
         ],
         "failurePolicy": "fail-soft",
-        "constants": ["default limit = 20 (NonZero); default threads = 2 (NonZero)", "walker CHECK_INTERVAL = 1024 entries", "matcher TICK_TIMEOUT_MS = 10; idle select timeout = 100 ms"],
-        "evidence": ["codex-rs/file-search/src/lib.rs:96-133", "codex-rs/file-search/src/lib.rs:143-217", "codex-rs/file-search/src/lib.rs:405-497", "codex-rs/file-search/src/lib.rs:499-615"],
-        "modules": ["file-search"],
+        "constants": [
+          "default limit = 20 (NonZero); default threads = 2 (NonZero)",
+          "walker CHECK_INTERVAL = 1024 entries",
+          "matcher TICK_TIMEOUT_MS = 10; idle select timeout = 100 ms"
+        ],
+        "evidence": [
+          "codex-rs/file-search/src/lib.rs:96-133",
+          "codex-rs/file-search/src/lib.rs:143-217",
+          "codex-rs/file-search/src/lib.rs:405-497",
+          "codex-rs/file-search/src/lib.rs:499-615"
+        ],
+        "modules": [
+          "file-search"
+        ],
         "verified": true
       },
       {
@@ -1245,8 +2073,18 @@
           "PROMPT_IMAGE_PATCH_SIZE = 32; MAX_DIMENSION = 2048; MAX_IMAGE_CACHE_BYTES = 64 MiB (utils/image/src/lib.rs:24-32)",
           "Feature::UnifiedImageBudget is Stage::UnderDevelopment, default_enabled false (features/src/lib.rs:1307-1309)"
         ],
-        "evidence": ["codex-rs/protocol/src/local_media.rs:13-45", "codex-rs/core/src/image_preparation.rs:21-95", "codex-rs/utils/image/src/lib.rs:23-32", "codex-rs/features/src/lib.rs:1307-1309"],
-        "modules": ["core", "protocol", "utils/image", "features"],
+        "evidence": [
+          "codex-rs/protocol/src/local_media.rs:13-45",
+          "codex-rs/core/src/image_preparation.rs:21-95",
+          "codex-rs/utils/image/src/lib.rs:23-32",
+          "codex-rs/features/src/lib.rs:1307-1309"
+        ],
+        "modules": [
+          "core",
+          "protocol",
+          "utils/image",
+          "features"
+        ],
         "verified": true
       }
     ],
@@ -1265,8 +2103,20 @@
           "Metric names include codex.tool.call, codex.tool.call.duration_ms, codex.api_request, codex.sse_event, codex.websocket.request, codex.turn.e2e_duration_ms, codex.turn.ttft.duration_ms, codex.turn.token_usage, codex.startup.phase.duration_ms",
           "Feature::RuntimeMetrics key 'runtime_metrics' is Stage::UnderDevelopment, default_enabled FALSE (features/src/lib.rs:972-977) — the runtime summary reader is off by default"
         ],
-        "evidence": ["codex-rs/otel/src/events/session_telemetry.rs:106-261", "codex-rs/otel/src/events/session_telemetry.rs:451-490", "codex-rs/otel/src/events/session_telemetry.rs:945-1007", "codex-rs/otel/src/metrics/client.rs:302-359", "codex-rs/otel/src/provider.rs:62-130", "codex-rs/core/src/otel_init.rs:68-95", "codex-rs/features/src/lib.rs:972-977"],
-        "modules": ["otel", "core", "features"],
+        "evidence": [
+          "codex-rs/otel/src/events/session_telemetry.rs:106-261",
+          "codex-rs/otel/src/events/session_telemetry.rs:451-490",
+          "codex-rs/otel/src/events/session_telemetry.rs:945-1007",
+          "codex-rs/otel/src/metrics/client.rs:302-359",
+          "codex-rs/otel/src/provider.rs:62-130",
+          "codex-rs/core/src/otel_init.rs:68-95",
+          "codex-rs/features/src/lib.rs:972-977"
+        ],
+        "modules": [
+          "otel",
+          "core",
+          "features"
+        ],
         "verified": true
       },
       {
@@ -1284,8 +2134,18 @@
           "LOG_PARTITION_SIZE_LIMIT_BYTES = 10 MiB; LOG_PARTITION_ROW_LIMIT = 1_000; LOG_RETENTION_DAYS = 10",
           "DB_INIT_METRIC = codex.sqlite.init.count; DB_INIT_DURATION_METRIC = codex.sqlite.init.duration_ms; DB_FALLBACK_METRIC = codex.sqlite.fallback.count"
         ],
-        "evidence": ["codex-rs/state/src/telemetry.rs:11-36", "codex-rs/state/src/telemetry.rs:61-193", "codex-rs/state/src/log_db.rs:49-74", "codex-rs/state/src/runtime/logs.rs:10-95", "codex-rs/state/src/audit.rs:19-46", "codex-rs/state/src/sqlite.rs:231-305"],
-        "modules": ["state", "core"],
+        "evidence": [
+          "codex-rs/state/src/telemetry.rs:11-36",
+          "codex-rs/state/src/telemetry.rs:61-193",
+          "codex-rs/state/src/log_db.rs:49-74",
+          "codex-rs/state/src/runtime/logs.rs:10-95",
+          "codex-rs/state/src/audit.rs:19-46",
+          "codex-rs/state/src/sqlite.rs:231-305"
+        ],
+        "modules": [
+          "state",
+          "core"
+        ],
         "verified": true
       },
       {
@@ -1302,8 +2162,15 @@
           "TRACE_MANIFEST_SCHEMA_VERSION = 1; REDUCED_TRACE_SCHEMA_VERSION = 1",
           "Payload naming raw_payload:{ordinal} -> payloads/{ordinal}.json; event log flushed after every append"
         ],
-        "evidence": ["codex-rs/rollout-trace/src/bundle.rs:1-49", "codex-rs/rollout-trace/src/writer.rs:31-106", "codex-rs/rollout-trace/src/writer.rs:108-155", "codex-rs/rollout-trace/src/lib.rs:23-78"],
-        "modules": ["rollout-trace"],
+        "evidence": [
+          "codex-rs/rollout-trace/src/bundle.rs:1-49",
+          "codex-rs/rollout-trace/src/writer.rs:31-106",
+          "codex-rs/rollout-trace/src/writer.rs:108-155",
+          "codex-rs/rollout-trace/src/lib.rs:23-78"
+        ],
+        "modules": [
+          "rollout-trace"
+        ],
         "verified": true
       },
       {
@@ -1321,8 +2188,20 @@
           "DOCTOR_FEEDBACK_REPORT_TIMEOUT = 25 s; MAX_DOCTOR_TAG_VALUE_LEN = 256",
           "Attachments: codex-logs.log, codex-doctor-report.json, codex-connectivity-diagnostics.txt, codex-apps-tools-cache.json, codex-app-directory-cache.json, windows-sandbox.log"
         ],
-        "evidence": ["codex-rs/feedback/src/lib.rs:37-50", "codex-rs/feedback/src/lib.rs:196-265", "codex-rs/feedback/src/lib.rs:409-445", "codex-rs/feedback/src/lib.rs:495-618", "codex-rs/feedback/src/lib.rs:620-743", "codex-rs/feedback/src/feedback_diagnostics.rs:3-88", "codex-rs/app-server/src/request_processors/feedback_doctor_report.rs:23-116"],
-        "modules": ["feedback", "app-server", "tui"],
+        "evidence": [
+          "codex-rs/feedback/src/lib.rs:37-50",
+          "codex-rs/feedback/src/lib.rs:196-265",
+          "codex-rs/feedback/src/lib.rs:409-445",
+          "codex-rs/feedback/src/lib.rs:495-618",
+          "codex-rs/feedback/src/lib.rs:620-743",
+          "codex-rs/feedback/src/feedback_diagnostics.rs:3-88",
+          "codex-rs/app-server/src/request_processors/feedback_doctor_report.rs:23-116"
+        ],
+        "modules": [
+          "feedback",
+          "app-server",
+          "tui"
+        ],
         "verified": true
       },
       {
@@ -1334,9 +2213,23 @@
           "The in-flight observation channel is bounded and drops rather than blocking the turn loop, and the worker is cancelled on Drop (app-server/src/turn_cost_worker.rs:24, :96, :121-130)."
         ],
         "failurePolicy": "fail-soft",
-        "constants": ["POLL_INTERVAL = 150 s; REQUEST_TIMEOUT = 15 s", "OBSERVATION_CHANNEL_CAPACITY = 16_384", "MAX_TRACKED_TURNS = 4_096; MAX_QUERY_TURNS = 100; MAX_STALLED_POLL_ATTEMPTS = 5"],
-        "evidence": ["codex-rs/app-server/src/turn_cost_worker.rs:22-27", "codex-rs/app-server/src/turn_cost_worker.rs:87-130", "codex-rs/app-server/src/turn_cost_worker.rs:355-425", "codex-rs/otel/src/events/session_telemetry.rs:263-280", "codex-rs/backend-client/src/client/turn_usage.rs:46"],
-        "modules": ["app-server", "otel", "backend-client"],
+        "constants": [
+          "POLL_INTERVAL = 150 s; REQUEST_TIMEOUT = 15 s",
+          "OBSERVATION_CHANNEL_CAPACITY = 16_384",
+          "MAX_TRACKED_TURNS = 4_096; MAX_QUERY_TURNS = 100; MAX_STALLED_POLL_ATTEMPTS = 5"
+        ],
+        "evidence": [
+          "codex-rs/app-server/src/turn_cost_worker.rs:22-27",
+          "codex-rs/app-server/src/turn_cost_worker.rs:87-130",
+          "codex-rs/app-server/src/turn_cost_worker.rs:355-425",
+          "codex-rs/otel/src/events/session_telemetry.rs:263-280",
+          "codex-rs/backend-client/src/client/turn_usage.rs:46"
+        ],
+        "modules": [
+          "app-server",
+          "otel",
+          "backend-client"
+        ],
         "verified": true
       },
       {
@@ -1354,8 +2247,19 @@
           "PROXY_ATTRIBUTION_TOKEN_ENV_KEY = \"CODEX_NETWORK_PROXY_ATTRIBUTION\"",
           "Feature::NetworkProxy key 'network_proxy' = Stage::Experimental, default_enabled FALSE (features/src/lib.rs:1099-1107)"
         ],
-        "evidence": ["codex-rs/network-proxy/src/attribution.rs:12-139", "codex-rs/network-proxy/src/network_policy.rs:20-112", "codex-rs/network-proxy/src/lib.rs:30-100", "codex-rs/network-proxy/src/mitm_hook.rs:26-64", "codex-rs/features/src/lib.rs:1099-1107"],
-        "modules": ["network-proxy", "features", "core", "sandboxing"],
+        "evidence": [
+          "codex-rs/network-proxy/src/attribution.rs:12-139",
+          "codex-rs/network-proxy/src/network_policy.rs:20-112",
+          "codex-rs/network-proxy/src/lib.rs:30-100",
+          "codex-rs/network-proxy/src/mitm_hook.rs:26-64",
+          "codex-rs/features/src/lib.rs:1099-1107"
+        ],
+        "modules": [
+          "network-proxy",
+          "features",
+          "core",
+          "sandboxing"
+        ],
         "verified": true
       },
       {
@@ -1372,8 +2276,18 @@
           "Turn facts: TurnProfileFact, TurnTokenUsageFact, TurnResolvedConfigFact, AppInvocation (core/src/tasks/mod.rs:718-777)",
           "Per-turn histograms emitted for tool calls, token usage by token type, unified-exec running processes, network proxy active, memory read-allowed (core/src/tasks/mod.rs:657-766)"
         ],
-        "evidence": ["codex-rs/features/src/lib.rs:490-506", "codex-rs/core/src/tasks/mod.rs:657-777", "codex-rs/analytics/src/reducer.rs:414-432", "codex-rs/analytics/src/reducer.rs:1109-1117"],
-        "modules": ["analytics", "features", "core", "otel"],
+        "evidence": [
+          "codex-rs/features/src/lib.rs:490-506",
+          "codex-rs/core/src/tasks/mod.rs:657-777",
+          "codex-rs/analytics/src/reducer.rs:414-432",
+          "codex-rs/analytics/src/reducer.rs:1109-1117"
+        ],
+        "modules": [
+          "analytics",
+          "features",
+          "core",
+          "otel"
+        ],
         "verified": true
       },
       {
@@ -1384,9 +2298,19 @@
           "Gauge names are a process-wide flat namespace and must stay unique."
         ],
         "failurePolicy": "fail-open",
-        "constants": ["Gauge names: core.turns.active (core/src/tasks/mod.rs:68), core.mailbox.pending (core/src/session/input_queue.rs:17)"],
-        "evidence": ["codex-rs/core/src/tasks/mod.rs:68", "codex-rs/core/src/tasks/mod.rs:428", "codex-rs/core/src/session/input_queue.rs:17", "codex-rs/core/src/session/input_queue.rs:134"],
-        "modules": ["diagnostics", "core"],
+        "constants": [
+          "Gauge names: core.turns.active (core/src/tasks/mod.rs:68), core.mailbox.pending (core/src/session/input_queue.rs:17)"
+        ],
+        "evidence": [
+          "codex-rs/core/src/tasks/mod.rs:68",
+          "codex-rs/core/src/tasks/mod.rs:428",
+          "codex-rs/core/src/session/input_queue.rs:17",
+          "codex-rs/core/src/session/input_queue.rs:134"
+        ],
+        "modules": [
+          "diagnostics",
+          "core"
+        ],
         "verified": true
       }
     ],
@@ -1400,9 +2324,21 @@
           "Every EventMsg carries a sibling `Event.id` used as the turn id by consumers (app-server/src/bespoke_event_handling.rs:154-157)."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["~90 EventMsg variants from Error through SubAgentActivity (protocol/src/protocol.rs:1288-1498)", "Two variants carry legacy wire renames with aliases: task_started/turn_started and task_complete/turn_complete (protocol/src/protocol.rs:1331, :1340)"],
-        "evidence": ["codex-rs/protocol/src/protocol.rs:1282-1341", "codex-rs/protocol/src/protocol.rs:1365-1498", "codex-rs/app-server/src/bespoke_event_handling.rs:143-205"],
-        "modules": ["protocol", "core", "app-server", "app-server-protocol"],
+        "constants": [
+          "~90 EventMsg variants from Error through SubAgentActivity (protocol/src/protocol.rs:1288-1498)",
+          "Two variants carry legacy wire renames with aliases: task_started/turn_started and task_complete/turn_complete (protocol/src/protocol.rs:1331, :1340)"
+        ],
+        "evidence": [
+          "codex-rs/protocol/src/protocol.rs:1282-1341",
+          "codex-rs/protocol/src/protocol.rs:1365-1498",
+          "codex-rs/app-server/src/bespoke_event_handling.rs:143-205"
+        ],
+        "modules": [
+          "protocol",
+          "core",
+          "app-server",
+          "app-server-protocol"
+        ],
         "verified": true
       },
       {
@@ -1419,8 +2355,20 @@
           "Experimental gating convention '<method>' or '<method>.<field>' as the reason identifier (app-server-protocol/src/experimental_api.rs:16-19)",
           "Known oddity recorded in source: experimental_api_enabled is scoped per connection, not per instance (app-server/src/request_processors/initialize_processor.rs:63-68)"
         ],
-        "evidence": ["codex-rs/app-server-protocol/src/protocol/common.rs:1554-1583", "codex-rs/app-server-protocol/src/protocol/common.rs:1804-1863", "codex-rs/app-server-protocol/src/protocol/v1.rs:43-66", "codex-rs/app-server-protocol/src/experimental_api.rs:4-32", "codex-rs/app-server/src/message_processor.rs:873-888", "codex-rs/app-server/src/request_processors/initialize_processor.rs:59-109"],
-        "modules": ["app-server-protocol", "app-server", "app-server-client", "codex-experimental-api-macros"],
+        "evidence": [
+          "codex-rs/app-server-protocol/src/protocol/common.rs:1554-1583",
+          "codex-rs/app-server-protocol/src/protocol/common.rs:1804-1863",
+          "codex-rs/app-server-protocol/src/protocol/v1.rs:43-66",
+          "codex-rs/app-server-protocol/src/experimental_api.rs:4-32",
+          "codex-rs/app-server/src/message_processor.rs:873-888",
+          "codex-rs/app-server/src/request_processors/initialize_processor.rs:59-109"
+        ],
+        "modules": [
+          "app-server-protocol",
+          "app-server",
+          "app-server-client",
+          "codex-experimental-api-macros"
+        ],
         "verified": true
       },
       {
@@ -1432,9 +2380,22 @@
           "Only HookStarted, HookCompleted, McpServerStatusUpdated and buffered requests survive a session refresh; everything else is dropped on rebase (tui/src/app/thread_events.rs:56-67)."
         ],
         "failurePolicy": "fail-soft",
-        "constants": ["THREAD_EVENT_CHANNEL_CAPACITY = 32768 events per thread (tui/src/app.rs:258)", "MAX_COALESCED_AGENT_MESSAGE_DELTA_BYTES = 4 KiB; MAX_BUFFERED_AGENT_MESSAGE_DELTA_BYTES = 256 KiB (tui/src/app/thread_event_buffer.rs:9-10)"],
-        "evidence": ["codex-rs/tui/src/app/app_server_event_targets.rs:37-198", "codex-rs/tui/src/app/thread_event_buffer.rs:9-76", "codex-rs/tui/src/app/thread_events.rs:41-113", "codex-rs/tui/src/app.rs:258", "codex-rs/tui/src/chatwidget/protocol.rs:4-130"],
-        "modules": ["tui", "app-server-client", "app-server-protocol"],
+        "constants": [
+          "THREAD_EVENT_CHANNEL_CAPACITY = 32768 events per thread (tui/src/app.rs:258)",
+          "MAX_COALESCED_AGENT_MESSAGE_DELTA_BYTES = 4 KiB; MAX_BUFFERED_AGENT_MESSAGE_DELTA_BYTES = 256 KiB (tui/src/app/thread_event_buffer.rs:9-10)"
+        ],
+        "evidence": [
+          "codex-rs/tui/src/app/app_server_event_targets.rs:37-198",
+          "codex-rs/tui/src/app/thread_event_buffer.rs:9-76",
+          "codex-rs/tui/src/app/thread_events.rs:41-113",
+          "codex-rs/tui/src/app.rs:258",
+          "codex-rs/tui/src/chatwidget/protocol.rs:4-130"
+        ],
+        "modules": [
+          "tui",
+          "app-server-client",
+          "app-server-protocol"
+        ],
         "verified": true
       },
       {
@@ -1452,8 +2413,22 @@
           "terminal_probe::DEFAULT_TIMEOUT = 100 ms (tui/src/terminal_probe.rs:20)",
           "TerminalName has 14 variants including Dumb and Unknown; Multiplexer = Tmux{version} | Zellij{version} (terminal-detection/src/lib.rs:25-71)"
         ],
-        "evidence": ["codex-rs/tui/src/lib.rs:1773-1786", "codex-rs/tui/src/tui.rs:422-428", "codex-rs/tui/src/tui.rs:438-527", "codex-rs/tui/src/tui.rs:654-662", "codex-rs/tui/src/tui.rs:723-818", "codex-rs/tui/src/terminal_probe.rs:20", "codex-rs/terminal-detection/src/lib.rs:10-87", "codex-rs/protocol/src/config_types.rs:635-648"],
-        "modules": ["tui", "terminal-detection", "config", "protocol"],
+        "evidence": [
+          "codex-rs/tui/src/lib.rs:1773-1786",
+          "codex-rs/tui/src/tui.rs:422-428",
+          "codex-rs/tui/src/tui.rs:438-527",
+          "codex-rs/tui/src/tui.rs:654-662",
+          "codex-rs/tui/src/tui.rs:723-818",
+          "codex-rs/tui/src/terminal_probe.rs:20",
+          "codex-rs/terminal-detection/src/lib.rs:10-87",
+          "codex-rs/protocol/src/config_types.rs:635-648"
+        ],
+        "modules": [
+          "tui",
+          "terminal-detection",
+          "config",
+          "protocol"
+        ],
         "verified": true
       },
       {
@@ -1470,8 +2445,20 @@
           "A JSON-schema generator exists for the config surface (config/src/schema.rs: 270 lines)",
           "Cloud-sourced config is a separate 9-file crate (cloud-config)"
         ],
-        "evidence": ["codex-rs/config/src/lib.rs:1-181", "codex-rs/core/src/config/requirements.rs:1-187", "codex-rs/core/src/config/managed_features.rs:1-329", "codex-rs/core/src/config/permission_profile_catalog.rs:20-96", "codex-rs/config/src/schema.rs:1-40", "codex-rs/cloud-config/src/lib.rs:1-14"],
-        "modules": ["config", "cloud-config", "core", "app-server"],
+        "evidence": [
+          "codex-rs/config/src/lib.rs:1-181",
+          "codex-rs/core/src/config/requirements.rs:1-187",
+          "codex-rs/core/src/config/managed_features.rs:1-329",
+          "codex-rs/core/src/config/permission_profile_catalog.rs:20-96",
+          "codex-rs/config/src/schema.rs:1-40",
+          "codex-rs/cloud-config/src/lib.rs:1-14"
+        ],
+        "modules": [
+          "config",
+          "cloud-config",
+          "core",
+          "app-server"
+        ],
         "verified": true
       },
       {
@@ -1488,8 +2475,12 @@
           "available_in_side_conversation allowlist = 10 commands (tui/src/slash_command.rs:188-202)",
           "available_during_task() explicitly denies 24 commands including New, Archive, Fork, Init, Compact, Review, Plan, Clear, Logout (tui/src/slash_command.rs:205-227)"
         ],
-        "evidence": ["codex-rs/tui/src/slash_command.rs:188-283"],
-        "modules": ["tui"],
+        "evidence": [
+          "codex-rs/tui/src/slash_command.rs:188-283"
+        ],
+        "modules": [
+          "tui"
+        ],
         "verified": true
       },
       {
@@ -1500,9 +2491,18 @@
           "Path deserialization must accept both the URI form and the legacy app-path form so a client upgrade is not required in lockstep (protocol/src/capabilities.rs:38-47)."
         ],
         "failurePolicy": "fail-closed",
-        "constants": ["SelectedCapabilityRoot { id, location }; CapabilityRootLocation::Environment { environment_id, path } (protocol/src/capabilities.rs:8-36)"],
-        "evidence": ["codex-rs/protocol/src/capabilities.rs:1-51", "codex-rs/rollout/src/recorder.rs:112"],
-        "modules": ["protocol", "rollout", "core"],
+        "constants": [
+          "SelectedCapabilityRoot { id, location }; CapabilityRootLocation::Environment { environment_id, path } (protocol/src/capabilities.rs:8-36)"
+        ],
+        "evidence": [
+          "codex-rs/protocol/src/capabilities.rs:1-51",
+          "codex-rs/rollout/src/recorder.rs:112"
+        ],
+        "modules": [
+          "protocol",
+          "rollout",
+          "core"
+        ],
         "verified": true
       }
     ]
