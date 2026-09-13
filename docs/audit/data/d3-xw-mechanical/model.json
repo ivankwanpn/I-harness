@@ -1,0 +1,506 @@
+{
+  "domain": "model",
+  "rows": {
+    "provider-agnostic-model-seam-with-retry-only-before-output": {
+      "domain": "model",
+      "label": "provider-agnostic-model-seam-with-retry-only-before-output",
+      "members": {
+        "ih": [
+          "provider-agnostic-model-seam-with-retry-only-before-output"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "five-wire-adapters-with-per-generation-reasoning-translation": {
+      "domain": "model",
+      "label": "five-wire-adapters-with-per-generation-reasoning-translation",
+      "members": {
+        "ih": [
+          "five-wire-adapters-with-per-generation-reasoning-translation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "scripted-mock-model-client-test-seam": {
+      "domain": "model",
+      "label": "scripted-mock-model-client-test-seam",
+      "members": {
+        "ih": [
+          "scripted-mock-model-client-test-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-registry-model-discovery-probe-and-adapter-dispatch": {
+      "domain": "model",
+      "label": "provider-registry-model-discovery-probe-and-adapter-dispatch",
+      "members": {
+        "ih": [
+          "provider-registry-model-discovery-probe-and-adapter-dispatch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "typed-model-resolution-with-a-settings-backed-provider-runtime": {
+      "domain": "model",
+      "label": "typed-model-resolution-with-a-settings-backed-provider-runtime",
+      "members": {
+        "ih": [
+          "typed-model-resolution-with-a-settings-backed-provider-runtime"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ref-based-credential-store-with-env-over-file-precedence": {
+      "domain": "model",
+      "label": "ref-based-credential-store-with-env-over-file-precedence",
+      "members": {
+        "ih": [
+          "ref-based-credential-store-with-env-over-file-precedence"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "llm-adapter-registry-and-route-resolution": {
+      "domain": "model",
+      "label": "llm-adapter-registry-and-route-resolution",
+      "members": {
+        "dsh": [
+          "llm-adapter-registry-and-route-resolution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "model-catalogue-and-exact-model-metadata": {
+      "domain": "model",
+      "label": "model-catalogue-and-exact-model-metadata",
+      "members": {
+        "dsh": [
+          "model-catalogue-and-exact-model-metadata"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-model-discovery-service": {
+      "domain": "model",
+      "label": "provider-model-discovery-service",
+      "members": {
+        "dsh": [
+          "provider-model-discovery-service"
+        ],
+        "opencode-fork": [
+          "live-provider-model-discovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "reasoning-effort-translation": {
+      "domain": "model",
+      "label": "reasoning-effort-translation",
+      "members": {
+        "dsh": [
+          "reasoning-effort-translation"
+        ],
+        "codex": [
+          "reasoning-effort-and-context-metadata-translation"
+        ],
+        "opencode": [
+          "reasoning-effort-variant-translation"
+        ],
+        "opencode-fork": [
+          "reasoning-effort-variant-translation"
+        ],
+        "cc-custom": [
+          "reasoning-effort-translation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "context-window-and-max-output-metadata": {
+      "domain": "model",
+      "label": "context-window-and-max-output-metadata",
+      "members": {
+        "dsh": [
+          "context-window-and-max-output-metadata"
+        ],
+        "cc-custom": [
+          "context-window-and-max-output-metadata"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-credential-resolution-and-layered-sources": {
+      "domain": "model",
+      "label": "provider-credential-resolution-and-layered-sources",
+      "members": {
+        "dsh": [
+          "provider-credential-resolution-and-layered-sources"
+        ],
+        "codex": [
+          "provider-registry-resolution-chain",
+          "provider-credential-resolution-chain"
+        ],
+        "opencode-fork": [
+          "model-resolution-chain"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "oauth-authorization-flow-registry": {
+      "domain": "model",
+      "label": "oauth-authorization-flow-registry",
+      "members": {
+        "dsh": [
+          "oauth-authorization-flow-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-retry-policy-and-execution": {
+      "domain": "model",
+      "label": "provider-retry-policy-and-execution",
+      "members": {
+        "dsh": [
+          "provider-retry-policy-and-execution"
+        ],
+        "opencode": [
+          "llm-request-execution-and-retry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "streaming-call-dispatch-and-chunk-assembly": {
+      "domain": "model",
+      "label": "streaming-call-dispatch-and-chunk-assembly",
+      "members": {
+        "dsh": [
+          "streaming-call-dispatch-and-chunk-assembly"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "llm-failure-taxonomy-and-normalization": {
+      "domain": "model",
+      "label": "llm-failure-taxonomy-and-normalization",
+      "members": {
+        "dsh": [
+          "llm-failure-taxonomy-and-normalization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "deepseek-wire-protocol-and-request-extensions": {
+      "domain": "model",
+      "label": "deepseek-wire-protocol-and-request-extensions",
+      "members": {
+        "dsh": [
+          "deepseek-wire-protocol-and-request-extensions"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-package-attribution-inventory": {
+      "domain": "model",
+      "label": "plugin-package-attribution-inventory",
+      "members": {
+        "dsh": [
+          "plugin-package-attribution-inventory"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "token-metering-and-usage-projection": {
+      "domain": "model",
+      "label": "token-metering-and-usage-projection",
+      "members": {
+        "dsh": [
+          "token-metering-and-usage-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-default-model-resolution": {
+      "domain": "model",
+      "label": "agent-default-model-resolution",
+      "members": {
+        "dsh": [
+          "agent-default-model-resolution"
+        ],
+        "opencode": [
+          "model-default-and-fallback-resolution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "http-proxy-transport-policy": {
+      "domain": "model",
+      "label": "http-proxy-transport-policy",
+      "members": {
+        "dsh": [
+          "http-proxy-transport-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "remote-model-catalog-with-cache-and-bundled-fallback": {
+      "domain": "model",
+      "label": "remote-model-catalog-with-cache-and-bundled-fallback",
+      "members": {
+        "codex": [
+          "remote-model-catalog-with-cache-and-bundled-fallback"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "chatgpt-oauth-pkce-loopback-login": {
+      "domain": "model",
+      "label": "chatgpt-oauth-pkce-loopback-login",
+      "members": {
+        "codex": [
+          "chatgpt-oauth-pkce-loopback-login"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "auth-persistence-backend-and-unauthorized-recovery": {
+      "domain": "model",
+      "label": "auth-persistence-backend-and-unauthorized-recovery",
+      "members": {
+        "codex": [
+          "auth-persistence-backend-and-unauthorized-recovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "responses-websocket-transport-with-https-fallback": {
+      "domain": "model",
+      "label": "responses-websocket-transport-with-https-fallback",
+      "members": {
+        "codex": [
+          "responses-websocket-transport-with-https-fallback"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "models-dev-catalogue-cache": {
+      "domain": "model",
+      "label": "models-dev-catalogue-cache",
+      "members": {
+        "opencode": [
+          "models-dev-catalogue-cache"
+        ],
+        "opencode-fork": [
+          "models-dev-catalogue-cache"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-registry-merge-chain": {
+      "domain": "model",
+      "label": "provider-registry-merge-chain",
+      "members": {
+        "opencode": [
+          "provider-registry-merge-chain"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "model-capability-and-limit-metadata": {
+      "domain": "model",
+      "label": "model-capability-and-limit-metadata",
+      "members": {
+        "opencode": [
+          "model-capability-and-limit-metadata"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-sdk-resolution-and-timeouts": {
+      "domain": "model",
+      "label": "provider-sdk-resolution-and-timeouts",
+      "members": {
+        "opencode": [
+          "provider-sdk-resolution-and-timeouts"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "credential-store-and-oauth-lifecycle": {
+      "domain": "model",
+      "label": "credential-store-and-oauth-lifecycle",
+      "members": {
+        "opencode": [
+          "credential-store-and-oauth-lifecycle"
+        ],
+        "opencode-fork": [
+          "credential-store-with-oauth-refresh"
+        ],
+        "cc-custom": [
+          "subscription-oauth-credential-lifecycle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "models-dev-catalog-projection": {
+      "domain": "model",
+      "label": "models-dev-catalog-projection",
+      "members": {
+        "opencode-fork": [
+          "models-dev-catalog-projection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-catalog-state-availability-policy": {
+      "domain": "model",
+      "label": "provider-catalog-state-availability-policy",
+      "members": {
+        "opencode-fork": [
+          "provider-catalog-state-availability-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "llm-runtime-native-vs-aisdk-selection": {
+      "domain": "model",
+      "label": "llm-runtime-native-vs-aisdk-selection",
+      "members": {
+        "opencode-fork": [
+          "llm-runtime-native-vs-aisdk-selection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "custom-provider-configure-rollback": {
+      "domain": "model",
+      "label": "custom-provider-configure-rollback",
+      "members": {
+        "opencode-fork": [
+          "custom-provider-configure-rollback"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "anthropic-messages-wire-request-assembly": {
+      "domain": "model",
+      "label": "anthropic-messages-wire-request-assembly",
+      "members": {
+        "cc-custom": [
+          "anthropic-messages-wire-request-assembly"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "openai-responses-wire-adapter": {
+      "domain": "model",
+      "label": "openai-responses-wire-adapter",
+      "members": {
+        "cc-custom": [
+          "openai-responses-wire-adapter"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "protocol-selection-and-capability-negotiation": {
+      "domain": "model",
+      "label": "protocol-selection-and-capability-negotiation",
+      "members": {
+        "cc-custom": [
+          "protocol-selection-and-capability-negotiation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "streaming-wire-to-transcript-assembly": {
+      "domain": "model",
+      "label": "streaming-wire-to-transcript-assembly",
+      "members": {
+        "cc-custom": [
+          "streaming-wire-to-transcript-assembly"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "third-party-model-discovery": {
+      "domain": "model",
+      "label": "third-party-model-discovery",
+      "members": {
+        "cc-custom": [
+          "third-party-model-discovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "model-catalogue-alias-and-validation": {
+      "domain": "model",
+      "label": "model-catalogue-alias-and-validation",
+      "members": {
+        "cc-custom": [
+          "model-catalogue-alias-and-validation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "provider-registry-and-env-activation": {
+      "domain": "model",
+      "label": "provider-registry-and-env-activation",
+      "members": {
+        "cc-custom": [
+          "provider-registry-and-env-activation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "client-construction-credentials-and-egress": {
+      "domain": "model",
+      "label": "client-construction-credentials-and-egress",
+      "members": {
+        "cc-custom": [
+          "client-construction-credentials-and-egress"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "retry-backoff-and-rate-limit-policy": {
+      "domain": "model",
+      "label": "retry-backoff-and-rate-limit-policy",
+      "members": {
+        "cc-custom": [
+          "retry-backoff-and-rate-limit-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "beta-header-negotiation": {
+      "domain": "model",
+      "label": "beta-header-negotiation",
+      "members": {
+        "cc-custom": [
+          "beta-header-negotiation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "model-cost-and-usage-costing": {
+      "domain": "model",
+      "label": "model-cost-and-usage-costing",
+      "members": {
+        "cc-custom": [
+          "model-cost-and-usage-costing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "prompt-cache-break-detection": {
+      "domain": "model",
+      "label": "prompt-cache-break-detection",
+      "members": {
+        "cc-custom": [
+          "prompt-cache-break-detection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

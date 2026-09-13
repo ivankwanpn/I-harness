@@ -1,0 +1,429 @@
+{
+  "domain": "interface",
+  "rows": {
+    "tui-event-stream-contract-over-the-session-log": {
+      "domain": "interface",
+      "label": "tui-event-stream-contract-over-the-session-log",
+      "members": {
+        "ih": [
+          "tui-event-stream-contract-over-the-session-log"
+        ],
+        "dsh": [
+          "session-event-stream-contract"
+        ],
+        "codex": [
+          "event-msg-stream-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hard-slash-command-capability-gate": {
+      "domain": "interface",
+      "label": "hard-slash-command-capability-gate",
+      "members": {
+        "ih": [
+          "hard-slash-command-capability-gate"
+        ],
+        "codex": [
+          "slash-command-capability-gating"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "screen-mode-policy-and-host-re-launch-seam": {
+      "domain": "interface",
+      "label": "screen-mode-policy-and-host-re-launch-seam",
+      "members": {
+        "ih": [
+          "screen-mode-policy-and-host-re-launch-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-wire-event-acceptance": {
+      "domain": "interface",
+      "label": "session-wire-event-acceptance",
+      "members": {
+        "dsh": [
+          "session-wire-event-acceptance"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "forwarded-event-subscription-contract": {
+      "domain": "interface",
+      "label": "forwarded-event-subscription-contract",
+      "members": {
+        "dsh": [
+          "forwarded-event-subscription-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "client-remote-stream-supervision": {
+      "domain": "interface",
+      "label": "client-remote-stream-supervision",
+      "members": {
+        "dsh": [
+          "client-remote-stream-supervision"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-projection-consumer-contract": {
+      "domain": "interface",
+      "label": "session-projection-consumer-contract",
+      "members": {
+        "dsh": [
+          "session-projection-consumer-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "settings-seam": {
+      "domain": "interface",
+      "label": "settings-seam",
+      "members": {
+        "dsh": [
+          "settings-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-settings-provider": {
+      "domain": "interface",
+      "label": "file-settings-provider",
+      "members": {
+        "dsh": [
+          "file-settings-provider"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "client-boot-manifest-announcement": {
+      "domain": "interface",
+      "label": "client-boot-manifest-announcement",
+      "members": {
+        "dsh": [
+          "client-boot-manifest-announcement"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "directory-picker-capability-detection": {
+      "domain": "interface",
+      "label": "directory-picker-capability-detection",
+      "members": {
+        "dsh": [
+          "directory-picker-capability-detection"
+        ],
+        "codex": [
+          "screen-mode-and-terminal-capability-detection"
+        ],
+        "opencode": [
+          "capability-detection-endpoint"
+        ],
+        "cc-custom": [
+          "terminal-capability-detection",
+          "hyperlink-capability-detection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "acp-capability-advertisement": {
+      "domain": "interface",
+      "label": "acp-capability-advertisement",
+      "members": {
+        "dsh": [
+          "acp-capability-advertisement"
+        ],
+        "codex": [
+          "app-server-notification-contract-and-capability-negotiation"
+        ],
+        "opencode": [
+          "client-capability-negotiation"
+        ],
+        "opencode-fork": [
+          "acp-capability-negotiation"
+        ],
+        "grok": [
+          "session-capability-gated-command-advertisement"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-presentation-mode-policy": {
+      "domain": "interface",
+      "label": "tool-presentation-mode-policy",
+      "members": {
+        "dsh": [
+          "tool-presentation-mode-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "user-question-interaction-seam": {
+      "domain": "interface",
+      "label": "user-question-interaction-seam",
+      "members": {
+        "dsh": [
+          "user-question-interaction-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "renderer-notification-routing-and-bounded-replay": {
+      "domain": "interface",
+      "label": "renderer-notification-routing-and-bounded-replay",
+      "members": {
+        "codex": [
+          "renderer-notification-routing-and-bounded-replay"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "operator-config-layer-stack-and-requirements": {
+      "domain": "interface",
+      "label": "operator-config-layer-stack-and-requirements",
+      "members": {
+        "codex": [
+          "operator-config-layer-stack-and-requirements"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "selected-capability-roots": {
+      "domain": "interface",
+      "label": "selected-capability-roots",
+      "members": {
+        "codex": [
+          "selected-capability-roots"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "event-envelope-contract": {
+      "domain": "interface",
+      "label": "event-envelope-contract",
+      "members": {
+        "opencode": [
+          "event-envelope-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "versioned-event-manifest": {
+      "domain": "interface",
+      "label": "versioned-event-manifest",
+      "members": {
+        "opencode": [
+          "versioned-event-manifest"
+        ],
+        "opencode-fork": [
+          "event-manifest-versioned-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "screen-mode-policy": {
+      "domain": "interface",
+      "label": "screen-mode-policy",
+      "members": {
+        "opencode": [
+          "screen-mode-policy"
+        ],
+        "opencode-fork": [
+          "renderer-screen-mode-policy"
+        ],
+        "cc-custom": [
+          "screen-mode-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tui-control-channel": {
+      "domain": "interface",
+      "label": "tui-control-channel",
+      "members": {
+        "opencode": [
+          "tui-control-channel"
+        ],
+        "opencode-fork": [
+          "tui-control-request-channel"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "renderer-stream-transport": {
+      "domain": "interface",
+      "label": "renderer-stream-transport",
+      "members": {
+        "opencode": [
+          "renderer-stream-transport"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "event-v2-legacy-payload-bridge": {
+      "domain": "interface",
+      "label": "event-v2-legacy-payload-bridge",
+      "members": {
+        "opencode-fork": [
+          "event-v2-legacy-payload-bridge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "experimental-capabilities-endpoint": {
+      "domain": "interface",
+      "label": "experimental-capabilities-endpoint",
+      "members": {
+        "opencode-fork": [
+          "experimental-capabilities-endpoint"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "plugin-runtime-capability-readiness": {
+      "domain": "interface",
+      "label": "plugin-runtime-capability-readiness",
+      "members": {
+        "opencode-fork": [
+          "plugin-runtime-capability-readiness"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "worker-thread-rpc-bridge": {
+      "domain": "interface",
+      "label": "worker-thread-rpc-bridge",
+      "members": {
+        "opencode-fork": [
+          "worker-thread-rpc-bridge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "queue-state-broadcast-contract": {
+      "domain": "interface",
+      "label": "queue-state-broadcast-contract",
+      "members": {
+        "grok": [
+          "queue-state-broadcast-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "screen-mode-switch-with-in-process-reseed": {
+      "domain": "interface",
+      "label": "screen-mode-switch-with-in-process-reseed",
+      "members": {
+        "grok": [
+          "screen-mode-switch-with-in-process-reseed"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sdk-event-queue": {
+      "domain": "interface",
+      "label": "sdk-event-queue",
+      "members": {
+        "cc-custom": [
+          "sdk-event-queue"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sdk-message-schema-contract": {
+      "domain": "interface",
+      "label": "sdk-message-schema-contract",
+      "members": {
+        "cc-custom": [
+          "sdk-message-schema-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sdk-control-protocol": {
+      "domain": "interface",
+      "label": "sdk-control-protocol",
+      "members": {
+        "cc-custom": [
+          "sdk-control-protocol"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "structured-io-transport": {
+      "domain": "interface",
+      "label": "structured-io-transport",
+      "members": {
+        "cc-custom": [
+          "structured-io-transport"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ndjson-line-safety": {
+      "domain": "interface",
+      "label": "ndjson-line-safety",
+      "members": {
+        "cc-custom": [
+          "ndjson-line-safety"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "terminal-query-protocol": {
+      "domain": "interface",
+      "label": "terminal-query-protocol",
+      "members": {
+        "cc-custom": [
+          "terminal-query-protocol"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "headless-stdin-override": {
+      "domain": "interface",
+      "label": "headless-stdin-override",
+      "members": {
+        "cc-custom": [
+          "headless-stdin-override"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "render-export-seam": {
+      "domain": "interface",
+      "label": "render-export-seam",
+      "members": {
+        "cc-custom": [
+          "render-export-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "print-mode-streaming-loop": {
+      "domain": "interface",
+      "label": "print-mode-streaming-loop",
+      "members": {
+        "cc-custom": [
+          "print-mode-streaming-loop"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "gated-presentation-io-modules": {
+      "domain": "interface",
+      "label": "gated-presentation-io-modules",
+      "members": {
+        "cc-custom": [
+          "gated-presentation-io-modules"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

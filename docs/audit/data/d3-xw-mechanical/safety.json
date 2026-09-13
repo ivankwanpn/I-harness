@@ -1,0 +1,700 @@
+{
+  "domain": "safety",
+  "rows": {
+    "startup-applied-os-sandbox-that-refuses-to-run-unprotected": {
+      "domain": "safety",
+      "label": "startup-applied-os-sandbox-that-refuses-to-run-unprotected",
+      "members": {
+        "ih": [
+          "startup-applied-os-sandbox-that-refuses-to-run-unprotected"
+        ],
+        "grok": [
+          "startup-applied-os-sandbox"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "confinement-covers-only-shell-fs-fs-search-and-terminal-have-no-sandbox-integration": {
+      "domain": "safety",
+      "label": "confinement-covers-only-shell-fs-fs-search-and-terminal-have-no-sandbox-integration",
+      "members": {
+        "ih": [
+          "confinement-covers-only-shell-fs-fs-search-and-terminal-have-no-sandbox-integration"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "read-isolation-is-declared-but-absent-the-gate-is-never-armed-outside-tests": {
+      "domain": "safety",
+      "label": "read-isolation-is-declared-but-absent-the-gate-is-never-armed-outside-tests",
+      "members": {
+        "ih": [
+          "read-isolation-is-declared-but-absent-the-gate-is-never-armed-outside-tests"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "windows-write-restricted-token-backend": {
+      "domain": "safety",
+      "label": "windows-write-restricted-token-backend",
+      "members": {
+        "ih": [
+          "windows-write-restricted-token-backend"
+        ],
+        "dsh": [
+          "windows-acl-write-restricted-token"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sandbox-escalation-ladder-declared-tested-no-production-caller": {
+      "domain": "safety",
+      "label": "sandbox-escalation-ladder-declared-tested-no-production-caller",
+      "members": {
+        "ih": [
+          "sandbox-escalation-ladder-declared-tested-no-production-caller"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sandbox-mode-resolution-and-advisory-prompt-text": {
+      "domain": "safety",
+      "label": "sandbox-mode-resolution-and-advisory-prompt-text",
+      "members": {
+        "ih": [
+          "sandbox-mode-resolution-and-advisory-prompt-text"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "three-layer-approval-policy-with-an-advisory-danger-classifier": {
+      "domain": "safety",
+      "label": "three-layer-approval-policy-with-an-advisory-danger-classifier",
+      "members": {
+        "ih": [
+          "three-layer-approval-policy-with-an-advisory-danger-classifier"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "guardian-auto-review-subagent-with-fail-closed-verdict-and-breaker": {
+      "domain": "safety",
+      "label": "guardian-auto-review-subagent-with-fail-closed-verdict-and-breaker",
+      "members": {
+        "ih": [
+          "guardian-auto-review-subagent-with-fail-closed-verdict-and-breaker"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hooks-as-fail-closed-gates-and-fail-visible-observers": {
+      "domain": "safety",
+      "label": "hooks-as-fail-closed-gates-and-fail-visible-observers",
+      "members": {
+        "ih": [
+          "hooks-as-fail-closed-gates-and-fail-visible-observers"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "agent-preset-as-scoped-per-agent-configuration": {
+      "domain": "safety",
+      "label": "agent-preset-as-scoped-per-agent-configuration",
+      "members": {
+        "ih": [
+          "agent-preset-as-scoped-per-agent-configuration"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "repeat-call-nudge-guard-observational-never-blocking": {
+      "domain": "safety",
+      "label": "repeat-call-nudge-guard-observational-never-blocking",
+      "members": {
+        "ih": [
+          "repeat-call-nudge-guard-observational-never-blocking"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-timeout-guard-converting-a-hang-into-tool-timeout": {
+      "domain": "safety",
+      "label": "tool-timeout-guard-converting-a-hang-into-tool-timeout",
+      "members": {
+        "ih": [
+          "tool-timeout-guard-converting-a-hang-into-tool-timeout"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-retry-guard-with-re-entrancy-protection": {
+      "domain": "safety",
+      "label": "tool-retry-guard-with-re-entrancy-protection",
+      "members": {
+        "ih": [
+          "tool-retry-guard-with-re-entrancy-protection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sandbox-mode-vocabulary-and-per-call-policy": {
+      "domain": "safety",
+      "label": "sandbox-mode-vocabulary-and-per-call-policy",
+      "members": {
+        "dsh": [
+          "sandbox-mode-vocabulary-and-per-call-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "platform-runner-chain-selection-and-probing": {
+      "domain": "safety",
+      "label": "platform-runner-chain-selection-and-probing",
+      "members": {
+        "dsh": [
+          "platform-runner-chain-selection-and-probing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "per-runner-profile-synthesis-and-writable-roots": {
+      "domain": "safety",
+      "label": "per-runner-profile-synthesis-and-writable-roots",
+      "members": {
+        "dsh": [
+          "per-runner-profile-synthesis-and-writable-roots"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "windows-acl-capability-sid-grant-lifecycle": {
+      "domain": "safety",
+      "label": "windows-acl-capability-sid-grant-lifecycle",
+      "members": {
+        "dsh": [
+          "windows-acl-capability-sid-grant-lifecycle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "escalation-ladder-and-approval-choreography": {
+      "domain": "safety",
+      "label": "escalation-ladder-and-approval-choreography",
+      "members": {
+        "dsh": [
+          "escalation-ladder-and-approval-choreography"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "shell-confinement-wrap-and-denial-classification": {
+      "domain": "safety",
+      "label": "shell-confinement-wrap-and-denial-classification",
+      "members": {
+        "dsh": [
+          "shell-confinement-wrap-and-denial-classification"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "fs-mutation-containment-fence": {
+      "domain": "safety",
+      "label": "fs-mutation-containment-fence",
+      "members": {
+        "dsh": [
+          "fs-mutation-containment-fence"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "approval-service-policy-and-audit-pair": {
+      "domain": "safety",
+      "label": "approval-service-policy-and-audit-pair",
+      "members": {
+        "dsh": [
+          "approval-service-policy-and-audit-pair"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "permission-preset-bundling-and-knob-write-path": {
+      "domain": "safety",
+      "label": "permission-preset-bundling-and-knob-write-path",
+      "members": {
+        "dsh": [
+          "permission-preset-bundling-and-knob-write-path"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-sandbox-mode-override-log": {
+      "domain": "safety",
+      "label": "session-sandbox-mode-override-log",
+      "members": {
+        "dsh": [
+          "session-sandbox-mode-override-log"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hooks-as-permission-gates": {
+      "domain": "safety",
+      "label": "hooks-as-permission-gates",
+      "members": {
+        "dsh": [
+          "hooks-as-permission-gates"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "client-approval-and-permission-surfaces": {
+      "domain": "safety",
+      "label": "client-approval-and-permission-surfaces",
+      "members": {
+        "dsh": [
+          "client-approval-and-permission-surfaces"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "human-question-tool-seam": {
+      "domain": "safety",
+      "label": "human-question-tool-seam",
+      "members": {
+        "dsh": [
+          "human-question-tool-seam"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "advisory-repeat-tool-guard": {
+      "domain": "safety",
+      "label": "advisory-repeat-tool-guard",
+      "members": {
+        "dsh": [
+          "advisory-repeat-tool-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "preset-scope-isolation-gate": {
+      "domain": "safety",
+      "label": "preset-scope-isolation-gate",
+      "members": {
+        "dsh": [
+          "preset-scope-isolation-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "permission-profile-model-with-requirement-allowed-catalog": {
+      "domain": "safety",
+      "label": "permission-profile-model-with-requirement-allowed-catalog",
+      "members": {
+        "codex": [
+          "permission-profile-model-with-requirement-allowed-catalog"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-scoped-approval-cache": {
+      "domain": "safety",
+      "label": "session-scoped-approval-cache",
+      "members": {
+        "codex": [
+          "session-scoped-approval-cache"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "platform-sandbox-selection-and-transform": {
+      "domain": "safety",
+      "label": "platform-sandbox-selection-and-transform",
+      "members": {
+        "codex": [
+          "platform-sandbox-selection-and-transform"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "seatbelt-and-bubblewrap-backends": {
+      "domain": "safety",
+      "label": "seatbelt-and-bubblewrap-backends",
+      "members": {
+        "codex": [
+          "seatbelt-and-bubblewrap-backends"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "windows-sandbox-three-levels-with-wfp": {
+      "domain": "safety",
+      "label": "windows-sandbox-three-levels-with-wfp",
+      "members": {
+        "codex": [
+          "windows-sandbox-three-levels-with-wfp"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sandbox-violation-classification": {
+      "domain": "safety",
+      "label": "sandbox-violation-classification",
+      "members": {
+        "codex": [
+          "sandbox-violation-classification"
+        ],
+        "cc-custom": [
+          "sandbox-violation-surfacing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "permission-rule-engine": {
+      "domain": "safety",
+      "label": "permission-rule-engine",
+      "members": {
+        "opencode": [
+          "permission-rule-engine",
+          "session-permission-persistence",
+          "core-permission-service-v2"
+        ],
+        "opencode-fork": [
+          "permission-v2-engine",
+          "permission-v1-to-v2-migration"
+        ],
+        "cc-custom": [
+          "permission-rule-decision-ladder",
+          "permission-mode-model",
+          "permission-rule-shadow-detection"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "permission-ask-queue": {
+      "domain": "safety",
+      "label": "permission-ask-queue",
+      "members": {
+        "opencode": [
+          "permission-ask-queue"
+        ],
+        "opencode-fork": [
+          "permission-ask-and-remembered-rules",
+          "permission-ask-plugin-seam"
+        ],
+        "grok": [
+          "permission-mode-projection-and-queue-drain"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "no-os-level-sandbox": {
+      "domain": "safety",
+      "label": "no-os-level-sandbox",
+      "members": {
+        "opencode": [
+          "no-os-level-sandbox"
+        ],
+        "opencode-fork": [
+          "no-os-level-sandbox"
+        ],
+        "cc-custom": [
+          "os-sandbox-delegation",
+          "sandbox-policy-model"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "mcp-and-external-directory-gates": {
+      "domain": "safety",
+      "label": "mcp-and-external-directory-gates",
+      "members": {
+        "opencode": [
+          "mcp-and-external-directory-gates"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "legacy-permission-rules-shim": {
+      "domain": "safety",
+      "label": "legacy-permission-rules-shim",
+      "members": {
+        "opencode-fork": [
+          "legacy-permission-rules-shim"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subagent-grant-and-blocked-permissions": {
+      "domain": "safety",
+      "label": "subagent-grant-and-blocked-permissions",
+      "members": {
+        "opencode-fork": [
+          "subagent-grant-and-blocked-permissions"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "refuse-to-start-unprotected-sandbox": {
+      "domain": "safety",
+      "label": "refuse-to-start-unprotected-sandbox",
+      "members": {
+        "grok": [
+          "refuse-to-start-unprotected-sandbox"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "predefined-sandbox-profiles-and-anti-hollowing-merge": {
+      "domain": "safety",
+      "label": "predefined-sandbox-profiles-and-anti-hollowing-merge",
+      "members": {
+        "grok": [
+          "predefined-sandbox-profiles-and-anti-hollowing-merge"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bwrap-reexec-with-read-deny-placeholders": {
+      "domain": "safety",
+      "label": "bwrap-reexec-with-read-deny-placeholders",
+      "members": {
+        "grok": [
+          "bwrap-reexec-with-read-deny-placeholders"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hook-write-deny-under-sandbox": {
+      "domain": "safety",
+      "label": "hook-write-deny-under-sandbox",
+      "members": {
+        "grok": [
+          "hook-write-deny-under-sandbox"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hooks-as-fail-open-gates-with-deny-precedence": {
+      "domain": "safety",
+      "label": "hooks-as-fail-open-gates-with-deny-precedence",
+      "members": {
+        "grok": [
+          "hooks-as-fail-open-gates-with-deny-precedence"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "retention-and-secret-redaction": {
+      "domain": "safety",
+      "label": "retention-and-secret-redaction",
+      "members": {
+        "grok": [
+          "retention-and-secret-redaction"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "root-owned-managed-policy-pin": {
+      "domain": "safety",
+      "label": "root-owned-managed-policy-pin",
+      "members": {
+        "grok": [
+          "root-owned-managed-policy-pin"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "macos-mdm-forced-managed-preferences": {
+      "domain": "safety",
+      "label": "macos-mdm-forced-managed-preferences",
+      "members": {
+        "grok": [
+          "macos-mdm-forced-managed-preferences"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ed25519-signed-policy-at-rest-fail-closed-arm": {
+      "domain": "safety",
+      "label": "ed25519-signed-policy-at-rest-fail-closed-arm",
+      "members": {
+        "grok": [
+          "ed25519-signed-policy-at-rest-fail-closed-arm"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "requirement-pinned-feature-flags-with-seven-tier-ladder": {
+      "domain": "safety",
+      "label": "requirement-pinned-feature-flags-with-seven-tier-ladder",
+      "members": {
+        "grok": [
+          "requirement-pinned-feature-flags-with-seven-tier-ladder"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "config-overlay-confinement-allowlist": {
+      "domain": "safety",
+      "label": "config-overlay-confinement-allowlist",
+      "members": {
+        "grok": [
+          "config-overlay-confinement-allowlist"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "build-provenance-folder-trust-gate": {
+      "domain": "safety",
+      "label": "build-provenance-folder-trust-gate",
+      "members": {
+        "grok": [
+          "build-provenance-folder-trust-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "managed-mcp-and-marketplace-denylists": {
+      "domain": "safety",
+      "label": "managed-mcp-and-marketplace-denylists",
+      "members": {
+        "grok": [
+          "managed-mcp-and-marketplace-denylists"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "external-auth-provider-and-api-key-lockout": {
+      "domain": "safety",
+      "label": "external-auth-provider-and-api-key-lockout",
+      "members": {
+        "grok": [
+          "external-auth-provider-and-api-key-lockout"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subscription-tier-and-zero-data-retention-gates": {
+      "domain": "safety",
+      "label": "subscription-tier-and-zero-data-retention-gates",
+      "members": {
+        "grok": [
+          "subscription-tier-and-zero-data-retention-gates"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "enterprise-proxy-ca-bundle": {
+      "domain": "safety",
+      "label": "enterprise-proxy-ca-bundle",
+      "members": {
+        "grok": [
+          "enterprise-proxy-ca-bundle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sandbox-availability-gate": {
+      "domain": "safety",
+      "label": "sandbox-availability-gate",
+      "members": {
+        "cc-custom": [
+          "sandbox-availability-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "sandbox-auto-allow-and-write-allowlist": {
+      "domain": "safety",
+      "label": "sandbox-auto-allow-and-write-allowlist",
+      "members": {
+        "cc-custom": [
+          "sandbox-auto-allow-and-write-allowlist"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bypass-permissions-killswitch": {
+      "domain": "safety",
+      "label": "bypass-permissions-killswitch",
+      "members": {
+        "cc-custom": [
+          "bypass-permissions-killswitch"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "hook-permission-gate": {
+      "domain": "safety",
+      "label": "hook-permission-gate",
+      "members": {
+        "cc-custom": [
+          "hook-permission-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "approval-decision-single-shot": {
+      "domain": "safety",
+      "label": "approval-decision-single-shot",
+      "members": {
+        "cc-custom": [
+          "approval-decision-single-shot"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "denial-tracking-circuit-breaker": {
+      "domain": "safety",
+      "label": "denial-tracking-circuit-breaker",
+      "members": {
+        "cc-custom": [
+          "denial-tracking-circuit-breaker"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "path-safety-and-dangerous-removal-guard": {
+      "domain": "safety",
+      "label": "path-safety-and-dangerous-removal-guard",
+      "members": {
+        "cc-custom": [
+          "path-safety-and-dangerous-removal-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "dangerous-allow-rule-stripping": {
+      "domain": "safety",
+      "label": "dangerous-allow-rule-stripping",
+      "members": {
+        "cc-custom": [
+          "dangerous-allow-rule-stripping"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "auto-mode-llm-danger-classifier": {
+      "domain": "safety",
+      "label": "auto-mode-llm-danger-classifier",
+      "members": {
+        "cc-custom": [
+          "auto-mode-llm-danger-classifier"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ssrf-guard-for-http-hooks": {
+      "domain": "safety",
+      "label": "ssrf-guard-for-http-hooks",
+      "members": {
+        "cc-custom": [
+          "ssrf-guard-for-http-hooks"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}

@@ -1,0 +1,141 @@
+count 5
+[
+ {
+  "name": "pre-sampling-compaction-with-provider-routing",
+  "what": "Compaction runs *before* the sampling request, in `run_pre_sampling_compact` at the head of `run_turn`, and again mid-turn when the token status says the window is exhausted. `/compact` dispatches to `CompactTask`, which selects one of three implementations by provider capability: `compact_token_budget::run_manual_compact_task` when `Feature::TokenBudget` is on; `compact_remote::run_remote_compact_task` or `compact_remote_v2::run_remote_compact_task` when the provider advertises `RemoteCompactionSupport::V1`/`V2` (server-side compaction, with a `codex-api` endpoint at endpoint/compact.rs:39); and otherwise the local `compact::run_compact_task`, which sends the templated `SUMMARIZATION_PROMPT` as an extra `UserInput` round, takes the last assistant message as the summary, prepends `SUMMARY_PREFIX` and rebuilds history from the recent user messages up to a token cap. Any non-abort, non-tool-collision failure of the pre-sampling compaction is absorbed: the error is logged and the function returns `Ok(None)` rather than failing the turn.",
+  "invariants": [
+   "Compaction must never write a new history in place — it publishes a checkpoint plus a replacement history and keeps the original events (core/src/session/mod.rs:3367-3392).",
+   "Provider capability routing must be explicit: remote compaction is only attempted when the provider advertises support, never optimistically (core/src/tasks/compact.rs:19-85).",
+   "A compaction failure must not surface as a turn failure when the cause is not an abort or a tool collision (core/src/session/turn.rs:182-190)."
+  ],
+  "failurePolicy": "fail-soft",
+  "constants": [
+   "COMPACT_USER_MESSAGE_MAX_TOKENS = 20_000 (core/src/compact.rs:57)",
+   "Auto-compaction emits a warning after compaction that long threads reduce accuracy (core/src/compact.rs:389-392)",
+   "Feature::RemoteCompactionV2 key 'remote_compaction_v2', Stage::Stable, default_enabled true (features/src/lib.rs:1529-1534)",
+   "Feature::CompactionImageBudget, Stage::UnderDevelopment, default_enabled false (features/src/lib.rs:1534-1539)"
+  ],
+  "evidence": [
+   "codex-rs/core/src/session/turn.rs:165-190",
+   "codex-rs/core/src/session/turn.rs:460-500",
+   "codex-rs/core/src/compact.rs:57",
+   "codex-rs/core/src/compact.rs:111-141",
+   "codex-rs/core/src/compact.rs:639-718",
+   "codex-rs/core/src/session/mod.rs:3357-3406"
+  ],
+  "modules": [
+   "core",
+   "prompts",
+   "codex-api",
+   "model-provider",
+   "features"
+  ],
+  "verified": true
+ },
+ {
+  "name": "context-window-token-status-and-compact-scope",
+  "what": "`context_window_token_status` produces the single token verdict the turn loop consults. It counts usage against one of two scopes: `AutoCompactTokenLimitScope::Total` charges the model's whole `auto_compact_token_limit`, while `BodyAfterPrefix` subtracts a persisted prefill baseline so only tokens added after the window prefix count, with a per-config `model_auto_compact_token_limit` overriding the model's own. Independently it computes the model's *full* context window as a hard cap, takes the minimum of the two remaining-token figures as the reported headroom, and adds the configured `auto_compact_fallback_buffer_tokens` to the compact limit before declaring `token_limit_reached`. The turn loop uses `token_limit_reached` (or an explicit new-context-window request) to decide to roll over into auto-compaction.",
+  "invariants": [
+   "The full context window is a hard cap independent of the auto-compaction scope — reaching it forces compaction even when the compact scope still has headroom (core/src/session/context_window.rs:53-79).",
+   "The fallback buffer is only reserved when a fallback prompt actually exists to consume it (core/src/session/context_window.rs:65-72).",
+   "Compaction starts a new history window, so its world-state baseline must be a full snapshot rather than a diff (core/src/session/mod.rs:3379-3388)."
+  ],
+  "failurePolicy": "fail-closed",
+  "constants": [
+   "Buffered auto-compact limit = auto_compact_scope_limit + auto_compact_fallback_buffer_tokens (core/src/session/context_window.rs:71-72)",
+   "Auto-compact derivation from the catalogue = context_window * 9 / 10 (protocol/src/openai_models.rs, cited via the model domain)",
+   "Window ids are UUIDv7 with first/previous/current chained across compaction (core/src/state/auto_compact_window.rs:1-20, :77-80)"
+  ],
+  "evidence": [
+   "codex-rs/core/src/session/context_window.rs:5-91",
+   "codex-rs/core/src/session/turn.rs:413-500",
+   "codex-rs/core/src/state/auto_compact_window.rs:1-80",
+   "codex-rs/core/src/session/mod.rs:1258"
+  ],
+  "modules": [
+   "core",
+   "protocol",
+   "models-manager"
+  ],
+  "verified": true
+ },
+ {
+  "name": "token-budget-reminder-and-compact-fallback",
+  "what": "A model-owned or user-owned token budget injects two different contextual fragments. When remaining tokens against the *unbuffered* base window are at or below `reminder_threshold_tokens`, a one-shot `TokenBudgetReminder` fragment carrying the remaining count is claimed through session state and recorded into history. When no auto-compact fallback is allowed and remaining tokens have hit exactly zero, a one-shot `AutoCompactFallbackPrompt` fragment is injected instead. Model-provided defaults are applied only when the feature is on and the user has set nothing: `apply_model_defaults` copies `reminder_threshold_tokens`, `reminder_message_template`, `guidance_message`, `auto_compact_fallback_prompt` and `auto_compact_fallback_buffer_tokens` out of the model catalogue and validates them, logging and discarding an invalid set rather than failing. `Feature::TokenBudget` is `Stage::UnderDevelopment` with `default_enabled: false` (features/src/lib.rs:1414-1419), so this is off unless enabled.",
+  "invariants": [
+   "Each reminder must fire at most once per claimed state — delivery is claimed through `Session::state` before the fragment is recorded (core/src/session/token_budget.rs:79-92, :101-107).",
+   "Invalid model-owned defaults must be discarded with a warning, never applied partially (core/src/session/token_budget.rs:46-53).",
+   "Explicit user settings win over model defaults; the model defaults are only a fallback (core/src/session/token_budget.rs:23-26)."
+  ],
+  "failurePolicy": "fail-soft",
+  "constants": [
+   "Feature::TokenBudget key 'token_budget', Stage::UnderDevelopment, default_enabled false (features/src/lib.rs:1414-1419)",
+   "TokenBudgetConfig fields: reminder_threshold_tokens, reminder_message_template, guidance_message, auto_compact_fallback_prompt, auto_compact_fallback_buffer_tokens (core/src/session/token_budget.rs:36-44)"
+  ],
+  "evidence": [
+   "codex-rs/core/src/session/token_budget.rs:9-113",
+   "codex-rs/core/src/session/turn.rs:463-469",
+   "codex-rs/features/src/lib.rs:1414-1419"
+  ],
+  "modules": [
+   "core",
+   "features",
+   "protocol",
+   "models-manager"
+  ],
+  "verified": true
+ },
+ {
+  "name": "world-state-section-diffing",
+  "what": "Instead of re-injecting a monolithic context blurb every turn, model-visible environment state is a keyed set of typed `WorldStateSection`s (agents_md, apps, collaboration mode, compact permissions, context-window guidance, environments, model, multi-agent mode, multi-agent usage hint, permissions, personality, plugins, realtime, tools). Each section snapshots itself to a compact JSON value; the live `WorldState` renders, for each changed section, a `ContextualUserFragment` diff against the previous snapshot, and the snapshot set is diffed into an RFC 7386 merge patch that is persisted as a `WorldStateItem` so a resumed session can reconstruct the previous state without replaying every fragment. A `WorldStateHash` is a SHA-1 over `role` plus rendered text with a versioned domain separator, used to recognize a fragment already present in retained history.",
+  "invariants": [
+   "A section `ID` is persisted in rollouts and must remain stable across releases (core/src/context/world_state/mod.rs:202-212).",
+   "A section snapshot must never serialize to null, because merge-patch null means deletion — the erased wrapper refuses a null snapshot with an error log (core/src/context/world_state/mod.rs:206-209, :84-90).",
+   "Removals must be emitted before insertions in the generated patch so the patch output order is stable (core/src/context/world_state/mod.rs:299-305)."
+  ],
+  "failurePolicy": "fail-soft",
+  "constants": [
+   "Patch format is RFC 7386 merge patch (`merge_patch_from` / `apply_merge_patch`) (core/src/context/world_state/mod.rs:297-330)",
+   "Fragment hash domain separator `codex-world-state-fragment-v1\\0`, CRLF normalized to LF, length-prefixed components (core/src/context/world_state/mod.rs:252-266)",
+   "15 world-state sections registered (core/src/context/world_state/mod.rs:1-50)"
+  ],
+  "evidence": [
+   "codex-rs/core/src/context/world_state/mod.rs:52-65",
+   "codex-rs/core/src/context/world_state/mod.rs:202-266",
+   "codex-rs/core/src/context/world_state/mod.rs:268-330",
+   "codex-rs/core/src/session/mod.rs:3829-3879"
+  ],
+  "modules": [
+   "core",
+   "context-fragments",
+   "ext/extension-api",
+   "protocol"
+  ],
+  "verified": true
+ },
+ {
+  "name": "contextual-fragment-injection-primitive",
+  "what": "Every piece of injected context (environment, permissions, AGENTS.md, hooks, skills, inter-agent messages, token-budget reminders, aborted-turn markers, image notices, model-switch notes) is a `ContextualUserFragment` implementation rather than a bespoke message: the trait owns the response `role()`, a body, and a pair of start/end markers, and `render()` concatenates markers and body while `matches_text` recognizes a previously injected fragment of that type in existing history. Markers are the mechanism that lets world-state diffing and compaction tell an injected fragment apart from genuine user text. Over 35 fragment types are registered in one module.",
+  "invariants": [
+   "Role ownership belongs to the fragment, not the caller — a fragment decides whether it is a developer or user message (context-fragments/src/fragment.rs:14-15).",
+   "Unmarked fragments must leave both markers empty, in which case `matches_text` must never match arbitrary text (context-fragments/src/fragment.rs:8-13).",
+   "Marker text is part of the persisted transcript, so changing a marker is a history-compatibility change."
+  ],
+  "failurePolicy": "fail-open",
+  "constants": [
+   "`requires_separate_message()` defaults to false, letting a fragment share a message with others unless it opts out (context-fragments/src/fragment.rs:17-20)",
+   "35 fragment modules registered in core/src/context/mod.rs:3-40"
+  ],
+  "evidence": [
+   "codex-rs/context-fragments/src/fragment.rs:5-70",
+   "codex-rs/core/src/context/mod.rs:1-70"
+  ],
+  "modules": [
+   "context-fragments",
+   "core",
+   "protocol",
+   "ext/extension-api"
+  ],
+  "verified": true
+ }
+]

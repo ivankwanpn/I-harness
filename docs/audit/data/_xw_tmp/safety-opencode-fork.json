@@ -1,0 +1,149 @@
+[
+  {
+    "name": "permission-v2-engine",
+    "what": "The fork's permission model is {action, resource, effect} (PermissionV2) living in core. evaluate(action, resource, ...rulesets) takes the last wildcard-matching rule and defaults to effect 'ask'; fromToolOverrides converts a per-tool enable map into allow/deny rules with resource '*'; evaluateInput short-circuits to deny when any relevant rule denies and otherwise combines per-resource effects as deny > ask > allow; ask() only creates a request when the combined effect is 'ask', and assert() runs uninterruptibly. A missing agent is presented as deny-all via exported missingAgentPermissions.",
+    "invariants": [
+      "Rule resolution is last-match wildcard on (action, resource) with effect defaulting to 'ask'.",
+      "Deny must dominate the combination of multiple resources.",
+      "A missing agent must present deny-all, not an empty (permissive) ruleset."
+    ],
+    "failurePolicy": "fail-closed - unmatched requests ask, a missing agent denies, and DeclinedError/CorrectedError/BlockedError are distinct failures.",
+    "constants": [
+      "missingAgentPermissions = [{action:'*', resource:'*', effect:'deny'}] (packages/core/src/permission.ts:20)",
+      "effects = allow | ask | deny via Permission.Effect (packages/core/src/permission.ts:59)"
+    ],
+    "evidence": [
+      "packages/core/src/permission.ts:16-26",
+      "packages/core/src/permission.ts:81-105",
+      "packages/core/src/permission.ts:169-183",
+      "packages/core/src/permission.ts:224-238",
+      "packages/core/src/permission.ts:1"
+    ],
+    "modules": [
+      "core/permission"
+    ],
+    "verified": true
+  },
+  {
+    "name": "permission-ask-and-remembered-rules",
+    "what": "The V2 permission service keeps pending requests and a remembered allow list. A reply that saves the request's resources appends allow rules and then re-evaluates every other pending request of the agent, auto-approving those whose resources are all now allowed; a declined reply fails the request. Requests carry agent identity so approval is scoped correctly.",
+    "invariants": [
+      "Remembering a rule must only auto-approve pending requests whose resources are ALL covered by the effective ruleset.",
+      "An approved rule must be derived from the request's save list, never from the user's arbitrary input."
+    ],
+    "failurePolicy": "fail-closed - pending requests fail on finalization; unmatched requests stay 'ask'.",
+    "constants": [],
+    "evidence": [
+      "packages/core/src/permission.ts:190-206",
+      "packages/core/src/permission.ts:285-304",
+      "packages/core/src/permission.ts:124-149"
+    ],
+    "modules": [
+      "core/permission"
+    ],
+    "verified": true
+  },
+  {
+    "name": "permission-v1-to-v2-migration",
+    "what": "The stored session permission column was migrated in place from the V1 shape {permission, pattern, action} to the V2 shape {action, resource, effect}: the migration rewrites each element of the JSON array with json_group_array/json_object, guarded by json_valid and by a check that the first element still carries the V1 'permission' key, so already-migrated rows are left untouched. The session column type annotation switched to PermissionV2.Ruleset.",
+    "invariants": [
+      "The migration must be idempotent - rows already in V2 shape must not be rewritten.",
+      "The array must stay a JSON array of rule objects, never become an object.",
+      "The rewrite must be guarded by json_valid so malformed rows are skipped rather than corrupted."
+    ],
+    "failurePolicy": "fail-closed - invalid or non-V1 rows are excluded by the WHERE clause and left as-is; the migration runs in the schema migration transaction.",
+    "constants": [],
+    "evidence": [
+      "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:4-8",
+      "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:13-26",
+      "packages/core/src/session/sql.ts:50"
+    ],
+    "modules": [
+      "core/database",
+      "core/session"
+    ],
+    "verified": true
+  },
+  {
+    "name": "legacy-permission-rules-shim",
+    "what": "Because the runner consumes V2 rules but V1 consumers remain, the host keeps packages/opencode/src/permission/legacy-rules.ts: it re-exports the V1 evaluate/fromConfig/merge/disabled/visibleTools implementation plus the ~/$HOME pattern expansion and the edit/write/apply_patch -> 'edit' and MCP resource tools -> 'read' mappings, and exports itself under both LegacyPermissionRules and Permission so existing imports keep compiling. The upstream permission service files (index.ts/arity.ts/evaluate.ts) are gone.",
+    "invariants": [
+      "The legacy shim must produce the V1 rule shape only; it must not become a second policy engine for new code.",
+      "Its last-match lookup and default 'ask' must remain identical to the upstream implementation it replaces."
+    ],
+    "failurePolicy": "fail-closed - the shim keeps the upstream default of action 'ask' for unmatched requests.",
+    "constants": [
+      "edit-family tools = edit, write, apply_patch (packages/opencode/src/permission/legacy-rules.ts:42)",
+      "MCP resource tools mapped to 'read' (packages/opencode/src/permission/legacy-rules.ts:43)"
+    ],
+    "evidence": [
+      "packages/opencode/src/permission/legacy-rules.ts:6-16",
+      "packages/opencode/src/permission/legacy-rules.ts:18-35",
+      "packages/opencode/src/permission/legacy-rules.ts:41-56",
+      "packages/opencode/src/permission/legacy-rules.ts:58-59"
+    ],
+    "modules": [
+      "opencode/permission"
+    ],
+    "verified": true
+  },
+  {
+    "name": "subagent-grant-and-blocked-permissions",
+    "what": "Delegation in the fork derives the child's ruleset from explicit grants: grantRules turns a list of {tool, resource} grants into V2 allow rules while removing any action present in a blocked set, and the task tool combines this with the parent's ruleset. This replaces upstream's rule-shape-specific inheritance with an explicit grant model.",
+    "invariants": [
+      "A blocked action must never appear in the derived ruleset even if granted.",
+      "Grants are additive allow rules over a resource; the surrounding ruleset still defaults to ask."
+    ],
+    "failurePolicy": "fail-closed - blocked capabilities are removed rather than trusted to the child's own config.",
+    "constants": [],
+    "evidence": [
+      "packages/core/src/tool/task.ts:33-43",
+      "packages/core/src/tool/task.ts:206-227"
+    ],
+    "modules": [
+      "core/tool"
+    ],
+    "verified": true
+  },
+  {
+    "name": "no-os-level-sandbox",
+    "what": "REFUTED for the fork as well: there is still no OS-level confinement. The fork's bash tool spawns ChildProcess.make directly with the configured shell and states in its own tool description that the command runs 'with the host user's filesystem, process, and network authority', gated only by permission.assert (including external_directory approval for outside paths). The only 'sandbox' identifiers in core are the project sandboxes path column, a path-normalisation migration of that column, and the codemode package's JS-level SandboxTool types - none of which confine a spawned process.",
+    "invariants": [
+      "Permission assert is the only gate; the tool description itself must keep disclosing that the host user's authority applies.",
+      "External working directories and argument paths must require external_directory approval."
+    ],
+    "failurePolicy": "fail-open with respect to the OS - an allowed command runs with full user authority; there is no confinement to fall back on.",
+    "constants": [],
+    "evidence": [
+      "packages/core/src/tool/bash.ts:340",
+      "packages/core/src/tool/bash.ts:81-89",
+      "packages/core/src/tool/bash.ts:400-407",
+      "packages/core/src/project/sql.ts:16",
+      "packages/core/src/tool/code-mode.ts:3"
+    ],
+    "modules": [
+      "core/tool",
+      "core/project"
+    ],
+    "verified": true
+  },
+  {
+    "name": "permission-ask-plugin-seam",
+    "what": "Permission evaluation is pluggable: evaluateRequest runs the 'permission.ask' hook through PluginRuntime with a mutable effect holder before any request is created, so a plugin can rewrite the effect (for example auto-allow or force-ask) for a specific action/resource. The hook name is part of the named hook union.",
+    "invariants": [
+      "The plugin seam must run before the request is created or remembered, and must only be able to set a declared effect value.",
+      "The default outcome must remain the evaluated effect when no hook writes to the holder."
+    ],
+    "failurePolicy": "fail-closed on the default path - if no hook overrides, the evaluated effect (ask/deny) stands.",
+    "constants": [],
+    "evidence": [
+      "packages/core/src/permission.ts:198-206",
+      "packages/core/src/plugin/runtime.ts:15"
+    ],
+    "modules": [
+      "core/permission",
+      "core/plugin"
+    ],
+    "verified": true
+  }
+]

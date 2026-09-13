@@ -1,0 +1,88 @@
+=== [ih] durable-delegated-task-protocol-with-identity-cas
+WHAT: Delegated work is tracked by a durable task record with a status state machine accepted -> running -> {completed | error | cancelled | recovery-required}, keyed by a three-part identity (parentSessionId + callEventSeq, else toolCallId, else a fresh anon key) and persisted as one coordinator document `task-<stateId>`. submit() records 'accepted' immediately (an exact retry ADOPTS the existing record; a mismatched retry throws TaskIdentityConflictError); claim() is the only accepted->running edge and is called in spawn_agent AFTER spawnChild returns, i.e. after the child's initial run has already started — so 'running' is a recorded observation, not an admission gate. Terminalization is CAS (a record with an outcome is never re-settled) and enqueues a parent-notification row. The doc key uses a dash, not a colon, because a colon makes an NTFS alternate data stream that breaks rename.
+INVARIANTS: The real admission gates are the identity key plus the concurrency/depth quotas — NOT the 'running' status | A terminal record is never re-settled
+FAILURE: fail-closed on quota and identity (TaskConcurrencyLimitError / TaskIdentityConflictError) and on unknown ids; persistence is report-never-reject at the document layer so the in-memory registry stays authoritative for the run
+CONSTANTS: [{"name":"maxConcurrency default","value":"Infinity (host opt-in)","evidence":"packages/subagent/src/task-protocol.ts:118"},{"name":"maxDepth default","value":"1","evidence":"packages/subagent/src/tools.ts:95"},{"name":"doc key","value":"\"task-<stateId>\" (dash, not colon — NTFS ADS/rename hazard)","evidence":"packages/subagent/src/task-protocol.ts:54"},{"name":"cancellation-chain walk bound","value":"64 hops","evidence":"packages/subagent/src/task-protocol.ts:339"}]
+MODULES: subagent,session-persistence
+VERIFIED: True
+
+=== [ih] durable-notification-outbox-with-injectable-admission
+WHAT: Parent notification is a durable outbox: each row is pending|delivered|woken|error|suppressed, drain() re-checks each row's CURRENT status (idempotent, no double-admit), SUPPRESSES delivery when the parent chain was cancelled, and calls the injected admit() seam with an XML-ish <task> framing (task_result / task_error). A failed admit records 'error' and the row is retried on the next drain. With no admit seam, drain returns 0 and nothing is lost — delivery is then durable-only.
+INVARIANTS: Delivery is never duplicated across drains (status re-check) | A cancelled parent chain suppresses rather than drops-without-trace
+FAILURE: fail-soft but durable: a failed delivery is recorded and retried, never silently dropped
+CONSTANTS: {"name":"notification message id","value":"\"msg_task_\" + first 32 hex of sha256(taskId)","evidence":"packages/subagent/src/task-protocol.ts:58"}
+MODULES: subagent
+VERIFIED: True
+
+=== [ih] crash-recovery-by-classification-never-re-dispatch
+WHAT: On restore, ambiguous in-flight attempts are classified from the DURABLE child log rather than re-run: classifyRestoredTasks loads each unfinished task's child session after the seed length and looks for turn/end plus the last assistant/message — turn/end present becomes completed with that text, a missing log becomes 'dispatch-unknown', and a log without turn/end becomes 'response-interrupted'. Everything else in restore maps running->error ('interrupted by resume') while 'waiting' is preserved so a queued followup can be re-driven, and the parent session log additionally gets a replayed terminal job/status so a log-only fold agrees with the document.
+INVARIANTS: An ambiguous in-flight attempt is never re-dispatched | A queued followup survives a resume
+FAILURE: fail-visible: an unresolvable child log becomes recovery-required / 'child log unavailable after resume' rather than a silent empty stub
+CONSTANTS: 
+MODULES: subagent,session-persistence
+VERIFIED: True
+
+=== [ih] concurrency-and-depth-quotas
+WHAT: Two independent quotas govern delegation: a CONCURRENCY quota over non-terminal accepted+running records (submit throws TaskConcurrencyLimitError when runningCount() >= maxConcurrency, default Infinity so a host must opt in) and a DEPTH quota read from the caller session header's delegationDepth (default 1, so a top-level caller may spawn but a subagent may not nest). The code documents a carried depth-binding limitation: the tool mount is shared and binds ONE root parent session, so every caller resolves depth from the root and a host-raised maxDepth > 1 would under-enforce — moot in the shipped surface because no builtin role carries spawn_agent.
+INVARIANTS: Both quotas fail closed at the submit boundary
+FAILURE: fail-closed: TaskConcurrencyLimitError on the concurrency quota
+CONSTANTS: [{"name":"background:false wait timeout","value":"300000 ms","evidence":"packages/subagent/src/tools.ts:166"},{"name":"wait_agent timeout clamp","value":"100..300000 ms (default 30000)","evidence":"packages/subagent/src/tools.ts:180"}]
+MODULES: subagent
+VERIFIED: True
+
+=== [ih] team-scope-event-sourced-roster-task-board-and-mailbox
+WHAT: A Team is a lead plus named durable teammates over the SAME subagent machinery, event-sourced on the lead session's log with exactly four validated team/* events (team/member, team/task, team/message/queued, team/message/delivered) under strict schema validation with immutable member identity and +1 task revisions; foldTeam is a full replay that skips non-team events and recovers the canonical teamId from the FIRST team/* event. Every mutation goes through a serialized transaction whose callback is PURE-READ — it runs against a CLONE, candidates are validated in order, then applied to the live state, appended and flushed, so 'invalid never enters state or log' holds by construction. Delivery is durability-before-ack: a message counts delivered only after the target's session log is FLUSHED, so a flush failure leaves it queued for recoverRoot. Competing team tools REPLACE the same-named subagent tools on the shared parent registry and unmount restores them, making unmount a true reverse of mount; Lead-only authority (spawn_teammate, interrupt_agent) is enforced at the DOMAIN layer, and write scopes are advisory (overlap warns, never blocks).
+INVARIANTS: Events are applied and appended BEFORE flush (at-least-once); onCommit fires only after flush resolves | One team per run (module-level reservation) | Write-scope overlap is advice, not enforcement
+FAILURE: fail-closed: config validation runs before any side effect, provisioning fails closed when a child session cannot PROVE durability, and delivery returns false on a flush rejection
+CONSTANTS: [{"name":"maxMembers / maxTasks / maxPendingMessagesPerMember","value":"8 / 256 / 64","evidence":"packages/agent-team/src/scheduler.ts:105-107"},{"name":"maxMessageBytes","value":"65536 (including the framing)","evidence":"packages/agent-team/src/scheduler.ts:108"},{"name":"startupTimeoutMs (durability checkpoint)","value":"10000","evidence":"packages/agent-team/src/scheduler.ts:109"}]
+MODULES: agent-team,subagent,core-session
+VERIFIED: True
+
+=== [ih] static-yaml-workflow-runs-as-one-background-job
+WHAT: Workflows are static YAML files under <workspace>/workflow/*.yml; one run executes as ONE background job (id workflow-<n>) in a workflow-owned store that deliberately mirrors ExecService's job contract including the exact `unknown job: <id>` error string, because that store is the THIRD layer of subagent's job_* fallback chain. Steps run strictly sequentially with no DAG/parallel/conditions/loops (deliberately not implemented); on_failure:continue keeps the loop going but does NOT launder the failure — the run still ends 'error' with the first failing exit code, while 'stop' skips the remaining steps. Parameter interpolation is plain string substitution before spawn with the same trust level as the bash tool (only DECLARED params interpolate; unknown ${...} stays verbatim) and a missing required param fails loud BEFORE any job is created.
+INVARIANTS: A run never reports partial success | Params are model-authored command text, so no escaping is attempted
+FAILURE: fail-loud then fail-visible: a schema/YAML violation throws WorkflowParseError, the registry catches per file and warns+skips, and any failing step marks the run 'error'
+CONSTANTS: [{"name":"workflow_run tool timeoutMs","value":"600000","evidence":"packages/workflow/src/tool.ts:82"},{"name":"WORKFLOW_NAME_PATTERN","value":"/^[a-z0-9]+(?:-[a-z0-9]+)*$/","evidence":"packages/workflow/src/definition.ts:37"}]
+MODULES: workflow,subagent
+VERIFIED: True
+
+=== [ih] durable-reminders-whose-state-is-the-event-log
+WHAT: Per-session reminders are `schedule/change` v1 events with create/delete/dispatch operations folded last-wins per id, and a dispatch event acts as the durable ACCEPTANCE record: the driver appends the dispatch BEFORE delivering, so a delivery without a durable accept is impossible and a restart re-drives exactly the still-overdue remainder. Three rule kinds (after / at / every) with `every` advancing by a generation-anchored occurrence without enumerating a backlog. Reminder text is framed injection-resistant: dynamic fields are JSON-escaped and the model is explicitly told the prompt is untrusted reminder content. Creation validation is strict with machine-coded ScheduleInputError (non-empty prompt, strictly-future target, canonical four-digit-year UTC instants, and a frequency floor so a model cannot create a hot reminder loop).
+INVARIANTS: Durable accept precedes delivery | Schedule state has no separate store: the session event stream IS the state
+FAILURE: fail-closed on delivery (append failure means no delivery, recorded in deliveryErrors) and fail-visible on corruption (a corrupt session stream is skipped for the tick with a warning)
+CONSTANTS: [{"name":"MIN_EVERY_INTERVAL_SECONDS","value":"300","evidence":"packages/schedule/src/index.ts:20"},{"name":"driver pollMs default","value":"30000","evidence":"packages/schedule/src/driver.ts:73"}]
+MODULES: schedule,subagent
+VERIFIED: True
+
+=== [ih] whole-list-todo-snapshot
+WHAT: todo_write is a whole-list snapshot model: the model must send the WHOLE list every call and it REPLACES the previous one, which keeps status tracking race-free (last write wins, no merge logic), and the list lives in the session log as todo/write events so projection is a pure function and persistence mirrors it for free. Validation is fail-loud inside the tool body: empty/whitespace content and duplicate content throw, and more than one in_progress item throws unless allowParallelInProgress is set. The tool declares isConcurrencySafe:true (a whole-list replace has no read-modify-write hazard) while isReadOnly is false.
+INVARIANTS: One in_progress item is the planner invariant by default | The projection is a pure last-event-wins fold so replay is deterministic
+FAILURE: fail-loud: validation errors throw out of the tool body (unlike the fs family) and there is no try/catch in the module
+CONSTANTS: [{"name":"status vocabulary","value":"pending | in_progress | completed","evidence":"packages/todo/src/index.ts:44"},{"name":"in_progress limit default","value":"1 (unless allowParallelInProgress)","evidence":"packages/todo/src/index.ts:26"}]
+MODULES: todo,subagent
+VERIFIED: True
+
+=== [ih] plan-mode-as-log-state
+WHAT: Plan mode is log state, not process state: entering appends { plan/mode, mode:'on', proposal } AND the proposal as a regular user/message (so the model sees the plan request), and the projection is latest-wins via derivePlanMode. Exit is SOFT and idempotent — exitPlanMode returns false when plan mode is not active instead of throwing, and the tool reports { active: exitPlanMode(session) }. The exit_plan_mode tool is mounted idempotently by name (ensurePlanModeTool checks tools.get first) and can be withdrawn by name.
+INVARIANTS: Attribution (the proposal) stays on the marker while the model-visible text stays a normal user turn | Calling exit twice, or when never in plan mode, is not an error
+FAILURE: fail-soft: no throw anywhere except the underlying append validation; the tool is mounted by the assembly but never withdrawn there (withdrawPlanModeTool has no in-tree caller)
+CONSTANTS: 
+MODULES: plan-mode,session-executor
+VERIFIED: True
+
+=== [ih] whole-snapshot-goal-domain-with-mandatory-cas
+WHAT: Every non-clear goal mutation carries the COMPLETE post-change goal (id, revision, objective, phase, optional maxGoalRounds) so the projection is a pure last-wins replay with no separate state store, while a clear carries only a tombstone ref and projects to null. Mutations are PURE planners: applyGoalMutation never mutates its input and never appends — it returns { event, next } and the caller owns the log. CAS is mandatory: every mutation needs a ref matching the current id AND revision, else GoalStateError('goal-stale-ref'), and typed codes (goal-invalid / goal-exists / goal-none / goal-stale-ref / goal-invalid-transition) are the host contract with the HTTP status mapping owned by the route. Validation is asymmetric like the rest of the engine: strict writes, forgiving reads (a malformed persisted goal/change leaves the projection unchanged rather than throwing).
+INVARIANTS: The event IS the change: replay alone rebuilds the state, so a snapshot cannot drift from a log of deltas | Revision is bumped on every change and is the only concurrency control
+FAILURE: fail-closed for mutations (every invalid request throws a typed GoalStateError) and fail-safe for projection (malformed events are skipped)
+CONSTANTS: 
+MODULES: goal
+VERIFIED: True
+
+=== [ih] jobs-as-a-two-source-projection
+WHAT: The jobs surface is a PURE projection with two independent data sources producing ONE shape: the durable subagent snapshot document is the initial snapshot (GET /api/sessions/:id/jobs) and a fold of `job/status` session events (last-wins by jobId, whole-job snapshot per event) is the realtime update over the existing mux session stream — no new endpoint. The durable doc shape is INLINED STRUCTURALLY on purpose so web-host never depends on the subagent runtime; if the producer's shape drifts, the route's mapping warns loudly rather than silently mis-serving, and a foreign/corrupt doc maps to an empty list. The kill vocabulary ('cancellation-requested' | 'already-finished') is the live registry's own strings, and an unknown job is an honest 409 rather than a silent 200.
+INVARIANTS: A projection owns no store and invents no fields | The realtime path adds no endpoint (it reuses the mux session stream)
+FAILURE: honest degradation rather than fail-open/closed: a foreign/corrupt doc becomes an empty list with a loud warn at the route; an unknown kill target raises JobKillUnknownJobError so the transport answers 409
+CONSTANTS: [{"name":"JobStatusView","value":"\"running\" | \"completed\" | \"killed\" | \"error\"","evidence":"packages/jobs/src/index.ts:18"},{"name":"JobKillOutcome","value":"\"cancellation-requested\" | \"already-finished\"","evidence":"packages/jobs/src/index.ts:42"}]
+MODULES: jobs,subagent,web-host
+VERIFIED: True
+

@@ -1,0 +1,225 @@
+count 6
+[
+ {
+  "name": "single-source-token-estimation",
+  "what": "Token accounting is one shared, deliberately crude heuristic rather than per-consumer arithmetic. The crate doc states the intent plainly: it is the single source of truth for the bytes/4 heuristic and the derived-display arithmetic used by `/context`, `/session-info`, the auto-compact gates, the preflight overflow check, and every client renderer (xai-token-estimation/src/lib.rs:1-6). The primitives are `estimate_tokens`/`estimate_chars` over `BYTES_PER_TOKEN = 4` and a separate flat `IMAGE_TOKEN_ESTIMATE = 765` applied per image by `estimate_image_tokens` (lib.rs:9, :13, :17-31). Threshold decisions are also centralized: `exceeds_threshold` and `exceeds_threshold_with_headroom` are the only predicates, and percentage display is split into three variants (`usage_percentage`, `usage_percentage_u8`, `usage_percentage_truncated_u8`) so a renderer picks a rounding behaviour instead of inventing one (lib.rs:38-89).",
+  "invariants": [
+   "Every consumer that talks about context-window usage must route through this crate; the crate doc explicitly enumerates the five consumers so a new one is a visible addition.",
+   "Images are estimated by a flat per-image constant, not by decoding dimensions - the estimate is deliberately not content-aware.",
+   "An overflow check and the number shown to the user must use the same predicate, which is why the threshold helpers live here rather than at each call site."
+  ],
+  "failurePolicy": "fail-soft - the estimate is a heuristic that under- or over-counts; the fail-safe direction is supplied by the headroom variant rather than by the estimator, which has no error path at all (the functions are total).",
+  "constants": [
+   {
+    "name": "BYTES_PER_TOKEN",
+    "value": "4",
+    "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:9"
+   },
+   {
+    "name": "IMAGE_TOKEN_ESTIMATE",
+    "value": "765 (flat, per image)",
+    "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:13"
+   }
+  ],
+  "evidence": [
+   "crates/codegen/xai-token-estimation/src/lib.rs:1-31",
+   "crates/codegen/xai-token-estimation/src/lib.rs:38-89"
+  ],
+  "modules": [
+   "xai-token-estimation"
+  ],
+  "verified": true
+ },
+ {
+  "name": "compaction-transcript-rendering-with-byte-caps",
+  "what": "A compacted segment is rendered into self-contained markdown by a pure, I/O-free function rather than being summarized into an opaque blob. The crate doc describes it as pure rendering of a compacted segment into self-contained markdown aligned with a Python reference implementation (`render_segment_to_markdown` / `compute_turn_stats`, with an index built incrementally through `INDEX_HEADER` + `render_index_row`), matching headers, sections, detail levels and INDEX columns but not bytes (xai-compaction-transcript/src/lib.rs:1-6). Segments are written as `segment_<n>` files under a `compaction` directory with an `INDEX.md`, and each segment is bounded at `SEGMENT_MAX_BYTES = 512 * 1024` with a recorded truncation notice (lib.rs:16-22). Detail levels are expressed as character budgets - `BALANCED_TEXT_CHARS = 2000`, `BALANCED_RESPONSE_CHARS = 500`, `LAST_RESPONSE_EXCERPT_CHARS = 500` - plus a flat `PER_TURN_OVERHEAD_BYTES = 64` (lib.rs:25-30).",
+  "invariants": [
+   "The renderer is pure and performs no I/O; the caller owns writing, which is what makes the output reproducible.",
+   "Segment size is capped at 512 KiB, so a single pathological turn cannot produce an unbounded segment file.",
+   "Truncation is recorded in the output via a notice constant rather than being silent - a reader can tell a truncated segment from a complete one.",
+   "Format alignment with the Python implementation is a stated goal at the section/detail/column level; byte-identity is explicitly not."
+  ],
+  "failurePolicy": "fail-soft - over-budget content is truncated with a notice; the crate has no failure path because it performs no I/O.",
+  "constants": [
+   {
+    "name": "SEGMENT_MAX_BYTES",
+    "value": "512 * 1024",
+    "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:21"
+   },
+   {
+    "name": "BALANCED_TEXT_CHARS",
+    "value": "2000",
+    "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:25"
+   },
+   {
+    "name": "BALANCED_RESPONSE_CHARS",
+    "value": "500",
+    "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:26"
+   },
+   {
+    "name": "INDEX_FILE",
+    "value": "\"INDEX.md\"",
+    "evidence": "crates/codegen/xai-compaction-transcript/src/lib.rs:17"
+   }
+  ],
+  "evidence": [
+   "crates/codegen/xai-compaction-transcript/src/lib.rs:1-6",
+   "crates/codegen/xai-compaction-transcript/src/lib.rs:16-30",
+   "crates/codegen/xai-compaction-transcript/src/lib.rs:76-86"
+  ],
+  "modules": [
+   "xai-compaction-transcript"
+  ],
+  "verified": true
+ },
+ {
+  "name": "full-replace-compaction-rather-than-tail-retention",
+  "what": "grok's compaction is a FULL REPLACE: it summarises the whole conversation and rebuilds a fresh history rather than keeping a recent tail, so there is no tail-budget or split-point policy on the shipped path. `sample_summary_with_retries` calls the compaction sampler up to `max_attempts` times, accepting a non-empty summary whose cleaned seed passes `is_degenerate_summary`, treating empty or degenerate output as transient, and short-circuiting deterministic failures (xai-grok-compaction/src/code_compaction/compact.rs:53-73, :87-98). Failures are returned structurally as a typed error carrying `message`, `deterministic` and `context_overflow` so the host can choose between suppressing auto-compaction and stepping its own input ladder. The lossy summary is then made recoverable by a pointer, not by retained turns: `CompactionMode` is Summary (no pointer), Transcript (pointer to the raw `updates.jsonl`) or Segments(CompactionDetail), and `transcript_hint` returns None if the mode adds no pointer OR no location is available, so the model is never pointed at nothing (xai-chat-state/src/compaction_mode.rs:12-25, :49-83). `CompactionDetail` is a separate four-level axis (None/Minimal/Balanced/Verbose, default Verbose) that attaches only to Segments.",
+  "invariants": [
+   "A context-length overflow must be reported with BOTH `context_overflow` and `deterministic` set, because re-sending the same payload is guaranteed to fail again - retrying it is pure waste.",
+   "`CompactionMode::default()` must stay `Segments(CompactionDetail::default())`, i.e. Verbose; this is the shipped default and a change silently reduces recoverable detail.",
+   "Detail must attach only to `Segments` - the other modes ignore it, so attaching it elsewhere would expose a meaningless setting.",
+   "The retry loop must stay content-neutral: the harness builds the prompt and cleans the winning summary, so the loop cannot bias content."
+  ],
+  "failurePolicy": "fail-closed to the caller - a typed terminal error and no partially applied compaction; individual transient attempts are retried after a delay.",
+  "constants": [
+   {
+    "name": "FullReplaceConfig defaults",
+    "value": "max_attempts=3, retry_delay_secs=3, sampling_timeout_secs=120",
+    "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:33-40"
+   },
+   {
+    "name": "MIN_SUMMARY_SEED_CHARS",
+    "value": "500 (doc note: smallest healthy prod summary observed was ~3,242 chars)",
+    "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:20"
+   },
+   {
+    "name": "DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT",
+    "value": "85",
+    "evidence": "crates/common/xai-grok-compaction/src/code_compaction/config.rs:13"
+   }
+  ],
+  "evidence": [
+   "crates/common/xai-grok-compaction/src/code_compaction/compact.rs:53-98",
+   "crates/common/xai-grok-compaction/src/code_compaction/config.rs:13-41",
+   "crates/codegen/xai-chat-state/src/compaction_mode.rs:12-83",
+   "crates/codegen/xai-grok-shell/src/session/compaction.rs:1124-1138"
+  ],
+  "modules": [
+   "crates/common/xai-grok-compaction",
+   "xai-chat-state",
+   "xai-compaction-transcript",
+   "xai-grok-shell"
+  ],
+  "verified": true,
+  "wiringNote": "Mostly INERT in this tree. The crate is a real engine (36 src files, no cargo features) and the shell does call `sample_full_replace_summary` (xai-grok-shell/src/session/compaction.rs:1138), but `apply_intra_compaction`, `should_compact`, `inter_compaction`, `history::filter`/`history::validate`, `select.rs`, `fit.rs`, `assemble_compacted_history`, `apply_full_replace_compaction`, `wrap_user_query` and `validate_compaction_text` have callers only inside the crate's own tests - the shell uses xai-chat-state's duplicated `compaction_utils` copies instead. `IntraCompactionConfig::default()` sets `enabled: false` (crates/common/xai-grok-compaction/src/intra_compaction/config.rs:227). The tool-pair-safe split selector in particular is UNWIRED: `select_turns_to_compact` walks backward accumulating keep-tokens and `snap_to_safe_boundary` advances past a contiguous run of tool results so a split can never orphan a tool result, returning None rather than 'compact everything' when nothing should move (crates/common/xai-grok-compaction/src/select.rs:60-147) - but its only callers are intra_compaction/compact.rs:505 and fit.rs:148, in the unwired chain."
+ },
+ {
+  "name": "boundary-exact-token-gate-and-image-budget-hysteresis",
+  "what": "Two distinct budget mechanisms with deliberately different shapes. (a) The token gate is boundary-exact integer arithmetic: `exceeds_threshold` computes `used*100 >= window*threshold` so it fires exactly AT the threshold, which is one token earlier than a legacy `>` gate, and `exceeds_threshold_with_headroom` is the same scaled comparison minus `headroom*100` (xai-token-estimation/src/lib.rs:78-102). The display helpers deliberately differ from each other - `usage_percentage_u8` ROUNDS while `usage_percentage_truncated_u8` TRUNCATES - because a test pins that `exceeds_threshold(used, window, p)` agrees with `truncated(used, window) >= p` (lib.rs:48-64). (b) Image eviction is a hysteresis loop rather than a threshold: `apply_image_budget` measures the exact serialized conversation body and evicts inline images oldest-first only when the body reaches a high-water trigger, reclaiming down to a strictly lower low-water mark (xai-chat-state/src/image_budget.rs:20-60). Measurement is exact but allocation-free: `conversation_body_bytes` blanks every image URL, serializes through a byte-counting `io::Write` sink, then adds back each URL's exact escaped contribution (image_budget.rs:244-321).",
+  "invariants": [
+   "`exceeds_threshold` must keep `>=` semantics and the `context_window == 0 -> false` short-circuit, or callers would have to special-case a missing window.",
+   "`usage_percentage_truncated_u8` must keep truncating while `usage_percentage_u8` rounds; collapsing them breaks the agreement test between the gate and the displayed number.",
+   "All products in the gate must stay saturating so a huge window cannot wrap.",
+   "The image reclaim target must stay strictly BELOW the trigger - this is enforced by a compile-time assert, because otherwise every turn at the ceiling re-evicts and re-busts the prompt cache.",
+   "Below the trigger the request history must stay byte-identical so the KV prefix remains stable."
+  ],
+  "failurePolicy": "mixed. The token gate is pure and total (zero window returns false, overflow saturates, no error path). The image budget fails soft in the under-measuring direction: if serialization fails the byte counter keeps what it counted so far - a lower bound - and warns, so a measurement bug cannot force a needless eviction.",
+  "constants": [
+   {
+    "name": "MAX_REQUEST_BYTES",
+    "value": "50 MiB (doc note: proxy nginx proxy-body-size)",
+    "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:20"
+   },
+   {
+    "name": "IMAGE_COMPACT_TRIGGER_BYTES",
+    "value": "MAX_REQUEST_BYTES - 3 MiB = 47 MiB",
+    "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:41"
+   },
+   {
+    "name": "IMAGE_COMPACT_RECLAIM_TARGET_BYTES",
+    "value": "MAX_REQUEST_BYTES / 2 = 25 MiB",
+    "evidence": "crates/codegen/xai-chat-state/src/image_budget.rs:54"
+   },
+   {
+    "name": "BYTES_PER_TOKEN / IMAGE_TOKEN_ESTIMATE",
+    "value": "4 / 765",
+    "evidence": "crates/codegen/xai-token-estimation/src/lib.rs:9, :13"
+   }
+  ],
+  "evidence": [
+   "crates/codegen/xai-token-estimation/src/lib.rs:48-102",
+   "crates/codegen/xai-chat-state/src/image_budget.rs:20-60",
+   "crates/codegen/xai-chat-state/src/image_budget.rs:244-321",
+   "crates/codegen/xai-chat-state/src/actor/request_builder.rs:63"
+  ],
+  "modules": [
+   "xai-token-estimation",
+   "xai-chat-state"
+  ],
+  "verified": true,
+  "wiringNote": "Both wired on every request build; the image budget emits a `ChatStateEvent::ImageBudget` for observability. Note a real boundary asymmetry rather than a defect: this helper fires at `used == threshold`, while the intra-compaction trigger uses strict `>` (crates/common/xai-grok-compaction/src/intra_compaction/trigger.rs:143)."
+ },
+ {
+  "name": "structured-context-length-error-classifier",
+  "what": "Because backends report a size overflow with no stable error code, one shared predicate defines it. `is_context_length_error` is used by the turn path, the harness compaction classifiers and the shared retry loop, and it matches three classes: unanchored prose (\"too long for this model\", \"prompt is too long\", \"maximum prompt length\", \"maximum context length\", \"maximum allowed number of bytes\", and the pair \"current message\" + \"exceeds budget\"); ANCHORED provider slugs (`context_length_exceeded`, `exceed_context_size_error`, `payload_too_large`, each required at message start or immediately after `\": \"`); and rendered 413 reason phrases in legacy, RFC-9110 and RFC-2616 spellings (xai-grok-compaction/src/code_compaction/failure.rs:9-58).",
+  "invariants": [
+   "The anchored variants must stay anchored: the test table explicitly pins that echoed prose, an echoed slug, and a stray digit run next to a phrase must NOT classify.",
+   "`input length` and `exceeds the maximum allowed length` must be required as a PAIR, so field-length validation errors do not classify as size overflows.",
+   "Because the predicate is deterministic, callers must not retry on a match - a match means the same payload will fail again."
+  ],
+  "failurePolicy": "fail-open in the safe direction - an unmatched message is treated as transient and retried, while a false positive is deterministic and suppresses retry. Pure function, no IO, no error path.",
+  "constants": [
+   {
+    "name": "anchored slugs",
+    "value": "context_length_exceeded | exceed_context_size_error | payload_too_large",
+    "evidence": "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:34-38"
+   },
+   {
+    "name": "anchor separator",
+    "value": "\": \"",
+    "evidence": "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:29"
+   }
+  ],
+  "evidence": [
+   "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:9-58",
+   "crates/common/xai-grok-compaction/src/code_compaction/failure.rs:66-117",
+   "crates/codegen/xai-grok-shell/src/session/helpers/session_compact.rs:122"
+  ],
+  "modules": [
+   "crates/common/xai-grok-compaction",
+   "xai-grok-shell"
+  ],
+  "verified": true
+ },
+ {
+  "name": "project-instruction-injection-into-user-message",
+  "what": "Project instruction files (AGENTS.md, Claude.md, vendor rules directories) are read from `~/.grok/`, the git repository root and the session cwd, deduped by canonical path with a project-over-rule preference, then rendered by `render_agents_md` into a single `<system-reminder>` block ordered repo-root then cwd, with a note that deeper files take precedence on conflicts (xai-grok-agent/src/prompt/agents_md.rs:140, :300-332). The block is delivered in the USER MESSAGE rather than the system prompt, and rule files are reduced to their body via `extract_skill_body` before rendering. The leading bytes of the block are a compatibility contract: `LEGACY_AGENTS_MD_REMINDER_PREFIX` is what the shell matches to detect an untagged legacy copy on a resumed session, so changing it breaks resume de-duplication (agents_md.rs:306).",
+  "invariants": [
+   "Untrusted file content must be neutralized before interpolation: `neutralize_reminder_tags` HTML-escapes a leading `<` on `<system-reminder>`/`<system_reminder>`, so a repository's AGENTS.md cannot break out of or forge harness framing.",
+   "The literal leading bytes are a wire-format contract used for legacy detection on resumed sessions.",
+   "gitignore IS honored for instruction-file discovery - but deliberately NOT for skill-root discovery, which is a different traversal with a different rule."
+  ],
+  "failurePolicy": "fail-soft - an unreadable candidate is dropped through a `filter_map` over `read_to_string(...).ok()`, and an empty set renders to None rather than an empty reminder block.",
+  "constants": [
+   {
+    "name": "HOME_RULES_DIRS",
+    "value": "[\"rules\"]",
+    "evidence": "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:164"
+   },
+   {
+    "name": "LEGACY_AGENTS_MD_REMINDER_PREFIX",
+    "value": "leading-bytes compatibility contract",
+    "evidence": "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:306"
+   }
+  ],
+  "evidence": [
+   "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:140",
+   "crates/codegen/xai-grok-agent/src/prompt/agents_md.rs:300-332"
+  ],
+  "modules": [
+   "xai-grok-agent"
+  ],
+  "verified": true
+ }
+]

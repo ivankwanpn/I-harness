@@ -1,0 +1,795 @@
+{
+  "domain": "tools",
+  "rows": {
+    "three-stage-tool-dispatch-prepare-dispatch-finalize": {
+      "domain": "tools",
+      "label": "three-stage-tool-dispatch-prepare-dispatch-finalize",
+      "members": {
+        "ih": [
+          "three-stage-tool-dispatch-prepare-dispatch-finalize"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "deferred-tool-exposure-with-search-driven-promotion": {
+      "domain": "tools",
+      "label": "deferred-tool-exposure-with-search-driven-promotion",
+      "members": {
+        "ih": [
+          "deferred-tool-exposure-with-search-driven-promotion"
+        ],
+        "cc-custom": [
+          "deferred-tool-schema-exposure"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bm25-tool-retrieval-with-four-selection-modes": {
+      "domain": "tools",
+      "label": "bm25-tool-retrieval-with-four-selection-modes",
+      "members": {
+        "ih": [
+          "bm25-tool-retrieval-with-four-selection-modes"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "fs-tool-boundary-returned-failures-toctou-re-check-atomic-writes": {
+      "domain": "tools",
+      "label": "fs-tool-boundary-returned-failures-toctou-re-check-atomic-writes",
+      "members": {
+        "ih": [
+          "fs-tool-boundary-returned-failures-toctou-re-check-atomic-writes"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "codex-style-structured-patch-application": {
+      "domain": "tools",
+      "label": "codex-style-structured-patch-application",
+      "members": {
+        "ih": [
+          "codex-style-structured-patch-application"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "structured-line-diff-with-work-budget-and-honest-windowing": {
+      "domain": "tools",
+      "label": "structured-line-diff-with-work-budget-and-honest-windowing",
+      "members": {
+        "ih": [
+          "structured-line-diff-with-work-budget-and-honest-windowing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "shell-resolution-honesty-and-argv-view-for-policy": {
+      "domain": "tools",
+      "label": "shell-resolution-honesty-and-argv-view-for-policy",
+      "members": {
+        "ih": [
+          "shell-resolution-honesty-and-argv-view-for-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "process-execution-service-confinement-tree-kill-spill-background-jobs": {
+      "domain": "tools",
+      "label": "process-execution-service-confinement-tree-kill-spill-background-jobs",
+      "members": {
+        "ih": [
+          "process-execution-service-confinement-tree-kill-spill-background-jobs"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pty-terminal-service-with-ring-buffered-re-readable-output": {
+      "domain": "tools",
+      "label": "pty-terminal-service-with-ring-buffered-re-readable-output",
+      "members": {
+        "ih": [
+          "pty-terminal-service-with-ring-buffered-re-readable-output"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ripgrep-backed-search-tools-with-capped-deferred-result-sets": {
+      "domain": "tools",
+      "label": "ripgrep-backed-search-tools-with-capped-deferred-result-sets",
+      "members": {
+        "ih": [
+          "ripgrep-backed-search-tools-with-capped-deferred-result-sets"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "filesystem-watch-as-baseline-filtered-deltas": {
+      "domain": "tools",
+      "label": "filesystem-watch-as-baseline-filtered-deltas",
+      "members": {
+        "ih": [
+          "filesystem-watch-as-baseline-filtered-deltas"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "backend-snapshot-rollback-engine-rewind": {
+      "domain": "tools",
+      "label": "backend-snapshot-rollback-engine-rewind",
+      "members": {
+        "ih": [
+          "backend-snapshot-rollback-engine-rewind"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "durable-workspace-registry-with-a-bounded-file-walker": {
+      "domain": "tools",
+      "label": "durable-workspace-registry-with-a-bounded-file-walker",
+      "members": {
+        "ih": [
+          "durable-workspace-registry-with-a-bounded-file-walker"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "external-content-tool-surface": {
+      "domain": "tools",
+      "label": "external-content-tool-surface",
+      "members": {
+        "ih": [
+          "external-content-tool-surface"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-registry-and-scoped-visibility": {
+      "domain": "tools",
+      "label": "tool-registry-and-scoped-visibility",
+      "members": {
+        "dsh": [
+          "tool-registry-and-scoped-visibility"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-schema-dsl-and-output-contract": {
+      "domain": "tools",
+      "label": "tool-schema-dsl-and-output-contract",
+      "members": {
+        "dsh": [
+          "tool-schema-dsl-and-output-contract"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-execution-pipeline-and-guards": {
+      "domain": "tools",
+      "label": "tool-execution-pipeline-and-guards",
+      "members": {
+        "dsh": [
+          "tool-execution-pipeline-and-guards"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-presentation-modes-and-ptc-collapse": {
+      "domain": "tools",
+      "label": "tool-presentation-modes-and-ptc-collapse",
+      "members": {
+        "dsh": [
+          "tool-presentation-modes-and-ptc-collapse"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "parallel-tool-execution-with-commit-ordering": {
+      "domain": "tools",
+      "label": "parallel-tool-execution-with-commit-ordering",
+      "members": {
+        "dsh": [
+          "parallel-tool-execution-with-commit-ordering"
+        ],
+        "cc-custom": [
+          "parallel-tool-batching-and-commit-ordering"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "cooperative-cancellation-classification": {
+      "domain": "tools",
+      "label": "cooperative-cancellation-classification",
+      "members": {
+        "dsh": [
+          "cooperative-cancellation-classification"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-call-timeout-policy": {
+      "domain": "tools",
+      "label": "tool-call-timeout-policy",
+      "members": {
+        "dsh": [
+          "tool-call-timeout-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "repeat-tool-call-reminder-guard": {
+      "domain": "tools",
+      "label": "repeat-tool-call-reminder-guard",
+      "members": {
+        "dsh": [
+          "repeat-tool-call-reminder-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "output-spill-with-preview-and-locator": {
+      "domain": "tools",
+      "label": "output-spill-with-preview-and-locator",
+      "members": {
+        "dsh": [
+          "output-spill-with-preview-and-locator",
+          "bounded-output-retention"
+        ],
+        "opencode": [
+          "output-truncation-spill"
+        ],
+        "grok": [
+          "bounded-tool-output-with-mcp-spill"
+        ],
+        "cc-custom": [
+          "tool-result-output-spill"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-tool-suite-with-observation-policy": {
+      "domain": "tools",
+      "label": "file-tool-suite-with-observation-policy",
+      "members": {
+        "dsh": [
+          "file-tool-suite-with-observation-policy"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "string-replace-patch-editing": {
+      "domain": "tools",
+      "label": "string-replace-patch-editing",
+      "members": {
+        "dsh": [
+          "string-replace-patch-editing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "filesystem-and-shell-sandboxing": {
+      "domain": "tools",
+      "label": "filesystem-and-shell-sandboxing",
+      "members": {
+        "dsh": [
+          "filesystem-and-shell-sandboxing"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "search-tools-and-native-command-resolution": {
+      "domain": "tools",
+      "label": "search-tools-and-native-command-resolution",
+      "members": {
+        "dsh": [
+          "search-tools-and-native-command-resolution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "workspace-resolution-and-file-apis": {
+      "domain": "tools",
+      "label": "workspace-resolution-and-file-apis",
+      "members": {
+        "dsh": [
+          "workspace-resolution-and-file-apis"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "atomic-write-and-cross-process-locking": {
+      "domain": "tools",
+      "label": "atomic-write-and-cross-process-locking",
+      "members": {
+        "dsh": [
+          "atomic-write-and-cross-process-locking"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "shell-tools-and-persistent-sessions": {
+      "domain": "tools",
+      "label": "shell-tools-and-persistent-sessions",
+      "members": {
+        "dsh": [
+          "shell-tools-and-persistent-sessions"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pty-terminal-sessions": {
+      "domain": "tools",
+      "label": "pty-terminal-sessions",
+      "members": {
+        "dsh": [
+          "pty-terminal-sessions"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "subprocess-spawn-and-process-tree-control": {
+      "domain": "tools",
+      "label": "subprocess-spawn-and-process-tree-control",
+      "members": {
+        "dsh": [
+          "subprocess-spawn-and-process-tree-control"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "code-runtime-isolation": {
+      "domain": "tools",
+      "label": "code-runtime-isolation",
+      "members": {
+        "dsh": [
+          "code-runtime-isolation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "e2b-remote-execution-backends": {
+      "domain": "tools",
+      "label": "e2b-remote-execution-backends",
+      "members": {
+        "dsh": [
+          "e2b-remote-execution-backends"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-registry-with-exposure-ladder": {
+      "domain": "tools",
+      "label": "tool-registry-with-exposure-ladder",
+      "members": {
+        "codex": [
+          "tool-registry-with-exposure-ladder"
+        ],
+        "opencode": [
+          "tool-registry-exposure"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "parallel-tool-dispatch-with-serialization-gate": {
+      "domain": "tools",
+      "label": "parallel-tool-dispatch-with-serialization-gate",
+      "members": {
+        "codex": [
+          "parallel-tool-dispatch-with-serialization-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "approval-sandbox-retry-orchestrator": {
+      "domain": "tools",
+      "label": "approval-sandbox-retry-orchestrator",
+      "members": {
+        "codex": [
+          "approval-sandbox-retry-orchestrator"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "unified-pty-exec-process-manager": {
+      "domain": "tools",
+      "label": "unified-pty-exec-process-manager",
+      "members": {
+        "codex": [
+          "unified-pty-exec-process-manager"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "streaming-patch-application": {
+      "domain": "tools",
+      "label": "streaming-patch-application",
+      "members": {
+        "codex": [
+          "streaming-patch-application"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "exec-policy-rules-and-durable-amendment": {
+      "domain": "tools",
+      "label": "exec-policy-rules-and-durable-amendment",
+      "members": {
+        "codex": [
+          "exec-policy-rules-and-durable-amendment"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "filesystem-and-search-tool-runtimes": {
+      "domain": "tools",
+      "label": "filesystem-and-search-tool-runtimes",
+      "members": {
+        "codex": [
+          "filesystem-and-search-tool-runtimes"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pre-main-process-hardening": {
+      "domain": "tools",
+      "label": "pre-main-process-hardening",
+      "members": {
+        "codex": [
+          "pre-main-process-hardening"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "session-tool-materialization": {
+      "domain": "tools",
+      "label": "session-tool-materialization",
+      "members": {
+        "opencode": [
+          "session-tool-materialization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "shell-tool-execution": {
+      "domain": "tools",
+      "label": "shell-tool-execution",
+      "members": {
+        "opencode": [
+          "shell-tool-execution"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "doom-loop-repeat-guard": {
+      "domain": "tools",
+      "label": "doom-loop-repeat-guard",
+      "members": {
+        "opencode": [
+          "doom-loop-repeat-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "code-mode-interpreter-sandbox": {
+      "domain": "tools",
+      "label": "code-mode-interpreter-sandbox",
+      "members": {
+        "opencode": [
+          "code-mode-interpreter-sandbox"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "pty-session-buffer": {
+      "domain": "tools",
+      "label": "pty-session-buffer",
+      "members": {
+        "opencode": [
+          "pty-session-buffer"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "edit-replace-with-permission-diff": {
+      "domain": "tools",
+      "label": "edit-replace-with-permission-diff",
+      "members": {
+        "opencode": [
+          "edit-replace-with-permission-diff"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "snapshot-diff-tracking": {
+      "domain": "tools",
+      "label": "snapshot-diff-tracking",
+      "members": {
+        "opencode": [
+          "snapshot-diff-tracking"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "ripgrep-adapter-limits": {
+      "domain": "tools",
+      "label": "ripgrep-adapter-limits",
+      "members": {
+        "opencode": [
+          "ripgrep-adapter-limits"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "formatter-dispatch-by-config": {
+      "domain": "tools",
+      "label": "formatter-dispatch-by-config",
+      "members": {
+        "opencode": [
+          "formatter-dispatch-by-config"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-catalog-and-source-aware-registry": {
+      "domain": "tools",
+      "label": "tool-catalog-and-source-aware-registry",
+      "members": {
+        "opencode-fork": [
+          "tool-catalog-and-source-aware-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bash-tool-backgrounding": {
+      "domain": "tools",
+      "label": "bash-tool-backgrounding",
+      "members": {
+        "opencode-fork": [
+          "bash-tool-backgrounding"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "kernel-tool-scheduling": {
+      "domain": "tools",
+      "label": "kernel-tool-scheduling",
+      "members": {
+        "opencode-fork": [
+          "kernel-tool-scheduling"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "task-control-tools": {
+      "domain": "tools",
+      "label": "task-control-tools",
+      "members": {
+        "opencode-fork": [
+          "task-control-tools"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-search-durable-discovery": {
+      "domain": "tools",
+      "label": "tool-search-durable-discovery",
+      "members": {
+        "opencode-fork": [
+          "tool-search-durable-discovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "code-mode-in-core": {
+      "domain": "tools",
+      "label": "code-mode-in-core",
+      "members": {
+        "opencode-fork": [
+          "code-mode-in-core"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "host-tool-compat-shims": {
+      "domain": "tools",
+      "label": "host-tool-compat-shims",
+      "members": {
+        "opencode-fork": [
+          "host-tool-compat-shims"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "validate-then-freeze-tool-registry": {
+      "domain": "tools",
+      "label": "validate-then-freeze-tool-registry",
+      "members": {
+        "grok": [
+          "validate-then-freeze-tool-registry"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "declarative-tool-requirement-and-params-validation": {
+      "domain": "tools",
+      "label": "declarative-tool-requirement-and-params-validation",
+      "members": {
+        "grok": [
+          "declarative-tool-requirement-and-params-validation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "concurrent-tool-dispatch-with-per-path-serialization": {
+      "domain": "tools",
+      "label": "concurrent-tool-dispatch-with-per-path-serialization",
+      "members": {
+        "grok": [
+          "concurrent-tool-dispatch-with-per-path-serialization"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "backoff-ladder-plus-server-signalled-doom-loop-recovery": {
+      "domain": "tools",
+      "label": "backoff-ladder-plus-server-signalled-doom-loop-recovery",
+      "members": {
+        "grok": [
+          "backoff-ladder-plus-server-signalled-doom-loop-recovery"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "lazy-tool-exposure-via-search-index": {
+      "domain": "tools",
+      "label": "lazy-tool-exposure-via-search-index",
+      "members": {
+        "grok": [
+          "lazy-tool-exposure-via-search-index"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "process-group-terminal-kill-and-background-task-cap": {
+      "domain": "tools",
+      "label": "process-group-terminal-kill-and-background-task-cap",
+      "members": {
+        "grok": [
+          "process-group-terminal-kill-and-background-task-cap"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-registry-and-failsafe-defaults": {
+      "domain": "tools",
+      "label": "tool-registry-and-failsafe-defaults",
+      "members": {
+        "cc-custom": [
+          "tool-registry-and-failsafe-defaults"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-pool-assembly-and-exposure-filtering": {
+      "domain": "tools",
+      "label": "tool-pool-assembly-and-exposure-filtering",
+      "members": {
+        "cc-custom": [
+          "tool-pool-assembly-and-exposure-filtering"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "zod-schema-validation-and-input-coercion": {
+      "domain": "tools",
+      "label": "zod-schema-validation-and-input-coercion",
+      "members": {
+        "cc-custom": [
+          "zod-schema-validation-and-input-coercion"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-validateinput-and-error-result-mapping": {
+      "domain": "tools",
+      "label": "tool-validateinput-and-error-result-mapping",
+      "members": {
+        "cc-custom": [
+          "tool-validateinput-and-error-result-mapping"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "streaming-tool-executor": {
+      "domain": "tools",
+      "label": "streaming-tool-executor",
+      "members": {
+        "cc-custom": [
+          "streaming-tool-executor"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-abort-and-sibling-cancellation": {
+      "domain": "tools",
+      "label": "tool-abort-and-sibling-cancellation",
+      "members": {
+        "cc-custom": [
+          "tool-abort-and-sibling-cancellation"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "tool-hook-lifecycle": {
+      "domain": "tools",
+      "label": "tool-hook-lifecycle",
+      "members": {
+        "cc-custom": [
+          "tool-hook-lifecycle"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "per-message-aggregate-result-budget": {
+      "domain": "tools",
+      "label": "per-message-aggregate-result-budget",
+      "members": {
+        "cc-custom": [
+          "per-message-aggregate-result-budget"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "shell-process-control-and-disk-spill": {
+      "domain": "tools",
+      "label": "shell-process-control-and-disk-spill",
+      "members": {
+        "cc-custom": [
+          "shell-process-control-and-disk-spill"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "bash-command-security-gate": {
+      "domain": "tools",
+      "label": "bash-command-security-gate",
+      "members": {
+        "cc-custom": [
+          "bash-command-security-gate"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "powershell-command-safety-and-clm": {
+      "domain": "tools",
+      "label": "powershell-command-safety-and-clm",
+      "members": {
+        "cc-custom": [
+          "powershell-command-safety-and-clm"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "file-edit-patch-generation-and-staleness-guard": {
+      "domain": "tools",
+      "label": "file-edit-patch-generation-and-staleness-guard",
+      "members": {
+        "cc-custom": [
+          "file-edit-patch-generation-and-staleness-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    },
+    "blocking-sleep-repeat-guard": {
+      "domain": "tools",
+      "label": "blocking-sleep-repeat-guard",
+      "members": {
+        "cc-custom": [
+          "blocking-sleep-repeat-guard"
+        ]
+      },
+      "_groupedBy": "mechanical"
+    }
+  },
+  "_groupedBy": "mechanical-token-overlap"
+}
