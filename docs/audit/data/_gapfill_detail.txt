@@ -1,0 +1,250 @@
+===== KEY: branch (family=session) display=
+  rawName: branch
+  mechanism: src/commands/branch/branch.ts `call` (line 223) delegates to the private `createFork` (line 62), which reads the current transcript, filters to non-sidechain messages with isTranscriptMessage, rewrites every entry with a new randomUUID sessionId plus a forkedFrom marker, and writes a brand-new JSONL transcript via `writeFile(forkSessionPath, lines.join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })` at branch.ts:162-165. Back in `call`, the title is persisted with `saveCustomTitle(sessionId, effectiveTitle, forkPath)` (branch.ts:253) after collision handling in getUniqueForkName (line 180), and the process switches sessions with `await context.resume(sessionId, forkLog, 'fork')` (branch.ts:281). The `fork` alias is conditional on a build feature: `aliases: feature('FORK_SUBAGENT') ? [] : ['fork']` (index.ts:8).
+  gate: none (no `isEnabled`; src/commands/branch/index.ts:4-12)
+  backendModule: src/commands/branch/branch.ts — `call`, `createFork`, `getUniqueForkName`; persistence via src/utils/sessionStorage.ts — `saveCustomTitle`
+  backendStatus: 
+  verified: True
+  summary: Forks the current conversation into a new session file at this point and resumes into the fork.
+  evidence: src/commands/branch/index.ts:6 src/commands/branch/index.ts:8 src/commands/branch/branch.ts:162 src/commands/branch/branch.ts:223 src/commands/branch/branch.ts:253 src/commands/branch/branch.ts:281
+
+===== KEY: tag (family=session) display=
+  rawName: tag
+  mechanism: src/commands/tag/tag.tsx `call` dispatches on arguments: info/help or empty arguments render `<ShowHelp>` (lines 207-212), otherwise `<ToggleTagAndClose tagName={args} />` (line 213). That component reads the current tag with `getCurrentSessionTag(id)` (line 107); a different name writes via `await saveTag(id, normalizedTag, getTranscriptPath())` (lines 117-118), and an identical name opens the ConfirmRemoveTag dialog (line 110) whose confirm path calls `await saveTag(sessionId, "", fullPath)` (line 141). `saveTag` appends a `{ type: 'tag', tag, sessionId }` entry to the session transcript file with `appendEntryToFile` (src/utils/sessionStorage.ts:2331-2334) and caches it in memory as getProject().currentSessionTag (line 2337). Tag text is normalised with `recursivelySanitizeUnicode(...).trim()` (tag.tsx:82).
+  gate: `isEnabled: () => process.env.USER_TYPE === 'ant'` (src/commands/tag/index.ts:7)
+  backendModule: src/commands/tag/tag.tsx (`call`) -> src/utils/sessionStorage.ts (`saveTag` at :2331, `getCurrentSessionTag`, `getTranscriptPath`)
+  backendStatus: 
+  verified: True
+  summary: Adds, replaces or removes a searchable tag on the current session transcript (ant-only).
+  evidence: src/commands/tag/index.ts:5 src/commands/tag/index.ts:7 src/commands/tag/tag.tsx:118 src/commands/tag/tag.tsx:141 src/commands/tag/tag.tsx:213 src/utils/sessionStorage.ts:2331 src/utils/sessionStorage.ts:2334
+
+===== KEY: auto-compact-window (family=context) display=
+  rawName: auto-compact-window
+  mechanism: Declared twice in src/commands/limit-controls.ts: the interactive `autoCompactWindow` (lines 274-284, `type: 'local-jsx'`) and `autoCompactWindowNonInteractive` (lines 286-299, `type: 'local'`). Both `load` inline with no separate module (`load: () => Promise.resolve({ call: callAutoCompactWindowImmediate })` at line 283, and `{ call: callAutoCompactWindow }` at line 298). `callAutoCompactWindow` (line 201) is produced by `createLimitCommand` (line 97) with `settingKey: 'autoCompactWindowTokens'` (line 204). createLimitCommand parses the argument with parseTokenCount (line 33) and persists via `updateUserSetting` (line 58) -> `updateSettingsForSource('userSettings', { [key]: value })` (line 62) followed by `settingsChangeDetector.notifyChange('userSettings')` (line 67); reset words ('auto','unset','off', line 19) write `undefined` to delete the key (line 117). The cap is consumed by getEffectiveContextWindowSize (src/services/compact/autoCompact.ts:41-44).
+  gate: interactive variant: `isEnabled: () => !getIsNonInteractiveSession()` (src/commands/limit-controls.ts:279); non-interactive variant: `isEnabled() { return getIsNonInteractiveSession() }` (src/commands/limit-controls.ts:294-296) and `get isHidden() { return !getIsNonInteractiveSession() }` (line 291-293). Both also expose `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (line 280-282)
+  backendModule: src/commands/limit-controls.ts — `createLimitCommand`, `callAutoCompactWindow`, `updateUserSetting`, `toImmediateCommand`; consumer src/services/compact/autoCompact.ts — `getEffectiveContextWindowSize`
+  backendStatus: 
+  verified: True
+  summary: Reads or sets the context-window cap used by auto-compact (settings key `autoCompactWindowTokens`), with `auto`/`unset`/`off` clearing it.
+  evidence: src/commands/limit-controls.ts:201 src/commands/limit-controls.ts:204 src/commands/limit-controls.ts:276 src/commands/limit-controls.ts:279 src/commands/limit-controls.ts:288 src/commands/limit-controls.ts:294 src/commands/limit-controls.ts:62 src/services/compact/autoCompact.ts:41
+
+===== KEY: files (family=context) display=
+  rawName: files
+  mechanism: src/commands/files/files.ts `call` (line 7) reads `context.readFileState` through `cacheKeys()` (line 11) and returns a text result joining paths relativised with `relative(getCwd(), file)` (line 17), answering 'No files in context' when empty (line 14). No state mutation and no disk writes. It is ant-gated and `supportsNonInteractive: true` (index.ts:8).
+  gate: `isEnabled: () => process.env.USER_TYPE === 'ant'` (src/commands/files/index.ts:7)
+  backendModule: src/commands/files/files.ts (`call`)
+  backendStatus: 
+  verified: True
+  summary: Lists every file currently in the model's context (ant-only).
+  evidence: src/commands/files/index.ts:5 src/commands/files/index.ts:7 src/commands/files/index.ts:8 src/commands/files/files.ts:11 src/commands/files/files.ts:17
+
+===== KEY: memory (family=context) display=
+  rawName: memory
+  mechanism: src/commands/memory/memory.tsx `call` (line 83) calls `clearMemoryFileCaches()` then awaits `getMemoryFiles()` (lines 86-87, src/utils/claudemd.ts:790, memoized) to prime the list, and renders a Dialog containing MemoryFileSelector. On selection, handleSelectMemoryFile (line 21) mkdirs the config home dir when the path is under it (lines 25-27), creates the file empty with `writeFile(memoryPath, '', { encoding: 'utf8', flag: 'wx' })` swallowing EEXIST (lines 33-40), then opens it with `editFileInEditor(memoryPath)` (line 42) and reports the relative path via getRelativeMemoryPath (line 56). The command writes no memory content itself. The selector's list is getMemoryFiles() plus two synthesised entries: `join(getClaudeConfigHomeDir(),'CLAUDE.md')` and `join(getOriginalCwd(),'CLAUDE.md')` (MemoryFileSelector.tsx:51-52), with optional folder rows for getAutoMemPath(), the team-memory path and agent memory (lines 114-150).
+  gate: none (no `isEnabled`; src/commands/memory/index.ts:3-8)
+  backendModule: src/commands/memory/memory.tsx (`call`, `MemoryCommand`, `handleSelectMemoryFile`); src/components/memory/MemoryFileSelector.tsx (`MemoryFileSelector`); src/utils/claudemd.ts (`getMemoryFiles` at :790); path resolution src/utils/config.ts (`getMemoryPath` at :1628) and src/memdir/paths.ts (`getAutoMemEntrypoint` at :229)
+  backendStatus: 
+  verified: True
+  summary: Opens a selector of memory files (CLAUDE.md variants and memory folders) and opens the chosen one in $EDITOR.
+  evidence: src/commands/memory/index.ts:5 src/commands/memory/memory.tsx:33 src/commands/memory/memory.tsx:42 src/commands/memory/memory.tsx:83 src/commands/memory/memory.tsx:86 src/components/memory/MemoryFileSelector.tsx:51 src/components/memory/MemoryFileSelector.tsx:52 src/utils/claudemd.ts:790 src/utils/config.ts:1628 src/memdir/paths.ts:229
+
+===== KEY: code-review (family=execution) display=
+  rawName: code-review
+  mechanism: A prompt command with no `load`; its builder module is imported eagerly at index.ts:2. src/commands/code-review/code-review.tsx defines CODE_REVIEW_PROMPT (line 3), interpolating user-supplied paths when provided and otherwise instructing the model to review `git diff` / `git diff HEAD` (line 8); `getPromptForCommand` (line 20) returns it as a single ContentBlockParam text block (line 21). The command mutates no app state and writes nothing to disk — the harness executes the resulting prompt.
+  gate: none (no `isEnabled`; src/commands/code-review/index.ts:4-16)
+  backendModule: src/commands/code-review/code-review.tsx (`getPromptForCommand`, `CODE_REVIEW_PROMPT`)
+  backendStatus: 
+  verified: True
+  summary: Injects a code-review instruction prompt for the specified files or the current git diff.
+  evidence: src/commands/code-review/index.ts:5 src/commands/code-review/index.ts:6 src/commands/code-review/index.ts:13 src/commands/code-review/code-review.tsx:3 src/commands/code-review/code-review.tsx:20 src/commands/code-review/code-review.tsx:21
+
+===== KEY: commit (family=execution) display=
+  rawName: commit
+  mechanism: A prompt command defined entirely in the declaration file (no `load`). `getPromptForCommand` (commit.ts:65) calls getPromptContent (line 12), which embeds live shell substitutions (`!`git status``, `git diff HEAD`, `git branch --show-current`, `git log --oneline -10`, lines 22-25) plus attribution from getAttributionTexts and undercover instructions. It expands those embedded commands by awaiting `executeShellCommandsInPrompt` with the app state patched so ALLOWED_TOOLS (line 6: only `Bash(git add|status|commit)`) are pre-approved in `toolPermissionContext.alwaysAllowRules` (lines 67-86), returning the text block at line 88. Nothing is written to disk by the command itself; executeShellCommandsInPrompt (src/utils/promptShellExecution.ts:69) dispatches each span through `shellTool.call` (promptShellExecution.ts:115). Registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:196).
+  gate: none at the Command level (no `isEnabled`; src/commands/commit.ts:57-59). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)
+  backendModule: src/commands/commit.ts (`getPromptForCommand`, `getPromptContent`); expansion via src/utils/promptShellExecution.ts (`executeShellCommandsInPrompt`)
+  backendStatus: 
+  verified: True
+  summary: Builds and runs a prompt that stages and creates a single git commit from the current changes.
+  evidence: src/commands/commit.ts:58 src/commands/commit.ts:59 src/commands/commit.ts:65 src/commands/commit.ts:67 src/commands/commit.ts:88 src/utils/promptShellExecution.ts:69 src/commands.ts:196 src/commands.ts:287
+
+===== KEY: commit-push-pr (family=execution) display=
+  rawName: commit-push-pr
+  mechanism: A prompt command defined in its declaration file. `getPromptForCommand` (commit-push-pr.ts:119) resolves the default branch with `await getDefaultBranch()` and PR attribution with `await getEnhancedPRAttribution(context.getAppState)` (lines 121-124), builds the body via getPromptContent (line 26) and appends user instructions (line 130); it expands embedded shell substitutions with `executeShellCommandsInPrompt` (line 133) after injecting ALLOWED_TOOLS (line 10: git checkout/add/status/push/commit, gh pr create/edit/view/merge, ToolSearch, Slack MCP tools) into `toolPermissionContext.alwaysAllowRules` (lines 142-147). `contentLength` is a getter measuring getPromptContent('main').length (line 115). The command persists nothing. Registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:197).
+  gate: none at the Command level (no `isEnabled`; src/commands/commit-push-pr.ts:108-110). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)
+  backendModule: src/commands/commit-push-pr.ts (`getPromptForCommand`, `getPromptContent`); helpers src/utils/git.ts `getDefaultBranch`, src/utils/attribution.ts `getEnhancedPRAttribution`; expansion via src/utils/promptShellExecution.ts (`executeShellCommandsInPrompt`)
+  backendStatus: 
+  verified: True
+  summary: Builds and runs a prompt that commits all changes, pushes the branch and creates or updates a GitHub pull request.
+  evidence: src/commands/commit-push-pr.ts:109 src/commands/commit-push-pr.ts:110 src/commands/commit-push-pr.ts:119 src/commands/commit-push-pr.ts:133 src/utils/promptShellExecution.ts:69 src/commands.ts:197 src/commands.ts:287
+
+===== KEY: context-window (family=model) display=
+  rawName: context-window
+  mechanism: Declared twice in src/commands/limit-controls.ts: the interactive `contextWindow` (lines 220-230, `type: 'local-jsx'`) and `contextWindowNonInteractive` (lines 232-245, `type: 'local'`); both `load` inline with no separate module (lines 229 and 244). `callContextWindow` (line 176) is produced by `createLimitCommand` (line 97) with `settingKey: 'contextWindowTokens'` (line 179). createLimitCommand parses the argument via parseTokenCount (line 33) and persists through `updateUserSetting` (line 58) -> `updateSettingsForSource('userSettings', { [key]: value })` (line 62) plus `settingsChangeDetector.notifyChange('userSettings')` (line 67); reset words ('auto','unset','off', line 19) write `undefined` to delete the key (line 117). The status lines are produced by renderStatus using getContextWindowForModel and getEffectiveContextWindowSize (lines 180-188).
+  gate: interactive variant: `isEnabled: () => !getIsNonInteractiveSession()` (src/commands/limit-controls.ts:225); non-interactive variant: `isEnabled() { return getIsNonInteractiveSession() }` (lines 240-242) with `get isHidden() { return !getIsNonInteractiveSession() }` (lines 237-239). Interactive variant also has `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (lines 226-228)
+  backendModule: src/commands/limit-controls.ts — `createLimitCommand`, `callContextWindow`, `updateUserSetting`, `toImmediateCommand`; status reads src/utils/context.ts `getContextWindowForModel` and src/services/compact/autoCompact.ts `getEffectiveContextWindowSize`
+  backendStatus: 
+  verified: True
+  summary: Reads or sets the effective context-window token budget (settings key `contextWindowTokens`), with `auto`/`unset`/`off` clearing it.
+  evidence: src/commands/limit-controls.ts:176 src/commands/limit-controls.ts:179 src/commands/limit-controls.ts:222 src/commands/limit-controls.ts:225 src/commands/limit-controls.ts:233 src/commands/limit-controls.ts:240 src/commands/limit-controls.ts:62 src/services/compact/autoCompact.ts:34
+
+===== KEY: fast (family=model) display=
+  rawName: fast
+  mechanism: fast.tsx `call` (line 248) handles 'on'/'off' through handleFastModeShortcut() (line 226) and otherwise renders FastModePicker. Both converge on `applyFastMode` (fast.tsx:16), which calls clearFastModeCooldown() (line 17), then `updateSettingsForSource('userSettings', { fastMode: enable ? true : undefined })` (lines 18-20), and mutates AppState via setAppState: setting `fastMode: true` and switching `mainLoopModel` to `getFastModeModel()` when the current model lacks fast-mode support (lines 22-33), or `fastMode: false` on disable (lines 35-38). It persists the `fastMode` key in user settings.json and logs tengu_fast_mode_toggled.
+  gate: `isEnabled: () => isFastModeEnabled()` (src/commands/fast/index.ts:14), plus `get isHidden() { return !isFastModeEnabled() }` (index.ts:15-17) and `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (index.ts:19-21). isFastModeEnabled is src/utils/fastMode.js, imported at fast.tsx:12
+  backendModule: src/commands/fast/fast.tsx (`call`, `applyFastMode`, `handleFastModeShortcut`, `FastModePicker`); helpers src/utils/fastMode.js (`isFastModeEnabled`, `getFastModeModel`, `clearFastModeCooldown`)
+  backendStatus: 
+  verified: True
+  summary: Toggles fast mode — the premium high-speed tier — for the fast-mode model.
+  evidence: src/commands/fast/index.ts:10 src/commands/fast/index.ts:14 src/commands/fast/fast.tsx:16 src/commands/fast/fast.tsx:18 src/commands/fast/fast.tsx:31 src/commands/fast/fast.tsx:248
+
+===== KEY: max-output (family=model) display=
+  rawName: max-output
+  mechanism: Declared twice in src/commands/limit-controls.ts: the interactive `maxOutput` (lines 247-257, `type: 'local-jsx'`) and `maxOutputNonInteractive` (lines 259-272, `type: 'local'`); both `load` inline with no separate module (lines 256 and 271). `callMaxOutput` (line 191) is produced by `createLimitCommand` (line 97) with `settingKey: 'maxOutputTokens'` (line 194). createLimitCommand parses the argument with parseTokenCount (line 33) and persists via `updateUserSetting` (line 58) -> `updateSettingsForSource('userSettings', { [key]: value })` (line 62) plus `settingsChangeDetector.notifyChange('userSettings')` (line 67); reset words ('auto','unset','off', line 19) write `undefined` to delete the key (line 117). Its status line reports getMaxOutputTokensForModel(model) (line 197).
+  gate: interactive variant: `isEnabled: () => !getIsNonInteractiveSession()` (src/commands/limit-controls.ts:252); non-interactive variant: `isEnabled() { return getIsNonInteractiveSession() }` (lines 267-269) with `get isHidden() { return !getIsNonInteractiveSession() }` (lines 264-266). Interactive variant also has `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (lines 253-255)
+  backendModule: src/commands/limit-controls.ts — `createLimitCommand`, `callMaxOutput`, `updateUserSetting`, `toImmediateCommand`; status reads src/services/api/claude.ts `getMaxOutputTokensForModel`
+  backendStatus: 
+  verified: True
+  summary: Reads or sets the default max-output token budget (settings key `maxOutputTokens`), with `auto`/`unset`/`off` clearing it.
+  evidence: src/commands/limit-controls.ts:191 src/commands/limit-controls.ts:194 src/commands/limit-controls.ts:249 src/commands/limit-controls.ts:252 src/commands/limit-controls.ts:261 src/commands/limit-controls.ts:267 src/commands/limit-controls.ts:62
+
+===== KEY: protocol (family=model) display=
+  rawName: protocol
+  mechanism: src/commands/protocol/protocol.tsx `call` (line 150): info arguments render ShowProtocolAndClose; 'messages'|'responses' renders SetProtocolAndClose, whose effect sets AppState `{ protocol }` via setAppState (lines 104-107); no argument renders ProtocolPickerWrapper, whose handleSelect does the same (lines 55-58) after warning when the current model is incompatible. The command itself writes no settings file — `onChangeAppState` persists the AppState change with `updateSettingsForSource('userSettings', { protocol })` and mirrors it into the runtime override via `setRuntimeProtocolOverride` (src/utils/protocol/protocolState.ts:98-101, which also sets `process.env.CLAUDE_CODE_PROTOCOL`). The declaration's `description` getter renders the active protocol (index.ts:10-12).
+  gate: none (no `isEnabled`; src/commands/protocol/index.ts:7-15)
+  backendModule: src/commands/protocol/protocol.tsx (`call`, `ProtocolPickerWrapper`, `SetProtocolAndClose`, `ShowProtocolAndClose`); src/utils/protocol/protocolState.ts (`setRuntimeProtocolOverride` at :98, `getCurrentApiProtocol`, `renderProtocol`); persistence via src/state/onChangeAppState.ts
+  backendStatus: 
+  verified: True
+  summary: Switches the API protocol between the Messages and Responses APIs, or reports the current one.
+  evidence: src/commands/protocol/index.ts:8 src/commands/protocol/index.ts:9 src/commands/protocol/protocol.tsx:55 src/commands/protocol/protocol.tsx:104 src/commands/protocol/protocol.tsx:150 src/utils/protocol/protocolState.ts:98
+
+===== KEY: cost (family=inspect) display=
+  rawName: cost
+  mechanism: src/commands/cost/cost.ts is a 6-line shim: `call` (line 4) returns `{ type: 'text', value: formatTotalCost() }` (line 5), importing formatTotalCost from '../../cost-tracker.js' (line 1). src/cost-tracker.ts:223 `formatTotalCost` composes formatCost(getTotalCostUSD()) (line 225) with an unknown-model caveat via hasUnknownModelCost() (lines 226-228), formatDuration(getTotalAPIDuration()) and formatDuration(getTotalDuration()) (lines 234-235), getTotalLinesAdded()/getTotalLinesRemoved() (line 236) and formatModelUsage() (line 230). Every counter is imported from './bootstrap/state.js' (cost-tracker.ts:3-29) — in-memory bootstrap state, not recomputed from the transcript; per-model USD pricing comes from calculateUSDCost (./utils/modelCost.js, imported at line 43). Session totals can also be persisted/restored via getStoredSessionCosts (line 82, reading project config keys lastCost/lastDuration/lastModelUsage) and saveCurrentSessionCosts. The command mutates nothing and writes nothing.
+  gate: none (no `isEnabled`; src/commands/cost/index.ts:7-13)
+  backendModule: src/commands/cost/cost.ts (`call`); src/cost-tracker.ts (`formatTotalCost` at :223, `getStoredSessionCosts` at :82) over src/bootstrap/state.js counters
+  backendStatus: 
+  verified: True
+  summary: Prints the session's total cost, API and wall durations, line changes and per-model usage.
+  evidence: src/commands/cost/index.ts:8 src/commands/cost/index.ts:9 src/commands/cost/index.ts:12 src/commands/cost/cost.ts:5 src/cost-tracker.ts:3 src/cost-tracker.ts:223 src/cost-tracker.ts:225 src/cost-tracker.ts:235
+
+===== KEY: heapdump (family=inspect) display=
+  rawName: heapdump
+  mechanism: src/commands/heapdump/heapdump.ts `call` (line 3) awaits `performHeapDump()` from src/utils/heapDumpService.ts (line 221) and returns heapPath/diagPath. The service sets `dumpDir = getDesktopPath()` (heapDumpService.ts:240), builds heapPath/diagPath (lines 246-247), writes the diagnostics JSON with writeFile (line 250) and the snapshot with `writeHeapSnapshot` (line 256). The command is hidden rather than gated.
+  gate: none — no `isEnabled`; the command is hidden instead via `isHidden: true` (src/commands/heapdump/index.ts:7)
+  backendModule: src/commands/heapdump/heapdump.ts (`call`) -> src/utils/heapDumpService.ts (`performHeapDump` at :221)
+  backendStatus: 
+  verified: True
+  summary: Writes a JS heap snapshot plus a diagnostics JSON to the desktop.
+  evidence: src/commands/heapdump/index.ts:5 src/commands/heapdump/index.ts:7 src/commands/heapdump/heapdump.ts:3 src/utils/heapDumpService.ts:221 src/utils/heapDumpService.ts:240 src/utils/heapDumpService.ts:256
+
+===== KEY: insights (family=inspect) display=
+  rawName: insights
+  mechanism: A prompt command: `getPromptForCommand()` (src/commands/insights.ts:2843) awaits `generateUsageReport()` (line 2844) — implemented at insights.ts:2606, which aggregates session facets and writes the HTML report with `writeFile(htmlPath, htmlReport, ...)` where `htmlPath = join(getDataDir(), 'report.html')` (lines 2808-2809) — then returns one text block containing the report URL `file://${htmlPath}` (line 2846), the facets dir and instructions to print a fixed 'Your shareable insights report is ready' message. The command is the file's single exported Command: `const usageReport: Command = {...}` (line 2836), `name: 'insights'` (line 2838), `type: 'prompt'` (line 2837). It is loaded through a lazy shim so the 113KB module is only imported on invocation: `const usageReport: Command = { ... async getPromptForCommand(args, context) { const real = (await import('./commands/insights.js')).default; ... } }` (src/commands.ts:155-169). Registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:202); the file's `INSIGHT_SECTIONS` table at insights.ts:1156 is a prompt-section table, not a command list.
+  gate: none at the Command level (no `isEnabled`; src/commands/insights.ts:2836-2843). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)
+  backendModule: src/commands/insights.ts (`usageReport` default export at :2930, `getPromptForCommand` at :2843, `generateUsageReport` at :2606, HTML write at :2808); registered via the lazy shim in src/commands.ts:157-169
+  backendStatus: 
+  verified: True
+  summary: Generates a shareable HTML insights report over the user's Claude Code sessions and hands the summary to the model.
+  evidence: src/commands/insights.ts:2836 src/commands/insights.ts:2837 src/commands/insights.ts:2838 src/commands/insights.ts:2843 src/commands/insights.ts:2844 src/commands/insights.ts:2606 src/commands/insights.ts:2808 src/commands.ts:157 src/commands.ts:202
+
+===== KEY: stats (family=inspect) display=
+  rawName: stats
+  mechanism: The load target returns `<Stats onClose={onDone} />` (src/commands/stats/stats.tsx:5). Stats.tsx calls `aggregateClaudeCodeStatsForRange('all')` (src/components/Stats.tsx:65, and line 153 for other ranges) from src/utils/stats.ts:718. That walks every project transcript: `getProjectsDir()` then fs.readdir of each project dir collecting `*.jsonl` plus `{sessionId}/subagents/agent-*.jsonl` (stats.ts:375-413), parsed with readJSONLFile. Aggregation is memoised to disk through src/utils/statsCache.ts — cache path `join(getClaudeConfigHomeDir(), 'stats-cache.json')` (statsCache.ts:77-78), written by saveStatsCache (statsCache.ts:214) under withStatsCacheLock (stats.ts:648). The transcripts themselves are only read.
+  gate: none (no `isEnabled`; src/commands/stats/index.ts:3-8)
+  backendModule: src/commands/stats/stats.tsx (`call`) -> src/components/Stats.tsx -> src/utils/stats.ts (`aggregateClaudeCodeStatsForRange` at :718); src/utils/statsCache.ts (`saveStatsCache` at :214)
+  backendStatus: 
+  verified: True
+  summary: Shows historical Claude Code usage statistics (activity heatmap, model token usage, session counts) read from on-disk transcripts.
+  evidence: src/commands/stats/index.ts:5 src/commands/stats/stats.tsx:5 src/components/Stats.tsx:65 src/utils/stats.ts:718 src/utils/stats.ts:375 src/utils/statsCache.ts:77 src/utils/statsCache.ts:214
+
+===== KEY: version (family=inspect) display=
+  rawName: version
+  mechanism: Fully self-contained: the `load` returns a resolved module `{ call }` instead of an import (src/commands/version.ts:19), and `call` is an in-file LocalCommandCall returning a text result built from the compile-time macros `MACRO.VERSION` and `MACRO.BUILD_TIME` (lines 6-8: `${MACRO.VERSION} (built ${MACRO.BUILD_TIME})` when BUILD_TIME exists, else MACRO.VERSION). No state mutation and no disk IO. It is `supportsNonInteractive: true` (line 18) and registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:202).
+  gate: `isEnabled: () => process.env.USER_TYPE === 'ant'` (src/commands/version.ts:17). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)
+  backendModule: none — src/commands/version.ts (const `call` at :3, default export `version` at :12; `load: () => Promise.resolve({ call })` at :19)
+  backendStatus: 
+  verified: True
+  summary: Prints the version this running session was built from (not what autoupdate has downloaded).
+  evidence: src/commands/version.ts:3 src/commands/version.ts:6 src/commands/version.ts:13 src/commands/version.ts:17 src/commands/version.ts:19 src/commands.ts:202
+
+===== KEY: brief (family=interface) display=
+  rawName: brief
+  mechanism: The `load` returns an inline component with no separate module (brief.ts:58-122). Its `call` reads `context.getAppState().isBriefOnly` (line 64), flips it, refuses the on-transition when `!isBriefEntitled()` with 'Brief tool is not enabled for your account' (lines 69-80), then sets the in-memory bootstrap flag `setUserMsgOptIn(newState)` (line 87 -> src/bootstrap/state.ts:1049-1050; STATE.userMsgOptIn declared at line 70, seeded false at line 269) and updates AppState via `context.setAppState(prev => ... { ...prev, isBriefOnly: newState })` (lines 89-92). It logs tengu_brief_mode_toggled and closes with a `<system-reminder>` metaMessage instructing the model to use or stop using BRIEF_TOOL_NAME (lines 108-119). Nothing is written to disk: both flags are session-scoped. Registration of the command itself is behind the build feature at src/commands.ts:84-86.
+  gate: `isEnabled: () => { if (feature('KAIROS_BRIEF')) { return getBriefConfig().enable_slash_command } return false }` (src/commands/brief.ts:51-56). getBriefConfig reads the GrowthBook key 'tengu_kairos_brief_config' (line 39) through `getFeatureValue_CACHED_MAY_BE_STALE`, which is a no-op stub returning its defaultValue in this tree (src/services/analytics/growthbook.ts:130-136), so DEFAULT_BRIEF_CONFIG `{ enable_slash_command: false }` (line 29-31) always wins and the command is effectively always disabled here. Registration also requires `feature('KAIROS_BRIEF')` (src/commands.ts:84-86)
+  backendModule: no external module — inline `load: () => Promise.resolve({ async call(...) })` in src/commands/brief.ts (no import target). Supporting: src/bootstrap/state.ts `setUserMsgOptIn`; src/tools/BriefTool/BriefTool.ts `isBriefEntitled`
+  backendStatus: 
+  verified: True
+  summary: Toggles brief-only mode, which routes user-facing output through the SendUserMessage (Brief) tool and injects a transition system-reminder.
+  evidence: src/commands/brief.ts:29 src/commands/brief.ts:49 src/commands/brief.ts:51 src/commands/brief.ts:64 src/commands/brief.ts:87 src/commands/brief.ts:89 src/bootstrap/state.ts:1049 src/services/analytics/growthbook.ts:130 src/commands.ts:84
+
+===== KEY: color (family=interface) display=
+  rawName: color
+  mechanism: src/commands/color/color.ts `call` (line 20) refuses swarm teammates via isTeammate() (line 26). Reset words ('default','reset','none','gray','grey', line 18) write the sentinel 'default' with `await saveAgentColor(sessionId, 'default', fullPath)` (line 51) and clear AppState via `context.setAppState(...) standaloneAgentContext.color: undefined` (line 53). A valid AGENT_COLORS name is persisted with `await saveAgentColor(sessionId, colorArg, fullPath)` (line 79) and mirrored into AppState at line 82. The transcript path comes from getTranscriptPath() (lines 47, 76), and the colours are user-visible only — the file carries the restored-build marker `// @ts-nocheck -- restored transpiled artifact; runtime-verified`.
+  gate: none (no `isEnabled`; src/commands/color/index.ts:7-14)
+  backendModule: src/commands/color/color.ts (`call`); persistence via src/utils/sessionStorage.ts (`saveAgentColor`, `getTranscriptPath`)
+  backendStatus: 
+  verified: True
+  summary: Sets or resets the prompt-bar colour used to identify the current session/agent.
+  evidence: src/commands/color/index.ts:8 src/commands/color/index.ts:9 src/commands/color/color.ts:51 src/commands/color/color.ts:53 src/commands/color/color.ts:79 src/utils/sessionStorage.ts:2479
+
+===== KEY: config (family=interface) display=
+  rawName: config
+  mechanism: src/commands/config/config.tsx is a small shim: `call` returns `<Settings onClose={onDone} context={context} defaultTab="Config" />`. The state web is src/components/Settings/Settings.tsx (`Settings`, line 22, with a `useState(defaultTab)` at line 29) rendering src/components/Settings/Config.tsx (`Config`, line 81). Config snapshots each settings source at mount (`getSettingsForSource('localSettings')` / `('userSettings')`, lines 142-143) and writes during the session with `updateSettingsForSource` for individual keys — e.g. localSettings at Config.tsx:282 and userSettings at Config.tsx:329 — or `saveGlobalConfig` for the revert path, mirroring live values into AppState via setAppState.
+  gate: none (no `isEnabled`; src/commands/config/index.ts:3-9)
+  backendModule: src/commands/config/config.tsx (`call`); src/components/Settings/Settings.tsx (`Settings`); src/components/Settings/Config.tsx (`Config`); writes via src/utils/settings/settings.ts (`updateSettingsForSource`)
+  backendStatus: 
+  verified: True
+  summary: Opens the settings panel, optionally landing on a specific tab.
+  evidence: src/commands/config/index.ts:4 src/commands/config/index.ts:6 src/commands/config/config.tsx:5 src/components/Settings/Config.tsx:282 src/components/Settings/Config.tsx:329
+
+===== KEY: keybindings (family=interface) display=
+  rawName: keybindings
+  mechanism: src/commands/keybindings/keybindings.ts `call` (line 11) re-checks `isKeybindingCustomizationEnabled()` and returns an explanatory string when disabled (lines 12-18); otherwise it resolves `getKeybindingsPath()` (line 20) = `join(getClaudeConfigHomeDir(), 'keybindings.json')` (loadUserBindings.ts:116), mkdirs the parent (line 25), writes `generateKeybindingsTemplate()` with `flag: 'wx'` — catching EEXIST to detect an existing file without a TOCTOU stat (lines 27-37) — and then calls `editFileInEditor(keybindingsPath)` (line 40), reporting whether the file was created or merely opened. The declaration duplicates the gate and sets `supportsNonInteractive: false` (index.ts:7-8).
+  gate: `isEnabled: () => isKeybindingCustomizationEnabled()` (src/commands/keybindings/index.ts:7), where isKeybindingCustomizationEnabled returns `getFeatureValue_CACHED_MAY_BE_STALE('tengu_keybinding_customization_release', false)` (src/keybindings/loadUserBindings.ts:41-46) — a no-op stub in this tree (src/services/analytics/growthbook.ts:130-136), so the effective value is always false here
+  backendModule: src/commands/keybindings/keybindings.ts (`call`); src/keybindings/loadUserBindings.ts (`getKeybindingsPath` at :116, `isKeybindingCustomizationEnabled` at :41); src/keybindings/template.ts (`generateKeybindingsTemplate`)
+  backendStatus: 
+  verified: True
+  summary: Creates the keybindings.json template if missing and opens it in the user's editor.
+  evidence: src/commands/keybindings/index.ts:5 src/commands/keybindings/index.ts:7 src/commands/keybindings/index.ts:10 src/commands/keybindings/keybindings.ts:20 src/commands/keybindings/keybindings.ts:27 src/commands/keybindings/keybindings.ts:40 src/keybindings/loadUserBindings.ts:41 src/keybindings/loadUserBindings.ts:116 src/services/analytics/growthbook.ts:130
+
+===== KEY: output-style (family=interface) display=
+  rawName: output-style
+  mechanism: src/commands/output-style/output-style.tsx `call` (line 2) only invokes onDone with the deprecation string '/output-style has been deprecated. Use /config to change your output style, or set it in your settings file. Changes take effect on the next session.' and `display: 'system'` (lines 3-5). No state is mutated and nothing is written to disk. The command is hidden rather than gated, and its description carries the same deprecation note (index.ts:6-7).
+  gate: none — no `isEnabled`; hidden instead via `isHidden: true` (src/commands/output-style/index.ts:7)
+  backendModule: src/commands/output-style/output-style.tsx (`call`) — nothing else
+  backendStatus: 
+  verified: True
+  summary: Deprecated stub that tells the user to use /config or the settings file instead.
+  evidence: src/commands/output-style/index.ts:5 src/commands/output-style/index.ts:6 src/commands/output-style/index.ts:7 src/commands/output-style/output-style.tsx:2 src/commands/output-style/output-style.tsx:3
+
+===== KEY: stickers (family=interface) display=
+  rawName: stickers
+  mechanism: The load target is a 16-line module: `call()` sets `const url = 'https://www.stickermule.com/claudecode'` (stickers.ts:5) and calls `openBrowser(url)` (line 6) from src/utils/browser.ts:39; on success it returns the text result 'Opening sticker page in browser…' (line 9), otherwise the URL as fallback text (lines 11-14). No state is mutated and nothing is persisted. The declaration sets `supportsNonInteractive: false` (index.ts:7).
+  gate: none (no `isEnabled`; src/commands/stickers/index.ts:3-9)
+  backendModule: src/commands/stickers/stickers.ts (`call`) + src/utils/browser.ts (`openBrowser`)
+  backendStatus: 
+  verified: True
+  summary: Opens the Claude Code sticker-ordering page in the user's browser.
+  evidence: src/commands/stickers/index.ts:5 src/commands/stickers/index.ts:7 src/commands/stickers/stickers.ts:5 src/commands/stickers/stickers.ts:6 src/utils/browser.ts:39
+
+===== KEY: terminal-setup (family=interface) display=
+  rawName: terminal-setup
+  mechanism: src/commands/terminalSetup/terminalSetup.tsx `call` short-circuits when the terminal natively supports the CSI u / Kitty keyboard protocol (lines 144-150), refuses unsupported terminals (lines 153-182), then runs `setupTerminal(context.options.theme)` (line 183). setupTerminal switches on `env.terminal` (lines 82-103) and dispatches to installBindingsForVSCodeTerminal (line 195, which backs up then rewrites `<userDir>/keybindings.json` via addItemToJSONCArray + writeFile at lines 259-264), installBindingsForAlacritty (line 374, writes `alacritty.toml` at line 454), installBindingsForZed (line 463, writes `~/.config/zed/keymap.json`), or enableOptionAsMetaForTerminal (line 311, driving `/usr/libexec/PlistBuddy` on the Terminal.app plist at lines 276/282/301 and `killall cfprefsd` at line 356 after backupTerminalPreferences at line 314). It then persists completion flags through `saveGlobalConfig`: `shiftEnterKeyBindingInstalled` / `optionAsMetaKeyInstalled` (lines 104-119). The declaration's `description` is terminal-conditional (index.ts:15-18) and it carries the restored-build marker plus an un-substituted `"external" === 'ant'` literal at line 123.
+  gate: none (no `isEnabled`; src/commands/terminalSetup/index.ts:12-21). Hidden instead via `isHidden: env.terminal !== null && env.terminal in NATIVE_CSIU_TERMINALS` (index.ts:19)
+  backendModule: src/commands/terminalSetup/terminalSetup.tsx (`call`, `setupTerminal`); persistence via src/utils/config.ts (`saveGlobalConfig`)
+  backendStatus: 
+  verified: True
+  summary: Installs a Shift+Enter (or Option+Enter on Apple Terminal) newline key binding for the detected terminal.
+  evidence: src/commands/terminalSetup/index.ts:14 src/commands/terminalSetup/index.ts:19 src/commands/terminalSetup/terminalSetup.tsx:109 src/commands/terminalSetup/terminalSetup.tsx:183 src/commands/terminalSetup/terminalSetup.tsx:262 src/commands/terminalSetup/terminalSetup.tsx:276
+
+===== KEY: tui (family=interface) display=
+  rawName: tui
+  mechanism: src/commands/tui/tui.ts `call` parses on|off|toggle (lines 24-33; anything else returns usage text at lines 35-42), then does two things: `setUserFullscreenPreference(newPref)` for immediate in-session effect (line 45) and `saveGlobalConfig(current => ({ ...current, fullscreenMode: newMode }))` to persist 'on'/'off' (lines 48-51). The in-memory half is a module-level `let userFullscreenPreference: boolean | null = null` in src/utils/fullscreen.ts:13 (setter at lines 16-18), reloaded at startup by loadFullscreenPreferenceFromConfig (lines 29-40). Fullscreen is then decided by isFullscreenEnvEnabled (fullscreen.ts:147-151: explicit preference wins, else CLAUDE_CODE_NO_FLICKER falsy/truthy, else tmux -CC auto-disable, else `USER_TYPE === 'ant'`). It does NOT restart the process — it prints 'Restart or send a new message for the change to take full effect.' when the new preference differs from the env-derived state (tui.ts:66-69); the alt-screen wrapper is chosen at render time in `if (isFullscreenEnvEnabled()) return <AlternateScreen ...>` (src/screens/REPL.tsx:4671-4675). The declaration sets `supportsNonInteractive: false` (index.ts:8).
+  gate: none (no `isEnabled`; src/commands/tui/index.ts:3-11)
+  backendModule: src/commands/tui/tui.ts (`call`) + src/utils/fullscreen.ts (`setUserFullscreenPreference` at :16, `isFullscreenEnvEnabled` at :147); rendered by src/screens/REPL.tsx:4671
+  backendStatus: 
+  verified: True
+  summary: Toggles fullscreen (alt-screen, virtualized-scroll) TUI mode on/off/toggle and persists the choice.
+  evidence: src/commands/tui/index.ts:4 src/commands/tui/index.ts:8 src/commands/tui/tui.ts:45 src/commands/tui/tui.ts:48 src/commands/tui/tui.ts:68 src/utils/fullscreen.ts:13 src/utils/fullscreen.ts:147 src/screens/REPL.tsx:4671
+

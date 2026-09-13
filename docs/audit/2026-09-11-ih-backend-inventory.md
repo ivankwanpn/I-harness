@@ -23,9 +23,13 @@
 | 關卡 | 方法 | 結果 |
 |---|---|---|
 | 覆蓋率 | `assemble-d1.mjs` 硬閘：表徵過的包集合必須**精確等於** `ih-surface.json` 的在範圍集合 | **65/65 PASS**（不足即拒絕產出文件並列出缺哪幾包） |
-| 引註（機械） | `verify-citations.mjs`：重開每一條引註，確認檔案存在、行號在範圍內、非空白行 | **985 條主張 / 3,037 條引註，全部解析成功，0 越界** |
+| 引註（機械） | `verify-citations.mjs`：重開每一條引註，確認檔案存在、行號在範圍內、非空白行 | **985 條主張 / 3,047 條引註，全部解析成功，0 越界** |
 | 引註（對抗，第一輪） | 無利益關係的獨立代理抽 27 格，重讀原文判定引註是否真的支撐主張 | **0 條造假／過期行號**（每一條 `lineText` 與來源逐字元相符）；但 **4 條 WRONG_LINE**——主張為真，引註位置承載不了它 |
-| 引註（對抗，第二輪） | 全資料 enriched 後重新分層抽樣 22 格再判 | 見姊妹文件的驗證節 |
+| 引註（對抗，第二輪） | 全資料 enriched 後重新分層抽樣 22 格再判 | `SUPPORTED 9 / PARTIAL 7 / WRONG_LINE 4 / UNSUPPORTED 0 / UNCERTAIN 2`。**又是 0 條造假或過期行號**；所有失敗同樣是載體失敗 |
+| **合計** | 兩輪共 49 格、**35 格可評分** | **UNSUPPORTED 0**——無一條主張被判定為無根據 |
+| 載體分佈 | `carrierClass()` 分類每條機制主張的**領頭引註**（786 條） | implementation **47%** ／ registry-listing **37%** ／ doc-comment 10% ／ alias-or-helper 3% ／ type-decl 3% |
+
+**領頭引註的載體分佈是本次審計最重要的資料品質量測**，也是兩輪抽樣各有約一半格子不合格的原因：**不到一半的機制主張，領頭引註是實作它的那行程式碼**。11 個非 SUPPORTED 的格子全部落在三種形狀——bundle/manifest 條目、registry/exports 清單、同檔輔助函式或裸 alias。這三類現已是可重跑的量測，不再需要每輪重新發現。矩陣顯示時會改用**可得的最佳載體**（`bestCitation`），但上表量測的是**原始資料**，不因顯示層改善而變好。
 
 **第一輪抓到的實際缺陷**（已修正，原始引註保留並就地記錄）：
 
@@ -161,7 +165,7 @@
 | `session-query` | engine | Full-text session search and lineage over the durable JSONL store: an independent, rebuild… | 5 | 3 | 17 |
 | `session-title` | engine | Derive and persist a short session title: a deterministic word-count fallback, a one-shot … | 4 | 2 | 9 |
 | `runtime-context` | engine | Dynamic system context as a durable snapshot: named sections rendered at each agent/pre-st… | 4 | 1 | 9 |
-| `instructions` | engine | Discover and load AGENTS.md / CLAUDE.md instruction files and render them as one runtime-c… | 3 | 2 | 7 |
+| `instructions` | engine | Discover and load AGENTS.md / CLAUDE.md instruction files and render them as one runtime-c… | 3 | 2 | 10 |
 | `interaction` | engine | The interaction seams between host and engine: the approval answerer, the user-question pr… | 4 | 1 | 11 |
 | `plan-mode` | engine | The R-A7 plan-mode surface: the plan-mode system-prompt fragment, enter/exit helpers that … | 4 | 1 | 12 |
 | `goal` | engine | The goal domain: a last-wins goal projection folded from goal/change session events, plus … | 4 | 2 | 12 |
@@ -218,7 +222,7 @@
 | `schedule` | service | Durable per-session reminders whose state IS the session event stream: `schedule/change` v… | 4 | 3 | 21 |
 | `feedback` | service | Per-message user feedback (like/dislike + optional note) for a session, persisted as ONE c… | 4 | 3 | 19 |
 
-合計 **65** 包、**299** 條設計決策、**1204** 條引註；**65** 包有原始碼內標記的已知缺口。
+合計 **65** 包、**299** 條設計決策、**1207** 條引註；**65** 包有原始碼內標記的已知缺口。
 
 ## 引擎與會話核心
 
@@ -659,7 +663,7 @@ Discover and load AGENTS.md / CLAUDE.md instruction files and render them as one
    - 出處：`packages/instructions/src/files.ts:13`、`packages/instructions/src/files.ts:7`
 2. **The section is rendered with a per-file `### <workspace-relative path>` header, joined blank-line separated, and hard-capped at maxBytes with a `(truncated)` suffix.**
    - 理由：Bounded prompt cost for an unbounded set of on-disk files.
-   - 出處：`packages/instructions/src/files.ts:64`、`packages/instructions/src/index.ts:48`
+   - 出處：`packages/instructions/src/index.ts:24`、`packages/instructions/src/index.ts:9`、`packages/instructions/src/index.ts:47-50`、`packages/instructions/src/files.ts:64`、`packages/instructions/src/index.ts:48`
 3. **The getter is SYNCHRONOUS because the runtime-context pre-step render seam is sync, and it caches by (file list \| max mtimeMs \| total size): an unchanged tree costs one stat per file per step boundary and no re-read.**
    - 理由：Change detection has to fit a synchronous render hook; mtime+size is the cheapest honest proxy.
    - 出處：`packages/instructions/src/index.ts:17`

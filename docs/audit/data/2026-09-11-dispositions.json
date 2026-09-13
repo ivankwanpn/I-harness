@@ -2,6 +2,10 @@
   "generatedBy": "scripts/audit/merge-dispositions.mjs",
   "subsets": [
     {
+      "file": "2026-09-11-dispositions-extension-safety.json",
+      "assigned": 39
+    },
+    {
       "file": "2026-09-11-dispositions-interface-inspect.json",
       "assigned": 50
     },
@@ -11,6 +15,162 @@
     }
   ],
   "rows": {
+    "add-dir": {
+      "disposition": "路線差異",
+      "rationale": "cc 以權限規則擴目錄；IH 單根"
+    },
+    "always-approve": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作；guardian 閘未開"
+    },
+    "approve": {
+      "disposition": "rewrite",
+      "rationale": "codex 列近期拒絕並注入重試"
+    },
+    "auto": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作；同 always-approve"
+    },
+    "permission": {
+      "disposition": "rewrite",
+      "rationale": "dsh preset 一命令切政策"
+    },
+    "permissions": {
+      "disposition": "rewrite",
+      "rationale": "codex 綁審批與 profile"
+    },
+    "privacy": {
+      "disposition": "不做",
+      "rationale": "IH 無帳戶面；明示不註冊"
+    },
+    "sandbox-add-read-dir": {
+      "disposition": "遠期",
+      "rationale": "需 elevated 讀隔離後端"
+    },
+    "sandbox-toggle": {
+      "disposition": "rewrite",
+      "rationale": "cc 寫入 sandbox.* 設定"
+    },
+    "security-review": {
+      "disposition": "路線差異",
+      "rationale": "IH 不內建 prompt；走 skill"
+    },
+    "setup-default-sandbox": {
+      "disposition": "遠期",
+      "rationale": "IH 無 elevated 後端"
+    },
+    "test-approval": {
+      "disposition": "rewrite",
+      "rationale": "以既有 approval seam 送假請求"
+    },
+    "agents-platform": {
+      "disposition": "不做",
+      "rationale": "原後端缺席的內部 stub"
+    },
+    "apps": {
+      "disposition": "路線差異",
+      "rationale": "IH 以 MCP 為整合面"
+    },
+    "config-agents": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（builtinRoles）"
+    },
+    "hooks": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（含 sha256 驗證）"
+    },
+    "import": {
+      "disposition": "遠期",
+      "rationale": "產品級遷移；含對話匯入"
+    },
+    "import-claude": {
+      "disposition": "遠期",
+      "rationale": "同 import；掃 .claude 設定"
+    },
+    "init-verifiers": {
+      "disposition": "路線差異",
+      "rationale": "內部 prompt；IH 走 skill"
+    },
+    "marketplace": {
+      "disposition": "improved-writing",
+      "rationale": "IH 真掃描目錄；勿退化"
+    },
+    "mcp": {
+      "disposition": "rewrite",
+      "rationale": "cc 可 toggle MCP 伺服器"
+    },
+    "mcps": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作；不捏造掛載態"
+    },
+    "personas": {
+      "disposition": "不做",
+      "rationale": "IH 明示不註冊：無 preset 目錄"
+    },
+    "plugin": {
+      "disposition": "rewrite",
+      "rationale": "cc 四頁管理；IH 後端已有"
+    },
+    "plugins": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（四態目錄）"
+    },
+    "reload-plugins": {
+      "disposition": "rewrite",
+      "rationale": "cc refresh 後即時套用"
+    },
+    "skills": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（registry 掃描）"
+    },
+    "think-back": {
+      "disposition": "不做",
+      "rationale": "遠端旗標動畫；本 build no-op"
+    },
+    "thinkback-play": {
+      "disposition": "不做",
+      "rationale": "同 think-back；隱藏 no-op"
+    },
+    "workflows": {
+      "disposition": "路線差異",
+      "rationale": "IH workflow 別名即此"
+    },
+    "agents": {
+      "disposition": "遠期",
+      "rationale": "IH dashboard 已有；編輯遠期"
+    },
+    "btw": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作；走 steer 進對話"
+    },
+    "dashboard": {
+      "disposition": "improved-writing",
+      "rationale": "IH 每列真值；勿退化"
+    },
+    "install-slack-app": {
+      "disposition": "不做",
+      "rationale": "開瀏覽器的產品推廣面"
+    },
+    "pr-comments": {
+      "disposition": "路線差異",
+      "rationale": "同 moved-to-plugin 路徑"
+    },
+    "share": {
+      "disposition": "不做",
+      "rationale": "IH 明示不做共享；grok 僅 stub"
+    },
+    "side": {
+      "disposition": "路線差異",
+      "rationale": "codex /side≡/btw；IH 單一"
+    },
+    "subagents": {
+      "disposition": "rewrite",
+      "rationale": "codex 以 root 過濾挑選"
+    },
+    "tasks": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（live 投影）"
+    },
     "debug": {
       "disposition": "遠期",
       "rationale": "grok dev HUD；IH 暫無覆蓋層"
@@ -411,51 +571,7 @@
       "disposition": "路線差異",
       "rationale": "IH 走 preset，非執行期切換"
     },
-    "always-approve": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "auto": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "btw": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "config-agents": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "dashboard": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "hooks": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "marketplace": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "mcps": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "plugins": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
     "provider": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "skills": {
-      "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
-    },
-    "tasks": {
       "disposition": "已存在",
       "rationale": "IH 已實作（機械補齊）"
     }
