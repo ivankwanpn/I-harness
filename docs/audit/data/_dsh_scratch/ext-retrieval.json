@@ -1,0 +1,1009 @@
+{
+  "domains": {
+    "extension": {
+      "mechanisms": [
+        {
+          "name": "mcp-client-connection-supervision-and-reconnect",
+          "what": "startConnection() in the MCP client bridge owns one MCP SDK Client generation per plugin instance and restarts the configured server with bounded exponential backoff when the connection drops. createTransport() selects either a StdioClientTransport whose child env is built by buildChildEnv() from scrubbedParentEnv() plus spec env, or a StreamableHTTPClientTransport over an explicit URL and header map. scheduleReconnect() keeps one shared attempt budget per outage: the delay is initialDelayMs * 2 ** (failedAttempts - 1) capped at maxDelayMs, the budget resets only when a generation stayed up for at least maxDelayMs (the stability window), and exhaustion unregisters the server's tools and stops until disposal or Host restart. Generation teardown is fail-closed: a failed generation that does not emit close within GENERATION_CLOSE_TIMEOUT_MS stops reconnection rather than overlapping child processes, and apply() rejects the fiber only when failOnStartupError is set.",
+          "invariants": [
+            "One outage shares one attempt budget; only a generation that survives the maxDelayMs stability window opens a fresh budget.",
+            "A generation may act only while it is the current one on a live plugin (isCurrent), so racing close/error signals stay idempotent.",
+            "An armed reconnect timer is unref'd and a generation proven unclosed aborts reconnection instead of spawning an overlapping server."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "RECONNECT_DEFAULTS = { enabled: true, initialDelayMs: 500, maxDelayMs: 30000, maxAttempts: 10 } (connection.ts:40-45)",
+            "GENERATION_CLOSE_TIMEOUT_MS = 5000 (connection.ts:50)",
+            "DEFAULT_TOOL_CALL_TIMEOUT_MS = 60000 (index.ts:35)",
+            "SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/ (index.ts:38)"
+          ],
+          "evidence": [
+            "packages/mcp/mcp-client/src/connection.ts:40-45",
+            "packages/mcp/mcp-client/src/connection.ts:50",
+            "packages/mcp/mcp-client/src/connection.ts:192-225",
+            "packages/mcp/mcp-client/src/connection.ts:237-305",
+            "packages/mcp/mcp-client/src/connection.ts:285-294",
+            "packages/mcp/mcp-client/src/transport.ts:21-23",
+            "packages/mcp/mcp-client/src/transport.ts:31-49",
+            "packages/mcp/mcp-client/src/index.ts:35-38",
+            "packages/mcp/mcp-client/src/index.ts:146-187"
+          ],
+          "modules": [
+            "mcp/mcp-client"
+          ],
+          "verified": true
+        },
+        {
+          "name": "mcp-tool-bridging-and-namespace-isolation",
+          "what": "syncTools() bridges an MCP server's tool list into the harness ToolRuntime under deterministic server-qualified public names. publicToolName() composes mcp__<serverName>__<rawName>, replacing characters outside [A-Za-z0-9_-] and appending 12 hex chars of a SHA-256 over (serverName, rawName) whenever normalization or the 64-character function-name cap changed the name, so distinct MCP identities never collapse. The sync is two-phase: phase 1 drains paginated tools/list (duplicate raw names or a repeated continuation cursor reject as an invalid list, leaving the prior generation registered), phase 2 disposes the previous generation and registers the new one, rolling back to zero tools if a foreign registration squats the namespace. Execution sends tools/call with the raw wire name and maps MCP content blocks through projectContent(); image blocks are validated as canonical base64 and durably stored via ctx.attachments only after the exact model route proves image input, otherwise each image becomes diagnostic text while the raw value stays available to programmatic callers.",
+          "invariants": [
+            "The raw MCP name is sent only on the wire and is never recovered by parsing the public name; (serverName, rawName) is the stable identity.",
+            "The model sees either the complete next tool generation or the previous one, never a partial set.",
+            "An advertised output schema unsupported by assertSupportedJsonSchema falls back to plain JsonValue rather than rejecting the tool."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "MAX_PUBLIC_NAME_LENGTH = 64 (tools.ts:50)",
+            "HASH_LENGTH = 12 hex chars of SHA-256 (tools.ts:56)",
+            "IMAGE_MEDIA_TYPES = image/png, image/jpeg, image/webp, image/gif (tools.ts:62-67)"
+          ],
+          "evidence": [
+            "packages/mcp/mcp-client/src/tools.ts:50-70",
+            "packages/mcp/mcp-client/src/tools.ts:112-118",
+            "packages/mcp/mcp-client/src/tools.ts:144-203",
+            "packages/mcp/mcp-client/src/tools.ts:313-371",
+            "packages/mcp/mcp-client/src/tools.ts:443-497"
+          ],
+          "modules": [
+            "mcp/mcp-client"
+          ],
+          "verified": true
+        },
+        {
+          "name": "lsp-provider-registry-and-extension-routing",
+          "what": "ctx.lsp is a Service Definition exposing exactly four normalized operations (goToDefinition, findReferences, goToImplementation, hover) and a provider registry keyed by branded provider id and exclusive file extensions. registerProvider() validates the id, every normalized lowercase leading-dot extension, intra-provider duplicates and cross-provider conflicts before any mutation, then reserves the id and all extensions inside one ctx.effect whose disposer releases them together, so an invalid or conflicting registration publishes nothing. query() routes a request by the file's final extension only (finalExtension(), which splits on both separators and returns '' for dotfiles) and never depends on registration order; an unroutable path throws LspError LSP_UNAVAILABLE. The seam deliberately exposes no JSON-RPC escape hatch.",
+          "invariants": [
+            "A published route always has a live provider: id and extensions are reserved and released atomically.",
+            "Selection is a pure function of the file's final extension, never of registration order.",
+            "An invalid or conflicting registration mutates no registry state."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "EXTENSION_PATTERN = /^\\.[^./\\\\]+$/ (index.ts:70)",
+            "Stable LspError codes: LSP_INVALID_PROVIDER, LSP_CONFLICT, LSP_UNAVAILABLE, LSP_DISPOSED, LSP_UNSUPPORTED_OPERATION, LSP_MALFORMED_RESPONSE (index.ts:44-49)"
+          ],
+          "evidence": [
+            "packages/lsp/lsp/src/index.ts:44-50",
+            "packages/lsp/lsp/src/index.ts:60-70",
+            "packages/lsp/lsp/src/index.ts:82-90",
+            "packages/lsp/lsp/src/index.ts:90-141",
+            "packages/lsp/lsp/src/index.ts:143-149"
+          ],
+          "modules": [
+            "lsp/lsp"
+          ],
+          "verified": true
+        },
+        {
+          "name": "lsp-stdio-server-pooling-and-transient-document-lifecycle",
+          "what": "lsp-stdio resolves every configured executable through ctx.subprocess.resolveExecutable before publishing any provider, then registers one LocalLspProvider per server table entry that lazily single-flights one LspInstance per canonical workspace key and serializes each query lifecycle on a per-workspace promise queue. LspInstance.initialize() sends processId: null with the workspace folder URI, the client capability set, and static initializationOptions, negotiates utf-16 position encoding, and then serves each query as textDocument/didOpen followed by the operation request and didClose; findReferences always sets context.includeDeclaration: true. raceAbort() sends $/cancelRequest and, if the request does not settle within killGraceMs, tears the instance down so an ignored cancellation cannot overlap the next queued document lifecycle; servers the host cannot drive (workspace/applyEdit) are refused and only lifecycle bookkeeping requests are acknowledged. LspConnection frames JSON-RPC itself, caps message and stderr bytes, answers workspace/configuration from static config, and treats a framing/JSON failure as fatal by failing the connection and terminating the managed process range; teardown is bounded shutdown/exit then SIGTERM-to-SIGKILL with awaited process close.",
+          "invariants": [
+            "One server process per (provider id, canonical workspace); a dead or failed instance is evicted and never reused.",
+            "Queries are read-only, so a transport failure may be replaced and retried at most once per query; cancellation that the server ignores terminates the instance.",
+            "Disposal owes quiescence: process close and managed-range exit are awaited, not merely requested."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "DEFAULT_MAX_MESSAGE_BYTES = 16000000 (index.ts:49)",
+            "DEFAULT_MAX_STDERR_BYTES = 1000000 (index.ts:50)",
+            "DEFAULT_MAX_DOCUMENT_BYTES = 4000000 (index.ts:51)",
+            "DEFAULT_SHUTDOWN_TIMEOUT_MS = 5000 (index.ts:52)",
+            "DEFAULT_KILL_GRACE_MS = 2000 (index.ts:53)"
+          ],
+          "evidence": [
+            "packages/lsp/lsp-stdio/src/index.ts:49-53",
+            "packages/lsp/lsp-stdio/src/index.ts:126-186",
+            "packages/lsp/lsp-stdio/src/index.ts:260-315",
+            "packages/lsp/lsp-stdio/src/index.ts:318-329",
+            "packages/lsp/lsp-stdio/src/index.ts:365-380",
+            "packages/lsp/lsp-stdio/src/instance.ts:110-125",
+            "packages/lsp/lsp-stdio/src/instance.ts:187-204",
+            "packages/lsp/lsp-stdio/src/instance.ts:211-236",
+            "packages/lsp/lsp-stdio/src/instance.ts:247-264",
+            "packages/lsp/lsp-stdio/src/instance.ts:290-320",
+            "packages/lsp/lsp-stdio/src/instance.ts:340-350",
+            "packages/lsp/lsp-stdio/src/connection.ts:88-104",
+            "packages/lsp/lsp-stdio/src/connection.ts:160-177",
+            "packages/lsp/lsp-stdio/src/connection.ts:221-233",
+            "packages/lsp/lsp-stdio/src/connection.ts:306-316"
+          ],
+          "modules": [
+            "lsp/lsp-stdio"
+          ],
+          "verified": true
+        },
+        {
+          "name": "lsp-model-facing-tool-and-result-caps",
+          "what": "tool-lsp registers one read-only model-facing `lsp` tool with a closed four-operation enum plus a system-prompt section positioned as a precision aid for ambiguous textual matches. The tool requires the session workspace cwd through sessionCwd(exec) with no fallback, converts the model's one-based UTF-16 line/character coordinates into the seam's positions, and renders locations or hover text through formatLocations/formatHover under maxLocations and maxResultChars caps. Its output schema is a closed oneOf over locations and hover, and the definition carries timeoutMs for the cooperative tool-call timeout policy. Config values are validated at load so a non-positive or over-large cap fails the plugin.",
+          "invariants": [
+            "The tool runtime-injects only tools, lsp, and systemPrompt and imports no concrete provider.",
+            "A missing session workspace is an error, not a silent fallback to the process cwd.",
+            "Declared caps must be positive integers and the timeout must not exceed MAX_TIMER_DELAY_MS."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "DEFAULT_LSP_TOOL_TIMEOUT_MS = 60000 (index.ts:50)",
+            "maxLocations default 100, maxResultChars default 16000 (index.ts:57-64)"
+          ],
+          "evidence": [
+            "packages/lsp/tool-lsp/src/index.ts:50",
+            "packages/lsp/tool-lsp/src/index.ts:53-54",
+            "packages/lsp/tool-lsp/src/index.ts:57-70",
+            "packages/lsp/tool-lsp/src/index.ts:97-107",
+            "packages/lsp/tool-lsp/src/index.ts:183-194",
+            "packages/lsp/tool-lsp/src/index.ts:234-246"
+          ],
+          "modules": [
+            "lsp/tool-lsp"
+          ],
+          "verified": true
+        },
+        {
+          "name": "skill-registry-layered-precedence-and-caching",
+          "what": "SkillRegistry is the ctx.skills layer registry: provider catalogs and runtime contributions file into the calling context's scope layer, a read merges the global layer with the viewing scope's chain, and the nearest layer wins a duplicate name outright while rank decides duplicates only within one layer (compareIndexedCandidates orders by rank, then provider registration order, then local order). registerProvider() reserves the provider name `runtime` and aborts the registration's lifecycle signal on disposal; register() adds whole runtime definitions with rank 250 and first-wins semantics. collect() memoizes completed catalogs under JSON.stringify({cwd, scopes, revision}) with a bounded insertion-ordered cache, retries once when a concurrent mutation changed the revision, and never caches an incomplete provider observation, so consumers can keep last-good state. get() validates the loaded definition, passes the opaque locator back to the owning provider, and invalidates the entry when the returned name disagrees with the selected candidate, but only while that exact provider registration is still live.",
+          "invariants": [
+            "A nearer scope layer shadows farther layers regardless of rank; rank only breaks ties inside one layer.",
+            "An incomplete provider catalog is never cached, and a skill body is validated before it reaches a consumer.",
+            "A stale-definition invalidation must not evict a newer registration's cache."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "DEFAULT_COLLECT_CACHE_ENTRIES = 128 (index.ts:22)",
+            "MAX_COLLECT_ATTEMPTS = 2 (index.ts:23)",
+            "RUNTIME_PROVIDER = 'runtime', RUNTIME_RANK = 250 (index.ts:24-25)",
+            "BUNDLED_SKILL_RANK = 600 (index.ts:28)",
+            "SKILL_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/ (index.ts:21)"
+          ],
+          "evidence": [
+            "packages/skill/skill/src/index.ts:21-28",
+            "packages/skill/skill/src/index.ts:172-185",
+            "packages/skill/skill/src/index.ts:392-430",
+            "packages/skill/skill/src/index.ts:441-462",
+            "packages/skill/skill/src/index.ts:502-519",
+            "packages/skill/skill/src/index.ts:521-551",
+            "packages/skill/skill/src/index.ts:586-621",
+            "packages/skill/skill/src/index.ts:808-812"
+          ],
+          "modules": [
+            "skill/skill"
+          ],
+          "verified": true
+        },
+        {
+          "name": "filesystem-skill-discovery-and-watch-invalidation",
+          "what": "FileSystemSkillProvider scans project roots (.dsh/skills and .agents/skills under the nearest ancestor containing the project-root marker), custom dirs, user roots ($DSH_HOME/skills, ~/.agents/skills, where .system is skipped), and an optional bundled root, with fixed ranks 100/200/300/400/500/600 deciding intra-layer precedence. Directory bundles load SKILL.md and flat .md files are also accepted; parseSkillFile requires YAML frontmatter delimited by --- with string name and description, rejects legacy camelCase invocation keys, reads disable-model-invocation/user-invocable through a boolean-ish parser, and reads an optional metadata map. SkillWatchManager keeps bounded chokidar watchers (evicting the oldest project when the cap is exceeded, and watching an ancestor for a root that does not exist yet) and turns any relevant event, watcher error, or first-party fs mutation observed through the fs/observed event into one coalesced microtask catalog invalidation. The bundled dsh-badge provider registers through the same seam with BUNDLED_SKILL_RANK and a directory resourceBase.",
+          "invariants": [
+            "A skill file missing frontmatter, name, description, or a valid kebab-case name is skipped with a warning, never fatal to discovery.",
+            "The bundled root is host-trusted and is read through node fs rather than the ctx.fs provider, and is only mounted when default roots are included.",
+            "Watcher counts stay bounded and a watch failure degrades the observation to incomplete instead of failing the read."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "Root ranks: PROJECT_DSH_RANK 100, PROJECT_AGENTS_RANK 200, CUSTOM_RANK 300, USER_DSH_RANK 400, USER_AGENTS_RANK 500, BUNDLED_SKILL_RANK 600 (index.ts:36-40, skill/skill/src/index.ts:28)",
+            "DEFAULT_WATCH_STABILITY_THRESHOLD_MS = 200, DEFAULT_WATCH_POLL_INTERVAL_MS = 100, DEFAULT_WATCH_MAX_PROJECTS = 128 (index.ts:41-43)"
+          ],
+          "evidence": [
+            "packages/skill/skill-filesystem/src/index.ts:36-43",
+            "packages/skill/skill-filesystem/src/index.ts:130-143",
+            "packages/skill/skill-filesystem/src/index.ts:182-198",
+            "packages/skill/skill-filesystem/src/index.ts:241-261",
+            "packages/skill/skill-filesystem/src/index.ts:297-330",
+            "packages/skill/skill-filesystem/src/index.ts:542-563",
+            "packages/skill/skill-filesystem/src/index.ts:719-747",
+            "packages/skill/skill-filesystem/src/index.ts:793-835",
+            "packages/skill/skill-filesystem/src/index.ts:909-921",
+            "packages/skill/skill-filesystem/src/index.ts:992-1002",
+            "packages/skill/skill-filesystem/src/index.ts:1010-1029",
+            "packages/skill/skill-badge/src/index.ts:17-34",
+            "packages/skill/skill-badge/src/index.ts:58-60"
+          ],
+          "modules": [
+            "skill/skill-filesystem",
+            "skill/skill-badge"
+          ],
+          "verified": true
+        },
+        {
+          "name": "skill-catalog-injection-and-model-facing-loader",
+          "what": "tool-skill registers the model-facing `skill` loader, which resolves the name through ctx.skills.list()/get() with the calling agent as the scope key and re-checks isModelInvocable on both the summary and the loaded definition before returning the body. A second agent/pre-step listener publishes the session skill catalog as a durable catalog-form user message whose recorded entries mirror the rendered lines; it republishes only when the SHA-256 digest over those durable entries changes, emits a replacement catalog when the tool registration is visible to the agent, and otherwise removes a stale catalog message. A third listener scans only source.kind === 'user' messages for whitespace-bounded /name gestures and injects the rendered <skill_content> as an instructions-form context message for user-invocable skills, which is the only entry point for disable-model-invocation skills. The browser half registers the '/' input source and single-flights the per-session skills/list RPC addressed by sessionId.",
+          "invariants": [
+            "Only claimed user messages can trigger the /name gesture; unknown or user-disabled names remain ordinary prose.",
+            "Catalog identity is computed over the durable entry list, never over model-facing prose framing.",
+            "The catalog is emitted only while this plugin's exact tool definition is the visible registration, so a scoped shadow does not inherit it."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "DEFAULT_CATALOG_DESCRIPTION_MAX_LENGTH = 500, enforced minimum 3 (index.ts:27, index.ts:79)",
+            "SKILL_GESTURE = /(^|\\s)\\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\\s|$)/g (index.ts:408)"
+          ],
+          "evidence": [
+            "packages/skill/tool-skill/src/index.ts:27",
+            "packages/skill/tool-skill/src/index.ts:77-79",
+            "packages/skill/tool-skill/src/index.ts:81-161",
+            "packages/skill/tool-skill/src/index.ts:177-204",
+            "packages/skill/tool-skill/src/index.ts:213-251",
+            "packages/skill/tool-skill/src/index.ts:328-335",
+            "packages/skill/tool-skill/src/index.ts:408",
+            "packages/client/ui-skill/src/client/index.ts:62",
+            "packages/client/ui-skill/src/client/index.ts:68-73",
+            "packages/client/ui-skill/src/client/index.ts:96-119"
+          ],
+          "modules": [
+            "skill/tool-skill",
+            "client/ui-skill"
+          ],
+          "verified": true
+        },
+        {
+          "name": "hook-protocol-execution-and-vendor-dialect-bridges",
+          "what": "The non-plugin hook-protocol library runs configured command hooks through ctx.shell: runHook() serializes the bridge-built payload to stdin with an optional trailing newline (Claude Code yes, Codex no), merges explicit env after the executor's scrub, applies the per-hook timeoutSec override or the bridge's defaultTimeoutMs, and decodes the captured outcome with parseHookOutput; an infrastructure rejection becomes an outcome with no exit code so a hook can never crash the calling turn. mergeHookOutputs folds every matched hook into one most-restrictive outcome under deny > ask > allow with a sticky first continue:false stop and joined reasons, and matchesMatcher applies the dialect rule (Claude treats purely word-and-pipe patterns as literal | alternatives, Codex treats every pattern as an unanchored regex, absent/empty/'*' match all, invalid regex is a non-match). Durable logging appends a turn-enclosed hook/invoked plus hook/result pair per hook with a capped stderr summary. On top of that library hooks-claude-code and hooks-codex run unmodified vendor hooks on harness interception points: Claude Code supports SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, Stop and SubagentStart/Stop with Claude-shaped stdin payloads, ${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PROJECT_DIR} substitution and a per-run CLAUDE_PROJECT_DIR env, while Codex supports five points with regex-only matchers, snake_case payloads, no hook environment and only blocking decisions honored; both run emit-shaped lifecycle points detached with a drained disposal, and both log-and-ignore updatedInput (CC only) and systemMessage.",
+          "invariants": [
+            "A hook that cannot run is a non-blocking error: runHook never throws into the calling turn and non-numeric exit codes map to undefined.",
+            "hook/invoked and hook/result stay turn-enclosed and paired; emit-shaped lifecycle points omit the pair.",
+            "The matcher dialect decides literal-versus-regex interpretation, and the stderr summary cap is passed in by the bridge rather than defaulted by the library."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "DEFAULT_HOOK_TIMEOUT_MS = 600000 (runner.ts:20)",
+            "DEFAULT_STDERR_SUMMARY_MAX_CHARS = 500 (events.ts:53)",
+            "Both bridges default defaultTimeoutMs to 600000 and stderrSummaryMaxChars to 500 (hooks-claude-code/src/index.ts:71-77, hooks-codex/src/index.ts:59-64)",
+            "SUBAGENT_TYPE = 'general-purpose' reported for SubagentStart/Stop (hooks-claude-code/src/index.ts:303)"
+          ],
+          "evidence": [
+            "packages/hooks/hook-protocol/src/index.ts:1-25",
+            "packages/hooks/hook-protocol/src/runner.ts:20",
+            "packages/hooks/hook-protocol/src/runner.ts:67-105",
+            "packages/hooks/hook-protocol/src/merge.ts:2-6",
+            "packages/hooks/hook-protocol/src/merge.ts:34-52",
+            "packages/hooks/hook-protocol/src/matcher.ts:13-18",
+            "packages/hooks/hook-protocol/src/matcher.ts:37-44",
+            "packages/hooks/hook-protocol/src/matcher.ts:57-65",
+            "packages/hooks/hook-protocol/src/events.ts:53",
+            "packages/hooks/hook-protocol/src/events.ts:64-68",
+            "packages/hooks/hook-protocol/src/events.ts:75-83",
+            "packages/hooks/hook-protocol/src/events.ts:92-103",
+            "packages/hooks/hooks-claude-code/src/index.ts:41",
+            "packages/hooks/hooks-claude-code/src/index.ts:71-77",
+            "packages/hooks/hooks-claude-code/src/index.ts:95-125",
+            "packages/hooks/hooks-claude-code/src/index.ts:136-186",
+            "packages/hooks/hooks-claude-code/src/index.ts:205-214",
+            "packages/hooks/hooks-claude-code/src/index.ts:218-243",
+            "packages/hooks/hooks-claude-code/src/index.ts:246-264",
+            "packages/hooks/hooks-claude-code/src/index.ts:269-276",
+            "packages/hooks/hooks-claude-code/src/index.ts:303",
+            "packages/hooks/hooks-codex/src/index.ts:40",
+            "packages/hooks/hooks-codex/src/index.ts:59-64",
+            "packages/hooks/hooks-codex/src/index.ts:80-104",
+            "packages/hooks/hooks-codex/src/index.ts:112-169",
+            "packages/hooks/hooks-codex/src/index.ts:187-195"
+          ],
+          "modules": [
+            "hooks/hook-protocol",
+            "hooks/hooks-claude-code",
+            "hooks/hooks-codex"
+          ],
+          "verified": true
+        },
+        {
+          "name": "dynamic-cordis-package-sandbox-approval-and-client-execution",
+          "what": "DynamicCordisRunnerService keeps immutable package versions per plugin with one active run, mints semantic plugin IDs plus package/run/approval IDs in DynamicCordisRegistry, and evaluates a package's host half in a fresh node:vm realm whose globals are a package-tagged console, harness.handle/defineTool/registerTool, and traps that redirect require/fetch/timers to cordis services (the module documents this as inspectability and disposability, explicitly not containment). startHostHalf() awaits the cordis-dynamic group, mounts the guarded plugin as a child fiber, and disposes it before rethrowing a startup failure so a failed run never lingers, while missingServices() reports the inject names a settled-but-pending fiber still waits for. Client-bearing packages are approval-gated: run() mints and arms an approval request, emits cordis/request-run, and runHostHalf() refuses unless the request still identifies the plugin's latest run, recording per-package approval or plugin-wide approval for future versions; the browser half is served only through getClientCode for the exact active run. extension surfaces are exposed as Typert @Remote methods (runHostHalf, getClientCode, resolveRequestRun, settleUserRun, stopFromPanel, undefineFromPanel, inventory, inspect resolution, invoke, failure reports) consumed by ui-cordis, and tool-cordis registers the model-facing cordis_inspect_list, cordis_inspect_query and cordis_inspect_self tools plus the define/run/stop surface over the same service.",
+          "invariants": [
+            "One active run per plugin; source and identity are immutable per package ID and Client source is served only for the exact active run.",
+            "A failed host-half activation is disposed before the error propagates, so no failed fiber stays mounted.",
+            "Approval identity is re-verified against the latest run before activation, and a plugin-wide approval only covers later versions when explicitly granted."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "vmTimeoutMs default 5000 (index.ts:127-129)",
+            "Sandbox builtins: ctx, harness, console, btoa, atob, TextEncoder, TextDecoder (sandbox.ts:18-43)",
+            "Trapped Node APIs: require, setTimeout, setInterval, setImmediate, clearTimeout, clearInterval, fetch (sandbox.ts:96-108)"
+          ],
+          "evidence": [
+            "packages/extensions/cordis-host-runner/src/index.ts:88-91",
+            "packages/extensions/cordis-host-runner/src/index.ts:124-129",
+            "packages/extensions/cordis-host-runner/src/index.ts:248-312",
+            "packages/extensions/cordis-host-runner/src/index.ts:324-374",
+            "packages/extensions/cordis-host-runner/src/index.ts:383-404",
+            "packages/extensions/cordis-host-runner/src/index.ts:412-428",
+            "packages/extensions/cordis-host-runner/src/index.ts:437-448",
+            "packages/extensions/cordis-host-runner/src/registry.ts:141-159",
+            "packages/extensions/cordis-host-runner/src/registry.ts:233-275",
+            "packages/extensions/cordis-host-runner/src/lifecycle.ts:22-45",
+            "packages/extensions/cordis-host-runner/src/sandbox.ts:18-43",
+            "packages/extensions/cordis-host-runner/src/sandbox.ts:96-119",
+            "packages/extensions/tool-cordis/src/index.ts:25-26",
+            "packages/extensions/tool-cordis/src/index.ts:34-42",
+            "packages/extensions/tool-cordis/src/index.ts:44-97",
+            "packages/extensions/tool-cordis/src/index.ts:99-149",
+            "packages/extensions/cordis-client-runner/src/client/index.ts:66-120",
+            "packages/extensions/ui-cordis/src/client/index.ts:38-63"
+          ],
+          "modules": [
+            "extensions/cordis-host-runner",
+            "extensions/cordis-client-runner",
+            "extensions/tool-cordis",
+            "extensions/ui-cordis"
+          ],
+          "verified": true
+        },
+        {
+          "name": "plugin-inventory-rpc-and-configurable-settings-surfaces",
+          "what": "PluginInventoryGateway is a TypertRemoteService exposing a single @Remote('list') that reads ctx.loader.entries() on every call, skips group entries, and projects each entry's Cordis Fiber.state into a serializable phase (pending/loading/active/failed/overloaded as null for disposed), appending agent-preset composition rows when an agentPresets roster is composed instead of caching a second lifecycle truth. The browser half ui-settings-plugin-inventory contributes a lazy read-only tab (id 'all', order 10) into the settings.plugins.tab slot and calls ctx.remote.pluginInventory.list() per open. The companion ui-settings-plugins package mounts the configurable tab and ships per-plugin cards (shell/bash, agent loop, web search, subagent model selection) whose controllers bind a settings namespace through ctx.settingsScope and refresh on credentials/reference-updated, llm/adapters-updated, settings/document-updated and connection/reset.",
+          "invariants": [
+            "The inventory is derived from the Loader on every call and never becomes a second source of plugin lifecycle state.",
+            "A settings card writes only through its own bound settings namespace scope, so cards stay unaware of one another.",
+            "A card reports credential state from forwarded credential events because a credential is not part of any settings section."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "Fiber phase projection covers PENDING 0, LOADING 1, ACTIVE 2, FAILED 3, DISPOSED 4 (null), UNLOADING 5 (plugin-inventory/src/index.ts:26-43)",
+            "Inventory tab order 10 (client/ui-settings-plugin-inventory/src/client/index.ts:50-57)"
+          ],
+          "evidence": [
+            "packages/host/plugin-inventory/src/index.ts:26-43",
+            "packages/host/plugin-inventory/src/index.ts:46-51",
+            "packages/host/plugin-inventory/src/index.ts:65-89",
+            "packages/client/ui-settings-plugin-inventory/src/client/index.ts:29",
+            "packages/client/ui-settings-plugin-inventory/src/client/index.ts:32-57",
+            "packages/client/ui-settings-plugins/src/client/index.ts:56-58",
+            "packages/client/ui-settings-plugins/src/client/index.ts:64-100"
+          ],
+          "modules": [
+            "host/plugin-inventory",
+            "client/ui-settings-plugin-inventory",
+            "client/ui-settings-plugins"
+          ],
+          "verified": true
+        },
+        {
+          "name": "workspace-instruction-baseline-and-change-projection",
+          "what": "agent-instructions loads AGENTS.md/CLAUDE.md-family workspace instruction files into durable model context. compose() finds the project root by walking up from the session cwd to the configured marker set, derives a workspaceBaselineIdentity from the discovery configuration plus the relative project root, and decides whether a resumed or forked session's visible baseline source still matches that identity before reusing its excluded scopes; otherwise loadBaselineInstructionSet rebuilds it. Successful read/write/edit tool results whose file_path lies inside an instruction scope queue dynamic projection of nested, changed, and removed files, composed against the inbox produced by earlier results for the same agent and committed only at an execution-ancestry and step boundary. Two byte budgets bound the feature: maxBytes for one rendered baseline or dynamic batch (non-positive or non-finite disables loading entirely) and maxSourceBytes per instruction file, which is ignored when exceeded; without a ctx.fs provider the plugin degrades to a no-op.",
+          "invariants": [
+            "A visible baseline is reused only when its recorded identity matches the current discovery configuration and workspace.",
+            "Dynamic instruction projection composes in order per agent and commits only inside the enclosing durable step.",
+            "An instruction file larger than maxSourceBytes is ignored rather than silently truncated."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "DEFAULT_MAX_SOURCE_BYTES = 1048576, overridable by maxSourceBytes (config.ts:14, config.ts:43)",
+            "DEFAULT_PROJECT_ROOT_MARKERS = ['.git'], DEFAULT_INSTRUCTION_FILE_CANDIDATES = ['AGENTS.md', 'CLAUDE.md'], DEFAULT_LOCAL_INSTRUCTION_FILE_CANDIDATES = ['AGENTS.local.md', 'CLAUDE.local.md'] (config.ts:11-13)",
+            "File-touching tool names tracked for projection: read, write, edit (index.ts:73)"
+          ],
+          "evidence": [
+            "packages/context/agent-instructions/src/index.ts:73-81",
+            "packages/context/agent-instructions/src/index.ts:83-140",
+            "packages/context/agent-instructions/src/config.ts:11-14",
+            "packages/context/agent-instructions/src/config.ts:39-46",
+            "packages/context/agent-instructions/src/config.ts:69-82"
+          ],
+          "modules": [
+            "context/agent-instructions"
+          ],
+          "verified": true
+        },
+        {
+          "name": "settings-namespace-registry-and-file-backed-persistence",
+          "what": "SettingsProvider (ctx.settings) owns namespace registration, composition-base/schema/user-layer resolution, deep-frozen resolved values, change detection and the settings/updated commit event, while providers implement only load()/persist(). register() rejects duplicates and invalid namespace ids and files the registration as an effect on the calling fiber; each namespace carries a monotonic revision over its RAW user section so an editor holding a stale snapshot is refused with SettingsConflictError code SETTINGS_CONFLICT. Writes are serialized per namespace on settled promise chains, and path-addressed SettingsPathOp set/unset mutations exist so a caller holding a redacted (secret-stripped) descriptor can name one field without restating the section and silently deleting secrets. The file provider resolves settings.yaml under the harness home, patches a YAML/JSON document leaf-by-leaf to preserve comments and anchors, and performs every write as a lock-guarded read-modify-write with reconcileFromDisk() so an unobserved external edit cannot be resurrected; chokidar events (with an at-ready reconcile) hot-publish external edits, and the document is created owner-only (0700 dir, 0600 file). A package-owned invariant companion asserts that settings/updated fires only for a registered namespace, only with the service's authoritative resolved value, and only on an actual value change.",
+          "invariants": [
+            "A namespace registration is a fiber effect: disposing the registrant removes the namespace and its observers.",
+            "A write must not resurrect unobserved on-disk state, and an unparsable existing document fails loud instead of being overwritten.",
+            "Secret-role fields never ride the verbatim default to a wire surface; redacting surfaces must pass redactSecrets."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "NAMESPACE_PATTERN = /^[a-z][a-z0-9-]*$/ (index.ts:20)",
+            "File provider debounceMs default 100 ms, watcher pollInterval = max(1, min(debounceMs, 10)) (settings-file/src/index.ts:66, settings-file/src/index.ts:241-244)",
+            "Format map: .yaml/.yml -> yaml, .json -> json; anything else fails resolution (settings-file/src/index.ts:36-40, settings-file/src/index.ts:58-61)"
+          ],
+          "evidence": [
+            "packages/settings/settings/src/index.ts:114-141",
+            "packages/settings/settings/src/index.ts:154-173",
+            "packages/settings/settings/src/index.ts:190-209",
+            "packages/settings/settings/src/index.ts:307-325",
+            "packages/settings/settings/src/index.ts:333-351",
+            "packages/settings/settings/src/index.ts:359-368",
+            "packages/settings/settings/src/index.ts:419-439",
+            "packages/settings/settings/src/invariant.ts:23-40",
+            "packages/settings/settings-file/src/index.ts:36-40",
+            "packages/settings/settings-file/src/index.ts:56-68",
+            "packages/settings/settings-file/src/index.ts:82-93",
+            "packages/settings/settings-file/src/index.ts:105-112",
+            "packages/settings/settings-file/src/index.ts:154-169",
+            "packages/settings/settings-file/src/index.ts:185-198",
+            "packages/settings/settings-file/src/index.ts:211-231",
+            "packages/settings/settings-file/src/index.ts:233-258"
+          ],
+          "modules": [
+            "settings/settings",
+            "settings/settings-file"
+          ],
+          "verified": true
+        },
+        {
+          "name": "durable-todo-goal-schedule-and-workflow-extension-state",
+          "what": "Four capabilities persist extension state in the session log or drive bounded extension runs. tool-todo appends a whole-list todo/write snapshot per call (last-write-wins on replay, non-agent callers rejected, allowParallelInProgress deciding whether several items may be in_progress), and a projection exposes the latest list to UIs. goal keeps a durable goal/change snapshot stream with an admitted-round counter: create/edit/resume/clear commit full snapshots through GoalService.commit(), a replayed round-advance user message must be exactly roundsStarted + 1 and within maxGoalRounds, and resume is refused once the round budget is exhausted. schedule folds versioned durable records (after/at/every) plus dispatch history, enforces MIN_EVERY_INTERVAL_SECONDS for fixed-rate rules, models delivery as session-local to the original session, and advances past missed occurrences using the acceptedAt decision time. The workflow engine validates a script's meta block and body parse up front, runs the body in a fresh worker thread with agent()/pipeline()/parallel()/phase()/log()/args hooks and independent provider/model overrides, and bounds the fan-out with maxConcurrentAgents (0 resolving to min(16, availableParallelism() - 2)), maxTotalAgents, maxItemsPerCall and syncTimeoutMs.",
+          "invariants": [
+            "Todo state is a whole-value replacement: every call carries the complete list and the projection folds the latest snapshot.",
+            "A goal round is admitted only as the next consecutive round of the active revision and never beyond maxGoalRounds.",
+            "A workflow run's caps are enforced by the engine: tripped caps kill the script rather than dissolving into a per-item null."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "SCHEDULE_CHANGE_VERSION = 1, MIN_EVERY_INTERVAL_SECONDS = 300, accepted instants bounded to four-digit years 0001..9999 (schedule/src/domain.ts:21-28)",
+            "Workflow engine defaults: maxConcurrentAgents 0 (auto), maxTotalAgents 1000, maxItemsPerCall 4096, syncTimeoutMs 5000, disposeGraceMs 5000, auto concurrency min(16, availableParallelism() - 2) (workflow-worker-thread/src/index.ts:115-122, workflow-worker-thread/src/index.ts:150-157)",
+            "Todo statuses: pending, in_progress, completed (tool-todo/src/index.ts:26)"
+          ],
+          "evidence": [
+            "packages/todo/tool-todo/src/index.ts:22-26",
+            "packages/todo/tool-todo/src/index.ts:41-43",
+            "packages/todo/tool-todo/src/index.ts:203-220",
+            "packages/goal/goal/src/index.ts:171-204",
+            "packages/goal/goal/src/index.ts:578-626",
+            "packages/schedule/schedule/src/domain.ts:21-28",
+            "packages/schedule/schedule/src/types.ts:66-105",
+            "packages/workflow/workflow-worker-thread/src/index.ts:112-122",
+            "packages/workflow/workflow-worker-thread/src/index.ts:143-157",
+            "packages/workflow/tool-workflow/src/index.ts:132-149"
+          ],
+          "modules": [
+            "todo/tool-todo",
+            "goal/goal",
+            "schedule/schedule",
+            "workflow/workflow",
+            "workflow/tool-workflow",
+            "workflow/workflow-worker-thread"
+          ],
+          "verified": true
+        }
+      ],
+      "moduleCoverage": {
+        "mcp/mcp-client": "mcp-client-connection-supervision-and-reconnect, mcp-tool-bridging-and-namespace-isolation",
+        "lsp/lsp": "lsp-provider-registry-and-extension-routing (Service Definition for ctx.lsp; Cordis plumbing plus the atomic registry and route table)",
+        "lsp/lsp-stdio": "lsp-stdio-server-pooling-and-transient-document-lifecycle",
+        "lsp/tool-lsp": "lsp-model-facing-tool-and-result-caps",
+        "skill/skill": "skill-registry-layered-precedence-and-caching (Service Definition for ctx.skills; Cordis plumbing plus the layered registry)",
+        "skill/skill-badge": "filesystem-skill-discovery-and-watch-invalidation (bundled provider registered at BUNDLED_SKILL_RANK through the same provider seam)",
+        "skill/skill-filesystem": "filesystem-skill-discovery-and-watch-invalidation",
+        "skill/tool-skill": "skill-catalog-injection-and-model-facing-loader",
+        "hooks/hook-protocol": "hook-protocol-execution-and-vendor-dialect-bridges (non-plugin shared library: matcher, runner, codec, merge, durable event helpers, detached runs)",
+        "hooks/hooks-claude-code": "hook-protocol-execution-and-vendor-dialect-bridges (Claude Code dialect half: payloads, env, substitution, extension-point mapping)",
+        "hooks/hooks-codex": "hook-protocol-execution-and-vendor-dialect-bridges (Codex dialect half: regex-only matchers, snake_case payloads, no hook env)",
+        "host/plugin-inventory": "plugin-inventory-rpc-and-configurable-settings-surfaces (Typert remote face over the Cordis Loader; plumbing plus the read-only projection)",
+        "extensions/cordis-host-runner": "dynamic-cordis-package-sandbox-approval-and-client-execution (host half: registry, vm sandbox, guarded fiber lifecycle, approval gate, @Remote operations)",
+        "extensions/cordis-client-runner": "dynamic-cordis-package-sandbox-approval-and-client-execution (browser half: load engine, guard, client inspect registry, approval orchestration and panel-facing run face)",
+        "extensions/tool-cordis": "dynamic-cordis-package-sandbox-approval-and-client-execution (model-facing cordis_inspect_* / define / run / stop surface and inspect-provider registration)",
+        "context/agent-instructions": "workspace-instruction-baseline-and-change-projection",
+        "settings/settings": "settings-namespace-registry-and-file-backed-persistence (abstract Service Definition owning registration, resolution, revisions and the settings/updated commit event)",
+        "settings/settings-file": "settings-namespace-registry-and-file-backed-persistence (file provider: comment-preserving leaf-level patch, writer lock, hot reload)",
+        "session-query/session-query": "session-query-live-preferred-corpus-reads-and-traces (Service Definition for ctx.sessionQuery: exact reads, filters, lineage traces, title folds, bounded event windows)",
+        "session-query/session-query-sqlite": "session-full-text-index-and-ranked-search",
+        "session-query/tool-session-query": "model-facing-session-search-and-workspace-authorization",
+        "session-query/session-log-export": "session-log-export-archive",
+        "attachment/attachment": "attachment-ingestion-and-durable-content-addressed-store, image-admission-normalization-and-request-image-projection (abstract Service Definition owning canonical-base64 admission and batch validation policy)",
+        "attachment/attachment-local": "attachment-ingestion-and-durable-content-addressed-store, image-admission-normalization-and-request-image-projection (local content-addressed provider under DSH_HOME/attachments/v1)",
+        "context/file-reference": "at-file-reference-grammar-and-fuzzy-completion-index (Service Definition plus the browser-safe @ token grammar/formatting shared by terminal and web clients)",
+        "context/file-reference-local": "at-file-reference-grammar-and-fuzzy-completion-index (workspace fuzzy index, exclusions and per-agent invalidation)",
+        "context/session-reference": "cross-session-reference-snapshot-injection",
+        "context/time-context": "request-time-and-tmux-location-context-injection",
+        "fs/tool-fs-search": "ripgrep-backed-file-search-tools",
+        "web/web": "web-search-provider-selection-and-tool-bounds (Service Definition for ctx.web: provider registries plus order-independent execution-time selection; shared by search and fetch)",
+        "web/web-fetch-http": "http-fetch-with-public-address-pinning",
+        "web/web-search-deepseek": "web-search-provider-selection-and-tool-bounds (Anthropic-compatible Messages API provider with native web_search, settings namespace and credential reference)",
+        "web/web-search-exa": "web-search-provider-selection-and-tool-bounds (Exa provider; apiKey from config or $EXA_API_KEY, empty key means unavailable)",
+        "web/web-search-perplexity": "web-search-provider-selection-and-tool-bounds (Perplexity provider; apiKey from config or $PERPLEXITY_API_KEY)",
+        "web/tool-web": "web-search-provider-selection-and-tool-bounds (model-facing web_search/web_fetch schemas, bounds and presentation)",
+        "interaction/user-questions": "user-questions-waterfall (Service Definition for ctx.userQuestions: liveness/delegation checks, intent validation, scoped answerer waterfall)",
+        "context/tmux-context": "request-time-and-tmux-location-context-injection",
+        "session/session-title": "session-title-projection-and-model-titling (Service Definition for ctx.sessionTitle, title/titleInput projections, normalization and provider registration)",
+        "session/session-title-llm": "session-title-projection-and-model-titling (shared route/framing/timeout/validation policy for model-backed providers)",
+        "session/session-title-all-prompts-llm": "session-title-projection-and-model-titling (all-human-messages provider variant)",
+        "session/session-title-first-prompt-llm": "session-title-projection-and-model-titling (first-human-message provider variant)",
+        "client/ui-settings-plugin-inventory": "plugin-inventory-rpc-and-configurable-settings-surfaces (read-only inventory tab in the Plugins settings section)",
+        "client/ui-settings-plugins": "plugin-inventory-rpc-and-configurable-settings-surfaces (configurable plugins section, per-namespace cards and slot contract)",
+        "client/ui-skill": "skill-catalog-injection-and-model-facing-loader (web '/' input source over the skills/list RPC and the skill tool row)",
+        "extensions/ui-cordis": "dynamic-cordis-package-sandbox-approval-and-client-execution (panel, run/define/action cards, @pluginId source and approval reconciliation)"
+      }
+    },
+    "retrieval": {
+      "mechanisms": [
+        {
+          "name": "session-query-live-preferred-corpus-reads-and-traces",
+          "what": "SessionQueryEngine (ctx.sessionQuery) resolves a live-preferred logical session corpus and serves backend-independent exact reads, filters, traces and title folds. SessionCorpus binds the optional sessionPersistence service through ctx.inject and, for a known live session, never consults persistence, so an optional backend failure cannot make in-memory history unreadable; a persisted header is checked with assertSessionHeadersCompatible before it is merged with a live one and records are returned newest-first. readSession replays the loaded log through Session.create to validate it before returning snapshots, readTitleSnapshots folds foldSessionTitle per session with per-session failure isolation, traceSession walks known ancestry and descendants from one listing, and traceEvent/readEvent expose direct positional replacements and a bounded raw-log window. readWindowMax is validated per call and prepared cold observations are cached by durable revision.",
+          "invariants": [
+            "A live session is always preferred and never requires persistence to be readable.",
+            "A read returns detached clones (structuredClone/snapshotSessionEvent); callers cannot mutate retained state.",
+            "Batch title reads isolate per-session failures while cancellation rejects the whole operation."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "SESSION_QUERY_READ_WINDOW_MAX = 50 (config.ts:6)",
+            "SESSION_QUERY_DEFAULT_PERSISTED_INSPECT_CONCURRENCY = 4 (config.ts:9)",
+            "SESSION_QUERY_DEFAULT_PREPARED_SESSION_CACHE_SIZE = 5 (config.ts:12)",
+            "Closed error taxonomy of 18 SESSION_QUERY_* codes (config.ts:29-46)"
+          ],
+          "evidence": [
+            "packages/session-query/session-query/src/index.ts:97-131",
+            "packages/session-query/session-query/src/index.ts:139-144",
+            "packages/session-query/session-query/src/index.ts:152-175",
+            "packages/session-query/session-query/src/index.ts:183-196",
+            "packages/session-query/session-query/src/index.ts:218-260",
+            "packages/session-query/session-query/src/index.ts:325-345",
+            "packages/session-query/session-query/src/index.ts:353-403",
+            "packages/session-query/session-query/src/corpus.ts:35-54",
+            "packages/session-query/session-query/src/corpus.ts:61-80",
+            "packages/session-query/session-query/src/corpus.ts:91-120",
+            "packages/session-query/session-query/src/config.ts:6-12",
+            "packages/session-query/session-query/src/config.ts:29-46"
+          ],
+          "modules": [
+            "session-query/session-query"
+          ],
+          "verified": true
+        },
+        {
+          "name": "session-full-text-index-and-ranked-search",
+          "what": "SqliteSessionQueryEngine adds a disposable SQLite derived read model under the same ctx.sessionQuery service. openSearchDatabase() refuses a foreign database (application_id check), refuses a non-empty unrecognized file, and resets the derived schema in place when user_version differs from SESSION_QUERY_SQLITE_SCHEMA_VERSION, then creates a persisted schema (search_state with a singleton global_generation, persisted_sessions with revision/generation, and an fts5 persisted_docs table tokenized with unicode61) plus connection-local live_sessions and live_docs tables. The engine reconciles persisted and live sessions against the index under a serialized operation tail with a stability retry, keeps per-scope cursors carrying instance id, request fingerprint and generation so a stale cursor is rejected, and answers queries with MATCH plus highlight(). Caller text is quoted into a single FTS5 phrase so query syntax stays inert data, reserved highlight noncharacters are sanitized out of indexed text and queries, and snippet extraction is bounded by snippetChars counted in Unicode code points.",
+          "invariants": [
+            "The index is disposable derived state: a schema-version or application-id mismatch resets or refuses rather than migrating user data.",
+            "Indexed text and the caller query are both sanitized for the reserved highlight markers, and the query is always one quoted phrase.",
+            "A cursor is bound to instance, normalized request fingerprint and generation, so a stale or retargeted page is refused."
+          ],
+          "failurePolicy": "mixed",
+          "constants": [
+            "SESSION_QUERY_SQLITE_SCHEMA_VERSION = 8 (schema.ts:8), SESSION_QUERY_SQLITE_APPLICATION_ID = 0x44534851 (schema.ts:11)",
+            "SESSION_QUERY_SQLITE_DEFAULT_LIMIT = 20, SESSION_QUERY_SQLITE_MAX_LIMIT = 100, SESSION_QUERY_SQLITE_SNIPPET_CHARS = 240 (index.ts:79-83)",
+            "STABLE_OBSERVATION_ATTEMPTS = 2 (index.ts:86)",
+            "SQLITE_PORTABLE_VARIABLE_LIMIT = 32766, SQLITE_FTS5_OUTER_PREDICATE_LIMIT = 14, SQLITE_MAX_PAGE_LIMIT = Number.MAX_SAFE_INTEGER - 1 (query.ts:24-30)",
+            "openAt default 'startup' with 'never' disabling search entirely, journalMode default 'wal' (index.ts:208-209)"
+          ],
+          "evidence": [
+            "packages/session-query/session-query-sqlite/src/schema.ts:8",
+            "packages/session-query/session-query-sqlite/src/schema.ts:11",
+            "packages/session-query/session-query-sqlite/src/schema.ts:46-78",
+            "packages/session-query/session-query-sqlite/src/schema.ts:103-139",
+            "packages/session-query/session-query-sqlite/src/schema.ts:141-169",
+            "packages/session-query/session-query-sqlite/src/index.ts:79-86",
+            "packages/session-query/session-query-sqlite/src/index.ts:92-119",
+            "packages/session-query/session-query-sqlite/src/index.ts:193-200",
+            "packages/session-query/session-query-sqlite/src/index.ts:206-224",
+            "packages/session-query/session-query-sqlite/src/query.ts:19-30",
+            "packages/session-query/session-query-sqlite/src/query.ts:36-56",
+            "packages/session-query/session-query-sqlite/src/query.ts:223-237",
+            "packages/session-query/session-query-sqlite/src/query.ts:244-261",
+            "packages/session-query/session-query-sqlite/src/query.ts:269-294"
+          ],
+          "modules": [
+            "session-query/session-query-sqlite"
+          ],
+          "verified": true
+        },
+        {
+          "name": "model-facing-session-search-and-workspace-authorization",
+          "what": "tool-session-query registers five model-facing tools over ctx.sessionQuery: session_search, session_event_search, session_trace, session_event_trace and session_event_read, each carrying the deployment's cooperative timeout budget and a shared system-prompt section. Every entry point derives the caller from the agent-bound execution context and authorizes the target before reading: a target session is accepted only when it is the caller's own session or when a filterSessions query returns exactly one record matching the caller's cwd, and cross-session search always appends a cwd filter, so search is workspace-scoped. Search results are cursor-free and capped by maxSearchResults, while the read/trace tools are declared concurrency-safe; a caller without a workspace or without an agent is rejected with a coded HarnessError.",
+          "invariants": [
+            "Every target session must be the caller's own or share the caller's workspace cwd; no caller-supplied id bypasses authorization.",
+            "Cross-session search is always constrained to the caller workspace.",
+            "A caller without an agent or without a workspace cwd is refused rather than defaulted."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "DEFAULT_MAX_SEARCH_RESULTS = 100 (index.ts:22)",
+            "DEFAULT_SEARCH_TIMEOUT_MS = 30000 (index.ts:25)"
+          ],
+          "evidence": [
+            "packages/session-query/tool-session-query/src/index.ts:19-25",
+            "packages/session-query/tool-session-query/src/index.ts:36-39",
+            "packages/session-query/tool-session-query/src/index.ts:57-122",
+            "packages/session-query/tool-session-query/src/operations.ts:55-90",
+            "packages/session-query/tool-session-query/src/workspace-access.ts:56-90"
+          ],
+          "modules": [
+            "session-query/tool-session-query"
+          ],
+          "verified": true
+        },
+        {
+          "name": "session-log-export-archive",
+          "what": "session-log-export registers the Web-only `/export` human command and a Host-owned streaming download route at /api/session.export. The route validates the sessionId and includeDescendants query parameters, refuses with 500 when session-query, session-persistence or attachments are not mounted, flushes a live session's log before reading it, and answers 404 when the stored log is absent; the root log is prepared before the response so a read failure becomes a plain 500 that cannot echo absolute host paths into the browser. It then streams a ZIP whose per-entry DEFLATE level comes from config (0-9, default 6), optionally including descendant sessions, with a fixed content type and a generated attachment filename; HEAD requests cancel the body.",
+          "invariants": [
+            "The route is the only export surface: query parameters are validated and unknown or malformed session input is a 400.",
+            "A live session's log is flushed before it is read so the archive matches the durable log.",
+            "Preparation errors are reported as generic status text, never as raw host error detail."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "SESSION_LOG_EXPORT_PATH = '/api/session.export' (index.ts:42)",
+            "DEFAULT_SESSION_LOG_COMPRESSION_LEVEL = 6, configurable 0-9 (index.ts:52-53)"
+          ],
+          "evidence": [
+            "packages/session-query/session-log-export/src/index.ts:38-42",
+            "packages/session-query/session-log-export/src/index.ts:44-54",
+            "packages/session-query/session-log-export/src/index.ts:77-100",
+            "packages/session-query/session-log-export/src/index.ts:106-166"
+          ],
+          "modules": [
+            "session-query/session-log-export"
+          ],
+          "verified": true
+        },
+        {
+          "name": "attachment-ingestion-and-durable-content-addressed-store",
+          "what": "AttachmentStore (ctx.attachments) is the durable binary seam: admitEncodedImages/admitEncodedFile decode wire uploads while rejecting non-canonical base64 (an empty image is rejected, an empty file is a valid zero-byte payload) and then delegate to the store, and saveImages validates the whole ordered batch before committing any member so a refused batch starts no writes. Image admission enforces media-type, per-image, count and aggregate-byte limits plus a full decode, and returns content-addressed references in input order; verbatim file storage has no admission limits and defaults to an explicit ATTACHMENT_FILES_UNSUPPORTED rejection in backends that cannot store files, with streaming save/read variants that must not collect the whole file in memory. The local backend (LocalAttachmentStore) stores normalized images under <DSH_HOME>/attachments/v1 with declared limits for max image bytes, count per message, aggregate message bytes, intrinsic pixels and per-side dimension, and runs native transformations through a bounded CompressionLimiter.",
+          "invariants": [
+            "Wire input must be canonical RFC 4648 base64; no alias or whitespace form is accepted.",
+            "An image batch is all-or-nothing: every member is validated before any member is committed, and references keep input order.",
+            "Verbatim file bytes are stored exactly, and a backend without file storage must reject explicitly rather than silently drop."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "DEFAULT_MAX_IMAGE_BYTES = 20 MiB, DEFAULT_MAX_IMAGES_PER_MESSAGE = 20, DEFAULT_MAX_MESSAGE_IMAGE_BYTES = 200 MiB, DEFAULT_MAX_IMAGE_PIXELS = 64000000, DEFAULT_MAX_IMAGE_DIMENSION = 8192 (attachment-local/src/index.ts:34-42)",
+            "Accepted media types image/png, image/jpeg, image/webp, image/gif (attachment-local/src/index.ts:181)"
+          ],
+          "evidence": [
+            "packages/attachment/attachment/src/index.ts:52-58",
+            "packages/attachment/attachment/src/index.ts:76-104",
+            "packages/attachment/attachment/src/index.ts:113-128",
+            "packages/attachment/attachment/src/index.ts:136-138",
+            "packages/attachment/attachment/src/index.ts:157-166",
+            "packages/attachment/attachment/src/index.ts:187-208",
+            "packages/attachment/attachment/src/index.ts:218-228",
+            "packages/attachment/attachment/src/admission.ts:15-24",
+            "packages/attachment/attachment/src/admission.ts:49-54",
+            "packages/attachment/attachment/src/admission.ts:66-73",
+            "packages/attachment/attachment-local/src/index.ts:34-58",
+            "packages/attachment/attachment-local/src/index.ts:148-160",
+            "packages/attachment/attachment-local/src/index.ts:172-198",
+            "packages/attachment/attachment-local/src/index.ts:200-214"
+          ],
+          "modules": [
+            "attachment/attachment",
+            "attachment/attachment-local"
+          ],
+          "verified": true
+        },
+        {
+          "name": "image-admission-normalization-and-request-image-projection",
+          "what": "Beyond raw storage, the attachment layer owns a normalized image representation and a per-request projection. The local store resolves a NormalizationPolicy (total-pixel budget, long-edge dimension cap and encoded-byte target) applied after admission, so a larger admitted source is downscaled rather than refused, and native transformations run under the configured concurrency limit (default 2, max 8). readImageRequest(ref, policy) derives a deterministic model-request version from the stored normalized image for an exact route pixel budget and encoded-byte target, and returns both the bytes and a cache/upload identity covering every transform input; the base store rejects with ATTACHMENT_PROJECTION_UNSUPPORTED when a backend cannot derive request images. The MCP bridge is a second consumer of the same admission path: image content blocks from an MCP server are decoded and saved through ctx.attachments only after the exact current model route proves image input, and otherwise every image in the result is projected as diagnostic text while the raw value stays available to programmatic callers.",
+          "invariants": [
+            "Admission bounds what is stored; normalization bounds what rides every later model request, and normalization never refuses an admitted ordinary source.",
+            "A request-image variant identity must cover every transform input so a cached variant cannot be reused for a different policy.",
+            "An image is admitted to model context only on positive proof that the exact current route accepts image input."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "DEFAULT_NORMALIZED_IMAGE_MAX_PIXELS = 2048 * 2048, DEFAULT_NORMALIZED_IMAGE_MAX_DIMENSION = 8192, DEFAULT_NORMALIZED_IMAGE_MAX_BYTES = 4 MiB (attachment-local/src/index.ts:50-54)",
+            "DEFAULT_IMAGE_COMPRESSION_CONCURRENCY = 2, MAX_IMAGE_COMPRESSION_CONCURRENCY = 8 (attachment-local/src/index.ts:56-58)"
+          ],
+          "evidence": [
+            "packages/attachment/attachment-local/src/index.ts:50-58",
+            "packages/attachment/attachment-local/src/index.ts:183-198",
+            "packages/attachment/attachment-local/src/index.ts:204-212",
+            "packages/attachment/attachment/src/index.ts:241-260",
+            "packages/mcp/mcp-client/src/tools.ts:409-430",
+            "packages/mcp/mcp-client/src/tools.ts:443-497"
+          ],
+          "modules": [
+            "attachment/attachment",
+            "attachment/attachment-local",
+            "mcp/mcp-client"
+          ],
+          "verified": true
+        },
+        {
+          "name": "at-file-reference-grammar-and-fuzzy-completion-index",
+          "what": "The file-reference seam provides @-mention completion shared by terminal and web clients. activeAtToken() parses an @path or @\"path with spaces token at the editor cursor (an @ inside another token such as an email is not a trigger) and formatFileMention() renders a selection back into prompt text, refusing paths the grammar cannot represent safely and keeping a directory quote open so completion can descend. LocalFileReferenceService implements list() per agent over a cancellable WorkspaceFileSearch rooted at the agent's session cwd: directory-scoped queries read live state while a bare fuzzy query shares one bounded traversal (maxEntries) that is invalidated on tool results, and rankCandidates scores and truncates to maxResults. The seam installs a system-prompt section only while the model-facing read tool is visible to that agent.",
+          "invariants": [
+            "Only path text is indexed and offered; file contents never enter the completion index or the prompt.",
+            "The index is bounded per workspace and invalidated by tool results rather than re-traversed per query.",
+            "The @-mention prompt guidance is installed per agent and only while the read tool is visible."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "DEFAULT_FILE_SEARCH_MAX_RESULTS = 20, DEFAULT_FILE_SEARCH_MAX_ENTRIES = 50000 (search.ts:16-18)",
+            "DEFAULT_FILE_SEARCH_EXCLUDED_DIRECTORIES = .git, node_modules, dist, build, out, coverage, target, .next, .nuxt, .turbo, .venv, __pycache__, .pytest_cache, .mypy_cache, .gradle (search.ts:31-47)"
+          ],
+          "evidence": [
+            "packages/context/file-reference/src/index.ts:17",
+            "packages/context/file-reference/src/index.ts:26-43",
+            "packages/context/file-reference/src/grammar.ts:26-35",
+            "packages/context/file-reference/src/grammar.ts:45-55",
+            "packages/context/file-reference-local/src/index.ts:44-50",
+            "packages/context/file-reference-local/src/index.ts:66-100",
+            "packages/context/file-reference-local/src/index.ts:113-137",
+            "packages/context/file-reference-local/src/search.ts:16-18",
+            "packages/context/file-reference-local/src/search.ts:31-47"
+          ],
+          "modules": [
+            "context/file-reference",
+            "context/file-reference-local"
+          ],
+          "verified": true
+        },
+        {
+          "name": "cross-session-reference-snapshot-injection",
+          "what": "SessionReferenceResolver (ctx.sessionReferenceResolver, a TypertRemoteService over ctx.sessionQuery) turns a host-adapted cross-session mention into immutable message context. A system-prompt assembly listener records the assembly's provider/model per agent so a later route check uses the model that actually served the step; an agent/pre-step listener then prepares direct messages before the step proceeds. Referenced sessions are read as an exact surface snapshot, projected into a budgeted JSON snapshot wrapped in a `<referenced-sessions>` block explicitly labelled untrusted and read-only, and refused or replaced by an omission notice when they exceed the reference budget. Config bounds how many references one message may carry, how many candidates a picker sees, the absolute reference byte budget and the fraction of the model context the block may occupy.",
+          "invariants": [
+            "Referenced session content is presented as untrusted, read-only data, never as instructions.",
+            "A reference block is bounded by both an absolute byte budget and a fraction of the model context.",
+            "The route used to size the block is the route actually recorded for the step, not a caller-supplied guess."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "DEFAULT_REFERENCE_CONTEXT_FRACTION = 0.2 (index.ts:55)",
+            "maxReferenceBytes is required configuration; maxReferences/candidateLimit are validated positive safe integers (index.ts:87-92, index.ts:105-119)"
+          ],
+          "evidence": [
+            "packages/context/session-reference/src/index.ts:55-64",
+            "packages/context/session-reference/src/index.ts:85-92",
+            "packages/context/session-reference/src/index.ts:105-125",
+            "packages/context/session-reference/src/index.ts:127-140"
+          ],
+          "modules": [
+            "context/session-reference"
+          ],
+          "verified": true
+        },
+        {
+          "name": "request-time-and-tmux-location-context-injection",
+          "what": "Two opt-in plugins add source-attributed situational context to request preparation. time-context registers a `timeContext` session projection (stateVersion 2) folding the latest model-visible event time, its own last injection time and the current turn's injection time, then appends one durable plugin-form snapshot message per eligible step naming the sampled time, the elapsed interval since the preceding model-visible message or step context, and the resolved browser time zone when the turn's claimed user messages carry exactly one. tmux-context runs one read-only `tmux display-message` plus a `ps -o tty=` comparison through ctx.shell once per turn, confirming the process actually owns the pane's tty (a terminal that merely inherited TMUX/TMUX_PANE reads as not in tmux) before injecting the session, window, pane and window-layout fields. Both re-inject only when the rendered state changed and honour an optional refreshIntervalMs floor.",
+          "invariants": [
+            "Both features are no-ops rather than errors when their inputs are absent or unknown: no tmux pane, no shell service, or a failed query injects nothing.",
+            "Time and tmux readings are attached to the exact session and turn that produced them and are re-injected only when they change.",
+            "The browser time zone is used only when the turn's messages agree on exactly one zone."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "time-context projection key 'timeContext' stateVersion 2 (time-context/src/index.ts:152-156)",
+            "tmux fields read: session_name, window_index, window_name, pane_index, pane_id, window_active, pane_active, window_layout (tmux-context/src/index.ts:51-60)",
+            "refreshIntervalMs is a non-negative safe integer; 0 or omitted means inject on every eligible change (time-context/src/index.ts:110-119)"
+          ],
+          "evidence": [
+            "packages/context/time-context/src/index.ts:33-40",
+            "packages/context/time-context/src/index.ts:49-60",
+            "packages/context/time-context/src/index.ts:110-119",
+            "packages/context/time-context/src/index.ts:152-178",
+            "packages/context/time-context/src/index.ts:180-220",
+            "packages/context/tmux-context/src/index.ts:33-44",
+            "packages/context/tmux-context/src/index.ts:51-60",
+            "packages/context/tmux-context/src/index.ts:109-120"
+          ],
+          "modules": [
+            "context/time-context",
+            "context/tmux-context"
+          ],
+          "verified": true
+        },
+        {
+          "name": "ripgrep-backed-file-search-tools",
+          "what": "tool-fs-search registers the model-facing `glob` and `grep` tools over the packaged ripgrep binary, executed as ordinary foreground spawns through ctx.subprocess with fixed argv vectors (never ctx.shell, never a background task), so no system rg install and no shell quoting layer exist. glob excludes VCS metadata directories with paired any-depth and contents negated globs, sorts by modification time and either takes the modification-time head or samples across top-level entries when a page is over cap; grep uses a fixed line-oriented `rg --json` command so path, line and text parse without colon ambiguity, retains capped flat matches and per-line previews, and spills the formatted result through ctx.spillStore.saveText() once retention caps are exceeded. Complete raw stdout is bounded by rawOutputMaxBytes and a truncated capture fails explicitly with SEARCH_RAW_OUTPUT_OVERFLOW rather than parsing a partial stream, while stderr is retained only as a bounded diagnostic excerpt embedded in coded SearchError messages.",
+          "invariants": [
+            "Search runs as a plain argv spawn through the subprocess seam; there is no shell layer and no model-visible background task.",
+            "A truncated or over-cap raw capture fails with a stable code instead of being parsed as if complete.",
+            "Stable failure codes: SEARCH_INVALID_PATTERN, SEARCH_FAILED, SEARCH_RAW_OUTPUT_OVERFLOW, SEARCH_ABORTED."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "RAW_OUTPUT_MAX_BYTES = 20000000 (search-core.ts:36)",
+            "SEARCH_TIMEOUT_MS = 30000, SEARCH_STDERR_MAX_BYTES = 65536, SEARCH_GRACE_MS = 3000, SEARCH_META_MAX_BYTES = 65536 (search-core.ts:43-65)",
+            "GREP_MAX_MATCHES = 250, GREP_MAX_LINE_BYTES = 2000 (grep.ts:29-35)",
+            "GLOB_MAX_RESULTS = 100 (glob.ts:25), GLOB_VCS_EXCLUDES = .git, .svn, .hg, .bzr, .jj, .sl (glob.ts:37)"
+          ],
+          "evidence": [
+            "packages/fs/tool-fs-search/src/index.ts:67-70",
+            "packages/fs/tool-fs-search/src/index.ts:73-107",
+            "packages/fs/tool-fs-search/src/index.ts:128-160",
+            "packages/fs/tool-fs-search/src/search-core.ts:36",
+            "packages/fs/tool-fs-search/src/search-core.ts:43-65",
+            "packages/fs/tool-fs-search/src/search-core.ts:78-82",
+            "packages/fs/tool-fs-search/src/grep.ts:29-35",
+            "packages/fs/tool-fs-search/src/glob.ts:25",
+            "packages/fs/tool-fs-search/src/glob.ts:37"
+          ],
+          "modules": [
+            "fs/tool-fs-search"
+          ],
+          "verified": true
+        },
+        {
+          "name": "web-search-provider-selection-and-tool-bounds",
+          "what": "ctx.web is a provider registry plus execution-time selection: a configured searchProvider/fetchProvider id must be registered and available, a configured-but-missing or unavailable id fails with a distinct WebError code, and with no id configured exactly one usable provider is required or the call fails as ambiguous/unavailable, so selection never depends on registration order; the same fields may be fed by $DSH_WEB_SEARCH_PROVIDER/$DSH_WEB_FETCH_PROVIDER. The seam truncates a provider's over-return to request.maxResults and flags `truncated`. Concrete providers register through the same seam: an Exa provider (apiKey from config or $EXA_API_KEY, empty key means unavailable), a Perplexity provider ($PERPLEXITY_API_KEY, sonar model, search_recency_filter), and a DeepSeek provider that calls the Anthropic-compatible Messages API with the native web_search server tool, resolving its key through the credentials seam, exposing a settings namespace, and logging each auxiliary request as a durable web/deepseek-search-llm-request event. The model-facing tool-web package owns schemas, enablement, prompt guidance and bounds, and fails with a structured error at execution time when no provider can run.",
+          "invariants": [
+            "Provider selection is resolved at execution time and is order-independent: ambiguity is an error, never a first-registered win.",
+            "The seam, not the provider or the model, enforces the returned-source bound.",
+            "An enabled web tool stays registered and visible even when its provider is unavailable."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "WEB_SEARCH_MAX_RESULTS = 8, WEB_SEARCH_MAX_QUERIES = 4 (tool-web/src/search.ts:19-22)",
+            "DEFAULT_WEB_TOOL_TIMEOUT_MS = 30000, DEFAULT_FETCH_MAX_OUTPUT_CHARS = 200000 (tool-web/src/index.ts:27-34)",
+            "DeepSeek search defaults: model deepseek-v4-flash, apiVersion 2023-06-01, maxTokens 4096, maxUses 5, endpoint env DEEPSEEK_SEARCH_BASE_URL (web-search-deepseek/src/index.ts:53-60, web-search-deepseek/src/index.ts:82)"
+          ],
+          "evidence": [
+            "packages/web/web/src/index.ts:55-60",
+            "packages/web/web/src/index.ts:74-94",
+            "packages/web/web/src/index.ts:103-129",
+            "packages/web/web/src/index.ts:140-163",
+            "packages/web/web/src/index.ts:172-200",
+            "packages/web/tool-web/src/index.ts:27-34",
+            "packages/web/tool-web/src/index.ts:54-62",
+            "packages/web/tool-web/src/index.ts:83-95",
+            "packages/web/tool-web/src/search.ts:19-22",
+            "packages/web/web-search-deepseek/src/index.ts:53-60",
+            "packages/web/web-search-deepseek/src/index.ts:82",
+            "packages/web/web-search-deepseek/src/index.ts:95-124",
+            "packages/web/web-search-deepseek/src/index.ts:127-140",
+            "packages/web/web-search-exa/src/index.ts:48-54",
+            "packages/web/web-search-exa/src/index.ts:57-67",
+            "packages/web/web-search-perplexity/src/index.ts:43-49",
+            "packages/web/web-search-perplexity/src/index.ts:52-62"
+          ],
+          "modules": [
+            "web/web",
+            "web/tool-web",
+            "web/web-search-deepseek",
+            "web/web-search-exa",
+            "web/web-search-perplexity"
+          ],
+          "verified": true
+        },
+        {
+          "name": "http-fetch-with-public-address-pinning",
+          "what": "The local http fetch provider validates a URL before any network work: bounded length, http/https only, and no embedded credentials; response bodies are classified into html or text kinds, decoded with the declared charset (an unrecognized charset fails loudly rather than producing mojibake), and a redirect that crosses origins is refused so each new origin needs a fresh tool call and a fresh address check. Destination safety is enforced by resolving the hostname once with resolvePublicAddresses and rejecting the complete answer set if any address is not globally reachable unicast (IPv4-mapped IPv6 classified by its embedded address; NAT64 and other transition prefixes stay blocked because the eventual IPv4 destination cannot be pinned), then handing the validated addresses to an address-pinned transport so the connection cannot re-resolve to a private address. An IP-literal destination that the checks would refuse never takes the proxied path.",
+          "invariants": [
+            "A hostname is resolved once and the whole answer set must be public; the pinned addresses are the only ones the transport may use.",
+            "Redirects are same-origin only, so each new origin is re-validated.",
+            "An unsupported or unrecognized response encoding fails loudly instead of being decoded leniently."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "WEB_FETCH_MAX_URL_LENGTH = 2048 (policy.ts:12)",
+            "Defaults: maxResponseBytes 5000000, maxBodyChars 100000, timeoutMs 30000, maxRedirects 5, User-Agent deepseek-harness/0.0.1 (+https://github.com/deepseek-ai) (index.ts:45-51)",
+            "RFC 6052 NAT64 prefix lengths 32/40/48/56/64/96 and IPv4-only discovery via ipv4only.arpa with sentinels 192.0.0.170/192.0.0.171 (network.ts:37-39)"
+          ],
+          "evidence": [
+            "packages/web/web-fetch-http/src/index.ts:22-23",
+            "packages/web/web-fetch-http/src/index.ts:45-51",
+            "packages/web/web-fetch-http/src/index.ts:79-94",
+            "packages/web/web-fetch-http/src/policy.ts:12",
+            "packages/web/web-fetch-http/src/policy.ts:25-39",
+            "packages/web/web-fetch-http/src/policy.ts:49-54",
+            "packages/web/web-fetch-http/src/policy.ts:65-67",
+            "packages/web/web-fetch-http/src/policy.ts:78-84",
+            "packages/web/web-fetch-http/src/policy.ts:111-118",
+            "packages/web/web-fetch-http/src/network.ts:37-39",
+            "packages/web/web-fetch-http/src/network.ts:54-64",
+            "packages/web/web-fetch-http/src/network.ts:75-100"
+          ],
+          "modules": [
+            "web/web-fetch-http"
+          ],
+          "verified": true
+        },
+        {
+          "name": "session-title-projection-and-model-titling",
+          "what": "SessionTitleService (ctx.sessionTitle) folds the latest logged session/title event as the single source of truth, registers `title` and `titleInput` session projections (the latter counting eligible human messages and remembering first/last seq), and accepts at most one title provider whose automatic mode is first-prompt or all-prompts. It normalizes every accepted title: OSC/CSI/ESC sequences, remaining C0/C1 controls and directional/invisible controls are stripped, whitespace is collapsed, and the result is truncated to a UTF-8 byte budget without splitting a code point; a deterministic first-prompt fallback is derived from the leading words when no provider produces a title, and rename of text that normalizes to empty fails as SessionTitleInvalidError. The two model-backed provider plugins share one policy module: they select the first human message or all human messages, frame them as JSON so user text cannot break delimiters, require the framed input to fit maxInputBytes, resolve an explicit provider/model pair or the exact route recorded on the session's main request, log the exact auxiliary request as a durable session/title-llm-request event before dispatch, and reject tool-call or max-token finishes instead of accepting a partial title.",
+          "invariants": [
+            "The logged session/title event is the only title source of truth; the projection and get() both fold the log.",
+            "An accepted title is terminal-safe and within the UTF-8 byte budget, and the fallback budget must not exceed maxTitleBytes.",
+            "A model-backed title must be text-only and produced within the configured input-byte, output-token and timeout budgets."
+          ],
+          "failurePolicy": "fail-soft",
+          "constants": [
+            "Config requires fallbackMaxWords, fallbackMaxBytes and maxTitleBytes; fallbackMaxBytes must not exceed maxTitleBytes (index.ts:56-63, index.ts:297-323)",
+            "Title/titleInput projection stateVersions 1 and 3 (index.ts:263-275, index.ts:340-343)",
+            "session-title-llm requires targetWords, targetCjkCharacters, maxInputBytes, maxOutputTokens, timeoutMs with no library defaults, and provider/model must be supplied together (session-title-llm/src/index.ts:74-82, session-title-llm/src/index.ts:129-133)",
+            "SESSION_TITLE_TIMEOUT_CODE = 'SESSION_TITLE_TIMEOUT' (session-title-llm/src/index.ts:50)"
+          ],
+          "evidence": [
+            "packages/session/session-title/src/index.ts:56-63",
+            "packages/session/session-title/src/index.ts:92",
+            "packages/session/session-title/src/index.ts:107-128",
+            "packages/session/session-title/src/index.ts:260-301",
+            "packages/session/session-title/src/index.ts:338-354",
+            "packages/session/session-title/src/index.ts:385-387",
+            "packages/session/session-title/src/normalize.ts:4-12",
+            "packages/session/session-title/src/normalize.ts:39-51",
+            "packages/session/session-title/src/normalize.ts:59-74",
+            "packages/session/session-title-llm/src/index.ts:50",
+            "packages/session/session-title-llm/src/index.ts:74-85",
+            "packages/session/session-title-llm/src/index.ts:110-140",
+            "packages/session/session-title-llm/src/index.ts:155-171",
+            "packages/session/session-title-llm/src/index.ts:188-200",
+            "packages/session/session-title-llm/src/index.ts:231-296",
+            "packages/session/session-title-all-prompts-llm/src/index.ts:34-36",
+            "packages/session/session-title-first-prompt-llm/src/index.ts:34-40"
+          ],
+          "modules": [
+            "session/session-title",
+            "session/session-title-llm",
+            "session/session-title-all-prompts-llm",
+            "session/session-title-first-prompt-llm"
+          ],
+          "verified": true
+        },
+        {
+          "name": "user-questions-waterfall",
+          "what": "UserQuestionService (ctx.userQuestions) pauses an agent tool call until a human answers, asking the scoped `user-questions/request` waterfall on the agent's scope so UI packages compose the actual answerer. ask() validates the request before touching any UI: an already-aborted signal and an empty question list are distinct failures, a supplied agent must be the registry's exact live instance (CALLER_NOT_LIVE) and must be a live runtime root rather than an owned child (DELEGATED_CALLER, so a delegated child is told to return the question in its result instead of blocking forever), and a presentation intent is rejected unless its approve label is one of that question's own options and a plan review carries the detail it reviews. With no answerer accepting the request the waterfall resolves to NO_PROVIDER, and an abort observed anywhere in the ask is reported as ASK_ABORTED with the UserQuestionError shape restored across the waterfall boundary.",
+          "invariants": [
+            "Human interaction is valid only for the exact live calling agent and only when that agent is a runtime root.",
+            "A declared presentation intent must be self-consistent with the question's options and detail before any UI sees it.",
+            "The service never invents an answer: without an accepting answerer the call fails as NO_PROVIDER."
+          ],
+          "failurePolicy": "fail-closed",
+          "constants": [
+            "Stable codes: ASK_ABORTED, EMPTY_QUESTIONS, CALLER_NOT_LIVE, DELEGATED_CALLER, BAD_INTENT, NO_PROVIDER (index.ts:41-47, index.ts:86-151)"
+          ],
+          "evidence": [
+            "packages/interaction/user-questions/src/index.ts:41-47",
+            "packages/interaction/user-questions/src/index.ts:64-68",
+            "packages/interaction/user-questions/src/index.ts:86-107",
+            "packages/interaction/user-questions/src/index.ts:115-129",
+            "packages/interaction/user-questions/src/index.ts:130-151"
+          ],
+          "modules": [
+            "interaction/user-questions"
+          ],
+          "verified": true
+        }
+      ],
+      "moduleCoverage": {
+        "mcp/mcp-client": "image-admission-normalization-and-request-image-projection (MCP image content blocks are a second consumer of the attachment admission path); its primary mechanisms are in the extension domain",
+        "lsp/lsp": "contributes none to retrieval: Cordis Service Definition plumbing for the ctx.lsp provider registry, cited in the extension domain under lsp-provider-registry-and-extension-routing",
+        "lsp/lsp-stdio": "contributes none to retrieval: it is the stdio language-server implementation of the extension-domain ctx.lsp seam",
+        "lsp/tool-lsp": "contributes none to retrieval: model-facing code-navigation tool registered from the extension domain",
+        "skill/skill": "contributes none to retrieval: Cordis Service Definition plumbing for the ctx.skills provider registry (extension domain)",
+        "skill/skill-badge": "contributes none to retrieval: bundled bundled-content skill provider for the extension domain",
+        "skill/skill-filesystem": "contributes none to retrieval: local skill discovery is extension-domain catalog state, not a query index over session or file content",
+        "skill/tool-skill": "contributes none to retrieval: the durable skill catalog is extension state injected into context, not a searchable index",
+        "hooks/hook-protocol": "contributes none to retrieval: shared hook execution/matcher/merge library for the extension domain",
+        "hooks/hooks-claude-code": "contributes none to retrieval: vendor hook dialect bridge (extension domain)",
+        "hooks/hooks-codex": "contributes none to retrieval: vendor hook dialect bridge (extension domain)",
+        "host/plugin-inventory": "contributes none to retrieval: read-only Cordis Loader projection for the extension-domain settings surface",
+        "extensions/cordis-host-runner": "contributes none to retrieval: dynamic package sandbox/approval runtime (extension domain)",
+        "extensions/cordis-client-runner": "contributes none to retrieval: browser-half load engine for dynamic packages (extension domain)",
+        "extensions/tool-cordis": "contributes none to retrieval: model-facing Cordis inspect/define/run tools (extension domain)",
+        "context/agent-instructions": "contributes none to retrieval: workspace instruction files are injected context, not an index; it does react to read/write/edit tool results, but it performs no search",
+        "settings/settings": "contributes none to retrieval: settings namespace registry and commit seam (extension domain)",
+        "settings/settings-file": "contributes none to retrieval: file-backed settings provider (extension domain)",
+        "session-query/session-query": "session-query-live-preferred-corpus-reads-and-traces",
+        "session-query/session-query-sqlite": "session-full-text-index-and-ranked-search",
+        "session-query/tool-session-query": "model-facing-session-search-and-workspace-authorization",
+        "session-query/session-log-export": "session-log-export-archive",
+        "attachment/attachment": "attachment-ingestion-and-durable-content-addressed-store, image-admission-normalization-and-request-image-projection",
+        "attachment/attachment-local": "attachment-ingestion-and-durable-content-addressed-store, image-admission-normalization-and-request-image-projection",
+        "context/file-reference": "at-file-reference-grammar-and-fuzzy-completion-index",
+        "context/file-reference-local": "at-file-reference-grammar-and-fuzzy-completion-index",
+        "context/session-reference": "cross-session-reference-snapshot-injection",
+        "context/time-context": "request-time-and-tmux-location-context-injection",
+        "fs/tool-fs-search": "ripgrep-backed-file-search-tools",
+        "web/web": "web-search-provider-selection-and-tool-bounds",
+        "web/web-fetch-http": "http-fetch-with-public-address-pinning",
+        "web/web-search-deepseek": "web-search-provider-selection-and-tool-bounds",
+        "web/web-search-exa": "web-search-provider-selection-and-tool-bounds",
+        "web/web-search-perplexity": "web-search-provider-selection-and-tool-bounds",
+        "web/tool-web": "web-search-provider-selection-and-tool-bounds",
+        "interaction/user-questions": "user-questions-waterfall",
+        "context/tmux-context": "request-time-and-tmux-location-context-injection",
+        "session/session-title": "session-title-projection-and-model-titling",
+        "session/session-title-llm": "session-title-projection-and-model-titling",
+        "session/session-title-all-prompts-llm": "session-title-projection-and-model-titling",
+        "session/session-title-first-prompt-llm": "session-title-projection-and-model-titling",
+        "client/ui-settings-plugin-inventory": "contributes none to retrieval: it renders the extension-domain plugin inventory tab",
+        "client/ui-settings-plugins": "contributes none to retrieval: it renders extension-domain settings cards",
+        "client/ui-skill": "contributes none to retrieval: it is the extension-domain '/' skill input source and skill tool row",
+        "extensions/ui-cordis": "contributes none to retrieval: it renders the extension-domain dynamic plugin panel"
+      }
+    }
+  },
+  "notes": "Read-only inventory of dsh v0.1.5-rc.2 at D:\\agent-complete\\deepseek-harness-dsh-v0.1.5-rc.2. Every evidence string points at lines opened with the read tool in this session; no README or docs file was used as evidence and no file in the source tree was modified. Scope note: workflow/schedule/todo/goal were not in the required moduleCoverage list but are named by the extension domain description, so they are covered inside the single extension mechanism durable-todo-goal-schedule-and-workflow-extension-state. Cordis plumbing is called out explicitly in moduleCoverage: lsp/lsp, skill/skill, session-query/session-query, web/web, attachment/attachment, settings/settings, interaction/user-questions, context/file-reference and host/plugin-inventory are Service Definitions (abstract services or remote faces) whose concrete behavior lives in provider or consumer packages, and hooks/hook-protocol is a shared non-plugin library. Commands vs RPC: the audited capabilities surface through Typert @Remote methods (PluginInventoryGateway @Remote('list'); DynamicCordisRunnerService @Remote runHostHalf/getClientCode/resolveRequestRun/settleUserRun/stopFromPanel/undefineFromPanel/inventory/reportRenderFailure/reportClientGuardFailure/invoke) and through model-facing tools rather than slash commands; session-log-export is the one command-shaped surface found (a Web-only /export command plus the /api/session.export route). Unverified or not-opened, and therefore not cited: host/plugin-inventory/src/types.ts; hooks/hook-protocol codec.ts/detached.ts/invariant.ts/types.ts; session-query/src/observation.ts and session-query-sqlite reconcile/observe internals (index.ts ~230-1132); attachment-local store.ts/image.ts/normalization.ts/request-image.ts/file-store.ts internals; cordis-client-runner runtime.ts/guard.ts/evaluator.ts/orchestrator.ts; session-reference projection.ts/spill.ts/uri.ts; file-reference-local scoring internals (search.ts rankCandidates/scoreCandidate bodies); web/tool-web fetch.ts HTML-to-markdown conversion; web-fetch-http provider.ts request/redirect loop; schedule runtime.ts/persistence.ts; goal fold.ts/round-driver/tool-goal/command-goal; workflow/workflow seam internals beyond the engine entry. interaction/user-questions documents that its model-facing tool lives in @deepseek-ai/dsh-tool-ask-user and that UI packages compose answerers on the Agent-scoped waterfall; neither that tool package nor those UI answerers are in the audited module set, so this inventory records the seam as read and does not claim a verified production caller. Similarly, mcp-client, lsp-stdio, both hook bridges, the dynamic-Cordis packages and the web/skill providers are registered by plugin composition (cordis.yml / app composition) that was not opened here, so their wiring was not verified from the packages alone."
+}
