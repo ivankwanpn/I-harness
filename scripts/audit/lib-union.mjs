@@ -68,8 +68,17 @@ export function readJson(p) {
 export function loadSources(dataDir) {
   const loaded = {}
   for (const { key } of SOURCES) {
+    // The I-harness command extraction is named `ih-commands-enriched.json`
+    // while every other source uses `<key>-enriched.json`. Looking only for the
+    // latter silently fell back to the RAW extraction for I-harness, so the
+    // whole IH column of the matrix was built from entries with `mechanism:
+    // null` and no family -- the richest source in the audit rendered as its
+    // emptiest. Both spellings are probed.
+    const enriched =
+      readJson(join(dataDir, `2026-09-11-${key}-enriched.json`)) ??
+      readJson(join(dataDir, `2026-09-11-${key}-commands-enriched.json`))
     loaded[key] = {
-      enriched: readJson(join(dataDir, `2026-09-11-${key}-enriched.json`)),
+      enriched,
       raw: readJson(join(dataDir, `2026-09-11-${key}-commands.json`)),
     }
   }

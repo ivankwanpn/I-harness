@@ -260,6 +260,7 @@
           "commandKind": "local-jsx",
           "backendModule": "src/commands/exit/exit.tsx (`call`); src/components/ExitFlow.tsx (`ExitFlow`); src/utils/gracefulShutdown.ts (`gracefulShutdown` at :391)",
           "evidence": [
+            "src/commands/exit/exit.tsx:18-30",
             "src/commands/exit/index.ts:4",
             "src/commands/exit/index.ts:6",
             "src/commands/exit/exit.tsx:20",
@@ -271,7 +272,12 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: exit — REPL exit; distinct from the CLI exit helpers in src/cli/exit.ts (`cliOk`/`cliError`), which belong to the commander subcommand layer"
-          ]
+          ],
+          "citationCorrected": {
+            "prepended": "src/commands/exit/exit.tsx:18-30",
+            "reason": "the sampled cite :30 is reached only after the bg-session detach (:18-24) and worktree ExitFlow (:25-28) branches are skipped; the range shows the actual decision",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
         }
       }
     },
@@ -359,14 +365,30 @@
           "rawName": "fork",
           "canonical": "fork",
           "aliases": [],
-          "displayName": "fork",
-          "description": "Fork the current session (backend fork)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "session",
+          "summary": "Forks the current session into a new one and switches to it.",
+          "mechanism": "Registered in sessions.ts:56-72, visible() = hasCapability(ctx,'fork') (sessions.ts:63). run() guards on the optional ctx.fork member ('fork: backend fork seam absent') and otherwise passes an optional title (sessions.ts:65-70); the loop wires fork to forkSession (loop.ts:2527, implemented at loop.ts:2558-2572), which calls the OPTIONAL BackendClient.forkSession, activates the returned id and renames it when a title was given. 'fork' is pushed only when backend.forkSession !== undefined (loop.ts:2427); defaultEmbeddedFactory always supplies it — durable forkSession(coordinator,…) with a store, else an in-memory completedTurnPrefix child (embedded.ts:1012-1025). Bare createEmbeddedBackend without the forkSession option has no member at all (embedded.ts:559-568).",
+          "gate": "capability:fork (types.ts:28), derived in loop.ts:2427 from backend.forkSession !== undefined",
+          "backendModule": "packages/tui/src/backend/embedded.ts:559 (member) and :1012 (defaultEmbeddedFactory's forkSessionForBackend -> @i-harness/session-persistence forkSession)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:60"
+            "packages/tui/src/app/slash/impl/sessions.ts:56-72",
+            "packages/tui/src/app/slash/impl/sessions.ts:60",
+            "packages/tui/src/app/slash/impl/sessions.ts:63",
+            "packages/tui/src/app/slash/impl/sessions.ts:65",
+            "packages/tui/src/app/loop.ts:2427",
+            "packages/tui/src/app/loop.ts:2527",
+            "packages/tui/src/app/loop.ts:2558",
+            "packages/tui/src/backend/embedded.ts:559",
+            "packages/tui/src/backend/embedded.ts:1012",
+            "packages/tui/src/contracts.ts:200"
           ],
-          "verified": false
+          "verified": true,
+          "citationCorrected": {
+            "prepended": "packages/tui/src/app/slash/impl/sessions.ts:56-72",
+            "reason": "the sampled cite backend/embedded.ts:559 is the optional backend member; the registration, visible() gate and guard live in sessions.ts",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
         },
         "codex": {
           "rawName": "fork",
@@ -415,48 +437,6 @@
       }
     },
     {
-      "key": "home",
-      "family": "session",
-      "perSource": {
-        "ih": {
-          "rawName": "home",
-          "canonical": "home",
-          "aliases": [],
-          "displayName": "home",
-          "description": "Show the welcome screen",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:28"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "home",
-          "canonical": "home",
-          "aliases": [
-            "welcome"
-          ],
-          "displayName": "home",
-          "family": "session",
-          "summary": "Exits the current session and returns to the welcome screen.",
-          "mechanism": "run() returns `Action::ExitSession` (home.rs:16-18). Dispatch handles `Action::ExitSession` as a first-class arm that clears the composer and re-enters the main dispatcher (app/dispatch/prompt.rs:660-665). Registered as `home` with the alias `welcome` (home.rs:11).",
-          "gate": "always",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/home.rs",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/home.rs:10",
-            "crates/codegen/xai-grok-pager/src/slash/commands/home.rs:17",
-            "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:660",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:150"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: home / welcome (leave session, keep the app open)"
-          ]
-        }
-      }
-    },
-    {
       "key": "login",
       "family": "session",
       "perSource": {
@@ -499,6 +479,7 @@
           "gate": "always；!available_during_task（slash_command.rs:225）",
           "backendModule": "codex-rs/tui/src/app/event_dispatch.rs（+ app-server logout RPC）",
           "evidence": [
+            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:401-403",
             "codex-rs/tui/src/slash_command.rs:65",
             "codex-rs/tui/src/chatwidget/slash_dispatch.rs:401",
             "codex-rs/tui/src/app/event_dispatch.rs:661",
@@ -507,7 +488,12 @@
           "verified": true,
           "crossSourceHints": [
             "logout / sign out"
-          ]
+          ],
+          "citationCorrected": {
+            "prepended": "codex-rs/tui/src/chatwidget/slash_dispatch.rs:401-403",
+            "reason": "the sampled cite slash_command.rs:225 is an available_during_task=false match arm (a gating listing), not the logout mechanism",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
         },
         "grok": {
           "rawName": "logout",
@@ -539,14 +525,25 @@
           "rawName": "new",
           "canonical": "new",
           "aliases": [],
-          "displayName": "new",
-          "description": "Start a new session (backend create)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "session",
+          "summary": "Creates a new backend session and switches to it.",
+          "mechanism": "Registered in sessions.ts:15-26, visible() = hasCapability(ctx,'session-create') (sessions.ts:18). run() guards on the optional ctx.createSession member, toasting 'new session: backend create seam absent' otherwise (sessions.ts:20-23); the loop wires createSession to newSession (loop.ts:2520, implemented at loop.ts:2542-2555), which calls the OPTIONAL BackendClient.createSession, activates the returned id and toasts 'new session failed: …' on rejection. 'session-create' is pushed only when backend.createSession !== undefined (loop.ts:2423); the embedded member exists only when the caller wired the option (embedded.ts:549-558) and defaultEmbeddedFactory always wires it — coordinator.create() with a store, else a fresh in-memory session (embedded.ts:1006-1011).",
+          "gate": "capability:session-create (types.ts:22), derived in loop.ts:2423 from backend.createSession !== undefined",
+          "backendModule": "packages/tui/src/backend/embedded.ts:549 (member) and :1006 (defaultEmbeddedFactory's createSessionForBackend -> @i-harness/session-persistence coordinator.create)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:16"
+            "packages/tui/src/app/slash/impl/sessions.ts:16",
+            "packages/tui/src/app/slash/impl/sessions.ts:18",
+            "packages/tui/src/app/slash/impl/sessions.ts:20",
+            "packages/tui/src/app/loop.ts:2423",
+            "packages/tui/src/app/loop.ts:2520",
+            "packages/tui/src/app/loop.ts:2542",
+            "packages/tui/src/app/loop.ts:2543",
+            "packages/tui/src/backend/embedded.ts:549",
+            "packages/tui/src/backend/embedded.ts:1006",
+            "packages/tui/src/contracts.ts:199"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "new",
@@ -596,72 +593,6 @@
       }
     },
     {
-      "key": "quit",
-      "family": "session",
-      "perSource": {
-        "ih": {
-          "rawName": "quit",
-          "canonical": "quit",
-          "aliases": [],
-          "displayName": "quit",
-          "description": "Quit the TUI",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/tools.ts:78"
-          ],
-          "verified": false
-        },
-        "codex": {
-          "rawName": "quit",
-          "canonical": "quit",
-          "aliases": [
-            "exit"
-          ],
-          "displayName": "quit",
-          "variant": "Quit",
-          "family": "session",
-          "summary": "直接離開 Codex。",
-          "mechanism": "與 /exit 共用 arm：request_quit_without_confirmation()（slash_dispatch.rs:398-400；chatwidget.rs:1408）。描述與 Exit 共用 'exit Codex'（slash_command.rs:101）。",
-          "gate": "always（available_during_task 為 true）",
-          "backendModule": "codex-rs/tui/src/chatwidget.rs",
-          "evidence": [
-            "codex-rs/tui/src/slash_command.rs:66",
-            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:398",
-            "codex-rs/tui/src/chatwidget.rs:1408"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "quit / exit"
-          ]
-        },
-        "grok": {
-          "rawName": "quit",
-          "canonical": "quit",
-          "aliases": [
-            "exit"
-          ],
-          "displayName": "quit",
-          "family": "session",
-          "summary": "Quits the application.",
-          "mechanism": "run() returns `Action::Quit` (exit.rs:23-25). The module also exports `is_exit_alias`, the bare-text list (exit | quit | :q | :q! | :wq | :wq!) shared by the agent prompt send path and the dashboard dispatch so vim/shell muscle memory resolves to a quit even outside slash resolution; dispatch checks it only when the input is not a slash invocation (app/dispatch/prompt.rs:759-763). Note the command's canonical name is `quit` with `exit` as the alias, not the reverse (exit.rs:17-18).",
-          "gate": "always",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:6",
-            "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:17",
-            "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:24",
-            "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:759",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:153"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: quit / exit"
-          ]
-        }
-      }
-    },
-    {
       "key": "rename",
       "family": "session",
       "perSource": {
@@ -669,14 +600,24 @@
           "rawName": "rename",
           "canonical": "rename",
           "aliases": [],
-          "displayName": "rename",
-          "description": "Rename the session title",
-          "gate": "none",
-          "mechanism": null,
+          "family": "session",
+          "summary": "Renames the session title (with a prompt overlay when no argument is given).",
+          "mechanism": "Registered ungated in sessions.ts:87-105. With an argument run() calls ctx.renameSession(title) directly (sessions.ts:94); without one it opens a bindTextInput overlay prefilled with app.title whose submit calls renameSession (sessions.ts:98-103), and cancel toasts 'rename cancelled'. The loop wires renameSession to Loop.renameSession (loop.ts:2494, implemented at loop.ts:2990-3006): it trims to 200 chars, toasts 'rename: empty title' for an empty value, updates app.title/app.prompt.title, then calls backend.rename — and because BackendClient.rename is UNCONDITIONAL on the embedded client it persists; a backend without the member falls back to the honest toast 'rename: backend seam absent — title updated in-session only' (loop.ts:2999-3005). The embedded rename appends a session/title event through applyTitle so the title flows back on the event stream (embedded.ts:814-817).",
+          "gate": "always",
+          "backendModule": "packages/tui/src/backend/embedded.ts:814 (createEmbeddedBackend.rename -> applyTitle, @i-harness/core-session) driven by Loop.renameSession (packages/tui/src/app/loop.ts:2990)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:88"
+            "packages/tui/src/app/slash/impl/sessions.ts:88",
+            "packages/tui/src/app/slash/impl/sessions.ts:94",
+            "packages/tui/src/app/slash/impl/sessions.ts:98",
+            "packages/tui/src/app/loop.ts:2494",
+            "packages/tui/src/app/loop.ts:2990",
+            "packages/tui/src/app/loop.ts:2999",
+            "packages/tui/src/app/loop.ts:3005",
+            "packages/tui/src/backend/embedded.ts:814",
+            "packages/tui/src/contracts.ts:264"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "rename",
@@ -759,14 +700,22 @@
           "rawName": "resume",
           "canonical": "resume",
           "aliases": [],
-          "displayName": "resume",
-          "description": "Open the session picker",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "session",
+          "summary": "Opens the session picker to resume a stored session.",
+          "mechanism": "Registered in sessions.ts:34-41, visible() = hasCapability(ctx,'session-list') (sessions.ts:37). run() calls ctx.openSessions() (sessions.ts:39), wired in the loop (loop.ts:2454-2456) to toggle the sessions picker open when it is not already open; the picker loader is opts.listSessions else backend.listSessions (loop.ts:3555), and the TUI host supplies a filtered loader (apps/tui/src/index.ts:427). 'session-list' is pushed whenever the (non-optional) listSessions member exists (loop.ts:2422), so the gate is effectively always satisfied.",
+          "gate": "capability:session-list (types.ts:23), derived in loop.ts:2422 from backend.listSessions !== undefined",
+          "backendModule": "Loop.openSessions/toggleSessions (packages/tui/src/app/loop.ts:2454, :3549) over BackendClient.listSessions (packages/tui/src/contracts.ts:193; embedded at packages/tui/src/backend/embedded.ts:518)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:35"
+            "packages/tui/src/app/slash/impl/sessions.ts:35",
+            "packages/tui/src/app/slash/impl/sessions.ts:37",
+            "packages/tui/src/app/slash/impl/sessions.ts:39",
+            "packages/tui/src/app/loop.ts:2422",
+            "packages/tui/src/app/loop.ts:2454",
+            "packages/tui/src/app/loop.ts:3549",
+            "packages/tui/src/contracts.ts:193"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "resume",
@@ -841,78 +790,47 @@
       }
     },
     {
-      "key": "rewind",
+      "key": "session-info",
       "family": "session",
       "perSource": {
         "ih": {
-          "rawName": "rewind",
-          "canonical": "rewind",
+          "rawName": "session-info",
+          "canonical": "session-info",
           "aliases": [],
-          "displayName": "rewind",
-          "description": "Rewind the session (open the rewind picker)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "session",
+          "summary": "Shows session details: id, model, turn count, line count and context usage.",
+          "mechanism": "Registered ungated in sessions.ts:106-125. run() probes the OPTIONAL backend.context member with a catch-to-undefined (sessions.ts:110) and opens the 'session-info' panel built by sessionInfoRows with the id/title/model/turns/lines and the probed used/total (sessions.ts:111-123). turns() comes from the engine's turn-anchor walk and lines from engine.lineCount() (loop.ts:2447, :2448); a missing or failed context probe simply omits used/total rather than inventing numbers.",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/sessions.ts:110 over optional BackendClient.context (packages/tui/src/contracts.ts:246) and packages/tui/src/views/light-session-info.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/run.ts:18"
+            "packages/tui/src/app/slash/impl/sessions.ts:107",
+            "packages/tui/src/app/slash/impl/sessions.ts:110",
+            "packages/tui/src/app/slash/impl/sessions.ts:114",
+            "packages/tui/src/contracts.ts:246",
+            "packages/tui/src/backend/embedded.ts:785"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
-          "rawName": "rewind",
-          "canonical": "rewind",
-          "aliases": [
-            "undo"
-          ],
-          "displayName": "rewind",
-          "family": "session",
-          "summary": "Rewinds the conversation to a previous turn.",
-          "mechanism": "run() returns `Action::RewindShowPicker` (rewind.rs:15-17). Dispatch hydrates a picker: if the session is busy it first offers to cancel the running turn; otherwise it stashes the composer draft and emits `Effect::FetchRewindPoints`, which calls ACP ext `x.ai/rewind/points` and deserializes a `RewindPointsResponse` (app/dispatch/rewind.rs:129-163; app/effects/mod.rs:4102-4159). Confirming a point emits `Effect::RewindExecute` -> ext `x.ai/rewind/execute` (app/effects/mod.rs:4161-4211); on success the pager truncates the scrollback from the matching user-prompt entry (`scrollback.remove_from`), drops the removed tail and releases retained memory, clears the persisted last-turn summary, and restores the stashed draft or the response's `prompt_text` back into the composer (app/dispatch/rewind.rs:445-487). File changes made after that turn are deliberately left as-is — rewind restores conversation state, not the filesystem (actions/defaults.rs:441).",
-          "gate": "session-scoped (`session_scoped: true`, rewind.rs:12); also reachable idle with an empty prompt via a double Esc within 800ms",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs + crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs + crates/codegen/xai-grok-pager/src/views/rewind.rs",
+          "rawName": "session-info",
+          "canonical": "session-info",
+          "aliases": [],
+          "displayName": "session-info",
+          "family": "inspect",
+          "summary": "Shows session info: session ID, cwd, model and context usage.",
+          "mechanism": "run() errors without a session and otherwise returns `Action::ShowSessionInfo` (session_info.rs:17-23). It is instant and non-queued (session_info.rs:1).",
+          "gate": "session-scoped (`session_scoped: true`, session_info.rs:14) plus an explicit session_id check",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs",
           "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs:8",
-            "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs:16",
-            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:159",
-            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:451",
-            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:478",
-            "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:4106",
-            "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:4165",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:99"
+            "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:11",
+            "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:19",
+            "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:22",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:105"
           ],
           "verified": true,
           "crossSourceHints": [
-            "canonical: rewind / undo-turn (claude-code `/rewind`; I-harness lacks it)"
-          ]
-        },
-        "cc-custom": {
-          "rawName": "rewind",
-          "canonical": "rewind",
-          "aliases": [
-            "checkpoint",
-            "undo"
-          ],
-          "displayName": "rewind",
-          "family": "session",
-          "summary": "Restores the code, the conversation, or both to a previous user-message checkpoint.",
-          "mechanism": "src/commands/rewind/rewind.ts is a 13-line shim: its `call` invokes `context.openMessageSelector()` and returns `{ type: 'skip' }` (rewind.ts:8-12). That callback is wired in src/screens/REPL.tsx:2243-2247 to `setIsMessageSelectorVisible(true)`, which mounts `<MessageSelector>` (REPL.tsx:4583); the selector offers code / conversation / both (MessageSelector.tsx:217-232). Code restore runs REPL's onRestoreCode -> `fileHistoryRewind(updater, message.uuid)` (REPL.tsx:4584-4589), which applies file backups to disk; conversation restore runs `onRestoreMessage={handleRestoreMessage}` (REPL.tsx:4661) -> restoreMessageSync -> rewindConversationTo, which does `setMessages(prev.slice(0, messageIndex))` (REPL.tsx:3460) plus `setConversationId(randomUUID())` (line 3462), `resetMicrocompactState()` (line 3464) and a setAppState restoring the message's permissionMode and clearing promptSuggestion (lines 3466-3481). File backup content is persisted outside the transcript at `{configDir}/file-history/{sessionId}/{sha256(filePath)[0:16]}@vN` (src/utils/fileHistory.ts:734-742), while snapshot metadata is appended to the session transcript via recordFileHistorySnapshot -> `getProject().insertFileHistorySnapshot` (fileHistory.ts:320, sessionStorage.ts:1326-1336). The rewind path writes no transcript deletions: rewound-away messages remain in the JSONL, and the only transcript-removing call (`removeTranscriptMessage`) is used at REPL.tsx:2426 for tombstoned streaming messages.",
-          "gate": "none (no `isEnabled`; src/commands/rewind/index.ts:3-11). The declaration sets `supportsNonInteractive: false` (index.ts:9)",
-          "commandKind": "local",
-          "backendModule": "src/commands/rewind/rewind.ts (`call`); real work in src/utils/fileHistory.ts (`fileHistoryRewind` at :348, `applySnapshot` at :538, `resolveBackupPath` at :734) and src/components/MessageSelector.tsx; host wiring in src/screens/REPL.tsx (`rewindConversationTo` at :3450, `restoreMessageSync` at :3487)",
-          "evidence": [
-            "src/commands/rewind/index.ts:5",
-            "src/commands/rewind/index.ts:6",
-            "src/commands/rewind/index.ts:10",
-            "src/commands/rewind/rewind.ts:8",
-            "src/screens/REPL.tsx:3460",
-            "src/screens/REPL.tsx:4584",
-            "src/screens/REPL.tsx:4661",
-            "src/utils/fileHistory.ts:348",
-            "src/utils/fileHistory.ts:383",
-            "src/utils/fileHistory.ts:738"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: rewind — checkpoint restore of both files and conversation; the headless sibling is `--rewind-files <user-message-id>` (src/main.tsx:886, src/cli/print.ts:683-716)"
+            "canonical: session-info / status"
           ]
         }
       }
@@ -988,14 +906,23 @@
           "rawName": "compact",
           "canonical": "compact",
           "aliases": [],
-          "displayName": "compact",
-          "description": "Compact the conversation now (shadow + summary)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "context",
+          "summary": "Compacts the conversation immediately (shadow + summary).",
+          "mechanism": "Registered in run.ts:25-42, visible() = hasCapability(ctx,'compact') (run.ts:29). run() first guards on the OPTIONAL BackendClient.compact member and toasts 'compact: backend seam absent (session-compact not wired)' when it is missing (run.ts:31-34) — the optional-member honesty the design doc flags. When present it awaits backend.compact(arg) and toasts 'compacted' or 'compacted: nothing to compact' (run.ts:36-37), toasting 'compact failed: …' on rejection (run.ts:39). The embedded client implements compact unconditionally (embedded.ts:822-826) via assembly.compactNow (the M33 session-executor surface); 'compact' is pushed by slashCapabilities() whenever backend.compact !== undefined (loop.ts:2426).",
+          "gate": "capability:compact (types.ts:27), derived in loop.ts:2426 from backend.compact !== undefined",
+          "backendModule": "packages/tui/src/backend/embedded.ts:822 (createEmbeddedBackend.compact -> SessionAssembly.compactNow, @i-harness/session-executor)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/run.ts:26"
+            "packages/tui/src/app/slash/impl/run.ts:26",
+            "packages/tui/src/app/slash/impl/run.ts:29",
+            "packages/tui/src/app/slash/impl/run.ts:31",
+            "packages/tui/src/app/slash/impl/run.ts:36",
+            "packages/tui/src/app/loop.ts:2426",
+            "packages/tui/src/contracts.ts:268",
+            "packages/tui/src/backend/embedded.ts:822",
+            "packages/tui/src/backend/embedded.ts:824"
           ],
-          "verified": false
+          "verified": true
         },
         "dsh": {
           "rawName": "compact",
@@ -1008,6 +935,7 @@
           "gate": "requires a composed `commands` registry AND a composed `compaction` service (`inject = ['commands', 'compaction']`); in the shipped web-app bundle the host-plane row is explicitly disabled and the plugin is mounted per agent preset instead, so the command is scoped to the preset's agent rather than global",
           "backendModule": "packages/compaction/command-compact/src/index.ts (command plugin) -> packages/compaction/compaction/src/index.ts (CompactionEngine seam) -> packages/compaction/compaction-basic/src/index.ts + src/region.ts (provider/transaction)",
           "evidence": [
+            "packages/compaction/command-compact/src/index.ts:10-11",
             "packages/compaction/command-compact/src/index.ts:57-105",
             "packages/compaction/command-compact/src/index.ts:10",
             "packages/compaction/command-compact/src/index.ts:11",
@@ -1035,8 +963,8 @@
             "canonical: compact — same capability as I-harness `/compact`, grok-build `compact`, cc-custom `/compact` and the codex SlashCommand::Compact variant; dsh's distinct name form is the plugin package `command-compact`"
           ],
           "citationCorrected": {
-            "prepended": "packages/compaction/command-compact/src/index.ts:57-105",
-            "reason": "the sampled cite packages/core/session/src/types.ts:427 is a SurfaceOp doc comment, not the command's implementation",
+            "prepended": "packages/compaction/command-compact/src/index.ts:10-11",
+            "reason": "packages/compaction/compaction-basic/src/index.ts:369 is the ENGINE's compactNow, but the claim is about the command's identity (name/inject) and its /compact registration, which live in command-compact; the cited file exports no name/inject at all",
             "by": "adversarial verification sample (2026-09-12)"
           }
         },
@@ -1128,14 +1056,23 @@
           "rawName": "context",
           "canonical": "context",
           "aliases": [],
-          "displayName": "context",
-          "description": "Context usage for this session (local)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "context",
+          "summary": "Shows the context/token usage for this session.",
+          "mechanism": "Registered in sessions.ts:73-86, visible() = hasCapability(ctx,'context') (sessions.ts:78). run() guards on the optional SlashContext.openContext member and toasts 'context: backend context seam absent' otherwise (sessions.ts:80-83); the loop wires openContext to openContextPanel (loop.ts:2528), which probes the OPTIONAL BackendClient.context member and opens the 'usage' light panel — with the honest row 'no context usage available (backend probe absent)' when the probe is missing/undefined and a 'context probe failed: …' row on rejection (loop.ts:2575-2592). 'context' is pushed whenever backend.context !== undefined (loop.ts:2428).",
+          "gate": "capability:context (types.ts:29), derived in loop.ts:2428 from backend.context !== undefined",
+          "backendModule": "Loop.openContextPanel (packages/tui/src/app/loop.ts:2575) over BackendClient.context (packages/tui/src/contracts.ts:246, implemented at packages/tui/src/backend/embedded.ts:785)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:76"
+            "packages/tui/src/app/slash/impl/sessions.ts:76",
+            "packages/tui/src/app/slash/impl/sessions.ts:78",
+            "packages/tui/src/app/slash/impl/sessions.ts:80",
+            "packages/tui/src/app/loop.ts:2428",
+            "packages/tui/src/app/loop.ts:2528",
+            "packages/tui/src/app/loop.ts:2575",
+            "packages/tui/src/contracts.ts:246",
+            "packages/tui/src/backend/embedded.ts:785"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "context",
@@ -1510,43 +1447,77 @@
       }
     },
     {
-      "key": "transcript",
+      "key": "usage",
       "family": "context",
       "perSource": {
         "ih": {
-          "rawName": "transcript",
-          "canonical": "transcript",
+          "rawName": "usage",
+          "canonical": "usage",
           "aliases": [],
-          "displayName": "transcript",
-          "description": "Open the transcript in $PAGER (temp file)",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/tools.ts:53"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "transcript",
-          "canonical": "transcript",
-          "aliases": [
-            "log"
-          ],
-          "displayName": "transcript",
           "family": "context",
-          "summary": "Renders the full conversation transcript to a temp file and opens it in $PAGER.",
-          "mechanism": "run() errors without a session and otherwise returns `Action::OpenTranscriptPager` (transcript.rs:23-28); args are ignored and produce the same dispatch. The dispatcher writes the session transcript to a temp Markdown file and opens the user's pager (default `less`), suspending the inline TUI until the pager exits (transcript.rs:2-5). Primary motivation is minimal mode, where older blocks have already scrolled into native terminal history and there is no interactive scrollback pane, though it works in every render mode (transcript.rs:5-6).",
-          "gate": "session-scoped (`session_scoped: true`, transcript.rs:20) plus an explicit session_id check",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs",
+          "summary": "Shows this session's context usage (no account quota).",
+          "mechanism": "Registered ungated in surfaces.ts:15-29. run() awaits the OPTIONAL backend.context member with catch-to-undefined (surfaces.ts:22) and opens the 'usage' panel titled 'Usage · this session' with usageRows(usage), or the USAGE_EMPTY row when the probe returned nothing (surfaces.ts:23-27). The panel explicitly covers this session only — no account/subscription quota path exists (comment surfaces.ts:19-21).",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/surfaces.ts:22 over optional BackendClient.context (packages/tui/src/contracts.ts:246, implemented at packages/tui/src/backend/embedded.ts:785)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:16",
-            "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:25",
-            "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:27",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:109"
+            "packages/tui/src/app/slash/impl/surfaces.ts:16",
+            "packages/tui/src/app/slash/impl/surfaces.ts:22",
+            "packages/tui/src/app/slash/impl/surfaces.ts:24",
+            "packages/tui/src/app/slash/impl/surfaces.ts:27",
+            "packages/tui/src/contracts.ts:246",
+            "packages/tui/src/backend/embedded.ts:785"
+          ],
+          "verified": true
+        },
+        "codex": {
+          "rawName": "usage",
+          "canonical": "usage",
+          "aliases": [],
+          "displayName": "usage",
+          "variant": "Usage",
+          "family": "inspect",
+          "summary": "檢視帳號用量，或使用一次用量限制重置額度。",
+          "mechanism": "bare dispatch 先經 ensure_usage_command_available（需 has_codex_backend_auth，否則提示 'Sign in with ChatGPT to use /usage.'）再 open_usage_menu（slash_dispatch.rs:477-481、1110-1116）；選單提供 Show usage（送 AppEvent::OpenTokenActivity）與重置額度選項，並在可用重置次數為 0 時送 AppEvent::RefreshRateLimits{origin: UsageMenu{request_id}} 重新查詢（usage.rs:17-60）。帶參數解析 tokens::TokenActivityView::parse(trimmed)（daily|weekly|cumulative），失敗回 'Usage: /usage [daily|weekly|cumulative]'（slash_dispatch.rs:714-723）。",
+          "gate": "auth: has_codex_backend_auth（commands_for_input 以 token_activity_command_enabled 隱藏，slash_commands.rs:77、slash_dispatch.rs:1101,1110-1116）",
+          "backendModule": "codex-rs/tui/src/chatwidget/usage.rs + codex-rs/tui/src/token_usage.rs",
+          "evidence": [
+            "codex-rs/tui/src/slash_command.rs:55",
+            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:477",
+            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1110",
+            "codex-rs/tui/src/chatwidget/usage.rs:17",
+            "codex-rs/tui/src/bottom_pane/slash_commands.rs:77"
           ],
           "verified": true,
           "crossSourceHints": [
-            "canonical: transcript / pager-view"
+            "usage / rate limits"
+          ]
+        },
+        "grok": {
+          "rawName": "usage",
+          "canonical": "usage",
+          "aliases": [
+            "cost"
+          ],
+          "displayName": "usage",
+          "family": "inspect",
+          "summary": "Shows session token and cost totals, and lets consumer accounts manage billing.",
+          "mechanism": "run() refuses with `Error(\"/usage is not available.\")` when `ctx.usage_command_visible` is false (usage.rs:88-90). On non-consumer installs only a bare `/usage` is accepted (anything else errors); on consumer accounts `show`/empty map to `Action::ShowUsage` and `manage` maps to `Action::ManageBilling` (usage.rs:91-104). Visibility, arg-taking and suggestions all read the same two AppCtx flags (`usage_command_visible`, `billing_surface_visible`), so the three stay in lockstep (usage.rs:58-85). External-auth installs are detected at startup by `detect_external_auth_provider` from the ACP auth-method meta `external_provider`, the `GROK_AUTH_PROVIDER_COMMAND` env var, or `grok_com_config.auth_provider_command` (usage.rs:15-47; app/dispatch/prompt.rs:550).",
+          "gate": "two independent gates: `visible()` requires `ctx.usage_command_visible` (false for external-auth deployments with no grok.com billing session), and the per-user tier deny list adds \"usage\" with \"imagine\", \"imagine-video\" and \"voice\" for the free / X Basic tiers — restricted commands still show in the dropdown for discoverability but `CommandRegistry::get` refuses them and invoking one shows the SuperGrok upsell (app/app_view.rs:550-551, :1743-1763; registry.rs:242-274)",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs + crates/codegen/xai-grok-pager/src/app/app_view.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:15",
+            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:51",
+            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:59",
+            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:89",
+            "crates/codegen/xai-grok-pager/src/app/app_view.rs:551",
+            "crates/codegen/xai-grok-pager/src/app/app_view.rs:1744",
+            "crates/codegen/xai-grok-pager/src/slash/registry.rs:246",
+            "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:550"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: usage / cost (claude-code `/cost`; the `cost` alias exists here too)"
           ]
         }
       }
@@ -1559,14 +1530,17 @@
           "rawName": "goal",
           "canonical": "goal",
           "aliases": [],
-          "displayName": "goal",
-          "description": "Current goal (from the goal event stream)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "plan",
+          "summary": "Shows the current goal tracked in this session.",
+          "mechanism": "Registered ungated in surfaces.ts:37-43; run() opens the 'goal' light panel with rows built by goalRows(ctx.app.status.goal) (surfaces.ts:41). The value is not probed from the backend at run time — it is the goal label the loop already projects into app.status from the goal event stream (the goal event carries the goal text; status.goal is the read surface).",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/surfaces.ts:41 over TuiAppState.status.goal (packages/tui/src/app/present.ts), rendered by packages/tui/src/views/light-goal.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/surfaces.ts:38"
+            "packages/tui/src/app/slash/impl/surfaces.ts:38",
+            "packages/tui/src/app/slash/impl/surfaces.ts:41"
           ],
-          "verified": false
+          "verified": true
         },
         "dsh": {
           "rawName": "goal",
@@ -1639,14 +1613,20 @@
           "rawName": "plan",
           "canonical": "plan",
           "aliases": [],
-          "displayName": "plan",
-          "description": "Plan mode (live backend switching capability)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "plan",
+          "summary": "Enters plan mode (gated on a live backend switching capability).",
+          "mechanism": "Registered in run.ts:43-53 with visible() = hasCapability(ctx,'plan-mode') (run.ts:49). The run body is a single toast, 'plan: live backend switching capability not wired' (run.ts:51) — the M46a UI-state-only implementation was deliberately removed. Loop.slashCapabilities() never pushes 'plan-mode' (loop.ts:2419-2431), so the command is hidden and unmatched in the shipped TUI; the plan text panel is reached instead through the plan status-chip click / planRows() (loop.ts:2460).",
+          "gate": "capability:plan-mode (types.ts:30) — never supplied by Loop.slashCapabilities()",
+          "backendModule": "packages/tui/src/app/slash/impl/run.ts:51 (toast only; no backend call)",
+          "backendStatus": "stub-toast",
           "evidence": [
-            "packages/tui/src/app/slash/impl/run.ts:47"
+            "packages/tui/src/app/slash/impl/run.ts:47",
+            "packages/tui/src/app/slash/impl/run.ts:49",
+            "packages/tui/src/app/slash/impl/run.ts:51",
+            "packages/tui/src/app/loop.ts:2419",
+            "packages/tui/src/app/slash/types.ts:30"
           ],
-          "verified": false
+          "verified": true
         },
         "dsh": {
           "rawName": "plan",
@@ -1733,6 +1713,7 @@
           "commandKind": "local-jsx",
           "backendModule": "src/commands/plan/plan.tsx (`call`, `PlanDisplay`); src/utils/permissions/permissionSetup.ts (`prepareContextForPlanMode` at :1448); src/bootstrap/state.ts (`handlePlanModeTransition` at :1258); plan storage src/utils/plans.ts (`getPlan`, `getPlanFilePath`)",
           "evidence": [
+            "src/commands/plan/plan.tsx:75-82",
             "src/commands/plan/index.ts:5",
             "src/commands/plan/plan.tsx:70",
             "src/commands/plan/plan.tsx:74",
@@ -1745,7 +1726,12 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: plan — plan mode; I-harness implements plan mode as a capability with an exit-plan tool"
-          ]
+          ],
+          "citationCorrected": {
+            "prepended": "src/commands/plan/plan.tsx:75-82",
+            "reason": "the sampled cite :70 reads the current mode; the mode is actually WRITTEN via setAppState + applyPermissionUpdate setMode:'plan' at :75-82",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
         }
       }
     },
@@ -1757,14 +1743,21 @@
           "rawName": "view-plan",
           "canonical": "view-plan",
           "aliases": [],
-          "displayName": "view-plan",
-          "description": "View the plan (live backend switching capability)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "plan",
+          "summary": "Views the plan (gated on a live backend switching capability).",
+          "mechanism": "Registered in run.ts:54-61 with visible() = hasCapability(ctx,'plan-mode') (run.ts:57). The run body is the same toast as /plan, 'plan: live backend switching capability not wired' (run.ts:59). 'plan-mode' is never pushed by Loop.slashCapabilities() (loop.ts:2419-2431), so the command is hidden and unmatched; the actual plan text is available through ctx.planRows() (loop.ts:2460) and the plan status-chip click path.",
+          "gate": "capability:plan-mode (types.ts:30) — never supplied by Loop.slashCapabilities()",
+          "backendModule": "packages/tui/src/app/slash/impl/run.ts:59 (toast only; no backend call)",
+          "backendStatus": "stub-toast",
           "evidence": [
-            "packages/tui/src/app/slash/impl/run.ts:55"
+            "packages/tui/src/app/slash/impl/run.ts:55",
+            "packages/tui/src/app/slash/impl/run.ts:57",
+            "packages/tui/src/app/slash/impl/run.ts:59",
+            "packages/tui/src/app/loop.ts:2419",
+            "packages/tui/src/app/loop.ts:2460",
+            "packages/tui/src/app/slash/types.ts:30"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "view-plan",
@@ -2032,46 +2025,6 @@
       }
     },
     {
-      "key": "queue",
-      "family": "execution",
-      "perSource": {
-        "ih": {
-          "rawName": "queue",
-          "canonical": "queue",
-          "aliases": [],
-          "displayName": "queue",
-          "description": "Toggle the queue pane",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/run.ts:63"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "queue",
-          "canonical": "queue",
-          "aliases": [],
-          "displayName": "queue",
-          "family": "execution",
-          "summary": "Lists the prompts queued behind the running turn.",
-          "mechanism": "run() errors without a session and otherwise returns `Action::ShowQueue` (queue.rs:21-26). The dispatcher's `dispatch_show_queue` reads the merged server and local queue and commits a read-only list; editing the queue is out of scope and the interactive QueuePane remains the full-TUI route (queue.rs:5-6). Minimal mode has no interactive QueuePane, so `/queue` is the way to inspect what is waiting, and it works in every render mode (queue.rs:3-4).",
-          "gate": "session-scoped plus an explicit session_id check in run(); available in both screen modes",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs + crates/codegen/xai-grok-pager/src/views/queue_pane.rs",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:15",
-            "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:22",
-            "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:25",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:103"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: queue (list pending prompts)"
-          ]
-        }
-      }
-    },
-    {
       "key": "review",
       "family": "execution",
       "perSource": {
@@ -2153,6 +2106,93 @@
       }
     },
     {
+      "key": "rewind",
+      "family": "execution",
+      "perSource": {
+        "ih": {
+          "rawName": "rewind",
+          "canonical": "rewind",
+          "aliases": [],
+          "family": "execution",
+          "summary": "Opens the rewind picker to roll the session and its files back to an earlier point.",
+          "mechanism": "Registered in run.ts:17-24, visible() = hasCapability(ctx,'rewind') (run.ts:20). run() calls ctx.openRewind() (run.ts:22), wired to Loop.openRewind (loop.ts:2458, implemented at loop.ts:3727-3742): it returns immediately when backend.rewind is undefined (no toast — a silent no-op guard), otherwise it arms the rewind overlay (bindRewindOverlay) over the BackendClient.rewind points/plan/execute surface. 'rewind' is pushed only when backend.rewind !== undefined (loop.ts:2425); the embedded member exists only when the factory was given a rewindWorkspace, i.e. a durable coordinator plus rewindStoreRoot (embedded.ts:806-808, :953, :1047), and fails loudly for a session whose assembly has no rewind handle (embedded.ts:853-860).",
+          "gate": "capability:rewind (types.ts:26), derived in loop.ts:2425 from backend.rewind !== undefined",
+          "backendModule": "packages/tui/src/backend/embedded.ts:806 + buildRewindMember (:853) over @i-harness/rewind RewindService; Loop.openRewind (packages/tui/src/app/loop.ts:3727)",
+          "backendStatus": "optional-seam",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/run.ts:18",
+            "packages/tui/src/app/slash/impl/run.ts:20",
+            "packages/tui/src/app/slash/impl/run.ts:22",
+            "packages/tui/src/app/loop.ts:2425",
+            "packages/tui/src/app/loop.ts:2458",
+            "packages/tui/src/app/loop.ts:3727",
+            "packages/tui/src/app/loop.ts:3728",
+            "packages/tui/src/backend/embedded.ts:806",
+            "packages/tui/src/backend/embedded.ts:853"
+          ],
+          "verified": true
+        },
+        "grok": {
+          "rawName": "rewind",
+          "canonical": "rewind",
+          "aliases": [
+            "undo"
+          ],
+          "displayName": "rewind",
+          "family": "session",
+          "summary": "Rewinds the conversation to a previous turn.",
+          "mechanism": "run() returns `Action::RewindShowPicker` (rewind.rs:15-17). Dispatch hydrates a picker: if the session is busy it first offers to cancel the running turn; otherwise it stashes the composer draft and emits `Effect::FetchRewindPoints`, which calls ACP ext `x.ai/rewind/points` and deserializes a `RewindPointsResponse` (app/dispatch/rewind.rs:129-163; app/effects/mod.rs:4102-4159). Confirming a point emits `Effect::RewindExecute` -> ext `x.ai/rewind/execute` (app/effects/mod.rs:4161-4211); on success the pager truncates the scrollback from the matching user-prompt entry (`scrollback.remove_from`), drops the removed tail and releases retained memory, clears the persisted last-turn summary, and restores the stashed draft or the response's `prompt_text` back into the composer (app/dispatch/rewind.rs:445-487). File changes made after that turn are deliberately left as-is — rewind restores conversation state, not the filesystem (actions/defaults.rs:441).",
+          "gate": "session-scoped (`session_scoped: true`, rewind.rs:12); also reachable idle with an empty prompt via a double Esc within 800ms",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs + crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs + crates/codegen/xai-grok-pager/src/views/rewind.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs:8",
+            "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs:16",
+            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:159",
+            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:451",
+            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:478",
+            "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:4106",
+            "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:4165",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:99"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: rewind / undo-turn (claude-code `/rewind`; I-harness lacks it)"
+          ]
+        },
+        "cc-custom": {
+          "rawName": "rewind",
+          "canonical": "rewind",
+          "aliases": [
+            "checkpoint",
+            "undo"
+          ],
+          "displayName": "rewind",
+          "family": "session",
+          "summary": "Restores the code, the conversation, or both to a previous user-message checkpoint.",
+          "mechanism": "src/commands/rewind/rewind.ts is a 13-line shim: its `call` invokes `context.openMessageSelector()` and returns `{ type: 'skip' }` (rewind.ts:8-12). That callback is wired in src/screens/REPL.tsx:2243-2247 to `setIsMessageSelectorVisible(true)`, which mounts `<MessageSelector>` (REPL.tsx:4583); the selector offers code / conversation / both (MessageSelector.tsx:217-232). Code restore runs REPL's onRestoreCode -> `fileHistoryRewind(updater, message.uuid)` (REPL.tsx:4584-4589), which applies file backups to disk; conversation restore runs `onRestoreMessage={handleRestoreMessage}` (REPL.tsx:4661) -> restoreMessageSync -> rewindConversationTo, which does `setMessages(prev.slice(0, messageIndex))` (REPL.tsx:3460) plus `setConversationId(randomUUID())` (line 3462), `resetMicrocompactState()` (line 3464) and a setAppState restoring the message's permissionMode and clearing promptSuggestion (lines 3466-3481). File backup content is persisted outside the transcript at `{configDir}/file-history/{sessionId}/{sha256(filePath)[0:16]}@vN` (src/utils/fileHistory.ts:734-742), while snapshot metadata is appended to the session transcript via recordFileHistorySnapshot -> `getProject().insertFileHistorySnapshot` (fileHistory.ts:320, sessionStorage.ts:1326-1336). The rewind path writes no transcript deletions: rewound-away messages remain in the JSONL, and the only transcript-removing call (`removeTranscriptMessage`) is used at REPL.tsx:2426 for tombstoned streaming messages.",
+          "gate": "none (no `isEnabled`; src/commands/rewind/index.ts:3-11). The declaration sets `supportsNonInteractive: false` (index.ts:9)",
+          "commandKind": "local",
+          "backendModule": "src/commands/rewind/rewind.ts (`call`); real work in src/utils/fileHistory.ts (`fileHistoryRewind` at :348, `applySnapshot` at :538, `resolveBackupPath` at :734) and src/components/MessageSelector.tsx; host wiring in src/screens/REPL.tsx (`rewindConversationTo` at :3450, `restoreMessageSync` at :3487)",
+          "evidence": [
+            "src/commands/rewind/index.ts:5",
+            "src/commands/rewind/index.ts:6",
+            "src/commands/rewind/index.ts:10",
+            "src/commands/rewind/rewind.ts:8",
+            "src/screens/REPL.tsx:3460",
+            "src/screens/REPL.tsx:4584",
+            "src/screens/REPL.tsx:4661",
+            "src/utils/fileHistory.ts:348",
+            "src/utils/fileHistory.ts:383",
+            "src/utils/fileHistory.ts:738"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: rewind — checkpoint restore of both files and conversation; the headless sibling is `--rewind-files <user-message-id>` (src/main.tsx:886, src/cli/print.ts:683-716)"
+          ]
+        }
+      }
+    },
+    {
       "key": "stop",
       "family": "execution",
       "perSource": {
@@ -2193,14 +2233,27 @@
           "aliases": [
             "workflows"
           ],
-          "displayName": "workflow",
-          "description": "Run/list workflow jobs (run <name> | status [id] | list)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "execution",
+          "summary": "Runs, lists and inspects workflow jobs (run <name> | status [id] | list).",
+          "mechanism": "Registered in workflow2.ts:131-177 with the 'workflows' alias (workflow2.ts:134). run() resolves ctx.workflow and toasts 'workflow: surface not wired' if absent (workflow2.ts:138-141); 'run <name>' validates the name against surf.list() BEFORE prompting for params (unknown name → 'workflow run: unknown workflow \"<name>\"', workflow2.ts:152-161), then opens a text-input overlay whose whitespace-separated key=value tokens become the params map (workflow2.ts:34-43, :113-126) and calls surf.run, toasting the job id and refreshing the status panel; 'status [id]' opens the status panel with [r] refresh and row-select stop (workflow2.ts:65-85, :87-105); bare /workflow or 'list' opens the registry index (workflow2.ts:169-172); anything else toasts the usage line (workflow2.ts:174). The loop supplies the surface through workflowSurface(), which caches opts.workflow or builds createDefaultWorkflowSurface(workspace) (loop.ts:2517, :2612-2615). The default surface uses @i-harness/workflow's registry scan of <workspace>/workflow/*.yml plus the executor over a local node:child_process exec shim with its own job map (workflow2.ts:279-307, :227-274).",
+          "gate": "always",
+          "backendModule": "@i-harness/workflow (createWorkflowRegistry/createWorkflowExecutor) behind packages/tui/src/app/slash/impl/workflow2.ts:279 (createDefaultWorkflowSurface) and WorkflowSurface (packages/tui/src/contracts.ts)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/workflow2.ts:133"
+            "packages/tui/src/app/slash/impl/workflow2.ts:133",
+            "packages/tui/src/app/slash/impl/workflow2.ts:134",
+            "packages/tui/src/app/slash/impl/workflow2.ts:138",
+            "packages/tui/src/app/slash/impl/workflow2.ts:154",
+            "packages/tui/src/app/slash/impl/workflow2.ts:165",
+            "packages/tui/src/app/slash/impl/workflow2.ts:170",
+            "packages/tui/src/app/slash/impl/workflow2.ts:174",
+            "packages/tui/src/app/slash/impl/workflow2.ts:279",
+            "packages/tui/src/app/slash/impl/workflow2.ts:282",
+            "packages/tui/src/app/slash/impl/workflow2.ts:298",
+            "packages/tui/src/app/loop.ts:2517",
+            "packages/tui/src/app/loop.ts:2612"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "workflow",
@@ -2267,14 +2320,23 @@
           "rawName": "effort",
           "canonical": "effort",
           "aliases": [],
-          "displayName": "effort",
-          "description": "Model reasoning effort (settings llm.defaultModel.reasoningEffort)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "model",
+          "summary": "Reads or sets the model reasoning-effort level (six-level vocabulary).",
+          "mechanism": "Registered in g1.ts:45-66, visible() = hasCapability(ctx,'provider-settings') (g1.ts:49). A bare /effort calls ctx.effort?.('') to report the current level (g1.ts:56-59); an unknown level is rejected with the vocabulary toast 'effort: unknown level … (off | low | medium | high | xhigh | max)' (g1.ts:60-63) against EFFORT_LEVELS (g1.ts:16); a valid level calls ctx.effort?.(level) (g1.ts:64). The loop wires effort to Loop.effort (loop.ts:2510, implemented at loop.ts:3026), which requires the provider controller and, for a live session, writes the per-session modelSelection.reasoningEffort through backend.setSessionModel, otherwise the durable llm.defaultModel.reasoningEffort (loop.ts:3019-3045). 'provider-settings' is pushed only when providerController() is defined (loop.ts:2429).",
+          "gate": "capability:provider-settings (types.ts:25), derived in loop.ts:2429 from providerController() !== undefined",
+          "backendModule": "Loop.effort (packages/tui/src/app/loop.ts:3026) over the ProviderController settings surface and, with a live session, BackendClient.setSessionModel (packages/tui/src/contracts.ts:202, wired at packages/tui/src/backend/embedded.ts:574)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/g1.ts:46"
+            "packages/tui/src/app/slash/impl/g1.ts:46",
+            "packages/tui/src/app/slash/impl/g1.ts:49",
+            "packages/tui/src/app/slash/impl/g1.ts:60",
+            "packages/tui/src/app/slash/impl/g1.ts:64",
+            "packages/tui/src/app/loop.ts:2429",
+            "packages/tui/src/app/loop.ts:2510",
+            "packages/tui/src/app/loop.ts:3026",
+            "packages/tui/src/contracts.ts:202"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "effort",
@@ -2389,14 +2451,23 @@
           "rawName": "model",
           "canonical": "model",
           "aliases": [],
-          "displayName": "model",
-          "description": "Model selector (ArgPicker over the active provider catalog)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "model",
+          "summary": "Opens the model picker over the active provider catalog.",
+          "mechanism": "Registered in g1.ts:28-36, visible() = hasCapability(ctx,'provider-settings') (g1.ts:32). The run body is a single forwarding call ctx.model?.(ctx.arg.trim()) (g1.ts:34) — the registry entry is the inventory/unit-test surface; the LIVE path is the earlier text interception, because the submit path checks tryG1SlashModal BEFORE the registry (loop.ts:2091-2094) and that method handles '/model' by calling openModelPicker (loop.ts:3184-3188). tryG1SlashModal returns false immediately when there is no provider controller (loop.ts:3179), so the gate and the interception agree.",
+          "gate": "capability:provider-settings (types.ts:25), derived in loop.ts:2429 from providerController() !== undefined",
+          "backendModule": "Loop.openModelPicker (packages/tui/src/app/loop.ts:3463) via tryG1SlashModal (packages/tui/src/app/loop.ts:3184); forwarded by packages/tui/src/app/slash/impl/g1.ts:34",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/g1.ts:29"
+            "packages/tui/src/app/slash/impl/g1.ts:29",
+            "packages/tui/src/app/slash/impl/g1.ts:32",
+            "packages/tui/src/app/slash/impl/g1.ts:34",
+            "packages/tui/src/app/loop.ts:2091",
+            "packages/tui/src/app/loop.ts:3179",
+            "packages/tui/src/app/loop.ts:3184",
+            "packages/tui/src/app/loop.ts:3463",
+            "packages/tui/src/app/loop.ts:2429"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "model",
@@ -2543,14 +2614,23 @@
           "rawName": "provider",
           "canonical": "provider",
           "aliases": [],
-          "displayName": "provider",
-          "description": "Provider management (menu / add / use / delete / reload)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "model",
+          "summary": "Opens provider management (menu / add / use / delete / reload).",
+          "mechanism": "Registered in g1.ts:19-27, visible() = hasCapability(ctx,'provider-settings') (g1.ts:23); the run body forwards ctx.provider?.(arg) (g1.ts:25). The live path is the text interception: tryG1SlashModal handles a /^\\/provider(\\s|$)/ line by calling openProvider(arg) (loop.ts:3189-3193, implemented at loop.ts:3202) before the registry is consulted (loop.ts:2091-2094), and returns false with no provider controller so the command stays gated out (loop.ts:3179).",
+          "gate": "capability:provider-settings (types.ts:25), derived in loop.ts:2429 from providerController() !== undefined",
+          "backendModule": "Loop.openProvider (packages/tui/src/app/loop.ts:3202) via tryG1SlashModal (packages/tui/src/app/loop.ts:3189); forwarded by packages/tui/src/app/slash/impl/g1.ts:25",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/g1.ts:20"
+            "packages/tui/src/app/slash/impl/g1.ts:20",
+            "packages/tui/src/app/slash/impl/g1.ts:23",
+            "packages/tui/src/app/slash/impl/g1.ts:25",
+            "packages/tui/src/app/loop.ts:2091",
+            "packages/tui/src/app/loop.ts:3179",
+            "packages/tui/src/app/loop.ts:3189",
+            "packages/tui/src/app/loop.ts:3202",
+            "packages/tui/src/app/loop.ts:2429"
           ],
-          "verified": false
+          "verified": true
         },
         "cc-custom": {
           "rawName": "provider",
@@ -2576,6 +2656,58 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: provider — runtime model-provider switching; the fork's headline feature (package.json description: 'Third-party-provider-only Claude Code fork')"
+          ]
+        }
+      }
+    },
+    {
+      "key": "settings",
+      "family": "model",
+      "perSource": {
+        "ih": {
+          "rawName": "settings",
+          "canonical": "settings",
+          "aliases": [],
+          "family": "model",
+          "summary": "Opens the settings modal (Appearance / Mouse / Models / Approval …).",
+          "mechanism": "Registered in g1.ts:37-44, visible() = hasCapability(ctx,'provider-settings') (g1.ts:40); the run body forwards ctx.openSettings?.() (g1.ts:42). The live path is the interception: tryG1SlashModal matches '/settings' or '/settings …' and calls openSettings() (loop.ts:3180-3183, implemented at loop.ts:3387) before the registry is consulted (loop.ts:2091-2094). The modal is the persisted-settings surface reached through the provider controller / settings store.",
+          "gate": "capability:provider-settings (types.ts:25), derived in loop.ts:2429 from providerController() !== undefined",
+          "backendModule": "Loop.openSettings (packages/tui/src/app/loop.ts:3387) via tryG1SlashModal (packages/tui/src/app/loop.ts:3180); forwarded by packages/tui/src/app/slash/impl/g1.ts:42",
+          "backendStatus": "optional-seam",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/g1.ts:38",
+            "packages/tui/src/app/slash/impl/g1.ts:40",
+            "packages/tui/src/app/slash/impl/g1.ts:42",
+            "packages/tui/src/app/loop.ts:2091",
+            "packages/tui/src/app/loop.ts:3180",
+            "packages/tui/src/app/loop.ts:3387",
+            "packages/tui/src/app/loop.ts:2429"
+          ],
+          "verified": true
+        },
+        "grok": {
+          "rawName": "settings",
+          "canonical": "settings",
+          "aliases": [
+            "config",
+            "preferences",
+            "prefs"
+          ],
+          "displayName": "settings",
+          "family": "interface",
+          "summary": "Opens the settings modal.",
+          "mechanism": "run() returns `Action::OpenSettings` unconditionally; there is no direct jump to one setting, args are silently discarded and the modal always opens, with in-modal `/` filtering as the search route (settings_cmd.rs:2-3, :19-21). Registered as `settings` with aliases `config`, `preferences`, `prefs` (settings_cmd.rs:14).",
+          "gate": "always",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs + crates/codegen/xai-grok-pager/src/views/settings_modal",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:13",
+            "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:20",
+            "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:87",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:79"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: settings / config"
           ]
         }
       }
@@ -2619,14 +2751,22 @@
           "rawName": "always-approve",
           "canonical": "always-approve",
           "aliases": [],
-          "displayName": "always-approve",
-          "description": "Always-approve (live guardian capability)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "safety",
+          "summary": "Turns the always-approve permission stance on.",
+          "mechanism": "Registered in approval.ts:23-31 with visible() = hasCapability(ctx,'guardian') (approval.ts:27); the gate is a hard gate in CommandRegistry.matches (registry.ts:107). run() calls applyStance(ctx,true) (approval.ts:14-21), which guards on the optional SlashContext.setAlwaysApprove member and otherwise toasts 'always-approve: live guardian capability not wired'. The loop wires setAlwaysApprove to setAlwaysApproveStance (loop.ts:2513), which calls the host seam opts.setAlwaysApprove and flips app.mode/prompt.alwaysApprove (loop.ts:3159-3167). Because slashCapabilities() (loop.ts:2419-2431) never pushes 'guardian', the command is never visible nor matched in the shipped TUI.",
+          "gate": "capability:guardian (SlashCapability, types.ts:31) — never supplied by Loop.slashCapabilities(), so effectively unreachable",
+          "backendModule": "packages/tui/src/app/slash/impl/approval.ts + Loop.setAlwaysApproveStance (packages/tui/src/app/loop.ts:3159); host seam TuiAppOptions.setAlwaysApprove (packages/tui/src/app/loop.ts:208)",
+          "backendStatus": "stub-toast",
           "evidence": [
-            "packages/tui/src/app/slash/impl/approval.ts:25"
+            "packages/tui/src/app/slash/impl/approval.ts:25",
+            "packages/tui/src/app/slash/impl/approval.ts:27",
+            "packages/tui/src/app/slash/impl/approval.ts:14",
+            "packages/tui/src/app/loop.ts:2419",
+            "packages/tui/src/app/loop.ts:2513",
+            "packages/tui/src/app/loop.ts:3159",
+            "packages/tui/src/app/slash/registry.ts:107"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "always-approve",
@@ -2692,14 +2832,20 @@
           "rawName": "auto",
           "canonical": "auto",
           "aliases": [],
-          "displayName": "auto",
-          "description": "Always-approve toggle (live guardian capability)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "safety",
+          "summary": "Second name for the always-approve stance toggle (same flip as /always-approve).",
+          "mechanism": "Registered in approval.ts:32-39 gated on the same 'guardian' capability (approval.ts:35) and routed through the identical applyStance helper as /always-approve (approval.ts:36-38 -> approval.ts:14-21). Note that both commands pass on=true: /auto never turns the stance back off, the flip is Shift+Tab or the settings modal. Same unreachable gate as /always-approve: 'guardian' is never in Loop.slashCapabilities() (loop.ts:2419-2431).",
+          "gate": "capability:guardian (types.ts:31) — never supplied by Loop.slashCapabilities()",
+          "backendModule": "packages/tui/src/app/slash/impl/approval.ts + Loop.setAlwaysApproveStance (packages/tui/src/app/loop.ts:3159)",
+          "backendStatus": "stub-toast",
           "evidence": [
-            "packages/tui/src/app/slash/impl/approval.ts:33"
+            "packages/tui/src/app/slash/impl/approval.ts:33",
+            "packages/tui/src/app/slash/impl/approval.ts:35",
+            "packages/tui/src/app/slash/impl/approval.ts:14",
+            "packages/tui/src/app/loop.ts:2419",
+            "packages/tui/src/app/loop.ts:2513"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "auto",
@@ -3052,14 +3198,20 @@
           "rawName": "config-agents",
           "canonical": "config-agents",
           "aliases": [],
-          "displayName": "config-agents",
-          "description": "Subagent role table (builtin + registered)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "extension",
+          "summary": "Lists the subagent role table (builtin roles plus registered ones).",
+          "mechanism": "Registered ungated in eco.ts:112-123. run() calls builtinRoles() from @i-harness/subagent (eco.ts:120, imported at eco.ts:20), maps them through configAgentRows and opens the 'config-agents' light panel (eco.ts:121), falling back to the CONFIG_AGENTS_EMPTY row when the table is empty (eco.ts:37-39, 121). Synchronous, no backend call — the data source is the subagent package's builtin role table.",
+          "gate": "always",
+          "backendModule": "@i-harness/subagent builtinRoles (packages/subagent), rendered by packages/tui/src/views/light-config-agents.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/eco.ts:117"
+            "packages/tui/src/app/slash/impl/eco.ts:117",
+            "packages/tui/src/app/slash/impl/eco.ts:120",
+            "packages/tui/src/app/slash/impl/eco.ts:121",
+            "packages/tui/src/app/slash/impl/eco.ts:20",
+            "packages/tui/src/app/slash/impl/eco.ts:26"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "config-agents",
@@ -3093,14 +3245,20 @@
           "rawName": "hooks",
           "canonical": "hooks",
           "aliases": [],
-          "displayName": "hooks",
-          "description": "Hooks config (9 events, per-handler sha256)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "extension",
+          "summary": "Lists the hooks configuration: 9 events with a per-handler sha256 validity verdict.",
+          "mechanism": "Registered ungated in eco.ts:72-85. run() resolves the hooks config path with resolveHooksConfigPath(), loads it with loadHooksConfig(path, dirname(path)) from @i-harness/hooks (eco.ts:77-78, imports at eco.ts:17) and opens the 'hooks' panel with hooksRows(handlers, HOOK_EVENTS) (eco.ts:79); a load failure opens the panel with an honest 'hooks config: <message>' row instead (eco.ts:80-83). Real filesystem read of the hooks config, no BackendClient call.",
+          "gate": "always",
+          "backendModule": "@i-harness/hooks loadHooksConfig/HOOK_EVENTS (packages/hooks), rendered by packages/tui/src/views/light-hooks.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/eco.ts:73"
+            "packages/tui/src/app/slash/impl/eco.ts:73",
+            "packages/tui/src/app/slash/impl/eco.ts:77",
+            "packages/tui/src/app/slash/impl/eco.ts:78",
+            "packages/tui/src/app/slash/impl/eco.ts:79",
+            "packages/tui/src/app/slash/impl/eco.ts:80"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "hooks",
@@ -3269,14 +3427,20 @@
           "rawName": "marketplace",
           "canonical": "marketplace",
           "aliases": [],
-          "displayName": "marketplace",
-          "description": "Plugin market shelf (not yet installed)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "extension",
+          "summary": "Shows the plugin market shelf (catalog entries that are not installed).",
+          "mechanism": "Registered ungated in eco.ts:99-110. run() constructs PluginRegistry({root: <workspace>/.i-harness/plugins}), awaits registry.catalog() and opens the 'marketplace' panel with marketplaceRows(plugins) (eco.ts:104-106); a scan failure opens the panel with a 'market: <error>' row (eco.ts:107-109). The workspace comes from ctx.workspace ?? process.cwd() (eco.ts:33-35).",
+          "gate": "always",
+          "backendModule": "@i-harness/plugin-registry PluginRegistry.catalog (packages/plugin-registry), rendered by packages/tui/src/views/light-plugins.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/eco.ts:100"
+            "packages/tui/src/app/slash/impl/eco.ts:100",
+            "packages/tui/src/app/slash/impl/eco.ts:104",
+            "packages/tui/src/app/slash/impl/eco.ts:105",
+            "packages/tui/src/app/slash/impl/eco.ts:106",
+            "packages/tui/src/app/slash/impl/eco.ts:34"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "marketplace",
@@ -3364,14 +3528,20 @@
           "rawName": "mcps",
           "canonical": "mcps",
           "aliases": [],
-          "displayName": "mcps",
-          "description": "MCP servers configured for this session",
-          "gate": "none",
-          "mechanism": null,
+          "family": "extension",
+          "summary": "Lists the MCP servers configured for this session.",
+          "mechanism": "Registered ungated in eco.ts:54-71. run() builds the workspace PluginRegistry and reads registry.runtimeInputs().mcpServerConfigs (eco.ts:59-60), deriving each server's transport from url (streamable-http) or command (stdio), else 'unknown' (eco.ts:62-65), then opens the 'mcps' panel; a scan failure opens the honest 'MCP config unavailable (plugin scan failed)' row (eco.ts:67-69). The file comment (eco.ts:11-14) states the rows label the CONFIGURED state only because the TUI host has no MCP supervisor status source.",
+          "gate": "always",
+          "backendModule": "@i-harness/plugin-registry PluginRegistry.runtimeInputs (packages/plugin-registry), rendered by packages/tui/src/views/light-mcps.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/eco.ts:55"
+            "packages/tui/src/app/slash/impl/eco.ts:55",
+            "packages/tui/src/app/slash/impl/eco.ts:59",
+            "packages/tui/src/app/slash/impl/eco.ts:60",
+            "packages/tui/src/app/slash/impl/eco.ts:66",
+            "packages/tui/src/app/slash/impl/eco.ts:68"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "mcps",
@@ -3468,14 +3638,20 @@
           "rawName": "plugins",
           "canonical": "plugins",
           "aliases": [],
-          "displayName": "plugins",
-          "description": "Plugin catalog (installed/enabled states)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "extension",
+          "summary": "Lists the plugin catalog with installed/enabled states.",
+          "mechanism": "Registered ungated in eco.ts:86-98. run() constructs PluginRegistry({root: <workspace>/.i-harness/plugins}) and awaits registry.catalog(), then opens the 'plugins' panel with pluginRows(plugins) (eco.ts:91-93); a failure opens an honest 'plugin catalog failed: <error>' row (eco.ts:94-96).",
+          "gate": "always",
+          "backendModule": "@i-harness/plugin-registry PluginRegistry.catalog (packages/plugin-registry), rendered by packages/tui/src/views/light-plugins.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/eco.ts:87"
+            "packages/tui/src/app/slash/impl/eco.ts:87",
+            "packages/tui/src/app/slash/impl/eco.ts:91",
+            "packages/tui/src/app/slash/impl/eco.ts:92",
+            "packages/tui/src/app/slash/impl/eco.ts:93",
+            "packages/tui/src/app/slash/impl/eco.ts:95"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "plugins",
@@ -3563,14 +3739,20 @@
           "rawName": "skills",
           "canonical": "skills",
           "aliases": [],
-          "displayName": "skills",
-          "description": "Skills registry (workspace + global)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "extension",
+          "summary": "Lists the skills registry scanned from the workspace and the global root.",
+          "mechanism": "Registered ungated in eco.ts:42-53. run() creates the skill registry with createSkillRegistry({workspace: ctx.workspace ?? process.cwd()}) (eco.ts:47, :33-35), lists it and opens the 'skills' panel through skillsRows (eco.ts:48); a scan failure opens the panel with a 'skills scan failed: …' row (eco.ts:49-51).",
+          "gate": "always",
+          "backendModule": "@i-harness/skills createSkillRegistry (packages/skills), rendered by packages/tui/src/views/light-skills.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/eco.ts:43"
+            "packages/tui/src/app/slash/impl/eco.ts:43",
+            "packages/tui/src/app/slash/impl/eco.ts:47",
+            "packages/tui/src/app/slash/impl/eco.ts:48",
+            "packages/tui/src/app/slash/impl/eco.ts:50",
+            "packages/tui/src/app/slash/impl/eco.ts:34"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "skills",
@@ -3736,6 +3918,104 @@
       }
     },
     {
+      "key": "copy",
+      "family": "inspect",
+      "perSource": {
+        "ih": {
+          "rawName": "copy",
+          "canonical": "copy",
+          "aliases": [],
+          "family": "inspect",
+          "summary": "Copies the currently selected scrollback block to the clipboard.",
+          "mechanism": "Registered ungated in tools.ts:37-43; run() calls ctx.copy() (tools.ts:41), wired in the loop to copySelectedBlock (loop.ts:2497). That reads engine.selection(), slices the display lines for the selection range out of engine.viewport(0,total), joins the run texts and hands them to the clipboard adapter (loop.ts:2595-2603). It unconditionally toasts 'Copied!' — also when nothing is selected, so the toast is not a success signal.",
+          "gate": "always",
+          "backendModule": "Loop.copySelectedBlock (packages/tui/src/app/loop.ts:2595) over ScrollbackEngine.selection/viewport (packages/tui/src/contracts.ts:335) and the clipboard adapter (defaultClipboard, loop.ts:504)",
+          "backendStatus": "implemented",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/tools.ts:38",
+            "packages/tui/src/app/slash/impl/tools.ts:41",
+            "packages/tui/src/app/loop.ts:2497",
+            "packages/tui/src/app/loop.ts:2595",
+            "packages/tui/src/app/loop.ts:2600",
+            "packages/tui/src/app/loop.ts:2602"
+          ],
+          "verified": true
+        },
+        "codex": {
+          "rawName": "copy",
+          "canonical": "copy",
+          "aliases": [],
+          "displayName": "copy",
+          "variant": "Copy",
+          "family": "interface",
+          "summary": "把最後一則 agent 回覆以 markdown 原文複製到剪貼簿。",
+          "mechanism": "dispatch 呼叫 copy_last_agent_markdown（slash_dispatch.rs:404-406），實作讀 transcript.last_agent_markdown 後透過 clipboard_copy::copy_to_clipboard 複製並保存 clipboard_lease，成功／失敗都寫 history cell（interaction.rs:299-327）。Android 不顯示（slash_command.rs:269），且是少數可在側聊使用的命令之一（slash_command.rs:191）。",
+          "gate": "platform: !cfg!(target_os = 'android')（slash_command.rs:269）",
+          "backendModule": "codex-rs/tui/src/chatwidget/interaction.rs + codex-rs/tui/src/clipboard_copy.rs",
+          "evidence": [
+            "codex-rs/tui/src/chatwidget/interaction.rs:300-327",
+            "codex-rs/tui/src/slash_command.rs:9",
+            "codex-rs/tui/src/slash_command.rs:269",
+            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:404",
+            "codex-rs/tui/src/chatwidget/interaction.rs:299"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "copy last response"
+          ],
+          "citationCorrected": {
+            "prepended": "codex-rs/tui/src/chatwidget/interaction.rs:300-327",
+            "reason": "the sampled cite is the doc comment at :299; the body that does last_agent_markdown -> copy_to_clipboard starts at :300",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
+        },
+        "grok": {
+          "rawName": "copy",
+          "canonical": "copy",
+          "aliases": [],
+          "displayName": "copy",
+          "family": "interface",
+          "summary": "Copies the latest (or Nth-latest) assistant message to the clipboard or a file.",
+          "mechanism": "parse_copy_args splits the args into `(n, Option<PathBuf>)`: empty -> (1,None), `2` -> (2,None), a non-numeric first token is treated as the whole path, and `0` is an error (copy.rs:42-60). run() returns `Action::CopyAssistantMessage{n, file_path}` (copy.rs:26-33); a file path also acts as the fallback when the clipboard is unreachable (copy.rs:3-7).",
+          "gate": "session-scoped (`session_scoped: true`, copy.rs:22); mode_support stays Both so it also works in minimal mode",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:18",
+            "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:29",
+            "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:53",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:111"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: copy (clipboard export of the last response)"
+          ]
+        },
+        "cc-custom": {
+          "rawName": "copy",
+          "canonical": "copy",
+          "aliases": [],
+          "displayName": "copy",
+          "family": "interface",
+          "summary": "Copies a recent assistant message (or one of its code blocks) to the clipboard and mirrors it into a temp file.",
+          "mechanism": "src/commands/copy/copy.tsx `call` (line 334) walks messages newest-first with collectRecentAssistantTexts (line 50, capped at MAX_LOOKBACK = 20 at line 25), resolves `/copy N` to an age index (lines 341-355), and either copies immediately when copyFullResponse is set or there are no code blocks (line 365) or renders the CopyPicker Ink selector (line 369). `copyOrWriteToFile` (line 81) issues the OSC 52 escape sequence with `setClipboard` (line 82, src/ink/termio/osc.js) and always mirrors the text to disk under `join(tmpdir(), 'claude')` via mkdir + writeFile (lines 73-79). Choosing 'always' persists the preference with saveGlobalConfig (line 191).",
+          "gate": "none (no `isEnabled`; src/commands/copy/index.ts:7-13)",
+          "commandKind": "local-jsx",
+          "backendModule": "src/commands/copy/copy.tsx (`call`, `copyOrWriteToFile`, `collectRecentAssistantTexts`, `CopyPicker`)",
+          "evidence": [
+            "src/commands/copy/index.ts:8",
+            "src/commands/copy/index.ts:9",
+            "src/commands/copy/copy.tsx:82",
+            "src/commands/copy/copy.tsx:334",
+            "src/commands/copy/copy.tsx:365"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: copy — clipboard copy of the last response; distinctive to this source"
+          ]
+        }
+      }
+    },
+    {
       "key": "cost",
       "family": "inspect",
       "perSource": {
@@ -3763,6 +4043,59 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: cost — session cost/duration report; I-harness analogue is its cost/usage command"
+          ]
+        }
+      }
+    },
+    {
+      "key": "dashboard",
+      "family": "inspect",
+      "perSource": {
+        "ih": {
+          "rawName": "dashboard",
+          "canonical": "dashboard",
+          "aliases": [],
+          "family": "inspect",
+          "summary": "Opens the local session dashboard (sessions with their live model/queue/task values).",
+          "mechanism": "Registered in sessions.ts:42-55, visible() = hasCapability(ctx,'dashboard') (sessions.ts:47). run() guards on the optional ctx.dashboard member and toasts 'dashboard: backend projection absent' otherwise (sessions.ts:49-52); the loop wires dashboard to openDashboard (loop.ts:2521, implemented at loop.ts:4196). 'dashboard' is pushed whenever the OPTIONAL BackendClient.dashboard member exists (loop.ts:2424); the embedded client always provides it and enriches each row with live per-session running/queued/tasks/modelLabel values from the service, never fabricating a zero (embedded.ts:743-767).",
+          "gate": "capability:dashboard (types.ts:24), derived in loop.ts:2424 from backend.dashboard !== undefined",
+          "backendModule": "packages/tui/src/backend/embedded.ts:743 (createEmbeddedBackend.dashboard) rendered by Loop.openDashboard (packages/tui/src/app/loop.ts:4196)",
+          "backendStatus": "optional-seam",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/sessions.ts:45",
+            "packages/tui/src/app/slash/impl/sessions.ts:47",
+            "packages/tui/src/app/slash/impl/sessions.ts:49",
+            "packages/tui/src/app/loop.ts:2424",
+            "packages/tui/src/app/loop.ts:2521",
+            "packages/tui/src/contracts.ts:238",
+            "packages/tui/src/backend/embedded.ts:743"
+          ],
+          "verified": true
+        },
+        "grok": {
+          "rawName": "dashboard",
+          "canonical": "dashboard",
+          "aliases": [
+            "agents-dashboard",
+            "sessions"
+          ],
+          "displayName": "dashboard",
+          "family": "collab",
+          "summary": "Opens the Agent Dashboard that lists every session and subagent.",
+          "mechanism": "run() returns `Action::OpenDashboard` (dashboard.rs:31-33). The aliases `agents-dashboard` and `sessions` redirect old muscle memory after the sessions picker modal was removed (dashboard.rs:20-23). It is FullscreenOnly via `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal is single-session\"})` (dashboard.rs:26-28), so minimal mode both hides it from completion and refuses a typed invocation with a hint naming `/fullscreen`.",
+          "gate": "feature-flag gated AND mode gated: hidden by default in CommandRegistry::new (registry.rs:156) and revealed only by `set_dashboard_visible(true)` from `dashboard_enabled()`; refused in minimal mode; `[dashboard].enabled = false` or `GROK_AGENT_DASHBOARD=0` makes the dispatcher refuse with a toast (dashboard.rs:7-8)",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs + crates/codegen/xai-grok-pager/src/views/dashboard",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:19",
+            "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:26",
+            "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:32",
+            "crates/codegen/xai-grok-pager/src/slash/registry.rs:156",
+            "crates/codegen/xai-grok-pager/src/slash/registry.rs:377",
+            "crates/codegen/xai-grok-pager/src/slash/mode_support.rs:34"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: sessions-dashboard / agent dashboard"
           ]
         }
       }
@@ -3936,14 +4269,21 @@
           "rawName": "doctor",
           "canonical": "doctor",
           "aliases": [],
-          "displayName": "doctor",
-          "description": "Terminal capability report (live probe)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "inspect",
+          "summary": "Runs a live terminal-capability probe and reports it as a panel.",
+          "mechanism": "Registered ungated in tools.ts:20-36. run() opens the doctor panel in the Probing… state first (tools.ts:32) so that frame paints, then awaits the OPTIONAL ctx.probeReport member (tools.ts:33) and re-opens the panel with the rows. If probeReport is absent the panel shows 'probe report unavailable' (tools.ts:28-31). The loop wires probeReport (loop.ts:2505-2509): a microtask yield, then armLiveProbe() suspends the frame pump, and doctorRows(this.cap) is built from the TerminalCapabilityContext obtained at startup by probeCapabilities with a 2 s outer cap (apps/tui/src/index.ts:764-769).",
+          "gate": "always",
+          "backendModule": "Loop SlashContext.probeReport (packages/tui/src/app/loop.ts:2505) over the tui-core capability probe, rendered by packages/tui/src/views/light-doctor.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/tools.ts:21"
+            "packages/tui/src/app/slash/impl/tools.ts:21",
+            "packages/tui/src/app/slash/impl/tools.ts:28",
+            "packages/tui/src/app/slash/impl/tools.ts:32",
+            "packages/tui/src/app/slash/impl/tools.ts:33",
+            "packages/tui/src/app/loop.ts:2505",
+            "apps/tui/src/index.ts:764"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "doctor",
@@ -4006,14 +4346,21 @@
           "rawName": "export",
           "canonical": "export",
           "aliases": [],
-          "displayName": "export",
-          "description": "Write the session transcript to a workspace file",
-          "gate": "none",
-          "mechanism": null,
+          "family": "inspect",
+          "summary": "Writes the session transcript to a text file in the workspace.",
+          "mechanism": "Registered ungated in tools.ts:44-51. run() awaits ctx.exportTranscript() and toasts 'exported: <path>' or 'export failed' depending on whether a path came back (tools.ts:48-49), wired to Loop.exportTranscript (loop.ts:2499, implemented at loop.ts:3096). That serializes the engine's display rows (transcriptText, loop.ts:3142-3146) and writeFileSync's them to `<workspace>/transcript-<ISO timestamp>.txt`, returning the path (loop.ts:3096-3109).",
+          "gate": "always",
+          "backendModule": "Loop.exportTranscript (packages/tui/src/app/loop.ts:3096) over ScrollbackEngine.viewport (packages/tui/src/contracts.ts:330) + node:fs",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/tools.ts:45"
+            "packages/tui/src/app/slash/impl/tools.ts:45",
+            "packages/tui/src/app/slash/impl/tools.ts:48",
+            "packages/tui/src/app/loop.ts:2499",
+            "packages/tui/src/app/loop.ts:3096",
+            "packages/tui/src/app/loop.ts:3101",
+            "packages/tui/src/app/loop.ts:3102"
           ],
-          "verified": false
+          "verified": true
         },
         "dsh": {
           "rawName": "export",
@@ -4110,6 +4457,52 @@
       }
     },
     {
+      "key": "find",
+      "family": "inspect",
+      "perSource": {
+        "ih": {
+          "rawName": "find",
+          "canonical": "find",
+          "aliases": [],
+          "family": "inspect",
+          "summary": "Activates scrollback search, optionally prefilled with a pattern.",
+          "mechanism": "Registered ungated in navigation.ts:15-23; run() reads ctx.arg and calls ctx.startSearch(pattern) with undefined for an empty argument (navigation.ts:20-21), wired in the loop to activateSearch (loop.ts:2459). activateSearch owns the search mode over the ScrollbackEngine.search/matches/nextMatch surface (contracts.ts:342-346) and re-renders the viewport.",
+          "gate": "always",
+          "backendModule": "Loop.activateSearch (packages/tui/src/app/loop.ts:2698) over ScrollbackEngine search (packages/tui/src/contracts.ts:342)",
+          "backendStatus": "implemented",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/navigation.ts:16",
+            "packages/tui/src/app/slash/impl/navigation.ts:20",
+            "packages/tui/src/app/loop.ts:2459",
+            "packages/tui/src/app/loop.ts:2698",
+            "packages/tui/src/contracts.ts:342"
+          ],
+          "verified": true
+        },
+        "grok": {
+          "rawName": "find",
+          "canonical": "find",
+          "aliases": [],
+          "displayName": "find",
+          "family": "interface",
+          "summary": "Opens an incremental search over the conversation scrollback.",
+          "mechanism": "run() trims the args and returns `Action::OpenScrollbackSearch(Some(query))`, or `None` for empty/whitespace args so the search opens blank (find.rs:25-30). It exists because in simple mode a bare `/` goes to the prompt, so simple-mode users cannot reach the vim `/` scrollback search; `/find` focuses the scrollback pane and opens the same search from either mode (find.rs:3-4).",
+          "gate": "session-scoped plus `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal has no scrollback pane: use your terminal's own search\"})` (find.rs:19-21)",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/find.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:14",
+            "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:19",
+            "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:29",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:112"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: find / scrollback-search"
+          ]
+        }
+      }
+    },
+    {
       "key": "heapdump",
       "family": "inspect",
       "perSource": {
@@ -4166,6 +4559,54 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: insights — session-analytics report; distinctive to this source"
+          ]
+        }
+      }
+    },
+    {
+      "key": "jump",
+      "family": "inspect",
+      "perSource": {
+        "ih": {
+          "rawName": "jump",
+          "canonical": "jump",
+          "aliases": [],
+          "family": "inspect",
+          "summary": "Jumps the scrollback to a chosen turn, directly by number or through a picker.",
+          "mechanism": "Registered ungated in navigation.ts:24-52. With a numeric argument it validates /^\\d+$/ (toasting 'jump: expected a turn number (1..N) or no arg' otherwise, navigation.ts:32-35), indexes ctx.jumpAnchors() and calls ctx.gotoLine(anchor.line), toasting 'jump: turn N out of range' for an index past the end (navigation.ts:36-41). Without an argument it opens the 'jump' panel whose onSelect also calls gotoLine (navigation.ts:44-50). gotoLine sets app.scroll = {offset, follow:false} (loop.ts:2449-2452); jumpAnchors comes from the engine's user-block turn walk (loop.ts:2448).",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/navigation.ts over Loop.jumpAnchors/gotoLine (packages/tui/src/app/loop.ts:2448) and the ScrollbackEngine turn anchors",
+          "backendStatus": "implemented",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/navigation.ts:25",
+            "packages/tui/src/app/slash/impl/navigation.ts:32",
+            "packages/tui/src/app/slash/impl/navigation.ts:41",
+            "packages/tui/src/app/slash/impl/navigation.ts:49",
+            "packages/tui/src/app/loop.ts:2448",
+            "packages/tui/src/app/loop.ts:2450"
+          ],
+          "verified": true
+        },
+        "grok": {
+          "rawName": "jump",
+          "canonical": "jump",
+          "aliases": [],
+          "displayName": "jump",
+          "family": "interface",
+          "summary": "Opens a picker to jump to a turn in the conversation.",
+          "mechanism": "run() returns `Action::JumpShowPicker` (jump.rs:18-20). The picker is fullscreen-only because minimal scrolls with the terminal's native scrollback (jump.rs:13-15). Rewind takes input priority over this picker, and both rewind entry points call `agent.dismiss_jump_picker()` first so a stale picker cannot reappear (app/dispatch/rewind.rs:97-98).",
+          "gate": "session-scoped plus `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal scrolls with your terminal's native scrollback\"})` (jump.rs:13-15)",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs + crates/codegen/xai-grok-pager/src/app/agent_view/jump.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:9",
+            "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:13",
+            "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:19",
+            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:98",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:100"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: jump-to-turn"
           ]
         }
       }
@@ -4257,46 +4698,6 @@
       }
     },
     {
-      "key": "session-info",
-      "family": "inspect",
-      "perSource": {
-        "ih": {
-          "rawName": "session-info",
-          "canonical": "session-info",
-          "aliases": [],
-          "displayName": "session-info",
-          "description": "Session details (id/model/turns/context)",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:107"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "session-info",
-          "canonical": "session-info",
-          "aliases": [],
-          "displayName": "session-info",
-          "family": "inspect",
-          "summary": "Shows session info: session ID, cwd, model and context usage.",
-          "mechanism": "run() errors without a session and otherwise returns `Action::ShowSessionInfo` (session_info.rs:17-23). It is instant and non-queued (session_info.rs:1).",
-          "gate": "session-scoped (`session_scoped: true`, session_info.rs:14) plus an explicit session_id check",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:11",
-            "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:19",
-            "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:22",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:105"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: session-info / status"
-          ]
-        }
-      }
-    },
-    {
       "key": "stats",
       "family": "inspect",
       "perSource": {
@@ -4381,70 +4782,50 @@
       }
     },
     {
-      "key": "usage",
+      "key": "transcript",
       "family": "inspect",
       "perSource": {
         "ih": {
-          "rawName": "usage",
-          "canonical": "usage",
+          "rawName": "transcript",
+          "canonical": "transcript",
           "aliases": [],
-          "displayName": "usage",
-          "description": "Context usage for THIS session only (no account quota)",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/surfaces.ts:16"
-          ],
-          "verified": false
-        },
-        "codex": {
-          "rawName": "usage",
-          "canonical": "usage",
-          "aliases": [],
-          "displayName": "usage",
-          "variant": "Usage",
           "family": "inspect",
-          "summary": "檢視帳號用量，或使用一次用量限制重置額度。",
-          "mechanism": "bare dispatch 先經 ensure_usage_command_available（需 has_codex_backend_auth，否則提示 'Sign in with ChatGPT to use /usage.'）再 open_usage_menu（slash_dispatch.rs:477-481、1110-1116）；選單提供 Show usage（送 AppEvent::OpenTokenActivity）與重置額度選項，並在可用重置次數為 0 時送 AppEvent::RefreshRateLimits{origin: UsageMenu{request_id}} 重新查詢（usage.rs:17-60）。帶參數解析 tokens::TokenActivityView::parse(trimmed)（daily|weekly|cumulative），失敗回 'Usage: /usage [daily|weekly|cumulative]'（slash_dispatch.rs:714-723）。",
-          "gate": "auth: has_codex_backend_auth（commands_for_input 以 token_activity_command_enabled 隱藏，slash_commands.rs:77、slash_dispatch.rs:1101,1110-1116）",
-          "backendModule": "codex-rs/tui/src/chatwidget/usage.rs + codex-rs/tui/src/token_usage.rs",
+          "summary": "Writes the transcript to a temp file and opens it in $PAGER.",
+          "mechanism": "Registered ungated in tools.ts:52-59; run() awaits ctx.openTranscriptPager() and toasts 'transcript: pager opened' or 'transcript failed' (tools.ts:56-57), wired to Loop.openTranscriptPager (loop.ts:2500, implemented at loop.ts:3113-3139). That writes the serialized display rows to `<tmpdir>/ih-transcript-<ts>.ansi`, then spawns $PAGER on it (shell:true) when PAGER is set; on Windows without PAGER it falls back to `cmd /c start <file>` and otherwise spawns `less` (loop.ts:3121-3134).",
+          "gate": "always",
+          "backendModule": "Loop.openTranscriptPager (packages/tui/src/app/loop.ts:3113) over the engine rows (transcriptText, :3142) + node:child_process",
+          "backendStatus": "implemented",
           "evidence": [
-            "codex-rs/tui/src/slash_command.rs:55",
-            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:477",
-            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1110",
-            "codex-rs/tui/src/chatwidget/usage.rs:17",
-            "codex-rs/tui/src/bottom_pane/slash_commands.rs:77"
+            "packages/tui/src/app/slash/impl/tools.ts:53",
+            "packages/tui/src/app/slash/impl/tools.ts:56",
+            "packages/tui/src/app/loop.ts:2500",
+            "packages/tui/src/app/loop.ts:3113",
+            "packages/tui/src/app/loop.ts:3123",
+            "packages/tui/src/app/loop.ts:3128"
           ],
-          "verified": true,
-          "crossSourceHints": [
-            "usage / rate limits"
-          ]
+          "verified": true
         },
         "grok": {
-          "rawName": "usage",
-          "canonical": "usage",
+          "rawName": "transcript",
+          "canonical": "transcript",
           "aliases": [
-            "cost"
+            "log"
           ],
-          "displayName": "usage",
-          "family": "inspect",
-          "summary": "Shows session token and cost totals, and lets consumer accounts manage billing.",
-          "mechanism": "run() refuses with `Error(\"/usage is not available.\")` when `ctx.usage_command_visible` is false (usage.rs:88-90). On non-consumer installs only a bare `/usage` is accepted (anything else errors); on consumer accounts `show`/empty map to `Action::ShowUsage` and `manage` maps to `Action::ManageBilling` (usage.rs:91-104). Visibility, arg-taking and suggestions all read the same two AppCtx flags (`usage_command_visible`, `billing_surface_visible`), so the three stay in lockstep (usage.rs:58-85). External-auth installs are detected at startup by `detect_external_auth_provider` from the ACP auth-method meta `external_provider`, the `GROK_AUTH_PROVIDER_COMMAND` env var, or `grok_com_config.auth_provider_command` (usage.rs:15-47; app/dispatch/prompt.rs:550).",
-          "gate": "two independent gates: `visible()` requires `ctx.usage_command_visible` (false for external-auth deployments with no grok.com billing session), and the per-user tier deny list adds \"usage\" with \"imagine\", \"imagine-video\" and \"voice\" for the free / X Basic tiers — restricted commands still show in the dropdown for discoverability but `CommandRegistry::get` refuses them and invoking one shows the SuperGrok upsell (app/app_view.rs:550-551, :1743-1763; registry.rs:242-274)",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs + crates/codegen/xai-grok-pager/src/app/app_view.rs",
+          "displayName": "transcript",
+          "family": "context",
+          "summary": "Renders the full conversation transcript to a temp file and opens it in $PAGER.",
+          "mechanism": "run() errors without a session and otherwise returns `Action::OpenTranscriptPager` (transcript.rs:23-28); args are ignored and produce the same dispatch. The dispatcher writes the session transcript to a temp Markdown file and opens the user's pager (default `less`), suspending the inline TUI until the pager exits (transcript.rs:2-5). Primary motivation is minimal mode, where older blocks have already scrolled into native terminal history and there is no interactive scrollback pane, though it works in every render mode (transcript.rs:5-6).",
+          "gate": "session-scoped (`session_scoped: true`, transcript.rs:20) plus an explicit session_id check",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs",
           "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:15",
-            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:51",
-            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:59",
-            "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:89",
-            "crates/codegen/xai-grok-pager/src/app/app_view.rs:551",
-            "crates/codegen/xai-grok-pager/src/app/app_view.rs:1744",
-            "crates/codegen/xai-grok-pager/src/slash/registry.rs:246",
-            "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:550"
+            "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:16",
+            "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:25",
+            "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:27",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:109"
           ],
           "verified": true,
           "crossSourceHints": [
-            "canonical: usage / cost (claude-code `/cost`; the `cost` alias exists here too)"
+            "canonical: transcript / pager-view"
           ]
         }
       }
@@ -4601,14 +4982,19 @@
           "rawName": "compact-mode",
           "canonical": "compact-mode",
           "aliases": [],
-          "displayName": "compact-mode",
-          "description": "Toggle compact mode (tighter layout)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Toggles the tighter layout (compact mode).",
+          "mechanism": "Registered ungated in visual.ts:77-84. run() negates app.compactMode and calls ctx.setCompactMode(next) (visual.ts:81), wired in the loop to set app.compactMode directly (loop.ts:2489-2491). The toast text is computed AFTER the state write, so it reads the new value (visual.ts:82). Purely local app state — no backend call.",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/visual.ts + Loop SlashContext.setCompactMode (packages/tui/src/app/loop.ts:2489); state field TuiAppState.compactMode (packages/tui/src/app/present.ts)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/visual.ts:78"
+            "packages/tui/src/app/slash/impl/visual.ts:78",
+            "packages/tui/src/app/slash/impl/visual.ts:81",
+            "packages/tui/src/app/loop.ts:2489",
+            "packages/tui/src/app/slash/types.ts:139"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "compact-mode",
@@ -4664,91 +5050,6 @@
       }
     },
     {
-      "key": "copy",
-      "family": "interface",
-      "perSource": {
-        "ih": {
-          "rawName": "copy",
-          "canonical": "copy",
-          "aliases": [],
-          "displayName": "copy",
-          "description": "Copy the selected block",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/tools.ts:38"
-          ],
-          "verified": false
-        },
-        "codex": {
-          "rawName": "copy",
-          "canonical": "copy",
-          "aliases": [],
-          "displayName": "copy",
-          "variant": "Copy",
-          "family": "interface",
-          "summary": "把最後一則 agent 回覆以 markdown 原文複製到剪貼簿。",
-          "mechanism": "dispatch 呼叫 copy_last_agent_markdown（slash_dispatch.rs:404-406），實作讀 transcript.last_agent_markdown 後透過 clipboard_copy::copy_to_clipboard 複製並保存 clipboard_lease，成功／失敗都寫 history cell（interaction.rs:299-327）。Android 不顯示（slash_command.rs:269），且是少數可在側聊使用的命令之一（slash_command.rs:191）。",
-          "gate": "platform: !cfg!(target_os = 'android')（slash_command.rs:269）",
-          "backendModule": "codex-rs/tui/src/chatwidget/interaction.rs + codex-rs/tui/src/clipboard_copy.rs",
-          "evidence": [
-            "codex-rs/tui/src/slash_command.rs:9",
-            "codex-rs/tui/src/slash_command.rs:269",
-            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:404",
-            "codex-rs/tui/src/chatwidget/interaction.rs:299"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "copy last response"
-          ]
-        },
-        "grok": {
-          "rawName": "copy",
-          "canonical": "copy",
-          "aliases": [],
-          "displayName": "copy",
-          "family": "interface",
-          "summary": "Copies the latest (or Nth-latest) assistant message to the clipboard or a file.",
-          "mechanism": "parse_copy_args splits the args into `(n, Option<PathBuf>)`: empty -> (1,None), `2` -> (2,None), a non-numeric first token is treated as the whole path, and `0` is an error (copy.rs:42-60). run() returns `Action::CopyAssistantMessage{n, file_path}` (copy.rs:26-33); a file path also acts as the fallback when the clipboard is unreachable (copy.rs:3-7).",
-          "gate": "session-scoped (`session_scoped: true`, copy.rs:22); mode_support stays Both so it also works in minimal mode",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:18",
-            "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:29",
-            "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:53",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:111"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: copy (clipboard export of the last response)"
-          ]
-        },
-        "cc-custom": {
-          "rawName": "copy",
-          "canonical": "copy",
-          "aliases": [],
-          "displayName": "copy",
-          "family": "interface",
-          "summary": "Copies a recent assistant message (or one of its code blocks) to the clipboard and mirrors it into a temp file.",
-          "mechanism": "src/commands/copy/copy.tsx `call` (line 334) walks messages newest-first with collectRecentAssistantTexts (line 50, capped at MAX_LOOKBACK = 20 at line 25), resolves `/copy N` to an age index (lines 341-355), and either copies immediately when copyFullResponse is set or there are no code blocks (line 365) or renders the CopyPicker Ink selector (line 369). `copyOrWriteToFile` (line 81) issues the OSC 52 escape sequence with `setClipboard` (line 82, src/ink/termio/osc.js) and always mirrors the text to disk under `join(tmpdir(), 'claude')` via mkdir + writeFile (lines 73-79). Choosing 'always' persists the preference with saveGlobalConfig (line 191).",
-          "gate": "none (no `isEnabled`; src/commands/copy/index.ts:7-13)",
-          "commandKind": "local-jsx",
-          "backendModule": "src/commands/copy/copy.tsx (`call`, `copyOrWriteToFile`, `collectRecentAssistantTexts`, `CopyPicker`)",
-          "evidence": [
-            "src/commands/copy/index.ts:8",
-            "src/commands/copy/index.ts:9",
-            "src/commands/copy/copy.tsx:82",
-            "src/commands/copy/copy.tsx:334",
-            "src/commands/copy/copy.tsx:365"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: copy — clipboard copy of the last response; distinctive to this source"
-          ]
-        }
-      }
-    },
-    {
       "key": "docs",
       "family": "interface",
       "perSource": {
@@ -4787,14 +5088,20 @@
           "rawName": "edit-prompt",
           "canonical": "edit-prompt",
           "aliases": [],
-          "displayName": "edit-prompt",
-          "description": "Edit the prompt draft in $EDITOR",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Opens the current prompt draft in $EDITOR and reads the edited text back.",
+          "mechanism": "Registered ungated in navigation.ts:60-69; run() calls ctx.editPromptInEditor() (navigation.ts:67), wired to Loop.editPromptInEditor (loop.ts:2498, implemented at loop.ts:3068) — the same $EDITOR round-trip seam the minimal-mode Ctrl+G binding uses. Local process behaviour: a temp file plus an editor spawn; no backend call.",
+          "gate": "always",
+          "backendModule": "Loop.editPromptInEditor (packages/tui/src/app/loop.ts:3068)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/navigation.ts:64"
+            "packages/tui/src/app/slash/impl/navigation.ts:64",
+            "packages/tui/src/app/slash/impl/navigation.ts:67",
+            "packages/tui/src/app/loop.ts:2498",
+            "packages/tui/src/app/loop.ts:3068",
+            "packages/tui/src/app/slash/types.ts:162"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "edit-prompt",
@@ -4877,46 +5184,6 @@
       }
     },
     {
-      "key": "find",
-      "family": "interface",
-      "perSource": {
-        "ih": {
-          "rawName": "find",
-          "canonical": "find",
-          "aliases": [],
-          "displayName": "find",
-          "description": "Search the scrollback (type the pattern, Enter applies)",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/navigation.ts:16"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "find",
-          "canonical": "find",
-          "aliases": [],
-          "displayName": "find",
-          "family": "interface",
-          "summary": "Opens an incremental search over the conversation scrollback.",
-          "mechanism": "run() trims the args and returns `Action::OpenScrollbackSearch(Some(query))`, or `None` for empty/whitespace args so the search opens blank (find.rs:25-30). It exists because in simple mode a bare `/` goes to the prompt, so simple-mode users cannot reach the vim `/` scrollback search; `/find` focuses the scrollback pane and opens the same search from either mode (find.rs:3-4).",
-          "gate": "session-scoped plus `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal has no scrollback pane: use your terminal's own search\"})` (find.rs:19-21)",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/find.rs",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:14",
-            "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:19",
-            "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:29",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:112"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: find / scrollback-search"
-          ]
-        }
-      }
-    },
-    {
       "key": "fullscreen",
       "family": "interface",
       "perSource": {
@@ -4924,14 +5191,21 @@
           "rawName": "fullscreen",
           "canonical": "fullscreen",
           "aliases": [],
-          "displayName": "fullscreen",
-          "description": "Relaunch in fullscreen mode (cell TUI)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Relaunches the same session in fullscreen (cell TUI) mode.",
+          "mechanism": "Registered ungated in visual.ts:92-98; run() calls ctx.relaunch() and quits this process when the host reports it spawned (visual.ts:96). ctx.relaunch is wired to Loop.relaunchSlash(input) (loop.ts:2495, implemented at loop.ts:3012-3017), which forwards the raw slash line to the host's modeSwitch relay and toasts 'mode relay: host modeSwitch not wired' when the host has none. The host-side relay builds the relaunch argv and respawns (apps/tui/src/index.ts, relaunchArgs/defaultRelaunchArgv).",
+          "gate": "always",
+          "backendModule": "Loop.relaunchSlash (packages/tui/src/app/loop.ts:3012) -> TuiAppOptions.modeSwitch host relay (@i-harness/tui-app, apps/tui/src/index.ts)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/visual.ts:93"
+            "packages/tui/src/app/slash/impl/visual.ts:93",
+            "packages/tui/src/app/slash/impl/visual.ts:96",
+            "packages/tui/src/app/loop.ts:2495",
+            "packages/tui/src/app/loop.ts:3012",
+            "packages/tui/src/app/loop.ts:3015",
+            "packages/tui/src/app/slash/types.ts:146"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "fullscreen",
@@ -4946,6 +5220,7 @@
           "gate": "session-scoped plus `ModeSupport::MinimalOnly(Remedy::AlreadyInMode)` (screen_mode_switch.rs:62-68): offered only in minimal, refused with \"You're already in fullscreen mode.\" elsewhere",
           "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs + crates/codegen/xai-grok-pager/src/app/mode_switch.rs",
           "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77-79",
             "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:20",
             "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:39",
             "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:50",
@@ -4957,7 +5232,12 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: fullscreen (I-harness registers a same-named command; grok's carries the `full` alias and is minimal-only)"
-          ]
+          ],
+          "citationCorrected": {
+            "prepended": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77-79",
+            "reason": "the sampled cite :39 is the `[\"full\"]` alias expression only; the switch itself is the RelaunchInScreenMode result, executed in app/dispatch/router.rs:182-195 -- and it is a relaunch, not an in-place flip",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
         }
       }
     },
@@ -4997,14 +5277,21 @@
           "rawName": "help",
           "canonical": "help",
           "aliases": [],
-          "displayName": "help",
-          "description": "Slash commands + active key bindings",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Shows the currently visible slash commands plus the active key bindings.",
+          "mechanism": "Registered ungated in tools.ts:60-76. run() reads ctx.visibleCommands?.() and ctx.keyBindings?.() (tools.ts:66-67) and builds a two-section cheatsheet panel (Commands / Keys) opened as kind 'cheatsheet' (tools.ts:68-74). Both seams are wired in the loop: visibleCommands() re-derives the CURRENT capability-gated visible set through registry.visible(this.slashCtx('')) (loop.ts:2529-2530) and keyBindings() resolves shortcutsFor(...) against the live focus/mode/turn state (loop.ts:2531-2537) — so /help is never a static list and can never show a command the gate hides.",
+          "gate": "always",
+          "backendModule": "Loop SlashContext.visibleCommands/keyBindings (packages/tui/src/app/loop.ts:2529) over CommandRegistry.visible (packages/tui/src/app/slash/registry.ts:91)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/tools.ts:61"
+            "packages/tui/src/app/slash/impl/tools.ts:61",
+            "packages/tui/src/app/slash/impl/tools.ts:66",
+            "packages/tui/src/app/slash/impl/tools.ts:74",
+            "packages/tui/src/app/loop.ts:2529",
+            "packages/tui/src/app/loop.ts:2531",
+            "packages/tui/src/app/slash/registry.ts:91"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "help",
@@ -5061,14 +5348,19 @@
           "rawName": "history",
           "canonical": "history",
           "aliases": [],
-          "displayName": "history",
-          "description": "Open the prompt history panel",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Opens the prompt-history picker.",
+          "mechanism": "Registered ungated in navigation.ts:53-59; run() calls ctx.openHistoryPanel() (navigation.ts:57), wired in the loop to openHistoryPicker (loop.ts:2457, implemented at loop.ts:2631). The picker is driven from app.history (the same list the loop appends every accepted prompt to, loop.ts:2099-2100) — app state, no backend call.",
+          "gate": "always",
+          "backendModule": "Loop.openHistoryPicker (packages/tui/src/app/loop.ts:2631) over TuiAppState.history",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/navigation.ts:54"
+            "packages/tui/src/app/slash/impl/navigation.ts:54",
+            "packages/tui/src/app/slash/impl/navigation.ts:57",
+            "packages/tui/src/app/loop.ts:2457",
+            "packages/tui/src/app/loop.ts:2631"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "history",
@@ -5093,42 +5385,48 @@
       }
     },
     {
-      "key": "jump",
+      "key": "home",
       "family": "interface",
       "perSource": {
         "ih": {
-          "rawName": "jump",
-          "canonical": "jump",
+          "rawName": "home",
+          "canonical": "home",
           "aliases": [],
-          "displayName": "jump",
-          "description": "Jump to a turn (engine anchors; /jump <n> jumps directly)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Returns to the welcome screen.",
+          "mechanism": "Registered ungated in sessions.ts:27-33; run() calls ctx.setScreen('welcome') (sessions.ts:31), wired in the loop (loop.ts:2463-2478) to activateWelcome(), rebuild the welcome menus/modelState and request a frame. The 'agent' branch of the same seam only re-activates when a session id is known.",
+          "gate": "always",
+          "backendModule": "Loop SlashContext.setScreen (packages/tui/src/app/loop.ts:2463) over TuiAppState.screen (packages/tui/src/app/present.ts)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/navigation.ts:25"
+            "packages/tui/src/app/slash/impl/sessions.ts:28",
+            "packages/tui/src/app/slash/impl/sessions.ts:31",
+            "packages/tui/src/app/loop.ts:2463",
+            "packages/tui/src/app/slash/types.ts:134"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
-          "rawName": "jump",
-          "canonical": "jump",
-          "aliases": [],
-          "displayName": "jump",
-          "family": "interface",
-          "summary": "Opens a picker to jump to a turn in the conversation.",
-          "mechanism": "run() returns `Action::JumpShowPicker` (jump.rs:18-20). The picker is fullscreen-only because minimal scrolls with the terminal's native scrollback (jump.rs:13-15). Rewind takes input priority over this picker, and both rewind entry points call `agent.dismiss_jump_picker()` first so a stale picker cannot reappear (app/dispatch/rewind.rs:97-98).",
-          "gate": "session-scoped plus `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal scrolls with your terminal's native scrollback\"})` (jump.rs:13-15)",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs + crates/codegen/xai-grok-pager/src/app/agent_view/jump.rs",
+          "rawName": "home",
+          "canonical": "home",
+          "aliases": [
+            "welcome"
+          ],
+          "displayName": "home",
+          "family": "session",
+          "summary": "Exits the current session and returns to the welcome screen.",
+          "mechanism": "run() returns `Action::ExitSession` (home.rs:16-18). Dispatch handles `Action::ExitSession` as a first-class arm that clears the composer and re-enters the main dispatcher (app/dispatch/prompt.rs:660-665). Registered as `home` with the alias `welcome` (home.rs:11).",
+          "gate": "always",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/home.rs",
           "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:9",
-            "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:13",
-            "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:19",
-            "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:98",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:100"
+            "crates/codegen/xai-grok-pager/src/slash/commands/home.rs:10",
+            "crates/codegen/xai-grok-pager/src/slash/commands/home.rs:17",
+            "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:660",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:150"
           ],
           "verified": true,
           "crossSourceHints": [
-            "canonical: jump-to-turn"
+            "canonical: home / welcome (leave session, keep the app open)"
           ]
         }
       }
@@ -5202,14 +5500,20 @@
           "rawName": "minimal",
           "canonical": "minimal",
           "aliases": [],
-          "displayName": "minimal",
-          "description": "Relaunch in minimal mode (terminal-native scrollback)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Relaunches the same session in minimal mode (terminal-native scrollback).",
+          "mechanism": "Registered ungated in visual.ts:85-91; run() calls ctx.relaunch() and quits the process only when the host reports the spawn happened (visual.ts:89). Same seam as /fullscreen: Loop.relaunchSlash forwards the raw line to the host modeSwitch relay and toasts when the host has none (loop.ts:3012-3017). Minimal mode additionally implies the inline host / no alt-screen path in the host.",
+          "gate": "always",
+          "backendModule": "Loop.relaunchSlash (packages/tui/src/app/loop.ts:3012) -> TuiAppOptions.modeSwitch host relay (@i-harness/tui-app, apps/tui/src/index.ts)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/visual.ts:86"
+            "packages/tui/src/app/slash/impl/visual.ts:86",
+            "packages/tui/src/app/slash/impl/visual.ts:89",
+            "packages/tui/src/app/loop.ts:2495",
+            "packages/tui/src/app/loop.ts:3012",
+            "packages/tui/src/app/loop.ts:3015"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "minimal",
@@ -5247,14 +5551,19 @@
           "rawName": "multiline",
           "canonical": "multiline",
           "aliases": [],
-          "displayName": "multiline",
-          "description": "Toggle multiline prompt editing",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Toggles multiline prompt editing.",
+          "mechanism": "Registered ungated in visual.ts:69-76; run() negates app.prompt.multiLine and calls ctx.setMultiline(next) (visual.ts:73), wired in the loop to write app.prompt.multiLine and refresh the shortcuts bar (loop.ts:2485-2488). The toast is computed after the write so it reports the new value (visual.ts:74).",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/visual.ts + Loop SlashContext.setMultiline (packages/tui/src/app/loop.ts:2485)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/visual.ts:70"
+            "packages/tui/src/app/slash/impl/visual.ts:70",
+            "packages/tui/src/app/slash/impl/visual.ts:73",
+            "packages/tui/src/app/loop.ts:2485",
+            "packages/tui/src/app/slash/types.ts:138"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "multiline",
@@ -5269,6 +5578,7 @@
           "gate": "session-scoped with `offered_when_session_less: true` (multiline.rs:22-24), so the dashboard can toggle its own compose flag",
           "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs",
           "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:27-30",
             "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:18",
             "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:24",
             "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:29",
@@ -5277,7 +5587,12 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: multiline-input"
-          ]
+          ],
+          "citationCorrected": {
+            "prepended": "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:27-30",
+            "reason": "the sampled cite slash/commands/mod.rs:128 is a registry vec entry; the behaviour lives in multiline.rs",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
         }
       }
     },
@@ -5339,6 +5654,132 @@
       }
     },
     {
+      "key": "queue",
+      "family": "interface",
+      "perSource": {
+        "ih": {
+          "rawName": "queue",
+          "canonical": "queue",
+          "aliases": [],
+          "family": "interface",
+          "summary": "Toggles the queue pane.",
+          "mechanism": "Registered ungated in run.ts:62-72. run() guards on the optional ctx.queue member, toasting 'queue: pane seam absent' (run.ts:66-69), else calls it; the loop wires queue to togglePane('queue') (loop.ts:2522, implemented at loop.ts:3530-3547), which adds/removes the pane and, on open, calls refreshQueuePane (loop.ts:4006) to fetch the OPTIONAL BackendClient.queue projection at open time — when that member is missing the pane renders the honest queueUnavailable state rather than an empty list (loop.ts:4011-4016).",
+          "gate": "always",
+          "backendModule": "Loop.togglePane/refreshQueuePane (packages/tui/src/app/loop.ts:3530, :4006) over optional BackendClient.queue (packages/tui/src/contracts.ts:217, implemented at packages/tui/src/backend/embedded.ts:700)",
+          "backendStatus": "implemented",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/run.ts:63",
+            "packages/tui/src/app/slash/impl/run.ts:66",
+            "packages/tui/src/app/loop.ts:2522",
+            "packages/tui/src/app/loop.ts:3530",
+            "packages/tui/src/app/loop.ts:4006",
+            "packages/tui/src/app/loop.ts:4011",
+            "packages/tui/src/contracts.ts:217"
+          ],
+          "verified": true
+        },
+        "grok": {
+          "rawName": "queue",
+          "canonical": "queue",
+          "aliases": [],
+          "displayName": "queue",
+          "family": "execution",
+          "summary": "Lists the prompts queued behind the running turn.",
+          "mechanism": "run() errors without a session and otherwise returns `Action::ShowQueue` (queue.rs:21-26). The dispatcher's `dispatch_show_queue` reads the merged server and local queue and commits a read-only list; editing the queue is out of scope and the interactive QueuePane remains the full-TUI route (queue.rs:5-6). Minimal mode has no interactive QueuePane, so `/queue` is the way to inspect what is waiting, and it works in every render mode (queue.rs:3-4).",
+          "gate": "session-scoped plus an explicit session_id check in run(); available in both screen modes",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs + crates/codegen/xai-grok-pager/src/views/queue_pane.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:15",
+            "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:22",
+            "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:25",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:103"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: queue (list pending prompts)"
+          ]
+        }
+      }
+    },
+    {
+      "key": "quit",
+      "family": "interface",
+      "perSource": {
+        "ih": {
+          "rawName": "quit",
+          "canonical": "quit",
+          "aliases": [],
+          "family": "interface",
+          "summary": "Quits the TUI.",
+          "mechanism": "Registered ungated in tools.ts:77-83; run() calls ctx.quitApp() (tools.ts:81), wired to Loop.requestQuit (loop.ts:2496) — the same quit path the key binding uses (it closes the backend and tears the terminal down through the host's shutdown controller, apps/tui/src/index.ts:199-202).",
+          "gate": "always",
+          "backendModule": "Loop SlashContext.quitApp (packages/tui/src/app/loop.ts:2496) -> Loop.requestQuit + the host shutdown controller (apps/tui/src/index.ts:199)",
+          "backendStatus": "implemented",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/tools.ts:77-83",
+            "packages/tui/src/app/slash/impl/tools.ts:78",
+            "packages/tui/src/app/slash/impl/tools.ts:81",
+            "packages/tui/src/app/loop.ts:2496",
+            "packages/tui/src/app/slash/types.ts:147",
+            "apps/tui/src/index.ts:199"
+          ],
+          "verified": true,
+          "citationCorrected": {
+            "prepended": "packages/tui/src/app/slash/impl/tools.ts:77-83",
+            "reason": "the sampled cite apps/tui/src/index.ts:199 is a generic shutdown controller; the command's registration lives in tools.ts and its dispatch in loop.ts:2496",
+            "by": "adversarial verification sample (2026-09-12)"
+          }
+        },
+        "codex": {
+          "rawName": "quit",
+          "canonical": "quit",
+          "aliases": [
+            "exit"
+          ],
+          "displayName": "quit",
+          "variant": "Quit",
+          "family": "session",
+          "summary": "直接離開 Codex。",
+          "mechanism": "與 /exit 共用 arm：request_quit_without_confirmation()（slash_dispatch.rs:398-400；chatwidget.rs:1408）。描述與 Exit 共用 'exit Codex'（slash_command.rs:101）。",
+          "gate": "always（available_during_task 為 true）",
+          "backendModule": "codex-rs/tui/src/chatwidget.rs",
+          "evidence": [
+            "codex-rs/tui/src/slash_command.rs:66",
+            "codex-rs/tui/src/chatwidget/slash_dispatch.rs:398",
+            "codex-rs/tui/src/chatwidget.rs:1408"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "quit / exit"
+          ]
+        },
+        "grok": {
+          "rawName": "quit",
+          "canonical": "quit",
+          "aliases": [
+            "exit"
+          ],
+          "displayName": "quit",
+          "family": "session",
+          "summary": "Quits the application.",
+          "mechanism": "run() returns `Action::Quit` (exit.rs:23-25). The module also exports `is_exit_alias`, the bare-text list (exit | quit | :q | :q! | :wq | :wq!) shared by the agent prompt send path and the dashboard dispatch so vim/shell muscle memory resolves to a quit even outside slash resolution; dispatch checks it only when the input is not a slash invocation (app/dispatch/prompt.rs:759-763). Note the command's canonical name is `quit` with `exit` as the alias, not the reverse (exit.rs:17-18).",
+          "gate": "always",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:6",
+            "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:17",
+            "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:24",
+            "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:759",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:153"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: quit / exit"
+          ]
+        }
+      }
+    },
+    {
       "key": "raw",
       "family": "interface",
       "perSource": {
@@ -5391,50 +5832,6 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: release-notes / changelog (I-harness deliberately lacks it)"
-          ]
-        }
-      }
-    },
-    {
-      "key": "settings",
-      "family": "interface",
-      "perSource": {
-        "ih": {
-          "rawName": "settings",
-          "canonical": "settings",
-          "aliases": [],
-          "displayName": "settings",
-          "description": "Settings modal (Appearance / Mouse / Models / Approval …)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/g1.ts:38"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "settings",
-          "canonical": "settings",
-          "aliases": [
-            "config",
-            "preferences",
-            "prefs"
-          ],
-          "displayName": "settings",
-          "family": "interface",
-          "summary": "Opens the settings modal.",
-          "mechanism": "run() returns `Action::OpenSettings` unconditionally; there is no direct jump to one setting, args are silently discarded and the modal always opens, with in-modal `/` filtering as the search route (settings_cmd.rs:2-3, :19-21). Registered as `settings` with aliases `config`, `preferences`, `prefs` (settings_cmd.rs:14).",
-          "gate": "always",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs + crates/codegen/xai-grok-pager/src/views/settings_modal",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:13",
-            "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:20",
-            "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:87",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:79"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: settings / config"
           ]
         }
       }
@@ -5518,6 +5915,82 @@
       }
     },
     {
+      "key": "tasks",
+      "family": "interface",
+      "perSource": {
+        "ih": {
+          "rawName": "tasks",
+          "canonical": "tasks",
+          "aliases": [],
+          "family": "interface",
+          "summary": "Toggles the tasks pane (subagent/job/workflow rows).",
+          "mechanism": "Registered ungated in run.ts:73-83. run() guards on the optional ctx.tasks member, toasting 'tasks: pane seam absent' (run.ts:77-80), else calls it; the loop wires tasks to togglePane('tasks') (loop.ts:2523, implemented at loop.ts:3530-3547), which calls refreshTasksPane on open (loop.ts:4093) to fetch the OPTIONAL BackendClient.tasks projection; without the member the pane shows the honest unavailable state.",
+          "gate": "always",
+          "backendModule": "Loop.togglePane/refreshTasksPane (packages/tui/src/app/loop.ts:3530, :4093) over optional BackendClient.tasks (packages/tui/src/contracts.ts:227, implemented at packages/tui/src/backend/embedded.ts:733)",
+          "backendStatus": "implemented",
+          "evidence": [
+            "packages/tui/src/app/slash/impl/run.ts:74",
+            "packages/tui/src/app/slash/impl/run.ts:77",
+            "packages/tui/src/app/loop.ts:2523",
+            "packages/tui/src/app/loop.ts:3530",
+            "packages/tui/src/app/loop.ts:4093",
+            "packages/tui/src/contracts.ts:227",
+            "packages/tui/src/backend/embedded.ts:733"
+          ],
+          "verified": true
+        },
+        "grok": {
+          "rawName": "tasks",
+          "canonical": "tasks",
+          "aliases": [],
+          "displayName": "tasks",
+          "family": "collab",
+          "summary": "Lists background tasks, subagents and scheduled tasks.",
+          "mechanism": "run() errors without a session and otherwise returns `Action::ShowTasks` (tasks.rs:20-25); `dispatch_show_tasks` reads the three task sources and commits a read-only list, with killing and attaching left to the full-TUI tasks pane (tasks.rs:3-4). Minimal mode has no interactive TasksPane, so this is the snapshot route there, and it works in every render mode (tasks.rs:1-2).",
+          "gate": "session-scoped plus an explicit session_id check; available in both screen modes",
+          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs",
+          "evidence": [
+            "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:14",
+            "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:22",
+            "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:24",
+            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:114"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: tasks (background jobs / subagents / cron)"
+          ]
+        },
+        "cc-custom": {
+          "rawName": "tasks",
+          "canonical": "tasks",
+          "aliases": [
+            "bashes"
+          ],
+          "displayName": "tasks",
+          "family": "execution",
+          "summary": "Lists and manages the session's background tasks (agents, shells, teammates, workflows) with drill-in detail and stop actions.",
+          "mechanism": "The load target discards the context and returns `<BackgroundTasksDialog onDone={onDone} />` (src/commands/tasks/tasks.tsx:5-7). The dialog reads live task state from AppState: `const tasks = useAppState(s => s.tasks)` (src/components/tasks/BackgroundTasksDialog.tsx:120) plus foregroundedTaskId and expandedView (lines 121-122), then lists `Object.values(tasks ?? {}).filter(isBackgroundTask)` (lines 113, 169; `isBackgroundTask` is src/tasks/types.ts:34). Tasks live IN MEMORY: AppStateStore declares `tasks: { [taskId: string]: TaskState }` (src/state/AppStateStore.ts:138) initialised to `{}` (line 397), and the store comment notes AppState.tasks is always empty in remote-viewer mode because those tasks live in a different process (lines 119-123). The dialog persists nothing; it only mutates AppState and calls onDone with a dismissal message. Task kinds come from src/tasks/types.ts and the per-kind modules imported at BackgroundTasksDialog.tsx:9-19 (DreamTask, InProcessTeammateTask, LocalAgentTask, LocalShellTask, and LocalWorkflowTask / MonitorMcpTask behind `feature()` at lines 99 and 106).",
+          "gate": "none (no `isEnabled`; src/commands/tasks/index.ts:3-9)",
+          "commandKind": "local-jsx",
+          "backendModule": "src/commands/tasks/tasks.tsx (`call`) -> src/components/tasks/BackgroundTasksDialog.tsx (`BackgroundTasksDialog`); src/tasks/types.ts (`isBackgroundTask` at :34); state in src/state/AppStateStore.ts:138",
+          "evidence": [
+            "src/commands/tasks/index.ts:5",
+            "src/commands/tasks/index.ts:6",
+            "src/commands/tasks/tasks.tsx:5",
+            "src/components/tasks/BackgroundTasksDialog.tsx:113",
+            "src/components/tasks/BackgroundTasksDialog.tsx:120",
+            "src/state/AppStateStore.ts:138",
+            "src/state/AppStateStore.ts:397",
+            "src/tasks/types.ts:34"
+          ],
+          "verified": true,
+          "crossSourceHints": [
+            "canonical: tasks — background task listing/management; I-harness has a task surface (tasks.ts, src/tasks/) but not as a slash command"
+          ]
+        }
+      }
+    },
+    {
       "key": "terminal-setup",
       "family": "interface",
       "perSource": {
@@ -5555,14 +6028,21 @@
           "rawName": "theme",
           "canonical": "theme",
           "aliases": [],
-          "displayName": "theme",
-          "description": "Cycle theme (auto → grok-night → grok-day → tokyo-night → …)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Cycles the theme, or sets it directly by name.",
+          "mechanism": "Registered ungated in visual.ts:44-59. A bare /theme advances through THEME_ORDER (system → grok-night → grok-day → tokyo-night → rose-pine-moon → oscura-midnight → system) via nextTheme and calls ctx.setTheme(next) (visual.ts:34-41, :50); a named argument is canonicalized ('auto' → 'system') and must be in THEME_ORDER or the command toasts 'theme: unknown … (system | grok-night | …)' (visual.ts:51-57). ctx.setTheme is wired to themeCommit (loop.ts:2479-2483), the shared preview/commit/rollback path that persists the choice; a persist failure toasts 'theme: not persisted — <message>'.",
+          "gate": "always",
+          "backendModule": "Loop.themeCommit (packages/tui/src/app/loop.ts:2479, implemented at :2864) over the settings store (SettingsTheme, packages/settings)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/visual.ts:45"
+            "packages/tui/src/app/slash/impl/visual.ts:45",
+            "packages/tui/src/app/slash/impl/visual.ts:50",
+            "packages/tui/src/app/slash/impl/visual.ts:57",
+            "packages/tui/src/app/slash/impl/visual.ts:29",
+            "packages/tui/src/app/loop.ts:2479",
+            "packages/tui/src/app/loop.ts:2864"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "theme",
@@ -5643,14 +6123,22 @@
           "rawName": "timeline",
           "canonical": "timeline",
           "aliases": [],
-          "displayName": "timeline",
-          "description": "Toggle the turn timeline rail (right columns)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Toggles the turn-timeline rail in the scrollback's right columns.",
+          "mechanism": "Registered ungated in timeline.ts:10-19; run() negates app.showTimeline and writes it directly on the app state (timeline.ts:15-17) with an on/off toast. The rail is additionally gated at DRAW time by views/timeline.ts: showTimeline must be true AND the pane width ≥ 60 AND turns ≥ 2 (views/timeline.ts:45-53) — so a successful toggle can still produce no visible rail. The host seeds the initial value from opts.showTimeline (default OFF, loop.ts:196-199, :594).",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/timeline.ts + the draw gate packages/tui/src/views/timeline.ts:45",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/timeline.ts:12"
+            "packages/tui/src/app/slash/impl/timeline.ts:12",
+            "packages/tui/src/app/slash/impl/timeline.ts:15",
+            "packages/tui/src/app/slash/impl/timeline.ts:16",
+            "packages/tui/src/views/timeline.ts:45",
+            "packages/tui/src/views/timeline.ts:53",
+            "packages/tui/src/app/loop.ts:196",
+            "packages/tui/src/app/loop.ts:594"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "timeline",
@@ -5683,14 +6171,20 @@
           "rawName": "timestamps",
           "canonical": "timestamps",
           "aliases": [],
-          "displayName": "timestamps",
-          "description": "Toggle right-aligned timestamps on rows",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Toggles right-aligned timestamps on scrollback rows.",
+          "mechanism": "Registered ungated in visual.ts:60-68; run() negates app.timestamps and calls ctx.setTimestamps(next) (visual.ts:64-65), wired to Loop.setTimestamps (loop.ts:2484, implemented at loop.ts:2883). The toast reports the new value because it is computed after the write (visual.ts:66). No backend call.",
+          "gate": "always",
+          "backendModule": "Loop.setTimestamps (packages/tui/src/app/loop.ts:2883) over the ScrollbackEngine live timestamps toggle (packages/tui/src/contracts.ts:353)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/visual.ts:61"
+            "packages/tui/src/app/slash/impl/visual.ts:61",
+            "packages/tui/src/app/slash/impl/visual.ts:64",
+            "packages/tui/src/app/loop.ts:2484",
+            "packages/tui/src/app/loop.ts:2883",
+            "packages/tui/src/contracts.ts:353"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "timestamps",
@@ -5750,14 +6244,23 @@
           "rawName": "toggle-mouse-reporting",
           "canonical": "toggle-mouse-reporting",
           "aliases": [],
-          "displayName": "toggle-mouse-reporting",
-          "description": "Toggle terminal mouse capture (native copy/paste vs in-app hover/scroll)",
-          "gate": "capability:(ctx: SlashContext) => ctx.mouseReportingToggle === true",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Toggles terminal mouse capture (native copy/paste versus in-app hover and scroll).",
+          "mechanism": "Built by toggleMouseReportingCommand and spread into the registry through mouseCommands() (mouse.ts:17-38, registry.ts:58). The gate is a FEATURE setting, not a backend capability: visible() = ctx.mouseReportingToggle === true (mouse.ts:21), and the loop supplies that value from mouseToggleFeature() (loop.ts:2514, implemented at loop.ts:495-497) which reads the host option opts.mouseToggleFeature. run() flips app.mouse.enabled, clears the engine's scroll stream and the hovered set, then toasts on/off (mouse.ts:22-32); when app.mouse is undefined it toasts 'mouse capture: no mouse path' (mouse.ts:24-27).",
+          "gate": "feature setting: ctx.mouseReportingToggle === true (types.ts:157; loop.ts:495), host-resolved from GROK_MOUSE_REPORTING_TOGGLE or tui.prefs.mouseReportingToggle (apps/tui/src/index.ts:656)",
+          "backendModule": "packages/tui/src/app/slash/impl/mouse.ts + TuiAppState.mouse (packages/tui/src/app/present.ts) and the scroll-stream normalizer (packages/tui/src/app/loop.ts:518)",
+          "backendStatus": "optional-seam",
           "evidence": [
-            "packages/tui/src/app/slash/impl/mouse.ts:19"
+            "packages/tui/src/app/slash/impl/mouse.ts:19",
+            "packages/tui/src/app/slash/impl/mouse.ts:21",
+            "packages/tui/src/app/slash/impl/mouse.ts:28",
+            "packages/tui/src/app/slash/impl/mouse.ts:29",
+            "packages/tui/src/app/loop.ts:2514",
+            "packages/tui/src/app/loop.ts:495",
+            "packages/tui/src/app/loop.ts:518",
+            "apps/tui/src/index.ts:656"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "toggle-mouse-reporting",
@@ -5823,14 +6326,20 @@
           "rawName": "tutorial",
           "canonical": "tutorial",
           "aliases": [],
-          "displayName": "tutorial",
-          "description": "Topic list (terminal setup / keys / rewind / minimal)",
-          "gate": "none",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Shows the tutorial topic list (terminal setup / keys / rewind / minimal).",
+          "mechanism": "Registered ungated in surfaces.ts:30-36; run() calls the exported openTutorialIndex(ctx) (surfaces.ts:34, defined at surfaces.ts:46-61), which opens the 'tutorial' panel from tutorialIndexRows(); selecting a row opens that topic's content panel, whose onSelect returns to the index (surfaces.ts:51-59). Content is static in packages/tui/src/views/light-tutorial.ts (imported at surfaces.ts:12) — no backend call.",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/surfaces.ts:46 + packages/tui/src/views/light-tutorial.ts",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/surfaces.ts:31"
+            "packages/tui/src/app/slash/impl/surfaces.ts:31",
+            "packages/tui/src/app/slash/impl/surfaces.ts:34",
+            "packages/tui/src/app/slash/impl/surfaces.ts:46",
+            "packages/tui/src/app/slash/impl/surfaces.ts:54",
+            "packages/tui/src/app/slash/impl/surfaces.ts:12"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "tutorial",
@@ -5917,14 +6426,21 @@
           "rawName": "vim-mode",
           "canonical": "vim-mode",
           "aliases": [],
-          "displayName": "vim-mode",
-          "description": "Vim-style editing mode (live editor capability)",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
+          "family": "interface",
+          "summary": "Switches the prompt editor to vim-style editing (gated on a live editor capability).",
+          "mechanism": "Registered in the editorSafetyCommands array (text-input.ts:63-72) which the registry spreads last (registry.ts:61), visible() = hasCapability(ctx,'vim-mode') (text-input.ts:67). The run body is a single toast, 'vim-mode: live editor capability not wired' (text-input.ts:69). 'vim-mode' is never pushed by Loop.slashCapabilities() (loop.ts:2419-2431), so the command is hidden and unmatched in the shipped TUI.",
+          "gate": "capability:vim-mode (types.ts:32) — never supplied by Loop.slashCapabilities()",
+          "backendModule": "packages/tui/src/app/slash/impl/text-input.ts:69 (toast only; no backend call)",
+          "backendStatus": "stub-toast",
           "evidence": [
-            "packages/tui/src/app/slash/impl/text-input.ts:65"
+            "packages/tui/src/app/slash/impl/text-input.ts:65",
+            "packages/tui/src/app/slash/impl/text-input.ts:67",
+            "packages/tui/src/app/slash/impl/text-input.ts:69",
+            "packages/tui/src/app/slash/registry.ts:61",
+            "packages/tui/src/app/loop.ts:2419",
+            "packages/tui/src/app/slash/types.ts:32"
           ],
-          "verified": false
+          "verified": true
         },
         "grok": {
           "rawName": "vim-mode",
@@ -6040,14 +6556,21 @@
           "rawName": "btw",
           "canonical": "btw",
           "aliases": [],
-          "displayName": "btw",
-          "description": "Interject a sidebar question",
-          "gate": "none",
-          "mechanism": null,
+          "family": "collab",
+          "summary": "Interjects a side question into the running turn without replacing the prompt.",
+          "mechanism": "Registered ungated in run.ts:84-96. With an argument the run calls ctx.toggleBtwWith(question) (run.ts:91), wired in the loop to toggleBtwWith (loop.ts:2461): it writes app.paneData.btw {question,state:'asking'} and calls backend.steer(question) (loop.ts:2803-2818), i.e. the question rides the live queue as an interject rather than a new submit. With no argument it calls ctx.openBtwInput() (run.ts:94), which opens the bindTextInput overlay (loop.ts:2832-2839, text-input.ts:23-55); an empty submitted line toasts 'btw cancelled'.",
+          "gate": "always",
+          "backendModule": "packages/tui/src/app/slash/impl/run.ts + Loop.toggleBtwWith/toggleBtwInput (packages/tui/src/app/loop.ts:2803) over BackendClient.steer (packages/tui/src/contracts.ts:204)",
+          "backendStatus": "implemented",
           "evidence": [
-            "packages/tui/src/app/slash/impl/run.ts:85"
+            "packages/tui/src/app/slash/impl/run.ts:85",
+            "packages/tui/src/app/slash/impl/run.ts:88",
+            "packages/tui/src/app/loop.ts:2461",
+            "packages/tui/src/app/loop.ts:2803",
+            "packages/tui/src/app/loop.ts:2814",
+            "packages/tui/src/app/loop.ts:2832"
           ],
-          "verified": false
+          "verified": true
         },
         "codex": {
           "rawName": "btw",
@@ -6117,51 +6640,6 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: btw — side question in a forked, tool-less agent; distinctive to this source"
-          ]
-        }
-      }
-    },
-    {
-      "key": "dashboard",
-      "family": "collab",
-      "perSource": {
-        "ih": {
-          "rawName": "dashboard",
-          "canonical": "dashboard",
-          "aliases": [],
-          "displayName": "dashboard",
-          "description": "Open the local session dashboard",
-          "gate": "capability:(ctx) => hasCapability(ctx",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/sessions.ts:45"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "dashboard",
-          "canonical": "dashboard",
-          "aliases": [
-            "agents-dashboard",
-            "sessions"
-          ],
-          "displayName": "dashboard",
-          "family": "collab",
-          "summary": "Opens the Agent Dashboard that lists every session and subagent.",
-          "mechanism": "run() returns `Action::OpenDashboard` (dashboard.rs:31-33). The aliases `agents-dashboard` and `sessions` redirect old muscle memory after the sessions picker modal was removed (dashboard.rs:20-23). It is FullscreenOnly via `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal is single-session\"})` (dashboard.rs:26-28), so minimal mode both hides it from completion and refuses a typed invocation with a hint naming `/fullscreen`.",
-          "gate": "feature-flag gated AND mode gated: hidden by default in CommandRegistry::new (registry.rs:156) and revealed only by `set_dashboard_visible(true)` from `dashboard_enabled()`; refused in minimal mode; `[dashboard].enabled = false` or `GROK_AGENT_DASHBOARD=0` makes the dispatcher refuse with a toast (dashboard.rs:7-8)",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs + crates/codegen/xai-grok-pager/src/views/dashboard",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:19",
-            "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:26",
-            "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:32",
-            "crates/codegen/xai-grok-pager/src/slash/registry.rs:156",
-            "crates/codegen/xai-grok-pager/src/slash/registry.rs:377",
-            "crates/codegen/xai-grok-pager/src/slash/mode_support.rs:34"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: sessions-dashboard / agent dashboard"
           ]
         }
       }
@@ -6309,74 +6787,6 @@
           "verified": true,
           "crossSourceHints": [
             "subagents / agent switcher（DSH subagent 工具對應）"
-          ]
-        }
-      }
-    },
-    {
-      "key": "tasks",
-      "family": "collab",
-      "perSource": {
-        "ih": {
-          "rawName": "tasks",
-          "canonical": "tasks",
-          "aliases": [],
-          "displayName": "tasks",
-          "description": "Toggle the tasks pane",
-          "gate": "none",
-          "mechanism": null,
-          "evidence": [
-            "packages/tui/src/app/slash/impl/run.ts:74"
-          ],
-          "verified": false
-        },
-        "grok": {
-          "rawName": "tasks",
-          "canonical": "tasks",
-          "aliases": [],
-          "displayName": "tasks",
-          "family": "collab",
-          "summary": "Lists background tasks, subagents and scheduled tasks.",
-          "mechanism": "run() errors without a session and otherwise returns `Action::ShowTasks` (tasks.rs:20-25); `dispatch_show_tasks` reads the three task sources and commits a read-only list, with killing and attaching left to the full-TUI tasks pane (tasks.rs:3-4). Minimal mode has no interactive TasksPane, so this is the snapshot route there, and it works in every render mode (tasks.rs:1-2).",
-          "gate": "session-scoped plus an explicit session_id check; available in both screen modes",
-          "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs",
-          "evidence": [
-            "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:14",
-            "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:22",
-            "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:24",
-            "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:114"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: tasks (background jobs / subagents / cron)"
-          ]
-        },
-        "cc-custom": {
-          "rawName": "tasks",
-          "canonical": "tasks",
-          "aliases": [
-            "bashes"
-          ],
-          "displayName": "tasks",
-          "family": "execution",
-          "summary": "Lists and manages the session's background tasks (agents, shells, teammates, workflows) with drill-in detail and stop actions.",
-          "mechanism": "The load target discards the context and returns `<BackgroundTasksDialog onDone={onDone} />` (src/commands/tasks/tasks.tsx:5-7). The dialog reads live task state from AppState: `const tasks = useAppState(s => s.tasks)` (src/components/tasks/BackgroundTasksDialog.tsx:120) plus foregroundedTaskId and expandedView (lines 121-122), then lists `Object.values(tasks ?? {}).filter(isBackgroundTask)` (lines 113, 169; `isBackgroundTask` is src/tasks/types.ts:34). Tasks live IN MEMORY: AppStateStore declares `tasks: { [taskId: string]: TaskState }` (src/state/AppStateStore.ts:138) initialised to `{}` (line 397), and the store comment notes AppState.tasks is always empty in remote-viewer mode because those tasks live in a different process (lines 119-123). The dialog persists nothing; it only mutates AppState and calls onDone with a dismissal message. Task kinds come from src/tasks/types.ts and the per-kind modules imported at BackgroundTasksDialog.tsx:9-19 (DreamTask, InProcessTeammateTask, LocalAgentTask, LocalShellTask, and LocalWorkflowTask / MonitorMcpTask behind `feature()` at lines 99 and 106).",
-          "gate": "none (no `isEnabled`; src/commands/tasks/index.ts:3-9)",
-          "commandKind": "local-jsx",
-          "backendModule": "src/commands/tasks/tasks.tsx (`call`) -> src/components/tasks/BackgroundTasksDialog.tsx (`BackgroundTasksDialog`); src/tasks/types.ts (`isBackgroundTask` at :34); state in src/state/AppStateStore.ts:138",
-          "evidence": [
-            "src/commands/tasks/index.ts:5",
-            "src/commands/tasks/index.ts:6",
-            "src/commands/tasks/tasks.tsx:5",
-            "src/components/tasks/BackgroundTasksDialog.tsx:113",
-            "src/components/tasks/BackgroundTasksDialog.tsx:120",
-            "src/state/AppStateStore.ts:138",
-            "src/state/AppStateStore.ts:397",
-            "src/tasks/types.ts:34"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: tasks — background task listing/management; I-harness has a task surface (tasks.ts, src/tasks/) but not as a slash command"
           ]
         }
       }

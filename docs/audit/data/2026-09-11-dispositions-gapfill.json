@@ -1,0 +1,23 @@
+{
+  "subset": "gapfill",
+  "_provenance": "AUTHORED BY THE LEAD, not by a subagent. These 12 rows entered the union AFTER the three disposition agents were launched (the cc-custom enriched extraction reassigned their families), so no agent was assigned them. A dedicated gap-fill agent was dispatched and did not deliver within a full goal round, so the lead authored them directly from the union data, following agent C's rubric and precedents. They therefore carry less independent review than the other rows -- the distinction is recorded rather than hidden.",
+  "_superseded": "This file originally held 25 rows. The interface+inspect agent later re-issued its own file against the current 147-row union, covering 13 of them (cost, heapdump, insights, stats, version, brief, color, config, keybindings, output-style, stickers, terminal-setup, tui). Those 13 were REMOVED from here so that the independently-reviewed agent verdicts win; the two files disagreed on 7 of the 13, and an agent that verified its claims against I-harness source (including reading the vim-mode capability gate, and anchoring 不做 in README.md:262 / CAPABILITIES.md:128-129) is better evidence than a lead-authored row.",
+  "_consistency_notes": [
+    "The prompt-command category is split deliberately. Agent C marked security-review / pr-comments / init-verifiers `路線差異` because cc-custom is itself MIGRATING that content to its plugin marketplace, making them transitional. code-review / commit / commit-push-pr are NOT migrated -- they remain first-class prompt commands -- so they are `rewrite` (an actionable gap) rather than `路線差異`.",
+    "`branch` is cc-custom's spelling of a capability I-harness ships as /fork. It carries NO I-harness cell, so rule 1 forbids 已存在; `路線差異` records that the absence is naming, not capability."
+  ],
+  "rows": {
+    "branch": { "disposition": "路線差異", "rationale": "即 IH /fork；cc-custom 僅異名" },
+    "tag": { "disposition": "遠期", "rationale": "ant-only 標籤；IH 有 FTS 查詢" },
+    "auto-compact-window": { "disposition": "rewrite", "rationale": "IH 有 modelPolicies，缺命令面" },
+    "files": { "disposition": "rewrite", "rationale": "context 透明度；IH 缺檔案清單" },
+    "memory": { "disposition": "rewrite", "rationale": "IH 載入 AGENTS.md，缺編輯入口" },
+    "code-review": { "disposition": "rewrite", "rationale": "prompt 命令；IH 無此類別" },
+    "commit": { "disposition": "rewrite", "rationale": "git 工作流；IH 無提交命令" },
+    "commit-push-pr": { "disposition": "rewrite", "rationale": "依賴 git/PR 整合，成本較高" },
+    "context-window": { "disposition": "rewrite", "rationale": "IH 有解析鏈，缺命令面" },
+    "fast": { "disposition": "路線差異", "rationale": "provider 商業分層，IH 無此概念" },
+    "max-output": { "disposition": "rewrite", "rationale": "同 context-window，缺命令面" },
+    "protocol": { "disposition": "路線差異", "rationale": "IH 以 provider 選協議，非會話內切" }
+  }
+}

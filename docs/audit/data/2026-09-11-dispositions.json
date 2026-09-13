@@ -6,12 +6,16 @@
       "assigned": 39
     },
     {
+      "file": "2026-09-11-dispositions-gapfill.json",
+      "assigned": 12
+    },
+    {
       "file": "2026-09-11-dispositions-interface-inspect.json",
-      "assigned": 50
+      "assigned": 57
     },
     {
       "file": "2026-09-11-dispositions-session-context.json",
-      "assigned": 50
+      "assigned": 45
     }
   ],
   "rows": {
@@ -171,6 +175,58 @@
       "disposition": "已存在",
       "rationale": "IH 已實作（live 投影）"
     },
+    "branch": {
+      "disposition": "路線差異",
+      "rationale": "IH /fork 已做同一件事"
+    },
+    "tag": {
+      "disposition": "遠期",
+      "rationale": "ant-only 標籤；IH 有 FTS 查詢"
+    },
+    "auto-compact-window": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc：設定自動壓縮窗"
+    },
+    "files": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc 列已讀檔，日誌推導"
+    },
+    "memory": {
+      "disposition": "rewrite",
+      "rationale": "IH 載入 AGENTS.md，缺編輯入口"
+    },
+    "code-review": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc：送審查提示（diff）"
+    },
+    "commit": {
+      "disposition": "rewrite",
+      "rationale": "仿 cc：提示走既有審批"
+    },
+    "commit-push-pr": {
+      "disposition": "rewrite",
+      "rationale": "依賴 git/PR 整合，成本較高"
+    },
+    "context-window": {
+      "disposition": "rewrite",
+      "rationale": "IH 有解析鏈，缺命令面"
+    },
+    "fast": {
+      "disposition": "路線差異",
+      "rationale": "provider 商業分層，IH 無此概念"
+    },
+    "max-output": {
+      "disposition": "rewrite",
+      "rationale": "同 context-window，缺命令面"
+    },
+    "protocol": {
+      "disposition": "路線差異",
+      "rationale": "IH 協定屬 provider 設定"
+    },
+    "cost": {
+      "disposition": "遠期",
+      "rationale": "需定價來源，暫不硬編碼"
+    },
     "debug": {
       "disposition": "遠期",
       "rationale": "grok dev HUD；IH 暫無覆蓋層"
@@ -189,7 +245,7 @@
     },
     "diff": {
       "disposition": "rewrite",
-      "rationale": "沿用 rewind git 對照做面板"
+      "rationale": "借 cc 無鎖 git diff 面板"
     },
     "doctor": {
       "disposition": "已存在",
@@ -198,6 +254,14 @@
     "export": {
       "disposition": "已存在",
       "rationale": "IH 已實作 transcript 匯出"
+    },
+    "heapdump": {
+      "disposition": "reuse",
+      "rationale": "cc 的 v8 heap snapshot 可直搬"
+    },
+    "insights": {
+      "disposition": "遠期",
+      "rationale": "可分享報表；IH 分享面遠期"
     },
     "pwd": {
       "disposition": "路線差異",
@@ -211,33 +275,13 @@
       "disposition": "遠期",
       "rationale": "grok 捲動 HUD；暫緩"
     },
-    "session-attachment-read": {
-      "disposition": "路線差異",
-      "rationale": "IH 走 read_image 路徑解析"
-    },
-    "session-control": {
-      "disposition": "路線差異",
-      "rationale": "IH 以 WS live 流＋queue 投影"
-    },
-    "session-follow": {
-      "disposition": "路線差異",
-      "rationale": "IH 以 WS live＋afterSeq 續傳"
-    },
-    "session-history-page": {
-      "disposition": "路線差異",
-      "rationale": "IH web-host 分頁讀持久層"
-    },
     "session-info": {
       "disposition": "已存在",
       "rationale": "IH 已實作；缺值誠實省略"
     },
-    "session-list": {
-      "disposition": "路線差異",
-      "rationale": "IH 走本地 dashboard 面"
-    },
-    "session-search": {
-      "disposition": "rewrite",
-      "rationale": "仿 dsh 無 resume 內容查詢"
+    "stats": {
+      "disposition": "遠期",
+      "rationale": "跨 session 統計報表，暫緩"
     },
     "status": {
       "disposition": "路線差異",
@@ -247,6 +291,10 @@
       "disposition": "已存在",
       "rationale": "IH 已實作 session 用量；帳號面不做"
     },
+    "version": {
+      "disposition": "路線差異",
+      "rationale": "IH 以 --version／Welcome 呈現"
+    },
     "announcements": {
       "disposition": "不做",
       "rationale": "需伺服器公告面；IH 無帳號面"
@@ -255,9 +303,21 @@
       "disposition": "遠期",
       "rationale": "web/desktop 在 IH 遠期隊列"
     },
+    "brief": {
+      "disposition": "不做",
+      "rationale": "帳號權益功能；IH 不做帳號面"
+    },
+    "color": {
+      "disposition": "遠期",
+      "rationale": "per-session 顏色識別，暫緩"
+    },
     "compact-mode": {
       "disposition": "已存在",
       "rationale": "IH 已實作本地狀態切換"
+    },
+    "config": {
+      "disposition": "路線差異",
+      "rationale": "同 IH /settings 面，非缺口"
     },
     "copy": {
       "disposition": "已存在",
@@ -303,6 +363,10 @@
       "disposition": "已存在",
       "rationale": "IH 已實作，含參數驗證"
     },
+    "keybindings": {
+      "disposition": "遠期",
+      "rationale": "keybindings.json 覆蓋層未規劃"
+    },
     "keymap": {
       "disposition": "遠期",
       "rationale": "鍵表重映射需設定層，暫緩"
@@ -314,6 +378,10 @@
     "multiline": {
       "disposition": "已存在",
       "rationale": "IH 已實作 multiline 切換"
+    },
+    "output-style": {
+      "disposition": "不做",
+      "rationale": "cc 已棄用 stub，無可採"
     },
     "pets": {
       "disposition": "不做",
@@ -335,6 +403,14 @@
       "disposition": "路線差異",
       "rationale": "IH 設 statusLine.items"
     },
+    "stickers": {
+      "disposition": "不做",
+      "rationale": "行銷貼紙頁，與 IH 無關"
+    },
+    "terminal-setup": {
+      "disposition": "路線差異",
+      "rationale": "IH 以 /tutorial 指引＋探測"
+    },
     "theme": {
       "disposition": "已存在",
       "rationale": "IH 已實作主題循環與持久化"
@@ -355,17 +431,21 @@
       "disposition": "improved-writing",
       "rationale": "IH 翻轉時清 hover/scroll 串流"
     },
+    "tui": {
+      "disposition": "路線差異",
+      "rationale": "IH 用 /minimal、/fullscreen"
+    },
     "tutorial": {
       "disposition": "已存在",
       "rationale": "IH 已實作 tutorial 主題面板"
     },
     "vim": {
       "disposition": "rewrite",
-      "rationale": "IH 僅 stub toast，需真實作"
+      "rationale": "codex/cc 有真切換，IH 無"
     },
     "vim-mode": {
-      "disposition": "遠期",
-      "rationale": "grok 捲動 vim 鍵；次優先"
+      "disposition": "rewrite",
+      "rationale": "IH 僅 stub toast，未接線"
     },
     "voice": {
       "disposition": "不做",
@@ -431,41 +511,9 @@
       "disposition": "improved-writing",
       "rationale": "IH 還原檔案＋對話，優於 grok"
     },
-    "session-create": {
-      "disposition": "路線差異",
-      "rationale": "IH 以 /new 直建，非 RPC"
-    },
-    "session-followup": {
-      "disposition": "路線差異",
-      "rationale": "IH delivery=queue 已同層"
-    },
-    "session-fork": {
-      "disposition": "路線差異",
-      "rationale": "IH /fork 取完成回合前綴"
-    },
-    "session-prompt": {
-      "disposition": "路線差異",
-      "rationale": "IH web-host 有 prompt 路由"
-    },
-    "session-rename": {
-      "disposition": "路線差異",
-      "rationale": "IH /rename 已持久化標題"
-    },
-    "session-send": {
-      "disposition": "路線差異",
-      "rationale": "IH InputSubmit 為同一原語"
-    },
-    "session-steer": {
-      "disposition": "路線差異",
-      "rationale": "IH delivery=steer 步驟界"
-    },
-    "session-update-queue": {
-      "disposition": "rewrite",
-      "rationale": "仿 dsh：編輯/移除/轉 steer"
-    },
     "compact": {
-      "disposition": "improved-writing",
-      "rationale": "append-only 投影，優於改寫"
+      "disposition": "rewrite",
+      "rationale": "引擎 append-only，缺 host 接線"
     },
     "context": {
       "disposition": "已存在",
@@ -476,8 +524,8 @@
       "rationale": "需編輯器擴充，規模大"
     },
     "init": {
-      "disposition": "rewrite",
-      "rationale": "仿 codex 送提示生成 AGENTS.md"
+      "disposition": "reuse",
+      "rationale": "仿 codex：內建提示直接送"
     },
     "memories": {
       "disposition": "不做",
@@ -494,10 +542,6 @@
     "remember": {
       "disposition": "不做",
       "rationale": "§10.3 明文排除 /remember"
-    },
-    "session-inject": {
-      "disposition": "reuse",
-      "rationale": "仿 dsh 加 wake=false 靜默層"
     },
     "transcript": {
       "disposition": "已存在",
@@ -539,10 +583,6 @@
       "disposition": "rewrite",
       "rationale": "仿 codex：子代理審查變更"
     },
-    "session-cancel": {
-      "disposition": "路線差異",
-      "rationale": "IH cancel 保留 inbox"
-    },
     "stop": {
       "disposition": "rewrite",
       "rationale": "仿 codex：停背景程序並清單"
@@ -559,21 +599,13 @@
       "disposition": "已存在",
       "rationale": "IH 已實作"
     },
-    "model-catalog": {
-      "disposition": "路線差異",
-      "rationale": "IH provider 已探測模型目錄"
-    },
-    "model-select": {
-      "disposition": "路線差異",
-      "rationale": "IH 有 session 模型選擇"
-    },
     "personality": {
       "disposition": "路線差異",
       "rationale": "IH 走 preset，非執行期切換"
     },
     "provider": {
       "disposition": "已存在",
-      "rationale": "IH 已實作（機械補齊）"
+      "rationale": "IH 已實作"
     }
   }
 }
