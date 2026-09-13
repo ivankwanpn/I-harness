@@ -1806,8 +1806,7 @@
         "invariants": [
           "The order disabled -> allowed -> hidden is stated as the single source of truth for the catalog; a second filtering site would let the two disagree (xai-grok-shell/src/agent/models/resolution.rs:322).",
           "A fleet pin matches the routing slug, never the user-chosen catalog key, so adding a local `[model.*]` alias cannot smuggle a denied model in (resolution.rs:293-297).",
-          "A fail-closed pin or an unparsable glob set must mark every entry non-selectable rather than falling back to unrestricted (resolution.rs:256-260, :278-286).",
-          "`hidden` hides in every auth mode; `supported_in_api = false` hides only for API-key auth (xai-grok-shell/src/agent/config.rs:4274-4283)."
+          "A fail-closed pin or an unparsable glob set must mark every entry non-selectable rather than falling back to unrestricted (resolution.rs:256-260, :278-286)."
         ],
         "failurePolicy": "fail-closed - an invalid pattern set or a fail-closed managed pin makes every model non-selectable, the catalog stays empty of selectable entries, and the denial is surfaced as policy text; nothing downgrades to unrestricted access.",
         "constants": [
@@ -1840,8 +1839,7 @@
         "invariants": [
           "The BOM strip must stay: without it the first SSE frame of a BOM-prefixed response reaches the typed parser as garbage (xai-grok-sampler/src/client.rs:1071-1084).",
           "A transport error must terminate the stream after being surfaced once; polling again after an h2 failure is the documented busy-loop (client.rs:1088-1096, :1126-1129).",
-          "A stream that ends without a terminal event is an explicit error, never an empty success (xai-grok-sampler/src/stream/collect.rs:16-21, :38-51).",
-          "Correlation headers are applied per request, not baked into the shared client, because the shared client is built without config-derived input (client.rs:52-88)."
+          "A stream that ends without a terminal event is an explicit error, never an empty success (xai-grok-sampler/src/stream/collect.rs:16-21, :38-51)."
         ],
         "failurePolicy": "mixed - layers 1 and 2 surface typed errors as stream items (`SamplingError::EventStreamError`, `StreamError`, `Serialization`) and leave the decision to the retry loop above them; a stream with no terminal event fails closed with `SamplingErrorKind::Api`.",
         "constants": [
@@ -1881,8 +1879,7 @@
         "invariants": [
           "A retry veto must never be retried: the sampler actor and one-shot callers share `is_retry_vetoed` so a new veto lands everywhere at once (xai-grok-sampling-types/src/error.rs:558-564).",
           "Only 401 is an auth error; 403 is a policy denial and must not trigger an OIDC refresh (xai-grok-sampling-types/src/error.rs:332-346).",
-          "The image-strip retry stops when nothing is left to strip, upgrading to Fatal instead of looping (xai-grok-sampler/src/actor/request_task.rs:411-418).",
-          "The rate-limit budget is bounded by RATE_LIMIT_RETRY_THRESHOLD, not by the general retry budget (xai-grok-sampler/src/retry.rs:130-134)."
+          "The image-strip retry stops when nothing is left to strip, upgrading to Fatal instead of looping (xai-grok-sampler/src/actor/request_task.rs:411-418)."
         ],
         "failurePolicy": "mixed - transient errors retry under a bounded, jittered budget; deterministic classes fail fast as Fatal; auth failures are handed to the session for re-auth rather than retried; the HTTP/1.1 rebuild fails soft, reusing the old client if construction fails (xai-grok-sampler/src/actor/request_task.rs:469-474).",
         "constants": [
@@ -1932,7 +1929,6 @@
         "invariants": [
           "The shared builders must stay configuration-free: any config-derived input (auth, headers, base URL) belongs per request, or two sessions would share another session's credentials (shared_http.rs:1-9).",
           "A build failure must not populate the OnceLock; caching it would make one transient failure permanent for the process (shared_http.rs:34-50, pinned by the `shared_does_not_cache_build_failures` test).",
-          "Environment knobs are read once per process by design, so a rollback is consistent between the kill switch and the pool knobs (shared_http.rs:17-19, :74-83).",
           "Every client must be built through the TLS policy helper, because rustls must stay pinned; a native-tls client would break the certificate-error classifier (xai-grok-extra-ca/src/lib.rs:4, :47-59)."
         ],
         "failurePolicy": "fail-soft - client construction errors are returned as `SamplingError::Http` to the caller and are not latched; a bad extra CA bundle is logged and skipped rather than failing client construction (xai-grok-extra-ca/src/lib.rs:1-4).",
@@ -1978,8 +1974,7 @@
         "invariants": [
           "A prewarm must carry no credentials; it is a bare GET of the origin (prewarm.rs:1-4, :199).",
           "A claim must be released on every path that did not warm, or a failed prewarm would permanently suppress later attempts for that origin (prewarm.rs:144-150).",
-          "The tracker is bounded at 32 origins and sweeps expired entries before reporting full, so one noisy process cannot grow it without limit (prewarm.rs:16, :160-170).",
-          "The warm window is the same pool idle timeout the client uses, so 'warm' cannot disagree with the pool's own eviction (prewarm.rs:152-157, :173)."
+          "The tracker is bounded at 32 origins and sweeps expired entries before reporting full, so one noisy process cannot grow it without limit (prewarm.rs:16, :160-170)."
         ],
         "failurePolicy": "fail-open - prewarming is skipped on every adverse outcome (`NoOrigin`, `ClientUnavailable`, `AlreadyClaimed`, `TrackerFull`, `Failed`, `TimedOut`) and a skipped prewarm never fails the sampling request; only a fully drained pooled response counts as warmed.",
         "constants": [
@@ -2018,8 +2013,7 @@
         "invariants": [
           "`snapshot().token` must mirror the bearer `HttpAuth::apply` would send, or 401-attribution prefixes will not match the request that was actually made (xai-grok-auth/src/auth_provider.rs:35-38).",
           "Only the bearer tail is stamped and logged: JWT heads are a shared constant and the tail is the safe part for a sink (retry_middleware.rs:12-16).",
-          "The suffix must be taken by char index, not byte offset, or a multi-byte token panics (bearer_fragment.rs:8-14).",
-          "A provider with no credential must produce no stamp at all - absence, not an empty string (retry_middleware.rs:308-325, pinned by test)."
+          "The suffix must be taken by char index, not byte offset, or a multi-byte token panics (bearer_fragment.rs:8-14)."
         ],
         "failurePolicy": "fail-soft - a header that cannot be built is warned about and the request continues unauthenticated (retry_middleware.rs:51-54); a refresh failure simply ends the retry loop and returns the last 401 response (retry_middleware.rs:80-97); a deployment key never refreshes and never sends the token-auth header (xai-grok-shell/src/auth/credential_provider.rs:106-116).",
         "constants": [
@@ -2060,8 +2054,7 @@
         "invariants": [
           "The `\\b` anchor on the API-key pattern is load-bearing: without it `task-`, `disk-` and `risk-` prefixes turn into redactions (xai-grok-secrets/src/sanitizer.rs:8-11).",
           "The username backstop runs only when `$HOME`/`$USER` are unavailable, because regex-based user matching over-redacts real paths (sanitizer.rs:190-195).",
-          "`redact_url` must rebuild the query through the form-urlencoded serializer so the `redacted` placeholder is not percent-encoded (sanitizer.rs:277-304).",
-          "The borrowed-vs-owned return is part of the contract: callers test for `Cow::Owned` to decide whether a value changed (sanitizer.rs:91-93, :120-126)."
+          "`redact_url` must rebuild the query through the form-urlencoded serializer so the `redacted` placeholder is not percent-encoded (sanitizer.rs:277-304)."
         ],
         "failurePolicy": "fail-open with respect to flow (redaction never errors and never blocks a request) but fail-safe in the direction that matters: an unmatched string is passed through unchanged, so the regexes are the only defence and a new secret shape requires a new pattern.",
         "constants": [
@@ -2471,7 +2464,366 @@
         "verified": true
       }
     ],
-    "service": [],
+    "service": [
+      {
+        "name": "double-fork-daemonize-with-single-instance-pidfile-lock",
+        "what": "On Unix `daemonize()` runs `fork_and_exit_parent()` (the parent exits 0), `setsid()`, a second fork, `chdir(\"/\")`, then redirects stdin to `/dev/null` and stdout/stderr onto an append-mode log; on Windows there is no fork, only stdio repointing at the log handle (xai-grok-workspace-daemon/src/daemonize.rs:142-167, :169-198). Single-instance exclusion is an advisory `flock` held for the daemon's whole life by `PidFile::_file`, and the PID text stored in the file is explicitly advisory for diagnostics - exclusion comes from the lock, not the number (daemonize.rs:270-307). `acquire_or_take_over` escalates against a live predecessor: read the recorded PID, signal it gracefully, poll the lock for `TAKEOVER_GRACE`, then kill forcefully and poll for `TAKEOVER_KILL_GRACE`, declining if a newer spawn won the lock instead (daemonize.rs:309-360). Every daemon-owned file - log, pidfile and the preview-proxy log - is opened through one helper that adds `O_NOFOLLOW` and mode 0600 (daemonize.rs:220-229). The binary calls this only under `--daemonize`, which defaults off (xai-grok-workspace/src/bin/workspace_server.rs:246-260, :842-845).",
+        "invariants": [
+          "The double-fork and `setsid()` must run before anything starts threads: the binary daemonizes before it builds the tokio runtime (xai-grok-workspace/src/bin/workspace_server.rs:246-260, :278).",
+          "The flock is never bypassed - a guard exists only while the lock is held, and a contended acquire returns `Ok(None)` so the caller exits quietly instead of running a second instance (xai-grok-workspace-daemon/src/daemonize.rs:280-307, :356-359).",
+          "Daemon-owned files must keep `O_NOFOLLOW` plus 0600; the helper is shared with the preview proxy so both files stay equally strict (daemonize.rs:220-229)."
+        ],
+        "failurePolicy": "mixed - exclusivity fails closed (a held lock means the new process declines and exits), while OOM protection fails soft: a failed `oom_score_adj` write is logged and reported as false but the server still starts (xai-grok-workspace-daemon/src/daemonize.rs:110-139, :65-68).",
+        "constants": [
+          {
+            "name": "DEFAULT_LOG_PATH (unix) / (windows)",
+            "value": "\"/tmp/workspace-server.log\" / \"C:\\\\Windows\\\\Temp\\\\workspace-server.log\"",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:37-45"
+          },
+          {
+            "name": "DEFAULT_PIDFILE_PATH (unix)",
+            "value": "\"/tmp/workspace-server.pid\"",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:43"
+          },
+          {
+            "name": "TAKEOVER_GRACE / TAKEOVER_KILL_GRACE / TAKEOVER_POLL",
+            "value": "2 s / 1 s / 50 ms",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:52-58"
+          },
+          {
+            "name": "WORKSPACE_SERVER_OOM_SCORE_ADJ / PREVIEW_PROXY_OOM_SCORE_ADJ",
+            "value": "-900 / -500",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:65-68"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:142-167",
+          "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:220-229",
+          "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:270-307",
+          "crates/codegen/xai-grok-workspace-daemon/src/daemonize.rs:309-360",
+          "crates/codegen/xai-grok-workspace-daemon/src/lib.rs:1-16",
+          "crates/codegen/xai-grok-workspace/src/bin/workspace_server.rs:246-260"
+        ],
+        "modules": [
+          "xai-grok-workspace-daemon"
+        ],
+        "verified": true
+      },
+      {
+        "name": "preview-proxy-supervision-with-loopback-activity-scraping",
+        "what": "After the workspace server daemonizes, the supervisor execs exactly one child, `/usr/local/bin/xai-grok-preview-proxy`, capturing its stdout/stderr into a workspace-server-owned log that is served back through the diagnostics endpoints (xai-grok-workspace-daemon/src/preview_supervisor.rs:26-31). The child is spawned with `kill_on_drop(true)` inside a restart loop whose base delay doubles up to a cap, and a run lasting at least `PREVIEW_PROXY_HEALTHY_RUN_SECS` resets the backoff step so a crash loop pins at the cap instead of growing (preview_supervisor.rs:33-40, :166-188, :307-341). On Linux a `pre_exec` sets `PR_SET_PDEATHSIG(SIGKILL)` and re-checks `getppid()` to close the fork/exec race, because PDEATHSIG keys off the spawning thread and the task must therefore run on long-lived runtime workers (preview_supervisor.rs:10-13, :281). Two scrapers then poll the proxy's loopback control endpoints: `/__control/activity` feeds a sink that withholds idle (preview_supervisor.rs:401-435, :523-585) and `/__control/metrics` is exported to the hub metrics sink under the `preview_proxy_` prefix every 60 s (preview_supervisor.rs:618-637). The whole supervisor is gated: it is spawned only when `--preview-enabled` was passed, which defaults off (xai-grok-workspace/src/bin/workspace_server.rs:193, :433-439, :903).",
+        "invariants": [
+          "The child is spawned only after daemonize, so it inherits the daemon's session and process group and escapes the launcher's process-group reap (xai-grok-workspace-daemon/src/preview_supervisor.rs:6-9).",
+          "The supervise task must run on long-lived worker threads: PDEATHSIG keys off the spawning thread, so a short-lived thread would kill the child spuriously (preview_supervisor.rs:11-13).",
+          "A healthy run resets the restart step, so a crash loop converges on a fixed interval rather than an unbounded delay (preview_supervisor.rs:33-40)."
+        ],
+        "failurePolicy": "fail-soft - a spawn or log-open failure backs off and retries rather than dropping the task; an unreachable proxy or a bad scrape body is a quiet no-op on the activity path and a logged debug on the metrics path (xai-grok-workspace-daemon/src/preview_supervisor.rs:539-637).",
+        "constants": [
+          {
+            "name": "PREVIEW_PROXY_BIN_PATH / PREVIEW_PROXY_LOG_PATH",
+            "value": "\"/usr/local/bin/xai-grok-preview-proxy\" / \"/var/tmp/workspace-server/tmp/preview-proxy.log\"",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:26-31"
+          },
+          {
+            "name": "PREVIEW_PROXY_HEALTHY_RUN_SECS / RESTART_BACKOFF_BASE / CAP",
+            "value": "30 s healthy run; backoff 1 s doubling to a 30 s cap",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:34-40"
+          },
+          {
+            "name": "DEFAULT_PREVIEW_CONTROL_PORT",
+            "value": "6015",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:407"
+          },
+          {
+            "name": "PREVIEW_ACTIVITY_SCRAPE_TIMEOUT / PREVIEW_METRICS_SCRAPE_INTERVAL",
+            "value": "2 s / 60 s (metrics prefix \"preview_proxy_\")",
+            "evidence": "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:427, :619-620"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:1-13",
+          "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:281",
+          "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:307-341",
+          "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:401-435",
+          "crates/codegen/xai-grok-workspace-daemon/src/preview_supervisor.rs:523-637",
+          "crates/codegen/xai-grok-workspace/src/bin/workspace_server.rs:433-439"
+        ],
+        "modules": [
+          "xai-grok-workspace-daemon"
+        ],
+        "verified": true
+      },
+      {
+        "name": "loopback-diagnostics-readiness-server",
+        "what": "An in-guest HTTP server answers three unauthenticated GET routes for the standalone workspace server: `/ready`, `/statusz` and `/logs` (xai-grok-diag-server/src/lib.rs:1-5, :371-393). It binds either a Unix socket, removing any stale file first and then `set_permissions(0o600)`, or loopback TCP on `Ipv4Addr::LOCALHOST`, and it never goes through the sandbox port mapping (lib.rs:398-449). `/ready` is 200 only when the hub state is `Connected` and 503 otherwise, with the body served either way so naive HTTP probes and state parsers agree; `/statusz` flattens those fields and adds `os` plus advisory `image_capabilities`; `/logs` tails the daemon log with a 64 KiB default clamped to a 256 KiB hard cap, returns 404 when there is no log file, and answers a generic 500 body on I/O error so the log path is never echoed (lib.rs:64-97, :333-358, :377-385). State is a mutex latch with deliberate stickiness: `set_failed` is terminal, `set_terminal_close` latches a hub close code (4100-4199) that `set_disconnected` must not clear, and `revive_connected` clears it only for a code in the caller's allow-list (lib.rs:149-231). Not gated by a flag - the workspace server always starts it and advertises `diag: true` in its capability manifest (xai-grok-workspace/src/bin/workspace_server.rs:231); the TCP listener exists only on Windows, so `DEFAULT_DIAG_PORT` is inert on Unix (workspace_server.rs:408-411).",
+        "invariants": [
+          "The `/ready` field set is a frozen contract with the sandbox readiness gate: never rename or remove fields, additions only (xai-grok-diag-server/src/lib.rs:67-68).",
+          "`/ready` must never be 2xx while the state is not `Connected`, or a probe would disagree with a client parsing `state` (lib.rs:377-385).",
+          "`image_capabilities` is advisory only and never an authorization input, because the guest can forge the markers (lib.rs:92-97)."
+        ],
+        "failurePolicy": "mixed - a bind failure is fatal only on the daemonized path, which has a grep-able marker and a dedicated exit code, and is warn-only otherwise (xai-grok-diag-server/src/lib.rs:33-37; xai-grok-workspace/src/bin/workspace_server.rs:408-431); socket `chmod` failure is warn-only, and `/logs` read errors return a generic 500 body.",
+        "constants": [
+          {
+            "name": "DEFAULT_DIAG_SOCKET_PATH",
+            "value": "\"/tmp/workspace-server.sock\" (unix)",
+            "evidence": "crates/codegen/xai-grok-diag-server/src/lib.rs:28"
+          },
+          {
+            "name": "DEFAULT_DIAG_PORT",
+            "value": "6016 (Windows loopback TCP; inert on Unix)",
+            "evidence": "crates/codegen/xai-grok-diag-server/src/lib.rs:31"
+          },
+          {
+            "name": "DIAG_BIND_FAILED_MARKER / EXIT_DIAG_BIND_FAILED",
+            "value": "\"diagnostics server bind failed\" / 5",
+            "evidence": "crates/codegen/xai-grok-diag-server/src/lib.rs:34-37"
+          },
+          {
+            "name": "DEFAULT_LOG_TAIL_BYTES / MAX_LOG_TAIL_BYTES",
+            "value": "64 * 1024 / 256 * 1024",
+            "evidence": "crates/codegen/xai-grok-diag-server/src/lib.rs:40-43"
+          },
+          {
+            "name": "MAX_ERROR_DETAIL_BYTES",
+            "value": "256",
+            "evidence": "crates/codegen/xai-grok-diag-server/src/lib.rs:65"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-diag-server/src/lib.rs:1-5",
+          "crates/codegen/xai-grok-diag-server/src/lib.rs:67-97",
+          "crates/codegen/xai-grok-diag-server/src/lib.rs:149-231",
+          "crates/codegen/xai-grok-diag-server/src/lib.rs:333-358",
+          "crates/codegen/xai-grok-diag-server/src/lib.rs:371-449",
+          "crates/codegen/xai-grok-workspace/src/bin/workspace_server.rs:231, :408-411"
+        ],
+        "modules": [
+          "xai-grok-diag-server"
+        ],
+        "verified": true,
+        "wiringNote": "moduleCoverage files this crate as \"Service-domain\", so it is recorded here rather than under `ops` where the brief's starting list placed it. Its inputs are the workspace daemon's own log path and the hub connection state, both owned by the workspace server binary."
+      },
+      {
+        "name": "shared-http-clients-with-poison-pool-escape",
+        "what": "Shared `reqwest` client construction with one escape hatch. `shared_client()` is an HTTP/2 client with keepalive, a 30 s pool idle timeout and a mode header; `shared_upload_client()` is HTTP/1.1-only with `pool_max_idle_per_host(2)` and a 10 s idle timeout because a degraded multiplexed connection silently drops multipart bodies; `shared_startup_blocking_client()` carries `STARTUP_FETCH_TIMEOUT` as both connect and read ceiling; and `fresh_http1_client()` is a pool-less, never-cached client used to escape a poisoned pool (xai-grok-http/src/lib.rs:256-269, :285-298, :326-334, :346-350, :557-576). `send_with_retry_escaping_pool` runs early attempts on the pooled client and swaps the final attempt of a multi-attempt run onto the pool-less client, so a tight-budget caller escapes a reset or GOAWAY connection immediately instead of waiting for pool eviction (lib.rs:501-527). Transport failures are classified by descending the cause chain, with certificate verdicts separated from plain connect failures (lib.rs:404-449). Two compile-time asserts pin the budget relationships between the startup timeouts (lib.rs:37-49). moduleCoverage calls this crate \"infrastructure ... contributes no mechanism of its own\"; the pool-escape policy plus the failure classifier are the mechanism, and the file's own `hintCorrections` assigns the crate to `service`.",
+        "invariants": [
+          "The pool escape must stay on the LAST attempt: moving it earlier makes every retry pay a fresh connection setup (xai-grok-http/src/lib.rs:501-527).",
+          "The two compile-time asserts must keep holding - `SETTINGS_REAPPLY_TIMEOUT > STARTUP_FETCH_TIMEOUT * (1 + SETTINGS_FETCH_MAX_ATTEMPTS)` and `MIN_CLIENT_CONNECT_TIMEOUT >= 2 * STARTUP_AUTH_TIMEOUT` (lib.rs:37-49).",
+          "Certificate trust failures must be classified before the generic connect case, or an untrusted issuer reads as an unreachable host (lib.rs:404-449)."
+        ],
+        "failurePolicy": "mixed - retry count and retryability are owned by the caller and the helper returns a classified transport error rather than inventing an outcome; the pool-escape attempt is best effort and its failure is classified like any other attempt (xai-grok-http/src/lib.rs:404-449, :501-527).",
+        "constants": [
+          {
+            "name": "STARTUP_FETCH_TIMEOUT / STARTUP_AUTH_TIMEOUT / STARTUP_AUTH_REFRESH_TIMEOUT",
+            "value": "5 s / 60 s / 5 s",
+            "evidence": "crates/codegen/xai-grok-http/src/lib.rs:24-30"
+          },
+          {
+            "name": "SETTINGS_REAPPLY_TIMEOUT / SETTINGS_FETCH_MAX_ATTEMPTS",
+            "value": "30 s / 3",
+            "evidence": "crates/codegen/xai-grok-http/src/lib.rs:32-34"
+          },
+          {
+            "name": "MIN_CLIENT_CONNECT_TIMEOUT",
+            "value": "120 s (asserted >= 2x STARTUP_AUTH_TIMEOUT)",
+            "evidence": "crates/codegen/xai-grok-http/src/lib.rs:46-49"
+          },
+          {
+            "name": "CLIENT_MODE_HEADER",
+            "value": "\"x-grok-client-mode\" (default \"interactive\")",
+            "evidence": "crates/codegen/xai-grok-http/src/lib.rs:256-269"
+          },
+          {
+            "name": "shared client pool knobs",
+            "value": "pool_idle_timeout 30 s (HTTP/2); upload client idle 10 s with max 2 idle per host",
+            "evidence": "crates/codegen/xai-grok-http/src/lib.rs:294, :332-334"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-http/src/lib.rs:24-49",
+          "crates/codegen/xai-grok-http/src/lib.rs:256-269",
+          "crates/codegen/xai-grok-http/src/lib.rs:285-298",
+          "crates/codegen/xai-grok-http/src/lib.rs:326-350",
+          "crates/codegen/xai-grok-http/src/lib.rs:404-449",
+          "crates/codegen/xai-grok-http/src/lib.rs:501-576"
+        ],
+        "modules": [
+          "xai-grok-http"
+        ],
+        "verified": true
+      },
+      {
+        "name": "acp-gateway-channel-pair-and-fire-and-forget-notifications",
+        "what": "The ACP transport is a pair of linked unbounded mpsc channels with a oneshot response slot per request: `acp_channels()` builds the pair and `acp_send` attaches the responder, awaits the reply, and maps a closed channel to a typed error (xai-acp-lib/src/channel.rs:28-40). `acp_gateway` builds the sender/receiver pair, and the receiver's `run` loop dispatches every message through the `handle!` macro, which builds an optional span from `_meta` and spawns the handler on an injected spawn function so the loop never blocks on a handler (xai-acp-lib/src/gateway.rs:99, :144-174). The sender offers `forward_with_completion` and `forward_fire_and_forget`, and both `session_notification` and `ext_notification` are deliberately fire-and-forget because blocking on a degraded relay can stall a session (gateway.rs:455, :468). Channel failures carry a typed discriminant in the error `data` - `xaiAcpChannelFailure` with `send_failed` / `recv_failed` - so \"the receiver was already gone\" is distinguishable from \"a peer took the request then vanished\" without substring-matching the message (xai-acp-lib/src/common.rs:41-67).",
+        "invariants": [
+          "The channel-failure discriminant must stay a typed field in the error `data`, never be inferred from message text (xai-acp-lib/src/common.rs:41-67).",
+          "Per-message tracing spans are opt-in (`tracing: bool`, `with_tracing`) and off by default (xai-acp-lib/src/gateway.rs:25, :43, :93).",
+          "The default dispatcher is `tokio::task::spawn_local`, so a receiver needs a `LocalSet` unless `with_spawn_fn` overrides it (gateway.rs:36-37, :50-56)."
+        ],
+        "failurePolicy": "fail-soft - a dropped receiver discards the message rather than failing the caller, `acp_send` surfaces a typed `INTERNAL_ERROR` carrying the discriminant, and handler work is isolated in its spawned task (xai-acp-lib/src/common.rs:41-67).",
+        "constants": [
+          {
+            "name": "AcpChannelFailure::DATA_KEY",
+            "value": "\"xaiAcpChannelFailure\"",
+            "evidence": "crates/codegen/xai-acp-lib/src/common.rs:41"
+          },
+          {
+            "name": "channel failure tags",
+            "value": "\"send_failed\" / \"recv_failed\"",
+            "evidence": "crates/codegen/xai-acp-lib/src/common.rs:45-46"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-acp-lib/src/channel.rs:28-40",
+          "crates/codegen/xai-acp-lib/src/gateway.rs:25-56",
+          "crates/codegen/xai-acp-lib/src/gateway.rs:99",
+          "crates/codegen/xai-acp-lib/src/gateway.rs:144-174",
+          "crates/codegen/xai-acp-lib/src/gateway.rs:455-468",
+          "crates/codegen/xai-acp-lib/src/common.rs:41-67"
+        ],
+        "modules": [
+          "xai-acp-lib"
+        ],
+        "verified": true
+      },
+      {
+        "name": "acp-stdio-line-transport-hardening",
+        "what": "The stdin side of the ACP wire is read by a dedicated OS thread doing blocking reads into a depth-64 channel with `blocking_send`, which gives natural backpressure instead of buffering without bound (xai-acp-lib/src/stdin_reader.rs:56-79, :122). On Windows an `isolate_process_stdin` helper exists beside that reader so the process-wide stdin handle can be handled separately from the reader's own handle (stdin_reader.rs:87-93, :136-137). Every line then passes through `normalize_json_line`, which rewrites only lines containing a `\\/` escape that the pinned acp envelope would otherwise drop, and forwards lines that already parse as `RawIncomingMessage` byte-identical (xai-acp-lib/src/normalize.rs:15-45). `LineBufferedRead` pre-reads whole newline-delimited lines on a task and serves them from a channel so `poll_read` returns `Pending` only between lines, which is what makes it usable inside a biased select, with a per-line ceiling of `MAX_LINE_SIZE` (xai-acp-lib/src/line_reader.rs:30, :51-54, :163-168).",
+        "invariants": [
+          "Normalization must stay limited to the one escape that breaks the pinned envelope: valid lines are forwarded byte-identical and unparseable input passes through untouched, leaving garbage handling to the acp crate (xai-acp-lib/src/normalize.rs:38-45).",
+          "A line larger than `MAX_LINE_SIZE` must be an `InvalidData` error, not unbounded buffering (xai-acp-lib/src/line_reader.rs:163-168).",
+          "The stdin reader thread must park on a full channel rather than dropping or growing, which is what `blocking_send` on a depth-64 channel provides (xai-acp-lib/src/stdin_reader.rs:56, :122)."
+        ],
+        "failurePolicy": "fail-soft - EOF or a read error closes the channel, an over-long line is a typed error rather than memory growth, and anything the normalizer cannot parse is forwarded unchanged (xai-acp-lib/src/stdin_reader.rs:122; src/line_reader.rs:163-168).",
+        "constants": [
+          {
+            "name": "STDIN_LINE_CHANNEL_DEPTH",
+            "value": "64",
+            "evidence": "crates/codegen/xai-acp-lib/src/stdin_reader.rs:56"
+          },
+          {
+            "name": "MAX_LINE_SIZE",
+            "value": "64 * 1024 * 1024 (64 MiB)",
+            "evidence": "crates/codegen/xai-acp-lib/src/line_reader.rs:30"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-acp-lib/src/stdin_reader.rs:56-79",
+          "crates/codegen/xai-acp-lib/src/stdin_reader.rs:122-137",
+          "crates/codegen/xai-acp-lib/src/normalize.rs:15-45",
+          "crates/codegen/xai-acp-lib/src/line_reader.rs:30",
+          "crates/codegen/xai-acp-lib/src/line_reader.rs:51-54",
+          "crates/codegen/xai-acp-lib/src/line_reader.rs:163-168"
+        ],
+        "modules": [
+          "xai-acp-lib"
+        ],
+        "verified": true
+      },
+      {
+        "name": "streaming-stt-dictation-with-out-of-process-mic-capture",
+        "what": "Voice input is a streaming STT client plus a pipeline task, not a renderer concern: `run_voice_pipeline` consumes press/release/shutdown commands and drives a session that connects to the STT websocket, sends binary PCM and then `{\"type\":\"audio.done\"}`, and maps server events into Created/Partial/Done/Error (xai-grok-voice/src/pipeline.rs:37, :241-249; xai-grok-voice/src/stt/streaming.rs:66-88). Two bounds keep it honest: a `NO_SPEECH_TIMEOUT` watchdog tears down a silent session with microphone guidance instead of streaming a dead input, and a `BACKLOG_MAX_CHUNKS` backlog bridges capture to the socket so capture never backpressures during the handshake (pipeline.rs:133-153, :181-183, :249). Capture is deliberately out of process where the audio stack is expensive: the binary re-execs itself as a hidden `__mic-capture` helper that speaks a one-line READY handshake, Linux falls back to system recorders probed with a short `--raw` check, and the feature is compile-time gated by the `audio` cargo feature (xai-grok-voice/src/lib.rs:42-52, :81-84; xai-grok-voice/src/audio/capture_subprocess.rs:28-33, :73, :161; xai-grok-voice/src/audio/capture_linux.rs:31-39, :164). Audio defaults to 16 kHz with `stt_ws_path` `/v1/stt` (xai-grok-voice/src/config.rs:6, :37).",
+        "invariants": [
+          "The microphone must be stopped before end-of-utterance is signalled, so no stray PCM is queued after `audio.done` (xai-grok-voice/src/pipeline.rs:241).",
+          "A session that produces no speech must end in an explicit error rather than an open microphone (pipeline.rs:181-183, :249).",
+          "The capture-to-socket backlog is bounded at 1024 chunks and holding the sender defers the writer's `audio.done` until the backlog drains (pipeline.rs:133-139, :153)."
+        ],
+        "failurePolicy": "fail-soft - capture and connect failures surface as error events and the pipeline keeps running; the no-speech watchdog converts a silent session into an explicit teardown instead of a hang (xai-grok-voice/src/pipeline.rs:181-183).",
+        "constants": [
+          {
+            "name": "DEFAULT_SAMPLE_RATE",
+            "value": "16_000",
+            "evidence": "crates/codegen/xai-grok-voice/src/config.rs:6"
+          },
+          {
+            "name": "stt_ws_path / default STT language",
+            "value": "\"/v1/stt\" / \"en\"",
+            "evidence": "crates/codegen/xai-grok-voice/src/config.rs:37; crates/codegen/xai-grok-voice/src/language.rs:28"
+          },
+          {
+            "name": "BACKLOG_MAX_CHUNKS / NO_SPEECH_TIMEOUT",
+            "value": "1024 chunks / 10 s",
+            "evidence": "crates/codegen/xai-grok-voice/src/pipeline.rs:133, :181"
+          },
+          {
+            "name": "READY_TIMEOUT / PW_HELP_TIMEOUT",
+            "value": "5 s (mic-capture helper handshake) / 2 s (recorder --raw probe)",
+            "evidence": "crates/codegen/xai-grok-voice/src/audio/capture_subprocess.rs:33; crates/codegen/xai-grok-voice/src/audio/capture_linux.rs:39"
+          },
+          {
+            "name": "MIC_CAPTURE_SUBCOMMAND",
+            "value": "\"__mic-capture\"",
+            "evidence": "crates/codegen/xai-grok-voice/src/lib.rs:47"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-voice/src/pipeline.rs:37",
+          "crates/codegen/xai-grok-voice/src/pipeline.rs:133-153",
+          "crates/codegen/xai-grok-voice/src/pipeline.rs:181-183",
+          "crates/codegen/xai-grok-voice/src/pipeline.rs:241-249",
+          "crates/codegen/xai-grok-voice/src/stt/streaming.rs:66-88",
+          "crates/codegen/xai-grok-voice/src/lib.rs:42-52",
+          "crates/codegen/xai-grok-voice/src/audio/capture_subprocess.rs:28-33",
+          "crates/codegen/xai-grok-voice/src/audio/capture_linux.rs:31-39"
+        ],
+        "modules": [
+          "xai-grok-voice"
+        ],
+        "verified": true
+      },
+      {
+        "name": "workspace-rpc-client-over-a-frozen-wire-contract",
+        "what": "The workspace surface is three crates that only work together. `WorkspaceClient` keeps a connected latch and fast-fails with `NotConnected` without a round trip, then `rpc_raw` invokes the `workspace_rpc` hub tool and drains the stream to its terminal item; a non-retryable `workspace_unavailable` maps to a distinct `WorkspaceHibernated` (\"do not retry\") that deliberately does not trip the latch, while `NetworkError` or a `Custom` error whose details code is `protocol_error` does (xai-grok-workspace-client/src/lib.rs:79, :87, :114-129, :203-209, :235-236, :246-257). The wire contract lives in `xai-grok-workspace-types`: every wire enum is adjacently tagged `#[serde(tag = \"type\", content = \"data\")]`, method names come from `const METHOD`, and `const ACTIVITY: RpcActivityClass` has no default so a new RPC method cannot compile without stating whether it keeps the workspace awake (xai-grok-workspace-types/src/lib.rs:23; src/rpc/mod.rs:30-60, with several dozen `workspace.*` methods each carrying a Read/Mutation classification). The response envelope carries `turn_active`, `hub_error` and `unknown_method` codes, including a matcher for the legacy `unknown workspace method:` prefix so an older hub is still understood (xai-grok-workspace-types/src/rpc/envelope.rs:13-44). `xai-grok-tools-api` is the third contract crate: generated protobuf types, shared config validation so save-time checks cannot drift from bind-time enforcement, canonical slash-command wording and the tool names that gate those commands (xai-grok-tools-api/src/lib.rs:1-9, :112-113; src/slash_commands.rs:8, :99, :105).",
+        "invariants": [
+          "The connected latch is only cleared by a fatal transport error: an envelope error or a hibernation must leave it connected (xai-grok-workspace-client/src/lib.rs:235-236, :727-784).",
+          "Wire enums must stay adjacently tagged, so adding a variant cannot silently change the encoding of existing ones (xai-grok-workspace-types/src/lib.rs:23).",
+          "`ACTIVITY` has no default value, which is what forces every new RPC method to declare its idle-hibernation class (xai-grok-workspace-types/src/rpc/mod.rs:56-60)."
+        ],
+        "failurePolicy": "mixed - fail-closed on the latch (`NotConnected` with no round trip) and fail-soft otherwise: RPC errors are returned as typed envelope errors without disturbing the connection, and hibernation is a distinct non-retryable variant rather than a retryable failure (xai-grok-workspace-client/src/lib.rs:79, :203-236).",
+        "constants": [
+          {
+            "name": "WORKSPACE_RPC_TOOL_ID",
+            "value": "\"workspace_rpc\"",
+            "evidence": "crates/codegen/xai-grok-workspace-types/src/rpc/mod.rs:30"
+          },
+          {
+            "name": "TURN_ACTIVE / HUB_ERROR / UNKNOWN_METHOD / legacy prefix",
+            "value": "\"turn_active\" / \"hub_error\" / \"unknown_method\" / \"unknown workspace method:\"",
+            "evidence": "crates/codegen/xai-grok-workspace-types/src/rpc/envelope.rs:13-20"
+          },
+          {
+            "name": "MCP_TOOL_NAME_DELIMITER",
+            "value": "\"__\"",
+            "evidence": "crates/codegen/xai-grok-workspace-types/src/lib.rs:66"
+          },
+          {
+            "name": "SCHEDULER_CREATE_TOOL_NAME / IMAGE_GEN_TOOL_NAME / IMAGE_TO_VIDEO_TOOL_NAME",
+            "value": "\"scheduler_create\" / \"image_gen\" / \"image_to_video\"",
+            "evidence": "crates/codegen/xai-grok-tools-api/src/slash_commands.rs:8, :99, :105"
+          },
+          {
+            "name": "default_client_name parsing",
+            "value": "segment after the FIRST colon: `id.split(':').nth(1).unwrap_or(id)`",
+            "evidence": "crates/codegen/xai-grok-tools-api/src/lib.rs:112-113"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-workspace-client/src/lib.rs:87-129",
+          "crates/codegen/xai-grok-workspace-client/src/lib.rs:203-257",
+          "crates/codegen/xai-grok-workspace-types/src/lib.rs:23, :66",
+          "crates/codegen/xai-grok-workspace-types/src/rpc/mod.rs:30-60",
+          "crates/codegen/xai-grok-workspace-types/src/rpc/envelope.rs:13-44",
+          "crates/codegen/xai-grok-tools-api/src/lib.rs:1-9, :112-113",
+          "crates/codegen/xai-grok-tools-api/src/slash_commands.rs:8-105"
+        ],
+        "modules": [
+          "xai-grok-workspace-client",
+          "xai-grok-workspace-types",
+          "xai-grok-tools-api"
+        ],
+        "verified": true
+      }
+    ],
     "retrieval": [
       {
         "name": "hybrid-bm25-plus-vector-memory-retrieval",
@@ -2687,7 +3039,371 @@
         "wiringNote": "Wired: the single dependent is xai-grok-workspace, exposing it as a `workspace.fuzzy_search` RPC driven through a manager (xai-grok-workspace/src/file_system/mod.rs:143-166). The degradation ladder is regression-guarded by a unix child-re-exec test that caps the process-count rlimit and asserts the process degrades instead of aborting (lib.rs:843-890)."
       }
     ],
-    "ops": [],
+    "ops": [
+      {
+        "name": "three-mode-telemetry-policy-gate",
+        "what": "One mode decides whether anything is emitted at all. `TelemetryMode` is `Disabled | SessionMetrics | Enabled`, and `Disabled` is the `#[default]`, so telemetry is off unless it is explicitly turned on (xai-grok-telemetry/src/config.rs:5, :11-13). Parsing accepts the legacy bool plus the string `session-metrics` / `session_metrics` for the middle mode, and `Display` writes the mode back so a parent can hand `GROK_TELEMETRY_ENABLED={mode}` to spawned children (config.rs:32, :40, :61). Emission sites consult the narrowest predicate: `log_event` needs `client::is_enabled()` (full `Enabled`), `log_session_event` needs `is_session_metrics_enabled()` (either non-disabled mode), and Mixpanel profile sync needs `is_enabled()` only (client.rs:138, :146-151; session_ctx.rs:168-171). `log_event_dual(internal_enabled, data)` exists so a caller with a stricter internal gate still fans out to the external stream exactly once (session_ctx.rs:157). `TelemetryConfig::apply_env_overrides` layers `GROK_TELEMETRY_EVENTS_URL`, `_EVENTS_API_KEY`, `_MIXPANEL_TOKEN`, `_MIXPANEL_ENABLED` and `_TRACE_UPLOAD` over file and remote config, and Mixpanel defaults on only when a build token was baked in (config.rs:192, :236-248). The enterprise posture is the default: `Disabled` unless an operator turns it on, and an unrecognized mode string degrades to `Disabled` with a warning rather than enabling anything (config.rs:12-13, :46).",
+        "invariants": [
+          "`TelemetryMode::Disabled` must stay the `#[default]` - telemetry is opt-in (xai-grok-telemetry/src/config.rs:12-13).",
+          "`is_enabled()` and `is_session_metrics_enabled()` must read the installed client, never the requested mode (client.rs:138, :146-151).",
+          "`log_event_dual` must fan out to the external stream before the internal gate, because that stream is independent of `TelemetryMode` (session_ctx.rs:157)."
+        ],
+        "failurePolicy": "fail-open in the safe direction - an unrecognized mode string warns and lands on `Disabled`, every emission path early-returns, and nothing errors (xai-grok-telemetry/src/config.rs:46).",
+        "constants": [
+          {
+            "name": "TelemetryMode default",
+            "value": "Disabled (`#[default]`)",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/config.rs:12-13"
+          },
+          {
+            "name": "session-metrics tokens",
+            "value": "\"session-metrics\" | \"session_metrics\"",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/config.rs:32"
+          },
+          {
+            "name": "env overrides",
+            "value": "GROK_TELEMETRY_EVENTS_URL / _EVENTS_API_KEY / _MIXPANEL_TOKEN / _MIXPANEL_ENABLED / _TRACE_UPLOAD",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/config.rs:236-248"
+          },
+          {
+            "name": "mixpanel_enabled default",
+            "value": "baked_enabled || build_token.is_some()",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/config.rs:192"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-telemetry/src/config.rs:5-13",
+          "crates/codegen/xai-grok-telemetry/src/config.rs:32-61",
+          "crates/codegen/xai-grok-telemetry/src/config.rs:192-248",
+          "crates/codegen/xai-grok-telemetry/src/client.rs:138-151",
+          "crates/codegen/xai-grok-telemetry/src/session_ctx.rs:157-174"
+        ],
+        "modules": [
+          "xai-grok-telemetry"
+        ],
+        "verified": true,
+        "wiringNote": "Two functions in `id.rs` are inert: `has_workspace_env_markers` (id.rs:156) and the `GROK_TELEMETRY_SPECIAL_USER` gate `is_special_user` (id.rs:161-163) exist but the special-user gate has no shipped caller, so it is dead code today."
+      },
+      {
+        "name": "typed-event-emission-with-fire-and-forget-exit-drain",
+        "what": "Events are typed structs registered through the `telemetry_event!` macro rather than free-form strings, and delivery is fire-and-forget with a bounded exit drain. `log_event` and `log_session_event` funnel into `emit_event_with_origin`, which snapshots the ambient session context, prefixes the event name with the emitter's origin, and spawns the post; in-flight posts are counted by a `PENDING_EVENTS` atomic through an RAII guard (xai-grok-telemetry/src/session_ctx.rs:202, :317; xai-grok-telemetry/src/events/mod.rs:2). `drain_pending(timeout)` polls that counter until it reaches zero or the deadline passes, and the drain is entrypoint-gated: one-shot entrypoints drain at session exit within `SESSION_EXIT_DRAIN`, while interactive hosts deliberately do not (session_ctx.rs:221-246). Event names are reserved against `RESERVED_EVENT_KEYS` so an event payload cannot overwrite an injected key (client.rs:2-3, :252). Local diagnostics are separate and env-gated: `unified.jsonl` under the grok home is capped at 5 MiB, the writer rechecks its own inode every 2 s, and trimming rewrites the tail in place under an exclusive advisory lock so concurrent appenders keep a live file (xai-grok-telemetry/src/unified_log.rs:27-28, :120, :334-338).",
+        "invariants": [
+          "The pending counter must be decremented on every exit path, including a cancelled or never-polled post, or the drain would wait out its whole budget (xai-grok-telemetry/src/session_ctx.rs:202, :246).",
+          "Registration must happen after the runtime check, so a dropped event cannot pin the counter above zero for the life of the process (session_ctx.rs:317).",
+          "`unified.jsonl` trimming must stay in place under the exclusive lock, never a delete-and-recreate, or open appenders would keep writing to an unlinked inode (unified_log.rs:334-338)."
+        ],
+        "failurePolicy": "fail-soft - telemetry loss always beats blocking: with no Tokio runtime the event is dropped rather than panicking, the drain gives up at its deadline, and there is no retry or persistence (xai-grok-telemetry/src/session_ctx.rs:221-246).",
+        "constants": [
+          {
+            "name": "CLI_DRAIN / SESSION_EXIT_DRAIN",
+            "value": "5 s / 2 s",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/session_ctx.rs:221-223"
+          },
+          {
+            "name": "unified log file / size cap / maintenance interval",
+            "value": "\"unified.jsonl\" / 5 MiB / 2 s",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/unified_log.rs:27-28, :120"
+          },
+          {
+            "name": "LOG_METHOD",
+            "value": "\"x.ai/log\" (ACP notification that forwards pager/desktop entries)",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/unified_log.rs:31"
+          },
+          {
+            "name": "RESERVED_EVENT_KEYS",
+            "value": "27 reserved event keys",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/client.rs:252"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-telemetry/src/events/mod.rs:2",
+          "crates/codegen/xai-grok-telemetry/src/session_ctx.rs:202",
+          "crates/codegen/xai-grok-telemetry/src/session_ctx.rs:221-246",
+          "crates/codegen/xai-grok-telemetry/src/session_ctx.rs:317",
+          "crates/codegen/xai-grok-telemetry/src/client.rs:252",
+          "crates/codegen/xai-grok-telemetry/src/unified_log.rs:27-31",
+          "crates/codegen/xai-grok-telemetry/src/unified_log.rs:334-338"
+        ],
+        "modules": [
+          "xai-grok-telemetry"
+        ],
+        "verified": true,
+        "wiringNote": "There is no bounded queue, no batching and no drop-on-full in this crate - product events are unbounded `tokio::spawn` posts. The bounded-queue and circuit-breaker behaviour for trace uploads lives in `xai-file-utils` (queue.rs), which the shell's upload path calls, not here."
+      },
+      {
+        "name": "dual-analytics-sink-with-minimal-mixpanel-client",
+        "what": "`client::track` is the single analytics emitter and it fans out to two independent sinks. It first attaches identity and a 20-field `EventEnrichment` snapshot (os, arch, cpu share and time, memory, uptime, CI flag, entrypoint, interactivity, release channel, dev build) to the event (xai-grok-telemetry/src/client.rs:183). The product-events sink fires only when both a URL and an API key are configured, and the Mixpanel sink only when a Mixpanel client was built, which requires `mixpanel_enabled` plus a token (client.rs:82, :322, :356). `event_value` strips the emitter prefix so shell and workspace events collapse to one bare suffix (client.rs:23). `xai-mixpanel` is deliberately minimal: base64 of the JSON array form-POSTed to `api.mixpanel.com/track` (and `engage`) with a 10 s timeout and an injectable `reqwest::Client`, because `mixpanel-rs` would pull a second reqwest version into the binary (xai-mixpanel/src/lib.rs:1-6, :27, :63-86). Property strings are scrubbed for secrets *before* the project token is injected, so the token itself - which is deliberately Bearer-shaped - is not redacted (xai-mixpanel/src/lib.rs:47-59).",
+        "invariants": [
+          "Each sink fires only when its own configuration is complete: product events need url plus key, Mixpanel needs the enabled flag plus a token (xai-grok-telemetry/src/client.rs:322, :356).",
+          "The Mixpanel token must be injected after the scrub, or the token is redacted out of every payload (xai-mixpanel/src/lib.rs:47-59).",
+          "`event_value` must strip exactly one leading emitter prefix; the prefixes are asserted mutually exclusive (xai-grok-telemetry/src/client.rs:23, :687)."
+        ],
+        "failurePolicy": "fail-soft - both posts are fire-and-forget; an analytics failure is logged and cannot affect the turn (xai-mixpanel/src/lib.rs:63-86).",
+        "constants": [
+          {
+            "name": "Mixpanel REQUEST_TIMEOUT",
+            "value": "10 s",
+            "evidence": "crates/codegen/xai-mixpanel/src/lib.rs:27"
+          },
+          {
+            "name": "track / engage endpoints",
+            "value": "https://api.mixpanel.com/track, https://api.mixpanel.com/engage",
+            "evidence": "crates/codegen/xai-mixpanel/src/lib.rs:79, :111"
+          },
+          {
+            "name": "EventEnrichment",
+            "value": "20 serialized field groups",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/client.rs:183"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-telemetry/src/client.rs:23",
+          "crates/codegen/xai-grok-telemetry/src/client.rs:82",
+          "crates/codegen/xai-grok-telemetry/src/client.rs:183",
+          "crates/codegen/xai-grok-telemetry/src/client.rs:322-356",
+          "crates/codegen/xai-mixpanel/src/lib.rs:1-27",
+          "crates/codegen/xai-mixpanel/src/lib.rs:39-59",
+          "crates/codegen/xai-mixpanel/src/lib.rs:63-118"
+        ],
+        "modules": [
+          "xai-grok-telemetry",
+          "xai-mixpanel"
+        ],
+        "verified": true
+      },
+      {
+        "name": "external-otel-stream-behind-a-fail-closed-privacy-gate",
+        "what": "An opt-in OTLP stream to the customer's own collector, activated only by a double opt-in: `GROK_EXTERNAL_OTEL` must be set *and* a real exporter must be selected in `OTEL_METRICS_EXPORTER` or `OTEL_LOGS_EXPORTER`, otherwise resolution returns nothing and no exporter, thread or socket is created (xai-grok-telemetry/src/external/config.rs:5, :41, :392; xai-grok-telemetry/src/external/mod.rs:4, :16). Construction also refuses to activate when the internal pipeline already consumed the shared `OTEL_EXPORTER_OTLP_*` variables, which prevents double-exporting the same events (external/mod.rs:160). The privacy boundary is enforced twice: at emit time by a scrub, and at export time by validators that inspect each record and metric and DROP a violating record or the whole metric export rather than scrubbing in place, because the SDK types are not mutable from an exporter wrapper (external/redact.rs:4, :56; external/emit.rs:99). Content is additionally capped: strings collapse to a 512-character prefix and JSON depth, collection size and byte budgets are bounded (external/truncate.rs:6). Emission also sits behind a fail-closed settings gate that opens when settings resolve or after a bounded wait, and remote policy may only tighten - force-disable or lock content gates, never enable (external/mod.rs:263, :388).",
+        "invariants": [
+          "Default off: with the master switch unset or no exporter selected, nothing is constructed - zero allocation, zero threads, zero sockets (xai-grok-telemetry/src/external/mod.rs:16).",
+          "Remote policy has no enable direction; it may only force-disable or tighten content gates (external/mod.rs:388).",
+          "A record that fails the content gate must be dropped, never scrubbed at export time, because the SDK read path is immutable (external/redact.rs:4, :56)."
+        ],
+        "failurePolicy": "mixed - fail-closed on privacy and schema violations (silent drop with health counters), fail-open on activation (the stream is simply absent), and bounded-open on the settings gate (a 30 s ceiling, then it proceeds under local config).",
+        "constants": [
+          {
+            "name": "ENV_MASTER_SWITCH",
+            "value": "\"GROK_EXTERNAL_OTEL\"",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/external/config.rs:41"
+          },
+          {
+            "name": "DEFAULT_SETTINGS_GATE_MAX_WAIT",
+            "value": "30 s",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/external/mod.rs:263"
+          },
+          {
+            "name": "MAX_STRING_LEN",
+            "value": "512",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/external/truncate.rs:6"
+          },
+          {
+            "name": "latency histogram boundaries",
+            "value": "50 ms .. 120000 ms",
+            "evidence": "crates/codegen/xai-grok-telemetry/src/external/emit.rs:19-21"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-telemetry/src/external/config.rs:5",
+          "crates/codegen/xai-grok-telemetry/src/external/config.rs:41",
+          "crates/codegen/xai-grok-telemetry/src/external/config.rs:392",
+          "crates/codegen/xai-grok-telemetry/src/external/mod.rs:16",
+          "crates/codegen/xai-grok-telemetry/src/external/mod.rs:160",
+          "crates/codegen/xai-grok-telemetry/src/external/mod.rs:263-388",
+          "crates/codegen/xai-grok-telemetry/src/external/redact.rs:56",
+          "crates/codegen/xai-grok-telemetry/src/external/truncate.rs:6"
+        ],
+        "modules": [
+          "xai-grok-telemetry"
+        ],
+        "verified": true,
+        "wiringNote": "Related but distinct: the internal OTLP trace pipeline and the Sentry path share the same redaction primitives (`redact_common`), and Sentry is configured with `send_default_pii: false`, a 0.01 trace sample rate and a `before_send` scrubber (xai-grok-telemetry/src/sentry.rs:10, :39-53, :193)."
+      },
+      {
+        "name": "crash-handler-with-postmortem-capture-and-archive",
+        "what": "`install()` registers one `sigaction` for SIGBUS, SIGSEGV and SIGABRT with `SA_SIGINFO | SA_ONSTACK | SA_RESETHAND`, saves the terminal state, and allocates a 16 KiB alternate signal stack via mmap so a stack-overflow fault still has somewhere to run (xai-crash-handler/src/handler.rs:195-212, :228-250, :297-310). The handler writes a fixed-layout binary blob - magic `GCRX`, version 1, at most 64 frames, header 59 bytes, whole file at most 571 bytes - into a pre-allocated `.bss` buffer, so it never allocates (xai-crash-handler/src/format.rs:1-33; handler.rs:195-196). SIGABRT is hooked on purpose because `panic = \"abort\"` builds - every shipped release - terminate through `abort(3)`, so a Rust panic otherwise leaves nothing; Windows captures access violations through the unhandled-exception filter and has no SIGABRT arm (handler.rs:3-8; xai-crash-handler/src/lib.rs:1-8). The handler then restores the terminal through raw async-signal-safe writes and re-raises with the default disposition, preserving exit status and core dumps (xai-crash-handler/src/terminal.rs:41-61; handler.rs:252-281). At the next startup `check_previous_crash` parses the blob, symbolicates the frames, writes `last-crash-report.txt` owner-only, archives to `history/crash-<timestamp>.txt` keeping the last five, and deletes the blob so it is processed once (lib.rs:43, :122-149, :181-203).",
+        "invariants": [
+          "`check_previous_crash` must run before `install`, because install opens the blob with truncation and would erase the previous crash (xai-crash-handler/src/lib.rs:12-15).",
+          "Only async-signal-safe work belongs in the handler: raw `write(2)` on a static buffer, no allocation (xai-crash-handler/src/format.rs:1-4; terminal.rs:48-61).",
+          "Crash reports must stay owner-only 0600, including a pre-existing looser file, because they carry source paths and backtraces (lib.rs:151-179)."
+        ],
+        "failurePolicy": "fail-soft - `install` returns false on any failure (unsupported platform, mkdir/open error) rather than aborting startup, and report-writing errors are ignored so a crash report can never mask the crash itself (xai-crash-handler/src/lib.rs:79-83, :132-138).",
+        "constants": [
+          {
+            "name": "ALT_STACK_SIZE",
+            "value": "16 * 1024",
+            "evidence": "crates/codegen/xai-crash-handler/src/handler.rs:208"
+          },
+          {
+            "name": "MAGIC / VERSION / MAX_FRAMES / VERSION_STRING_LEN",
+            "value": "\"GCRX\" / 1 / 64 / 32",
+            "evidence": "crates/codegen/xai-crash-handler/src/format.rs:7-16"
+          },
+          {
+            "name": "HEADER_SIZE / MAX_FILE_SIZE",
+            "value": "59 / HEADER_SIZE + 64 * 8 = 571",
+            "evidence": "crates/codegen/xai-crash-handler/src/format.rs:30-33"
+          },
+          {
+            "name": "MAX_HISTORY",
+            "value": "5 archived reports",
+            "evidence": "crates/codegen/xai-crash-handler/src/lib.rs:43"
+          },
+          {
+            "name": "signal flags",
+            "value": "SA_SIGINFO | SA_ONSTACK | SA_RESETHAND",
+            "evidence": "crates/codegen/xai-crash-handler/src/handler.rs:303"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-crash-handler/src/lib.rs:1-15",
+          "crates/codegen/xai-crash-handler/src/lib.rs:43",
+          "crates/codegen/xai-crash-handler/src/lib.rs:122-149",
+          "crates/codegen/xai-crash-handler/src/lib.rs:151-203",
+          "crates/codegen/xai-crash-handler/src/handler.rs:195-212",
+          "crates/codegen/xai-crash-handler/src/handler.rs:228-250",
+          "crates/codegen/xai-crash-handler/src/handler.rs:283-310",
+          "crates/codegen/xai-crash-handler/src/format.rs:1-33",
+          "crates/codegen/xai-crash-handler/src/terminal.rs:41-61"
+        ],
+        "modules": [
+          "xai-crash-handler"
+        ],
+        "verified": true
+      },
+      {
+        "name": "smoke-test-verified-self-update-with-atomic-activation",
+        "what": "Self-update converges the on-disk install to the channel pointer, and its integrity gate is execution rather than a hash. There is no checksum or signature verification: the crate's own comment states that downloads are verified by a smoke test, not a checksum, which is exactly why `GROK_CLI_BASE_URL` is honoured only for a parsed loopback URL - a userinfo trick such as `http://127.0.0.1:9@evil.com` is rejected by parsing the URL rather than prefix-matching it (xai-grok-update/src/version.rs:27-57). Channel pointers resolve to a plain-text semver at a primary Cloudflare-fronted base with a direct-GCS fallback, and for the alpha channel both pointers are fetched and the semver-greater wins (version.rs:16-25, :251-291). A download streams into a unique temp sibling (`<name>.{pid}-{seq}.tmp`, so two racing updaters can never rename each other's half-written file), gets `+x` *before* the rename onto the destination so a concurrent installer never execs a 0644 file, and is renamed atomically into place (auto_update.rs:998-1034). The smoke test is bounded at 30 s with eight ETXTBSY retries at a 25 ms base backoff, downloads carry a 20-minute request budget and are swept only after an hour of staleness, parallel byte-range fetching needs at least 16 MiB and clamps to 8 chunks, and decoded archives are capped so a crafted bundle cannot fill the disk (auto_update.rs:983-1042, :1309, :1453-1460). Windows cannot write a running executable, so activation renames the destination aside and rolls the rename back if the copy fails (auto_update.rs:1990-2065).",
+        "invariants": [
+          "Activation must stay atomic and per-racer: the temp name is unique per process and the `+x` mode is set before the rename, or a concurrent updater could exec a partially published binary (xai-grok-update/src/auto_update.rs:998-1034).",
+          "A non-loopback `GROK_CLI_BASE_URL` must stay ignored; with no checksum in the pipeline, an arbitrary base would serve a hijacked install (xai-grok-update/src/version.rs:27-40).",
+          "Stale-artifact sweeping must wait at least `STALE_TMP_AGE`, because deleting a concurrent updater's in-flight download makes its atomic rename fail (auto_update.rs:983-988)."
+        ],
+        "failurePolicy": "fail-closed on install - a candidate that fails the smoke test is never activated and the running version is unchanged - with a soft landing on the platform's inability to replace a running binary, where the destination is renamed aside and the rename is rolled back if the copy fails (xai-grok-update/src/auto_update.rs:2038-2065).",
+        "constants": [
+          {
+            "name": "STALE_TMP_AGE / DOWNLOAD_REQUEST_TIMEOUT",
+            "value": "1 h / 20 min",
+            "evidence": "crates/codegen/xai-grok-update/src/auto_update.rs:988-992"
+          },
+          {
+            "name": "SMOKE_TEST_TIMEOUT / ETXTBSY retries / backoff",
+            "value": "30 s / 8 / 25 ms",
+            "evidence": "crates/codegen/xai-grok-update/src/auto_update.rs:1453-1460"
+          },
+          {
+            "name": "PARALLEL_DOWNLOAD_MIN_BYTES / chunk clamp",
+            "value": "16 MiB; 1 chunk per 16 MiB clamped to 1..=8",
+            "evidence": "crates/codegen/xai-grok-update/src/auto_update.rs:1037-1042"
+          },
+          {
+            "name": "MAX_DECODED_BYTES",
+            "value": "512 * 1024 * 1024",
+            "evidence": "crates/codegen/xai-grok-update/src/auto_update.rs:1309"
+          },
+          {
+            "name": "CLI base URLs",
+            "value": "https://x.ai/cli then https://storage.googleapis.com/grok-build-public-artifacts/cli",
+            "evidence": "crates/codegen/xai-grok-update/src/version.rs:16-25"
+          },
+          {
+            "name": "version cache TTL",
+            "value": "30 min (60 * 30 s)",
+            "evidence": "crates/codegen/xai-grok-update/src/version.rs:12"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-update/src/version.rs:12-57",
+          "crates/codegen/xai-grok-update/src/version.rs:251-291",
+          "crates/codegen/xai-grok-update/src/auto_update.rs:983-1042",
+          "crates/codegen/xai-grok-update/src/auto_update.rs:1309",
+          "crates/codegen/xai-grok-update/src/auto_update.rs:1453-1460",
+          "crates/codegen/xai-grok-update/src/auto_update.rs:1990-2065"
+        ],
+        "modules": [
+          "xai-grok-update"
+        ],
+        "verified": true,
+        "wiringNote": "Related: the channel label shown next to the version is derived from a cached stable pointer with no network I/O (`channel_label`, xai-grok-update/src/version.rs:485-559), and version comparison rejects a pre-release candidate on the stable/enterprise channels (auto_update.rs:508-519)."
+      },
+      {
+        "name": "compile-time-version-stamping-with-runtime-commit-injection",
+        "what": "The installed version is a compile-time constant: `VERSION` is `option_env!(\"GROK_VERSION\")` when the release pipeline injects it and falls back to `CARGO_PKG_VERSION` otherwise, and `IS_DEV_BUILD` is exactly the absence of that injection, so a from-source build is self-identifying (xai-grok-version/src/lib.rs:9-15). The short commit is injected at runtime instead of compiled into every library, because only the release binary stamps and calls `set_full_version` at startup; the value lives in a `OnceLock` where the first set wins and repeats are ignored, so the lib crates do not recompile on every commit (lib.rs:17-30). `installed()` honours a trimmed `GROK_TEST_VERSION` override and `installed_semver()` parses the result, which is what lets version policy be tested without a release (lib.rs:7, :32-42). Display helpers append a pre-formatted channel label (\" [alpha]\", \" [stable]\" or empty) supplied by the update crate (lib.rs:44-53).",
+        "invariants": [
+          "`VERSION` and `IS_DEV_BUILD` must stay `const` and derived from the same `option_env!` call, so a build without injection is consistently a dev build (xai-grok-version/src/lib.rs:9-15).",
+          "`set_full_version` must stay first-set-wins and idempotent; a later call must not rewrite the stamp (lib.rs:21-25, pinned by test at :87-94).",
+          "The channel label stays a caller-supplied suffix; this crate must not do network I/O to compute it (lib.rs:44-53)."
+        ],
+        "failurePolicy": "fail-open - the version string is never absent: without injection it degrades to `CARGO_PKG_VERSION`, and `full_version()` falls back to plain `VERSION` when no binary has stamped a commit (xai-grok-version/src/lib.rs:14-15, :27-30).",
+        "constants": [
+          {
+            "name": "TEST_VERSION_ENV",
+            "value": "\"GROK_TEST_VERSION\"",
+            "evidence": "crates/codegen/xai-grok-version/src/lib.rs:7"
+          },
+          {
+            "name": "VERSION source",
+            "value": "option_env!(\"GROK_VERSION\") else env!(\"CARGO_PKG_VERSION\")",
+            "evidence": "crates/codegen/xai-grok-version/src/lib.rs:9-12"
+          },
+          {
+            "name": "IS_DEV_BUILD",
+            "value": "option_env!(\"GROK_VERSION\").is_none()",
+            "evidence": "crates/codegen/xai-grok-version/src/lib.rs:15"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-version/src/lib.rs:9-30",
+          "crates/codegen/xai-grok-version/src/lib.rs:32-53",
+          "crates/codegen/xai-grok-version/src/lib.rs:87-94",
+          "crates/codegen/xai-grok-update/src/version.rs:485-559"
+        ],
+        "modules": [
+          "xai-grok-version",
+          "xai-grok-update"
+        ],
+        "verified": true
+      },
+      {
+        "name": "timestamped-and-timed-tracing-macros",
+        "what": "Two small macro families give headless-safe diagnostics without a terminal. `tprintln!` emits `{unix_seconds}::{message}` at info level and `teprintln!` does the same at warn, both through `tracing` so they are safe with no TTY attached, with `format_args!` forwarded straight through and a pre-epoch clock yielding `0` instead of a panic (xai-tracing-macros/src/timestamp.rs:1-4, :20-35, :51-66). `timed!` measures a block with `Instant` and either returns `(value, elapsed_ms)` or logs the elapsed time at a caller-chosen level (debug by default); its `try:` arms log the error as a field on the error path and return the original `Result` unchanged, in sync and async forms (xai-tracing-macros/src/timed.rs:1-13, :23-28, :49-63, :84-98). The macros are `#[macro_export]`ed from the crate root through two private modules (src/lib.rs:28-29).",
+        "invariants": [
+          "The timestamp is Unix **seconds** and the separator is exactly `::`; the no-argument arm still emits the trailing separator (xai-tracing-macros/src/timestamp.rs:21-34).",
+          "`timed!` must return the wrapped block's value - or the original `Result`, error included - so it stays drop-in inside existing code (timed.rs:23-28, :53-62).",
+          "`elapsed_ms` is recorded as `u64` and error arms add an `error` field, which is the machine-readable part of the contract (timed.rs:16-21)."
+        ],
+        "failurePolicy": "fail-open - a failing system clock yields timestamp 0 rather than panicking, and timing never alters the wrapped block's result (xai-tracing-macros/src/timestamp.rs:22-26).",
+        "constants": [
+          {
+            "name": "timestamp format",
+            "value": "\"{unix_secs}::{message}\"",
+            "evidence": "crates/codegen/xai-tracing-macros/src/timestamp.rs:33"
+          },
+          {
+            "name": "default timed! level",
+            "value": "debug",
+            "evidence": "crates/codegen/xai-tracing-macros/src/timed.rs:34"
+          },
+          {
+            "name": "logged fields",
+            "value": "elapsed_ms (u64), error (?err on the error arm)",
+            "evidence": "crates/codegen/xai-tracing-macros/src/timed.rs:16-21"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-tracing-macros/src/timestamp.rs:20-35",
+          "crates/codegen/xai-tracing-macros/src/timestamp.rs:51-66",
+          "crates/codegen/xai-tracing-macros/src/timed.rs:14-28",
+          "crates/codegen/xai-tracing-macros/src/timed.rs:49-63",
+          "crates/codegen/xai-tracing-macros/src/timed.rs:84-98",
+          "crates/codegen/xai-tracing-macros/src/lib.rs:28-29"
+        ],
+        "modules": [
+          "xai-tracing-macros"
+        ],
+        "verified": true,
+        "wiringNote": "No rate limiting, sampling, env gate or feature flag exists in this crate - the two capabilities are timestamp prefixing and elapsed-time logging."
+      }
+    ],
     "interface": [
       {
         "name": "session-capability-gated-command-advertisement",
