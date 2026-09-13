@@ -1,0 +1,386 @@
+{
+  "group": "packages/terminal/terminal, packages/terminal/terminal-bash, packages/terminal/tool-terminal",
+  "mechanisms": [
+    {
+      "name": "owner-scoped-pty-terminal-registry",
+      "what": "`TerminalSessionService` is the `ctx.terminals` Cordis `Service` (registered with `super(ctx, 'terminals')`), and its constructor installs `ctx.effect(() => () => this.disposeAll(), 'pty teardown')`. It owns backend registration (`registerBackend`), owner-scoped session maps (`sessions`, `reservedNames`, `pendingSpawns`, `ownerCleanups`, `disposedOwners`), registry-minted ids (`pty-${++this.nextId}`), publication, authorization and awaited cleanup. Every operation funnels through `expectOwned(owner, id)`, which distinguishes `NO_SESSION` from `FOREIGN_SESSION`; `isLiveOwner` requires `ctx.get('agents')?.get(owner.id) === owner` and that the agent is not in `disposedOwners`. Owner teardown is installed with `owner.ctx.effect(...)` on first spawn.",
+      "invariants": [
+        "Backends own terminal mechanics while this service owns ids, publication, authorization, and awaited cleanup. (packages/terminal/terminal/src/index.ts:2-3)",
+        "true across the entire spawn-to-close interval, with no publication gap. (packages/terminal/terminal/src/index.ts:229)",
+        "Teardown is best-effort: a close failure still clears registries and runs owner cleanups before the aggregated error propagates, so one stuck session cannot orphan backends, reservations, or owner detachers. (packages/terminal/terminal/src/index.ts:437-439)"
+      ],
+      "failurePolicy": "fail-closed — eight machine-routable `TerminalErrorCode`s (DUPLICATE_BACKEND, DUPLICATE_NAME, FOREIGN_SESSION, NO_BACKEND, NO_SESSION, OWNER_NOT_LIVE, SEND_ACTIVE, SERVICE_DISPOSING) are thrown via `TerminalError`; disposal aggregates per-session failures into `AggregateError` after clearing registries.",
+      "constants": [
+        { "value": "'pty-' + counter", "where": "packages/terminal/terminal/src/index.ts:166", "meaning": "session id minting scheme (`pty-${++this.nextId}`)" },
+        { "value": "['DUPLICATE_BACKEND','DUPLICATE_NAME','FOREIGN_SESSION','NO_BACKEND','NO_SESSION','OWNER_NOT_LIVE','SEND_ACTIVE','SERVICE_DISPOSING']", "where": "packages/terminal/terminal/src/index.ts:55-63", "meaning": "the complete TerminalErrorCode union" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal/src/index.ts:105",
+        "packages/terminal/terminal/src/index.ts:116",
+        "packages/terminal/terminal/src/index.ts:117",
+        "packages/terminal/terminal/src/index.ts:125",
+        "packages/terminal/terminal/src/index.ts:128",
+        "packages/terminal/terminal/src/index.ts:166",
+        "packages/terminal/terminal/src/index.ts:231",
+        "packages/terminal/terminal/src/index.ts:243",
+        "packages/terminal/terminal/src/index.ts:246",
+        "packages/terminal/terminal/src/index.ts:285",
+        "packages/terminal/terminal/src/index.ts:318",
+        "packages/terminal/terminal/src/index.ts:338",
+        "packages/terminal/terminal/src/index.ts:341",
+        "packages/terminal/terminal/src/index.ts:389",
+        "packages/terminal/terminal/src/index.ts:390",
+        "packages/terminal/terminal/src/index.ts:435",
+        "packages/terminal/terminal/src/index.ts:472",
+        "packages/terminal/terminal/src/types.ts:55"
+      ],
+      "verified": true
+    },
+    {
+      "name": "pty-session-spawn-publication-and-rollback",
+      "what": "`spawn(owner, request, signal)` validates the service is active, resolves the backend, validates a non-empty name, reserves the owner-local name and a spawn reservation (an `AbortController` plus a settlement promise), mints the session id, and calls `backend.spawn({sessionId, owner, type, name?, cwd?, signal: AbortSignal.any([signal, reservation.signal])})`. Only after setup returns does it re-check the caller signal, `this.disposing` and `isLiveOwner(owner)` before inserting the `SessionRecord` and returning `snapshot(record, session.motd)`. On any failure it rolls the session back with `session.close('PTY spawn rolled back')`, prefers a cancellation failure over the setup error, and throws `AggregateError('PTY spawn and rollback both failed')` when the rollback also failed and the caller signal was not aborted. `TerminalBackendCleanupError` (an `AggregateError` of spawn + cleanup failure) has its `cleanupError` recorded so `abortPendingSpawns` can re-report it during disposal.",
+      "invariants": [
+        "Create an unpublished session or reject after cleaning partial resources; cleanup failure uses TerminalBackendCleanupError. (packages/terminal/terminal/src/types.ts:169)",
+        "Create and publish one owner-scoped session after backend setup succeeds. (packages/terminal/terminal/src/index.ts:148)",
+        "a cancellation failure is preferred over the setup error when the caller's signal aborted (packages/terminal/terminal/src/index.ts:209-215)"
+      ],
+      "failurePolicy": "fail-closed — nothing is published until every post-setup liveness check passes; a failed rollback raises `AggregateError`, and `abortPendingSpawns` collects `cleanupFailure`s into `AggregateError('failed to roll back unpublished PTY setup')`.",
+      "constants": [
+        { "value": "'PTY spawn rolled back'", "where": "packages/terminal/terminal/src/index.ts:203", "meaning": "close reason used during spawn rollback" },
+        { "value": "'failed to roll back unpublished PTY setup'", "where": "packages/terminal/terminal/src/index.ts:383", "meaning": "AggregateError message from abortPendingSpawns" },
+        { "value": "'PTY backend startup and cleanup both failed'", "where": "packages/terminal/terminal/src/types.ts:23", "meaning": "TerminalBackendCleanupError message" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal/src/index.ts:154",
+        "packages/terminal/terminal/src/index.ts:159",
+        "packages/terminal/terminal/src/index.ts:161",
+        "packages/terminal/terminal/src/index.ts:162",
+        "packages/terminal/terminal/src/index.ts:163",
+        "packages/terminal/terminal/src/index.ts:170",
+        "packages/terminal/terminal/src/index.ts:179",
+        "packages/terminal/terminal/src/index.ts:182",
+        "packages/terminal/terminal/src/index.ts:196",
+        "packages/terminal/terminal/src/index.ts:197",
+        "packages/terminal/terminal/src/index.ts:203",
+        "packages/terminal/terminal/src/index.ts:216",
+        "packages/terminal/terminal/src/index.ts:217",
+        "packages/terminal/terminal/src/index.ts:374",
+        "packages/terminal/terminal/src/index.ts:383",
+        "packages/terminal/terminal/src/types.ts:18",
+        "packages/terminal/terminal/src/types.ts:169"
+      ],
+      "verified": true
+    },
+    {
+      "name": "pty-send-readiness-state-machine",
+      "what": "`LocalPtySession.startSend` enforces one active send per session (throwing `TerminalError(..., 'SEND_ACTIVE')`), creates a `LocalSendOperation`, resets readiness evidence, wires the caller abort to `operation.cancel()`, arms an absolute `setTimeout(..., config.timeoutMs)` that settles with `'timeout'`, and starts `beginSend`. `pollReadiness` is the authority: it inspects the foreground process group, and settles on (a) `stdin_read` when `promptSeen && promptTextSeen && idleFor >= pollIntervalMs && foreground.processGroupId === shellPgid`, (b) `stdin_read` when `elapsed >= exactProbeAfterMs` and the foreground group's `inputWaiting` is post-write evidence (`acceptsStdinWait`), or (c) `inferred_idle` when `startupHasOutput && idleFor >= idleSilenceMs + (promptSeen ? handoffGraceMs : 0)`. Session exit and transport failure settle/fail the operation from `onExit`/`onTransportFailure`.",
+      "invariants": [
+        "Keep the exit marker... (n/a here) — the governing rules are: 'Bash can print PROMPT_COMMAND before the kernel publishes its return to the foreground process group. Retain the marker; polling below is the authority that accepts it only after bash owns the foreground.' (packages/terminal/terminal-bash/src/session.ts:425-428)",
+        "Silence therefore remains the bound on waiting for shell ownership instead of letting a child marker suppress readiness until the absolute timeout. (packages/terminal/terminal-bash/src/session.ts:505-508)",
+        "The same group may still expose the wait that existed before terminal.write. Observe every poll so a departure before the exact-settlement threshold still makes a later return to that wait post-write evidence. (packages/terminal/terminal-bash/src/session.ts:144-146)"
+      ],
+      "failurePolicy": "mixed — a transport failure settles the session as exited (`{kind:'exited', exitCode:null, signal:null}`), fails the active operation, closes the emulator and terminates the terminal; a readiness/inspection failure fails the active send with that error; a timeout settles the send with `'timeout'` rather than throwing.",
+      "constants": [
+        { "value": "30_000", "where": "packages/terminal/terminal-bash/src/config.ts:98", "meaning": "default `timeoutMs` — absolute bound for one send and the whole pwsh startup sequence" },
+        { "value": "3_000", "where": "packages/terminal/terminal-bash/src/config.ts:96", "meaning": "default `idleSilenceMs` that yields `inferred_idle`" },
+        { "value": "150", "where": "packages/terminal/terminal-bash/src/config.ts:95", "meaning": "default `exactProbeAfterMs` — delay before exact syscall/foreground probes are trusted" },
+        { "value": "50", "where": "packages/terminal/terminal-bash/src/config.ts:94", "meaning": "default `pollIntervalMs` readiness polling interval (also the minimum idle before a prompt-based stdin_read)" },
+        { "value": "500", "where": "packages/terminal/terminal-bash/src/config.ts:97", "meaning": "default `handoffGraceMs` added to idleSilenceMs once a prompt marker was seen" },
+        { "value": "['stdin_read','inferred_idle','timeout','session_exit']", "where": "packages/terminal/terminal/src/types.ts:29", "meaning": "the complete TerminalWaitReason union" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal-bash/src/session.ts:251",
+        "packages/terminal/terminal-bash/src/session.ts:262",
+        "packages/terminal/terminal-bash/src/session.ts:277",
+        "packages/terminal/terminal-bash/src/session.ts:279",
+        "packages/terminal/terminal-bash/src/session.ts:284",
+        "packages/terminal/terminal-bash/src/session.ts:419",
+        "packages/terminal/terminal-bash/src/session.ts:428",
+        "packages/terminal/terminal-bash/src/session.ts:440",
+        "packages/terminal/terminal-bash/src/session.ts:447",
+        "packages/terminal/terminal-bash/src/session.ts:472",
+        "packages/terminal/terminal-bash/src/session.ts:492",
+        "packages/terminal/terminal-bash/src/session.ts:501",
+        "packages/terminal/terminal-bash/src/session.ts:509",
+        "packages/terminal/terminal-bash/src/session.ts:510",
+        "packages/terminal/terminal-bash/src/session.ts:143",
+        "packages/terminal/terminal-bash/src/config.ts:94",
+        "packages/terminal/terminal-bash/src/config.ts:95",
+        "packages/terminal/terminal-bash/src/config.ts:96",
+        "packages/terminal/terminal-bash/src/config.ts:97",
+        "packages/terminal/terminal-bash/src/config.ts:98",
+        "packages/terminal/terminal/src/types.ts:29"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-ansi-sanitization",
+      "what": "`TerminalSanitizer` is a streaming control-sequence stripper: `push(chunk)` accumulates into `pending`, walks for `\\x1b`, removes OSC sequences (terminated by BEL or ST, and recognizing the owned `PROMPT_MARKER_PREFIX = '133;D;'` inside an OSC payload to set `prompt: true` and start tracking `promptTail`), removes CSI sequences (terminated by any byte in 0x40–0x7e), removes two-byte escapes, and keeps split sequences in `pending` for the next chunk. `enforcePendingBound` drops an over-long incomplete sequence (choosing osc vs csi from `pending[1]`) and `discardPrefix` resumes discarding in the next chunk. `normalizeTerminalText` converts CRLF and lone CR to `\\n` and strips BEL; `flush()` emits a trailing printable fragment and restores a trailing CR as a newline.",
+      "invariants": [
+        "Full terminal emulation is deliberately deferred; ordinary line output and the private prompt marker are the supported contract. (packages/terminal/terminal-bash/src/sanitize.ts:21-22)"
+      ],
+      "failurePolicy": "fail-soft — a malformed or oversized sequence is dropped rather than raising; `flush()` discards an incomplete trailing escape.",
+      "constants": [
+        { "value": "'133;D;'", "where": "packages/terminal/terminal-bash/src/sanitize.ts:6", "meaning": "PROMPT_MARKER_PREFIX inside the OSC payload" },
+        { "value": "'dsh> '", "where": "packages/terminal/terminal-bash/src/sanitize.ts:9", "meaning": "CONTROLLED_PROMPT — the exact printable prompt after the marker" },
+        { "value": "0x40..0x7e", "where": "packages/terminal/terminal-bash/src/sanitize.ts:88 and :147", "meaning": "final-byte range that terminates a CSI sequence" },
+        { "value": "maxPendingBytes = config.maxReadBytes (default 256 * 1024)", "where": "packages/terminal/terminal-bash/src/session.ts:219 with packages/terminal/terminal-bash/src/config.ts:93", "meaning": "bound on retained incomplete escape data" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal-bash/src/sanitize.ts:6",
+        "packages/terminal/terminal-bash/src/sanitize.ts:9",
+        "packages/terminal/terminal-bash/src/sanitize.ts:24",
+        "packages/terminal/terminal-bash/src/sanitize.ts:38",
+        "packages/terminal/terminal-bash/src/sanitize.ts:62",
+        "packages/terminal/terminal-bash/src/sanitize.ts:75",
+        "packages/terminal/terminal-bash/src/sanitize.ts:84",
+        "packages/terminal/terminal-bash/src/sanitize.ts:88",
+        "packages/terminal/terminal-bash/src/sanitize.ts:114",
+        "packages/terminal/terminal-bash/src/sanitize.ts:136",
+        "packages/terminal/terminal-bash/src/sanitize.ts:142",
+        "packages/terminal/terminal-bash/src/sanitize.ts:186",
+        "packages/terminal/terminal-bash/src/session.ts:219"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-bounded-scrollback-and-utf8-truncation",
+      "what": "`BoundedTextBuffer` retains text under two independent bounds: `maxLines` (splitting on `\\n` and keeping only the last `maxLines`, setting `dropped`), then `maxBytes` via `utf8Tail`, which walks the string from the end accumulating whole code points with `Buffer.byteLength` so a UTF-8 character is never split. `consume()` returns the delta plus the `dropped` flag and clears both, so consecutive reads never repeat output; `snapshot()` is non-consuming. `LocalPtySession` uses one `BoundedTextBuffer(config.scrollbackMaxBytes, config.scrollbackLines)` for the scrollback and one `BoundedTextBuffer(maxReadBytes)` per send operation.",
+      "invariants": [
+        "The retained window is measured in UTF-8 bytes and cut on code-point boundaries — `utf8Tail` never splits a character (packages/terminal/terminal-bash/src/session.ts:31-43)."
+      ],
+      "failurePolicy": "fail-soft — overflow sets the `truncated`/`dropped` flag and drops the oldest text; nothing throws.",
+      "constants": [
+        { "value": "10_000", "where": "packages/terminal/terminal-bash/src/config.ts:91", "meaning": "default `scrollbackLines`" },
+        { "value": "4 * 1024 * 1024 (4,194,304)", "where": "packages/terminal/terminal-bash/src/config.ts:92", "meaning": "default `scrollbackMaxBytes`" },
+        { "value": "256 * 1024 (262,144)", "where": "packages/terminal/terminal-bash/src/config.ts:93", "meaning": "default `maxReadBytes` — per-read and settled-viewport cap; validated to be <= scrollbackMaxBytes at packages/terminal/terminal-bash/src/config.ts:116-118" },
+        { "value": "40 rows / 160 cols", "where": "packages/terminal/terminal-bash/src/config.ts:89-90", "meaning": "default terminal dimensions and the xterm headless size" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal-bash/src/session.ts:31",
+        "packages/terminal/terminal-bash/src/session.ts:37",
+        "packages/terminal/terminal-bash/src/session.ts:45",
+        "packages/terminal/terminal-bash/src/session.ts:54",
+        "packages/terminal/terminal-bash/src/session.ts:64",
+        "packages/terminal/terminal-bash/src/session.ts:69",
+        "packages/terminal/terminal-bash/src/session.ts:77",
+        "packages/terminal/terminal-bash/src/session.ts:220",
+        "packages/terminal/terminal-bash/src/config.ts:91",
+        "packages/terminal/terminal-bash/src/config.ts:92",
+        "packages/terminal/terminal-bash/src/config.ts:93",
+        "packages/terminal/terminal-bash/src/config.ts:116"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-emulator-protocol-replies",
+      "what": "`LocalPtySession` feeds every decoded chunk into an `@xterm/headless` `Terminal` constructed with `{cols, rows, scrollback: 0}`; the emulator's `onData` output (device-status and similar replies a real terminal would send) is written back to the PTY through a serialized `responseWrites` chain. The session tracks `pendingResponseWrites` and an `emulatorWriteDone` latch so `protocolWorkPending()` is true whenever replies or emulator writes are outstanding, and `drainTerminalProtocol()`/`inspectForegroundAfterProtocol()` wait until both chains are quiet before the foreground state is sampled — so a reply generated by the inspected output cannot be mistaken for the shell regaining the foreground.",
+      "invariants": [
+        "Wait until generated replies reach the provider before another send can publish. (packages/terminal/terminal-bash/src/session.ts:525)",
+        "Sample foreground state only after protocol replies are quiet for the entire inspection. (packages/terminal/terminal-bash/src/session.ts:537)"
+      ],
+      "failurePolicy": "fail-closed on transport — a failed response write calls `onTransportFailure` unless the emulator is closed or the session is closing, which settles the session as exited and terminates the terminal.",
+      "constants": [
+        { "value": "scrollback: 0", "where": "packages/terminal/terminal-bash/src/session.ts:207", "meaning": "the headless emulator keeps no scrollback of its own (protocol state only)" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal-bash/src/session.ts:29",
+        "packages/terminal/terminal-bash/src/session.ts:207",
+        "packages/terminal/terminal-bash/src/session.ts:208",
+        "packages/terminal/terminal-bash/src/session.ts:210",
+        "packages/terminal/terminal-bash/src/session.ts:526",
+        "packages/terminal/terminal-bash/src/session.ts:538",
+        "packages/terminal/terminal-bash/src/session.ts:548",
+        "packages/terminal/terminal-bash/src/session.ts:553",
+        "packages/terminal/terminal-bash/src/session.ts:557",
+        "packages/terminal/terminal-bash/src/session.ts:568",
+        "packages/terminal/terminal-bash/src/session.ts:608"
+      ],
+      "verified": true
+    },
+    {
+      "name": "pty-shell-dialect-and-prompt-bootstrap",
+      "what": "`terminal-bash` is dialect-parameterized. `resolveConfig` picks `shellDialect` (default `'bash'`) and then `shellPath`/`shellArgs`: bash -> `/bin/bash` with `['--noprofile','--norc','-i']`, pwsh -> `resolvePwshPath()` with `['-NoLogo','-NoProfile']`; an explicitly non-empty value always wins (Schemastery materializes an absent array as `[]`, so emptiness means dialect default). `childEnvironment` sets `TERM=dumb, PAGER=cat, GIT_PAGER=cat, DSH_SHELL=1, DSH_SESSION_ID, DSH_PTY_SESSION_ID`; the bash branch adds `PS1='dsh> '`, `PROMPT_COMMAND='printf \"\\033]133;D;%s\\007\" \"$?\"; PS1='dsh> ''` (which re-asserts PS1 each prompt) and `BASH_SILENCE_DEPRECATION_WARNING=1`, while the pwsh branch adds only `NO_COLOR=1` and installs the prompt function `PWSH_PROMPT_SETUP` by writing `ENCODING_PREAMBLE + PWSH_PROMPT_SETUP` as the first startup send. Bash startup goes through `LocalPtySession.initialize`; pwsh startup loops until `waitReason === 'stdin_read'`, accepting only backend stdin-read evidence and bounded by an absolute `timeoutMs`.",
+      "invariants": [
+        "Re-asserting PS1 after the marker keeps prompt readiness working when a command overwrote the shell variable: bash runs PROMPT_COMMAND before rendering each prompt, so an override never survives to the next prompt. (packages/terminal/terminal-bash/src/index.ts:83-85)",
+        "echoed setup source containing the printable prompt is not readiness (packages/terminal/terminal-bash/src/index.ts:128-130)"
+      ],
+      "failurePolicy": "fail-closed — an empty sandbox-produced argv, a `session_exit` or `timeout` wait reason during startup, or a missing `ctx.sandbox` for a confining mode all throw; a startup failure closes the session and rethrows, wrapping a failed cleanup in `TerminalBackendCleanupError`.",
+      "constants": [
+        { "value": "'/bin/bash' / ['--noprofile', '--norc', '-i']", "where": "packages/terminal/terminal-bash/src/config.ts:54-56", "meaning": "bash dialect defaults" },
+        { "value": "['-NoLogo', '-NoProfile']", "where": "packages/terminal/terminal-bash/src/config.ts:58", "meaning": "pwsh dialect default arguments" },
+        { "value": "TERM: 'dumb', PAGER: 'cat', GIT_PAGER: 'cat', DSH_SHELL: '1'", "where": "packages/terminal/terminal-bash/src/index.ts:68-71", "meaning": "terminal-specific env overrides layered after the subprocess scrub" },
+        { "value": "3_000", "where": "packages/terminal/terminal-bash/src/config.ts:99", "meaning": "default `disposeGraceMs`, passed as the terminal spawn's `graceMs`" },
+        { "value": "handoffGraceMs >= pollIntervalMs", "where": "packages/terminal/terminal-bash/src/config.ts:119-121", "meaning": "validated invariant 'so one readiness poll runs inside the grace window'" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal-bash/src/config.ts:54",
+        "packages/terminal/terminal-bash/src/config.ts:56",
+        "packages/terminal/terminal-bash/src/config.ts:58",
+        "packages/terminal/terminal-bash/src/config.ts:69",
+        "packages/terminal/terminal-bash/src/config.ts:74",
+        "packages/terminal/terminal-bash/src/config.ts:99",
+        "packages/terminal/terminal-bash/src/config.ts:107",
+        "packages/terminal/terminal-bash/src/config.ts:119",
+        "packages/terminal/terminal-bash/src/index.ts:16",
+        "packages/terminal/terminal-bash/src/index.ts:64",
+        "packages/terminal/terminal-bash/src/index.ts:82",
+        "packages/terminal/terminal-bash/src/index.ts:86",
+        "packages/terminal/terminal-bash/src/index.ts:97",
+        "packages/terminal/terminal-bash/src/index.ts:98",
+        "packages/terminal/terminal-bash/src/index.ts:114",
+        "packages/terminal/terminal-bash/src/index.ts:135",
+        "packages/terminal/terminal-bash/src/index.ts:140",
+        "packages/terminal/terminal-bash/src/index.ts:158",
+        "packages/terminal/terminal-bash/src/index.ts:208",
+        "packages/terminal/terminal-bash/src/session.ts:235"
+      ],
+      "verified": true
+    },
+    {
+      "name": "sandbox-mode-fence-for-open-terminals",
+      "what": "`ensureSandboxModeFence(ctx, owner)` installs one global `owner.ctx.on('internal/dispatch', ...)` listener per agent that reacts only to `'session/event'` events whose `event.type === 'sandbox/mode'` and whose session is the owner's own. It folds the current mode from `sessionProjections.stateOf(session, 'sandboxMode')` or `sandboxPolicy.defaultMode`, and if the requested mode differs while `state.pty.hasOwnerActivity(owner)` is true it throws, refusing the mode change. `spawnArgv` resolves the session's policy and, when the mode is not `danger-full-access`, requires `ctx.get('sandbox')` and replaces the argv with `sandbox.confine(argv, {...policy, mode}).argv`.",
+      "invariants": [
+        "cannot change sandbox mode from \"<current>\" to \"<new>\" while persistent terminal sessions are open or being created; wait for creation to settle and close them first (packages/terminal/terminal-bash/src/index.ts:58-60)",
+        "`hasOwnerActivity` is deliberately true across the entire spawn-to-close interval 'with no publication gap' (packages/terminal/terminal/src/index.ts:229)"
+      ],
+      "failurePolicy": "fail-closed — the mode-change event throws, and a confining mode without a `ctx.sandbox` provider throws `terminal-bash: sandbox mode \"<mode>\" requires a ctx.sandbox provider in the execution world`.",
+      "constants": [
+        { "value": "'danger-full-access'", "where": "packages/terminal/terminal-bash/src/index.ts:102", "meaning": "the mode that skips confinement and returns the raw argv" },
+        { "value": "'sandbox/mode' + 'sandboxMode'", "where": "packages/terminal/terminal-bash/src/index.ts:54-55", "meaning": "the event type and projection key the fence watches" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal-bash/src/index.ts:27",
+        "packages/terminal/terminal-bash/src/index.ts:37",
+        "packages/terminal/terminal-bash/src/index.ts:51",
+        "packages/terminal/terminal-bash/src/index.ts:54",
+        "packages/terminal/terminal-bash/src/index.ts:57",
+        "packages/terminal/terminal-bash/src/index.ts:58",
+        "packages/terminal/terminal-bash/src/index.ts:100",
+        "packages/terminal/terminal-bash/src/index.ts:102",
+        "packages/terminal/terminal-bash/src/index.ts:105",
+        "packages/terminal/terminal-bash/src/index.ts:108",
+        "packages/terminal/terminal-bash/src/index.ts:193",
+        "packages/terminal/terminal-bash/src/index.ts:194",
+        "packages/terminal/terminal-bash/src/index.ts:199",
+        "packages/terminal/terminal-bash/src/index.ts:203"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-send-interrupt-on-cancel",
+      "what": "`LocalSendOperation.cancel()` sets `cancellationRequested`, invokes its `onCancel` callback (which calls `LocalPtySession.interrupt(operation)`) and returns false once already settled. `interrupt` only acts when the operation is still active, marks it as `interrupting`, stops readiness polling and runs `interruptOnce`: it awaits any in-flight provider write (bailing out if it failed), delivers `terminal.signalForeground('SIGINT')`, and then either releases the settled operation or resumes polling immediately (`schedulePoll(operation, 0)`). Cancellation deliberately retains the send slot until the in-flight signal and post-signal polling complete.",
+      "invariants": [
+        "A pre-write inspection failure while cancellation owns the slot must not release it: interruptOnce's in-flight foreground signal could land on a successor's foreground group. (packages/terminal/terminal-bash/src/session.ts:300-305)",
+        "Cancellation owns post-write signalling and reservation release. (packages/terminal/terminal-bash/src/session.ts:325)"
+      ],
+      "failurePolicy": "fail-closed on the slot, fail-soft on the signal — a signalling failure while the operation is still active escalates to `onTransportFailure`; `cancel()` on a settled operation is a no-op returning false.",
+      "constants": [
+        { "value": "'SIGINT'", "where": "packages/terminal/terminal-bash/src/session.ts:674", "meaning": "the only signal cancel delivers" },
+        { "value": "schedulePoll(operation, 0)", "where": "packages/terminal/terminal-bash/src/session.ts:685", "meaning": "immediate poll restart after the interrupt signal" }
+      ],
+      "evidence": [
+        "packages/terminal/terminal-bash/src/session.ts:152",
+        "packages/terminal/terminal-bash/src/session.ts:272",
+        "packages/terminal/terminal-bash/src/session.ts:306",
+        "packages/terminal/terminal-bash/src/session.ts:325",
+        "packages/terminal/terminal-bash/src/session.ts:497",
+        "packages/terminal/terminal-bash/src/session.ts:663",
+        "packages/terminal/terminal-bash/src/session.ts:665",
+        "packages/terminal/terminal-bash/src/session.ts:670",
+        "packages/terminal/terminal-bash/src/session.ts:674",
+        "packages/terminal/terminal-bash/src/session.ts:676",
+        "packages/terminal/terminal-bash/src/session.ts:685",
+        "packages/terminal/terminal-bash/src/session.ts:689"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-tool-suite",
+      "what": "`apply(ctx, config)` registers six model-facing tools — `terminal_open`, `terminal_send`, `terminal_read`, `terminal_signal`, `terminal_close`, `terminal_list` — all of which derive the owner from `requireAgent(exec.agent)` and delegate to `ctx.terminals`. It also registers the `tool:pty` system-prompt section. `terminal_open` calls `ctx.terminals.spawn(owner, {type, name?, cwd?}, exec.signal)` and returns the published snapshot plus `motd`; `terminal_send` either starts a `ctx.jobs` job of kind `'pty-send'` (with `outputLimitBytes: maxResultBytes`, `cancel: () => operation.cancel()`, and a `done` mapping that reports `killed` when cancel was requested) or awaits the send with `exec.signal`; `terminal_read` maps offset/count onto `ctx.terminals.read`; `terminal_signal` forwards the signal; `terminal_close` maps `ctx.terminals.kill` to `'closed'`/`'already-closing'`; `terminal_list` returns the owner's snapshots.",
+      "invariants": [
+        "Owner identity comes from the exact tool execution Agent; generic `ctx.jobs` owns background ids and collection. (packages/terminal/tool-terminal/src/index.ts:2-3)",
+        "Use a terminal session only when work needs persistent terminal state or interactive stdin ... An inferred_idle or timeout result does not prove the foreground command exited. (packages/terminal/tool-terminal/src/index.ts:159)"
+      ],
+      "failurePolicy": "fail-closed — a missing agent, an empty `sessionId`, a disabled background mode, or a missing `jobs` service throws before any terminal I/O; a foreground send whose `exec.signal` aborted throws `terminal send aborted` after the result is awaited.",
+      "constants": [
+        { "value": "256 * 1024 (262,144)", "where": "packages/terminal/tool-terminal/src/index.ts:30", "meaning": "DEFAULT_MAX_RESULT_BYTES cap for one complete model-facing terminal result" },
+        { "value": "64", "where": "packages/terminal/tool-terminal/src/index.ts:32", "meaning": "MIN_MAX_RESULT_BYTES — smallest cap preserving every counter-backed PTY and job id" },
+        { "value": "'pty-send'", "where": "packages/terminal/tool-terminal/src/index.ts:256", "meaning": "the ctx.jobs kind registered by terminal_send" },
+        { "value": "['SIGINT','SIGTERM','SIGKILL','SIGTSTP','SIGHUP']", "where": "packages/terminal/tool-terminal/src/index.ts:336", "meaning": "advertised terminal_signal enum; 'Shell-targeted SIGKILL is rejected; use terminal_close'" },
+        { "value": "'tool:pty'", "where": "packages/terminal/tool-terminal/src/index.ts:157", "meaning": "system-prompt section name" }
+      ],
+      "evidence": [
+        "packages/terminal/tool-terminal/src/index.ts:27",
+        "packages/terminal/tool-terminal/src/index.ts:30",
+        "packages/terminal/tool-terminal/src/index.ts:32",
+        "packages/terminal/tool-terminal/src/index.ts:43",
+        "packages/terminal/tool-terminal/src/index.ts:146",
+        "packages/terminal/tool-terminal/src/index.ts:156",
+        "packages/terminal/tool-terminal/src/index.ts:163",
+        "packages/terminal/tool-terminal/src/index.ts:184",
+        "packages/terminal/tool-terminal/src/index.ts:256",
+        "packages/terminal/tool-terminal/src/index.ts:261",
+        "packages/terminal/tool-terminal/src/index.ts:277",
+        "packages/terminal/tool-terminal/src/index.ts:279",
+        "packages/terminal/tool-terminal/src/index.ts:299",
+        "packages/terminal/tool-terminal/src/index.ts:322",
+        "packages/terminal/tool-terminal/src/index.ts:333",
+        "packages/terminal/tool-terminal/src/index.ts:358",
+        "packages/terminal/tool-terminal/src/index.ts:381",
+        "packages/terminal/tool-terminal/src/index.ts:389",
+        "packages/terminal/tool-terminal/src/index.ts:397"
+      ],
+      "verified": true
+    },
+    {
+      "name": "terminal-result-bounding",
+      "what": "Every terminal tool registers `finalizeContent` which re-bounds the single text block through `boundTerminalText(text, maxResultBytes)`; each `render` also bounds its own output with the same cap. `boundTerminalText` returns the text unchanged when it fits, else appends `TRUNCATED` and retains the HEAD of the text with `TextRetainer({kind:'head'})`. `fitWithPrefix`/`fitWithSuffix`/`boundBodyWithSuffix` keep the metadata suffix (wait reason, session status, line range) or the session prefix visible by budgeting their byte length first and retaining the body's tail.",
+      "invariants": [
+        "Bound one complete terminal acknowledgement while preserving UTF-8 cuts. (packages/terminal/tool-terminal/src/render.ts:88)",
+        "Smallest cap that preserves every counter-backed PTY and job id in its creation acknowledgement. (packages/terminal/tool-terminal/src/index.ts:31)"
+      ],
+      "failurePolicy": "fail-closed at configuration time — `apply` throws when `maxResultBytes` is not a safe integer or is below `MIN_MAX_RESULT_BYTES`; runtime bounding never throws (it truncates instead).",
+      "constants": [
+        { "value": "'\\n[output truncated]'", "where": "packages/terminal/tool-terminal/src/render.ts:50", "meaning": "TRUNCATED marker appended by every bounded renderer" },
+        { "value": "MIN_MAX_RESULT_BYTES = 64", "where": "packages/terminal/tool-terminal/src/index.ts:32", "meaning": "lower bound enforced both by the schema (.min at :45) and by apply (:149-151)" },
+        { "value": "kind: 'head' for the top-level cap, 'tail' for metadata-budgeted bodies", "where": "packages/terminal/tool-terminal/src/render.ts:57, :65, :72, :97", "meaning": "the TextRetainer direction chosen per renderer" }
+      ],
+      "evidence": [
+        "packages/terminal/tool-terminal/src/render.ts:49",
+        "packages/terminal/tool-terminal/src/render.ts:50",
+        "packages/terminal/tool-terminal/src/render.ts:56",
+        "packages/terminal/tool-terminal/src/render.ts:62",
+        "packages/terminal/tool-terminal/src/render.ts:68",
+        "packages/terminal/tool-terminal/src/render.ts:75",
+        "packages/terminal/tool-terminal/src/render.ts:93",
+        "packages/terminal/tool-terminal/src/render.ts:96",
+        "packages/terminal/tool-terminal/src/render.ts:106",
+        "packages/terminal/tool-terminal/src/render.ts:120",
+        "packages/terminal/tool-terminal/src/render.ts:150",
+        "packages/terminal/tool-terminal/src/render.ts:166",
+        "packages/terminal/tool-terminal/src/index.ts:31",
+        "packages/terminal/tool-terminal/src/index.ts:32",
+        "packages/terminal/tool-terminal/src/index.ts:45",
+        "packages/terminal/tool-terminal/src/index.ts:149",
+        "packages/terminal/tool-terminal/src/index.ts:152"
+      ],
+      "verified": true
+    }
+  ],
+  "moduleCoverage": {
+    "terminal/terminal": {
+      "kind": "mechanism",
+      "note": "Real logic, not mere registration: `TerminalSessionService` implements the whole owner-scoped registry — id minting, name/spawn reservations, publication ordering, eight coded failure modes, awaited per-session close, owner-effect cleanup and aggregate disposal (packages/terminal/terminal/src/index.ts:105-474). `types.ts` carries the backend/session/send vocabulary plus `TerminalBackendCleanupError` (packages/terminal/terminal/src/types.ts:18-177). Mechanisms: owner-scoped-pty-terminal-registry, pty-session-spawn-publication-and-rollback."
+    },
+    "terminal/terminal-bash": {
+      "kind": "mechanism",
+      "note": "Real logic. It IS the local PTY backend: config/dialect resolution plus validation (config.ts), streaming ANSI sanitizer (sanitize.ts), and the 708-line `LocalPtySession` implementing readiness polling, bounded scrollback, the xterm headless protocol-reply loop, interrupt/cancel and idempotent close (session.ts). `index.ts` adds the sandbox-mode fence and the bash/pwsh prompt bootstrap. Mechanisms: pty-shell-dialect-and-prompt-bootstrap, sandbox-mode-fence-for-open-terminals, terminal-ansi-sanitization, terminal-bounded-scrollback-and-utf8-truncation, terminal-emulator-protocol-replies, pty-send-readiness-state-machine, terminal-send-interrupt-on-cancel."
+    },
+    "terminal/tool-terminal": {
+      "kind": "mechanism",
+      "note": "Real logic beyond registration: six tool definitions with output schemas, background job wiring of kind 'pty-send', presentation hooks, and the `finalizeContent` result-bounding pipeline in render.ts. The `apply` function is the registration entry point but is not a hollow one (validation, config defaulting, prompt section, six tools) (packages/terminal/tool-terminal/src/index.ts:146-401). Mechanisms: terminal-tool-suite, terminal-result-bounding."
+    }
+  },
+  "notes": "All 8 .ts files read in full. Cross-package facts worth carrying: (1) `terminal-bash` depends directly on `@deepseek-ai/dsh-pwsh-local` for `resolvePwshPath` and `ENCODING_PREAMBLE` (packages/terminal/terminal-bash/src/config.ts:4 and src/index.ts:16) — a packages/terminal -> packages/shell dependency. (2) `terminal-bash` reaches the PTY through `ctx.subprocess.spawnTerminal`, so all the subprocess-local containment/identity machinery applies underneath. (3) `isStdinWaiting` from the subprocess inspector is the exact-probe evidence the readiness machine consumes via `SubprocessTerminalForeground.inputWaiting` (session.ts:500); on macOS and Windows that probe always returns false (packages/subprocess/subprocess-local/src/process-inspector.ts:506 and windows-inspector.ts:96), so only the prompt-marker and idle-silence paths can settle there. (4) `tool-bash-persistent`/`tool-pwsh-persistent` consume this service only through `ctx.terminals.spawn/startSend/read/kill/list`. (5) The `idleSilenceMs` default (3_000) is the only 'idle timeout' in this group; the absolute per-send bound is `timeoutMs` (30_000)."
+}
