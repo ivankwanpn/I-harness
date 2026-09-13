@@ -1,0 +1,234 @@
+{
+  "group": "packages/subprocess/win32-process",
+  "mechanisms": [
+    {
+      "name": "win32-lazy-koffi-ffi-binding",
+      "what": "All Win32 access goes through lazily-resolved Koffi bindings. `bindingContext()` loads `kernel32.dll` and `advapi32.dll` once and returns a `bind` helper that calls `lib.func('__stdcall', name, result, args)`; `bindings()` additionally loads the current process with `koffi.load(null)` to bind `uv_get_osfhandle`, then populates `CurrentTokenProcessBindings` with CloseHandle, GetLastError, FormatMessageW, CreatePipe, SetHandleInformation, CreateProcessAsUserW, CreateProcessW, ReadFile, PeekNamedPipe, WaitForSingleObject, GetExitCodeProcess, CreateJobObjectW, SetInformationJobObject, QueryInformationJobObject, AssignProcessToJobObject, ResumeThread, TerminateProcess, TerminateJobObject and GetStdHandle. `STARTUPINFOW` and `PROCESS_INFORMATION` are declared with `koffi.struct` under the names `DSH_STARTUPINFOW`/`DSH_PROCESS_INFORMATION` and size-asserted against the x64 constants at module load. `extendWin32ProcessBindings(create)` lets a caller (the Windows sandbox) add policy-specific API families over the shared table.",
+      "invariants": [
+        "STARTUPINFOW layout mismatch: koffi computed ${STARTUPINFOW.size}, expected ${abi.STARTUPINFOW_SIZE} — thrown at import when the ABI does not match. (packages/subprocess/win32-process/src/ffi.ts:159-161)",
+        "PROCESS_INFORMATION layout mismatch (packages/subprocess/win32-process/src/ffi.ts:162-164)",
+        "The sandbox mutates its process environment before this call. Passing an explicit block through Koffi makes CreateProcessAsUserW reject the request with ERROR_INVALID_PARAMETER, so lpEnvironment remains NULL. (packages/subprocess/win32-process/src/process.ts:179-181)"
+      ],
+      "failurePolicy": "fail-closed — a layout mismatch or a failed bind throws at load; every checked Win32 call funnels into `throwLastError`/`throwWin32` which raise `Win32Error`.",
+      "constants": [
+        { "value": "'STARTUPINFOW_SIZE = 104'", "where": "packages/subprocess/win32-process/src/abi.ts:46", "meaning": "x64 STARTUPINFOW byte size asserted against koffi's computed size" },
+        { "value": "'PROCESS_INFORMATION_SIZE = 24'", "where": "packages/subprocess/win32-process/src/abi.ts:48", "meaning": "x64 PROCESS_INFORMATION byte size asserted at load" },
+        { "value": "'kernel32.dll' / 'advapi32.dll' / koffi.load(null)", "where": "packages/subprocess/win32-process/src/ffi.ts:242-243 and :257", "meaning": "the three loaded modules (null = current process, for uv_get_osfhandle)" },
+        { "value": "Buffer.alloc(1024)", "where": "packages/subprocess/win32-process/src/ffi.ts:322", "meaning": "FormatMessageW message buffer size in bytes (buffer.length / 2 passed as the character count)" }
+      ],
+      "evidence": [
+        "packages/subprocess/win32-process/src/ffi.ts:9",
+        "packages/subprocess/win32-process/src/ffi.ts:12",
+        "packages/subprocess/win32-process/src/ffi.ts:129",
+        "packages/subprocess/win32-process/src/ffi.ts:151",
+        "packages/subprocess/win32-process/src/ffi.ts:159",
+        "packages/subprocess/win32-process/src/ffi.ts:162",
+        "packages/subprocess/win32-process/src/ffi.ts:240",
+        "packages/subprocess/win32-process/src/ffi.ts:242",
+        "packages/subprocess/win32-process/src/ffi.ts:257",
+        "packages/subprocess/win32-process/src/ffi.ts:290",
+        "packages/subprocess/win32-process/src/ffi.ts:300",
+        "packages/subprocess/win32-process/src/ffi.ts:310",
+        "packages/subprocess/win32-process/src/abi.ts:46",
+        "packages/subprocess/win32-process/src/abi.ts:48",
+        "packages/subprocess/win32-process/src/process.ts:179"
+      ],
+      "verified": true
+    },
+    {
+      "name": "win32-job-object-kill-on-close",
+      "what": "`createKillOnCloseJob(api)` calls `CreateJobObjectW(null, null)` (unnamed), then allocates a `JOBOBJECT_EXTENDED_LIMIT_SIZE` (144-byte) buffer and writes `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`0x00002000`) at byte offset 16, applying it with `SetInformationJobObject(job, JobObjectExtendedLimitInformation /* 9 */, ...)`. On failure it closes the Job handle and throws. `isJobEmpty` queries `JobObjectBasicAccountingInformation` (class 1) into a 48-byte buffer and reads `ActiveProcesses` at offset 40. `probeCurrentTokenJobSupport` creates and immediately closes such a Job to prove the current token can use one.",
+      "invariants": [
+        "Job limit that terminates every member when the final Job handle closes. (packages/subprocess/win32-process/src/abi.ts:31)",
+        "Only the KILL_ON_JOB_CLOSE limit is set — no CPU/memory/UI limits are configured."
+      ],
+      "failurePolicy": "fail-closed — a failed CreateJobObjectW, SetInformationJobObject or QueryInformationJobObject throws `Win32Error`; `createKillOnCloseJob` closes the Job handle before throwing so no leaked kernel object remains.",
+      "constants": [
+        { "value": "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000", "where": "packages/subprocess/win32-process/src/abi.ts:32", "meaning": "the only Job limit flag set" },
+        { "value": "JobObjectExtendedLimitInformation = 9", "where": "packages/subprocess/win32-process/src/abi.ts:36", "meaning": "SetInformationJobObject class" },
+        { "value": "JOBOBJECT_EXTENDED_LIMIT_SIZE = 144", "where": "packages/subprocess/win32-process/src/abi.ts:42", "meaning": "buffer size for the extended limit record" },
+        { "value": "JOBOBJECT_EXTENDED_LIMIT_FLAGS_OFFSET = 16", "where": "packages/subprocess/win32-process/src/abi.ts:44", "meaning": "byte offset of BasicLimitInformation.LimitFlags" },
+        { "value": "JobObjectBasicAccountingInformation = 1, SIZE = 48, ACTIVE_PROCESSES_OFFSET = 40", "where": "packages/subprocess/win32-process/src/abi.ts:34, :38, :40", "meaning": "query class and layout for isJobEmpty" }
+      ],
+      "evidence": [
+        "packages/subprocess/win32-process/src/abi.ts:32",
+        "packages/subprocess/win32-process/src/abi.ts:34",
+        "packages/subprocess/win32-process/src/abi.ts:36",
+        "packages/subprocess/win32-process/src/abi.ts:38",
+        "packages/subprocess/win32-process/src/abi.ts:40",
+        "packages/subprocess/win32-process/src/abi.ts:42",
+        "packages/subprocess/win32-process/src/abi.ts:44",
+        "packages/subprocess/win32-process/src/process.ts:333",
+        "packages/subprocess/win32-process/src/process.ts:334",
+        "packages/subprocess/win32-process/src/process.ts:337",
+        "packages/subprocess/win32-process/src/process.ts:341",
+        "packages/subprocess/win32-process/src/process.ts:348",
+        "packages/subprocess/win32-process/src/process.ts:546",
+        "packages/subprocess/win32-process/src/process.ts:576",
+        "packages/subprocess/win32-process/src/process.ts:587"
+      ],
+      "verified": true
+    },
+    {
+      "name": "win32-suspended-create-assign-resume",
+      "what": "`spawnJobProcess` is the shared lifecycle for both Job-spawning entry points: create the kill-on-close Job, resolve stdio handles, enable `HANDLE_FLAG_INHERIT` on stdin/stdout/stderr (recording each so the bits can be restored in `finally`), allocate and encode a `STARTUPINFOW` with `cb = 104` and `dwFlags = STARTF_USESTDHANDLES`, create the process with `CREATE_SUSPENDED` (plus `CREATE_UNICODE_ENVIRONMENT` for the current-token path), then `AssignProcessToJobObject(job, hProcess)` and finally `ResumeThread(hThread)`. Every failure step terminates the process (exit code 1) and closes the Job, thread and process handles before throwing. `spawnInheritedJobProcess` uses `CreateProcessAsUserW` with the restricted token and the runner's own `GetStdHandle` values; `spawnCurrentTokenJobProcess` uses `CreateProcessW` with the resolved `applicationName`, a UTF-16 environment block, and target handle values obtained from `uv_get_osfhandle` on the carrier descriptors.",
+      "invariants": [
+        "Node clears stdio handle inheritability at startup through uv_disable_stdio_inheritance. This operation temporarily restores the bits required by STARTF_USESTDHANDLES. Restoring them afterward is best-effort: failure must not replace the already-created child's outcome. (packages/subprocess/win32-process/src/process.ts:494-497)",
+        "The runner spawns nothing else; cleanup failure must not mask the child. (packages/subprocess/win32-process/src/process.ts:443)"
+      ],
+      "failurePolicy": "fail-closed — a null process/thread handle pair, a failed Job assignment, or a failed ResumeThread throws after killing the just-created process (`TerminateProcess(hProcess, 1)`), so a Job member can never escape unowned.",
+      "constants": [
+        { "value": "CREATE_SUSPENDED = 0x4", "where": "packages/subprocess/win32-process/src/abi.ts:12", "meaning": "creation flag for both Job spawn paths" },
+        { "value": "CREATE_UNICODE_ENVIRONMENT = 0x400", "where": "packages/subprocess/win32-process/src/abi.ts:14", "meaning": "added only by spawnCurrentTokenJobProcess (packages/subprocess/win32-process/src/process.ts:534)" },
+        { "value": "STARTF_USESTDHANDLES = 0x00000100", "where": "packages/subprocess/win32-process/src/abi.ts:4", "meaning": "dwFlags value for both encodings" },
+        { "value": "HANDLE_FLAG_INHERIT = 0x1", "where": "packages/subprocess/win32-process/src/abi.ts:6", "meaning": "bit set before create and cleared after (process.ts:420, :444)" },
+        { "value": "UV_INVALID_OS_FILE_HANDLE = 0xffff_ffff_ffff_ffffn / UV_INVALID_FILE_DESCRIPTOR = 0xffff_ffff_ffff_fffen", "where": "packages/subprocess/win32-process/src/process.ts:361-362", "meaning": "uv_get_osfhandle failure sentinels rejected by targetCarrierHandles" }
+      ],
+      "evidence": [
+        "packages/subprocess/win32-process/src/process.ts:400",
+        "packages/subprocess/win32-process/src/process.ts:407",
+        "packages/subprocess/win32-process/src/process.ts:420",
+        "packages/subprocess/win32-process/src/process.ts:426",
+        "packages/subprocess/win32-process/src/process.ts:434",
+        "packages/subprocess/win32-process/src/process.ts:444",
+        "packages/subprocess/win32-process/src/process.ts:463",
+        "packages/subprocess/win32-process/src/process.ts:470",
+        "packages/subprocess/win32-process/src/process.ts:472",
+        "packages/subprocess/win32-process/src/process.ts:478",
+        "packages/subprocess/win32-process/src/process.ts:499",
+        "packages/subprocess/win32-process/src/process.ts:521",
+        "packages/subprocess/win32-process/src/process.ts:534",
+        "packages/subprocess/win32-process/src/process.ts:377",
+        "packages/subprocess/win32-process/src/process.ts:388",
+        "packages/subprocess/win32-process/src/process.ts:361",
+        "packages/subprocess/win32-process/src/abi.ts:12",
+        "packages/subprocess/win32-process/src/abi.ts:14"
+      ],
+      "verified": true
+    },
+    {
+      "name": "win32-command-line-and-environment-encoding",
+      "what": "`quoteArg` implements the `CommandLineToArgvW` backslash/quote rules: an empty argument becomes `\"\"`, an argument without whitespace or quotes is passed bare, and otherwise a quoted form doubles runs of backslashes before a quote and before the terminating quote. `buildCommandLine` maps `quoteArg` over `[program, ...args]` and joins with spaces. `encodeWindowsEnvironment` sorts entries by case-folded key and emits `key=value` strings joined by `\\0` with a double-NUL terminator, encoded `utf16le` into a Buffer that `CreateProcessW` receives as `lpEnvironment`.",
+      "invariants": [
+        "Quote one argument according to CommandLineToArgvW parsing. (packages/subprocess/win32-process/src/process.ts:21)",
+        "The environment block is emitted double-NUL-terminated and case-insensitively sorted, matching the Win32 requirement."
+      ],
+      "failurePolicy": "n/a (pure encoding) — no failure path; a malformed argv simply produces the corresponding Win32 command line.",
+      "constants": [
+        { "value": "'\"\"'", "where": "packages/subprocess/win32-process/src/process.ts:26", "meaning": "encoding of an empty argument" },
+        { "value": "/[\\s\"]/u", "where": "packages/subprocess/win32-process/src/process.ts:27", "meaning": "test that decides whether quoting is needed at all" },
+        { "value": "'utf16le' with '${strings.join(\"\\0\")}\\0\\0'", "where": "packages/subprocess/win32-process/src/process.ts:68", "meaning": "the environment block terminator contract" }
+      ],
+      "evidence": [
+        "packages/subprocess/win32-process/src/process.ts:25",
+        "packages/subprocess/win32-process/src/process.ts:26",
+        "packages/subprocess/win32-process/src/process.ts:27",
+        "packages/subprocess/win32-process/src/process.ts:36",
+        "packages/subprocess/win32-process/src/process.ts:38",
+        "packages/subprocess/win32-process/src/process.ts:52",
+        "packages/subprocess/win32-process/src/process.ts:56",
+        "packages/subprocess/win32-process/src/process.ts:66",
+        "packages/subprocess/win32-process/src/process.ts:68",
+        "packages/subprocess/win32-process/src/process.ts:525",
+        "packages/subprocess/win32-process/src/process.ts:526"
+      ],
+      "verified": true
+    },
+    {
+      "name": "win32-anonymous-pipe-capture",
+      "what": "`spawnPipedProcess(api, options)` creates three anonymous pipes via `CreatePipe(readHandle, writeHandle, null, 0)`, sets `HANDLE_FLAG_INHERIT` on the child-side ends (stdin read, stdout write, stderr write), encodes a `STARTUPINFOW` pointing at them, and creates the process through `CreateProcessAsUserW` with `lpEnvironment = null` and a restricted primary token. On success it closes the parent-side ends it no longer needs and hands back the process handle plus the stdout/stderr read ends. `drainPipe` peeks with `PeekNamedPipe`, reads available bytes with `ReadFile`, yields 1 ms between polls, terminates on `ERROR_BROKEN_PIPE` (109) or `ERROR_NO_DATA` (232), and always closes the handle in `finally`. `waitForProcessExit` waits with `INFINITE` and always closes the process handle.",
+      "invariants": [
+        "The sandbox mutates its process environment before this call ... so lpEnvironment remains NULL. (packages/subprocess/win32-process/src/process.ts:179-181)",
+        "Drain one anonymous pipe until the writer closes it ... the handle is always closed. (packages/subprocess/win32-process/src/process.ts:273-278)"
+      ],
+      "failurePolicy": "fail-closed — every failed Win32 call throws `Win32Error` (via `throwLastError`/`throwWin32`); the catch path runs `closeAllOwned` so all pipes created so far are closed before the error propagates.",
+      "constants": [
+        { "value": "PeekNamedPipe return 0 with ERROR_BROKEN_PIPE (109) or ERROR_NO_DATA (232)", "where": "packages/subprocess/win32-process/src/process.ts:292 and packages/subprocess/win32-process/src/abi.ts:28-30", "meaning": "the two accepted end-of-stream conditions" },
+        { "value": "setTimeout(resolve, 1)", "where": "packages/subprocess/win32-process/src/process.ts:303", "meaning": "drain poll interval in ms" },
+        { "value": "INFINITE = 0xFFFFFFFF", "where": "packages/subprocess/win32-process/src/abi.ts:8", "meaning": "WaitForSingleObject timeout used by waitForProcessExit (process.ts:321)" },
+        { "value": "'CreatePipe' size argument 0", "where": "packages/subprocess/win32-process/src/process.ts:143", "meaning": "default pipe buffer size requested" }
+      ],
+      "evidence": [
+        "packages/subprocess/win32-process/src/process.ts:138",
+        "packages/subprocess/win32-process/src/process.ts:143",
+        "packages/subprocess/win32-process/src/process.ts:203",
+        "packages/subprocess/win32-process/src/process.ts:219",
+        "packages/subprocess/win32-process/src/process.ts:240",
+        "packages/subprocess/win32-process/src/process.ts:264",
+        "packages/subprocess/win32-process/src/process.ts:280",
+        "packages/subprocess/win32-process/src/process.ts:289",
+        "packages/subprocess/win32-process/src/process.ts:292",
+        "packages/subprocess/win32-process/src/process.ts:303",
+        "packages/subprocess/win32-process/src/process.ts:308",
+        "packages/subprocess/win32-process/src/process.ts:318",
+        "packages/subprocess/win32-process/src/process.ts:321",
+        "packages/subprocess/win32-process/src/abi.ts:26",
+        "packages/subprocess/win32-process/src/abi.ts:28",
+        "packages/subprocess/win32-process/src/abi.ts:30"
+      ],
+      "verified": true
+    },
+    {
+      "name": "win32-process-and-job-polling",
+      "what": "`pollProcessExit(api, process)` performs a zero-time `WaitForSingleObject`: `WAIT_TIMEOUT` (258) means still running and returns undefined, `0xFFFFFFFF` throws, anything else reads the exit code with `GetExitCodeProcess` and returns it. `isJobEmpty(api, job)` queries `JobObjectBasicAccountingInformation` and returns true only when `ActiveProcesses` (offset 40 in the 48-byte record) is zero. Together these are what the Windows Job runner polls on its 10 ms timer, and `closeHandleChecked(api, handle, detail)` centralizes checked handle closure with a labeled error.",
+      "invariants": [
+        "Poll one process handle without blocking the runner event loop. (packages/subprocess/win32-process/src/process.ts:552)",
+        "Return whether a Job has no active processes. (packages/subprocess/win32-process/src/process.ts:571)"
+      ],
+      "failurePolicy": "fail-closed — an unexpected wait result, a failed GetExitCodeProcess, a failed QueryInformationJobObject, or a failed CloseHandle all throw `Win32Error` with the API name.",
+      "constants": [
+        { "value": "WAIT_TIMEOUT = 258", "where": "packages/subprocess/win32-process/src/abi.ts:10", "meaning": "zero-time probe result meaning 'still running'" },
+        { "value": "0xFFFFFFFF", "where": "packages/subprocess/win32-process/src/process.ts:560", "meaning": "WAIT_FAILED sentinel turned into throwLastError" },
+        { "value": "ACTIVE_PROCESSES_OFFSET = 40 in a 48-byte record", "where": "packages/subprocess/win32-process/src/process.ts:587 with packages/subprocess/win32-process/src/abi.ts:38,40", "meaning": "the isJobEmpty read" }
+      ],
+      "evidence": [
+        "packages/subprocess/win32-process/src/process.ts:557",
+        "packages/subprocess/win32-process/src/process.ts:558",
+        "packages/subprocess/win32-process/src/process.ts:559",
+        "packages/subprocess/win32-process/src/process.ts:560",
+        "packages/subprocess/win32-process/src/process.ts:576",
+        "packages/subprocess/win32-process/src/process.ts:578",
+        "packages/subprocess/win32-process/src/process.ts:587",
+        "packages/subprocess/win32-process/src/process.ts:596",
+        "packages/subprocess/win32-process/src/process.ts:597",
+        "packages/subprocess/win32-process/src/process.ts:606",
+        "packages/subprocess/win32-process/src/process.ts:607",
+        "packages/subprocess/win32-process/src/abi.ts:10"
+      ],
+      "verified": true
+    },
+    {
+      "name": "win32-error-surfacing",
+      "what": "`Win32Error extends Error` carries the exact failing `api` name and the `win32Code`, with message `${api} failed (Win32 ${win32Code})[: detail]`. `errorText(api, win32Code)` renders the system message through `FormatMessageW` with `FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS` into a 1024-byte buffer, decoding `utf16le` and trimming (empty string when the call returns 0). `throwLastError(api, name, detail?)` captures the CURRENT `GetLastError()` value and throws; `throwWin32(api, name, win32Code, detail?)` throws an explicitly captured code — used where a cleanup call would otherwise overwrite the error.",
+      "invariants": [
+        "throwWin32 exists so an error captured BEFORE cleanup is the one reported (see the SetInformationJobObject and AssignProcessToJobObject call sites, packages/subprocess/win32-process/src/process.ts:347-349 and :471-476)."
+      ],
+      "failurePolicy": "fail-closed — this module is the failure path; it always throws, never returns a sentinel.",
+      "constants": [
+        { "value": "FORMAT_MESSAGE_FROM_SYSTEM = 0x00001000 | FORMAT_MESSAGE_IGNORE_INSERTS = 0x00000200", "where": "packages/subprocess/win32-process/src/abi.ts:22-24 and packages/subprocess/win32-process/src/ffi.ts:324", "meaning": "FormatMessageW flags" },
+        { "value": "ERROR_INSUFFICIENT_BUFFER = 122", "where": "packages/subprocess/win32-process/src/abi.ts:26", "meaning": "exported for callers that size a buffer from a Win32 query" }
+      ],
+      "evidence": [
+        "packages/subprocess/win32-process/src/errors.ts:2",
+        "packages/subprocess/win32-process/src/errors.ts:9",
+        "packages/subprocess/win32-process/src/errors.ts:10",
+        "packages/subprocess/win32-process/src/ffi.ts:321",
+        "packages/subprocess/win32-process/src/ffi.ts:331",
+        "packages/subprocess/win32-process/src/ffi.ts:342",
+        "packages/subprocess/win32-process/src/ffi.ts:355",
+        "packages/subprocess/win32-process/src/process.ts:347",
+        "packages/subprocess/win32-process/src/process.ts:471",
+        "packages/subprocess/win32-process/src/abi.ts:22",
+        "packages/subprocess/win32-process/src/abi.ts:26"
+      ],
+      "verified": true
+    }
+  ],
+  "moduleCoverage": {
+    "subprocess/win32-process": {
+      "kind": "mechanism",
+      "note": "Real logic and NOT Cordis plumbing: there is no `Service` subclass, no `apply(ctx)` and no `Context` registration anywhere in the package — `index.ts` is a pure re-export barrel (packages/subprocess/win32-process/src/index.ts:1-38). Mechanisms: win32-lazy-koffi-ffi-binding, win32-job-object-kill-on-close, win32-suspended-create-assign-resume, win32-command-line-and-environment-encoding, win32-anonymous-pipe-capture, win32-process-and-job-polling, win32-error-surfacing. Note the split of responsibilities: this package owns the Job Object itself and the suspended-create/assign/resume ladder; packages/subprocess/subprocess-local owns the runner process that drives it and the Toolhelp32 process-table inspector."
+    }
+  },
+  "notes": "All 5 .ts files read in full. Facts to carry into the inventory: (1) Job termination is implemented three ways here — `terminateJob`/`TerminateJobObject` (process.ts:596-598), kill-on-close via the Job limit (process.ts:333-352), and per-process `TerminateProcess` on failure paths. (2) The Job is unnamed and created per spawn (`CreateJobObjectW(null, null)`). (3) `spawnPipedProcess` (restricted-token, piped stdout/stderr) is exported but the ordinary Windows path used by subprocess-local is `spawnCurrentTokenJobProcess`; the piped variant's production caller (if any) is outside this package. (4) `quoteArg`/`buildCommandLine` are exported and used by both job spawn paths (process.ts:235, :503, :525)."
+}

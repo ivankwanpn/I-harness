@@ -1,0 +1,25 @@
+audit(d3): harvest existing mechanism material as both accelerator and fallback
+
+Phase 1's first run produced nothing in five rounds. If the re-run also fails, D3
+must still be deliverable from material already verified on disk rather than not
+at all, so this harvests what exists: the command-level extractions carry a
+`mechanism` prose field per command, and several carry a `mechanisms` object keyed
+by subsystem. 282 items across the seven sources, grouped by domain.
+
+It is honest about being partial. The material is COMMAND-SHAPED, so coverage
+tracks what commands touch and collapses exactly where a mechanism survey matters
+most:
+
+  session    ih 13  dsh 1  codex 13  opencode 0  fork 0  grok 22  cc-custom 24
+  subagent   ih  2  dsh 0  codex  2  opencode 0  fork 0  grok  1  cc-custom  2
+  safety     ih  2  dsh 0  codex  5  opencode 0  fork 0  grok  0  cc-custom  2
+  ops        ih  0  dsh 0  codex  0  opencode 0  fork 0  grok  0  cc-custom  4
+
+dsh yields 5 items and opencode 3, because both deliberately keep their command
+surface thin -- dsh's operations live on an RPC plane and opencode's commands are
+user-defined markdown. So this is a useful accelerator for IH, codex, grok and
+cc-custom, and nearly nothing for the two sources whose survey needs it most. The
+script prints that gap rather than hiding it.
+
+Also flagged the last dsh scratch file (_shell_partC.json) to the re-dispatched
+agent; the tools domain has three shell parts, one of which is truncated.
