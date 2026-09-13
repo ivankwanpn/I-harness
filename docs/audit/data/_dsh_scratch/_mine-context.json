@@ -100,7 +100,7 @@
     },
     {
       "name": "tool-result-pruner",
-      "what": "A model-free, replay-safe pruner service (`ctx.toolResultPruner`) that rewrites over-budget tool results in place on the current surface. It measures text content in Unicode code points (non-text blocks cost zero), and for any result above `thresholdChars` keeps a head and a tail around a fixed marker, splitting by code point so a surrogate pair is never broken. Each rewrite appends a `compaction/prune` shadow-price event immediately before the replacement `tool/result` carrye a single-node replace surfaceOp citing the shadowed seq.",
+      "what": "A model-free, replay-safe pruner service (`ctx.toolResultPruner`) that rewrites over-budget tool results in place on the current surface. It measures text content in Unicode code points (non-text blocks cost zero), and for any result above `thresholdChars` keeps a head and a tail around a fixed marker, splitting by code point so a surrogate pair is never broken. Each rewrite appends a `compaction/prune` shadow-price event immediately before the replacement `tool/result` carrying a single-node replace surfaceOp citing the shadowed seq.",
       "invariants": [
         "headChars + marker + tailChars must be at most thresholdChars",
         "the emitted replacement must be strictly smaller than the original and within threshold",

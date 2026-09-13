@@ -1,0 +1,323 @@
+{
+  "group": "packages/e2b/subprocess-e2b",
+  "mechanisms": [
+    {
+      "name": "e2b-remote-command-execution",
+      "what": "`E2BSubprocessHandle` projects one E2B background command onto the `SubprocessHandle` seam. Its constructor returns synchronously while `run()` resolves the shared sandbox, calls `prepareState`, then `sandbox.commands.run(commandText(spec, paths), {background: true, cwd, envs: e2bControlEnvs(controlEnvs), stdin: …, timeoutMs: 0, onStdout, onStderr})`. `commandText` emits a two-stage bash wrapper: a bootstrap that resolves `env`/`setsid`/`bash`/`node`/`ps`/`tr`/`tee`/`head`/`rm` with `command -v` and refuses unless every one is an absolute executable (`exit 125`), then `exec env -i -- \"${dsh_e2b_env[@]}\" setsid --wait -- bash -c <inner> … <argv>`; the inner script writes its own PGID to `<stateDir>/pid`, reads the NUL-delimited environment file, removes it, runs the target under `env -i`, writes the exit status to `<stateDir>/exit-code`, then `wait`s and exits with that status.",
+      "invariants": [
+        "Each handle starts through the shared sandbox and retains command output/status paths in that remote world. (packages/e2b/subprocess-e2b/src/index.ts:2-3)",
+        "The bootstrap ends in an exec chain through the scrubbed environment and `setsid`, so E2B's command PID is the provisional group id even before the private publication file can be trusted. (packages/e2b/subprocess-e2b/src/process.ts:571-574)"
+      ],
+      "failurePolicy": "mixed — spawn-time validation throws synchronously (disposing service, empty argv[0], unrepresentable grace, pre-aborted signal, NUL bytes); runtime failures roll back through `rollbackPublishedFailure`/`removeFailedState` and reject `done`; a cancellation during preparation resolves as `{exitCode: null, signal: 'SIGTERM'}` rather than throwing (packages/e2b/subprocess-e2b/src/process.ts:383).",
+      "constants": [
+        { "value": "20", "where": "packages/e2b/subprocess-e2b/src/index.ts:64", "meaning": "default `pollMs` — remote status/liveness poll cadence; each tick is one control-plane request" },
+        { "value": "exit 125", "where": "packages/e2b/subprocess-e2b/src/process.ts:134", "meaning": "bootstrap refusal when any required tool is not an absolute executable" },
+        { "value": "timeoutMs: 0", "where": "packages/e2b/subprocess-e2b/src/process.ts:323", "meaning": "no SDK-side command timeout; deadlines stay with the caller" },
+        { "value": "'processes' + randomUUID() under ctx.e2b.runtimeRoot", "where": "packages/e2b/subprocess-e2b/src/index.ts:173", "meaning": "per-spawn private remote state directory" },
+        { "value": "chmod 700 / chmod 600", "where": "packages/e2b/subprocess-e2b/src/process.ts:401 and :413", "meaning": "private mode on the state directory and its files" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/index.ts:148",
+        "packages/e2b/subprocess-e2b/src/index.ts:154",
+        "packages/e2b/subprocess-e2b/src/index.ts:173",
+        "packages/e2b/subprocess-e2b/src/index.ts:174",
+        "packages/e2b/subprocess-e2b/src/process.ts:93",
+        "packages/e2b/subprocess-e2b/src/process.ts:111",
+        "packages/e2b/subprocess-e2b/src/process.ts:115",
+        "packages/e2b/subprocess-e2b/src/process.ts:122",
+        "packages/e2b/subprocess-e2b/src/process.ts:134",
+        "packages/e2b/subprocess-e2b/src/process.ts:136",
+        "packages/e2b/subprocess-e2b/src/process.ts:159",
+        "packages/e2b/subprocess-e2b/src/process.ts:309",
+        "packages/e2b/subprocess-e2b/src/process.ts:316",
+        "packages/e2b/subprocess-e2b/src/process.ts:323",
+        "packages/e2b/subprocess-e2b/src/process.ts:383",
+        "packages/e2b/subprocess-e2b/src/process.ts:392",
+        "packages/e2b/subprocess-e2b/src/process.ts:401",
+        "packages/e2b/subprocess-e2b/src/process.ts:413"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-base64-output-transport",
+      "what": "Remote stdout/stderr travel as newline-delimited base64 frames produced by `OUTPUT_ENCODER_SOURCE`, a Node one-liner piped to `node -e` inside the wrapper (with `head -c <maxSpillBytes>` and `tee` writing the private spill file first when the mode has a spill). `E2BBase64Decoder.push(text)` buffers arbitrarily split SDK callbacks, splits on `\\n`, rejects a frame that is not valid base64 or that does not round-trip (`bytes.toString('base64') !== frame`), recognizes the reserved `E2B_OUTPUT_COMPLETE_FRAME` as clean EOF, and throws on a duplicate completion or on any frame after completion. `finish(requireComplete)` throws `truncated base64 output transport` when a partial frame remains and `incomplete output transport` when the EOF frame never arrived; a requested termination passes `requireComplete = false` to discard the interrupted tail.",
+      "invariants": [
+        "Decode every complete newline-delimited frame in one arbitrarily split SDK callback. (packages/e2b/subprocess-e2b/src/output.ts:17)",
+        "Reserved non-base64 frame proving that one remote encoder reached clean EOF. (packages/e2b/subprocess-e2b/src/output.ts:8)",
+        "the round-trip re-encode check `bytes.toString('base64') !== frame` is the acceptance test for a frame (packages/e2b/subprocess-e2b/src/output.ts:40-42)"
+      ],
+      "failurePolicy": "fail-closed — a transport fault is recorded in `outputTransportError`, the corresponding host stream is destroyed with it, and `run()` rethrows it after the command settles; the decoders' `finish()` rejects an incomplete transport instead of returning partial data as complete.",
+      "constants": [
+        { "value": "'!dsh-e2b-output-complete!'", "where": "packages/e2b/subprocess-e2b/src/output.ts:9", "meaning": "E2B_OUTPUT_COMPLETE_FRAME, the reserved EOF frame" },
+        { "value": "/^[A-Za-z0-9+/]+={0,2}$/u", "where": "packages/e2b/subprocess-e2b/src/output.ts:6", "meaning": "BASE64_TEXT pre-check before the round-trip verification" },
+        { "value": "requireComplete = this.terminationSignal === null && !this.outputDrainExpired", "where": "packages/e2b/subprocess-e2b/src/process.ts:363", "meaning": "when a clean EOF frame is demanded" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/process.ts:26",
+        "packages/e2b/subprocess-e2b/src/process.ts:33",
+        "packages/e2b/subprocess-e2b/src/process.ts:94",
+        "packages/e2b/subprocess-e2b/src/process.ts:96",
+        "packages/e2b/subprocess-e2b/src/process.ts:363",
+        "packages/e2b/subprocess-e2b/src/process.ts:364",
+        "packages/e2b/subprocess-e2b/src/process.ts:429",
+        "packages/e2b/subprocess-e2b/src/output.ts:6",
+        "packages/e2b/subprocess-e2b/src/output.ts:9",
+        "packages/e2b/subprocess-e2b/src/output.ts:12",
+        "packages/e2b/subprocess-e2b/src/output.ts:21",
+        "packages/e2b/subprocess-e2b/src/output.ts:30",
+        "packages/e2b/subprocess-e2b/src/output.ts:36",
+        "packages/e2b/subprocess-e2b/src/output.ts:40",
+        "packages/e2b/subprocess-e2b/src/output.ts:52",
+        "packages/e2b/subprocess-e2b/src/output.ts:58",
+        "packages/e2b/subprocess-e2b/src/output.ts:60"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-remote-environment-resolution",
+      "what": "`readRemoteEnvironment(sandbox)` runs one control command that resolves the login user's home from `getent passwd` and then prints the home and `env -0` output **as base64** (`base64 -w 0`) so SDK callback chunking cannot corrupt UTF-8; it validates exactly two base64 lines, decodes with a fatal UTF-8 `TextDecoder`, requires an absolute NUL-free home, forces `HOME` to that value, and returns a NUL-delimited string. `scrubRemoteEnvironment` drops every `DSH_*` name and anything matching `SENSITIVE_ENV_PATTERN`; `bootstrapEnvironment` returns `{TERM: 'dumb'}` plus an empty-string override for each private/credential-shaped name (so the bootstrap login shell does not see them); `serializeRemoteEnvironment` overlays explicit caller entries, where an explicit `undefined` is the seam's tombstone that deletes an ambient entry, and rejects names that are empty/contain `=`/NUL or values containing NUL.",
+      "invariants": [
+        "Read the remote environment through ASCII base64 so SDK callback chunking cannot corrupt UTF-8. (packages/e2b/subprocess-e2b/src/environment.ts:23)",
+        "TODO(e2b-replace-environment): Remove this ambient probe when E2B can start a command with a replacement environment instead of merged overrides. (packages/e2b/subprocess-e2b/src/environment.ts:29-30)",
+        "Isolate E2B's fixed login-shell bootstrap from user profiles and ambient credentials. (packages/e2b/subprocess-e2b/src/environment.ts:72)"
+      ],
+      "failurePolicy": "fail-closed — invalid base64, non-UTF-8 bytes, an invalid home, or an invalid explicit entry all throw; the environment file is deleted remotely right after the wrapper reads it (packages/e2b/subprocess-e2b/src/process.ts:114).",
+      "constants": [
+        { "value": "'set -o pipefail; … env -0 | base64 -w 0'", "where": "packages/e2b/subprocess-e2b/src/environment.ts:32", "meaning": "the single ambient probe command" },
+        { "value": "TERM: 'dumb'", "where": "packages/e2b/subprocess-e2b/src/environment.ts:77", "meaning": "the only entry bootstrapEnvironment always sets" },
+        { "value": "SENSITIVE_ENV_PATTERN (imported from dsh-subprocess)", "where": "packages/e2b/subprocess-e2b/src/environment.ts:7 and :65", "meaning": "shared credential-shaped name filter used for the remote scrub too" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/environment.ts:28",
+        "packages/e2b/subprocess-e2b/src/environment.ts:32",
+        "packages/e2b/subprocess-e2b/src/environment.ts:33",
+        "packages/e2b/subprocess-e2b/src/environment.ts:36",
+        "packages/e2b/subprocess-e2b/src/environment.ts:43",
+        "packages/e2b/subprocess-e2b/src/environment.ts:49",
+        "packages/e2b/subprocess-e2b/src/environment.ts:53",
+        "packages/e2b/subprocess-e2b/src/environment.ts:62",
+        "packages/e2b/subprocess-e2b/src/environment.ts:65",
+        "packages/e2b/subprocess-e2b/src/environment.ts:76",
+        "packages/e2b/subprocess-e2b/src/environment.ts:79",
+        "packages/e2b/subprocess-e2b/src/environment.ts:90",
+        "packages/e2b/subprocess-e2b/src/environment.ts:96",
+        "packages/e2b/subprocess-e2b/src/environment.ts:100",
+        "packages/e2b/subprocess-e2b/src/process.ts:114",
+        "packages/e2b/subprocess-e2b/src/process.ts:407"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-remote-process-group-quiescence",
+      "what": "Termination and quiescence are proved with control-plane probes keyed on a numeric PGID. `groupAlive` runs `ps -eo pgid=,stat= | awk '$1 == <pid> && $2 !~ /^[ZXx]/ { live=1 } END { if (live) print \"live\" }'` and treats `SandboxNotFoundError` as 'not alive'. `terminate()` aborts the internal `terminationController`, destroys the host pipes and starts `terminateRemote()` once; `terminateGroup` sends `TERM` to the group, waits for group exit within `spec.graceMs`, and on failure escalates to `SIGKILL` via `forceKillGroup` (group `kill -KILL` **and** `handle.kill()`), then requires `waitForGroupExit` to prove emptiness or throws `remote process group <id> remained live after force termination`. `waitForExit(signal)` blocks until the group is gone. `signalRemoteGroups` is the single tolerant signal path: it swallows `CommandExitError` (groups already gone) and `SandboxNotFoundError`.",
+      "invariants": [
+        "A same-UID sandbox process can rewrite this file; refuse ids whose negative form addresses every process (`kill -- -1`) or init's group. (packages/e2b/subprocess-e2b/src/process.ts:493-495)",
+        "the final liveness probe, not either transport's self-report, proves cleanup (packages/e2b/subprocess-e2b/src/process.ts:632)",
+        "TODO(e2b-pgid-identity): Prefer an atomic identity-bound group signal if E2B adds one; a userspace identity precheck cannot close the numeric-PGID reuse race. (packages/e2b/subprocess-e2b/src/remote.ts:87-88)"
+      ],
+      "failurePolicy": "fail-closed — a group that survives the KILL round throws; a recorded `terminationFailure` is rethrown from `waitForExit`; only `SandboxNotFoundError` is treated as proof of quiescence.",
+      "constants": [
+        { "value": "/^[1-9][0-9]*$/ and pid <= 1", "where": "packages/e2b/subprocess-e2b/src/process.ts:491 and :496", "meaning": "published PGID must be a positive safe integer greater than 1" },
+        { "value": "exitCode > 255 rejected, raw status must match /^(?:0|[1-9][0-9]*)$/", "where": "packages/e2b/subprocess-e2b/src/process.ts:521", "meaning": "acceptance test on the published exit-code file" },
+        { "value": "'kill -TERM|KILL -- -<group> …'", "where": "packages/e2b/subprocess-e2b/src/remote.ts:91", "meaning": "group signal form used by both ladders" },
+        { "value": "graceMs as the KILL deadline", "where": "packages/e2b/subprocess-e2b/src/process.ts:639", "meaning": "waitForGroupExit deadline = Date.now() + spec.graceMs" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/process.ts:229",
+        "packages/e2b/subprocess-e2b/src/process.ts:247",
+        "packages/e2b/subprocess-e2b/src/process.ts:291",
+        "packages/e2b/subprocess-e2b/src/process.ts:491",
+        "packages/e2b/subprocess-e2b/src/process.ts:496",
+        "packages/e2b/subprocess-e2b/src/process.ts:521",
+        "packages/e2b/subprocess-e2b/src/process.ts:607",
+        "packages/e2b/subprocess-e2b/src/process.ts:610",
+        "packages/e2b/subprocess-e2b/src/process.ts:618",
+        "packages/e2b/subprocess-e2b/src/process.ts:623",
+        "packages/e2b/subprocess-e2b/src/process.ts:635",
+        "packages/e2b/subprocess-e2b/src/process.ts:639",
+        "packages/e2b/subprocess-e2b/src/process.ts:651",
+        "packages/e2b/subprocess-e2b/src/process.ts:653",
+        "packages/e2b/subprocess-e2b/src/remote.ts:81",
+        "packages/e2b/subprocess-e2b/src/remote.ts:87",
+        "packages/e2b/subprocess-e2b/src/remote.ts:95"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-remote-pty-terminal",
+      "what": "`spawnE2BTerminal` writes a private state directory (0700) holding `runner.bash` (`TERMINAL_RUNNER_SOURCE`), the NUL-delimited `environment` and `argv` files and a random `output-marker` (all 0600), allocates the PTY with `sandbox.pty.create({rows, cols, cwd, envs, timeoutMs: 0, onData})`, then types `exec /bin/bash <runner> <stateDir>\\r` into it. The runner prints the marker and then `exec env -i -- \"${dsh_env[@]}\" \"${dsh_argv[@]}\"`, so the bootstrap login shell is replaced by the requested argv; `BootstrapOutputFilter` withholds all host output until the marker appears and then forwards only what follows it, and `waitForBootstrapOutput` bounds that with the caller signal and the command completion. Afterwards `terminalSessionId` resolves the POSIX session via `ps -o sid= -p <pid>` and an `E2BTerminalHandle` is returned.",
+      "invariants": [
+        "Allocate an E2B PTY, replace its bootstrap shell with the requested argv, and return only after the private runner has published readiness. (packages/e2b/subprocess-e2b/src/terminal.ts:449-452)",
+        "terminal runner received empty argv -> exit 125 (packages/e2b/subprocess-e2b/src/terminal.ts:38-41)",
+        "the retained bytes are at most marker.length - 1 so a split marker can still be matched on the next chunk (packages/e2b/subprocess-e2b/src/terminal.ts:76-77)"
+      ],
+      "failurePolicy": "fail-closed — every setup step is inside one try; the catch destroys the output stream and runs a `cleanup` that kills/rolls back the terminal (`rollbackUnpublishedTerminal`) and removes the state directory, aggregating any failure into `AggregateError` before rethrowing the original error.",
+      "constants": [
+        { "value": "`dsh-e2b-bootstrap:${randomUUID()}`", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:472", "meaning": "the per-spawn output marker the filter waits for" },
+        { "value": "exit 125", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:40", "meaning": "runner refusal on empty argv" },
+        { "value": "chmod 700 / 600", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:487 and :497", "meaning": "private mode on the terminal state directory and its four files" },
+        { "value": "timeoutMs: 0", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:505", "meaning": "no SDK-side PTY timeout" },
+        { "value": "'terminals' + randomUUID() under ctx.e2b.runtimeRoot", "where": "packages/e2b/subprocess-e2b/src/index.ts:195", "meaning": "per-terminal private remote state directory" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/terminal.ts:30",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:38",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:42",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:43",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:54",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:74",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:76",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:91",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:107",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:141",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:278",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:458",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:472",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:487",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:497",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:500",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:514",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:516",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:517",
+        "packages/e2b/subprocess-e2b/src/index.ts:195"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-terminal-session-scoping",
+      "what": "An E2B terminal is owned at the whole POSIX session level rather than one PGID: `terminalSessionId` resolves the session with `ps -o sid= -p <pid>` and `sessionProcessGroups` lists every live group in that session with `ps -eo sid=,pgid=,stat= | awk '$1 == <sid> && $3 !~ /^[ZXx]/ { print $2 }'`, rejecting any group <= 1. `E2BTerminalHandle.signalForeground` resolves the foreground group with `ps -o tpgid= -p <pid>` (always reporting `inputWaiting: false` because 'E2B exposes process-table commands but not the /proc memory access needed to prove a specific syscall is waiting on fd 0'), refuses to `SIGKILL` the shell itself, and sends `kill -<SIG> -- -<pgid>`. `closeOnce` walks the ladder: list groups, `TERM` + wait within grace, otherwise `SIGKILL` plus `handle.kill()` and a final kill-mode wait, then throws naming surviving groups or the surviving pid.",
+      "invariants": [
+        "refusing to SIGKILL the terminal shell; terminate the terminal session instead (packages/e2b/subprocess-e2b/src/terminal.ts:326)",
+        "E2B exposes process-table commands but not the /proc memory access needed to prove a specific syscall is waiting on fd 0. (packages/e2b/subprocess-e2b/src/terminal.ts:361-363)",
+        "TODO(e2b-pgid-identity): Replace retained numeric PTY/session ids when E2B exposes identity-bound input, foreground-signal, and cleanup operations. (packages/e2b/subprocess-e2b/src/terminal.ts:303-304)"
+      ],
+      "failurePolicy": "fail-closed — a surviving group or a live top-level pid throws; `SandboxNotFoundError` is the only accepted disappearance during cleanup; `terminate()` is idempotent (memoized promise, cleared on failure).",
+      "constants": [
+        { "value": "'ps -o sid= -p <pid>'", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:141", "meaning": "session-id resolution command" },
+        { "value": "'ps -eo sid=,pgid=,stat= | awk … $3 !~ /^[ZXx]/'", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:154", "meaning": "live-group enumeration for one session" },
+        { "value": "group <= 1 rejected", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:168-169", "meaning": "unsafe process group guard" },
+        { "value": "delay(Math.min(pollMs, Math.max(1, deadline - Date.now())))", "where": "packages/e2b/subprocess-e2b/src/terminal.ts:194", "meaning": "session liveness poll cadence bounded by the grace deadline" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/terminal.ts:121",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:135",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:141",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:146",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:154",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:168",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:176",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:194",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:198",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:303",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:306",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:319",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:325",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:337",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:352",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:361",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:384",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:407",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:431",
+        "packages/e2b/subprocess-e2b/src/terminal.ts:434"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-executable-resolution",
+      "what": "`E2BSubprocessRuntime.resolveExecutable` requires a non-empty command; for an absolute posix path it runs `test -f <cmd> -a -x <cmd>` inside the sandbox and returns the path; a bare name containing `/` is rejected as a relative path; otherwise it runs `PATH=<quoted> command -v -- <cmd>` (cwd = the shared E2B cwd, env = `env?.PATH` prefix) and requires the printed answer to be a single line that is either absolute or contains `/`, resolving a relative answer against `ctx.e2b.cwd`. Unlike subprocess-local there is no PATHEXT handling — the remote world is POSIX.",
+      "invariants": [
+        "use an absolute path or a bare PATH name (packages/e2b/subprocess-e2b/src/index.ts:129)",
+        "A relative result comes from a relative PATH entry; the lookup ran with the shared cwd. (packages/e2b/subprocess-e2b/src/index.ts:143)"
+      ],
+      "failurePolicy": "fail-closed — the `test` command's non-zero exit propagates as a `CommandExitError`; a multi-line or purely relative `command -v` answer throws `did not resolve to one absolute path`.",
+      "constants": [
+        { "value": "`test -f <q> -a -x <q>`", "where": "packages/e2b/subprocess-e2b/src/index.ts:121", "meaning": "absolute-path verification command" },
+        { "value": "`${prefix}command -v -- <q>`", "where": "packages/e2b/subprocess-e2b/src/index.ts:135", "meaning": "bare-name lookup command" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/index.ts:111",
+        "packages/e2b/subprocess-e2b/src/index.ts:116",
+        "packages/e2b/subprocess-e2b/src/index.ts:118",
+        "packages/e2b/subprocess-e2b/src/index.ts:119",
+        "packages/e2b/subprocess-e2b/src/index.ts:121",
+        "packages/e2b/subprocess-e2b/src/index.ts:127",
+        "packages/e2b/subprocess-e2b/src/index.ts:133",
+        "packages/e2b/subprocess-e2b/src/index.ts:135",
+        "packages/e2b/subprocess-e2b/src/index.ts:140",
+        "packages/e2b/subprocess-e2b/src/index.ts:144"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-remote-spill-and-tail-capture",
+      "what": "`E2BOutputReader` mirrors the local collector's tail-keep semantics over a remote file: `push(bytes)` appends and trims head chunks (or `subarray`s the over-cap head) until `retainedBytes <= maxBytes`, and `readFrom(fromByte)` reports `lossy` when the requested offset precedes `totalBytes - retainedBytes`, returning the whole retained tail in that case. The `spillPath` is advertised only when the read is lossy AND the spill was not invalidated AND `maxSpillBytes` is defined AND `totalBytes <= maxSpillBytes`. `finalizeSpills` removes the remote spill file when the output-drain grace expired, when the stream did not exceed the in-memory cap, or when it exceeded the spill cap — i.e. exactly when the file can no longer hold the complete stream.",
+      "invariants": [
+        "Stop advertising a remote spill whose writer did not reach clean EOF. (packages/e2b/subprocess-e2b/src/output.ts:88)",
+        "The command outcome is authoritative; owner teardown bounds private residue. (packages/e2b/subprocess-e2b/src/process.ts:671)"
+      ],
+      "failurePolicy": "fail-soft — overflow and expiry set flags and drop the spill reference; a failed remote removal is swallowed so the command outcome stays authoritative; `invalidateSpill()` is called on a grace-expired drain (packages/e2b/subprocess-e2b/src/process.ts:528-529).",
+      "constants": [
+        { "value": "`size <= mode.maxBytes || size > mode.spill.maxBytes`", "where": "packages/e2b/subprocess-e2b/src/process.ts:669", "meaning": "the exact condition under which the remote spill file is deleted" },
+        { "value": "`head -c <spill.maxBytes>`", "where": "packages/e2b/subprocess-e2b/src/process.ts:96 and :99", "meaning": "the remote spill write is itself byte-capped by head" },
+        { "value": "withinMs(settlement, this.spec.graceMs)", "where": "packages/e2b/subprocess-e2b/src/process.ts:525", "meaning": "grace bound on draining inherited output before the wrapper's status file is accepted" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/output.ts:65",
+        "packages/e2b/subprocess-e2b/src/output.ts:89",
+        "packages/e2b/subprocess-e2b/src/output.ts:97",
+        "packages/e2b/subprocess-e2b/src/output.ts:103",
+        "packages/e2b/subprocess-e2b/src/output.ts:117",
+        "packages/e2b/subprocess-e2b/src/output.ts:120",
+        "packages/e2b/subprocess-e2b/src/output.ts:126",
+        "packages/e2b/subprocess-e2b/src/process.ts:96",
+        "packages/e2b/subprocess-e2b/src/process.ts:99",
+        "packages/e2b/subprocess-e2b/src/process.ts:525",
+        "packages/e2b/subprocess-e2b/src/process.ts:527",
+        "packages/e2b/subprocess-e2b/src/process.ts:528",
+        "packages/e2b/subprocess-e2b/src/process.ts:663",
+        "packages/e2b/subprocess-e2b/src/process.ts:669"
+      ],
+      "verified": true
+    },
+    {
+      "name": "e2b-service-teardown",
+      "what": "`E2BSubprocessRuntime`'s constructor installs `ctx.effect` teardown: it sets `disposing = true` (so later `spawn`/`spawnTerminal` throw), aborts every in-flight `TerminalSetup` controller with `subprocess-e2b: service disposed during terminal setup` and awaits their `done` promises, then for every live handle calls `terminate()` and awaits BOTH `handle.waitForExit()` and `handle.done` before deleting it from `live`, and for every terminal awaits `terminal.terminate()`. Failures are collected with `Promise.allSettled` and rethrown as one error or `AggregateError(failures, 'subprocess-e2b: teardown failed')`. Allocation is deliberately non-blocking for `spawn` (the constructor starts `run()` and returns), so `spawnTerminal` re-checks `this.disposing` after the await and terminates a terminal that lost the race.",
+      "invariants": [
+        "Each handle starts through the shared sandbox and retains command output/status paths in that remote world. (packages/e2b/subprocess-e2b/src/index.ts:2-3)",
+        "Retain the handle so service disposal can retry its cleanup transaction. (packages/e2b/subprocess-e2b/src/index.ts:181)",
+        "if this.disposing, terminate the just-allocated terminal and throw 'service disposed during terminal setup' (packages/e2b/subprocess-e2b/src/index.ts:211-215)"
+      ],
+      "failurePolicy": "fail-closed — disposal awaits real remote quiescence per handle/terminal and rethrows single or aggregated failures; allocation after disposal has begun throws immediately.",
+      "constants": [
+        { "value": "pollMs must be a positive safe integer", "where": "packages/e2b/subprocess-e2b/src/index.ts:78-80", "meaning": "constructor validation of the only config field" },
+        { "value": "'subprocess-e2b: teardown failed'", "where": "packages/e2b/subprocess-e2b/src/index.ts:106", "meaning": "AggregateError message when more than one target failed" }
+      ],
+      "evidence": [
+        "packages/e2b/subprocess-e2b/src/index.ts:60",
+        "packages/e2b/subprocess-e2b/src/index.ts:61",
+        "packages/e2b/subprocess-e2b/src/index.ts:63",
+        "packages/e2b/subprocess-e2b/src/index.ts:64",
+        "packages/e2b/subprocess-e2b/src/index.ts:67",
+        "packages/e2b/subprocess-e2b/src/index.ts:78",
+        "packages/e2b/subprocess-e2b/src/index.ts:82",
+        "packages/e2b/subprocess-e2b/src/index.ts:83",
+        "packages/e2b/subprocess-e2b/src/index.ts:93",
+        "packages/e2b/subprocess-e2b/src/index.ts:99",
+        "packages/e2b/subprocess-e2b/src/index.ts:105",
+        "packages/e2b/subprocess-e2b/src/index.ts:106",
+        "packages/e2b/subprocess-e2b/src/index.ts:149",
+        "packages/e2b/subprocess-e2b/src/index.ts:181",
+        "packages/e2b/subprocess-e2b/src/index.ts:188",
+        "packages/e2b/subprocess-e2b/src/index.ts:211"
+      ],
+      "verified": true
+    }
+  ],
+  "moduleCoverage": {
+    "e2b/subprocess-e2b": {
+      "kind": "mechanism",
+      "note": "Real logic, not mere plumbing: `E2BSubprocessRuntime` is a full provider of `ctx.subprocess` with its own disposal policy, remote executable resolution, synchronous-spawn/asynchronous-start projection, and private remote state management (packages/e2b/subprocess-e2b/src/index.ts:60-229). `process.ts` (693 lines) is the remote ordinary-process mechanism; `terminal.ts` (567 lines) is the remote PTY mechanism; `environment.ts`/`output.ts`/`remote.ts` are the shared remote transports. Mechanisms: e2b-remote-command-execution, e2b-base64-output-transport, e2b-remote-environment-resolution, e2b-remote-process-group-quiescence, e2b-remote-pty-terminal, e2b-terminal-session-scoping, e2b-executable-resolution, e2b-remote-spill-and-tail-capture, e2b-service-teardown."
+    }
+  },
+  "notes": "All 6 .ts files read in full. Facts to carry: (1) This package is the remote twin of `subprocess-local` and shares only the seam types and `SENSITIVE_ENV_PATTERN`; there is no Win32/Job, no /proc inspection, and no identity fencing — quiescence is proven by re-running `ps` in the sandbox (packages/e2b/subprocess-e2b/src/process.ts:651-661, terminal.ts:146-174). (2) Process-group identity is a numeric PGID read from a file that a same-UID sandbox process could rewrite; the code guards only against ids <= 1 and documents the residual reuse race in a TODO (packages/e2b/subprocess-e2b/src/process.ts:493-498, remote.ts:87-88). (3) `E2BSubprocessHandle.spawn` is synchronous by contract while the remote command starts asynchronously, hence the `commandState`/`readyState` resolver pair and `DeferredStdin` (packages/e2b/subprocess-e2b/src/process.ts:51-69, :166-167). (4) Unlike subprocess-local, this provider has no 'fallback' containment tier: every ordinary spawn and terminal is always group/session-contained. (5) The `exit 125` sentinel appears twice (bootstrap tool check and the terminal runner's empty-argv check) and is not translated into a Node error code."
+}

@@ -39,8 +39,7 @@
           "invariants": [
             "Endpoint grammar is exactly two segments `<namespace>/<method>` sharing the Connection segment pattern /^[A-Za-z0-9_$.-]+$/ with '.' and '..' rejected.",
             "Once an endpoint's strict definition has been seen (hasSeen), SRC fallback is forbidden for it forever.",
-            "Argument objects must match the descriptor exactly: extra fields and non-omissible missing fields are refused; lookup ids are never omissible.",
-            "Wire values crossing the boundary must be lossless JSON (finite numbers, plain objects, dense arrays, no symbols, no cycles)."
+            "Argument objects must match the descriptor exactly: extra fields and non-omissible missing fields are refused; lookup ids are never omissible."
           ],
           "failurePolicy": "fail-closed",
           "constants": [
@@ -202,8 +201,7 @@
           "invariants": [
             "A forwarded event name must be non-empty and its arguments must be lossless JSON; a non-JSON argument throws rather than shipping a lossy frame.",
             "Only one forwarded-event source may be registered per Gateway; a second registration throws.",
-            "A scoped waterfall delivery must carry its Agent directly and the carrier Agent must be that exact object; otherwise it throws instead of guessing lineage.",
-            "A settled or superseded result frame is an idempotent no-op, never a re-settlement."
+            "A scoped waterfall delivery must carry its Agent directly and the carrier Agent must be that exact object; otherwise it throws instead of guessing lineage."
           ],
           "failurePolicy": "mixed",
           "constants": [
@@ -238,8 +236,7 @@
           "invariants": [
             "The server handshake identity stays the wire-stable name 'deepseek-harness-sdk-runtime'; reinitialization is unsupported.",
             "`session/prompt` only reports in-process subagent runs; remote child runs are never reported as `subagent.finished`.",
-            "A timed-out request is an abandonment: the transport drops its pending entry, but the server-side work keeps running until close (there is no wire-level cancel).",
-            "Notifications reach every session in the runtime context, not only SDK-created ones; scoping is the client's job (`subscribeSessionTree`)."
+            "A timed-out request is an abandonment: the transport drops its pending entry, but the server-side work keeps running until close (there is no wire-level cancel)."
           ],
           "failurePolicy": "mixed",
           "constants": [
@@ -278,8 +275,7 @@
           "invariants": [
             "`additionalDirectories` is rejected as outside the automation contract; cwd must be an absolute path.",
             "A durable session is only resumable when it is not subagent-origin, has no parentSession, and its recorded cwd resolves to the same physical directory.",
-            "The session/list cursor must be canonical (re-encoding the decoded JSON must reproduce the token byte for byte).",
-            "Teardown cancels synchronously before its first await so no owned prompt outlives the bridge."
+            "The session/list cursor must be canonical (re-encoding the decoded JSON must reproduce the token byte for byte)."
           ],
           "failurePolicy": "fail-closed",
           "constants": [
@@ -311,8 +307,7 @@
           "invariants": [
             "Duplicate (kind, path) routes, duplicate upgrade paths and a second fallback registration all throw: route patterns are a composition-level contract.",
             "An upgraded socket is tracked and destroyed explicitly on teardown because Node's closeAllConnections() does not include it.",
-            "Index responses always pass Connection authorization before bytes are read; non-index assets stay public.",
-            "Only the served index form creates and resolves `__DSH_BOOT_READY__`; a worker bootstrap must install it ahead of the entry module."
+            "Index responses always pass Connection authorization before bytes are read; non-index assets stay public."
           ],
           "failurePolicy": "mixed",
           "constants": [
@@ -351,8 +346,7 @@
           "invariants": [
             "App rows never own launcher-level command-line status; the launcher parses its flags and hands everything after them to the tree in argv order.",
             "Commander control-flow errors are detected structurally by a 'commander.'-prefixed code plus a numeric exitCode, because an out-of-tree plugin brings its own commander copy.",
-            "A stdio application's EOF must not mask a startup rejection: exit is requested only after AppReady commits.",
-            "After the tree settles, a non-disabled entry with no fiber is a hard startup failure."
+            "A stdio application's EOF must not mask a startup rejection: exit is requested only after AppReady commits."
           ],
           "failurePolicy": "fail-closed",
           "constants": [
@@ -424,8 +418,7 @@
           "invariants": [
             "Command names must match /^[a-z][a-z0-9_-]*$/ and are the registry key: a duplicate in one layer throws, and a scoped layer shadows the global one.",
             "Admission misses (bad syntax or unknown name) return undefined and log nothing; they never entered a handler.",
-            "Minted command ids are instance-token-prefixed (cmd-<8 hex>-<n>) so a resumed log never repeats a pairing id.",
-            "Registry-change notification is non-vetoing: each listener is invoked independently so one throwing listener cannot starve the rest."
+            "Minted command ids are instance-token-prefixed (cmd-<8 hex>-<n>) so a resumed log never repeats a pairing id."
           ],
           "failurePolicy": "mixed",
           "constants": [
@@ -455,8 +448,7 @@
           "invariants": [
             "The capability object must be stable for the service lifetime; consumers may capture it across calls.",
             "An unknown capability kind is documented to hide the picking affordance, not to fail.",
-            "Only one implementation may register `ctx.directoryPicker` (normal Cordis duplicate-service behaviour).",
-            "A display-dependent backend is never mounted when it is unreachable: all-interfaces bind, SSH launch, or no display/chooser on Linux resolve to `browse`."
+            "Only one implementation may register `ctx.directoryPicker` (normal Cordis duplicate-service behaviour)."
           ],
           "failurePolicy": "fail-soft",
           "constants": [
@@ -623,8 +615,7 @@
           "invariants": [
             "Every accepted window mutation publishes synchronously through notifySubscribers; a renderer never sees a torn window.",
             "`revision` increases by exactly one per publish; `change` always describes the delta between the previous and current revision.",
-            "A `settle-assistant` removes all transient rows for one attemptId and, when a durable settlement is supplied, inserts it at the first position whose seq is greater.",
-            "Transient (client-only) frames are admitted outside durable cursor algebra; they never masquerade as seq-bearing durable events."
+            "A `settle-assistant` removes all transient rows for one attemptId and, when a durable settlement is supplied, inserts it at the first position whose seq is greater."
           ],
           "failurePolicy": "fail-soft",
           "constants": [
@@ -800,8 +791,7 @@
           "invariants": [
             "The wire is single-sourced: the host node half and the browser parser share one `WebBootEntry`/`WebBootGraph` shape.",
             "A dynamic package row must precede rows whose `external` requests it; Cordis activation order is unrelated and stays with fiber service waiting.",
-            "A bundle factory executes only on first import/require and is memoized; script execution registers, it does not materialize.",
-            "An unresolvable specifier is a loud throw, the runtime mirror of the build-time bundle purity gate."
+            "A bundle factory executes only on first import/require and is memoized; script execution registers, it does not materialize."
           ],
           "failurePolicy": "fail-closed",
           "constants": [
@@ -1038,8 +1028,7 @@
           "invariants": [
             "`emit` must be a non-blocking enqueue: it is called synchronously from the session/event hot path, and its errors are contained and logged rather than reaching the agent loop.",
             "The redaction waterfall ships no rules of its own; the innermost next() passes the record through, so exported data is exactly as clean as the rules a deployment mounts.",
-            "A throwing rule withholds that one record (containment is per event) and never starves later events in the same replay.",
-            "The canonical session log is never rewritten by redaction; only the exported copy changes."
+            "A throwing rule withholds that one record (containment is per event) and never starves later events in the same replay."
           ],
           "failurePolicy": "fail-closed",
           "constants": [
@@ -1070,8 +1059,7 @@
           "invariants": [
             "Capture is authorized only by a listener that is the canonical appended event (session.eventAt(event.seq) === event); a non-canonical event warns and is dropped.",
             "Only this Session's own explicit feedback authorizes replay — events below inheritedEventCount, and message-level events for another session, never do.",
-            "The optional flush() hint is deliberately not implemented, because forwarding it to forceFlush() would be the only source of concurrent flushes and can silently drop tail records.",
-            "The processor's maxExportBatchSize must be a positive integer, because the SDK accepts non-positive values whose shutdown drain then never consumes the queue."
+            "The optional flush() hint is deliberately not implemented, because forwarding it to forceFlush() would be the only source of concurrent flushes and can silently drop tail records."
           ],
           "failurePolicy": "mixed",
           "constants": [
@@ -1148,7 +1136,7 @@
         },
         {
           "name": "session-stats-projection",
-          "what": "Whole-session accounting figures served through the session-projection seam rather than recomputed per render. The `session-statss` plugin registers one projection unit, `sessionStats` (stateVersion 1), that folds turn and step counts plus wall-time buckets: llmMs from step/start to the closing assistant/message, ttftMs/ttftSteps from the first streamed token, and decodeMs/decodeTokens gated on a provider-reported output token count. The plugin owns only the fold — delivery through the registry snapshot, the change feed and every projection carrier is the seam's job, so paging and compaction cannot change the figures a client renders.",
+          "what": "Whole-session accounting figures served through the session-projection seam rather than recomputed per render. The `session-stats` plugin registers one projection unit, `sessionStats` (stateVersion 1), that folds turn and step counts plus wall-time buckets: llmMs from step/start to the closing assistant/message, ttftMs/ttftSteps from the first streamed token, and decodeMs/decodeTokens gated on a provider-reported output token count. The plugin owns only the fold — delivery through the registry snapshot, the change feed and every projection carrier is the seam's job, so paging and compaction cannot change the figures a client renders.",
           "invariants": [
             "Uninteresting events return the same state reference (Object.is gates the change feed).",
             "One assembled assistant message closes one step boundary, so a defensive duplicate cannot accrue twice.",
@@ -1175,8 +1163,7 @@
           "invariants": [
             "No settings are supported: any key in TokenMeterConfig throws rather than being ignored.",
             "Every fallible step (surface plan and anchor validation) runs before replay state mutates, so a malformed event stays unread on retry instead of half-applying.",
-            "measure() returns detached deeply immutable values; the internal fold is never aliased to a caller.",
-            "Route image pricing must answer exactly one price per image occurrence or the measurement fails loud."
+            "measure() returns detached deeply immutable values; the internal fold is never aliased to a caller."
           ],
           "failurePolicy": "mixed",
           "constants": [
@@ -1202,8 +1189,7 @@
           "invariants": [
             "A put only targets a message that exists as an append-surface assistant/message event in the log; otherwise it is target-not-found.",
             "Operations are serialized per session id and drained on disposal; a new mutation after disposal begins is rejected.",
-            "maxNoteBytes is required with no default and must be a positive safe integer.",
-            "The live path verifies durability by reopening the persisted prefix and deep-comparing header and last event; a non-durable prefix throws instead of acknowledging."
+            "maxNoteBytes is required with no default and must be a positive safe integer."
           ],
           "failurePolicy": "mixed",
           "constants": [
@@ -1317,8 +1303,7 @@
           "invariants": [
             "The diagnostic is written before the release runs, so a hanging disposer cannot swallow the reason.",
             "The fatal exit is never cancelled by a wedged disposer — only delayed up to the release timeout; the timer stays referenced so Node cannot reach an empty event loop and exit 0.",
-            "A per-request failure must never exit the process: once headers are sent the response is destroyed, otherwise a 400 is written.",
-            "Startup failure is reported as a failed fiber with every unresolvable plugin named, not as a silent pending state."
+            "A per-request failure must never exit the process: once headers are sent the response is destroyed, otherwise a 400 is written."
           ],
           "failurePolicy": "fail-closed",
           "constants": [

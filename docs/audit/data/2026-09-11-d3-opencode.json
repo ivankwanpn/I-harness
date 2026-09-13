@@ -1,0 +1,6 @@
+{
+  "_status": "IN PROGRESS — first draft written early per brief ordering; being refined",
+  "upstream": { "source": "opencode", "version": "1.18.30", "moduleCount": 97, "domains": {}, "moduleCoverage": {}, "hintCorrections": [], "domainsAbsent": [] },
+  "fork": { "source": "opencode-fork", "dirName": "opencode-fork-private-999.0.15", "version": "999.0.19", "moduleCount": 99, "domains": {}, "moduleCoverage": {}, "hintCorrections": [], "domainsAbsent": [] },
+  "forkDeltas": []
+}

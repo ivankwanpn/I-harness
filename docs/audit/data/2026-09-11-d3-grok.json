@@ -1,0 +1,509 @@
+{
+  "source": "grok",
+  "sourcePath": "D:/agent-complete/grok-build-main",
+  "revision": "a549186d9d39311f2d3ee4208db62af8c65aa476",
+  "moduleCount": 82,
+  "revisionNote": "The checkout at D:/agent-complete/grok-build-main has no .git directory, so the revision string could not be independently re-verified in-tree; it is carried from the task brief. All evidence below was read from the working tree as it stands.",
+  "scopeNote": "The 82-module checklist is crates/codegen only. The repo also contains crates/common (12 crates: xai-grok-compaction, xai-interjection-core, xai-message-delivery-core, xai-tool-protocol, xai-tool-runtime, xai-tool-types, xai-tracing, xai-circuit-breaker, xai-computer-hub-*) and crates/build. Three mechanisms the brief named as grok's richest - prompt queue, message delivery, interjection - resolve to crates/codegen/xai-prompt-queue and crates/common/xai-message-delivery-core + crates/common/xai-interjection-core, i.e. one inside the checklist and two outside it.",
+  "domains": {
+    "loop": [
+      {
+        "name": "source-typed-operation-authorization",
+        "what": "New input is not admitted as text but as a typed envelope. `Principal` is exactly Human | Agent | Runtime and `Operation` is exactly Queue | Steer | Interject | InterruptAndSend (xai-message-delivery-core/src/envelope.rs:4-16). A `DeliveryEnvelope<Source, Grant, Content, Identity>` carries the principal as a private field plus a `PhantomData<Source>` marker, so `from_human` can only mint a `HumanSource` envelope and `from_agent` only an `AgentSource` one (envelope.rs:35-78). Authorization is a separate, explicit step: `OperationSet` is a bitmask whose only two named values are `QUEUE = 1<<0` and `QUEUE_AND_STEER = (1<<0)|(1<<1)` (envelope.rs:86-102), and `authorize_operation(allowed, requested)` is the single gate. The shell wires it as: humans get `OperationSet::QUEUE`, agents get `OperationSet::QUEUE_AND_STEER` (xai-grok-shell/src/session/message_delivery.rs:138, :171).",
+        "invariants": [
+          "A human principal may only Queue - the shell passes OperationSet::QUEUE for HumanSource, so Steer is not reachable from a human envelope even though Operation::Steer exists.",
+          "The principal is stored, not derived at the call site: callers must use into_parts() and cannot re-label an envelope, because `source` is PhantomData and `principal` is private.",
+          "OperationSet has exactly two named constants today; Interject and InterruptAndSend are defined in `Operation` but no code path constructs a set containing them."
+        ],
+        "failurePolicy": "fail-closed - authorize_operation returns Err(UnsupportedOperation) and the shell maps that to HumanDeliveryError::Unsupported / ActiveMessageAdmission::Unsupported, refusing the input rather than downgrading it to a weaker operation.",
+        "constants": [
+          {"name": "OperationSet::QUEUE", "value": "1<<0 (Queue only)", "evidence": "crates/common/xai-message-delivery-core/src/envelope.rs:90"},
+          {"name": "OperationSet::QUEUE_AND_STEER", "value": "(1<<0)|(1<<1)", "evidence": "crates/common/xai-message-delivery-core/src/envelope.rs:91"}
+        ],
+        "evidence": [
+          "crates/common/xai-message-delivery-core/src/envelope.rs:4-16",
+          "crates/common/xai-message-delivery-core/src/envelope.rs:86-119",
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:135-144",
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:159-174"
+        ],
+        "modules": ["crates/common/xai-message-delivery-core", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "delivery-envelope-identity-triple-check",
+        "what": "Admission of an agent-originated message re-derives and compares three independent facts before the command is queued. The shell recomputes the expected prompt id as the literal `format!(\"parent-message-{}\", message.message_id)` and rejects unless all three hold: `content == message.text`, `message_id == message.message_id`, and `prompt_id == parent-message-{message_id}` (xai-grok-shell/src/session/message_delivery.rs:163-169). Identity itself is a two-field pair `DeliveryIdentity<MessageId, PromptId>` whose constructor is the only way to build it (envelope.rs:22-33); for the human path the two ids are additionally required to be equal, and the grant's target session must match the handle's (message_delivery.rs:135-137). The grant type is the other half of the check: `ResidentHumanGrant{target_session_id}` and `OwnedActiveDescendantGrant{target_session_id, delivery}` are distinct structs, so a caller cannot present an agent grant on a human send path.",
+        "invariants": [
+          "The prompt-id string `parent-message-{message_id}` is load-bearing and duplicated between the producer and the check; changing the producer format without the check rejects every parent message.",
+          "A grant is scoped to exactly one target_session_id; there is no wildcard or inherited grant."
+        ],
+        "failurePolicy": "fail-closed - any mismatch returns Rejected (human path) or ActiveMessageAdmission::Rejected (agent path) before the mpsc send.",
+        "constants": [],
+        "evidence": [
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:29-31",
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:91-96",
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:135-140",
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:159-174"
+        ],
+        "modules": ["crates/common/xai-message-delivery-core", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "turn-bound-safe-point-delivery",
+        "what": "A message that must reach a running turn waits for a safe point instead of cutting in. `MessageDeliveryLifecycle` holds a `VecDeque<DeliverySlot>` where each slot is exactly Pending -> Projecting -> Delivered and each slot carries a `TurnBinding<PromptId, Epoch>` (xai-message-delivery-core/src/lifecycle.rs:74-78, :115-117). The three-phase protocol is explicit: `begin_delivery` moves this turn's Pending slots to Projecting and returns their messages, then `finish_delivery` runs a caller-supplied `commit` closure and only promotes Projecting to Delivered if the commit returns Ok (lifecycle.rs:195-254). A failed commit therefore leaves the messages Projecting, i.e. still unsettled, rather than lost. `transition(TerminalTarget::Turn | All, TerminalCause)` settles everything at end of turn, and the cause decides the disposition - `Completion | SoftCancel | Rewind` fall back (re-queue), while `HardTeardown | ActorDrop` complete as errors (lifecycle.rs:90-103, :256-287). The shell additionally caps live steer slots with `MAX_PARENT_STEER_SLOTS = 32` so one batch of parent text stays finite, and a `Drop` impl settles all slots with a terminal error if the owner disappears (xai-grok-shell/src/session/acp_session_impl/parent_message.rs:45-47, :83-97).",
+        "invariants": [
+          "Delivery is not delivery until the commit closure succeeds: Projecting is the only state from which a commit can promote.",
+          "A `TurnBinding` is (prompt_id, epoch), not just prompt_id - a rewind that reuses a prompt id but bumps the epoch does not match the old slots.",
+          "The lifecycle is append-unique by identity: `admit_pending` returns the message back as Err if that identity is already present in any slot.",
+          "ActorDrop must settle every slot: leaving a slot Pending would strand a caller awaiting its oneshot."
+        ],
+        "failurePolicy": "fail-closed - an uncommitted batch stays Projecting (neither delivered nor dropped) and terminal settlement routes it either to fallbacks (re-queue) or to an explicit error completion; nothing is silently discarded.",
+        "constants": [
+          {"name": "MAX_PARENT_STEER_SLOTS", "value": "32", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:47"}
+        ],
+        "evidence": [
+          "crates/common/xai-message-delivery-core/src/lifecycle.rs:90-108",
+          "crates/common/xai-message-delivery-core/src/lifecycle.rs:154-173",
+          "crates/common/xai-message-delivery-core/src/lifecycle.rs:195-254",
+          "crates/common/xai-message-delivery-core/src/lifecycle.rs:256-287",
+          "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:83-97"
+        ],
+        "modules": ["crates/common/xai-message-delivery-core", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "mid-turn-interjection-framing",
+        "what": "Input that arrives while a turn runs is buffered, then drained as synthetic user messages rather than injected as a system note. `InterjectionBuffer<Attachment>` is a type alias for `EventQueue<PendingInterjection<Attachment>>` (xai-interjection-core/src/buffer.rs:24), and `drain_formatted` drains all pending entries and frames each one separately - FIFO, one message per entry, explicitly never merged (buffer.rs:26-42). Framing is a fixed three-part envelope built by `frame_user_turn`: a leading note, the message wrapped by `user_query` in `<user_query>...</user_query>`, and a trailing `UNFINISHED_TASKS_REMINDER` that reads `Make sure to complete any unfinished tasks from previous turns.` (format.rs:8-24). Two notes exist for two situations - `INTERJECTION_NOTE = \"The user sent a message while you were working:\"` for a mid-turn steer and `INTERRUPT_NOTE = \"The user interrupted the previous turn:\"` for the next real query after a text-only mid-turn abort (format.rs:4-5, :43-51). Text longer than `LARGE_PROMPT_THRESHOLD = 25_000` bytes is truncated at a UTF-8 character boundary and suffixed `... [truncated]` (format.rs:1-2, :26-39).",
+        "invariants": [
+          "The trailing unfinished-tasks reminder is part of the contract, not decoration: every interjection and interrupt carries it, and a test pins that it follows the closing `</user_query>` tag.",
+          "One message per buffered entry - `drain_formatted` never merges, which is the opposite of the queued-prompt combine rule in xai-prompt-queue.",
+          "Truncation must land on a char boundary; the implementation walks char_indices rather than slicing at the byte offset."
+        ],
+        "failurePolicy": "fail-soft - oversize text is truncated with a visible marker rather than rejected; an empty buffer drains to an empty vec, and sanitization is a caller-supplied function whose absence is spelled as `std::convert::identity`.",
+        "constants": [
+          {"name": "LARGE_PROMPT_THRESHOLD", "value": "25_000 (bytes)", "evidence": "crates/common/xai-interjection-core/src/format.rs:2"},
+          {"name": "INTERJECTION_NOTE", "value": "\"The user sent a message while you were working:\"", "evidence": "crates/common/xai-interjection-core/src/format.rs:4"},
+          {"name": "INTERRUPT_NOTE", "value": "\"The user interrupted the previous turn:\"", "evidence": "crates/common/xai-interjection-core/src/format.rs:5"}
+        ],
+        "evidence": [
+          "crates/common/xai-interjection-core/src/format.rs:1-51",
+          "crates/common/xai-interjection-core/src/buffer.rs:24-42",
+          "crates/codegen/xai-grok-shell/src/session/acp_session.rs:821"
+        ],
+        "modules": ["crates/common/xai-interjection-core", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "queued-prompt-combine-with-versioned-edit",
+        "what": "Follow-up prompts queued behind a running turn can be merged into one turn under a pure, shared eligibility rule. `combine_prefix_len` walks the queue from the front and returns the mergeable prefix length: the front must be a plain prompt (`can_merge_front` - not synthetic, not an expanded skill, not bash, non-empty text, images allowed) and each follower must additionally carry no images and not be under edit hold (`can_merge_follower`) (xai-prompt-queue/src/combine.rs:29-60). Merged bodies are joined with a blank-line separator `TEXT_SEPARATOR = \"\\n\\n\"` (combine.rs:9, :62-68) and, when two or more originals merged, the per-prompt display texts are stamped into content-block `_meta` under `COMBINED_DISPLAY_TEXTS_META = \"combinedDisplayTexts\"` so the UI can rebuild multi-bubble display from one model turn (types.rs:3-5, combine.rs:70-93). Queue rows are edited in place under optimistic concurrency: `QueueEntryMeta.version` is a monotonic counter bumped on every edit and `owner` is explicitly never overwritten by edits, only `last_editor` is (types.rs:10-26). The whole queue is mirrored to clients as one `QueueChanged` broadcast keyed by `sessionId`, carrying `entries` plus a separately-reported `running_prompt_id`/`running_text` because the running row is deliberately omitted from `entries` (types.rs:53-76).",
+        "invariants": [
+          "Eligibility for merging lives in one pure module shared by the pager's local drain and the shell's promote path, so the stop conditions cannot drift between them.",
+          "The running row is never present in `entries`; a client must read `runningPromptId`/`runningText` or it will show a queue with a hole.",
+          "`owner` is immutable under edit - only `last_editor` moves.",
+          "A `QueueChanged` without `sessionId` must fail to parse rather than apply under the wrong key."
+        ],
+        "failurePolicy": "fail-soft - an ineligible front yields prefix length 1 (take the front alone), so combining simply does not happen; an unknown extra field deserializes and is ignored for forward compatibility.",
+        "constants": [
+          {"name": "TEXT_SEPARATOR", "value": "\"\\n\\n\"", "evidence": "crates/codegen/xai-prompt-queue/src/combine.rs:9"},
+          {"name": "COMBINED_DISPLAY_TEXTS_META", "value": "\"combinedDisplayTexts\"", "evidence": "crates/codegen/xai-prompt-queue/src/types.rs:5"},
+          {"name": "combine_combined_wire_threshold", "value": "len >= 2 segments", "evidence": "crates/codegen/xai-prompt-queue/src/combine.rs:72-74"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-prompt-queue/src/combine.rs:29-68",
+          "crates/codegen/xai-prompt-queue/src/combine.rs:70-93",
+          "crates/codegen/xai-prompt-queue/src/types.rs:10-26",
+          "crates/codegen/xai-prompt-queue/src/types.rs:53-76"
+        ],
+        "modules": ["xai-prompt-queue", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "canonical-turn-event-log",
+        "what": "Each session writes an append-only `events.jsonl` whose rows are a pinned, tagged event taxonomy rather than free-form logging. `EVENT_SCHEMA_VERSION = \"1.0\"` is stamped on the turn-scoped rows (xai-grok-session-events/src/types.rs:3, :15), and `Event` is a `#[serde(tag = \"type\", rename_all = \"snake_case\")]` enum covering the loop's observable states: TurnStarted (with turn_number, model_id, yolo_mode, conversation_message_count, session_relationship), PhaseChanged, FirstToken, LoopStarted{loop_index}, ToolStarted, ToolCompleted (duration_ms, outcome, source, rewriting_hook), PermissionRequested, PermissionResolved (decision, wait_ms), TurnEnded (outcome, cancellation_category, cancellation_context), Interjected (source, image_count, redirect_kind) and YoloToggled (types.rs:5-62). The `EventTracker` holds the mutable per-turn counters the events are derived from - active tool, tool count this turn, and one-shot `prior_interrupt_category` / `prior_redirect_kind` markers that survive `begin_turn` (tracker.rs:84-183).",
+        "invariants": [
+          "`schema_version` is a field on the turn-scoped rows, so a reader can branch per row rather than per file.",
+          "The prior-interrupt and prior-redirect markers are one-shot `take_*` values that deliberately survive begin_turn; they describe the previous turn, and a test pins that.",
+          "Wire labels are pinned by test: tool outcomes, cancellation categories, redirect kinds and interjection tags must round-trip."
+        ],
+        "failurePolicy": "fail-soft - the writer holds `Mutex<Option<File>>` and swallows open and write failures after logging once behind an AtomicBool error_logged latch; `EventWriter::noop()` exists so an unwritable session still runs (log.rs:28-81).",
+        "constants": [
+          {"name": "EVENT_SCHEMA_VERSION", "value": "\"1.0\"", "evidence": "crates/codegen/xai-grok-session-events/src/types.rs:3"},
+          {"name": "EVENTS_FILE", "value": "\"events.jsonl\"", "evidence": "crates/codegen/xai-grok-session-events/src/log.rs:19"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-session-events/src/types.rs:3-62",
+          "crates/codegen/xai-grok-session-events/src/log.rs:19-81",
+          "crates/codegen/xai-grok-session-events/src/tracker.rs:84-183"
+        ],
+        "modules": ["xai-grok-session-events", "xai-grok-shell"],
+        "verified": true
+      }
+    ],
+    "session": [
+      {
+        "name": "filesystem-aware-sqlite-journal-mode",
+        "what": "The SQLite journal mode is chosen from where the database physically lives, not from a constant. `JournalMode::for_db_path` classifies the parent directory and picks `Wal` on a local filesystem or `Truncate` on a network one (xai-sqlite-journal/src/lib.rs:43-73); the module doc explains the concrete failure being avoided - WAL keeps its wal-index in an mmap'd `-shm` file, and when `$HOME` is NFS-mounted a peer host truncating or rebuilding that `-shm` during recovery rips the mapping out and the next wal-index read dies with SIGBUS (lib.rs:1-13). `Truncate` uses EXCLUSIVE locking so the wal-index stays in heap memory, which is what lets an already-WAL-stamped database be converted without ever mmapping a `-shm` (lib.rs:199-209). In network mode `effective_db_path` gives each host its own DB file, so a peer - including a pre-fix binary that would flip a shared DB back to WAL - never shares the file (lib.rs:97-108). `GROK_SQLITE_JOURNAL_MODE` accepts `wal` or `truncate` as a field kill-switch, and an invalid value is warned about loudly rather than silently ignored (lib.rs:44-63, :283).",
+        "invariants": [
+          "WAL must never be selected for a database on a network filesystem; the per-host path is what makes that hold even against an old binary that stamps WAL.",
+          "Converting a WAL-stamped DB to TRUNCATE must go through EXCLUSIVE locking before the journal_mode change and back to NORMAL after - the ordering is what avoids the mmap.",
+          "The caller must create the parent directory before calling for_db_path, because classification reads the directory and not the file."
+        ],
+        "failurePolicy": "fail-soft with a fail-safe default - an unrecognized env value falls back to detection with a warning; under retry, an exhausted `BUSY_RETRY_BUDGET` surfaces SQLITE_BUSY rather than interminably blocking.",
+        "constants": [
+          {"name": "BUSY_TIMEOUT", "value": "5000 ms", "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:19"},
+          {"name": "BUSY_RETRY_BUDGET", "value": "10 s (inner retries share one deadline)", "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:23"},
+          {"name": "GROK_SQLITE_JOURNAL_MODE", "value": "\"wal\" | \"truncate\"", "evidence": "crates/codegen/xai-sqlite-journal/src/lib.rs:41-42"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-sqlite-journal/src/lib.rs:1-13",
+          "crates/codegen/xai-sqlite-journal/src/lib.rs:43-73",
+          "crates/codegen/xai-sqlite-journal/src/lib.rs:97-108",
+          "crates/codegen/xai-sqlite-journal/src/lib.rs:197-241"
+        ],
+        "modules": ["xai-sqlite-journal"],
+        "verified": true
+      },
+      {
+        "name": "append-only-jsonl-event-writer",
+        "what": "The session record on disk is a JSONL append stream with a mutex-guarded file handle shared across clones. `EventWriterInner` holds `Mutex<Option<File>>` plus an `AtomicBool` error latch; the handle is opened with `create(true).append(true)` so no writer ever seeks or truncates (xai-grok-session-events/src/log.rs:28-51). Every emit serializes `{ts, <flattened event>}` with an RFC3339 millisecond UTC timestamp, appends a newline and does one `write_all` under the lock, which is what makes concurrent emits from background tasks produce whole-line records rather than interleaved bytes (log.rs:62-81). Clones share one `Arc<EventWriterInner>`, so a background task can hold a writer without reopening the file (log.rs:21-26).",
+        "invariants": [
+          "A record is written with exactly one write_all of an already-newline-terminated buffer, under the file mutex - splitting it would allow interleaving.",
+          "The file is only ever appended to; the writer never truncates or seeks.",
+          "Open failure degrades to a None handle, not to a panic: the session must still run."
+        ],
+        "failurePolicy": "fail-soft - a failed open logs a warning and yields a writer with no file; a failed write logs a warning at most once per writer and is otherwise dropped.",
+        "constants": [],
+        "evidence": [
+          "crates/codegen/xai-grok-session-events/src/log.rs:21-81"
+        ],
+        "modules": ["xai-grok-session-events"],
+        "verified": true
+      }
+    ],
+    "context": [],
+    "tools": [],
+    "subagent": [
+      {
+        "name": "harness-only-subagent-capability-mode",
+        "what": "A subagent's tool inventory is narrowed by a four-valued capability mode - ReadOnly | ReadWrite | Execute | All - applied by filtering the tool config on each tool's `ToolKind` (xai-grok-tools/src/implementations/grok_build/task/types.rs:289-305). `filter_tool_config` returns immediately for `All`, otherwise retains only tools whose kind is in `allowed_tool_kinds()`, and then calls `prune_orphaned_background_task_tools`, which drops `get_task_output`/`kill_task` when no spawning tool remains so a read-only subagent is not handed lifecycle verbs for tasks it cannot create (types.rs:254-300). The mode is harness-only: it is `Option<SubagentCapabilityMode>` on the runtime overrides and is deliberately absent from the model-facing JSON schema, with tests asserting both that the schema omits `capability_mode` and that a model-supplied `capability_mode` in JSON does not round-trip (types.rs:1790-1864). The mode is set from the host side by the role that spawns the agent - for example the goal summarizer pins `SubagentCapabilityMode::ReadOnly` so the summariser can inspect but never edit or execute (xai-grok-shell/src/session/goal_summarizer.rs:140, :160).",
+        "invariants": [
+          "capability_mode must never be advertised on the model-facing tool schema, and a model-authored value must be ignored - the tests exist precisely to keep this boundary.",
+          "Tools with no `kind` (MCP and custom tools built via `ToolConfig::from_id`) are preserved unconditionally, so an MCP tool is NOT narrowed by capability mode.",
+          "Pruning background-task lifecycle tools is a consequence of the filter, not a separate opt-in."
+        ],
+        "failurePolicy": "fail-closed on inventory (the tool config is narrowed before the subagent starts) but with an explicit fail-open carve-out for kindless MCP/custom tools.",
+        "constants": [
+          {"name": "SubagentCapabilityMode variants", "value": "read-only | read-write | execute | all", "evidence": "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1870-1877"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:239-305",
+          "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1828-1832",
+          "crates/codegen/xai-grok-tools/src/implementations/grok_build/task/types.rs:1842-1864",
+          "crates/codegen/xai-grok-shell/src/session/goal_summarizer.rs:140-160"
+        ],
+        "modules": ["xai-grok-tools", "crates/common/xai-tool-types", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "parent-wake-safe-point-admission",
+        "what": "A resident subagent can receive text from its owning parent while a turn is running, but only through the same turn-bound lifecycle as human input, and only if the sender owns an active descendant. The shell route is `SessionCommand::ParentAgentMessage`, and the message is converted into an `InputItem` carrying queue metadata of kind `parent_agent_message` so it appears in the shared queue with honest provenance (xai-grok-shell/src/session/acp_session_impl/parent_message.rs:99-120). The grant is `OwnedActiveDescendantGrant`, which pairs a target session id with the `ActiveAgentMessageDelivery` it authorizes, and the handle rejects any mismatch with its own target session before doing anything else (message_delivery.rs:159-161). Live steer slots are bounded by `MAX_PARENT_STEER_SLOTS = 32` so a parent's text becomes model-visible in one finite batch (parent_message.rs:45-47). The operation a parent may request is restricted to Queue or Steer - `delivery_operation` maps only those two `ActiveAgentMessageOperation` variants, and the envelope is additionally checked against `OperationSet::QUEUE_AND_STEER` (message_delivery.rs:98-103, :170-174).",
+        "invariants": [
+          "The parent must own an active descendant: the grant is a distinct type carrying both target session and delivery, and there is no path that constructs it for a non-descendant.",
+          "A parent cannot use Interject or InterruptAndSend - only Queue and Steer are mapped, and the operation set check would reject the others.",
+          "The completion channel is a oneshot `PromptTurnResult` that must be settled on every path, including owner drop."
+        ],
+        "failurePolicy": "fail-closed - Rejected / Unsupported / ChannelClosed are returned to the caller and the message is not queued; the Drop impl settles stranded slots with an explicit error rather than leaving the parent awaiting.",
+        "constants": [
+          {"name": "MAX_PARENT_STEER_SLOTS", "value": "32", "evidence": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:47"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:45-47",
+          "crates/codegen/xai-grok-shell/src/session/acp_session_impl/parent_message.rs:83-120",
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:98-103",
+          "crates/codegen/xai-grok-shell/src/session/message_delivery.rs:146-192"
+        ],
+        "modules": ["xai-grok-shell", "crates/common/xai-message-delivery-core"],
+        "verified": true
+      }
+    ],
+    "safety": [
+      {
+        "name": "startup-applied-os-sandbox",
+        "what": "OS-level confinement is real and applied once, irreversibly, at process start. The crate's module doc states it provides kernel-enforced sandboxing via nono (Landlock on Linux, Seatbelt on macOS) applied once at process startup, covering in-process `tokio::fs` calls and child processes, with process-level network deliberately left open because the agent needs the LLM API while child network is blocked per-subprocess via seccomp (xai-grok-sandbox/src/lib.rs:8-15). `SandboxManager::apply` resolves the profile, computes a capability set, applies it through `Sandbox::apply`, and then stores global state with an `applied` flag (lib.rs:179-262). The reverse direction is also implemented: `should_auto_allow_bash()` requires BOTH the `auto_allow_bash` setting AND `is_active()`, so sandbox state feeds the approval model rather than the other way round (lib.rs:100-106).",
+        "invariants": [
+          "`apply` is documented irreversible: there is no unapply path, and the process either comes up confined or comes up under a refusal exit.",
+          "Sandbox state is process-global and set once (`OnceLock<GlobalSandboxState>`); a second apply cannot silently replace it.",
+          "`should_auto_allow_bash` must keep its `is_active()` conjunct - auto-allowing bash without an active sandbox would be an unconfined auto-approval."
+        ],
+        "failurePolicy": "mixed - by itself `SandboxManager::apply` degrades gracefully (an unsupported platform or a failed apply logs, records and returns Ok while leaving `applied = false`, lib.rs:196-240); the fail-closed decision is taken by the caller, which refuses to start (see the next mechanism).",
+        "constants": [
+          {"name": "BWRAP_ENV_VAR", "value": "\"__GROK_INSIDE_BWRAP\"", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:75"},
+          {"name": "enforce feature", "value": "on by default; without it the crate is helpers-only and nothing is kernel-enforced", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:13-15"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:8-15",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:100-106",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:179-262"
+        ],
+        "modules": ["xai-grok-sandbox"],
+        "verified": true
+      },
+      {
+        "name": "refuse-to-start-unprotected-sandbox",
+        "what": "The startup path is explicitly fail-closed, and it is a five-way decision rather than a boolean. `apply_sandbox` lives in the shell (it is not in the sandbox crate) and its Linux branch routes through `route_bwrap_startup`, whose variants are ReexecRequired, ReexecOptional, Verify, Refuse and Continue (xai-grok-shell/src/config/mod.rs:1458-1469). ReexecRequired execs bubblewrap and, if the exec fails, prints `Refusing to start with denied paths unprotected.` and exits 1 (mod.rs:1527-1535). Verify is the anti-spoof arm: when the process reports being inside bwrap, the required hook write-deny, read-deny and `/data` write-deny mounts are each independently re-verified, and any failure exits 1 with the message naming a `possible __GROK_INSIDE_BWRAP spoof` (mod.rs:1545-1579). Refuse covers the case where the required bwrap plan could not be prepared at all (mod.rs:1581-1587). After the Landlock/Seatbelt apply, a second independent gate refuses startup when a profile that needs protection (`is_custom || needs_hooks`) did not actually get applied (mod.rs:1591-1626).",
+        "invariants": [
+          "The `__GROK_INSIDE_BWRAP` marker is never trusted on its own - `trust_bwrap_marker_for_devbox()` is hardcoded false and the Verify arm re-checks the mounts.",
+          "The set of profiles that 'require' read-deny is computed intrinsically from the profile config, not from the resolved deny set, because the resolved set is empty on error and keying on it would silently downgrade to fail-open (lib.rs:441-467).",
+          "`resolve_failure_must_refuse` composes hook-write-deny OR read-deny OR data-write-deny, so a deny-carrying custom profile extends-devbox is covered by the read-deny arm even though the hook arm does not cover it (lib.rs:497-506).",
+          "Bwrap exec failure is fatal only when requires_bwrap; otherwise it is a warning and Landlock is the fallback."
+        ],
+        "failurePolicy": "fail-closed - the process calls std::process::exit(1) rather than continuing unprotected; the only degrade path is an optional-bwrap profile, which warns and falls back to Landlock.",
+        "constants": [
+          {"name": "exit code on refusal", "value": "1", "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:1534"},
+          {"name": "refusal message", "value": "\"Refusing to start with denied paths unprotected.\"", "evidence": "crates/codegen/xai-grok-shell/src/config/mod.rs:1521-1522"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-shell/src/config/mod.rs:1448-1470",
+          "crates/codegen/xai-grok-shell/src/config/mod.rs:1519-1589",
+          "crates/codegen/xai-grok-shell/src/config/mod.rs:1591-1628",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:441-467",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:497-506"
+        ],
+        "modules": ["xai-grok-sandbox", "xai-grok-shell", "xai-grok-config"],
+        "verified": true
+      },
+      {
+        "name": "predefined-sandbox-profiles-and-anti-hollowing-merge",
+        "what": "Confinement is expressed as named profiles with a fixed built-in set - `workspace` (the default), `devbox`, `read-only`, `strict`, `off` - plus `Custom(name)` resolved from `~/.grok/sandbox.toml` or `.grok/sandbox.toml` (xai-grok-sandbox/src/profiles.rs:1-3, :69-112). A profile resolves to a `SandboxProfile` with read_only, read_write, deny, write_deny, default_read and restrict_network (profiles.rs:26-43), and read-deny is kernel-enforced on both platforms via the `deny` list (profiles.rs:3). The layering is deliberately not last-write-wins: the project config is additive only and is merged with `entry(name).or_insert(profile)`, so a workspace cannot redefine a profile name that already exists globally, because doing so would let a malicious workspace hollow out a user or enterprise profile while keeping the trusted name - emptying `deny` or broadening `read_write` (profiles.rs:114-167). Divergence is not silently ignored either: `sandbox_profile_conflicts` reports project profile names whose definition differs from the global one (profiles.rs:138-160). Only `read-only` and `strict` restrict child network by default (profiles.rs:80-84).",
+        "invariants": [
+          "A project `.grok/sandbox.toml` can only ADD profile names; it can never replace a globally-defined profile's body.",
+          "The global config is read from `$GROK_HOME`, and the project path is workspace-relative - the two are never swapped.",
+          "`/dev/tty` may be dropped from the device set when it exists but cannot be opened (ENXIO without a controlling terminal), because a failed PathFd materialization aborts the whole Landlock ruleset - and that drop was itself the cause of a prior silent sandbox bypass under setsid/CI/headless launches (profiles.rs:183-200)."
+        ],
+        "failurePolicy": "fail-closed on policy composition (a conflicting project definition is ignored, keeping the trusted global body) and fail-soft on device enumeration (unopenable device nodes are skipped rather than aborting the ruleset); an unparsable sandbox.toml warns and is treated as absent (profiles.rs:169-181).",
+        "constants": [
+          {"name": "built-in profiles", "value": "workspace (default) | devbox | read-only | strict | off", "evidence": "crates/codegen/xai-grok-sandbox/src/profiles.rs:1-2, :69-78"},
+          {"name": "network-restricting built-ins", "value": "read-only, strict", "evidence": "crates/codegen/xai-grok-sandbox/src/profiles.rs:81-83"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-sandbox/src/profiles.rs:1-3",
+          "crates/codegen/xai-grok-sandbox/src/profiles.rs:26-43",
+          "crates/codegen/xai-grok-sandbox/src/profiles.rs:114-167",
+          "crates/codegen/xai-grok-sandbox/src/profiles.rs:183-200"
+        ],
+        "modules": ["xai-grok-sandbox"],
+        "verified": true
+      },
+      {
+        "name": "bwrap-reexec-with-read-deny-placeholders",
+        "what": "On Linux a second, mount-level confinement layer is built as a bubblewrap re-exec. `bwrap_reexec_command_ex` composes a command that drops all capabilities (`--cap-drop ALL`), binds `/` through, mounts each deny_write path read-only, and - the interesting part - makes deny_READ paths unreadable by binding a mode-000 placeholder over them, since a read-only bind would still permit reading (xai-grok-sandbox/src/lib.rs:302-369, :385-428). The placeholder is suffixed with the current PID precisely because a shared path races between concurrent grok processes and a lost race could return None, silently dropping the bind and failing open (lib.rs:394-401). If a placeholder for a deny-read path cannot be created, the function prints `refusing to start with a partial sandbox` and returns None rather than emitting a bwrap command with that deny missing (lib.rs:333-344). A containment sentinel directory is also bound in, which is what the `__GROK_INSIDE_BWRAP` verification later checks for (lib.rs:345-352).",
+        "invariants": [
+          "Read-deny requires a bind-over of an unreadable placeholder; a `--ro-bind` of the real path would be useless as a read denial.",
+          "The deny-read placeholder path must be PID-suffixed - sharing it across processes reintroduces the fail-open race.",
+          "A partial plan must abort: returning a bwrap command that silently omits one deny is the failure mode this code is written to avoid."
+        ],
+        "failurePolicy": "fail-closed at plan construction (any missing placeholder or unencodable handoff returns None with an explanation, and the caller's Refuse arm exits 1); Windows/macOS compile to a None return since the path is Linux-only.",
+        "constants": [
+          {"name": "placeholder mode", "value": "0o000 (chmod 000)", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:385-392"},
+          {"name": "bwrap flags", "value": "--cap-drop ALL; --bind / /; --dev-bind /dev /dev; --proc /proc", "evidence": "crates/codegen/xai-grok-sandbox/src/lib.rs:320-354"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:302-369",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:333-352",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:385-428"
+        ],
+        "modules": ["xai-grok-sandbox"],
+        "verified": true
+      },
+      {
+        "name": "hook-write-deny-under-sandbox",
+        "what": "The sandbox protects the hook installation path itself, closing the obvious escalation of writing a hook file to gain code execution on the next event. The crate exposes `requires_hook_write_deny` and the shell's startup calls `xai_grok_config::ensure_grok_hook_slots` before applying, failing the whole apply with `hook write-deny ensure failed` if the slots cannot be prepared (xai-grok-sandbox/src/lib.rs:50-64, :187-190). `SandboxManager::apply` also calls `maybe_install_namespace_lockdown_inside_bwrap` (lib.rs:191-192), and the module's own doc notes that shell fails closed when protection cannot be applied (lib.rs:50-51). `profile_enforces_hook_write_deny` and `verify_hook_write_deny_enforced` are re-exported so the startup path can both decide and then confirm the mounts took (lib.rs:39). `xai-grok-sandbox/src/hook_write_deny.rs` (415 lines) holds the plan builder, and the bwrap plan binds rootward ancestors read-write before the leaf read-only, with the ancestor ordering pinned by a test.",
+        "invariants": [
+          "hook write-deny is verified after apply, not merely requested - and re-verified again in the shell's Verify arm.",
+          "The bwrap plan must RW-bind rootward ancestors before RO-binding the leaf; reversing the order would re-expose the hook directory.",
+          "A replaced leaf identity (the directory moved and recreated) must make append refuse, not silently bind the new one."
+        ],
+        "failurePolicy": "fail-closed - an ensure failure aborts apply, an unenforced verification exits 1 at startup, and a plan that cannot be built returns None so the caller refuses.",
+        "constants": [],
+        "evidence": [
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:39",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:50-64",
+          "crates/codegen/xai-grok-sandbox/src/lib.rs:187-192",
+          "crates/codegen/xai-grok-shell/src/config/mod.rs:1545-1555"
+        ],
+        "modules": ["xai-grok-sandbox", "xai-grok-config", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "permission-mode-projection-and-queue-drain",
+        "what": "The approval model is one enum projected onto one boolean. `PermissionModeKind` has Default, Ask, Auto and AlwaysApprove, and AlwaysApprove is the only variant that projects to the shell's `yolo_mode = true`, with the canonical strings default/ask/auto/always-approve as the persisted vocabulary (xai-grok-pager/src/app/actions.rs:951-979). Switching always-approve ON drains the entire pending permission queue, answering each outstanding ACP RequestPermission with AllowOnce and falling back to Cancelled - never AllowAlways - and the flag flip is deliberately ordered before the drain (xai-grok-pager/src/app/dispatch/modes.rs:284-317). Auto is gated separately by `app.auto_mode_gate`: a commit to Auto degrades to Ask when the gate is off, and a display-side downgrade clears the per-agent auto flag so no badge can read Auto while it is disabled (modes.rs:408-420, :213-232). The enabled path also routes through a managed-policy refusal (`yolo_enable_blocked` / `refuse_if_yolo_locked`) before any state mutation (modes.rs:189-204, :353-399).",
+        "invariants": [
+          "AllowOnce and never AllowAlways is the drain rule: enabling bypass must not mint a durable grant for whatever happened to be pending.",
+          "The mode flag is flipped before the queue is drained - reversing that ordering would let a permission racing the drain be answered under the old mode.",
+          "A commit to Auto must be downgraded, not rejected, when auto_mode_gate is off, and the displayed badge must be downgraded too so the UI cannot disagree with the engine."
+        ],
+        "failurePolicy": "fail-closed with a soft projection - the gate either refuses the mode change outright (managed policy lock) or degrades Auto to Ask; pending requests are always answered (AllowOnce or Cancelled), so nothing is left hanging.",
+        "constants": [
+          {"name": "canonical permission modes", "value": "default | ask | auto | always-approve", "evidence": "crates/codegen/xai-grok-pager/src/app/actions.rs:967-979"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-pager/src/app/actions.rs:951-979",
+          "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:189-232",
+          "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:284-317",
+          "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:353-420"
+        ],
+        "modules": ["xai-grok-pager", "xai-grok-workspace", "xai-grok-config"],
+        "verified": true
+      },
+      {
+        "name": "root-owned-managed-policy-pin",
+        "what": "Deployment policy enters as a separate, higher-authority config layer rather than as a setting the user can flip back. Requirements load from unordered-on-disk but strictly-ordered layers: the user-writable `$GROK_HOME/requirements.toml` first, then the root-owned system file from `system_config_dir()`, then the macOS MDM managed-preferences layer last so it wins the deep merge - and the MDM layer is marked `is_system` exactly like the root-owned file (xai-grok-config/src/validation.rs:63-95). `is_system` is a stored flag rather than a re-derivation, with the stated reason that the source path is `GROK_HOME`-influenced and could carry `..` (validation.rs:56-58). `load_merged_requirements` deep-merges user then system so a user pin cannot win a conflict (validation.rs:97-106). The concrete user-facing effect is the always-approve lock: `[ui] disable_bypass_permissions_mode = true` in a requirements layer pins bypass off, with `[ui] yolo = false` kept as a back-compat alias, and the refusal string names the policy explicitly (xai-grok-workspace/src/permission/resolution.rs:918-932, :952, :1004).",
+        "invariants": [
+          "Order is user -> root-owned system -> MDM, and later layers win; nothing may be inserted after the MDM layer.",
+          "Security decisions must read the stored `is_system` boolean, never re-derive it from the path.",
+          "The `fail_closed` key is stripped during normalization so it cannot deep-merge into the effective config and leak into a user config write; a regression test exists for exactly that (xai-grok-shell/tests/test_config_update_isolation.rs)."
+        ],
+        "failurePolicy": "fail-closed - `fail_closed = true` in a requirements layer turns an invalid `[[version_overrides]]` for this build into a startup error (RequirementsError::InvalidVersionOverrides) rather than a skipped layer, and an unreadable requirements.toml is treated as fail_closed armed (xai-grok-config/src/managed_cache.rs:180-194).",
+        "constants": [
+          {"name": "REQUIREMENTS_FILENAME", "value": "\"requirements.toml\"", "evidence": "crates/codegen/xai-grok-config/src/loader.rs:95"},
+          {"name": "layer order (lowest to highest)", "value": "/etc/grok/managed_config.toml, $GROK_HOME/managed_config.toml, $GROK_HOME/config.toml, $GROK_HOME/requirements.toml, /etc/grok/requirements.toml, macOS MDM", "evidence": "crates/codegen/xai-grok-config/src/lib.rs:3-9"},
+          {"name": "always-approve pin keys", "value": "[ui] disable_bypass_permissions_mode = true (current); [ui] yolo = false (legacy alias)", "evidence": "crates/codegen/xai-grok-workspace/src/permission/resolution.rs:918-932"},
+          {"name": "FAIL_CLOSED_ENV", "value": "\"GROK_MANAGED_CONFIG_FAIL_CLOSED\"", "evidence": "crates/codegen/xai-grok-config/src/validation.rs:30"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-config/src/validation.rs:30-106",
+          "crates/codegen/xai-grok-config/src/lib.rs:1-12",
+          "crates/codegen/xai-grok-config/src/loader.rs:186-188",
+          "crates/codegen/xai-grok-workspace/src/permission/resolution.rs:918-952"
+        ],
+        "modules": ["xai-grok-config", "xai-grok-config-types", "xai-grok-workspace", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "macos-mdm-forced-managed-preferences",
+        "what": "On macOS an additional admin layer arrives through OS managed preferences rather than a file, and it is deliberately strong: `RequirementsSource::Mdm` is a distinct variant with no path at all, precisely so a caller cannot call `exists()` on it or read it as a file, and its label is the synthetic source id `ai.x.grok:...` (xai-grok-config/src/validation.rs:32-49). The layer is normalized through the same path as every other source and pushed last, and it is marked `is_system` so security decisions trust it like the root-owned layer (validation.rs:84-93). `managed_requirements_from` gates the whole thing on the forced read returning Some: a read that fails, or a value that is not valid base64, yields None - the layer is absent rather than partially applied (xai-grok-config/src/macos_managed.rs:22-29, :167-173). MDM is also a source for the sandbox-mode allow list, read through CoreFoundation and deliberately not environment-expanded.",
+        "invariants": [
+          "The MDM layer has no filesystem path by construction; code that wants to inspect it must match on the enum, not build a PathBuf.",
+          "MDM is pushed after the root-owned system file so it wins the merge; the doc comment states this as the reason for its position.",
+          "A failed or unparsable forced read must produce no layer at all, not a partially-decoded one."
+        ],
+        "failurePolicy": "fail-closed in effect - a broken MDM read removes the admin layer rather than installing a wrong one, but because the layer is admin-forced this also means policy is absent; the read itself is gated on an explicit `Some`.",
+        "constants": [
+          {"name": "MDM preferences domain", "value": "ai.x.grok (admin-forced managed preferences)", "evidence": "crates/codegen/xai-grok-config/src/lib.rs:9"},
+          {"name": "MDM_REQUIREMENTS_SOURCE", "value": "synthetic label `ai.x.grok:...`", "evidence": "crates/codegen/xai-grok-config/src/validation.rs:41-48"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-config/src/validation.rs:32-49",
+          "crates/codegen/xai-grok-config/src/validation.rs:84-95",
+          "crates/codegen/xai-grok-config/src/macos_managed.rs:22-29",
+          "crates/codegen/xai-grok-config/src/lib.rs:9"
+        ],
+        "modules": ["xai-grok-config", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "ed25519-signed-policy-at-rest-fail-closed-arm",
+        "what": "The cloud-cached requirements file is signed at rest once a key is embedded, and the managed cache carries an explicit armed state. `signed_policy.rs` treats a signed-ABSENT slot as requiring the file to be empty on disk, with the stated reason that a locally planted `requirements.toml` - the highest-precedence layer - is tamper and not noise (xai-grok-config/src/signed_policy.rs:375-389). The cache exposes `fail_closed_policy_armed_at`, which returns true when the sync marker records `fail_closed`, OR the on-disk requirements.toml parses as fail_closed, OR the file exists but is unreadable (managed_cache.rs:180-194). The unreadable case logs `requirements.toml unreadable; treating as fail_closed armed` and takes the armed branch.",
+        "invariants": [
+          "A signed-absent slot must be empty on disk; non-empty content there is tamper, not a normal unverifiable state.",
+          "Unreadable is treated the same as fail_closed-armed - the failure mode of a permission error must not be 'policy off'.",
+          "There are three independent ways to be armed (marker, parsed flag, unreadable file); removing any one narrows the arming surface."
+        ],
+        "failurePolicy": "fail-closed - an unreadable or tampered policy file arms fail-closed rather than disabling policy.",
+        "constants": [
+          {"name": "signature scheme", "value": "Ed25519 at rest", "evidence": "crates/codegen/xai-grok-config/src/lib.rs:7"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-config/src/lib.rs:7",
+          "crates/codegen/xai-grok-config/src/signed_policy.rs:375-389",
+          "crates/codegen/xai-grok-config/src/managed_cache.rs:180-194"
+        ],
+        "modules": ["xai-grok-config", "xai-grok-shell"],
+        "verified": true
+      },
+      {
+        "name": "managed-hooks-cannot-be-disabled",
+        "what": "Policy-tier hooks are exempt from user control by construction. `HookProvenance` carries a `is_managed_policy` classification whose documented meaning is that the user cannot disable or skip those hooks, and the loader root-owned tiers qualify while `$GROK_HOME` tiers deliberately never do - the comment states the reason plainly: the user owns that directory and can rewrite or repoint it (xai-grok-config/src/loader.rs:210-219). Because the exemption assumes admin ownership, the loader probes the system hooks file and warns separately when it is a symlink, when it is not root-owned, or when it is group- or world-writable, each warning naming the reduced enforcement assumption (loader.rs:323-343). Hook provenance also drives a rank ordering for duplicates: byte-identical hooks arriving from several tiers resolve to the highest-ranked copy, so the root-owned copy's pinned timeout and no-disable rule survive (loader.rs:217-219; xai-grok-hooks/src/discovery.rs:222, :764).",
+        "invariants": [
+          "`is_managed_policy` must stay tied to root-owned tiers only; marking a `$GROK_HOME` tier as managed policy would exempt a user-writable file from user control.",
+          "The no-disable exemption is an assumption about file ownership, so the symlink / non-root-owned / writable probes are part of the mechanism rather than diagnostics.",
+          "Duplicate resolution keeps the higher-authority copy whole - provenance, pinned timeout and pinned env travel together."
+        ],
+        "failurePolicy": "fail-closed on the exemption (the hook stays non-disableable) while emitting an explicit warning that the assumption may be violated; the hook is not silently downgraded to disableable.",
+        "constants": [
+          {"name": "policy tiers", "value": "root-owned /etc/grok tier; MDM tier; $GROK_HOME tiers excluded", "evidence": "crates/codegen/xai-grok-config/src/loader.rs:210-219"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-config/src/loader.rs:210-219",
+          "crates/codegen/xai-grok-config/src/loader.rs:323-343",
+          "crates/codegen/xai-grok-hooks/src/discovery.rs:217-248"
+        ],
+        "modules": ["xai-grok-config", "xai-grok-hooks"],
+        "verified": true
+      }
+    ],
+    "model": [],
+    "extension": [],
+    "service": [],
+    "retrieval": [],
+    "ops": [],
+    "interface": [
+      {
+        "name": "session-capability-gated-command-advertisement",
+        "what": "The backend interface gates which built-in commands exist by advertising a per-session capability snapshot rather than by runtime refusals. `CommandAvailability` is a `Copy` struct of boolean gates whose `Default` derives every gate to false, and the doc states the intent explicitly: a forgotten initialization advertises only `BuiltinGate::AlwaysOn` commands (xai-grok-shell/src/session/slash_commands.rs:391-413). `allows(gate)` maps each `BuiltinGate` variant onto one field - Feedback, Memory, MemoryConfigured, Scheduler, Hooks, Plugins, Goal, WorkflowLaunches, WorkflowManagement - with AlwaysOn unconditional and WorkflowManagement satisfied by either the workflows or the workflow_management flag (slash_commands.rs:414-429). Memory is the sharpest example: `/flush` and `/dream` are advertised only when the memory backend is enabled AND the active toolset actually includes `memory_search`/`memory_get`, because the commands are useless if the model cannot read back what they wrote (slash_commands.rs:401-405). The snapshot is delivered over the wire as ACP `AvailableCommandsUpdate.meta`, carrying the live tool-name list under the `tools` key, which is how the pager learns which tool-dependent commands to offer (slash_commands.rs:445-453).",
+        "invariants": [
+          "`CommandAvailability::default()` must stay all-false: the fail-closed advertisement is the safety property, and a derived all-true default would advertise commands whose backing subsystems are absent.",
+          "A capability gate must correspond to a real backend condition (memory tool present, scheduler configured), not to a UI preference.",
+          "The tool list travels in the update's `_meta`, not in the command list, so a client that ignores `_meta` will offer tool-dependent commands it cannot run."
+        ],
+        "failurePolicy": "fail-closed - an uninitialized snapshot advertises only AlwaysOn commands, so a missing capability removes the command rather than exposing a broken one.",
+        "constants": [],
+        "evidence": [
+          "crates/codegen/xai-grok-shell/src/session/slash_commands.rs:391-429",
+          "crates/codegen/xai-grok-shell/src/session/slash_commands.rs:445-453"
+        ],
+        "modules": ["xai-grok-shell", "xai-grok-pager"],
+        "verified": true
+      },
+      {
+        "name": "queue-state-broadcast-contract",
+        "what": "The renderer-facing contract for queued input is one typed broadcast, not a set of incremental patches. `QueueChanged` is keyed by `sessionId` (required - a payload without it fails to parse rather than applying under the wrong session) and carries the queued-but-not-running rows in `entries`, explicitly excluding the running prompt, plus separate `running_prompt_id`, `running_text`, `running_kind` and `running_combined_texts` fields (xai-prompt-queue/src/types.rs:53-76). Each `QueueEntryWire` is camelCase and carries id, version, owner, lastEditor, kind, text, combinedTexts and a 0-based `position` among queued prompts (types.rs:28-51). The wire shape is pinned by a golden-JSON test with the stated reason that a key rename breaks deployed clients (types.rs:124-159).",
+        "invariants": [
+          "`sessionId` is required on the wire - the type has no default for it and a missing value is a parse error by design.",
+          "The running row is carried out-of-band; a client must not expect to find it in `entries`.",
+          "Optional fields are omitted rather than sent as null (`skip_serializing_if = \"Option::is_none\"`), and the golden test pins that."
+        ],
+        "failurePolicy": "fail-closed on routing (a missing sessionId is rejected) and fail-soft on schema evolution (unknown extra fields are ignored, and sparse payloads deserialize to documented defaults).",
+        "constants": [],
+        "evidence": [
+          "crates/codegen/xai-prompt-queue/src/types.rs:28-76",
+          "crates/codegen/xai-prompt-queue/src/types.rs:124-166"
+        ],
+        "modules": ["xai-prompt-queue", "xai-grok-shell", "xai-grok-pager"],
+        "verified": true
+      },
+      {
+        "name": "screen-mode-switch-with-in-process-reseed",
+        "what": "The screen-mode switch is a command pair backed by an in-process transition with an exec-relaunch fallback, and the backend part of it is the state re-derivation. `/minimal` and `/fullscreen` are two const-constructed instances of one struct differing on a `to_minimal: bool`; each is offered only in the mode it leaves (`FullscreenOnly` for minimal, `MinimalOnly` for fullscreen, both with `Remedy::AlreadyInMode`), and a typed invocation in the wrong mode is refused through the shared mode-support path (xai-grok-pager/src/slash/commands/screen_mode_switch.rs:8-80). Dispatch keeps the switch in-process where it can: it sets `app.pending_screen_mode_switch` to the target mode and returns no effects, and only when `screen_mode_relaunch::exec_switch_forced()` says the in-process path is unavailable does it register a relaunch and emit `Effect::Quit` (xai-grok-pager/src/app/dispatch/router.rs:182-200). The backend-relevant half is `reseed_screen_mode`, which re-applies screen-mode globals, resolves the regular theme at most once behind an AtomicBool guard so a later round trip cannot clobber an in-session `/theme` choice, rebuilds the action registry, updates the welcome prompt, and recurses into every agent's prompt mode including subagent views (xai-grok-pager/src/app/mode_switch.rs:15-48).",
+        "invariants": [
+          "Every mode-derived piece of state that startup decided once must be re-derived on an in-process switch; the module doc frames the whole function as that list.",
+          "The theme is resolved at most once per reseed, guarded by an AtomicBool - without the guard a second reseed would overwrite an explicit in-session theme choice.",
+          "Subagent views are recursed into; reseeding only the top-level agent leaves nested views in the old mode."
+        ],
+        "failurePolicy": "fail-soft - the terminal transition performs rollback on failure and the in-process path degrades to an exec relaunch when unavailable, rather than refusing the switch.",
+        "constants": [
+          {"name": "fullscreen alias", "value": "[\"full\"]", "evidence": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:38-40"}
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:8-80",
+          "crates/codegen/xai-grok-pager/src/app/dispatch/router.rs:182-200",
+          "crates/codegen/xai-grok-pager/src/app/mode_switch.rs:15-48"
+        ],
+        "modules": ["xai-grok-pager", "xai-grok-pager-minimal", "xai-grok-shell"],
+        "verified": true
+      }
+    ]
+  },
+  "moduleCoverage": {},
+  "hintCorrections": [],
+  "domainsAbsent": []
+}
