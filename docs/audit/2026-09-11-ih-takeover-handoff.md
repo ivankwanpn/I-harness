@@ -88,3 +88,62 @@ pnpm test:quarantine       # case-027 的獨立閘門
 1. 驗 `case-027` 的「host 120s < referee 150s」假設。
 2. 重建 installer，否則這條分支的三個 commit 對使用者等於不存在。
 3. 其餘見 §7。
+
+---
+
+## 10. 接手後完成（2026-09-13）
+
+### 10a. 基線複驗
+
+`HEAD eb5fcea9` · 與 `origin/m62` **0/0** · `pnpm -r typecheck` **0 錯** · `pnpm test:default` **70/70 · 324 檔 / 3,302 測 · 0 失敗** · `pnpm test:quarantine` `case-027` **4.5s 綠**。
+
+> ⚠️ **`NO_COLOR=1` 確實被注入這個 session**（§5 第 1 點成立）。第一次沒移掉就得到 `packages/settings` 紅（層數 3≠2）與 7 個包沒跑；移掉並在**空閒機器**上重跑即全綠。**這條要照做，不是建議。**
+
+### 10b. installer 重建（§7 第 2 項，**已完成**）
+
+`build\I-harness-Setup-0.1.0{,-test}.exe` 重建、`verify-installer` **VERIFY PASS**（19 項，含 `dist-selfcheck` 在捆入的 node v22.23.2 下自足）。三個先前缺失的 commit 以**行為標記**確認在 bundle 內：transport 診斷（`NODE_USE_ENV_PROXY`）、`--sandbox`（usage 字串 + `sandbox: sandboxMode`）、`workspaceWarning`（`grouping only`）。
+
+**使用者仍需自行執行 `I-harness-Setup-0.1.0.exe`**（寫 `Program Files` 需提權，此 session 無法代跑）。
+
+### 10c. `case-027` 重新設計（§7 第 1 項，**已做**）
+
+**§7 的假設方向對、結論錯。** 實測時序：host 在 `scene-027-ready` 後（約 t≈2s）就進入 `pollMarker("request-exit", 120_000)`，因此在 **t≈122s** 放棄並拆 backend，而 referee 的 `spawn-running` 窗口到 **t≈152s**——host 確實先放棄。**但 referee 只輪詢 marker 檔、不監看 PTY 退出**，所以它仍報正確的 150s 與完整時間軸 → **「量到的不是真病因」不成立**，那份診斷仍有效。
+
+**真正的瓶頸是外層預算**：`case-027.yaml` 全部 timeout 加總最壞 **420s**，而 vitest 外層只有 **300s**（M61 從 120 提到 300，仍未超過）→ 內部每個 `timeoutMs` 仍是裝飾。
+
+**但真正的修法不是調預算，是切掉一條不必要的耦合。** 任務狀態機實測：
+
+```
+tasks.submit()    → "accepted"  → 視圖 "queued"    ← 同步回傳
+child 首次 claim   → "running"                       ← task-protocol.ts:233
+settle            → "completed" / "error"
+```
+
+`spawn-running` 這個見證原本等 `status === "running"`，**也就是等一條巢狀 spawn + 子模型串流完成**；而場景要驗的是「dashboard 顯示一個**活著的**任務、然後能取消它」。**測試驗 UI 狀態，卻讓自己依賴子代理的起跑時序**——滿載下那條路徑被餓死，紅的是它自己的時序假設。
+
+**改動**（`host-027.ts`，純測試）：見證改等 `alive(t) = queued | running | waiting`。這**不是放鬆**——`alive` 正是同檔下面**取消見證與計數見證本來就在用**的三態集合，`=== "running"` 才是那個不一致的例外；取消契約完全不變（仍要求任務**離開** active 集合）。順帶把三處重複判定收斂成一個 `alive()`。
+
+**驗證**：單獨跑 **4.56 / 4.52 / 4.64s 綠**（改前 4.4–5.2s，時序未變）；**突變證明仍是判別性的**——停用見證 → 紅在 `step 3 (await-marker): marker "spawn-running" not found after 150000ms`。
+
+**而且突變那次意外重現了真實停滯**，時間軸（本輪新加的診斷）顯示：
+
+```
+46 markers: backend-ready@+0.0s … scene-027-ready@+0.0s … input-1@+0.1s … writes@+0.1s
+            live-tasks@+120.0s host-failed@+120.1s
+[wait@+0.1s]
+```
+
+**前 0.1 秒全部發生，然後 120 秒什麼都沒有。** 這更正了先前對這個 marker 的直覺：**停滯不在「子代理起跑慢」，而在更早——prompt 送出後整個 agent 迴圈沒有推進**（連任務都沒被 submit）。它也揭露舊診斷的盲點：`=== "running"` 分不出「任務存在但卡在 accepted」與「任務根本不存在」；**新的 `alive` 版本可以**（箭頭後有沒有 `spawn-running`）。這是這次重新設計最實質的收穫。
+
+### 10d. 另一個 teardown flake（順手修掉，同類）
+
+全量閘門另一次紅在 `packages/session-executor`：
+
+```
+Error: EPERM, Permission denied: \\?\C:\…\Temp\ih-t12-wf-ncSPwx
+ ❯ test/service.test.ts:898  rmSync(ws, { recursive: true, force: true })
+```
+
+**斷言全過，紅在 `finally` 的清理**——handle 在 `service.close()` 之後才釋放。`force: true` 吞 ENOENT 但**不吞 EPERM/EBUSY**（M61 已記過這個 class，而且**同一個包裡**早就有 `test/helpers.ts` 的 `rmWorkspaceSync` 有界重試 helper）。`service.test.ts` 兩處、`rewind.test.ts` 的 `afterEach` 一處都用 raw `rmSync`，三處一併改用該 helper。單獨跑 66/66 綠。
+
+**殘留**：其他包的測試若有 raw `rmSync` 清理，仍屬同一風險類（未全面清查）。

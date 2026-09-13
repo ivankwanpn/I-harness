@@ -3,7 +3,7 @@
 // drives the recorder, and the durable point lands in the rewind store; then
 // the engine executes a rewind through the same store.
 import { describe, expect, it, afterEach, vi } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { readFile, writeFile } from "node:fs/promises"
@@ -12,6 +12,7 @@ import { append } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { RewindRecorder } from "@i-harness/rewind"
 import { RewindService } from "@i-harness/rewind"
+import { rmWorkspaceSync } from "./helpers.ts"
 import { RewindStore } from "@i-harness/rewind"
 import { createSessionAssembly } from "../src/assembly.ts"
 
@@ -30,7 +31,10 @@ async function waitFor(fn: () => Promise<boolean>, timeoutMs = 5_000): Promise<v
 describe("assembly rewind wiring", () => {
   const cleanup: string[] = []
   afterEach(() => {
-    for (const d of cleanup.splice(0)) rmSync(d, { recursive: true, force: true })
+    // Bounded retry (see helpers): a bare rmSync here throws EPERM/EBUSY when a
+    // handle outlives the test, which fails the NEXT assertion run for a reason
+    // unrelated to what it asserts.
+    for (const d of cleanup.splice(0)) rmWorkspaceSync(d)
   })
 
   it("records a point for a scripted turn that ran an fs write, then executes a rewind", async () => {

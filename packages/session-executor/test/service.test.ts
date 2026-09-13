@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
@@ -10,6 +10,7 @@ import { createSessionService, type SessionService } from "../src/service.ts"
 import type { SessionQueueItem } from "../src/index.ts"
 import { createTelemetry, type TelemetrySink } from "@i-harness/telemetry"
 import { createMockClient } from "@i-harness/llm-mock"
+import { rmWorkspaceSync } from "./helpers.ts"
 
 function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
   const events: unknown[] = []
@@ -456,7 +457,7 @@ describe("createSessionService", () => {
     expect(String(toolMsg?.content)).toContain("ENOENT")
     // and the turn's assistant answer landed
     expect(messages.some((m) => m.role === "assistant" && String(m.content).includes("recovered"))).toBe(true)
-    rmSync(workspace, { recursive: true, force: true })
+    rmWorkspaceSync(workspace)
   }, 60_000)
 
   it("settles a queued successor after a failed predecessor without an unhandled rejection", async () => {
@@ -895,7 +896,10 @@ describe("createSessionService — real task projection (Task 12)", () => {
       expect(service.tasks("a").some((row) => row.group === "workflow")).toBe(true)
     } finally {
       await service.close()
-      rmSync(ws, { recursive: true, force: true })
+      // Bounded retry: `force: true` swallows ENOENT but NOT EPERM/EBUSY, and a
+      // handle released just after close() made this cleanup throw under
+      // full-suite load — failing a test whose assertions had all passed.
+      rmWorkspaceSync(ws)
     }
   }, 60_000)
 })
