@@ -5051,18 +5051,32 @@
   "domainsAbsent": [],
   "inertMechanisms": [
     {
-      "mechanism": "All feature('X') gates imported from bun:bundle (~499 call sites, ~70 distinct flags: COORDINATOR_MODE, FORK_SUBAGENT, PROACTIVE, BUDDY, AGENT_TRIGGERS, WORKFLOW_SCRIPTS, MONITOR_TOOL, TREE_SITTER_BASH, TRANSCRIPT_CLASSIFIER, TOKEN_BUDGET, CONTEXT_COLLAPSE, HISTORY_SNIP, REACTIVE_COMPACT, CACHED_MICROCOMPACT, PROMPT_CACHE_BREAK_DETECTION, EXTRACT_MEMORIES, TEAMMEM, SSH_REMOTE, DIRECT_CONNECT, UNATTENDED_RETRY, ...)",
+      "mechanism": "All feature('X') gates imported from bun:bundle (measured: 153 importing files under src/, 556 feature() call sites, 68 distinct flags) (556 call sites, 68 distinct flags: COORDINATOR_MODE, FORK_SUBAGENT, PROACTIVE, BUDDY, AGENT_TRIGGERS, WORKFLOW_SCRIPTS, MONITOR_TOOL, TREE_SITTER_BASH, TRANSCRIPT_CLASSIFIER, TOKEN_BUDGET, CONTEXT_COLLAPSE, HISTORY_SNIP, REACTIVE_COMPACT, CACHED_MICROCOMPACT, PROMPT_CACHE_BREAK_DETECTION, EXTRACT_MEMORIES, TEAMMEM, SSH_REMOTE, DIRECT_CONNECT, UNATTENDED_RETRY, ...)",
       "reason": "feature() comes from the Bun bundler virtual module and only resolves at bundle time; the repo's own entry points (package.json dev/start = `bun run ./src/bootstrap-entry.ts`) and installer/build.ps1 pass no --feature flag, and there is no bunfig.toml (verified absent). Two sibling agents independently probed this on bun 1.3.14: an undefined feature takes the else branch, and `bun --feature=MONITOR_TOOL` flips it true — so the mechanism is present and the branches are dead for want of a build flag, not absent. Every feature()-gated capability in this inventory must be read as present-but-inert.",
       "evidence": [
+        "src/query/runtime/productionSessionServices.ts:84-86",
         "src/query/runtime/productionSessionServices.ts:72-86",
         "src/query/runtime/productionSessionState.ts:67",
         "src/tools.ts:25-36",
         "src/tools/ScheduleCronTool/prompt.ts:12-23",
         "src/services/api/claude.ts:1035-1059",
         "src/skills/bundled/index.ts:31-57",
-        "src/commands/branch/index.ts:1",
-        "package.json:115-121"
-      ]
+        "src/commands/branch/index.ts:1"
+      ],
+      "citationCorrected": {
+        "was": [
+          "src/query/runtime/productionSessionServices.ts:72-86",
+          "src/query/runtime/productionSessionState.ts:67",
+          "src/tools.ts:25-36",
+          "src/tools/ScheduleCronTool/prompt.ts:12-23",
+          "src/services/api/claude.ts:1035-1059",
+          "src/skills/bundled/index.ts:31-57",
+          "src/commands/branch/index.ts:1",
+          "package.json:115-121"
+        ],
+        "reason": "the cited package.json:115-121 is the npm scripts block and cannot carry a feature-gate claim; the counts were also understated (556 call sites over 68 flags in 153 files, not ~499/~70)",
+        "by": "D3 adversarial verification (2026-09-13)"
+      }
     },
     {
       "mechanism": "GrowthBook / Statsig feature-flag and dynamic-config layer",
