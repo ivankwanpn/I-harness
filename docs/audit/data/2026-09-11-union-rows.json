@@ -918,221 +918,6 @@
       }
     },
     {
-      "key": "session-create",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.create",
-          "canonical": "session-create",
-          "aliases": [],
-          "displayName": "session.create",
-          "family": "session",
-          "summary": "Create or idempotently adopt one ordinary Session for a requested identity, location and agent preset.",
-          "mechanism": "Published as `@Remote('create')` and delegated to the commands module, returning the Session identity and the resolved preset when one is configured. Idempotent adoption means a repeated create for the same identity is not an error, so the RPC is safe as a client-side ensure-exists call rather than a strict constructor.",
-          "gate": "Typert Gateway Remote; the requested agent preset must resolve when one is named",
-          "backendModule": "packages/api/session-controller/src/index.ts:243 -> packages/api/session-controller/src/commands.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:243",
-            "packages/api/session-controller/src/index.ts:241"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: new-session — the equivalent of `/new` or `/clear` in slash-centric harnesses, expressed as an RPC rather than a command"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-followup",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "agent.followup",
-          "canonical": "session-followup",
-          "aliases": [],
-          "displayName": "agent.followup",
-          "family": "session",
-          "summary": "Queue an ordinary follow-up turn at the `next-turn` boundary and wake the driver so it becomes the sole ordinary message of its own turn.",
-          "mechanism": "Declared as `followup(message: UserMessage): void` with the contract that the item becomes the sole ordinary message of its own turn. Implemented as the literal single call `this.send(input, 'next-turn', true)` — i.e. followup is the next-turn + wake tier of the send primitive, and carries no independent state. This is the tier the Host `session.prompt` mode `queue` and the subagent delivery mode `queue` both resolve to.",
-          "gate": "in-process Agent API",
-          "backendModule": "packages/core/agent-loop/src/agent.ts:137 (implementation) / packages/core/agent/src/runtime-types.ts:222 (contract)",
-          "evidence": [
-            "packages/core/agent/src/runtime-types.ts:222",
-            "packages/core/agent-loop/src/agent.ts:137",
-            "packages/core/agent-loop/src/agent.ts:138",
-            "packages/api/session-controller/src/commands.ts:364"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: session-followup — the next-turn/queue tier; sibling of a generic `send` and distinct from steering"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-fork",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.fork",
-          "canonical": "session-fork",
-          "aliases": [],
-          "displayName": "session.fork",
-          "family": "session",
-          "summary": "Fork a cold-readable completed-turn prefix of one Session into a new Session.",
-          "mechanism": "Published as `@Remote('fork')` on the session controller and delegated to the commands module, which creates the child Session from the source prefix (optionally anchored at a given event) and returns the new Session identity. It reads only a completed-turn prefix, so forking never depends on a live Agent and never mutates the source log — consistent with the Session model where history is an append-only log that derived surfaces fold.",
-          "gate": "Typert Gateway Remote; the source must be cold-readable and the prefix must end at a completed turn",
-          "backendModule": "packages/api/session-controller/src/index.ts:334 -> packages/api/session-controller/src/commands.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:334",
-            "packages/api/session-controller/src/index.ts:329"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: fork — branch-conversation-from-here, the same capability other harnesses name fork/branch"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-prompt",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.prompt",
-          "canonical": "session-prompt",
-          "aliases": [],
-          "displayName": "session.prompt",
-          "family": "session",
-          "summary": "Host RPC that admits one browser-authored prompt after resume, attachment and model-capability validation, delivering it as queue or steer.",
-          "mechanism": "Published as `@Remote('prompt')` on the session controller and typed by `SessionPromptRequest` whose `mode` is `'queue' | 'steer'`. The implementation rejects empty content, canonicalizes/validates `clientTimeZone`, resolves the Agent, dedupes by `requestId`, and requires the selected provider route to be served; image prompts are serialized per Agent and checked against the model's `inputModalities` before admission. After `attachments.admitPromptContent` the content becomes a `UserMessage` with `source: { kind: 'user', rpcId }`, then the delivery branch is literally `if (request.mode === 'steer') agent.steer(message) else agent.followup(message)`, with file-upload receipts committed only after delivery is accepted.",
-          "gate": "Typert Gateway Remote; requires a live/resumable Session, a served provider route, and (for image parts) a model advertising image input plus an attachment store",
-          "backendModule": "packages/api/session-controller/src/index.ts:345 (Remote face) / packages/api/session-controller/src/commands.ts:302 (admission + delivery)",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:345",
-            "packages/api/session-controller/src/commands.ts:302",
-            "packages/api/session-controller/src/commands.ts:303",
-            "packages/api/session-controller/src/commands.ts:353",
-            "packages/api/session-controller/src/commands.ts:363",
-            "packages/api/session-controller/src/commands.ts:364",
-            "packages/api/session-controller/src/types.ts:310",
-            "packages/api/session-controller/src/types.ts:314"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: prompt/send — this is the browser-facing union of dsh's followup (queue) and steer tiers; other harnesses expose it as the plain chat-submit path rather than a command"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-rename",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.rename",
-          "canonical": "session-rename",
-          "aliases": [],
-          "displayName": "session.rename",
-          "family": "session",
-          "summary": "Rename one Session after explicitly resuming it, returning the accepted title and its durable event sequence.",
-          "mechanism": "Published as `@Remote('rename')` and delegated to the commands module, which resumes the Session and appends the title as durable session state, returning both the accepted title and the `seq` at which it landed so a client can correlate the rename with the log position it produced. The resume requirement is what makes the operation explicit rather than an implicit side effect of reading a cold Session.",
-          "gate": "Typert Gateway Remote; the Session is resumed by the call",
-          "backendModule": "packages/api/session-controller/src/index.ts:324 -> packages/api/session-controller/src/commands.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:324",
-            "packages/api/session-controller/src/index.ts:322"
-          ],
-          "verified": true,
-          "crossSourceHints": []
-        }
-      }
-    },
-    {
-      "key": "session-send",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "agent.send",
-          "canonical": "session-send",
-          "aliases": [],
-          "displayName": "agent.send",
-          "family": "session",
-          "summary": "Route one identified message to a chosen inbox boundary with an explicit wake decision — the single primitive all other delivery tiers are built from.",
-          "mechanism": "Declared on the Agent interface as `send(message: UserMessage, target: InboxTarget, wakeup: boolean): void`. The implementation carries the whole admission policy: waking input that arrives after an abort is re-targeted from `next-step` to `next-turn`; the message is spliced into `this.inbox` at the resolved boundary; and only a waking call enters `wakeDriver`. Every higher tier is a one-line specialization of this method.",
-          "gate": "in-process Agent API — available on any live Agent; no command registry, RPC gateway or UI is required",
-          "backendModule": "packages/core/agent-loop/src/agent.ts (implementation) / packages/core/agent/src/runtime-types.ts (contract)",
-          "evidence": [
-            "packages/core/agent/src/runtime-types.ts:215",
-            "packages/core/agent-loop/src/agent.ts:128",
-            "packages/core/agent-loop/src/agent.ts:133",
-            "packages/core/agent-loop/src/agent.ts:134"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "this is the primitive behind the whole session-send / session-followup / session-steer / session-inject family; the literal names `session-send` etc. do not exist in dsh 0.1.5-rc.2 source — the real names are the Agent methods below"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-steer",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "agent.steer",
-          "canonical": "session-steer",
-          "aliases": [],
-          "displayName": "agent.steer",
-          "family": "session",
-          "summary": "Submit steering for the nearest step boundary, waking an idle driver but joining a running turn rather than opening a new one.",
-          "mechanism": "Declared as `steer(message: UserMessage): void`: an idle driver starts a turn, a running driver consumes the item at its next step boundary, a rejected step leaves steering parked in the inbox until the next wake, and cancellation or disposal may discard it. Implemented as `this.send(input, 'next-step', true)`. The loop consumes it inside the turn (asserted by the loop tests) and the Host surfaces it as `session.prompt` mode `steer` and `session.updateQueue` action `steer`.",
-          "gate": "in-process Agent API; the Host `updateQueue` steer action is additionally refused with `session/steer-unavailable` unless the item is still at `next-turn` and the agent is running",
-          "backendModule": "packages/core/agent-loop/src/agent.ts:141 (implementation) / packages/core/agent/src/runtime-types.ts:231 (contract)",
-          "evidence": [
-            "packages/core/agent/src/runtime-types.ts:231",
-            "packages/core/agent-loop/src/agent.ts:141",
-            "packages/core/agent-loop/src/agent.ts:142",
-            "packages/api/session-controller/src/commands.ts:363",
-            "packages/api/session-controller/src/commands.ts:463",
-            "packages/api/session-controller/src/commands.ts:483"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: session-steer — nearest-step interruption, the same capability other harnesses expose as interjecting/steering during a running turn"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-update-queue",
-      "family": "session",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.updateQueue",
-          "canonical": "session-update-queue",
-          "aliases": [],
-          "displayName": "session.updateQueue",
-          "family": "session",
-          "summary": "Edit, remove or promote-to-steer one still-pending inbox item on a live Agent without resuming a cold one.",
-          "mechanism": "Published as `@Remote('updateQueue')`; the implementation refuses non-text edits and blank edits, requires a live Agent, and enforces continuable-subagent ownership. It then locates the item in `agent.inbox.nextTurn` / `agent.inbox.nextStep` and dispatches on the action: `edit` calls `agent.inbox.replace` with a frozen message, `remove` calls `agent.inbox.remove` and retires the file-upload receipts, and `steer` removes the item and re-enters it through `agent.steer(message)`, which is why the action is pre-checked for `next-turn` + running status. A closed-union `assertNever` backstop guards the switch.",
-          "gate": "Typert Gateway Remote; the item must still be pending (`session/queue-item-not-found` otherwise) and the `steer` action additionally requires target `next-turn` and a running agent",
-          "backendModule": "packages/api/session-controller/src/index.ts:366 (Remote face) / packages/api/session-controller/src/commands.ts:424 (mutation)",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:366",
-            "packages/api/session-controller/src/commands.ts:424",
-            "packages/api/session-controller/src/commands.ts:454",
-            "packages/api/session-controller/src/commands.ts:468",
-            "packages/api/session-controller/src/commands.ts:474",
-            "packages/api/session-controller/src/commands.ts:481",
-            "packages/api/session-controller/src/commands.ts:483"
-          ],
-          "verified": true,
-          "crossSourceHints": []
-        }
-      }
-    },
-    {
       "key": "tag",
       "family": "session",
       "perSource": {
@@ -1721,34 +1506,6 @@
             "reason": "the sampled cite xai-grok-memory/src/storage.rs:113 is a MEMORY.md path helper, not the command's run path",
             "by": "adversarial verification sample (2026-09-12)"
           }
-        }
-      }
-    },
-    {
-      "key": "session-inject",
-      "family": "context",
-      "perSource": {
-        "dsh": {
-          "rawName": "agent.inject",
-          "canonical": "session-inject",
-          "aliases": [],
-          "displayName": "agent.inject",
-          "family": "context",
-          "summary": "Queue model-facing context for the next pre-step WITHOUT waking the driver — the silent-context tier.",
-          "mechanism": "Declared as `inject(message: UserMessage): void`: a running driver claims it at the nearest later step boundary, an idle driver leaves it pending until a follow-up or steer wakes it, it may miss a request whose pre-step already claimed its batch, and cancellation or disposal may discard it. Implemented as `this.send(input, 'next-step', false)` — identical to steer except `wakeup` is false, which is exactly what separates the two tiers. It has no Host RPC face: every caller in the tree is an in-process plugin (plan-mode narration, approval prompts, hooks, jobs, subagent continuation, cordis host runner).",
-          "gate": "in-process Agent API only; not reachable through any Typert @Remote in this version",
-          "backendModule": "packages/core/agent-loop/src/agent.ts:145 (implementation) / packages/core/agent/src/runtime-types.ts:241 (contract)",
-          "evidence": [
-            "packages/core/agent/src/runtime-types.ts:241",
-            "packages/core/agent-loop/src/agent.ts:145",
-            "packages/core/agent-loop/src/agent.ts:146",
-            "packages/plan/plan-mode/src/index.ts:430",
-            "packages/interaction/user-approval/src/index.ts:180"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: session-inject — non-waking context injection; distinguishes dsh's four tiers (send/followup/steer/inject) into two axes: inbox boundary (next-turn vs next-step) x wake (true/false)"
-          ]
         }
       }
     },
@@ -2396,33 +2153,6 @@
       }
     },
     {
-      "key": "session-cancel",
-      "family": "execution",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.cancel",
-          "canonical": "session-cancel",
-          "aliases": [],
-          "displayName": "session.cancel",
-          "family": "execution",
-          "summary": "Cancel one live Agent's active work while deliberately retaining its pending inbox.",
-          "mechanism": "Published as `@Remote('cancel')` and documented as 'cancel one active Agent turn without dropping its pending inbox'. It resolves the live Agent from the session id and delegates to the Agent cancel path, which aborts the active phase's AbortController; `Agent.cancel` itself only clears queued/steering work when `keepInbox` is not set, which is the option the Host path relies on to keep pending input. Cancellation is a no-op when no activity is active and does not arm later work.",
-          "gate": "Typert Gateway Remote; requires a live Agent for that session",
-          "backendModule": "packages/api/session-controller/src/index.ts:376 (Remote face) / packages/api/session-controller/src/commands.ts:497 / packages/core/agent-loop/src/agent.ts:149",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:376",
-            "packages/api/session-controller/src/commands.ts:497",
-            "packages/core/agent-loop/src/agent.ts:149",
-            "packages/core/agent-loop/src/agent.ts:154"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: cancel — the interrupting-stop capability other harnesses expose as Esc/Ctrl-C or `/cancel`"
-          ]
-        }
-      }
-    },
-    {
       "key": "stop",
       "family": "execution",
       "perSource": {
@@ -2742,55 +2472,6 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: model"
-          ]
-        }
-      }
-    },
-    {
-      "key": "model-catalog",
-      "family": "model",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.modelCatalog",
-          "canonical": "model-catalog",
-          "aliases": [],
-          "displayName": "session.modelCatalog",
-          "family": "model",
-          "summary": "Describe every currently routable model for Host-generation selectors, grouping by provider and isolating per-provider failures.",
-          "mechanism": "Published as `@Remote('modelCatalog')` and implemented by `buildModelCatalog(ctx)`, which walks the composed LLM adapters and returns provider-grouped models plus the deployment default; a provider whose catalog lookup fails is reported as an isolated failure entry instead of failing the whole call. This is the read side that makes `selectModel` offer only genuinely routable choices.",
-          "gate": "Typert Gateway Remote; depends on the composed `llm` service and its registered adapters",
-          "backendModule": "packages/api/session-controller/src/index.ts:262 / packages/api/session-controller/src/catalog.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:262",
-            "packages/api/session-controller/src/index.ts:264"
-          ],
-          "verified": true,
-          "crossSourceHints": []
-        }
-      }
-    },
-    {
-      "key": "model-select",
-      "family": "model",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.selectModel",
-          "canonical": "model-select",
-          "aliases": [],
-          "displayName": "session.selectModel",
-          "family": "model",
-          "summary": "Install one Session-local provider/model selection after explicitly resuming the Session, returning the normalized selection.",
-          "mechanism": "Published as `@Remote('selectModel')` and delegated to the commands module, which validates and installs the selection, then returns the normalized `{ provider, model }` that was actually installed. Normalization matters because the caller's requested string is not authoritative: the returned value is what later prompt assembly and `session/model-unavailable` checks compare against, and the selection is recorded as the log-only `model/selection` event rather than entering derived model history.",
-          "gate": "Typert Gateway Remote; the Session is resumed by the call and the requested route must normalize to a real selection",
-          "backendModule": "packages/api/session-controller/src/index.ts:253 -> packages/api/session-controller/src/commands.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:253",
-            "packages/api/session-controller/src/index.ts:251",
-            "packages/api/session-controller/src/types.ts:40"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: model — the equivalent of a `/model` selector in slash-centric harnesses, here an RPC driven by the model-selection UI"
           ]
         }
       }
@@ -3405,40 +3086,6 @@
       }
     },
     {
-      "key": "execute",
-      "family": "extension",
-      "perSource": {
-        "dsh": {
-          "rawName": "commands.execute",
-          "canonical": "command-execute",
-          "aliases": [],
-          "displayName": "commands.execute",
-          "family": "extension",
-          "summary": "Parse and execute one known slash line without sending it to the model, logging a paired command/run -> command/done lifecycle.",
-          "mechanism": "Published as `@Remote` on the same `commands` service. `parseCommand` applies the `/^\\/([a-z][a-z0-9_-]*)(?=$|[\\t\\n\\r ])/u` grammar and returns undefined on a syntax or unknown-name miss, in which case nothing is logged because no handler was entered. On a hit it mints a `CommandId` (monotonic counter plus an instance token so a resumed log never repeats an id), appends the log-only `command/run` event, enforces attachment admission at the registry boundary (declared `input.attachments`, composed attachment store, image limit, cancellation during admission), invokes the handler under `withAbort`, normalizes the `CommandResult`, and appends the paired `command/done`. A command handler error is contained: `command/done` records kind `error` and the handler's own error stays the reported failure.",
-          "gate": "Typert Gateway Remote on the `commands` service; the line must parse and resolve for the receiving Agent, and attachments are rejected unless the definition declares `input.attachments`",
-          "backendModule": "packages/interaction/commands/src/index.ts (CommandRuntime.execute) / packages/interaction/commands/src/types.ts (event vocabulary)",
-          "evidence": [
-            "packages/interaction/commands/src/index.ts:122",
-            "packages/interaction/commands/src/index.ts:355",
-            "packages/interaction/commands/src/index.ts:356",
-            "packages/interaction/commands/src/index.ts:363",
-            "packages/interaction/commands/src/index.ts:368",
-            "packages/interaction/commands/src/index.ts:375",
-            "packages/interaction/commands/src/index.ts:420",
-            "packages/interaction/commands/src/index.ts:441",
-            "packages/interaction/commands/src/types.ts:103",
-            "packages/interaction/commands/src/types.ts:110",
-            "packages/client/ui-commands/src/client/service.ts:374"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: command-execute — the slash-dispatch entry point; in dsh it is a Remote the browser calls, not a host-side parser loop"
-          ]
-        }
-      }
-    },
-    {
       "key": "hooks",
       "family": "extension",
       "perSource": {
@@ -3610,36 +3257,6 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: init-verifiers — generates verifier skills; distinctive to this source"
-          ]
-        }
-      }
-    },
-    {
-      "key": "list",
-      "family": "extension",
-      "perSource": {
-        "dsh": {
-          "rawName": "commands.list",
-          "canonical": "command-list",
-          "aliases": [],
-          "displayName": "commands.list",
-          "family": "extension",
-          "summary": "List the effective immutable command descriptors for one agent, after global-then-scoped shadowing, sorted by name.",
-          "mechanism": "Published as `@Remote` on `CommandRuntime`, which is constructed as `super(ctx, 'commands')`, i.e. the wire namespace is the Cordis service key `commands`. `list(agent)` resolves `this.view(agent)` — global registrations followed by exact scoped shadows for that agent — maps them to `CommandDescriptor` (name/description/input, never the handler) and freezes a name-sorted array. It is the discovery half of the command surface: the browser `/` menu calls it per session, and `commands/change` notifications tell clients when to invalidate.",
-          "gate": "Typert Gateway Remote on the `commands` service; the caller supplies the receiving Agent so scoped shadowing resolves per session",
-          "backendModule": "packages/interaction/commands/src/index.ts (CommandRuntime, TypertRemoteService subclass)",
-          "evidence": [
-            "packages/interaction/commands/src/index.ts:258",
-            "packages/interaction/commands/src/index.ts:272",
-            "packages/interaction/commands/src/index.ts:309",
-            "packages/interaction/commands/src/index.ts:310",
-            "packages/interaction/commands/src/index.ts:465",
-            "packages/interaction/commands/src/index.ts:474",
-            "packages/client/ui-commands/src/client/service.ts:92"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: command-list — the enumeration surface other harnesses expose as a slash-command menu/completion source"
           ]
         }
       }
@@ -4640,100 +4257,6 @@
       }
     },
     {
-      "key": "session-attachment-read",
-      "family": "inspect",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.attachment",
-          "canonical": "session-attachment-read",
-          "aliases": [],
-          "displayName": "session.attachment",
-          "family": "inspect",
-          "summary": "Read one image attachment after proving the addressed Session log actually references it.",
-          "mechanism": "Published as `@Remote('attachment')`; the handler first builds the authoritative session read state, scans the referenced events for the attachment id, rejects with `session/attachment-invalid` when the log does not reference it, and only then reads the bytes from the attachment store, returning the durable ref plus base64 data. Referenced-ness is the authorization rule, so an attachment id alone is never sufficient to fetch content.",
-          "gate": "Typert Gateway Remote; the attachment must be referenced by that Session's log and readable from the attachment store",
-          "backendModule": "packages/api/session-controller/src/index.ts:356 / packages/api/session-controller/src/commands.ts:383",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:356",
-            "packages/api/session-controller/src/commands.ts:383",
-            "packages/api/session-controller/src/commands.ts:397",
-            "packages/api/session-controller/src/commands.ts:406"
-          ],
-          "verified": true,
-          "crossSourceHints": []
-        }
-      }
-    },
-    {
-      "key": "session-control",
-      "family": "inspect",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.control",
-          "canonical": "session-control",
-          "aliases": [],
-          "displayName": "session.control",
-          "family": "inspect",
-          "summary": "Stream a complete live-control baseline followed by replacement frames for the session's pending/queue/status control state.",
-          "mechanism": "Declared as `@Remote({ mode: 'stream' })` and implemented over the control-state module as an `AsyncIterable<SessionControlFrame>`. The stream opens with one complete baseline and then emits whole replacement frames rather than diffs, so the client's control view (pending inbox items, placements, status) is last-write-wins and never needs patch merging.",
-          "gate": "Typert Gateway Remote stream mode",
-          "backendModule": "packages/api/session-controller/src/index.ts:409 / packages/api/session-controller/src/control.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:409",
-            "packages/api/session-controller/src/index.ts:410"
-          ],
-          "verified": true,
-          "crossSourceHints": []
-        }
-      }
-    },
-    {
-      "key": "session-follow",
-      "family": "inspect",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.follow",
-          "canonical": "session-follow",
-          "aliases": [],
-          "displayName": "session.follow",
-          "family": "inspect",
-          "summary": "Stream one Session log from its opening or resume cursor as a complete snapshot followed by gap-free durable event frames.",
-          "mechanism": "Declared as `@Remote({ mode: 'stream' })`, i.e. a Typert logical stream method, and served by the history module as an `AsyncIterable<SessionFollowFrame>`. The caller supplies the last committed sequence it already holds, and the stream answers with a complete opening snapshot then gap-free durable frames plus optional cursorless assistant-stream frames — so reconnection is expressed as 'resume from seq N' rather than as an event-replay protocol the client must reimplement.",
-          "gate": "Typert Gateway Remote stream mode; requires the caller's last committed seq",
-          "backendModule": "packages/api/session-controller/src/index.ts:399 / packages/api/session-controller/src/history.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:399",
-            "packages/api/session-controller/src/index.ts:400"
-          ],
-          "verified": true,
-          "crossSourceHints": []
-        }
-      }
-    },
-    {
-      "key": "session-history-page",
-      "family": "inspect",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.page",
-          "canonical": "session-history-page",
-          "aliases": [],
-          "displayName": "session.page",
-          "family": "inspect",
-          "summary": "Read one cold-safe, message-aligned page of Session history with a backward cursor and a page budget.",
-          "mechanism": "Published as `@Remote('page')` and served by the history module, which returns one chronological page for a durable address plus backward cursor. 'Cold-safe' and 'message-aligned' are the load-bearing properties: paging works against persistence without a live Agent and never cuts a message in half, which is what lets the client lazily load a long transcript.",
-          "gate": "Typert Gateway Remote; cold read over persistence",
-          "backendModule": "packages/api/session-controller/src/index.ts:387 / packages/api/session-controller/src/history.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:387",
-            "packages/api/session-controller/src/index.ts:389"
-          ],
-          "verified": true,
-          "crossSourceHints": []
-        }
-      }
-    },
-    {
       "key": "session-info",
       "family": "inspect",
       "perSource": {
@@ -4769,56 +4292,6 @@
           "verified": true,
           "crossSourceHints": [
             "canonical: session-info / status"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-list",
-      "family": "inspect",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.list",
-          "canonical": "session-list",
-          "aliases": [],
-          "displayName": "session.list",
-          "family": "inspect",
-          "summary": "Read all visible Session rows ordered by activity, without resuming any Agent.",
-          "mechanism": "Published as `@Remote('list')` and implemented by delegating to the list-state reader with the caller's signal, returning `{ items }` of Session summaries ordered by activity. The explicit no-resume property is what makes it usable for a sidebar: listing sessions never activates an Agent or opens a live Session.",
-          "gate": "Typert Gateway Remote; read-only path, no live Agent required",
-          "backendModule": "packages/api/session-controller/src/index.ts:222 / packages/api/session-controller/src/list.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:222",
-            "packages/api/session-controller/src/index.ts:224"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: sessions-list — the read side of what other harnesses expose as `/sessions` or `/resume` pickers, here an RPC plus a sidebar UI"
-          ]
-        }
-      }
-    },
-    {
-      "key": "session-search",
-      "family": "inspect",
-      "perSource": {
-        "dsh": {
-          "rawName": "session.search",
-          "canonical": "session-search",
-          "aliases": [],
-          "displayName": "session.search",
-          "family": "inspect",
-          "summary": "Search visible Session content with a literal message-content query, again without resuming an Agent.",
-          "mechanism": "Published as `@Remote('search')`; the handler forwards the request query and signal to the list-state search reader and returns bounded authorized results. It shares the no-resume property with `session.list`, so full-text search over past sessions is a pure persistence read rather than a replay.",
-          "gate": "Typert Gateway Remote; read-only, no live Agent required",
-          "backendModule": "packages/api/session-controller/src/index.ts:233 / packages/api/session-controller/src/list.ts",
-          "evidence": [
-            "packages/api/session-controller/src/index.ts:233",
-            "packages/api/session-controller/src/index.ts:235"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: session-search — the capability other harnesses expose as `/search` or a transcript finder"
           ]
         }
       }
@@ -6813,63 +6286,6 @@
       }
     },
     {
-      "key": "subagent-interrupt",
-      "family": "collab",
-      "perSource": {
-        "dsh": {
-          "rawName": "subagent.interruptByParent",
-          "canonical": "subagent-interrupt",
-          "aliases": [],
-          "displayName": "subagent.interruptByParent",
-          "family": "collab",
-          "summary": "Cancel one continuable child from its durable parent address without requiring the parent Agent to be online.",
-          "mechanism": "Published as `@Remote('interruptByParent')` taking the child id, the claimed parent id and the `mode: 'continuable'` discriminator. The implementation deliberately runs no catalog, history, persistence or parent-Agent lookup: it authorizes the address against the live Activation and delegates to the core `interrupt` primitive, which keeps a live child interruptible while its parent Agent is offline; absent, idle and already-completed targets are accepted no-ops, and the receipt acknowledges that the cancel signal was admitted, not that the target is quiescent.",
-          "gate": "Typert Gateway Remote; the claimed parent must own the live target (`subagent/unauthorized` otherwise)",
-          "backendModule": "packages/subagent/subagent/src/index.ts:479 (Remote face) over the subagent core interrupt primitive",
-          "evidence": [
-            "packages/subagent/subagent/src/index.ts:479",
-            "packages/subagent/subagent/src/index.ts:485",
-            "packages/subagent/subagent/src/index.ts:487"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: subagent-interrupt — the child-cancellation half of the collaboration tier"
-          ]
-        }
-      }
-    },
-    {
-      "key": "subagent-prompt",
-      "family": "collab",
-      "perSource": {
-        "dsh": {
-          "rawName": "subagent.prompt",
-          "canonical": "subagent-prompt",
-          "aliases": [],
-          "displayName": "subagent.prompt",
-          "family": "collab",
-          "summary": "Deliver one browser-authored message to a continuable direct child through the exact live parent, as queue or steer delivery.",
-          "mechanism": "Published as `@Remote('prompt')` with `SubagentPromptRequest` typed `mode: 'continuable'` and `delivery: 'queue' | 'steer'`. The handler validates the address, canonicalizes the client time zone, requires the parent Agent to be live, admits image parts into durable attachment references before delivery (so the child inbox only ever accepts Host-persisted attachments), then routes through the internal `deliverSubagentPrompt` symbol, which branches `delivery === 'steer'` to the steering path and otherwise queues. Success returns the accepted message's inbox identity; later execution is independent of the call.",
-          "gate": "Typert Gateway Remote; requires a live direct parent Agent, a continuable child address, and (for images) an attachment store plus a child model accepting image input",
-          "backendModule": "packages/subagent/subagent/src/index.ts:412 / packages/subagent/subagent/src/inbox.ts / packages/subagent/subagent/src/continuation-activation.ts",
-          "evidence": [
-            "packages/subagent/subagent/src/index.ts:412",
-            "packages/subagent/subagent/src/index.ts:414",
-            "packages/subagent/subagent/src/index.ts:451",
-            "packages/subagent/subagent/src/index.ts:275",
-            "packages/subagent/subagent/src/control-types.ts:98",
-            "packages/subagent/subagent/src/control-types.ts:106",
-            "packages/subagent/subagent/src/inbox.ts:53",
-            "packages/subagent/subagent/src/continuation-activation.ts:318"
-          ],
-          "verified": true,
-          "crossSourceHints": [
-            "canonical: subagent-message — the collaboration tier; note it reuses the same queue|steer delivery vocabulary as `session.prompt`, i.e. one delivery model for both sessions and children"
-          ]
-        }
-      }
-    },
-    {
       "key": "subagents",
       "family": "collab",
       "perSource": {
@@ -6964,76 +6380,6 @@
           ]
         }
       }
-    },
-    {
-      "key": "cli-subcommand-surface-found-in-src/main.tsx-(commander)-and-src/entrypoints/cli.tsx-(bootstrap-fast-paths),-with-handlers-in-src/cli/handlers/*-plus-src/cli/{print,structuredio,ndjsonsafestringify,exit}.ts.",
-      "family": null,
-      "perSource": {
-        "cc-custom": {
-          "rawName": "CLI subcommand surface found in src/main.tsx (commander) and src/entrypoints/cli.tsx (bootstrap fast-paths), with handlers in src/cli/handlers/* plus src/cli/{print,structuredIO,ndjsonSafeStringify,exit}.ts.",
-          "canonical": "CLI subcommand surface found in src/main.tsx (commander) and src/entrypoints/cli.tsx (bootstrap fast-paths), with handlers in src/cli/handlers/* plus src/cli/{print,structuredIO,ndjsonSafeStringify,exit}.ts."
-        }
-      }
-    },
-    {
-      "key": "src/commands.ts-is-the-single-central-registry-for-all-67-commands-(memoized-commands()-array-+-internal-only-commands-+-per-command-isenabled)-—-the-mechanism-this-source-was-chosen-to-illustrate.",
-      "family": null,
-      "perSource": {
-        "cc-custom": {
-          "rawName": "src/commands.ts is the single central registry for all 67 commands (memoized COMMANDS() array + INTERNAL_ONLY_COMMANDS + per-command isEnabled) — the mechanism this source was chosen to illustrate.",
-          "canonical": "src/commands.ts is the single central registry for all 67 commands (memoized COMMANDS() array + INTERNAL_ONLY_COMMANDS + per-command isEnabled) — the mechanism this source was chosen to illustrate."
-        }
-      }
-    },
-    {
-      "key": "src/commands/createmovedtoplugincommand.ts-implements-the-'command-moved-to-a-plugin'-migration-shim-used-by-pr-comments-and-security-review.",
-      "family": null,
-      "perSource": {
-        "cc-custom": {
-          "rawName": "src/commands/createMovedToPluginCommand.ts implements the 'command moved to a plugin' migration shim used by pr-comments and security-review.",
-          "canonical": "src/commands/createMovedToPluginCommand.ts implements the 'command moved to a plugin' migration shim used by pr-comments and security-review."
-        }
-      }
-    },
-    {
-      "key": "src/services/compact/-contains-three-distinct-compaction-layers-(compactconversation,-sessionmemorycompact,-microcompact)-plus-autocompact-threshold-logic-and-autocompactwindow.",
-      "family": null,
-      "perSource": {
-        "cc-custom": {
-          "rawName": "src/services/compact/ contains three distinct compaction layers (compactConversation, sessionMemoryCompact, microCompact) plus autoCompact threshold logic and autoCompactWindow.",
-          "canonical": "src/services/compact/ contains three distinct compaction layers (compactConversation, sessionMemoryCompact, microCompact) plus autoCompact threshold logic and autoCompactWindow."
-        }
-      }
-    },
-    {
-      "key": "src/utils/filehistory.ts-implements-per-user-message-file-checkpoints-with-content-backups-at-{configdir}/file-history/{sessionid}/{hash}@vn-—-the-storage-behind-/rewind.",
-      "family": null,
-      "perSource": {
-        "cc-custom": {
-          "rawName": "src/utils/fileHistory.ts implements per-user-message file checkpoints with content backups at {configDir}/file-history/{sessionId}/{hash}@vN — the storage behind /rewind.",
-          "canonical": "src/utils/fileHistory.ts implements per-user-message file checkpoints with content backups at {configDir}/file-history/{sessionId}/{hash}@vN — the storage behind /rewind."
-        }
-      }
-    },
-    {
-      "key": "src/utils/sandbox/sandbox-adapter.ts-shows-real-os-level-confinement-delegated-to-@anthropic-ai/sandbox-runtime-(seatbelt-on-macos,-bubblewrap+socat+seccomp-on-linux/wsl2)-rather-than-policy-only-prompts.",
-      "family": null,
-      "perSource": {
-        "cc-custom": {
-          "rawName": "src/utils/sandbox/sandbox-adapter.ts shows real OS-level confinement delegated to @anthropic-ai/sandbox-runtime (seatbelt on macOS, bubblewrap+socat+seccomp on Linux/WSL2) rather than policy-only prompts.",
-          "canonical": "src/utils/sandbox/sandbox-adapter.ts shows real OS-level confinement delegated to @anthropic-ai/sandbox-runtime (seatbelt on macOS, bubblewrap+socat+seccomp on Linux/WSL2) rather than policy-only prompts."
-        }
-      }
-    },
-    {
-      "key": "the-thinkback-pair-(/think-back,-/thinkback-play)-is-a-plugin-marketplace-installed-animation-feature-gated-by-a-remote-statsig-flag-that-is-a-no-op-stub-in-this-build.",
-      "family": null,
-      "perSource": {
-        "cc-custom": {
-          "rawName": "The thinkback pair (/think-back, /thinkback-play) is a plugin-marketplace-installed animation feature gated by a remote Statsig flag that is a no-op stub in this build.",
-          "canonical": "The thinkback pair (/think-back, /thinkback-play) is a plugin-marketplace-installed animation feature gated by a remote Statsig flag that is a no-op stub in this build."
-        }
-      }
     }
   ],
   "collisions": [
@@ -7049,11 +6395,11 @@
   ],
   "counts": {
     "ih": 50,
-    "dsh": 28,
+    "dsh": 6,
     "codex": 58,
     "opencode": 2,
     "opencode-fork": 2,
     "grok": 71,
-    "cc-custom": 74
+    "cc-custom": 67
   }
 }

@@ -66,12 +66,37 @@ export function loadSources(dataDir) {
 }
 
 /**
+ * Is this string plausibly a COMMAND NAME? The `added` array is filled by
+ * extraction agents, and an agent can misread the brief and put a prose
+ * observation there instead of a command. Measured case: cc-custom's `added`
+ * held seven sentences ("src/commands.ts is the single central registry for all
+ * 67 commands ..."), each of which the union then turned into a phantom row.
+ * A command name is short and has no spaces or path punctuation.
+ */
+export function isCommandName(s) {
+  if (typeof s !== "string") return false
+  const t = s.trim()
+  if (!t || t.length > 40) return false
+  if (/\s/.test(t)) return false
+  if (/[/\\.(){}[\],;:'"`*]/.test(t)) return false
+  return /^[a-z0-9][a-z0-9-]*$/i.test(t)
+}
+
+/**
  * Fold the per-source extractions into union rows.
- * Returns { rows: Map<key, row>, collisions: [...] }.
+ * Returns { rows, collisions, rejectedAdditions, interactionRows }.
+ *
+ * `interactionRows` are deliberately NOT folded into the union. dsh's RPC plane
+ * (session.*, subagent.*, commands.list/execute) is a DIFFERENT LAYER from a
+ * slash command; putting `execute` and `list` in the same table as `/compact`
+ * would compare two unlike things and inflate dsh's column. They are returned
+ * separately so D2 can render them as their own sub-table.
  */
 export function buildUnion(loaded) {
   const rows = new Map()
   const collisions = []
+  const rejectedAdditions = []
+  const interactionRows = []
 
   const ensure = (key, cmd) => {
     if (!rows.has(key)) rows.set(key, { key, family: cmd?.family ?? null, perSource: {} })
@@ -87,12 +112,20 @@ export function buildUnion(loaded) {
     // `added` holds commands the source genuinely has but the mechanical
     // extractor missed (dsh registers three inline from domain packages).
     for (const a of b.enriched?.added ?? []) {
-      if (typeof a === "string") list.push({ rawName: a, canonical: a })
-      else if (a && typeof a === "object") list.push(a)
+      if (typeof a === "string") {
+        if (!isCommandName(a)) {
+          rejectedAdditions.push({ source: src, value: a })
+          continue
+        }
+        list.push({ rawName: a, canonical: a })
+      } else if (a && typeof a === "object" && (a.rawName || a.canonical)) {
+        list.push(a)
+      } else {
+        rejectedAdditions.push({ source: src, value: JSON.stringify(a).slice(0, 120) })
+      }
     }
-    // dsh's second layer: interaction commands are real rows too.
     for (const a of b.enriched?.interactionCommands ?? []) {
-      if (a && typeof a === "object") list.push(a)
+      if (a && typeof a === "object") interactionRows.push({ source: src, ...a })
     }
 
     for (const cmd of list) {
@@ -151,5 +184,5 @@ export function buildUnion(loaded) {
     }
   }
 
-  return { rows, collisions }
+  return { rows, collisions, rejectedAdditions, interactionRows }
 }

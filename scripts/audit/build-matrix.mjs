@@ -34,7 +34,7 @@ const FAMILIES = [
 
 const loaded = loadSources(DATA)
 const missing = SOURCES.filter(({ key }) => !loaded[key]?.enriched && !loaded[key]?.raw).map((s) => s.key)
-const { rows, collisions } = buildUnion(loaded)
+const { rows, collisions, rejectedAdditions, interactionRows } = buildUnion(loaded)
 
 const allRows = [...rows.values()].sort((a, b) => {
   const fa = FAMILIES.indexOf(a.family)
@@ -75,6 +75,14 @@ if (args.includes("--json")) {
   console.log(`cells unverified:  ${unverified}`)
   console.log(`cells w/o evidence:${String(noEvidence).padStart(4)}   <- must be 0 before publishing`)
   if (missing.length) console.log(`\nMISSING source data: ${missing.join(", ")}`)
+
+  if (rejectedAdditions.length) {
+    console.log(`\nREJECTED \`added\` entries (${rejectedAdditions.length}) -- not command names, so not folded into the union:`)
+    for (const r of rejectedAdditions) console.log(`  ${r.source}: ${String(r.value).slice(0, 100)}`)
+  }
+  if (interactionRows.length) {
+    console.log(`\ndsh RPC-plane rows held OUT of the union (${interactionRows.length}) -- a different layer from a slash command; rendered as their own sub-table in D2`)
+  }
 
   if (collisions.length) {
     console.log(`\nsame-source canonical collisions (${collisions.length}) -- both commands re-keyed to their own names:`)

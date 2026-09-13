@@ -1,0 +1,206 @@
+{
+  "generatedBy": "scripts/audit/merge-dispositions.mjs",
+  "subsets": [],
+  "rows": {
+    "always-approve": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "auto": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "btw": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "compact": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "compact-mode": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "config-agents": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "context": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "copy": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "dashboard": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "doctor": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "edit-prompt": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "effort": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "export": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "find": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "fork": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "fullscreen": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "goal": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "help": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "history": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "home": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "hooks": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "jump": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "marketplace": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "mcps": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "minimal": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "model": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "multiline": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "new": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "plan": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "plugins": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "provider": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "queue": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "quit": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "rename": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "resume": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "rewind": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "session-info": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "settings": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "skills": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "tasks": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "theme": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "timeline": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "timestamps": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "toggle-mouse-reporting": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "transcript": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "tutorial": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "usage": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "view-plan": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "vim-mode": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    },
+    "workflow": {
+      "disposition": "已存在",
+      "rationale": "IH 已實作（機械補齊）"
+    }
+  }
+}

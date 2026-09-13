@@ -68,7 +68,7 @@ const NO_STATIC_REGISTRY = new Set(["opencode", "opencode-fork"])
 // drift; the rules (normalisation, per-source collision resolution, cross-source
 // hints) are documented there and are what the parity cells mean.
 const loaded = loadSources(DATA)
-const { rows, collisions } = buildUnion(loaded)
+const { rows, collisions, rejectedAdditions, interactionRows } = buildUnion(loaded)
 
 // ------------------------------------------------------------- dispositions
 const disp = readJson(DISP) ?? {}
@@ -306,6 +306,34 @@ for (const r of allRows) {
 if (xwalk === 0) L.push(`| （無） | ${SOURCES.map(() => "").join(" | ")} |`)
 L.push("")
 L.push(`> \`=\` 表示該源以同名列參與此列。共 ${xwalk} 列涉及異名映射。`, "")
+
+// dsh's RPC plane as its own sub-table. It is deliberately NOT in the union
+// above: a Typert @Remote method is a different layer from a slash command, and
+// interleaving `execute`/`list` with `/compact` would compare unlike things and
+// inflate dsh's column.
+if (interactionRows.length) {
+  const famLabel = { session: "會話生命週期", context: "上下文與壓縮", plan: "計劃與目標", execution: "執行控制", model: "模型與供應商", safety: "權限與安全", extension: "工具與擴展", inspect: "檢視與輸出", interface: "介面與外觀", collab: "協作與多智能體" }
+  const byFam = {}
+  for (const r of interactionRows) {
+    const f = r.family ?? "(未分類)"
+    ;(byFam[f] ??= []).push(r)
+  }
+  L.push(`## 附錄 D — dsh 的 RPC 平面（${interactionRows.length} 項，**不計入聯集**）`, "")
+  L.push(
+    "dsh 只有 6 個 slash 命令，因為它的命令面主要不在 slash。下表是它的 Typert `@Remote` RPC 方法——**這是與 slash 命令不同的層**，" +
+      "所以**不併入上方的聯集**，也不計入 dsh 的欄位覆蓋數。列於此是為了完整呈現 dsh 的實際操作面。",
+  )
+  L.push("")
+  L.push("| 方法 | 家族 | 機制 | 出處 |")
+  L.push("|---|---|---|---|")
+  for (const r of interactionRows) {
+    const cite = bestCitation(r)
+    L.push(
+      `| \`${r.rawName ?? r.canonical}\` | ${famLabel[r.family] ?? r.family ?? ""} | ${esc(r.mechanism ?? r.summary).slice(0, 190)} | ${cite ? `\`${esc(cite)}\`` : ""} |`,
+    )
+  }
+  L.push("")
+}
 
 const body = L.join("\n")
 const front = FRONT ? readFileSync(FRONT, "utf8").trimEnd() + "\n\n" : ""
