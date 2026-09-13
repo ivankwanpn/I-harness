@@ -21,6 +21,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs"
 import { join, resolve } from "node:path"
+import { SOURCES, buildUnion, loadSources, norm } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const DATA = join(ROOT, "docs/audit/data")
@@ -43,15 +44,6 @@ function readJson(p) {
   }
 }
 
-const SOURCES = [
-  { key: "ih", label: "IH" },
-  { key: "dsh", label: "dsh" },
-  { key: "codex", label: "codex" },
-  { key: "opencode", label: "opencode" },
-  { key: "opencode-fork", label: "ocode-fork" },
-  { key: "grok", label: "grok" },
-  { key: "cc-custom", label: "cc-custom" },
-]
 const FAMILIES = [
   ["session", "會話生命週期"],
   ["context", "上下文與壓縮"],
@@ -71,37 +63,12 @@ const FAMILIES = [
  */
 const NO_STATIC_REGISTRY = new Set(["opencode", "opencode-fork"])
 
-const norm = (s) =>
-  String(s).trim().toLowerCase().replace(/^command-/, "").replace(/[_\s]+/g, "-").replace(/-+/g, "-")
-
 // ------------------------------------------------------------- rebuild union
-// (same folding logic as build-matrix.mjs; kept in sync deliberately)
-const loaded = {}
-for (const { key } of SOURCES) {
-  const enriched = readJson(join(DATA, `2026-09-11-${key}-enriched.json`))
-  const raw = readJson(join(DATA, `2026-09-11-${key}-commands.json`))
-  loaded[key] = { enriched, raw }
-}
-
-const rows = new Map()
-for (const { key: src } of SOURCES) {
-  const b = loaded[src]
-  if (!b) continue
-  const list = [...(b.enriched?.commands ?? b.raw?.commands ?? [])]
-  for (const a of b.enriched?.added ?? []) {
-    if (typeof a === "string") list.push({ rawName: a, canonical: a })
-    else if (a && typeof a === "object") list.push(a)
-  }
-  for (const a of b.enriched?.interactionCommands ?? []) if (a && typeof a === "object") list.push(a)
-  for (const cmd of list) {
-    if (!cmd || (!cmd.rawName && !cmd.canonical)) continue
-    const key = norm(cmd.canonical || cmd.rawName)
-    if (!rows.has(key)) rows.set(key, { key, family: cmd.family ?? null, perSource: {} })
-    const row = rows.get(key)
-    if (!row.family && cmd.family) row.family = cmd.family
-    row.perSource[src] = cmd
-  }
-}
+// Folding lives in lib-union.mjs so this script and build-matrix.mjs cannot
+// drift; the rules (normalisation, per-source collision resolution, cross-source
+// hints) are documented there and are what the parity cells mean.
+const loaded = loadSources(DATA)
+const { rows, collisions } = buildUnion(loaded)
 
 // ------------------------------------------------------------- dispositions
 const disp = readJson(DISP) ?? {}

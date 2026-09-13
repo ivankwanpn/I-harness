@@ -313,17 +313,32 @@ function extractCodex() {
       pending = []
       const ser = attrs.match(/serialize\s*=\s*"([^"]+)"/)
       const toStr = attrs.match(/to_string\s*=\s*"([^"]+)"/)
-      // EnumString matches `serialize` when given, else kebab-case(variant).
-      const input = ser ? ser[1] : camelToKebab(variant)
-      const display = toStr ? toStr[1] : input
-      const aliases = []
-      if (toStr && ser && ser[1] !== toStr[1]) aliases.push(ser[1])
+      const kebab = camelToKebab(variant)
+      // Two DIFFERENT strum behaviours, and conflating them invents commands:
+      //   canonical  -- SlashCommand::command() is IntoStaticStr, so it is
+      //                 to_string > serialize > serialize_all(kebab).
+      //   parseable  -- EnumString registers serialize AND to_string, BOTH when
+      //                 both are present and ONLY to_string when serialize is
+      //                 absent. So for AutoReview (to_string only) the typed
+      //                 name is `approve` and `auto-review` is NOT parseable;
+      //                 an earlier version derived `auto-review` from
+      //                 serialize_all and emitted a command that cannot be
+      //                 invoked. Confirmed by the in-repo test
+      //                 `auto_review_command_is_approve` (slash_command.rs:319).
+      const canonical = toStr ? toStr[1] : ser ? ser[1] : kebab
+      const parseable = new Set()
+      if (ser) parseable.add(ser[1])
+      if (toStr) parseable.add(toStr[1])
+      if (parseable.size === 0) parseable.add(kebab)
+      const aliases = [...parseable].filter((x) => x !== canonical)
       cmds.push({
-        rawName: input,
-        canonical: canonicalise(input).canonical,
-        aliases: aliases.filter((a) => a !== input),
-        displayName: display,
+        rawName: canonical,
+        canonical,
+        aliases,
+        displayName: canonical,
         variant,
+        parseableNames: [...parseable],
+        derivation: toStr ? (ser ? "to_string+serialize" : "to_string-only") : ser ? "serialize-only" : "serialize_all",
         description: null,
         gate: "none",
         mechanism: null,
@@ -492,6 +507,12 @@ function extractGrok() {
           rawName: name,
           canonical: name,
           aliases: [],
+          // The aliases() impl of a hand-written command is COMPUTED (and can
+          // differ per constructed variant: screen_mode_switch returns &[] for
+          // minimal but ["full"] for fullscreen), so they cannot be recovered
+          // without evaluating the code. Recorded as unknown rather than guessed
+          // -- a wrong alias silently corrupts the union by merging rows.
+          aliasesUnknown: true,
           displayName: name,
           description: (doc.match(/^\/\/!?\s*(.+)$/m) || [])[1] || null,
           module: rel,

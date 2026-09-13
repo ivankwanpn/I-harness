@@ -17,6 +17,10 @@
       "aliases": [],
       "displayName": "agents",
       "variant": "Agents",
+      "parseableNames": [
+        "agents"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -31,6 +35,10 @@
       "aliases": [],
       "displayName": "app",
       "variant": "App",
+      "parseableNames": [
+        "app"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -40,11 +48,33 @@
       "verified": false
     },
     {
+      "rawName": "approve",
+      "canonical": "approve",
+      "aliases": [],
+      "displayName": "approve",
+      "variant": "AutoReview",
+      "parseableNames": [
+        "approve"
+      ],
+      "derivation": "to_string-only",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:26"
+      ],
+      "verified": false
+    },
+    {
       "rawName": "apps",
       "canonical": "apps",
       "aliases": [],
       "displayName": "apps",
       "variant": "Apps",
+      "parseableNames": [
+        "apps"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -59,6 +89,10 @@
       "aliases": [],
       "displayName": "archive",
       "variant": "Archive",
+      "parseableNames": [
+        "archive"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -68,25 +102,15 @@
       "verified": false
     },
     {
-      "rawName": "auto-review",
-      "canonical": "auto-review",
-      "aliases": [],
-      "displayName": "approve",
-      "variant": "AutoReview",
-      "description": null,
-      "gate": "none",
-      "mechanism": null,
-      "evidence": [
-        "codex-rs/tui/src/slash_command.rs:26"
-      ],
-      "verified": false
-    },
-    {
       "rawName": "btw",
       "canonical": "btw",
       "aliases": [],
       "displayName": "btw",
       "variant": "Btw",
+      "parseableNames": [
+        "btw"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -101,6 +125,10 @@
       "aliases": [],
       "displayName": "cd",
       "variant": "Cd",
+      "parseableNames": [
+        "cd"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -110,25 +138,15 @@
       "verified": false
     },
     {
-      "rawName": "clean",
-      "canonical": "clean",
-      "aliases": [],
-      "displayName": "stop",
-      "variant": "Stop",
-      "description": null,
-      "gate": "none",
-      "mechanism": null,
-      "evidence": [
-        "codex-rs/tui/src/slash_command.rs:72"
-      ],
-      "verified": false
-    },
-    {
       "rawName": "clear",
       "canonical": "clear",
       "aliases": [],
       "displayName": "clear",
       "variant": "Clear",
+      "parseableNames": [
+        "clear"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -143,6 +161,10 @@
       "aliases": [],
       "displayName": "compact",
       "variant": "Compact",
+      "parseableNames": [
+        "compact"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -157,6 +179,10 @@
       "aliases": [],
       "displayName": "copy",
       "variant": "Copy",
+      "parseableNames": [
+        "copy"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -166,25 +192,15 @@
       "verified": false
     },
     {
-      "rawName": "cwd",
-      "canonical": "cwd",
-      "aliases": [],
-      "displayName": "pwd",
-      "variant": "Pwd",
-      "description": null,
-      "gate": "none",
-      "mechanism": null,
-      "evidence": [
-        "codex-rs/tui/src/slash_command.rs:54"
-      ],
-      "verified": false
-    },
-    {
       "rawName": "debug-config",
       "canonical": "debug-config",
       "aliases": [],
       "displayName": "debug-config",
       "variant": "DebugConfig",
+      "parseableNames": [
+        "debug-config"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -199,6 +215,10 @@
       "aliases": [],
       "displayName": "debug-m-drop",
       "variant": "MemoryDrop",
+      "parseableNames": [
+        "debug-m-drop"
+      ],
+      "derivation": "serialize-only",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -213,6 +233,10 @@
       "aliases": [],
       "displayName": "debug-m-update",
       "variant": "MemoryUpdate",
+      "parseableNames": [
+        "debug-m-update"
+      ],
+      "derivation": "serialize-only",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -227,6 +251,10 @@
       "aliases": [],
       "displayName": "delete",
       "variant": "Delete",
+      "parseableNames": [
+        "delete"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -241,6 +269,10 @@
       "aliases": [],
       "displayName": "diff",
       "variant": "Diff",
+      "parseableNames": [
+        "diff"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -255,6 +287,10 @@
       "aliases": [],
       "displayName": "exit",
       "variant": "Exit",
+      "parseableNames": [
+        "exit"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -269,6 +305,10 @@
       "aliases": [],
       "displayName": "experimental",
       "variant": "Experimental",
+      "parseableNames": [
+        "experimental"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -283,6 +323,10 @@
       "aliases": [],
       "displayName": "export",
       "variant": "Export",
+      "parseableNames": [
+        "export"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -297,6 +341,10 @@
       "aliases": [],
       "displayName": "feedback",
       "variant": "Feedback",
+      "parseableNames": [
+        "feedback"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -311,6 +359,10 @@
       "aliases": [],
       "displayName": "fork",
       "variant": "Fork",
+      "parseableNames": [
+        "fork"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -325,6 +377,10 @@
       "aliases": [],
       "displayName": "goal",
       "variant": "Goal",
+      "parseableNames": [
+        "goal"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -339,6 +395,10 @@
       "aliases": [],
       "displayName": "hooks",
       "variant": "Hooks",
+      "parseableNames": [
+        "hooks"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -353,6 +413,10 @@
       "aliases": [],
       "displayName": "ide",
       "variant": "Ide",
+      "parseableNames": [
+        "ide"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -367,6 +431,10 @@
       "aliases": [],
       "displayName": "import",
       "variant": "Import",
+      "parseableNames": [
+        "import"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -381,6 +449,10 @@
       "aliases": [],
       "displayName": "init",
       "variant": "Init",
+      "parseableNames": [
+        "init"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -395,6 +467,10 @@
       "aliases": [],
       "displayName": "keymap",
       "variant": "Keymap",
+      "parseableNames": [
+        "keymap"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -409,6 +485,10 @@
       "aliases": [],
       "displayName": "logout",
       "variant": "Logout",
+      "parseableNames": [
+        "logout"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -423,6 +503,10 @@
       "aliases": [],
       "displayName": "mcp",
       "variant": "Mcp",
+      "parseableNames": [
+        "mcp"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -437,6 +521,10 @@
       "aliases": [],
       "displayName": "memories",
       "variant": "Memories",
+      "parseableNames": [
+        "memories"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -451,6 +539,10 @@
       "aliases": [],
       "displayName": "mention",
       "variant": "Mention",
+      "parseableNames": [
+        "mention"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -465,6 +557,10 @@
       "aliases": [],
       "displayName": "model",
       "variant": "Model",
+      "parseableNames": [
+        "model"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -479,6 +575,10 @@
       "aliases": [],
       "displayName": "new",
       "variant": "New",
+      "parseableNames": [
+        "new"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -493,6 +593,10 @@
       "aliases": [],
       "displayName": "permissions",
       "variant": "Permissions",
+      "parseableNames": [
+        "permissions"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -507,6 +611,10 @@
       "aliases": [],
       "displayName": "personality",
       "variant": "Personality",
+      "parseableNames": [
+        "personality"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -516,11 +624,18 @@
       "verified": false
     },
     {
-      "rawName": "pet",
-      "canonical": "pet",
-      "aliases": [],
+      "rawName": "pets",
+      "canonical": "pets",
+      "aliases": [
+        "pet"
+      ],
       "displayName": "pets",
       "variant": "Pets",
+      "parseableNames": [
+        "pet",
+        "pets"
+      ],
+      "derivation": "to_string+serialize",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -535,6 +650,10 @@
       "aliases": [],
       "displayName": "plan",
       "variant": "Plan",
+      "parseableNames": [
+        "plan"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -549,6 +668,10 @@
       "aliases": [],
       "displayName": "plugins",
       "variant": "Plugins",
+      "parseableNames": [
+        "plugins"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -563,6 +686,10 @@
       "aliases": [],
       "displayName": "ps",
       "variant": "Ps",
+      "parseableNames": [
+        "ps"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -572,11 +699,36 @@
       "verified": false
     },
     {
+      "rawName": "pwd",
+      "canonical": "pwd",
+      "aliases": [
+        "cwd"
+      ],
+      "displayName": "pwd",
+      "variant": "Pwd",
+      "parseableNames": [
+        "cwd",
+        "pwd"
+      ],
+      "derivation": "to_string+serialize",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:54"
+      ],
+      "verified": false
+    },
+    {
       "rawName": "quit",
       "canonical": "quit",
       "aliases": [],
       "displayName": "quit",
       "variant": "Quit",
+      "parseableNames": [
+        "quit"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -591,6 +743,10 @@
       "aliases": [],
       "displayName": "raw",
       "variant": "Raw",
+      "parseableNames": [
+        "raw"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -605,6 +761,10 @@
       "aliases": [],
       "displayName": "rename",
       "variant": "Rename",
+      "parseableNames": [
+        "rename"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -619,6 +779,10 @@
       "aliases": [],
       "displayName": "resume",
       "variant": "Resume",
+      "parseableNames": [
+        "resume"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -633,6 +797,10 @@
       "aliases": [],
       "displayName": "review",
       "variant": "Review",
+      "parseableNames": [
+        "review"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -647,6 +815,10 @@
       "aliases": [],
       "displayName": "rollout",
       "variant": "Rollout",
+      "parseableNames": [
+        "rollout"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -661,6 +833,10 @@
       "aliases": [],
       "displayName": "sandbox-add-read-dir",
       "variant": "SandboxReadRoot",
+      "parseableNames": [
+        "sandbox-add-read-dir"
+      ],
+      "derivation": "serialize-only",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -675,6 +851,10 @@
       "aliases": [],
       "displayName": "setup-default-sandbox",
       "variant": "ElevateSandbox",
+      "parseableNames": [
+        "setup-default-sandbox"
+      ],
+      "derivation": "serialize-only",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -689,6 +869,10 @@
       "aliases": [],
       "displayName": "side",
       "variant": "Side",
+      "parseableNames": [
+        "side"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -703,6 +887,10 @@
       "aliases": [],
       "displayName": "skills",
       "variant": "Skills",
+      "parseableNames": [
+        "skills"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -717,6 +905,10 @@
       "aliases": [],
       "displayName": "status",
       "variant": "Status",
+      "parseableNames": [
+        "status"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -731,6 +923,10 @@
       "aliases": [],
       "displayName": "statusline",
       "variant": "Statusline",
+      "parseableNames": [
+        "statusline"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -740,11 +936,36 @@
       "verified": false
     },
     {
+      "rawName": "stop",
+      "canonical": "stop",
+      "aliases": [
+        "clean"
+      ],
+      "displayName": "stop",
+      "variant": "Stop",
+      "parseableNames": [
+        "clean",
+        "stop"
+      ],
+      "derivation": "to_string+serialize",
+      "description": null,
+      "gate": "none",
+      "mechanism": null,
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:72"
+      ],
+      "verified": false
+    },
+    {
       "rawName": "subagents",
       "canonical": "subagents",
       "aliases": [],
       "displayName": "subagents",
       "variant": "MultiAgents",
+      "parseableNames": [
+        "subagents"
+      ],
+      "derivation": "serialize-only",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -759,6 +980,10 @@
       "aliases": [],
       "displayName": "test-approval",
       "variant": "TestApproval",
+      "parseableNames": [
+        "test-approval"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -773,6 +998,10 @@
       "aliases": [],
       "displayName": "theme",
       "variant": "Theme",
+      "parseableNames": [
+        "theme"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -787,6 +1016,10 @@
       "aliases": [],
       "displayName": "title",
       "variant": "Title",
+      "parseableNames": [
+        "title"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -801,6 +1034,10 @@
       "aliases": [],
       "displayName": "usage",
       "variant": "Usage",
+      "parseableNames": [
+        "usage"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,
@@ -815,6 +1052,10 @@
       "aliases": [],
       "displayName": "vim",
       "variant": "Vim",
+      "parseableNames": [
+        "vim"
+      ],
+      "derivation": "serialize_all",
       "description": null,
       "gate": "none",
       "mechanism": null,

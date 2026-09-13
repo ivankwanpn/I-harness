@@ -1,0 +1,593 @@
+===== KEY: always-approve | family=safety | display=always-approve
+  --- src=ih rawName=always-approve verified=False
+      gate: capability:(ctx) => hasCapability(ctx
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=always-approve verified=True
+      gate: always registered and always offered; runtime refusal when the managed-policy pin is set (`app.yolo_policy_block`, sourced from a root-owned requirements.toml `[ui] disable_bypass_permissions_mode = true` or legacy `[ui] yolo = false`)
+      module: crates/codegen/xai-grok-pager/src/slash/commands/always_approve.rs + crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs
+      summary: Toggles always-approve (YOLO) mode, which skips all permission prompts.
+      mechanism: run() reads `ctx.pager_state.yolo_mode` and returns `CommandResult::Action(Action::SetYoloMode(!current))` (always_approve.rs:21-24); the command itself mutates nothing. The dispatcher's set_yolo_mode (app/dispatch/modes.rs:353-399) calls set_yolo_mode_inner (modes.rs:263-336), which writes `agent.session.yolo_mode`, drains the whole `permission_queue` by answering each pending ACP RequestPermission with AllowOnce (falling back to Cancelled, never AllowAlways), restores stashed permissions, shows a toast, and emits `Effect::PersistPermissionMode` with rollback to the previous canonical. Enabling is refused outright when a managed policy pins it (modes.rs:191-204).
+
+===== KEY: approve | family=safety | display=approve
+  --- src=codex rawName=approve verified=True
+      gate: always 可見；popup 內容取決於本 thread 是否已有 auto-review 拒絕紀錄（無則顯示 'No recent auto-review denials in this thread.'）
+      module: codex-rs/tui/src/chatwidget/permission_popups.rs + codex-rs/tui/src/auto_review_denials.rs（core 端 codex-rs/core/src/session/handlers.rs）
+      summary: 手動核准一筆先前被自動審查（auto-review / guardian）拒絕的動作，讓 agent 重試一次。
+      mechanism: 命令字面值修正：variant 只有 #[strum(to_string='approve')]（slash_command.rs:25-26），無 serialize，EnumString 只註冊 to_string，因此使用者要打 `/approve`；`auto-review` 不可解析（slash_command.rs:321-327 的測試即斷言 from_str('approve')）。dispatch 呼叫 open_auto_review_denials_popup（slash_dispatch.rs:392-394），popup 讀 RecentAutoReviewDenials（僅收 status==Denied，最多 10 筆；auto_review_denials.rs:7-23、permission_popups.rs:168-226）。選取後送 AppEvent::ApproveRecentAutoReviewDenial → ChatWidget::approve_recent_auto_review_denial → AppCommand::approve_guardian_denied_action（permission_popups.rs:228-240、app_command.rs:238-240）；core 端 approve_guardian_denied_action 把『已核准的這個確切動作』以 developer message 注入既有對話（session/handlers.rs:695-733），不新開 turn。
+
+===== KEY: auto | family=safety | display=auto
+  --- src=ih rawName=auto verified=False
+      gate: capability:(ctx) => hasCapability(ctx
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=auto verified=True
+      gate: hard-hidden (fail-closed) until the caller invokes `CommandRegistry::set_auto_mode_available(true)`; hidden by default in `CommandRegistry::new` (registry.rs:160-161) and revealed by the auto permission-mode feature flag. Even when offered, a commit to Auto is inert while `auto_mode_gate` is off
+      module: crates/codegen/xai-grok-pager/src/slash/commands/auto.rs + crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs + crates/codegen/xai-grok-workspace/src/permission/auto_mode
+      summary: Toggles auto permission mode, where an LLM classifier approves safe tools.
+      mechanism: run() computes `currently_auto = ctx.pager_state.auto_mode && !ctx.pager_state.yolo_mode` and returns `Action::SetPermissionMode(Auto)` or `(Ask)` accordingly, so yolo always wins over auto (auto.rs:23-32). The dispatcher's set_permission_mode (app/dispatch/modes.rs:406-467) degrades a commit to Auto into Ask when `app.auto_mode_gate` is off, mutates the session flag, refreshes settings snapshots, toasts, and persists with rollback. The classifier itself lives in the workspace permission manager (xai-grok-workspace/src/permission/auto_mode/mod.rs:1-3, :1079-1160, :1440-1576): an allowlisted fast path decides without a model call, otherwise a transcript-aware classifier returns {allow|block}.
+
+===== KEY: permission | family=safety | display=permission
+  --- src=dsh rawName=permission verified=True
+      gate: the `commands` registry is injected on a child scope, so the command exists only when a command registry is composed
+      module: packages/interaction/permission-presets/src/index.ts
+      summary: Switch the session's permission preset (sandbox mode + approval policy) from the command plane.
+      mechanism: Registered by the permission-presets package itself, not by a `command-*` package: `ctx.inject(['commands'], commandCtx => commandCtx.commands.register({ name: 'permission', ... }))`. The handler returns the current preset and the available names for bare input, rejects an unknown name, and otherwise calls the preset `apply` with a callback that installs the resolved policy through `this.ctx.approval.setPolicy(agent, policy)` — so the command is the one write path the web client uses, with the popup contribution merely submitting the picked preset as this line. Its description is present in the client's localized host-description table.
+
+===== KEY: permissions | family=safety | display=permissions
+  --- src=codex rawName=permissions verified=True
+      gate: always；個別 preset 受 config 約束（approval_policy.can_set 會回錯誤並停用該項，permission_popups.rs:66-73）；Read Only preset 僅 Windows 顯示（permission_popups.rs:23,54-56）
+      module: codex-rs/tui/src/chatwidget/permission_popups.rs + codex-rs/utils/approval-presets/src/lib.rs
+      summary: 選擇 Codex 被允許做什麼：approval policy 與 permission profile 的預設組合。
+      mechanism: dispatch 呼叫 open_permissions_popup() + defer_input_until_settings_applied()（slash_dispatch.rs:322-325）。popup 讀 builtin_approval_presets()，每組 preset 綁定 AskForApproval 與 PermissionProfile/ActivePermissionProfile（utils/approval-presets/src/lib.rs:28-61：read-only=OnRequest+read_only、auto=OnRequest+workspace_write、full-access=Never+Disabled）；亦在此讀 Feature::GuardianApproval 決定 auto-review 選項可否使用（permission_popups.rs:17-51），Windows 上 degraded（RestrictedToken）時把 'auto' 標為 '(non-admin sandbox)' 並顯示升級提示（permission_popups.rs:32-63）。explicit_permission_profile_mode 時改開 profile 專用 popup（permission_popups.rs:18-21）。
+  --- src=cc-custom rawName=permissions verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: privacy | family=safety | display=privacy
+  --- src=grok rawName=privacy verified=True
+      gate: always, in every screen mode (minimal suppresses the privacy banner, making the command the only route there: privacy.rs:59)
+      module: crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs + settings modal
+      summary: Opens the coding-data, retention and training settings row.
+      mechanism: run() returns `Action::OpenSettingsFocus{key: "coding_data_sharing"}` (privacy.rs:6, :20-24). It declares no args and deliberately ignores trailing text rather than rejecting it, so `/privacy opt-in` from muscle memory lands on the page instead of erroring, and no hidden alias can change a privacy preference straight from the prompt (privacy.rs:19; test at :78-94).
+
+===== KEY: sandbox-add-read-dir | family=safety | display=sandbox-add-read-dir
+  --- src=codex rawName=sandbox-add-read-dir verified=True
+      gate: platform: cfg!(target_os = 'windows')（slash_command.rs:268）；!available_during_task（slash_command.rs:217）
+      module: codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/windows_sandbox.rs + codex-rs/windows-sandbox-rs
+      summary: 讓 Windows sandbox 額外可讀一個絕對路徑目錄。
+      mechanism: is_visible 僅 Windows（slash_command.rs:268）。bare dispatch 只回 'Usage: /sandbox-add-read-dir <absolute-directory-path>'（slash_dispatch.rs:384-388）；帶參數送 AppEvent::BeginWindowsSandboxGrantReadRoot { path: args }（slash_dispatch.rs:958-961）。TUI 端最終呼叫 codex_windows_sandbox::run_setup_refresh_with_extra_read_roots，並先驗證路徑為存在的絕對目錄（tui/src/windows_sandbox.rs:93-121）。!available_during_task（slash_command.rs:217）。
+
+===== KEY: setup-default-sandbox | family=safety | display=setup-default-sandbox
+  --- src=codex rawName=setup-default-sandbox verified=True
+      gate: platform: Windows + windows_sandbox_level == RestrictedToken（slash_dispatch.rs:332-343,1088-1095）
+      module: codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/chatwidget/windows_sandbox_prompts.rs + codex-rs/windows-sandbox-rs
+      summary: 在 Windows 上升級設定 elevated agent sandbox（由 restricted-token 降級模式升到 elevated）。
+      mechanism: dispatch 受 cfg(target_os='windows') 包住，且只在 level==RestrictedToken 時才繼續；否則直接 return（slash_dispatch.rs:332-343）。接著從 builtin_approval_presets() 找 id=='auto' 的 preset，用 permissions.approval_policy.can_set 驗證可設定，記 telemetry 'codex.windows_sandbox.setup_elevated_sandbox_command'，送 AppEvent::BeginWindowsSandboxElevatedSetup { preset, profile_selection: None }（slash_dispatch.rs:345-376）。命令可見性另由 BuiltinCommandFlags.allow_elevate_sandbox 控制，該值只在 Windows 且 level==RestrictedToken 時為 true（slash_dispatch.rs:1088-1095、builtins_for_input 過濾：slash_commands.rs:73）。
+
+===== KEY: test-approval | family=safety | display=test-approval
+  --- src=codex rawName=test-approval verified=True
+      gate: debug only: cfg!(debug_assertions)（slash_command.rs:271）
+      module: codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/approval_events.rs
+      summary: 開發用：送出一個假的 apply_patch 審批請求，測試審批 UI。
+      mechanism: is_visible 限 cfg!(debug_assertions)（slash_command.rs:271）。dispatch 直接構造 ApplyPatchApprovalRequestEvent（call_id/turn_id '1'、兩個 /tmp 檔案：Add 與 Update、grant_root=/tmp），呼叫 self.on_apply_patch_approval_request('1', event) 走正常審批流程（slash_dispatch.rs:534-564）。available_during_task 為 true（slash_command.rs:260）。
+
+===== KEY: apps | family=extension | display=apps
+  --- src=codex rawName=apps verified=True
+      gate: flags.connectors_enabled（connectors 未啟用時命令從 popup 消失且無法派發）
+      module: codex-rs/tui/src/chatwidget/connectors.rs
+      summary: 列出／管理 Codex Apps（connectors）整合。
+      mechanism: dispatch 呼叫 add_connectors_output（slash_dispatch.rs:515-517），實作在 chatwidget/connectors.rs:160。popup 清單受 BuiltinCommandFlags.connectors_enabled 控制（slash_commands.rs:75），該旗標由 ChatWidget::builtin_command_flags 的 self.connectors_enabled() 決定（slash_dispatch.rs:1097-1107）；未啟用時 find_builtin_command 直接回 None（slash_commands.rs:112-126）。
+
+===== KEY: config-agents | family=extension | display=config-agents
+  --- src=ih rawName=config-agents verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=config-agents verified=True
+      gate: always
+      module: crates/codegen/xai-grok-pager/src/slash/commands/config_agents.rs + crates/codegen/xai-grok-pager/src/views/agents_modal.rs
+      summary: Opens the agents modal listing agent definitions.
+      mechanism: run() returns `Action::OpenConfigAgentsModal(None)` (config_agents.rs:17-19), opening the shared agents modal with no preselected tab; `/personas` is the same action with `AgentsTab::Personas`. Registered as `config-agents` with the alias `agents` (config_agents.rs:12).
+
+===== KEY: execute | family=extension | display=command-execute
+  --- src=dsh rawName=commands.execute verified=True
+      gate: Typert Gateway Remote on the `commands` service; the line must parse and resolve for the receiving Agent, and attachments are rejected unless the definition declares `input.attachments`
+      module: packages/interaction/commands/src/index.ts (CommandRuntime.execute) / packages/interaction/commands/src/types.ts (event vocabulary)
+      summary: Parse and execute one known slash line without sending it to the model, logging a paired command/run -> command/done lifecycle.
+      mechanism: Published as `@Remote` on the same `commands` service. `parseCommand` applies the `/^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u` grammar and returns undefined on a syntax or unknown-name miss, in which case nothing is logged because no handler was entered. On a hit it mints a `CommandId` (monotonic counter plus an instance token so a resumed log never repeats an id), appends the log-only `command/run` event, enforces attachment admission at the registry boundary (declared `input.attachments`, composed attachment store, image limit, cancellation during admission), invokes the handler under `withAbort`, normalizes the `CommandResult`, and appends the paired `command/done`. A command handler error is contained: `command/done` records kind `error` and the handler's own error stays the reported failure.
+
+===== KEY: hooks | family=extension | display=hooks
+  --- src=ih rawName=hooks verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=codex rawName=hooks verified=True
+      gate: always（hook 定義來自 hooks.json；命令本身無 feature gate）
+      module: codex-rs/tui/src/chatwidget/hooks.rs + codex-rs/core/src/hook_runtime.rs
+      summary: 檢視與管理生命週期 hooks。
+      mechanism: dispatch 呼叫 add_hooks_output（slash_dispatch.rs:450-452），它只送 AppEvent::FetchHooksList { cwd }（hooks.rs:11-15）；事件由 app/event_dispatch.rs:879 處理，回呼 on_hooks_loaded 後用 hooks_list_entry_for_cwd 過濾當前 cwd 並開 HooksBrowserView（hooks.rs:17-42）。hook 執行期在 codex-rs/hooks 與 core/src/hook_runtime.rs。
+  --- src=grok rawName=hooks verified=True
+      gate: hidden by default in CommandRegistry::new and revealed by `set_plugins_visible(true)`; hidden means both absent from the dropdown and not executable (registry.rs:321-335)
+      module: crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs + crates/codegen/xai-grok-pager/src/views/extensions_modal.rs
+      summary: Opens the extensions modal on the Hooks tab.
+      mechanism: run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Hooks, trigger: ExtensionsModalTrigger::SlashCommand}` (plugin.rs:21-26). The module comment states all hook management (install, uninstall, trust) happens through the modal UI and no subcommands are passed through to the shell (plugin.rs:4). The shell's own hook subcommands (`hooks-add`, `hooks-list`, `hooks-remove`, `hooks-trust`, `hooks-untrust`, `reload-plugins`) are in BLOCKED_ACP_NAMES so the pager never offers them as ACP rows (registry.rs:21-29).
+  --- src=cc-custom rawName=hooks verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: import | family=extension | display=import
+  --- src=codex rawName=import verified=True
+      gate: always 可見；!available_during_task（slash_command.rs:220）；匯入內容來自外部 agent 產品（描述為 Claude Code）
+      module: codex-rs/tui/src/app/event_dispatch.rs + codex-rs/external-agent-migration
+      summary: 從 Claude Code 匯入設定、專案與近期對話。
+      mechanism: dispatch 只送 AppEvent::OpenExternalAgentConfigMigration（slash_dispatch.rs:446-449），由 app/event_dispatch.rs:233 處理並驅動 external-agent-migration 流程（crate codex-rs/external-agent-migration，state 端落點 state/src/runtime/external_agent_config_imports.rs）。!available_during_task（slash_command.rs:220）。
+
+===== KEY: import-claude | family=extension | display=import-claude
+  --- src=grok rawName=import-claude verified=True
+      gate: always
+      module: crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs
+      summary: Opens the interactive Claude settings import modal.
+      mechanism: run() warns via tracing when arguments are supplied (they are ignored) and returns `Action::ImportClaudeSettings` (import_claude.rs:20-26). The dispatch handler scans `.claude/settings*.json`, `~/.claude.json` and `.mcp.json`, populates modal state, and overlays the modal on the active session with the same selection UI as the welcome screen's Ctrl-I shortcut (import_claude.rs:4-5).
+
+===== KEY: list | family=extension | display=command-list
+  --- src=dsh rawName=commands.list verified=True
+      gate: Typert Gateway Remote on the `commands` service; the caller supplies the receiving Agent so scoped shadowing resolves per session
+      module: packages/interaction/commands/src/index.ts (CommandRuntime, TypertRemoteService subclass)
+      summary: List the effective immutable command descriptors for one agent, after global-then-scoped shadowing, sorted by name.
+      mechanism: Published as `@Remote` on `CommandRuntime`, which is constructed as `super(ctx, 'commands')`, i.e. the wire namespace is the Cordis service key `commands`. `list(agent)` resolves `this.view(agent)` — global registrations followed by exact scoped shadows for that agent — maps them to `CommandDescriptor` (name/description/input, never the handler) and freezes a name-sorted array. It is the discovery half of the command surface: the browser `/` menu calls it per session, and `commands/change` notifications tell clients when to invalidate.
+
+===== KEY: marketplace | family=extension | display=marketplace
+  --- src=ih rawName=marketplace verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=marketplace verified=True
+      gate: always
+      module: crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs
+      summary: Opens the extensions modal on the Marketplace tab.
+      mechanism: run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Marketplace, trigger: SlashCommand}` (plugin.rs:58-63). It shares the file with hooks/plugins/skills: one module declares four commands from four separate `impl SlashCommand` blocks (plugin.rs:12, :30, :49, :67).
+
+===== KEY: mcp | family=extension | display=mcp
+  --- src=codex rawName=mcp verified=True
+      gate: always（available_during_task 為 true）
+      module: codex-rs/tui/src/chatwidget.rs + codex-rs/tui/src/app/event_dispatch.rs（app-server MCP inventory RPC）
+      summary: 列出已設定的 MCP 伺服器與工具／認證狀態（`/mcp verbose` 顯示完整資訊）。
+      mechanism: bare dispatch 呼叫 add_mcp_output(McpServerStatusDetail::ToolsAndAuthOnly)（slash_dispatch.rs:512-514）；add_mcp_output 先放 loading spinner 再送 AppEvent::FetchMcpInventory { detail, thread_id }（chatwidget.rs:1593-1605），事件在 app/event_dispatch.rs:1112 處理，結果回來後 clear_mcp_inventory_loading（chatwidget.rs:1611-1624）。帶參數只接受 'verbose' → McpServerStatusDetail::Full，其餘回 'Usage: /mcp [verbose]'（slash_dispatch.rs:727-730）。
+  --- src=cc-custom rawName=mcp verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: mcps | family=extension | display=mcps
+  --- src=ih rawName=mcps verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=mcps verified=True
+      gate: always
+      module: crates/codegen/xai-grok-pager/src/slash/commands/mcps.rs
+      summary: Shows MCP server status.
+      mechanism: run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::McpServers, trigger: SlashCommand}` (mcps.rs:13-18), reusing the shared extensions modal rather than printing a separate status view.
+
+===== KEY: personas | family=extension | display=personas
+  --- src=grok rawName=personas verified=True
+      gate: always
+      module: crates/codegen/xai-grok-pager/src/slash/commands/personas.rs
+      summary: Opens the agents modal directly on the Personas tab.
+      mechanism: run() returns `Action::OpenConfigAgentsModal(Some(AgentsTab::Personas))` (personas.rs:17-19), i.e. the same modal as `/config-agents` but pre-selected on the Personas tab; the tab type comes from `crate::views::agents_modal::AgentsTab`.
+
+===== KEY: plugins | family=extension | display=plugins
+  --- src=ih rawName=plugins verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=codex rawName=plugins verified=True
+      gate: feature: plugins（flags.plugins_command_enabled = Feature::Plugins，slash_dispatch.rs:1100；commands_for_input 也會隱藏，slash_commands.rs:76）
+      module: codex-rs/tui/src/chatwidget/plugins.rs
+      summary: 瀏覽已安裝／可用的 plugins。
+      mechanism: dispatch 呼叫 add_plugins_output（slash_dispatch.rs:518-520）。實作先檢查 Feature::Plugins，未開則顯示 'Plugins are disabled.' 並提示啟用（plugins.rs:64-71）；開啟後設 plugins_active_tab_id、prefetch_plugins()，依 plugins_cache_for_current_cwd() 狀態決定開 popup、顯示錯誤或 loading popup（plugins.rs:73-88），快取狀態為 PluginsCacheState enum（plugins.rs:55-61）。
+  --- src=grok rawName=plugins verified=True
+      gate: hidden by default and revealed by `set_plugins_visible(true)`; hidden means absent from the dropdown and not executable
+      module: crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs
+      summary: Opens the extensions modal on the Plugins tab.
+      mechanism: run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Plugins, trigger: SlashCommand}` (plugin.rs:40-45). Registered as `plugins` with alias `plugin` (plugin.rs:35). It shares the plugins-visibility gate with `/hooks`: `set_plugins_visible` flips exactly the pair ["hooks","plugins"] (registry.rs:321-335).
+
+===== KEY: skills | family=extension | display=skills
+  --- src=ih rawName=skills verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=codex rawName=skills verified=True
+      gate: always（無 skills feature flag；mentions 觸發字元受 Feature::MentionsV2 影響：'@' vs '$'）
+      module: codex-rs/tui/src/chatwidget/skills.rs + codex-rs/bottom_pane/skills_toggle_view.rs（後端 codex-rs/ext/skills、codex-rs/skills）
+      summary: 開啟技能選單：列出技能，或啟用／停用個別技能。
+      mechanism: dispatch 呼叫 open_skills_menu（slash_dispatch.rs:443-445）。選單兩項：List skills 送 AppEvent::OpenSkillsList、Enable/Disable Skills 送 AppEvent::OpenManageSkillsPopup；清單捷徑字元依 Feature::MentionsV2 決定為 '@' 或 '$'（chatwidget/skills.rs:31-67），open_skills_list 同樣只是 insert_str('@'|'$')（skills.rs:23-29）。切換開關在 bottom_pane/skills_toggle_view.rs，落地為 skills/config/write RPC 與 [[skills.config]]（config/src/skills_config.rs）。技能本身無 Feature::Skills 閘（features 中只有 SkillSearch/MentionsV2 等相鄰旗標）。
+  --- src=grok rawName=skills verified=True
+      gate: always
+      module: crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs + crates/codegen/xai-grok-pager/src/slash/acp_command.rs
+      summary: Opens the extensions modal on the Skills tab.
+      mechanism: run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Skills, trigger: SlashCommand}` (plugin.rs:76-81). Actual skill invocation is a different path: the shell advertises skills as ACP AvailableCommands carrying `_meta` path/scope/pluginName, `SkillMeta::parse` classifies them, and `AcpSlashCommand::run` turns a real skill into `CommandResult::InjectSkill{display_as_skill: true}` (acp_command.rs:42-63, :126-144).
+  --- src=cc-custom rawName=skills verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: workflows | family=extension | display=workflows
+  --- src=grok rawName=workflows verified=True
+      gate: always, in every render mode
+      module: crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs + crates/codegen/xai-grok-pager/src/views/extensions_modal.rs
+      summary: Browses the installed workflow catalog in the extensions modal.
+      mechanism: run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Workflows, trigger: SlashCommand}` (workflows.rs:18-23). Unlike `/workflow` it does not consult `workflows_available`: visibility is deliberately unconditional so the catalog stays reachable mid-reload, which the module's test pins for both flag values, and mode_support stays Both for parity with `/skills` (workflows.rs:46-63, :85).
+
+===== KEY: agents | family=collab | display=agents
+  --- src=codex rawName=agents verified=True
+      gate: always（但在 embedded app-server 模式降級為提示；需 background/remote app-server 才有實際資料）
+      module: codex-rs/tui/src/app/agents_overview.rs（+ agents_overview_view.rs）
+      summary: 開啟跨 thread 的 agent 儀表板，用來檢視與切換所有作用中的 agent session。
+      mechanism: bare dispatch 送 AppEvent::OpenAgentsOverview（slash_dispatch.rs:316-318）；由 codex-rs/tui/src/app/agents_overview.rs 的 App::open_agents_overview 處理（agents_overview.rs:43）。狀態放在 AgentsOverviewState：visible_thread_ids、每個 thread 的 input_states 與已派發請求（agents_overview.rs:31-40）。embedded app-server 模式下不提供儀表板，改為提示啟動背景 server 或連接遠端（agents_overview.rs:44-64）。
+  --- src=cc-custom rawName=agents verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: btw | family=collab | display=btw
+  --- src=ih rawName=btw verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=btw verified=True
+      gate: session-scoped (`session_scoped: true`, btw.rs:17) and `args_required: true`; needs a live session to carry the x.ai/btw ext call
+      module: crates/codegen/xai-grok-pager/src/slash/commands/btw.rs + crates/codegen/xai-grok-pager/src/app/effects/mod.rs
+      summary: Asks a side question without interrupting the running turn.
+      mechanism: run() returns `Action::SendBtw(args.trim())` (btw.rs:21-23). Dispatch turns that into `Effect::SendBtw`, which fires the ACP extension method `x.ai/btw` with sessionId+question and renders the returned `answer` field as a scrollback line (app/effects/mod.rs:3834-3874). The ext method deliberately bypasses the prompt queue, so the side question does not enter the model conversation or the turn queue.
+  --- src=cc-custom rawName=btw verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: dashboard | family=collab | display=dashboard
+  --- src=ih rawName=dashboard verified=False
+      gate: capability:(ctx) => hasCapability(ctx
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=dashboard verified=True
+      gate: feature-flag gated AND mode gated: hidden by default in CommandRegistry::new (registry.rs:156) and revealed only by `set_dashboard_visible(true)` from `dashboard_enabled()`; refused in minimal mode; `[dashboard].enabled = false` or `GROK_AGENT_DASHBOARD=0` makes the dispatcher refuse with a toast (dashboard.rs:7-8)
+      module: crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs + crates/codegen/xai-grok-pager/src/views/dashboard
+      summary: Opens the Agent Dashboard that lists every session and subagent.
+      mechanism: run() returns `Action::OpenDashboard` (dashboard.rs:31-33). The aliases `agents-dashboard` and `sessions` redirect old muscle memory after the sessions picker modal was removed (dashboard.rs:20-23). It is FullscreenOnly via `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: "minimal is single-session"})` (dashboard.rs:26-28), so minimal mode both hides it from completion and refuses a typed invocation with a hint naming `/fullscreen`.
+
+===== KEY: share | family=collab | display=share
+  --- src=grok rawName=share verified=True
+      gate: menu-hidden by default (offered nowhere) but dispatchable when typed; the implementation currently always errors
+      module: crates/codegen/xai-grok-pager/src/slash/commands/share.rs + crates/codegen/xai-grok-pager/src/slash/registry.rs
+      summary: Shares the session via a public URL (currently disabled, and the command returns that as a handled error).
+      mechanism: run() ignores its context and returns `CommandResult::Error("Session sharing is temporarily disabled")` (share.rs:14-17) — the capability is stubbed in this revision rather than implemented. The registry keeps it menu-hidden by default and revealed only by `set_share_visible(true)`; the menu-only hide means a fully typed `/share` still reaches the pager handler instead of falling through to the shell as an unknown command (registry.rs:162-165, :359-371).
+
+===== KEY: side-conversation | family=collab | display=side-conversation
+  --- src=codex rawName=side verified=True
+      gate: always；需已有 thread_id；review 模式中不可用（slash_dispatch.rs:1224-1235）
+      module: codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/side.rs
+      summary: 在暫時性 fork 中開側聊（帶參數時該訊息成為側聊第一句）。
+      mechanism: 與 /btw 同一 arm（slash_dispatch.rs:313-315），描述共用 'start a side conversation in an ephemeral fork'（slash_command.rs:132-134）。bare 走 request_empty_side_conversation → AppEvent::StartSide{parent_thread_id, user_message:None}（slash_dispatch.rs:117-127）；帶參數先組 UserMessage 再送 StartSide（slash_dispatch.rs:931-948）。側聊中大部分命令被 ensure_slash_command_allowed_in_side_conversation 擋下，白名單見 available_in_side_conversation（slash_dispatch.rs:1212-1222；slash_command.rs:188-202）。
+
+===== KEY: subagent-interrupt | family=collab | display=subagent-interrupt
+  --- src=dsh rawName=subagent.interruptByParent verified=True
+      gate: Typert Gateway Remote; the claimed parent must own the live target (`subagent/unauthorized` otherwise)
+      module: packages/subagent/subagent/src/index.ts:479 (Remote face) over the subagent core interrupt primitive
+      summary: Cancel one continuable child from its durable parent address without requiring the parent Agent to be online.
+      mechanism: Published as `@Remote('interruptByParent')` taking the child id, the claimed parent id and the `mode: 'continuable'` discriminator. The implementation deliberately runs no catalog, history, persistence or parent-Agent lookup: it authorizes the address against the live Activation and delegates to the core `interrupt` primitive, which keeps a live child interruptible while its parent Agent is offline; absent, idle and already-completed targets are accepted no-ops, and the receipt acknowledges that the cancel signal was admitted, not that the target is quiescent.
+
+===== KEY: subagent-prompt | family=collab | display=subagent-prompt
+  --- src=dsh rawName=subagent.prompt verified=True
+      gate: Typert Gateway Remote; requires a live direct parent Agent, a continuable child address, and (for images) an attachment store plus a child model accepting image input
+      module: packages/subagent/subagent/src/index.ts:412 / packages/subagent/subagent/src/inbox.ts / packages/subagent/subagent/src/continuation-activation.ts
+      summary: Deliver one browser-authored message to a continuable direct child through the exact live parent, as queue or steer delivery.
+      mechanism: Published as `@Remote('prompt')` with `SubagentPromptRequest` typed `mode: 'continuable'` and `delivery: 'queue' | 'steer'`. The handler validates the address, canonicalizes the client time zone, requires the parent Agent to be live, admits image parts into durable attachment references before delivery (so the child inbox only ever accepts Host-persisted attachments), then routes through the internal `deliverSubagentPrompt` symbol, which branches `delivery === 'steer'` to the steering path and otherwise queues. Success returns the accepted message's inbox identity; later execution is independent of the call.
+
+===== KEY: subagents | family=collab | display=subagents
+  --- src=codex rawName=subagents verified=True
+      gate: always（available_during_task 為 true；需 root thread 與 subagent thread 存在）
+      module: codex-rs/tui/src/app/agent_picker.rs + codex-rs/tui/src/app/agent_navigation.rs
+      summary: 在目前 session 的 subagent 之間切換。
+      mechanism: dispatch 送 AppEvent::OpenAgentPicker（slash_dispatch.rs:319-321；slash_command.rs:76 以 serialize='subagents' 讓字面值為 subagents，而非變體名 multi-agents）。事件在 app/event_dispatch.rs:2414 處理；picker 以 root thread 為範圍分頁呼叫 ThreadList，並以 source_kinds=SubAgentThreadSpawn 過濾，頁大小 100、上限 1000（app/agent_picker.rs:13-45）。描述為 'switch between this session's subagents'（slash_command.rs:131）。
+
+===== KEY: tasks | family=collab | display=tasks
+  --- src=ih rawName=tasks verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+  --- src=grok rawName=tasks verified=True
+      gate: session-scoped plus an explicit session_id check; available in both screen modes
+      module: crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs
+      summary: Lists background tasks, subagents and scheduled tasks.
+      mechanism: run() errors without a session and otherwise returns `Action::ShowTasks` (tasks.rs:20-25); `dispatch_show_tasks` reads the three task sources and commits a read-only list, with killing and attaching left to the full-TUI tasks pane (tasks.rs:3-4). Minimal mode has no interactive TasksPane, so this is the snapshot route there, and it works in every render mode (tasks.rs:1-2).
+  --- src=cc-custom rawName=tasks verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: add-dir | family= | display=add-dir
+  --- src=cc-custom rawName=add-dir verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: agents-platform | family= | display=agents-platform
+  --- src=cc-custom rawName=agents-platform verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: auto-compact-window | family= | display=auto-compact-window
+  --- src=cc-custom rawName=auto-compact-window verified=False
+      gate: isEnabled:() => !getIsNonInteractiveSession()
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: branch | family= | display=branch
+  --- src=cc-custom rawName=branch verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: brief | family= | display=brief
+  --- src=cc-custom rawName=brief verified=False
+      gate: isEnabled:() => {
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: code-review | family= | display=code-review
+  --- src=cc-custom rawName=code-review verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: color | family= | display=color
+  --- src=cc-custom rawName=color verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: commit | family= | display=commit
+  --- src=cc-custom rawName=commit verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: commit-push-pr | family= | display=commit-push-pr
+  --- src=cc-custom rawName=commit-push-pr verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: config | family= | display=config
+  --- src=cc-custom rawName=config verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: context-window | family= | display=context-window
+  --- src=cc-custom rawName=context-window verified=False
+      gate: isEnabled:() => !getIsNonInteractiveSession()
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: cost | family= | display=cost
+  --- src=cc-custom rawName=cost verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: fast | family= | display=fast
+  --- src=cc-custom rawName=fast verified=False
+      gate: isEnabled:() => isFastModeEnabled()
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: files | family= | display=files
+  --- src=cc-custom rawName=files verified=False
+      gate: isEnabled:() => process.env.USER_TYPE === 'ant'
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: heapdump | family= | display=heapdump
+  --- src=cc-custom rawName=heapdump verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: init-verifiers | family= | display=init-verifiers
+  --- src=cc-custom rawName=init-verifiers verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: insights | family= | display=insights
+  --- src=cc-custom rawName=insights verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: install-slack-app | family= | display=install-slack-app
+  --- src=cc-custom rawName=install-slack-app verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: keybindings | family= | display=keybindings
+  --- src=cc-custom rawName=keybindings verified=False
+      gate: isEnabled:() => isKeybindingCustomizationEnabled()
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: max-output | family= | display=max-output
+  --- src=cc-custom rawName=max-output verified=False
+      gate: isEnabled:() => !getIsNonInteractiveSession()
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: memory | family= | display=memory
+  --- src=cc-custom rawName=memory verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: output-style | family= | display=output-style
+  --- src=cc-custom rawName=output-style verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: plugin | family= | display=plugin
+  --- src=cc-custom rawName=plugin verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: pr-comments | family= | display=pr-comments
+  --- src=cc-custom rawName=pr-comments verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: protocol | family= | display=protocol
+  --- src=cc-custom rawName=protocol verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: provider | family= | display=provider
+  --- src=ih rawName=provider verified=False
+      gate: capability:(ctx) => hasCapability(ctx
+      module: 
+      summary: 
+      mechanism: 
+  --- src=cc-custom rawName=provider verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: reload-plugins | family= | display=reload-plugins
+  --- src=cc-custom rawName=reload-plugins verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: sandbox | family= | display=sandbox
+  --- src=cc-custom rawName=sandbox verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: security-review | family= | display=security-review
+  --- src=cc-custom rawName=security-review verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: stats | family= | display=stats
+  --- src=cc-custom rawName=stats verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: stickers | family= | display=stickers
+  --- src=cc-custom rawName=stickers verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: tag | family= | display=tag
+  --- src=cc-custom rawName=tag verified=False
+      gate: isEnabled:() => process.env.USER_TYPE === 'ant'
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: terminal-setup | family= | display=terminal-setup
+  --- src=cc-custom rawName=terminal-setup verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: think-back | family= | display=think-back
+  --- src=cc-custom rawName=think-back verified=False
+      gate: isEnabled:() =>
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: thinkback-play | family= | display=thinkback-play
+  --- src=cc-custom rawName=thinkback-play verified=False
+      gate: isEnabled:() =>
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: tui | family= | display=tui
+  --- src=cc-custom rawName=tui verified=False
+      gate: none
+      module: 
+      summary: 
+      mechanism: 
+
+===== KEY: version | family= | display=version
+  --- src=cc-custom rawName=version verified=False
+      gate: isEnabled:() => process.env.USER_TYPE === 'ant'
+      module: 
+      summary: 
+      mechanism: 
+

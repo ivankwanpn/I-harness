@@ -1,0 +1,1064 @@
+{
+  "group": "safety-model",
+  "packages": [
+    {
+      "name": "sandbox",
+      "responsibility": "Type/contract seam for process sandboxing: defines the three modes, the SandboxProvider.confine() contract, the read-isolation capability gate, the workspace/temp writable-root derivation, the strictly-wider escalation ladder, and the runner-failure classifier that exec and the platform backends share.",
+      "publicSurface": [
+        "SandboxMode",
+        "ConfinedSandboxMode",
+        "SandboxEnforcement",
+        "SandboxExecutionPolicy",
+        "SandboxPolicy",
+        "RunnerFailureRule",
+        "ConfinedArgv",
+        "SandboxProvider",
+        "SANDBOX_UNAVAILABLE",
+        "SandboxUnavailableError",
+        "assertSandboxCapable",
+        "classifyRunnerFailure",
+        "matchesSignature",
+        "canonicalPath",
+        "writableRoots",
+        "WIDER_MODES",
+        "ESCALATION_TARGETS",
+        "approveEscalation",
+        "escalationHintMarker",
+        "sandboxDenialMarker",
+        "validateEscalationArgs",
+        "EscalationApproval",
+        "EscalationApprover",
+        "EscalationOutcome",
+        "EscalationRequest"
+      ],
+      "designDecisions": [
+        {
+          "decision": "confine() must return enforcing argv or throw; silent unconfined passthrough is forbidden by contract.",
+          "rationale": "The seam forbids the one failure mode that would silently disable confinement: a provider that cannot confine must fail closed instead of returning the raw argv.",
+          "evidence": ["packages/sandbox/src/index.ts:32-40"]
+        },
+        {
+          "decision": "A missing capabilities declaration is treated as {readIsolation:false}; a policy that demands read isolation is refused, never degraded.",
+          "rationale": "'capabilities unknown = NOT read-isolated' plus assertSandboxCapable turning requireReadIsolation + no capability into SandboxUnavailableError. requireReadIsolation defaults to false, so this is an opt-in gate.",
+          "evidence": ["packages/sandbox/src/index.ts:9-13", "packages/sandbox/src/index.ts:36-38", "packages/sandbox/src/index.ts:64-71"]
+        },
+        {
+          "decision": "Escalation is strictly-wider and checked at execution time, never baked into a tool schema.",
+          "rationale": "WIDER_MODES maps read-only -> [workspace-write, danger-full-access] and workspace-write -> [danger-full-access]; approveEscalation rejects a non-wider target, a missing approver, a missing agent, and maps outcome rejected/cancelled/unavailable to distinct errors.",
+          "evidence": ["packages/sandbox/src/escalation.ts:3-10", "packages/sandbox/src/escalation.ts:61-83"]
+        },
+        {
+          "decision": "writableRoots() is the single home of the workspace-write meaning: workspaceRoot + /tmp + tmpdir(), canonicalized and deduped.",
+          "rationale": "Comment states the purpose is that 'the profile dialects and any in-process fence can never drift apart'; read-only returns [].",
+          "evidence": ["packages/sandbox/src/roots.ts:5-18"]
+        },
+        {
+          "decision": "The runner-failure classifier lives in the seam (not in a platform backend) with signature matching lowercased and informational lines excluded.",
+          "rationale": "exec is generic and must not import a platform backend package; classifyRunnerFailure consults allowedExitCodes, skips informationalLines, and returns the first fatal-signature line.",
+          "evidence": ["packages/sandbox/src/runner-failures.ts:12-28"]
+        }
+      ],
+      "failurePolicy": "fail-closed. SandboxUnavailableError's message is '...refusing to run the command unconfined. Install bubblewrap (Linux) or ensure the ACL restricted-token runner can start (Windows) — otherwise switch the consumer to danger-full-access.' (packages/sandbox/src/index.ts:44-55); SANDBOX_UNAVAILABLE = 'SANDBOX_UNAVAILABLE' is the stable code string (packages/sandbox/src/index.ts:42); assertSandboxCapable refuses rather than dropping the demand (packages/sandbox/src/index.ts:64-71); approveEscalation throws when no approval service/channel is composed (packages/sandbox/src/escalation.ts:64-66, 81).",
+      "events": [
+        "none produced. sandboxDenialMarker()/escalationHintMarker() return tool-output TEXT markers ('[sandbox: file access denied under <mode> mode]', '[sandbox: escalation available — ...]'), not SessionEvents (packages/sandbox/src/escalation.ts:27-33)."
+      ],
+      "keyConstants": [
+        { "name": "SANDBOX_UNAVAILABLE", "value": "\"SANDBOX_UNAVAILABLE\"", "evidence": "packages/sandbox/src/index.ts:42" },
+        { "name": "WIDER_MODES", "value": "{\"read-only\":[\"workspace-write\",\"danger-full-access\"],\"workspace-write\":[\"danger-full-access\"]}", "evidence": "packages/sandbox/src/escalation.ts:5-8" },
+        { "name": "ESCALATION_TARGETS", "value": "[\"workspace-write\",\"danger-full-access\"]", "evidence": "packages/sandbox/src/escalation.ts:10" },
+        { "name": "writableRoots (workspace-write)", "value": "workspaceRoot + \"/tmp\" + tmpdir(), canonicalPath + Set-deduped; read-only => []", "evidence": "packages/sandbox/src/roots.ts:15-18" }
+      ],
+      "gaps": [
+        "The entire escalation surface has no consumer outside its own tests: repo-wide, WIDER_MODES/ESCALATION_TARGETS/approveEscalation/validateEscalationArgs/sandboxDenialMarker/escalationHintMarker appear in production src only in packages/sandbox/src/escalation.ts (definition) and packages/sandbox/src/index.ts (re-export); the only other references are packages/sandbox/test/seam.test.ts:4-60 and :86-117.",
+        "writableRoots() and canonicalPath() are likewise test-only in composed use (packages/sandbox/src/roots.ts:7-18; only packages/sandbox/test/seam.test.ts:17-35).",
+        "Read isolation is declared-but-absent and the gate that would refuse it is never armed: requireReadIsolation is set only in tests (packages/sandbox/test/enforcement.test.ts:13, packages/exec/test/enforcement.test.ts:15), never by any packages/*/src or apps/*/src caller.",
+        "In-code marker that no read-isolated backend exists: the capability error text says 'WRITE_RESTRICTED is read-visible on Windows; the codex-style elevated backend is not implemented in this build' (packages/sandbox/src/index.ts:68)."
+      ],
+      "evidence": [
+        "packages/sandbox/src/index.ts:34-40",
+        "packages/sandbox/src/index.ts:44-55",
+        "packages/sandbox/src/index.ts:64-71",
+        "packages/sandbox/src/escalation.ts:5-10",
+        "packages/sandbox/src/roots.ts:15-18",
+        "packages/sandbox/src/runner-failures.ts:16-28"
+      ]
+    },
+    {
+      "name": "sandbox-local",
+      "responsibility": "The platform-dispatch SandboxProvider: on Linux it wraps argv in a bubblewrap profile, on win32 it delegates to an injected Windows ACL backend, and on every other platform (or a missing backend) it returns a provider whose confine() throws.",
+      "publicSurface": ["LocalSandboxConfig", "createLocalSandbox", "probeBwrap"],
+      "designDecisions": [
+        {
+          "decision": "Platform selection is three fail-closed arms keyed on process.platform; every arm either confines or throws — no passthrough arm exists.",
+          "rationale": "win32 without windowsAclBackend throws SandboxUnavailableError 'no windows ACL backend composed (M16w)'; linux without a successful bwrap probe throws 'bwrap probe failed'; any other platform throws 'unsupported platform'.",
+          "evidence": ["packages/sandbox-local/src/index.ts:33-56", "packages/sandbox-local/src/index.ts:58-66", "packages/sandbox-local/src/index.ts:92-97"]
+        },
+        {
+          "decision": "enforcement and denial vocabularies are static per runner: bwrap = 'full', windows-acl = 'partial'.",
+          "rationale": "STATIC_ENFORCEMENT and DENIAL_SIGNATURES are keyed by Runner, and the win32 arm overwrites the delegate's enforcement with the host runner's 'partial'.",
+          "evidence": ["packages/sandbox-local/src/index.ts:20-30", "packages/sandbox-local/src/index.ts:53"]
+        },
+        {
+          "decision": "Honest capability declaration: both backends declare readIsolation:false and refuse a policy that requires read isolation.",
+          "rationale": "The win32 arm declares {readIsolation:false} and throws when policy.requireReadIsolation === true; the linux arm does the same, with the in-code reason 'bwrap isolates the filesystem for writes but does not hide/read-block filesystem content'.",
+          "evidence": ["packages/sandbox-local/src/index.ts:44-51", "packages/sandbox-local/src/index.ts:67-79"]
+        },
+        {
+          "decision": "The runner override is pinned to bwrap; any other runner[0] is refused.",
+          "rationale": "Prevents a config value from turning the Linux arm into an arbitrary argv prefix (which would be an unconfined passthrough by another name).",
+          "evidence": ["packages/sandbox-local/src/index.ts:72-76"]
+        },
+        {
+          "decision": "probeBwrap runs a real confined 'true' (default 5000 ms timeout) instead of 'bwrap --version'.",
+          "rationale": "Stated reason: '--version alone passes on hosts where user namespaces are blocked, so the e2e would run RED instead of SKIP'; the probe uses the read-only profile against '/'.",
+          "evidence": ["packages/sandbox-local/src/index.ts:100-110"]
+        }
+      ],
+      "failurePolicy": "fail-closed. Every unavailable backend is a provider whose confine() throws SandboxUnavailableError (packages/sandbox-local/src/index.ts:37-41, 61-65, 93-97) and a policy demanding read isolation is refused (49-51, 77-79). A bwrap runner failure (exit 125 + 'bwrap: failed to') is carried as a runnerFailureRule (packages/sandbox-local/src/index.ts:84-86) which exec converts into SandboxUnavailableError (packages/exec/src/index.ts:185-193).",
+      "events": ["none"],
+      "keyConstants": [
+        { "name": "STATIC_ENFORCEMENT", "value": "{bwrap:'full', 'windows-acl':'partial'}", "evidence": "packages/sandbox-local/src/index.ts:22-25" },
+        { "name": "DENIAL_SIGNATURES", "value": "bwrap:['read-only file system']; windows-acl:['access is denied','access to the path','permission denied']", "evidence": "packages/sandbox-local/src/index.ts:27-30" },
+        { "name": "bwrap runnerFailureRules", "value": "allowedExitCodes:[125], fatalSignatures:['bwrap: failed to']", "evidence": "packages/sandbox-local/src/index.ts:84-86" },
+        { "name": "probeTimeoutMs default", "value": "5000", "evidence": "packages/sandbox-local/src/index.ts:106" },
+        { "name": "bwrap profile argv", "value": "['--ro-bind','/','/','--dev','/dev','--unshare-pid','--proc','/proc','--die-with-parent'] (+ '--tmpfs','/tmp' and '--bind <workspaceRoot> <workspaceRoot>' under workspace-write)", "evidence": "packages/sandbox-local/src/profiles.ts:3-9" }
+      ],
+      "gaps": [
+        "runner-failures.ts adds isRunnerSpawnFailure and classifyDenial but src/index.ts re-exports neither (compare packages/sandbox-local/src/runner-failures.ts:12,23 with the three exports of packages/sandbox-local/src/index.ts:11-18,32,103); repo-wide the only importer is the package's own test (packages/sandbox-local/test/local.test.ts:3).",
+        "The win32 arm's failure text still names a historical milestone: 'no windows ACL backend composed (M16w)' with the comment 'the real backend ships in M16w' (packages/sandbox-local/src/index.ts:15-16,34-41) — the backend now exists in packages/sandbox-windows-acl.",
+        "The denialSignatures produced by both arms (packages/sandbox-local/src/index.ts:83) have no production consumer: exec keeps ConfinedArgv but only reads runnerFailureRules (packages/exec/src/index.ts:103-105,185-193) and classifyDenial is not called anywhere outside tests."
+      ],
+      "evidence": [
+        "packages/sandbox-local/src/index.ts:33-56",
+        "packages/sandbox-local/src/index.ts:67-88",
+        "packages/sandbox-local/src/index.ts:103-110",
+        "packages/sandbox-local/src/profiles.ts:3-9"
+      ]
+    },
+    {
+      "name": "sandbox-policy",
+      "responsibility": "Resolves the effective sandbox mode for a session (last 'sandbox/mode' event wins over the configured default) and renders the one-line policy text that the assembly injects into the system prompt.",
+      "publicSurface": ["SANDBOX_MODES", "SandboxPolicyConfig", "SandboxPolicyRequest", "SandboxPolicyService", "createSandboxPolicy", "effectiveSandboxMode", "renderPolicyContext"],
+      "designDecisions": [
+        {
+          "decision": "Mode precedence is request.mode > session's last sandbox/mode event > configured default (default 'read-only'), then path.resolve on the workspace root.",
+          "rationale": "resolve() computes sessionOverride from effectiveSandboxMode(session.events) and folds it between the explicit request mode and the service default.",
+          "evidence": ["packages/sandbox-policy/src/index.ts:25-39"]
+        },
+        {
+          "decision": "The session override is last-writer-wins: the scan runs backwards and returns the first (i.e. newest) sandbox/mode event.",
+          "rationale": "A mode change is a log append, so the newest event is the authoritative one and no separate mutable mode field is needed.",
+          "evidence": ["packages/sandbox-policy/src/session-mode.ts:6-12"]
+        },
+        {
+          "decision": "The rendered policy text is advisory and explicitly tells the model not to refuse work from the policy alone.",
+          "rationale": "read-only renders 'Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns.'; the resolved policy object is passed to both the enforcer and this renderer so they cannot drift (packages/session-executor/src/assembly.ts:292-301,602).",
+          "evidence": ["packages/sandbox-policy/src/index.ts:41-51"]
+        }
+      ],
+      "failurePolicy": "other (no enforcement here — pure resolution). An unrecognized mode falls through to the default arm and renders an empty string (packages/sandbox-policy/src/index.ts:49-50); workspaceRoot is resolved with path.resolve against process.cwd() (packages/sandbox-policy/src/index.ts:27,35).",
+      "events": ["consumes \"sandbox/mode\" (SessionEvent variant declared at packages/core-session/src/index.ts:43); produces none"],
+      "keyConstants": [
+        { "name": "SANDBOX_MODES", "value": "['read-only','workspace-write','danger-full-access']", "evidence": "packages/sandbox-policy/src/session-mode.ts:4" },
+        { "name": "default mode", "value": "\"read-only\"", "evidence": "packages/sandbox-policy/src/index.ts:26" }
+      ],
+      "gaps": ["none"],
+      "evidence": [
+        "packages/sandbox-policy/src/index.ts:25-39",
+        "packages/sandbox-policy/src/index.ts:41-51",
+        "packages/sandbox-policy/src/session-mode.ts:4-12"
+      ]
+    },
+    {
+      "name": "sandbox-windows-acl",
+      "responsibility": "Windows write-restriction backend: builds a WRITE_RESTRICTED token whose restricting-SID list carries per-workspace and per-temp capability SIDs, materializes matching Write ACEs on the workspace/temp DACLs, and confines a command by prefixing an argv runner that spawns the child under that token (never unrestricted).",
+      "publicSurface": [
+        "AclSandbox",
+        "AclSandboxChild",
+        "AclSandboxChildResult",
+        "AclSandboxOptions",
+        "AclSandboxSpawnOptions",
+        "AclWriteGrant",
+        "Win32Error",
+        "assertTempRootOutsideWorkspace",
+        "createWindowsAclSandbox",
+        "quoteArg",
+        "scanWorldWritable",
+        "tempWriteSid",
+        "workspaceWriteSid",
+        "WorldWritableFinding",
+        "ScanOptions"
+      ],
+      "designDecisions": [
+        {
+          "decision": "WRITE_RESTRICTED token with a mode-selected restricting-SID list: read-only [logon SID, EVERYONE]; workspace-write [logon SID, EVERYONE, workspace write SID, optional temp write SID]; Authenticated Users and INTERACTIVE/LOCAL are absent from BOTH lists.",
+          "rationale": "Stated reasons: logon+Everyone are the keep-alive group (DLL init / CNG otherwise fail); Authenticated Users is dropped because the WMI namespace check fails and because standing AU ACEs on the C: root close a tree-creation escape; INTERACTIVE/LOCAL is dropped because the Public tree grants writes to INTERACTIVE. Because read-only carries no write SID, a stale workspace ACE stays inert.",
+          "evidence": ["packages/sandbox-windows-acl/src/token.ts:161-186", "packages/sandbox-windows-acl/src/token.ts:204-208"]
+        },
+        {
+          "decision": "Capability identity is split: a deterministic per-workspace SID (S-1-4-x-y from sha256 of the canonical workspace path) and a per-private-temp SID (S-1-4-x-y-1, domain-separated by a fixed third subauthority).",
+          "rationale": "The workspace SID makes the workspace-root ACE materialize once per workspace per machine (later provisions hit the exact-ACE skip); the distinct temp SID prevents sibling sessions sharing a workspace from entering one another's temp trees; both SIDs' power is defined solely by the ACEs that name them.",
+          "evidence": ["packages/sandbox-windows-acl/src/workspace-sid.ts:1-25", "packages/sandbox-windows-acl/src/workspace-sid.ts:35-53"]
+        },
+        {
+          "decision": "Grant lifecycle is asymmetric: workspace ACEs are STANDING (never revoked — they are the cross-session reuse cache) while temp ACEs are REVOCABLE and removed by dispose(); with manageDacls:false the caller owns all DACLs.",
+          "rationale": "Revoking the workspace ACE would force the next session to re-propagate the whole tree; the temp ACE must not outlive its private directory. init() is fail-closed and rolls back the revocable grants, SID allocations and handles before rethrowing.",
+          "evidence": ["packages/sandbox-windows-acl/src/index.ts:29-39", "packages/sandbox-windows-acl/src/index.ts:260-280", "packages/sandbox-windows-acl/src/index.ts:308-345", "packages/sandbox-windows-acl/src/grant.ts:18-27"]
+        },
+        {
+          "decision": "Idempotent grants: grantWrite reads the directory's current explicit DACL and SKIPS the apply when the exact ACE (ACCESS_ALLOWED, OI|CI, GRANT_MASK, same SID) is already present.",
+          "rationale": "An unconditional SetNamedSecurityInfoW re-propagates the identical inheritable ACE over the whole tree ('minutes on large workspaces'); the whole read-merge-write runs under a per-path exclusive LockFileEx lock so concurrent instances cannot clobber each other's ACEs.",
+          "evidence": ["packages/sandbox-windows-acl/src/acl.ts:181-213", "packages/sandbox-windows-acl/src/acl.ts:215-244", "packages/sandbox-windows-acl/src/acl.ts:60-109"]
+        },
+        {
+          "decision": "The per-call SandboxPolicy is the enforcement input; the construction options' `mode` is never read by the factory.",
+          "rationale": "The in-code NOTE says mode/tempDir/writeSid/tempWriteSid/manageDacls 'are NOT read here ... A confinement's mode therefore comes from the policy, never from the construction options'. The compose site nevertheless passes mode:'read-only' (packages/session-executor/src/assembly.ts:286), which is inert.",
+          "evidence": ["packages/sandbox-windows-acl/src/index.ts:514-527", "packages/sandbox-windows-acl/src/index.ts:640-650"]
+        },
+        {
+          "decision": "Every Win32 call is checked and failure is loud; the confined child is never spawned unrestricted.",
+          "rationale": "Win32Error carries the API name and exact code; construction validates writableDirs exist and are directories; confinement passes through an argv runner whose every failure prints 'windows-acl-run: <detail>' and exits 127; spawn assigns the suspended child to a kill-on-close job before it runs.",
+          "evidence": ["packages/sandbox-windows-acl/src/errors.ts:1-20", "packages/sandbox-windows-acl/src/index.ts:527-537", "packages/sandbox-windows-acl/src/runner.ts:40-63", "packages/sandbox-windows-acl/src/spawn.ts:227-244"]
+        }
+      ],
+      "failurePolicy": "fail-closed at every level. Construction throws on a missing/non-directory writableDir (packages/sandbox-windows-acl/src/index.ts:532-537); grant materialization cleans up its SID and temp dir and rethrows (packages/sandbox-windows-acl/src/index.ts:541-592); init() revokes revocable grants, frees SIDs and closes handles before rethrowing, aggregating cleanup failures (packages/sandbox-windows-acl/src/index.ts:308-345); confine() after dispose throws SandboxUnavailableError (packages/sandbox-windows-acl/src/index.ts:642-643); dispose() reports every cleanup failure as AggregateError (packages/sandbox-windows-acl/src/index.ts:437-439); the runner exits 127 with the 'windows-acl-run: ' signature (packages/sandbox-windows-acl/src/runner.ts:54-63,220-225) which is declared as RUNNER_FAILURE_RULES so exec raises SandboxUnavailableError (packages/sandbox-windows-acl/src/index.ts:463 + packages/exec/src/index.ts:185-193).",
+      "events": ["none"],
+      "keyConstants": [
+        { "name": "GRANT_MASK", "value": "0x00110156 (FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD, minus STANDARD_RIGHTS_WRITE)", "evidence": "packages/sandbox-windows-acl/src/win32-abi.ts:51-73" },
+        { "name": "WRITE_RESTRICTED / DISABLE_MAX_PRIVILEGE / LUA_TOKEN", "value": "0x8 / 0x1 / 0x4 (the CreateRestrictedToken flags; constants at packages/sandbox-windows-acl/src/win32-abi.ts:86-90)", "evidence": "packages/sandbox-windows-acl/src/token.ts:210-218" },
+        { "name": "DENIAL_SIGNATURES", "value": "['access is denied','access to the path','permission denied']", "evidence": "packages/sandbox-windows-acl/src/index.ts:443-448" },
+        { "name": "WINDOWS_ACL_RUNNER_FAILURE_EXIT / RUNNER_FAILURE_RULES", "value": "127 / [{allowedExitCodes:[127], fatalSignatures:['windows-acl-run: ']}]", "evidence": "packages/sandbox-windows-acl/src/index.ts:450-463" },
+        { "name": "private temp dir prefix", "value": "'dsh-' (mkdtempSync(join(tmpdir(),'dsh-')); the runner does the same at packages/sandbox-windows-acl/src/runner.ts:156)", "evidence": "packages/sandbox-windows-acl/src/index.ts:564" },
+        { "name": "scanWorldWritable defaults", "value": "maxItemsPerDir 500, totalBudgetMs 2000, default probe returns 'unknown' (default probe at packages/sandbox-windows-acl/src/audit.ts:37)", "evidence": "packages/sandbox-windows-acl/src/audit.ts:28-29" },
+        { "name": "struct sizes pinned at load", "value": "SECURITY_MAX_SID_SIZE 68, SID_AND_ATTRIBUTES_SIZE 16, EXPLICIT_ACCESS_W_SIZE 48, STARTUPINFOW_SIZE 104, PROCESS_INFORMATION_SIZE 24 (asserted at packages/sandbox-windows-acl/src/ffi.ts:170-180)", "evidence": "packages/sandbox-windows-acl/src/win32-abi.ts:246-260" }
+      ],
+      "gaps": [
+        "Hard-link bypass is README-only, unconfirmed in src/: README.md:41-44 claims 'NTFS hard links can bypass directory DACLs (a hard link into a writable directory exposes the link target)'; no src file states or tests it.",
+        "The confined-child EPERM observation is README-only: README.md:79-82 pins 'confined target 無法 spawn 子進程 (EPERM) — observed; root cause 未調查 (M25 前 follow-up)'.",
+        "audit.ts is explicitly scoped-incomplete: the scope note says acl.ts's readCurrentDacl is unexported and no ACE enumeration exists (GetAce/GetExplicitEntriesFromAclW unbound), so scanWorldWritable only reports what an INJECTED DaclWriteProbe calls 'world-writable' and otherwise returns no findings ('unverified entries 不報為 finding'); the reported principal is hardcoded 'Everyone' (packages/sandbox-windows-acl/src/audit.ts:6-8,14-16,26,37,47-52).",
+        "Console isolation is unavailable by construction: CREATE_NO_WINDOW / CREATE_NEW_CONSOLE are intentionally absent because such children die with STATUS_DLL_INIT_FAILED under the restriction (packages/sandbox-windows-acl/src/spawn.ts:5-6; packages/sandbox-windows-acl/src/index.ts:26-28).",
+        "Read/network/process isolation is out of scope for the mechanism: 'writes are restricted; reads, network, and process visibility are NOT (WRITE_RESTRICTED intersects only write accesses)' (packages/sandbox-windows-acl/src/index.ts:23-25) — the same statement the README makes at README.md:10-22."
+      ],
+      "evidence": [
+        "packages/sandbox-windows-acl/src/token.ts:204-208",
+        "packages/sandbox-windows-acl/src/index.ts:642-650",
+        "packages/sandbox-windows-acl/src/index.ts:23-39",
+        "packages/sandbox-windows-acl/src/acl.ts:231-244",
+        "packages/sandbox-windows-acl/src/runner.ts:40-63",
+        "packages/sandbox-windows-acl/src/workspace-sid.ts:35-53"
+      ]
+    },
+    {
+      "name": "guard-approval",
+      "responsibility": "The tools/pre-execute approval policy (three layers plus a 'never' headless promotion) and the optional LLM approval guardian: a dedicated reviewer subagent with a strict-JSON verdict contract, a circuit breaker, and registration as the 'approval/guardian' service.",
+      "publicSurface": [
+        "ApprovalConfig",
+        "BUNDLED_GUARDIAN_POLICY",
+        "DEFAULT_DANGEROUS_COMMANDS",
+        "DEFAULT_DANGEROUS_FLAGS",
+        "GUARDIAN_BREAKER_DENY_LIMIT",
+        "GUARDIAN_BREAKER_WINDOW",
+        "GUARDIAN_JSON_CONTRACT",
+        "GUARDIAN_REVIEWER_ROLE_NAME",
+        "GUARDIAN_REVIEW_TIMEOUT_MS",
+        "GuardianBreaker",
+        "createApprovalPolicy",
+        "ensureReviewerRole",
+        "isGuardianBreakerState",
+        "parseGuardianAssessment",
+        "registerGuardian",
+        "renderGuardianMessage",
+        "renderRecentContext",
+        "runGuardianReview"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Three layers AS IMPLEMENTED: readOnly tool -> allow; `write` with no path or a path outside the workspace -> ask; any other non-readOnly tool -> ask (Layer 1 fallback); EXCEPT bash/pwsh, which ask ONLY when classifyDanger() != 'none'.",
+          "rationale": "The file's own comment block states this asymmetry explicitly and warns that the older comments 'used to describe an intent the code does not carry out'; a benign registered shell command therefore executes with NO approval even with askForNonReadOnly true and no answerer.",
+          "evidence": ["packages/guard-approval/src/index.ts:28-51", "packages/guard-approval/src/index.ts:108-149"]
+        },
+        {
+          "decision": "For the shell tools the safety boundary IS the danger classifier, and that classifier is advisory: it parses the tool's own getArgv output.",
+          "rationale": "Stated plainly in code: 'for the shell tools the safety boundary IS the danger classifier, and that classifier is advisory — it parses argv via the tool's own getArgv. The tests in the same file record the bypass surface it is meant to survive (quoted 'r''m', metachar '; rm -rf /', and control flow whose every basename is harmless, e.g. echo a; echo b)'.",
+          "evidence": ["packages/guard-approval/src/index.ts:46-51", "packages/guard-approval/src/index.ts:118-133"]
+        },
+        {
+          "decision": "Deny-on-metachar: any argv token containing one of 7 metachars is 'dangerous' even when every basename looks harmless.",
+          "rationale": "M62 added '>' / '<' / '>>' because 'echo hi > /etc/passwd' had no dangerous basename and no listed command, so it classified 'none' and ran with no approval (measured, per the comment: the shell tools carry no workspace boundary of their own; the write TOOL is gated by isInsideWorkspace, a redirect is not). 'Over-asking here is the intended direction: this layer is deliberately deny-on-metachar, not a precise effect model.'",
+          "evidence": ["packages/guard-approval/src/danger-class.ts:304-317"]
+        },
+        {
+          "decision": "extreme > dangerous: OS-level destruction, workspace-escaping force-delete, or URL/GUI launch is 'extreme'; a force-delete wholly inside the workspace is only 'dangerous'.",
+          "rationale": "'extreme' (echo-consent, default deny) covers format/diskpart/shutdown, reg delete, cipher /w, URL launchers with an http(s) URL, and force-delete whose targets are outside the workspace or a top-level system path; the 'force' tier protects ordinary agent cleanup. Wrapper penetration (sudo/env/POSIX shell -c/cmd /c/pwsh -Command/trap) is depth-limited to 8.",
+          "evidence": ["packages/guard-approval/src/danger-class.ts:10-27", "packages/guard-approval/src/danger-class.ts:173-195", "packages/guard-approval/src/danger-class.ts:199-250", "packages/guard-approval/src/danger-class.ts:295-331"]
+        },
+        {
+          "decision": "The policy seeds BOTH a plain listener and a waterfall handler with one shared decide().",
+          "rationale": "Stated reason: a waterfall-only handler is invisible to ctx.resolveDecision (a scope decision is recorded only when a plain listener seeded the chain), so a child scope's registry would fail OPEN on a parent-mounted policy.",
+          "evidence": ["packages/guard-approval/src/index.ts:152-191"]
+        },
+        {
+          "decision": "approvalPolicy 'never' promotes an ask-decision into deny-with-reason instead of consulting the answerer.",
+          "rationale": "Headless posture: no interactive prompt can ever approve execution.",
+          "evidence": ["packages/guard-approval/src/index.ts:64-70", "packages/guard-approval/src/index.ts:176-191"]
+        },
+        {
+          "decision": "Guardian reviews are fail-closed deny and are breaker-counted: deny, timeout and malformed all trip the breaker at 3 in the last 10 reviews.",
+          "rationale": "Only 'allow' falls through to the human answerer; a timeout/malformed is not model disagreement but exactly the stuck-reviewer failure the breaker exists for. The reviewer runs as a no-tools 'reviewer' role via spawnChild with forkTurns 'none' and is reclaimed in finally.",
+          "evidence": ["packages/guard-approval/src/guardian/index.ts:26-49", "packages/guard-approval/src/guardian/breaker.ts:12-36", "packages/guard-approval/src/guardian/reviewer.ts:46-59", "packages/guard-approval/src/guardian/reviewer.ts:126-188"]
+        }
+      ],
+      "failurePolicy": "mixed, explicitly tiered. Unknown tool (metadata unavailable) -> ask, i.e. fail closed (packages/guard-approval/src/index.ts:114-117); no applicable decision -> undefined = allow, which for a benign shell command is deliberate fail-open (packages/guard-approval/src/index.ts:122-124, 149); approvalPolicy 'never' turns every ask into deny-with-reason (packages/guard-approval/src/index.ts:67-70); the guardian denies on open breaker, on timeout (cause:'timeout'), on malformed strict JSON (cause:'malformed'), on a missing reviewer entry and on missing final text (packages/guard-approval/src/guardian/index.ts:47-49; packages/guard-approval/src/guardian/reviewer.ts:156-172); the durable breaker mirror is fail-soft (an unreadable doc yields a fresh closed breaker, and putDocument never rejects) (packages/guard-approval/src/guardian/index.ts:36-43,60-63).",
+      "events": [
+        "none produced. It hooks the plugin event \"tools/pre-execute\" as both a plain listener and a waterfall handler (packages/guard-approval/src/index.ts:176,183) and registers the service \"approval/guardian\" consumed by core-tools (packages/guard-approval/src/guardian/index.ts:66; packages/core-tools/src/index.ts:271)."
+      ],
+      "keyConstants": [
+        { "name": "DEFAULT_DANGEROUS_COMMANDS", "value": "['rm','Remove-Item','del','rd','erase','shred','wipe','taskkill']", "evidence": "packages/guard-approval/src/index.ts:16-25" },
+        { "name": "DEFAULT_DANGEROUS_FLAGS", "value": "['-rf','-Recurse','-Force']", "evidence": "packages/guard-approval/src/index.ts:26" },
+        { "name": "SHELL_TOOLS / WRITE_TOOLS", "value": "{bash, pwsh} / {write}", "evidence": "packages/guard-approval/src/index.ts:53-54" },
+        { "name": "METACHAR", "value": "[\";\", \"&&\", \"|\", \"$(\", \"`\", \">\", \"<\"]", "evidence": "packages/guard-approval/src/danger-class.ts:316" },
+        { "name": "STATEMENT_SEPARATORS (statement splitter, distinct from METACHAR)", "value": "/[;&|\\n]/", "evidence": "packages/guard-approval/src/danger-class.ts:29" },
+        { "name": "MAX_WRAPPER_DEPTH", "value": "8", "evidence": "packages/guard-approval/src/danger-class.ts:22" },
+        { "name": "EXTREME_COMMANDS", "value": "['format','diskpart','shutdown'] (plus 'reg delete' and 'cipher /w' checked at packages/guard-approval/src/danger-class.ts:176-177)", "evidence": "packages/guard-approval/src/danger-class.ts:17-18" },
+        { "name": "URL_LAUNCHERS", "value": "['start-process','start','saps','invoke-item','ii','rundll32','mshta','explorer'] (used with an http(s) URL at packages/guard-approval/src/danger-class.ts:180)", "evidence": "packages/guard-approval/src/danger-class.ts:20" },
+        { "name": "GUARDIAN_BREAKER_WINDOW / DENY_LIMIT", "value": "10 / 3 (check() counts every non-'allow' outcome in the window)", "evidence": "packages/guard-approval/src/guardian/breaker.ts:1-2" },
+        { "name": "GUARDIAN_REVIEW_TIMEOUT_MS", "value": "90000 (the default applied at packages/guard-approval/src/guardian/reviewer.ts:128)", "evidence": "packages/guard-approval/src/guardian/reviewer.ts:16" },
+        { "name": "guardian context bounds", "value": "maxChars 4000 / maxEvents 12 for the transcript (also the 4000-char request-args slice at line 97 and context slice at 101); per-line slice 200", "evidence": "packages/guard-approval/src/guardian/reviewer.ts:62-81" },
+        { "name": "askForNonReadOnly default", "value": "true", "evidence": "packages/guard-approval/src/index.ts:174" },
+        { "name": "BANNED_PREFIX_PATTERNS (unreachable, see gaps)", "value": "bash/bash -c/bash -lc, cmd/cmd /c/cmd /k/cmd.exe, pwsh/pwsh -Command/powershell/powershell -Command, sh/sh -c/zsh/zsh -c, node -e, bun -e", "evidence": "packages/guard-approval/src/remember.ts:14-20" }
+      ],
+      "gaps": [
+        "remember.ts is dead code: RememberRule/RememberStore/createRememberStore/BANNED_PREFIX_PATTERNS are not re-exported by src/index.ts (compare packages/guard-approval/src/remember.ts:9-29 with the export list at packages/guard-approval/src/index.ts:56-62) and a repo-wide search finds no importer of the module ('remember.ts' appears only in the file itself).",
+        "package.json declares @i-harness/interaction, @i-harness/exec and @i-harness/llm-mock, but no file under src/ imports them (packages/guard-approval/package.json dependencies vs the src import inventory: only core-plugin, core-tools, core-session, core-agent, llm-seam, provider, session-persistence and subagent are imported).",
+        "The classifier's bypass surface is recorded as a known limitation rather than closed: quoted 'r''m', metachar '; rm -rf /', and harmless-basename control flow (packages/guard-approval/src/index.ts:46-51).",
+        "The M62 metachar set still excludes a lone '&' and a newline from the deny list even though both split statements in danger-class.ts:29 — recorded here as the exact constant, not as a claim about intent (packages/guard-approval/src/danger-class.ts:29,316)."
+      ],
+      "evidence": [
+        "packages/guard-approval/src/index.ts:28-51",
+        "packages/guard-approval/src/index.ts:127-133",
+        "packages/guard-approval/src/danger-class.ts:316",
+        "packages/guard-approval/src/guardian/breaker.ts:1-2",
+        "packages/guard-approval/src/guardian/reviewer.ts:148-173",
+        "packages/guard-approval/src/remember.ts:14-20"
+      ]
+    },
+    {
+      "name": "guard-repeat-tool",
+      "responsibility": "Counts consecutive identical tool calls (tool name + JSON args) per Session and, at each configured threshold, appends an internal user/message nudge telling the model to consider changing approach.",
+      "publicSurface": ["RepeatToolConfig", "createRepeatToolGuard"],
+      "designDecisions": [
+        {
+          "decision": "The tracking key is name + JSON.stringify(args); any different key resets the counter to 1.",
+          "rationale": "Only an unbroken run of identical calls is a loop; interleaved different calls are not counted.",
+          "evidence": ["packages/guard-repeat-tool/src/index.ts:59-63"]
+        },
+        {
+          "decision": "thresholds is a LIST, not a single limit — the default [3,5,8] fires a nudge at each of those counts.",
+          "rationale": "Escalating reminders instead of one hard stop; thresholds.includes(state.count) is the trigger.",
+          "evidence": ["packages/guard-repeat-tool/src/index.ts:11", "packages/guard-repeat-tool/src/index.ts:65-78"]
+        },
+        {
+          "decision": "Per-session state is a WeakMap keyed by the Session object.",
+          "rationale": "Stated reason: a Session has no durable id in memory and this works for the main session and every child; entries are GC'd with their session.",
+          "evidence": ["packages/guard-repeat-tool/src/index.ts:44-47"]
+        },
+        {
+          "decision": "The nudge is appended as a session event with internal:true and source {kind:'plugin', plugin:'guard-repeat-tool'}.",
+          "rationale": "M59: it is an internal nudge to the model, not a user turn in the TUI.",
+          "evidence": ["packages/guard-repeat-tool/src/index.ts:71-77"]
+        }
+      ],
+      "failurePolicy": "other — observational, never blocking: the guard only appends a message and has no deny/escalation path (packages/guard-repeat-tool/src/index.ts:52-79). Misconfiguration fails loud at construction: thresholds must be a non-empty array of integers >= 2 (packages/guard-repeat-tool/src/index.ts:31-39).",
+      "events": ["produces \"user/message\" (with internal:true and a plugin source) at packages/guard-repeat-tool/src/index.ts:71-77"],
+      "keyConstants": [
+        { "name": "DEFAULT_THRESHOLDS", "value": "[3, 5, 8]", "evidence": "packages/guard-repeat-tool/src/index.ts:11" },
+        { "name": "DEFAULT_PREVIEW_CHARS", "value": "500", "evidence": "packages/guard-repeat-tool/src/index.ts:12" },
+        { "name": "minimum threshold", "value": "2 (integer)", "evidence": "packages/guard-repeat-tool/src/index.ts:34" }
+      ],
+      "gaps": ["none"],
+      "evidence": [
+        "packages/guard-repeat-tool/src/index.ts:29-47",
+        "packages/guard-repeat-tool/src/index.ts:52-79"
+      ]
+    },
+    {
+      "name": "guard-retry",
+      "responsibility": "Cascade guard on tools/execute that re-dispatches a tool call whose result carries the TOOL_TIMEOUT code, with exponential backoff + jitter, a retry cap, and a re-entrancy guard so retry frames cannot nest.",
+      "publicSurface": ["RetryConfig", "backoffDelay", "createRetryGuard"],
+      "designDecisions": [
+        {
+          "decision": "Mount order is load-bearing: this guard must be registered BEFORE createTimeoutGuard so it stays OUTER and sees the raw TOOL_TIMEOUT value.",
+          "rationale": "core-plugin runs cascade handlers in registration order with the first registered outermost; the registry only wraps the value in {name, output} after the cascade returns, and next() is one-shot so the guard re-invokes the whole cascade.",
+          "evidence": ["packages/guard-retry/src/index.ts:71-77", "packages/guard-retry/src/index.ts:103"]
+        },
+        {
+          "decision": "Retry triggers only on the TOOL_TIMEOUT code, and the ORIGINAL caller signal is captured before the inner timeout guard swaps exec.abortSignal.",
+          "rationale": "After a TOOL_TIMEOUT the timeout guard's own controller is aborted; reading the signal after next() would falsely stop retry. An aborted upstream signal means the STEP is being cancelled, so the loop breaks.",
+          "evidence": ["packages/guard-retry/src/index.ts:44-46", "packages/guard-retry/src/index.ts:82-92"]
+        },
+        {
+          "decision": "Re-dispatch deliberately bypasses registry.execute's pre-execute hooks, the monotonic guards and post-execute; only the final post-retry result reaches post-execute, and the frame is marked with markCascadeRedispatch.",
+          "rationale": "Approval was already granted for the original dispatch; M51 B1 adds the marker so once-per-logical-call cascade handlers (hooks pre/post-tool) skip their own run.",
+          "evidence": ["packages/guard-retry/src/index.ts:94-103"]
+        },
+        {
+          "decision": "A WeakSet of in-flight dispatch objects guards re-entrancy: a nested frame delegates to next() instead of retrying.",
+          "rationale": "Re-invoking ctx.cascade re-runs the whole chain including this handler, so without the set the retry frames would nest and multiply attempts exponentially.",
+          "evidence": ["packages/guard-retry/src/index.ts:64-67", "packages/guard-retry/src/index.ts:79"]
+        }
+      ],
+      "failurePolicy": "other — bounded best-effort recovery: after maxRetries the last timeout result is returned unchanged (packages/guard-retry/src/index.ts:90-105); an upstream abort during backoff stops retrying (91); invalid config throws at construction (maxRetries/initialDelayMs/maxDelayMs non-negative integers, jitterRatio in [0,1)) (packages/guard-retry/src/index.ts:24-42).",
+      "events": ["none"],
+      "keyConstants": [
+        { "name": "DEFAULT_MAX_RETRIES", "value": "2", "evidence": "packages/guard-retry/src/index.ts:19" },
+        { "name": "DEFAULT_INITIAL_DELAY_MS", "value": "500", "evidence": "packages/guard-retry/src/index.ts:20" },
+        { "name": "DEFAULT_MAX_DELAY_MS", "value": "10000", "evidence": "packages/guard-retry/src/index.ts:21" },
+        { "name": "DEFAULT_JITTER_RATIO", "value": "0.1", "evidence": "packages/guard-retry/src/index.ts:22" },
+        { "name": "backoff formula", "value": "min(min(initialDelayMs * 2**attempt, maxDelayMs) * jitter, maxDelayMs) with jitter in [1-r, 1+r]", "evidence": "packages/guard-retry/src/index.ts:55-60" }
+      ],
+      "gaps": ["none"],
+      "evidence": [
+        "packages/guard-retry/src/index.ts:19-22",
+        "packages/guard-retry/src/index.ts:55-60",
+        "packages/guard-retry/src/index.ts:77-105"
+      ]
+    },
+    {
+      "name": "guard-timeout",
+      "responsibility": "Cascade guard on tools/execute that enforces the tool's declared timeoutMs by swapping in a linked AbortController and substituting a structured TOOL_TIMEOUT raw result when its own timer fired.",
+      "publicSurface": ["TOOL_TIMEOUT", "TimeoutGuardConfig", "createTimeoutGuard"],
+      "designDecisions": [
+        {
+          "decision": "The deadline comes from the TOOL's declared timeoutMs; the guard holds no default and passes through untouched when timeoutMs is undefined.",
+          "rationale": "The config object is empty by design ('no hardcoded tunables'); per-tool policy stays with the tool.",
+          "evidence": ["packages/guard-timeout/src/index.ts:5-8", "packages/guard-timeout/src/index.ts:21-22"]
+        },
+        {
+          "decision": "On timeout the guard substitutes {error, code:'TOOL_TIMEOUT'} at the TOP level of the raw value, spreading the tool's other fields.",
+          "rationale": "The registry wraps the cascade value in {name, output}, so the marker must be top-level to read at tool/result.output.code (the spec's initial nested 'output:' shape would bury it one level deeper).",
+          "evidence": ["packages/guard-timeout/src/index.ts:43-57"]
+        },
+        {
+          "decision": "The guard's own timer is distinguished from an upstream (parent) cancel via a local timedOut flag, and the derived controller is linked to the upstream signal and unlinked in finally.",
+          "rationale": "A parent cancel is not a timeout; the listener is named so it can be removed (leak hygiene), and the original signal is restored for outer handlers/post-execute.",
+          "evidence": ["packages/guard-timeout/src/index.ts:24-35", "packages/guard-timeout/src/index.ts:67-71"]
+        },
+        {
+          "decision": "A tool that honors the abort by REJECTING still surfaces TOOL_TIMEOUT instead of propagating the rejection.",
+          "rationale": "Otherwise the rejection would abort the whole agent run with no marker.",
+          "evidence": ["packages/guard-timeout/src/index.ts:59-66"]
+        }
+      ],
+      "failurePolicy": "other — converts a hang into a structured failure value: {error:'tool call timed out after <ms>ms', code:'TOOL_TIMEOUT'} (packages/guard-timeout/src/index.ts:52-56, 63-65); with no timeoutMs the call is unbounded (22).",
+      "events": ["none (TOOL_TIMEOUT is a tool-output error code, not a SessionEvent)"],
+      "keyConstants": [
+        { "name": "TOOL_TIMEOUT", "value": "\"TOOL_TIMEOUT\"", "evidence": "packages/guard-timeout/src/index.ts:3" },
+        { "name": "TimeoutGuardConfig", "value": "empty interface, 'Reserved for future policy knobs'", "evidence": "packages/guard-timeout/src/index.ts:5-8" }
+      ],
+      "gaps": [
+        "TimeoutGuardConfig is an empty placeholder explicitly marked 'Reserved for future policy knobs; the current policy reads tool.timeoutMs directly' (packages/guard-timeout/src/index.ts:5-8)."
+      ],
+      "evidence": [
+        "packages/guard-timeout/src/index.ts:21-22",
+        "packages/guard-timeout/src/index.ts:33-57",
+        "packages/guard-timeout/src/index.ts:59-71"
+      ]
+    },
+    {
+      "name": "llm-seam",
+      "responsibility": "The provider-agnostic model seam: the LLMStreamEvent/LLMRequest/ModelClient vocabulary, the six-level reasoning-effort enum with its fail-loud rule, the retry policy resolver plus retrying client, image projection for text-only models, the message/log consistency assertion, and transport-error explanation.",
+      "publicSurface": [
+        "LLMStreamEvent",
+        "LLMRequest",
+        "ModelClient",
+        "ToolSchema",
+        "ReasoningEffort",
+        "RetryableErrorCode",
+        "RetryBackoffConfig",
+        "RetryPolicyConfig",
+        "NormalRetryPolicyConfig",
+        "AlwaysRetryPolicyConfig",
+        "ResolvedRetryPolicy",
+        "ResolvedRetryBackoff",
+        "ResolvedNormalRetryPolicy",
+        "ResolvedAlwaysRetryPolicy",
+        "resolveRetryPolicy",
+        "retryErrorCode",
+        "backoffDelay",
+        "createRetryingClient",
+        "assertMessagesFromLog",
+        "projectImagesForTextModel",
+        "describeTransportError",
+        "LLMMessage (re-export)",
+        "LLMContentPart (re-export)",
+        "ImageInput (re-export)",
+        "ImageMediaType (re-export)"
+      ],
+      "designDecisions": [
+        {
+          "decision": "One uniform six-level effort vocabulary ('off'|'low'|'medium'|'high'|'xhigh'|'max'); undefined means SEND NOTHING and an unsupported value is passed through verbatim so the provider's 400 surfaces.",
+          "rationale": "The comment states the 'don't default any provider' stance and the 'fail-loud' rule: 'a value the model does not support is passed through verbatim so the provider's 400 surfaces — adapters never guess, clamp or special-case.'",
+          "evidence": ["packages/llm-seam/src/index.ts:198-207", "packages/llm-seam/src/index.ts:209-222"]
+        },
+        {
+          "decision": "Retry only when the error is retryable AND nothing has been produced yet AND a budget remains; budget exhaustion is ALWAYS a hard failure.",
+          "rationale": "Two provider failure styles are handled (throw or {type:'error'} event). A restarted stream after output would duplicate text/reasoning/tool_call, so the error surfaces instead. Retries are silent; a give-up that is not exhaustion preserves the provider's surface style.",
+          "evidence": ["packages/llm-seam/src/index.ts:135-146", "packages/llm-seam/src/index.ts:147-190"]
+        },
+        {
+          "decision": "Error classification prefers a structured err.code found by walking the cause chain (depth 5), then message regexes for CONTEXT_WINDOW_EXCEEDED / QUOTA / RATE_LIMIT / TIMEOUT / SERVER.",
+          "rationale": "Gives a stable code for both provider styles and for wrapped errors (fetch cause chains) without depending on provider-specific text.",
+          "evidence": ["packages/llm-seam/src/index.ts:98-123"]
+        },
+        {
+          "decision": "Images are never silently dropped for text-only routes: part-level images become a deterministic placeholder carrying the first 8 base64 chars, and canonical dataBase64 occurrences in tool-role STRING content are masked.",
+          "rationale": "M14/M15 negative capability: the base64 prefix is a stable correlation hint, not the bytes; the mask stops raw base64 from tool results (output.images -> dataBase64) reaching a text-only model. User/assistant string content is untouched.",
+          "evidence": ["packages/llm-seam/src/index.ts:235-267"]
+        },
+        {
+          "decision": "assertMessagesFromLog pins the model-visible message array to deriveMessages(session) by JSON equality.",
+          "rationale": "Stated as audit F01-3: model-visible messages must derive from the session log.",
+          "evidence": ["packages/llm-seam/src/index.ts:228-233"]
+        },
+        {
+          "decision": "Transport failures are re-described by walking the cause chain and appending a proxy/CA remediation hint, and a caller abort is named as an abort rather than a network fault.",
+          "rationale": "Node collapses DNS/TCP/TLS/proxy failures into the identical 'TypeError: fetch failed'; the text never includes headers or the API key.",
+          "evidence": ["packages/llm-seam/src/index.ts:292-323"]
+        }
+      ],
+      "failurePolicy": "fail-loud with bounded retry. Exhaustion throws the underlying failure whichever style the provider used (packages/llm-seam/src/index.ts:186); a non-retryable or post-output give-up preserves the provider's style — an error EVENT stays terminal and ends the stream, a thrown error is rethrown (packages/llm-seam/src/index.ts:182-186); invalid policy config throws at resolve time (non-positive delays, initialDelayMs > maxDelayMs, jitterRatio outside [0,1], empty or duplicated retryableCodes) (packages/llm-seam/src/index.ts:69-96).",
+      "events": [
+        "LLMStreamEvent vocabulary (seam-internal, NOT SessionEvents): \"text/chunk\", \"reasoning\", \"tool_call\", \"end\", \"error\" (packages/llm-seam/src/index.ts:5-10). Consumers turn these into SessionEvents in core-agent (packages/core-agent/src/index.ts:184,257)."
+      ],
+      "keyConstants": [
+        { "name": "DEFAULT_MAX_RETRIES", "value": "5", "evidence": "packages/llm-seam/src/index.ts:63" },
+        { "name": "DEFAULT_INITIAL_DELAY_MS / DEFAULT_MAX_DELAY_MS / DEFAULT_JITTER_RATIO", "value": "500 / 10000 / 0.1", "evidence": "packages/llm-seam/src/index.ts:64-66" },
+        { "name": "DEFAULT_RETRYABLE_CODES", "value": "['RATE_LIMIT','SERVER','TIMEOUT','TRANSPORT','EMPTY_RESPONSE'] (CONTEXT_WINDOW_EXCEEDED and QUOTA are classified at packages/llm-seam/src/index.ts:16-23 but are not in the default retry set)", "evidence": "packages/llm-seam/src/index.ts:67" },
+        { "name": "backoffDelay (symmetric jitter)", "value": "round(min(initial*2^(n-1), max) + random(-1..1)*jitterRatio*capped), floored at 0", "evidence": "packages/llm-seam/src/index.ts:128-133" },
+        { "name": "cause-chain walk depth", "value": "5 (retryErrorCode; describeTransportError uses the same depth at packages/llm-seam/src/index.ts:300)", "evidence": "packages/llm-seam/src/index.ts:109" },
+        { "name": "image placeholder base64 prefix", "value": "8 characters (also the mask group at packages/llm-seam/src/index.ts:262)", "evidence": "packages/llm-seam/src/index.ts:245" }
+      ],
+      "gaps": [
+        "No usage/token event exists in the stream vocabulary — recorded as a missing seam slot by the adapters: 'the LLMStreamEvent vocabulary carries NO usage event ... (a future usage seam slot)' (packages/llm-gemini/src/index.ts:237-241) and the same note at packages/llm-bedrock/src/index.ts:225-229."
+      ],
+      "evidence": [
+        "packages/llm-seam/src/index.ts:5-10",
+        "packages/llm-seam/src/index.ts:147-190",
+        "packages/llm-seam/src/index.ts:198-222",
+        "packages/llm-seam/src/index.ts:292-323"
+      ]
+    },
+    {
+      "name": "llm-anthropic",
+      "responsibility": "Anthropic Messages wire adapter: streams SSE from POST {baseUrl}/v1/messages, assembles tool_use/thinking content blocks into the seam vocabulary, translates reasoning effort per model generation, and projects images out for text-only routes.",
+      "publicSurface": ["AnthropicConfig", "createAnthropicClient", "parseSSE", "translateReasoning"],
+      "designDecisions": [
+        {
+          "decision": "Two thinking protocols selected by a model-name generation regex: claude 4.x minor >= 6 uses thinking:{type:'adaptive'} + output_config:{effort}; every older model uses thinking:{type:'enabled', budget_tokens:<table>}.",
+          "rationale": "Effort is sent verbatim to the adaptive protocol (xhigh/max included, provider rejects what it cannot do); the legacy protocol NEVER carries the effort string, only the budget number. 'off' and undefined produce no thinking block at all.",
+          "evidence": ["packages/llm-anthropic/src/index.ts:48-59", "packages/llm-anthropic/src/index.ts:61-81"]
+        },
+        {
+          "decision": "Legacy budget table is low 2048 / medium 8192 / high 16384, and xhigh/max fall through verbatim into budget_tokens.",
+          "rationale": "Fail-loud: an unmapped level lands in the numeric slot and the provider 400s — 'no clamping/guessing'.",
+          "evidence": ["packages/llm-anthropic/src/index.ts:56-59", "packages/llm-anthropic/src/index.ts:65-68"]
+        },
+        {
+          "decision": "Request-level reasoningEffort wins over config.options by spread order in the body.",
+          "rationale": "Explicit per-request intent outranks static config.",
+          "evidence": ["packages/llm-anthropic/src/index.ts:119-121"]
+        },
+        {
+          "decision": "Tool-result messages are remapped to a user message with a tool_result block, and a folded assistant step emits its text block BEFORE its tool_use blocks.",
+          "rationale": "Anthropic does not accept image blocks inside tool_result (images travel on a synthetic user message); M51/B2 records that dropping the pre-tool narration made the model's text vanish.",
+          "evidence": ["packages/llm-anthropic/src/index.ts:35-46", "packages/llm-anthropic/src/index.ts:103-115"]
+        },
+        {
+          "decision": "Configured headers merge UNDER the adapter's own headers with a case-insensitive collision drop.",
+          "rationale": "Fetch combines Authorization and authorization into one comma-joined value, so a case-variant duplicate would corrupt the auth header.",
+          "evidence": ["packages/llm-anthropic/src/index.ts:17-33", "packages/llm-anthropic/src/index.ts:130"]
+        }
+      ],
+      "failurePolicy": "other — failures surface as an {type:'error'} terminal event and the stream emits no 'end' after it: transport (packages/llm-anthropic/src/index.ts:136-139), non-OK HTTP or missing body (140-143), malformed tool_use input (189-191). emitEvents stops consumption on the first error event (197-206,217,224).",
+      "events": ["LLMStreamEvent only: \"text/chunk\", \"reasoning\" (thinking_delta / thinking block), \"tool_call\", \"end\", \"error\" (packages/llm-anthropic/src/index.ts:148-196,230)"],
+      "keyConstants": [
+        { "name": "ADAPTIVE_THINKING_RE", "value": "/\\-4[-.](?:6|7|8|9|[1-9][0-9]+)/", "evidence": "packages/llm-anthropic/src/index.ts:54" },
+        { "name": "legacy budget table", "value": "low 2048, medium 8192, high 16384; xhigh/max verbatim", "evidence": "packages/llm-anthropic/src/index.ts:56-59" },
+        { "name": "anthropic-version header", "value": "\"2023-06-01\"", "evidence": "packages/llm-anthropic/src/index.ts:130" },
+        { "name": "default baseUrl / endpoint", "value": "https://api.anthropic.com (endpoint /v1/messages built at packages/llm-anthropic/src/index.ts:128)", "evidence": "packages/llm-anthropic/src/index.ts:94" }
+      ],
+      "gaps": [
+        "Token usage is not surfaced: the adapter never reads message_usage, and llm-gemini's comment names 'llm-anthropic's message_usage' as the same missing-slot gap (packages/llm-gemini/src/index.ts:238-241)."
+      ],
+      "evidence": [
+        "packages/llm-anthropic/src/index.ts:54-81",
+        "packages/llm-anthropic/src/index.ts:103-122",
+        "packages/llm-anthropic/src/index.ts:128-143",
+        "packages/llm-anthropic/src/index.ts:148-196"
+      ]
+    },
+    {
+      "name": "llm-openai",
+      "responsibility": "OpenAI Responses wire adapter: streams SSE from POST {baseUrl}/v1/responses, maps neutral messages into Responses input items (function_call / function_call_output / input_image), and accumulates function-call arguments.",
+      "publicSurface": ["OpenAIConfig", "createOpenAIClient", "parseSSE", "translateReasoning"],
+      "designDecisions": [
+        {
+          "decision": "One openai-family translation table for Responses|Chat|DeepSeek: effort verbatim into reasoning:{effort} with off -> 'none'; no generation special-casing.",
+          "rationale": "Stated reason: DeepSeek uses the SAME table because its server maps medium->high itself. Unset effort emits no field.",
+          "evidence": ["packages/llm-openai/src/index.ts:59-68", "packages/llm-openai/src/index.ts:120-121"]
+        },
+        {
+          "decision": "A tool message carrying image parts is split into a function_call_output (text) plus a following user item carrying the images.",
+          "rationale": "M14 direct-path collapse: matches what deriveMessages emits for the agent path, so a host-built tool message cannot lose its images or smuggle them into the text field.",
+          "evidence": ["packages/llm-openai/src/index.ts:44-57", "packages/llm-openai/src/index.ts:95-100"]
+        },
+        {
+          "decision": "A folded assistant step emits the assistant text item BEFORE the function_call items.",
+          "rationale": "M51/B2: dropping it lost the model's pre-tool narration.",
+          "evidence": ["packages/llm-openai/src/index.ts:102-114"]
+        },
+        {
+          "decision": "The model id comes from the adapter config (config.model), not from LLMRequest.model.",
+          "rationale": "The body sets model: config.model and translateReasoning is called with config.model, so a per-request model override is ignored by this adapter.",
+          "evidence": ["packages/llm-openai/src/index.ts:89-90", "packages/llm-openai/src/index.ts:121"]
+        },
+        {
+          "decision": "Inline function_call arguments on response.output_item.added are emitted immediately and remembered so the later arguments.done does not double-emit.",
+          "rationale": "Some Responses streams send the full arguments with the item; the yieldedInline set prevents a duplicate tool_call.",
+          "evidence": ["packages/llm-openai/src/index.ts:148-193"]
+        }
+      ],
+      "failurePolicy": "other — error events are terminal and the stream returns without 'end': transport (packages/llm-openai/src/index.ts:136-139), non-OK HTTP (140-143), malformed inline arguments (164-166), malformed accumulated arguments (187-189). [DONE] short-circuits further consumption via receivedDone (198-201,223-229).",
+      "events": ["LLMStreamEvent only: \"text/chunk\" (response.output_text.delta), \"reasoning\" (response.reasoning_summary_text.delta), \"tool_call\", \"end\", \"error\" (packages/llm-openai/src/index.ts:150-203,241)"],
+      "keyConstants": [
+        { "name": "endpoint / default baseUrl", "value": "/v1/responses (base https://api.openai.com built at packages/llm-openai/src/index.ts:83)", "evidence": "packages/llm-openai/src/index.ts:128" },
+        { "name": "effort mapping", "value": "reasoning:{effort}; 'off' -> 'none'", "evidence": "packages/llm-openai/src/index.ts:65-68" },
+        { "name": "SSE [DONE] sentinel", "value": "data: [DONE] -> {type:'[DONE]'} (consumed at packages/llm-openai/src/index.ts:198)", "evidence": "packages/llm-openai/src/index.ts:70-80" }
+      ],
+      "gaps": ["none"],
+      "evidence": [
+        "packages/llm-openai/src/index.ts:44-57",
+        "packages/llm-openai/src/index.ts:89-122",
+        "packages/llm-openai/src/index.ts:150-193"
+      ]
+    },
+    {
+      "name": "llm-openai-compatible",
+      "responsibility": "Chat Completions wire adapter for any OpenAI-compatible endpoint: streams SSE from POST {baseUrl}/v1/chat/completions, maps neutral messages to wire messages, and accumulates index-keyed tool_call deltas.",
+      "publicSurface": ["OpenAICompatibleConfig", "createOpenAICompatibleClient", "parseSSE", "translateReasoning"],
+      "designDecisions": [
+        {
+          "decision": "reasoning_effort is a TOP-LEVEL body field here (versus reasoning:{effort} in llm-openai), with the same verbatim / off->'none' rule and the same 'one table for the openai family' rationale.",
+          "rationale": "Chat Completions has no nested reasoning object; DeepSeek's server maps medium->high itself, so no adapter-side generation logic exists.",
+          "evidence": ["packages/llm-openai-compatible/src/index.ts:46-56", "packages/llm-openai-compatible/src/index.ts:107-108"]
+        },
+        {
+          "decision": "Tool calls are emitted as soon as their accumulated function.arguments parse as complete JSON, keeping tool_call events in stream order before later text chunks.",
+          "rationale": "Chat Completions splits one JSON string across deltas, so a successful parse means the arguments fully arrived; a final fallback flush parses leftovers and emits an error event for unparseable buffers.",
+          "evidence": ["packages/llm-openai-compatible/src/index.ts:149-165", "packages/llm-openai-compatible/src/index.ts:228-237"]
+        },
+        {
+          "decision": "A missing tool-call id is synthesized as `call_${index}` and the id/name are overwritten by later deltas that carry them.",
+          "rationale": "Keeps the index-keyed accumulator usable on endpoints that omit ids in early deltas.",
+          "evidence": ["packages/llm-openai-compatible/src/index.ts:136", "packages/llm-openai-compatible/src/index.ts:189-201"]
+        },
+        {
+          "decision": "M59 configured headers (e.g. a gateway's x-opencode-session) merge under the adapter's own auth headers with a case-insensitive collision drop.",
+          "rationale": "Same Fetch comma-join hazard as the other adapters; the adapter's auth shape always wins.",
+          "evidence": ["packages/llm-openai-compatible/src/index.ts:12-33", "packages/llm-openai-compatible/src/index.ts:117"]
+        }
+      ],
+      "failurePolicy": "other — error events are terminal and no 'end' follows: transport (packages/llm-openai-compatible/src/index.ts:123-126), non-OK HTTP (127-130), unparseable final tool args (235). [DONE] sets receivedDone and stops consumption (178-181,214-217).",
+      "events": ["LLMStreamEvent only: \"text/chunk\", \"tool_call\", \"end\", \"error\" (packages/llm-openai-compatible/src/index.ts:186-205,235,241)"],
+      "keyConstants": [
+        { "name": "endpoint / default baseUrl", "value": "/v1/chat/completions (base https://api.openai.com built at packages/llm-openai-compatible/src/index.ts:93)", "evidence": "packages/llm-openai-compatible/src/index.ts:115" },
+        { "name": "synthetic call id prefix", "value": "\"call_\" + index", "evidence": "packages/llm-openai-compatible/src/index.ts:195" },
+        { "name": "effort mapping", "value": "top-level reasoning_effort; 'off' -> 'none'", "evidence": "packages/llm-openai-compatible/src/index.ts:53-56" }
+      ],
+      "gaps": ["none"],
+      "evidence": [
+        "packages/llm-openai-compatible/src/index.ts:71-109",
+        "packages/llm-openai-compatible/src/index.ts:149-165",
+        "packages/llm-openai-compatible/src/index.ts:228-241"
+      ]
+    },
+    {
+      "name": "llm-gemini",
+      "responsibility": "Gemini generateContent wire adapter: streams SSE from POST {baseUrl}/v1beta/models/{model}:streamGenerateContent?alt=sse, maps messages to contents/parts, recovers function names, and accumulates streamed functionCall args.",
+      "publicSurface": ["GeminiConfig", "createGeminiClient", "parseSSE", "translateReasoning"],
+      "designDecisions": [
+        {
+          "decision": "Exactly two generation rules: gemini-2.5 -> thinkingConfig:{thinkingBudget} (off 0 / low 4096 / medium 8192 / high 16384, unmapped verbatim); everything else (gemini-3 and unknown generations) -> thinkingConfig:{thinkingLevel} with off->'minimal' and all other levels verbatim.",
+          "rationale": "Unknown generations default to the current thinkingLevel wire; an unsupported level reaches the provider and its 400 propagates (fail-loud).",
+          "evidence": ["packages/llm-gemini/src/index.ts:35-57", "packages/llm-gemini/src/index.ts:141-142"]
+        },
+        {
+          "decision": "functionResponse.response must be an OBJECT, so tool content is wrapped: a valid-JSON object passes through verbatim, anything else becomes {output:<text>}, and non-string content is flattened with '[image]' placeholders.",
+          "rationale": "The neutral tool content is a JSON string or plain text; passing a non-object through would violate the wire contract.",
+          "evidence": ["packages/llm-gemini/src/index.ts:80-97", "packages/llm-gemini/src/index.ts:118-127"]
+        },
+        {
+          "decision": "The function NAME is recovered from preceding assistant toolCalls by call id, because the neutral tool message carries only the id.",
+          "rationale": "Stated as a wire requirement plus the invariant that assistant toolCalls always precede tool results in model-visible order.",
+          "evidence": ["packages/llm-gemini/src/index.ts:106-115"]
+        },
+        {
+          "decision": "Streamed functionCall chunks accumulate with a name-opens-a-new-call rule and are emitted just before 'end'; the args parse is a concat-parse with a spread-merge fallback.",
+          "rationale": "Gemini streams the first chunk with the name and the rest with partial args objects; a name ALWAYS opens a new pending call so parallel same-name calls keep their own args.",
+          "evidence": ["packages/llm-gemini/src/index.ts:169-215", "packages/llm-gemini/src/index.ts:262"]
+        },
+        {
+          "decision": "systemInstruction is emitted only when the system prompt is non-empty, and tools only when the tool list is non-empty.",
+          "rationale": "Keeps the body minimal for text-only/no-tool calls.",
+          "evidence": ["packages/llm-gemini/src/index.ts:136-139"]
+        }
+      ],
+      "failurePolicy": "other — error events are terminal: transport (packages/llm-gemini/src/index.ts:158-161), non-OK HTTP (162-165); a partial-args parse failure degrades to a merged object rather than erroring (203-210).",
+      "events": ["LLMStreamEvent only: \"text/chunk\", \"tool_call\", \"end\", \"error\" (packages/llm-gemini/src/index.ts:211,226-243,266)"],
+      "keyConstants": [
+        { "name": "endpoint template", "value": "{baseUrl}/v1beta/models/{encodeURIComponent(model)}:streamGenerateContent?alt=sse", "evidence": "packages/llm-gemini/src/index.ts:147" },
+        { "name": "gemini-2.5 budget table", "value": "off 0, low 4096, medium 8192, high 16384; xhigh/max verbatim", "evidence": "packages/llm-gemini/src/index.ts:51-54" },
+        { "name": "default baseUrl", "value": "https://generativelanguage.googleapis.com", "evidence": "packages/llm-gemini/src/index.ts:100" }
+      ],
+      "gaps": [
+        "Token usage is deliberately not surfaced: the comment records that usageMetadata (promptTokenCount / candidatesTokenCount / totalTokenCount) arrives on the last chunk but 'the LLMStreamEvent vocabulary carries NO usage event ... (a future usage seam slot)' (packages/llm-gemini/src/index.ts:237-241)."
+      ],
+      "evidence": [
+        "packages/llm-gemini/src/index.ts:46-57",
+        "packages/llm-gemini/src/index.ts:106-127",
+        "packages/llm-gemini/src/index.ts:188-215",
+        "packages/llm-gemini/src/index.ts:237-241"
+      ]
+    },
+    {
+      "name": "llm-bedrock",
+      "responsibility": "AWS Bedrock Converse wire adapter: sends ConverseStreamCommand through the AWS SDK, walks the streamed member union into the seam vocabulary, translates reasoning per model family, and folds images/reasoning into additionalModelRequestFields.",
+      "publicSurface": ["BedrockConfig", "BedrockReasoningFields", "BedrockRuntimeFace", "createBedrockClient", "resolveBedrockRegion", "translateReasoning"],
+      "designDecisions": [
+        {
+          "decision": "Reasoning translation is family-keyed: claude 4.6+ -> additionalModelRequestFields {reasoningConfig:{type:'adaptive',maxReasoningEffort}, thinking:{type:'adaptive'}}; claude <=4.5 -> thinkingConfig:{type:'enabled',budgetTokens:<table>}; nova -> adaptive reasoningConfig; unknown family -> the legacy thinkingConfig shape.",
+          "rationale": "The unknown-family fallback is deliberate fail-loud: 'a model that rejects it surfaces its 400 — fail-loud, never silently drop the effort'. 'off'/undefined emit no thinking fields.",
+          "evidence": ["packages/llm-bedrock/src/index.ts:51-97"]
+        },
+        {
+          "decision": "The runtime client is constructed once at adapter construction (AWS credential chain + region resolution), and a test-injected BedrockRuntimeFace replaces it entirely.",
+          "rationale": "Credential chain resolved once; tests inject a fake so no network/AWS credentials are needed. Region chain: config.region -> AWS_REGION -> AWS_DEFAULT_REGION -> us-east-1.",
+          "evidence": ["packages/llm-bedrock/src/index.ts:19-29", "packages/llm-bedrock/src/index.ts:114-120"]
+        },
+        {
+          "decision": "Converse only accepts maxTokens/temperature/topP/stopSequences in inferenceConfig, so every extra option PLUS the reasoning fields go to additionalModelRequestFields.",
+          "rationale": "Explicit in-code statement of the wire split; the reasoning spread comes after config.options so request-level effort wins.",
+          "evidence": ["packages/llm-bedrock/src/index.ts:10-13", "packages/llm-bedrock/src/index.ts:126-152"]
+        },
+        {
+          "decision": "Images use the Converse ImageBlock with a media-type sub-type fallback to png, and tool results become {json} when the content is a valid JSON object, else {text}.",
+          "rationale": "media types outside the four Converse formats are sent as png-lite; the json/text split mirrors the wire contract.",
+          "evidence": ["packages/llm-bedrock/src/index.ts:31-47", "packages/llm-bedrock/src/index.ts:99-112"]
+        },
+        {
+          "decision": "The stream member union is soft-walked by runtime key checks because the SDK declares sibling members as `?: never` and TS's `in` narrowing cannot split the union.",
+          "rationale": "Documented reason in-code; the five exception members (internalServer/modelStreamError/serviceUnavailable/throttling/validation) all become error events.",
+          "evidence": ["packages/llm-bedrock/src/index.ts:160-180", "packages/llm-bedrock/src/index.ts:230-241"]
+        }
+      ],
+      "failurePolicy": "other — SDK/send rejections propagate as exceptions (no try/catch around client.send at packages/llm-bedrock/src/index.ts:156-159); stream-side exceptions become terminal error events and the stream returns WITHOUT 'end' (packages/llm-bedrock/src/index.ts:230-248); malformed tool-use args become an error event (216-221). The abort signal is passed to the SDK request (packages/llm-bedrock/src/index.ts:156-159).",
+      "events": ["LLMStreamEvent only: \"text/chunk\", \"reasoning\" (contentBlockDelta.reasoningContent), \"tool_call\", \"end\", \"error\" (packages/llm-bedrock/src/index.ts:190-224,243-250)"],
+      "keyConstants": [
+        { "name": "region chain", "value": "config.region -> AWS_REGION -> AWS_DEFAULT_REGION -> 'us-east-1'", "evidence": "packages/llm-bedrock/src/index.ts:23-29" },
+        { "name": "ADAPTIVE_CLAUDE_RE", "value": "/\\-4[-.](?:6|7|8|9|[1-9][0-9]+)/", "evidence": "packages/llm-bedrock/src/index.ts:56" },
+        { "name": "legacy budget table", "value": "low 2048, medium 8192, high 16384; xhigh/max verbatim", "evidence": "packages/llm-bedrock/src/index.ts:58-61" },
+        { "name": "only external (non-workspace) runtime dependency in this package group", "value": "@aws-sdk/client-bedrock-runtime ^3.800.0 (declared in packages/llm-bedrock/package.json)", "evidence": "packages/llm-bedrock/src/index.ts:2-3" }
+      ],
+      "gaps": [
+        "Token usage is not surfaced: the comment records that the metadata member carries the usage snapshot but 'the seam's LLMStreamEvent vocabulary has NO usage event (same gap as llm-anthropic / llm-gemini), so the wire position is documented here' (packages/llm-bedrock/src/index.ts:225-229)."
+      ],
+      "evidence": [
+        "packages/llm-bedrock/src/index.ts:85-97",
+        "packages/llm-bedrock/src/index.ts:114-159",
+        "packages/llm-bedrock/src/index.ts:181-224",
+        "packages/llm-bedrock/src/index.ts:225-250"
+      ]
+    },
+    {
+      "name": "llm-mock",
+      "responsibility": "A scripted mock ModelClient: each stream() call replays exactly one MockStep (its tool calls, then its text, then 'end'), consuming the script destructively one step per model turn.",
+      "publicSurface": ["MockStep", "MockToolCall", "createMockClient"],
+      "designDecisions": [
+        {
+          "decision": "Turn-based destructive consumption: one stream() call = one script step, so a script maps 1:1 to model turns.",
+          "rationale": "The comment states the cassette is one-shot and each call replays the NEXT step.",
+          "evidence": ["packages/llm-mock/src/index.ts:14-26"]
+        },
+        {
+          "decision": "Tool calls are yielded before the step's text, then 'end'.",
+          "rationale": "Fixed intra-step ordering so tests can assert on a deterministic event sequence.",
+          "evidence": ["packages/llm-mock/src/index.ts:27-31"]
+        }
+      ],
+      "failurePolicy": "fail-loud on exhaustion: an empty script yields {type:'error'} 'mock script exhausted' instead of a silent end (packages/llm-mock/src/index.ts:22-25).",
+      "events": ["LLMStreamEvent only: \"tool_call\", \"text/chunk\", \"end\", \"error\" (packages/llm-mock/src/index.ts:23-31)"],
+      "keyConstants": [],
+      "gaps": ["none"],
+      "evidence": [
+        "packages/llm-mock/src/index.ts:14-26",
+        "packages/llm-mock/src/index.ts:27-31"
+      ]
+    },
+    {
+      "name": "provider",
+      "responsibility": "The provider plane: protocol enum + ProviderProfile/registry, the unified model-context resolution chain over a capability-card catalog, the per-route model-probe machinery (protocol-aware auth, dual candidate paths, response normalization), the adapter dispatch (buildModelClient / buildWireClient), and the id-keyed websearch provider seam.",
+      "publicSurface": [
+        "ProviderProtocol",
+        "ProviderProfile",
+        "ProviderModelContext",
+        "ProviderRegistry",
+        "ModelCard",
+        "ModelDescriptor",
+        "DirectoryEntry",
+        "EffectiveContextInput",
+        "EffectiveModelContext",
+        "Probe",
+        "ProbeRequest",
+        "ProbeUnavailableError",
+        "ModelProbeFailedError",
+        "WireClientConfig",
+        "buildModelClient",
+        "buildWireClient",
+        "createProviderRegistry",
+        "defaultProviderRegistry",
+        "describeDirectory",
+        "probeCandidatePaths",
+        "probeModels",
+        "registerProbe",
+        "resolveEffectiveModelContext",
+        "resolveModelCard",
+        "resolveModelContext",
+        "WebSearchProvider",
+        "WebSearchRequest",
+        "WebSearchResult",
+        "WebSearchSource",
+        "getWebSearchProvider",
+        "registerWebSearchProvider",
+        "tryGetWebSearchProvider"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The registry IS the directory: describeDirectory() is a view over profiles registered through register(), and runtime credentials (apiKey/baseUrl) never surface in a DirectoryEntry.",
+          "rationale": "Avoids a second registration mechanism; the directory row carries only route/displayName/protocol/apiKeyEnv/defaultModel/models.",
+          "evidence": ["packages/provider/src/index.ts:160-167", "packages/provider/src/index.ts:248-261"]
+        },
+        {
+          "decision": "Effective model context is a per-field chain userModel > profile.modelContexts[modelId] > profile.contextWindow > model-catalog CARD > undefined; the card is value-only and never provides a request default.",
+          "rationale": "The card arm fills a missing contextWindow but never overwrites, maxOutputTokens comes from card/user maxTokens, and a run with no window knowledge anywhere returns undefined (fail-closed consumers gate on contextWindow).",
+          "evidence": ["packages/provider/src/index.ts:52-59", "packages/provider/src/index.ts:117-158"]
+        },
+        {
+          "decision": "Probe dispatch order: explicit registerProbe for the route > a request carrying an explicit modelsURL/baseURL (generic builtin probe for ANY route) > the built-in probe for the openai-compatible route when a base URL exists > the profile's static models list > ProbeUnavailableError.",
+          "rationale": "The route gate cannot apply to an unsaved draft; the static catalog is the offline fallback only for a route with no base URL, and the built-in probe always wins for openai-compatible because 'discovery IS the openai-compatible route's content'.",
+          "evidence": ["packages/provider/src/index.ts:591-647"]
+        },
+        {
+          "decision": "Probe URL/auth discipline: protocol-aware auth headers (anthropic-messages -> x-api-key + anthropic-version, gemini -> x-goog-api-key, everything else -> Bearer), an absent key omits the header entirely, both URLs are validated http/https, and a 10s AbortSignal.timeout bounds every candidate.",
+          "rationale": "'never `Bearer undefined`'; a black-hole baseURL must not hang the settings request; status errors try the sibling candidate while transport/shape failures are structural and stop the loop.",
+          "evidence": ["packages/provider/src/index.ts:263-272", "packages/provider/src/index.ts:340-355", "packages/provider/src/index.ts:437-495", "packages/provider/src/index.ts:497-519"]
+        },
+        {
+          "decision": "Probe response normalization accepts array | {data|models|items: [...]} | {data|models|items: {id:row}} | a bare {id:row} map, with per-field capacity rules where the limit.{context,output} pair is atomic.",
+          "rationale": "opencode/cc-switch shapes are accepted; a half-pair never surfaces (a missing/invalid half drops both) and an entry with no resolvable id raises a branded ModelProbeFailedError instead of a bare TypeError.",
+          "evidence": ["packages/provider/src/index.ts:357-398", "packages/provider/src/index.ts:400-435"]
+        },
+        {
+          "decision": "buildModelClient dispatches on profile.protocol and wraps the client with the retrying client ONLY when profile.retryPolicy is set; the default model falls back profile.defaultModel then 'gpt-4o'.",
+          "rationale": "Absent retryPolicy leaves the protocol client unwrapped (pre-M20 behavior); an unknown protocol throws at build time.",
+          "evidence": ["packages/provider/src/index.ts:702-737"]
+        },
+        {
+          "decision": "Websearch is a zero-default id-keyed seam: no built-in provider, pin > exactly-one > error, and a missing map means the websearch tool is simply not registered.",
+          "rationale": "Registered under the 'websearch/provider' service as a Map; a duplicate id throws; NO_PROVIDER/MULTIPLE_PROVIDERS are the two fail-loud misconfiguration classes.",
+          "evidence": ["packages/provider/src/index.ts:780-863"]
+        }
+      ],
+      "failurePolicy": "fail-loud / fail-closed. register() throws on a duplicate route and validates contextWindow/maxContextWindow and the retry policy at registration (packages/provider/src/index.ts:603-608,683-700); an unknown protocol throws at build (723-725); probe failures carry the branded code 'model-probe-failed' while 'no probe and no catalog' is 'probe-unavailable' (216-235); a model row with no resolvable id throws (389-398); resolveModelCard returns undefined rather than a synthetic value (110-115); the model catalog is validated at load and throws on a malformed route/model row (70-99); websearch throws NO_PROVIDER / MULTIPLE_PROVIDERS / duplicate-id (820-862).",
+      "events": ["none"],
+      "keyConstants": [
+        { "name": "ProviderProtocol", "value": "['openai-responses','openai-compatible','anthropic-messages','gemini','bedrock']", "evidence": "packages/provider/src/index.ts:9" },
+        { "name": "PROBE_TIMEOUT_MS", "value": "10000 (applied to every candidate fetch at packages/provider/src/index.ts:447)", "evidence": "packages/provider/src/index.ts:265" },
+        { "name": "PROBE_CANDIDATE_PATHS", "value": "['/v1/models','/models']", "evidence": "packages/provider/src/index.ts:272" },
+        { "name": "COMPAT_BASE_SUFFIXES", "value": "['/anthropic','/api/claudecode','/api/anthropic','/api/coding','/claude','/step_plan','/apps/anthropic']", "evidence": "packages/provider/src/index.ts:280-288" },
+        { "name": "ANTHROPIC_API_VERSION", "value": "\"2023-06-01\"", "evidence": "packages/provider/src/index.ts:317" },
+        { "name": "default model fallback", "value": "\"gpt-4o\"", "evidence": "packages/provider/src/index.ts:733" },
+        { "name": "model-catalog seeds", "value": "deepseek v4 line 1048576/384000; gemini 2.5 1048576/65536 and 1.5-pro 2097152/8192; bedrock claude-3-5 200000/8192 (data file: packages/provider/src/model-catalog.json)", "evidence": "packages/provider/src/index.ts:61-67" }
+      ],
+      "gaps": [
+        "buildWireClient (the RESOLVED-wire-protocol dispatch, packages/provider/src/index.ts:739-778) has no production caller: repo-wide it appears only in packages/provider/test/provider.test.ts:43-47.",
+        "Its doc comment assigns the unknown-protocol case to 'the caller owns the warn + mock fallback' (packages/provider/src/index.ts:760-761) but the function just returns undefined and no such fallback exists in this package.",
+        "maxContextWindow is declared as an 'absolute ceiling; budget-enforcement hook (no enforcement in M15)' — the hook is still unimplemented (packages/provider/src/index.ts:30)."
+      ],
+      "evidence": [
+        "packages/provider/src/index.ts:9-37",
+        "packages/provider/src/index.ts:142-158",
+        "packages/provider/src/index.ts:614-645",
+        "packages/provider/src/index.ts:707-737",
+        "packages/provider/src/index.ts:762-778"
+      ]
+    },
+    {
+      "name": "provider-runtime",
+      "responsibility": "The settings+credentials-backed provider runtime: merges registry templates with user settings rows into a directory view, persists provider config / keys / default model, runs model discovery, and resolves a session's model into a ready ModelClient binding or a typed unconfigured/invalid state.",
+      "publicSurface": ["CreateProviderRuntimeOptions", "ModelResolutionState", "ProviderRuntime", "ProviderRuntimeEntry", "SessionModelBinding", "createProviderRuntime"],
+      "designDecisions": [
+        {
+          "decision": "Model-resolution precedence: explicit override string 'provider:model' > session selection (provider+model+reasoningEffort) > settings llm.defaultModel; an empty default yields status 'unconfigured'.",
+          "rationale": "selectModel encodes the order and returns a typed state object instead of throwing for malformed input (override without a colon, empty provider/model, no model configured).",
+          "evidence": ["packages/provider-runtime/src/index.ts:496-542", "packages/provider-runtime/src/index.ts:298-302"]
+        },
+        {
+          "decision": "resolveModel validates in order provider existence, catalog membership, effort vocabulary, auth presence, auth resolution, ambient restriction, credential value, then buildClient — each failure a typed state with a reason.",
+          "rationale": "Keeps the caller's failure handling uniform ('invalid' carries providerId/modelId where known; 'unconfigured' means no usable credential) and wraps buildClient throws into an invalid state rather than propagating.",
+          "evidence": ["packages/provider-runtime/src/index.ts:303-405"]
+        },
+        {
+          "decision": "Auth is ref-based and derived from the view: apiKeyEnv -> {kind:'api-key-ref', ref}, bedrock -> {kind:'ambient'}, otherwise undefined (unconfigured).",
+          "rationale": "The runtime never holds key material in settings; the ref name is resolved through @i-harness/credentials at use time. An 'ambient' resolution is only accepted for the bedrock protocol.",
+          "evidence": ["packages/provider-runtime/src/index.ts:473-483", "packages/provider-runtime/src/index.ts:353-370"]
+        },
+        {
+          "decision": "The runtime profile REPLACES the template's inline apiKey with the resolved value and maps the settings/adapter vocabularies (openai-completions <-> openai-compatible).",
+          "rationale": "delete template.apiKey prevents a static template key from leaking past the credential resolution path; templateSettingsProtocol/adapterProtocol bridge the settings enum and ProviderProfile.protocol.",
+          "evidence": ["packages/provider-runtime/src/index.ts:449-471", "packages/provider-runtime/src/index.ts:485-494"]
+        },
+        {
+          "decision": "View precedence is user > template per field (displayName, baseURL, apiKeyEnv, headers wholesale, inputModalities), and models merge with user rows winning per field.",
+          "rationale": "A user header MAP replaces the template's whole map (not a per-key merge); a model entry's inputModalities may narrow/override the route declaration (M61), with absent-on-both meaning text-only.",
+          "evidence": ["packages/provider-runtime/src/index.ts:409-447", "packages/provider-runtime/src/index.ts:563-573"]
+        },
+        {
+          "decision": "Discovery caches per provider until force, merges probe rows UNDER manual rows (manual wins), and is refused entirely for bedrock.",
+          "rationale": "discoverModels throws 'Discovery is not available for this provider; add a model ID manually.' for bedrock; the merged catalog is written back into settings and cached.",
+          "evidence": ["packages/provider-runtime/src/index.ts:237-288", "packages/provider-runtime/src/index.ts:161"]
+        },
+        {
+          "decision": "The apiKey ref name is generated from the provider id: upper-snake-cased id + '_API_KEY'.",
+          "rationale": "Guarantees the ref satisfies the credentials env-grammar pattern; leading digits are prefixed with PROVIDER_ and an empty result becomes PROVIDER.",
+          "evidence": ["packages/provider-runtime/src/index.ts:627-635"]
+        }
+      ],
+      "failurePolicy": "mixed by operation. Read/resolve paths return typed states instead of throwing ('unconfigured'/'invalid'), including a caught auth-resolution failure (packages/provider-runtime/src/index.ts:330-334,336-351,356-361,364-369,398-404); mutations and discovery throw: 'provider id is required' (637-639), 'provider \"<id>\" is not configured' (246), 'No API key configured for provider' (252,259), bedrock manual-only (247-249). resolveModel returns a binding only after buildClient succeeds, so an unknown provider/model is never silently substituted.",
+      "events": ["none"],
+      "keyConstants": [
+        { "name": "REASONING_EFFORTS", "value": "{off, low, medium, high, xhigh, max}", "evidence": "packages/provider-runtime/src/index.ts:106-113" },
+        { "name": "api key ref convention", "value": "<UPPER_SNAKE_PROVIDER_ID>_API_KEY", "evidence": "packages/provider-runtime/src/index.ts:627-635" },
+        { "name": "discovery availability", "value": "bedrock => 'manual-only', everything else => 'available'", "evidence": "packages/provider-runtime/src/index.ts:161" },
+        { "name": "binding label", "value": "'<displayName> · <modelId>' unless displayName is empty or equals the id, then '<providerId>:<modelId>'", "evidence": "packages/provider-runtime/src/index.ts:388-393" }
+      ],
+      "gaps": [
+        "OAuth provider auth is declared but unreachable: authRef only ever builds 'api-key-ref' or 'ambient' (packages/provider-runtime/src/index.ts:473-477), while the credentials resolver maps the declared 'oauth-account-ref' kind to {configured:false, source:'oauth'} / undefined (packages/credentials/src/index.ts:162,167) — no OAuth flow exists.",
+        "discovered (the discovery cache) is in-memory only: it is cleared on upsert/remove and never reloaded from settings, so a restart re-probes (packages/provider-runtime/src/index.ts:119,174,189,286)."
+      ],
+      "evidence": [
+        "packages/provider-runtime/src/index.ts:298-405",
+        "packages/provider-runtime/src/index.ts:449-483",
+        "packages/provider-runtime/src/index.ts:496-542",
+        "packages/provider-runtime/src/index.ts:627-635"
+      ]
+    },
+    {
+      "name": "credentials",
+      "responsibility": "The ref-based credential store: one JSON document of ref -> value under the config home with env-over-file precedence and atomic 0600 writes, plus a ProviderAuthResolver that turns provider auth refs into api-key/bearer/ambient values.",
+      "publicSurface": [
+        "CredentialDocument",
+        "CredentialInfo",
+        "CredentialRefError",
+        "CredentialShadowedError",
+        "CredentialSource",
+        "CredentialStore",
+        "ProviderAuthRef",
+        "ProviderAuthResolver",
+        "ResolvedProviderAuth",
+        "createCredentialStore",
+        "createProviderAuthResolver"
+      ],
+      "designDecisions": [
+        {
+          "decision": "'Refs not values': the settings document may hold only a ref NAME (apiKeyEnv); describe() is a one-way redacted record that never carries the value, and resolve() is the internal read that hands the value to a builder.",
+          "rationale": "Module doc: 'the settings document must NEVER hold key material — it only references a credential ref by name (apiKeyEnv)'; resolve is explicitly 'NOT part of the one-way surface (never echo a value through describe; resolve hands it to a builder, never to a UI-facing reader)'. Settings mirrors this: apiKeyEnv is role 'credential-ref' and no inline apiKey field exists (packages/settings/src/sections.ts:137; packages/settings/src/index.ts:125-128).",
+          "evidence": ["packages/credentials/src/index.ts:1-10", "packages/credentials/src/index.ts:36-49", "packages/credentials/src/index.ts:109-120"]
+        },
+        {
+          "decision": "Read precedence env > file, and a WRITE on an env-shadowed ref is REJECTED with CredentialShadowedError (code 'credential-rejected').",
+          "rationale": "Stated reason: 'Silent shadowed writes would make the user believe the file value took effect; reject instead.' The env var name IS the ref (refs are env-grammar identifiers).",
+          "evidence": ["packages/credentials/src/index.ts:5-10", "packages/credentials/src/index.ts:93-104", "packages/credentials/src/index.ts:128-130", "packages/credentials/src/index.ts:134-141", "packages/credentials/src/index.ts:197-203"]
+        },
+        {
+          "decision": "Empty/whitespace means 'not configured here', symmetrically: writes reject it, the loader drops such entries, and an empty env var does NOT shadow the file.",
+          "rationale": "Self-consistent emptiness stance so {configured:false} is what an empty secret reliably reports.",
+          "evidence": ["packages/credentials/src/index.ts:11-16", "packages/credentials/src/index.ts:182-195", "packages/credentials/src/index.ts:219-223"]
+        },
+        {
+          "decision": "Reads degrade to empty and never throw; writes are atomic (tmp + rename) with mode 0600 on the temp file plus a defensive chmod.",
+          "rationale": "A missing file is a normal first run; a corrupt or non-conforming document degrades to empty but reports via console.warn. The atomic mode param creates the temp 0600 so the leftover window and the renamed file are never world-readable; on win32 chmod is best-effort because Node ignores POSIX bits.",
+          "evidence": ["packages/credentials/src/index.ts:17-27", "packages/credentials/src/index.ts:205-231", "packages/credentials/src/index.ts:242-254"]
+        },
+        {
+          "decision": "Values at rest are plaintext in the refs JSON map; the stated protection is file permissions plus atomic replacement — no encryption or OS keychain.",
+          "rationale": "The document is JSON.stringify({refs}) written by writeFileAtomic(path, json, 0o600); nothing in the module encrypts or delegates to a keychain.",
+          "evidence": ["packages/credentials/src/index.ts:77-80", "packages/credentials/src/index.ts:246-253"]
+        }
+      ],
+      "failurePolicy": "split: fail-open on READ (missing file -> {} silently; corrupt/unshapeable -> {} + console.warn via warnBad; packages/credentials/src/index.ts:205-240) and fail-loud on WRITE. Rejections: a ref that does not match the env-grammar pattern -> CredentialRefError 'credential-invalid-ref' (174-180); an empty/whitespace or non-string set value -> CredentialRefError (182-188); a write/unset on an env-provided ref -> CredentialShadowedError 'credential-rejected' (197-203). unset on an absent ref is an idempotent no-op (146).",
+      "events": ["none"],
+      "keyConstants": [
+        { "name": "REF_PATTERN", "value": "/^[A-Za-z_][A-Za-z0-9_]*$/ (a valid environment-variable name)", "evidence": "packages/credentials/src/index.ts:106-107" },
+        { "name": "file mode", "value": "0o600 (atomic-write temp mode + chmodSync best-effort)", "evidence": "packages/credentials/src/index.ts:248-253" },
+        { "name": "error codes", "value": "'credential-invalid-ref' (CredentialRefError at packages/credentials/src/index.ts:86) / 'credential-rejected' (CredentialShadowedError at packages/credentials/src/index.ts:99)", "evidence": "packages/credentials/src/index.ts:86" }
+      ],
+      "gaps": [
+        "OAuth is a declared stub: ProviderAuthRef includes {kind:'oauth-account-ref'} but describe returns {configured:false, source:'oauth', writable:false} and resolve returns undefined (packages/credentials/src/index.ts:54,162,167) — there is no OAuth implementation or caller.",
+        "'bearer' is a declared resolved kind but no code path produces it (packages/credentials/src/index.ts:58 vs the only producer at 169 returning {kind:'api-key'})."
+      ],
+      "evidence": [
+        "packages/credentials/src/index.ts:1-16",
+        "packages/credentials/src/index.ts:121-156",
+        "packages/credentials/src/index.ts:174-203",
+        "packages/credentials/src/index.ts:205-254"
+      ]
+    },
+    {
+      "name": "preset",
+      "responsibility": "Agent presets: the JSON preset shape (name/systemPrompt/tools/model), parsePreset validation, mountPreset (resolving the preset's tools through a ToolProvider into a fresh child scope), and the I-harness-owned DEFAULT_AGENT_PRESET system prompt.",
+      "publicSurface": ["AgentPreset", "DEFAULT_AGENT_PRESET", "ToolProvider", "mountPreset", "parsePreset"],
+      "designDecisions": [
+        {
+          "decision": "mountPreset resolves EVERY tool BEFORE mutating any scope, so an unknown tool throws with no partial mount.",
+          "rationale": "Stated as audit F10-1: resolution happens before any scope mutation so the failure is fail-loud and leaves no half-mounted child.",
+          "evidence": ["packages/preset/src/index.ts:26-41"]
+        },
+        {
+          "decision": "Per-agent configuration is scoped to the child: the 'preset' service and the resolved tools go into a freshly mounted child scope, lazily creating a tools/registry when the caller exposed none.",
+          "rationale": "Keeps a preset from leaking its tools/system prompt into the parent scope; the get-or-create mirrors the interaction pattern.",
+          "evidence": ["packages/preset/src/index.ts:43-63"]
+        },
+        {
+          "decision": "The default preset's system prompt is the readable in-repo source and is treated as a BASE by the assembly, not as the final prompt.",
+          "rationale": "default.ts states 'the readable source here IS the authoritative default system prompt' while 'the assembly composes its runtime sections AFTER this base, and the model's user message always outranks the system prompt'; the consumer appends the sandbox policy context after it (packages/session-executor/src/assembly.ts:592-602).",
+          "evidence": ["packages/preset/src/default.ts:1-7", "packages/preset/src/default.ts:11-52"]
+        }
+      ],
+      "failurePolicy": "fail-loud. parsePreset throws 'invalid preset: name, systemPrompt, tools required' (packages/preset/src/index.ts:18-24); mountPreset throws `preset '<name>' requires unknown tool: <name>` before any scope mutation (packages/preset/src/index.ts:35-41).",
+      "events": ["none"],
+      "keyConstants": [
+        { "name": "DEFAULT_AGENT_PRESET.name", "value": "\"default\"", "evidence": "packages/preset/src/default.ts:12" },
+        { "name": "DEFAULT_AGENT_PRESET.tools", "value": "['read','write','list_dir','grep','glob','bash']", "evidence": "packages/preset/src/default.ts:53-60" }
+      ],
+      "gaps": [
+        "mountPreset and ToolProvider have no production caller: repo-wide they appear only in packages/preset/test/preset.test.ts:38,46,57 (plus a TUI comment at packages/tui/src/views/light-personas.ts:2). The only production consumer uses parsePreset(...).systemPrompt / DEFAULT_AGENT_PRESET.systemPrompt (packages/session-executor/src/assembly.ts:63,598-599), so the preset's tools/model fields are not applied anywhere."
+      ],
+      "evidence": [
+        "packages/preset/src/index.ts:18-24",
+        "packages/preset/src/index.ts:26-63",
+        "packages/preset/src/default.ts:11-60"
+      ]
+    }
+  ],
+  "coverage": { "assigned": 19, "covered": 19 }
+}

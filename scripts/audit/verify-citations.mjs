@@ -69,11 +69,19 @@ function lines(abs) {
   return v
 }
 
-/** Split "a/b/c.ts:123" into path and line. Bare paths are allowed. */
+/**
+ * Split "a/b/c.ts:123" or "a/b/c.ts:123-145" into path and line endpoints.
+ * The RANGE form is explicitly allowed by the design ("path:line or
+ * path:line-line") and is used wherever one decision is carried by a block of
+ * code. An earlier version of this function only accepted a bare line number,
+ * so every range citation failed to resolve and was reported as a missing FILE
+ * -- 274 false positives that would have read as a citation crisis.
+ * A bare path (no line) is allowed too.
+ */
 function parseCitation(cite) {
-  const m = String(cite).match(/^(.*?):(\d+)$/)
-  if (!m) return { path: String(cite), line: null }
-  return { path: m[1], line: Number(m[2]) }
+  const m = String(cite).match(/^(.*?):(\d+)(?:-(\d+))?$/)
+  if (!m) return { path: String(cite), line: null, endLine: null }
+  return { path: m[1], line: Number(m[2]), endLine: m[3] ? Number(m[3]) : null }
 }
 
 /** Identifiers worth comparing between a claim and its cited line. */
@@ -115,7 +123,7 @@ function checkClaim(source, cmd, field, claimText, citations) {
   let anyCode = false
   for (const cite of citations) {
     stats.citations++
-    const { path: rel, line } = parseCitation(cite)
+    const { path: rel, line, endLine } = parseCitation(cite)
     const abs = join(root, rel)
     if (!existsSync(abs)) {
       stats.missingFile++
@@ -133,9 +141,15 @@ function checkClaim(source, cmd, field, claimText, citations) {
       anyResolved = true
       continue
     }
-    if (line < 1 || line > ls.length) {
+    const last = endLine ?? line
+    if (line < 1 || last > ls.length || last < line) {
       stats.outOfRange++
-      problems.push({ source, cmd: cmd.rawName, kind: "OUT_OF_RANGE", detail: `${cite} (file has ${ls.length} lines)` })
+      problems.push({
+        source,
+        cmd: cmd.rawName,
+        kind: "OUT_OF_RANGE",
+        detail: `${cite} (file has ${ls.length} lines)`,
+      })
       continue
     }
     const text = ls[line - 1]
@@ -185,30 +199,75 @@ for (const f of files) {
     if (files.includes(enriched)) continue
   }
   const data = readJson(join(DATA, f))
-  if (!data || !data.commands) continue
-  const source = data.source
+  if (!data) continue
+  const source = data.source ?? "ih"
   if (!SOURCE_PATHS[source]) continue
-  const all = [...data.commands]
-  // `added` entries are commands the source really has but the mechanical
-  // extractor missed; they are part of the claim set and must be verified too.
-  for (const a of data.added ?? []) {
-    if (a && typeof a === "object") all.push(a)
+
+  // (a) package-level backend inventory files: every design decision, constant
+  // and package-level evidence citation is a claim and must resolve.
+  for (const pkg of data.packages ?? []) {
+    for (const d of pkg.designDecisions ?? []) {
+      checkClaim(source, { rawName: `${pkg.name}:decision` }, "mechanism", `${d.decision} ${d.rationale}`, d.evidence)
+    }
+    for (const k of pkg.keyConstants ?? []) {
+      checkClaim(source, { rawName: `${pkg.name}:const:${k.name}` }, "mechanism", `${k.name} ${k.value}`, [k.evidence])
+    }
+    checkClaim(source, { rawName: `${pkg.name}:package` }, "mechanism", pkg.responsibility, pkg.evidence)
   }
-  for (const cmd of all) {
-    const claimText = `${cmd.summary ?? ""} ${cmd.mechanism ?? ""}`
-    checkClaim(source, cmd, "mechanism", claimText, cmd.evidence)
+
+  // (b) command files
+  if (data.commands) {
+    const all = [...data.commands]
+    // `added` entries are commands the source really has but the mechanical
+    // extractor missed; they are part of the claim set and must be verified too.
+    for (const a of data.added ?? []) {
+      if (a && typeof a === "object") all.push(a)
+    }
+    for (const cmd of all) {
+      const claimText = `${cmd.summary ?? ""} ${cmd.mechanism ?? ""}`
+      checkClaim(source, cmd, "mechanism", claimText, cmd.evidence)
+    }
   }
 }
 
 // ---------------------------------------------------------------- reporting
 
 if (SAMPLE_N > 0) {
-  // Deterministic sample: stride through the cell list so the sample spreads
-  // across sources rather than clustering in whichever file sorting put first.
-  const step = Math.max(1, Math.floor(cells.length / SAMPLE_N))
+  // Stratified by source, and biased toward SUBSTANTIVE claims. Proportional
+  // sampling is useless here: I-harness contributes most of the citations, so a
+  // flat stride would spend the whole budget re-checking one source, and the
+  // raw extractions' name citations (claim text empty) are not worth a
+  // verifier's judgement. What needs adversarial review is mechanism prose.
+  const bySource = new Map()
+  for (const c of cells) {
+    if (!bySource.has(c.source)) bySource.set(c.source, [])
+    bySource.get(c.source).push(c)
+  }
+  const substantive = (c) => (c.claim ?? "").trim().length > 40
   const picked = []
-  for (let i = 0; i < cells.length && picked.length < SAMPLE_N; i += step) picked.push(cells[i])
-  console.log(JSON.stringify({ sampleSize: picked.length, ofTotal: cells.length, cells: picked }, null, 2))
+  const perSource = Math.max(1, Math.floor(SAMPLE_N / Math.max(1, bySource.size)))
+  for (const [src, list] of bySource) {
+    const ranked = [...list].sort((a, b) => Number(substantive(b)) - Number(substantive(a)) || a.cite.localeCompare(b.cite))
+    const step = Math.max(1, Math.floor(ranked.length / perSource))
+    for (let i = 0, n = 0; i < ranked.length && n < perSource; i += step, n++) picked.push(ranked[i])
+  }
+  console.log(
+    JSON.stringify(
+      {
+        sampleSize: picked.length,
+        ofTotal: cells.length,
+        stratifiedBy: [...bySource.keys()],
+        instructions:
+          "For each cell: open <sourceRoot>/<cite>, read the cited line AND enough surrounding context " +
+          "(the enclosing function/block) to judge independently, then decide whether the cited line actually " +
+          "SUPPORTS the claim. Verdicts: SUPPORTED | PARTIAL | UNSUPPORTED | WRONG_LINE (claim is plausible but " +
+          "the cited line does not carry it). A verifier must not trust the claim text; the source is the truth.",
+        cells: picked,
+      },
+      null,
+      2,
+    ),
+  )
 } else if (args.includes("--json")) {
   console.log(JSON.stringify({ stats, reusedLines: [...lineUse.entries()].filter(([, n]) => n > 3), problems }, null, 2))
 } else {

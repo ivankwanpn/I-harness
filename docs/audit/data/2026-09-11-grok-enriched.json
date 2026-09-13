@@ -1,0 +1,1646 @@
+{
+  "source": "grok",
+  "sourcePath": "D:/agent-complete/grok-build-main",
+  "version": "a549186d9d39311f2d3ee4208db62af8c65aa476",
+  "commandModelNote": "per-module slash_meta: each command lives in its own file under crates/codegen/xai-grok-pager/src/slash/commands/ and declares constant metadata through the slash_meta! macro (crates/codegen/xai-grok-pager/src/slash/command.rs:398-461), which expands inside an `impl SlashCommand for X` block. The trait itself is crates/codegen/xai-grok-pager/src/slash/command.rs:221-388. Three declaration forms exist in the tree: (a) slash_meta! with string literals (the common case), (b) slash_meta! with a Rust constant as `name:` (imagine.rs:14 uses IMAGINE_COMMAND_NAME, imagine_video.rs:15 uses IMAGINE_VIDEO_COMMAND_NAME, both defined in crates/codegen/xai-grok-tools-api/src/slash_commands.rs:102 and :108), and (c) NO slash_meta! at all: screen_mode_switch.rs hand-implements the whole trait and computes name()/description()/usage()/mode_support() at runtime from a `to_minimal` bool, which is how ONE module yields TWO commands (minimal and fullscreen). The registry (slash/registry.rs:110-557) is built from builtin_commands() (slash/commands/mod.rs:75-161), a single ordered Vec that is the source of truth for the builtin set and menu order. Input-file revision note: this run was authored against the regenerated 2026-09-11-grok-commands.json (71 commands); the extractor's own rows for `minimal`/`fullscreen` carry only file-level metadata (evidence line 1, module doc as description) and `fullscreen` is missing its `full` alias, which slash/commands/screen_mode_switch.rs:39 declares. Those two rows were re-derived from the implementation here. No command was missing from the regenerated list, so `added` is empty. Families were assigned by dominant purpose: session = session lifecycle/identity; context = conversation content and history; plan = plan mode; execution = scheduling and workflow runs; model = model/effort selection; safety = permission/approval/privacy; extension = plugins/hooks/skills/MCP/agents/workflows catalog; inspect = read-only diagnostics and reporting; interface = display, input and navigation surfaces; collab = multi-session/multi-agent surfaces.",
+  "commands": [
+    {
+      "rawName": "always-approve",
+      "canonical": "always-approve",
+      "aliases": [],
+      "displayName": "always-approve",
+      "family": "safety",
+      "summary": "Toggles always-approve (YOLO) mode, which skips all permission prompts.",
+      "mechanism": "run() reads `ctx.pager_state.yolo_mode` and returns `CommandResult::Action(Action::SetYoloMode(!current))` (always_approve.rs:21-24); the command itself mutates nothing. The dispatcher's set_yolo_mode (app/dispatch/modes.rs:353-399) calls set_yolo_mode_inner (modes.rs:263-336), which writes `agent.session.yolo_mode`, drains the whole `permission_queue` by answering each pending ACP RequestPermission with AllowOnce (falling back to Cancelled, never AllowAlways), restores stashed permissions, shows a toast, and emits `Effect::PersistPermissionMode` with rollback to the previous canonical. Enabling is refused outright when a managed policy pins it (modes.rs:191-204).",
+      "gate": "always registered and always offered; runtime refusal when the managed-policy pin is set (`app.yolo_policy_block`, sourced from a root-owned requirements.toml `[ui] disable_bypass_permissions_mode = true` or legacy `[ui] yolo = false`)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/always_approve.rs + crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/always_approve.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/always_approve.rs:23",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:263",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:293",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:394",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:126"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: auto-approve / bypass-permissions (claude-code `--dangerously-skip-permissions`; codex approval-mode bypass)"
+      ]
+    },
+    {
+      "rawName": "announcements",
+      "canonical": "announcements",
+      "aliases": [],
+      "displayName": "announcements",
+      "family": "interface",
+      "summary": "Shows or hides the in-session announcement banner.",
+      "mechanism": "run() takes the first whitespace token and maps `hide` -> `Action::AnnouncementsHide`, `show` -> `Action::AnnouncementsShow`, anything else -> a usage Error (announcements.rs:41-47). `takes_args: true` with `args_required: true` and an arg_placeholder of `hide|show`, and suggest_args offers exactly those two rows (announcements.rs:20-35). visible() returns `ctx.has_session_announcements`, so the row disappears from the menu when the session carries no announcement (announcements.rs:37-39).",
+      "gate": "session-scoped visibility: `visible()` requires AppCtx::has_session_announcements (a live critical or promo announcement exists)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/announcements.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/announcements.rs:12",
+        "crates/codegen/xai-grok-pager/src/slash/commands/announcements.rs:38",
+        "crates/codegen/xai-grok-pager/src/slash/commands/announcements.rs:43",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:143"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: announcements / whats-new banner"
+      ]
+    },
+    {
+      "rawName": "auto",
+      "canonical": "auto",
+      "aliases": [],
+      "displayName": "auto",
+      "family": "safety",
+      "summary": "Toggles auto permission mode, where an LLM classifier approves safe tools.",
+      "mechanism": "run() computes `currently_auto = ctx.pager_state.auto_mode && !ctx.pager_state.yolo_mode` and returns `Action::SetPermissionMode(Auto)` or `(Ask)` accordingly, so yolo always wins over auto (auto.rs:23-32). The dispatcher's set_permission_mode (app/dispatch/modes.rs:406-467) degrades a commit to Auto into Ask when `app.auto_mode_gate` is off, mutates the session flag, refreshes settings snapshots, toasts, and persists with rollback. The classifier itself lives in the workspace permission manager (xai-grok-workspace/src/permission/auto_mode/mod.rs:1-3, :1079-1160, :1440-1576): an allowlisted fast path decides without a model call, otherwise a transcript-aware classifier returns {allow|block}.",
+      "gate": "hard-hidden (fail-closed) until the caller invokes `CommandRegistry::set_auto_mode_available(true)`; hidden by default in `CommandRegistry::new` (registry.rs:160-161) and revealed by the auto permission-mode feature flag. Even when offered, a commit to Auto is inert while `auto_mode_gate` is off",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/auto.rs + crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs + crates/codegen/xai-grok-workspace/src/permission/auto_mode",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/auto.rs:18",
+        "crates/codegen/xai-grok-pager/src/slash/commands/auto.rs:25",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:160",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:397",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:406",
+        "crates/codegen/xai-grok-workspace/src/permission/auto_mode/mod.rs:1136",
+        "crates/codegen/xai-grok-workspace/src/permission/auto_mode/mod.rs:1577"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: auto-approve-classifier / auto mode"
+      ]
+    },
+    {
+      "rawName": "btw",
+      "canonical": "btw",
+      "aliases": [],
+      "displayName": "btw",
+      "family": "collab",
+      "summary": "Asks a side question without interrupting the running turn.",
+      "mechanism": "run() returns `Action::SendBtw(args.trim())` (btw.rs:21-23). Dispatch turns that into `Effect::SendBtw`, which fires the ACP extension method `x.ai/btw` with sessionId+question and renders the returned `answer` field as a scrollback line (app/effects/mod.rs:3834-3874). The ext method deliberately bypasses the prompt queue, so the side question does not enter the model conversation or the turn queue.",
+      "gate": "session-scoped (`session_scoped: true`, btw.rs:17) and `args_required: true`; needs a live session to carry the x.ai/btw ext call",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/btw.rs + crates/codegen/xai-grok-pager/src/app/effects/mod.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/btw.rs:12",
+        "crates/codegen/xai-grok-pager/src/slash/commands/btw.rs:22",
+        "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:3834",
+        "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:3840",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:83"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: side-question / btw (no direct equivalent in most harnesses; it is an out-of-band model query)"
+      ]
+    },
+    {
+      "rawName": "cd",
+      "canonical": "cd",
+      "aliases": [],
+      "displayName": "cd",
+      "family": "session",
+      "summary": "Changes the working directory that new dashboard agents spawn in.",
+      "mechanism": "run() returns `Action::DashboardOpenLocationPicker` for empty/whitespace args and `Action::DashboardChangeLocation{input}` otherwise (cd.rs:24-33). The dispatch layer handles both via `dispatch_dashboard_open_location_picker` / `dispatch_dashboard_change_location`; outside the dashboard it prints a toast pointing at `/dashboard` (cd.rs:1-5). The command is declared `dashboard_only: true` (cd.rs:20), which is the inverse of session_scoped: it is offered only on the session-less dashboard surface and suppressed on the agent view and welcome screen.",
+      "gate": "dashboard-only surface (`dashboard_only()` true, command.rs:313-315); hidden from every completion surface outside the agent dashboard",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/cd.rs + crates/codegen/xai-grok-pager/src/app/dispatch/dashboard.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/cd.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/cd.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/cd.rs:27",
+        "crates/codegen/xai-grok-pager/src/slash/command.rs:313",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:137"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: cd (I-harness has a same-named command)"
+      ]
+    },
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "family": "context",
+      "summary": "Compacts the conversation history, optionally with a focus instruction.",
+      "mechanism": "This is the canonical re-emit design: run() does no work, it rebuilds the text (`/compact` or `/compact <args>`) and returns `CommandResult::QueueCommand(text)` (compact.rs:20-28). Dispatch maps QueueCommand to `agent.session.enqueue_command(text)` with `QueueEntryKind::Command` (app/dispatch/prompt.rs:693-695; app/agent.rs:951). When the queue drains, the Command arm starts `AgentCommand::Compact`, pushes a `SessionEvent::CompactStarted` block and emits `Effect::Compact` (app/dispatch/queue.rs:528-547), which sends ACP ext `x.ai/compact_conversation` (app/effects/mod.rs:1666-1684); the shell handles it in xai-grok-shell/src/extensions/memory.rs:15,:22-38 by forwarding a `SessionCommand::CompactSession` carrying the user context to the session actor, where the real summarisation happens.",
+      "gate": "session-scoped (`session_scoped: true`, compact.rs:16); args optional (`args_required: false`)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/compact.rs -> app/dispatch/queue.rs -> app/effects/mod.rs -> crates/codegen/xai-grok-shell/src/extensions/memory.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/compact.rs:11",
+        "crates/codegen/xai-grok-pager/src/slash/commands/compact.rs:27",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:693",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/queue.rs:528",
+        "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:1666",
+        "crates/codegen/xai-grok-shell/src/extensions/memory.rs:22",
+        "crates/codegen/xai-grok-shell/src/extensions/memory.rs:29"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: compact (design doc section 6 names this exact set: IH/grok/cc `/compact`, dsh `command-compact`, codex enum `Compact`, opencode markdown template)"
+      ]
+    },
+    {
+      "rawName": "compact-mode",
+      "canonical": "compact-mode",
+      "aliases": [],
+      "displayName": "compact-mode",
+      "family": "interface",
+      "summary": "Toggles the compact display mode that reduces message padding.",
+      "mechanism": "run() returns `Action::ToggleCompactMode` (compact_mode.rs:21-23), so the command and the keybinding share one toggle gate; the dispatcher owns the state flip and the gate reads the USER value while the render value may be auto-forced on short terminals (compact_mode.rs:5-6).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/compact_mode.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/compact_mode.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/compact_mode.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:129"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: compact-mode (display density toggle, not context compaction)"
+      ]
+    },
+    {
+      "rawName": "config-agents",
+      "canonical": "config-agents",
+      "aliases": [
+        "agents"
+      ],
+      "displayName": "config-agents",
+      "family": "extension",
+      "summary": "Opens the agents modal listing agent definitions.",
+      "mechanism": "run() returns `Action::OpenConfigAgentsModal(None)` (config_agents.rs:17-19), opening the shared agents modal with no preselected tab; `/personas` is the same action with `AgentsTab::Personas`. Registered as `config-agents` with the alias `agents` (config_agents.rs:12).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/config_agents.rs + crates/codegen/xai-grok-pager/src/views/agents_modal.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/config_agents.rs:11",
+        "crates/codegen/xai-grok-pager/src/slash/commands/config_agents.rs:18",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:122"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: agents (definition manager)"
+      ]
+    },
+    {
+      "rawName": "context",
+      "canonical": "context",
+      "aliases": [],
+      "displayName": "context",
+      "family": "context",
+      "summary": "Shows the context-window usage breakdown for the current session.",
+      "mechanism": "run() first guards on `ctx.session_id.is_none()` and returns `Error(\"No active session\")`, then returns `Action::ShowContextInfo` (context.rs:17-23). It is an instant, non-queued command: dispatch renders the progress bar, token categories and stats directly rather than sending anything to the model (context.rs:1-2).",
+      "gate": "session-scoped (`session_scoped: true`, context.rs:14) plus an explicit session_id check inside run()",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/context.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/context.rs:11",
+        "crates/codegen/xai-grok-pager/src/slash/commands/context.rs:18",
+        "crates/codegen/xai-grok-pager/src/slash/commands/context.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:89"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: context (usage inspector; codex `/status`-adjacent)"
+      ]
+    },
+    {
+      "rawName": "copy",
+      "canonical": "copy",
+      "aliases": [],
+      "displayName": "copy",
+      "family": "interface",
+      "summary": "Copies the latest (or Nth-latest) assistant message to the clipboard or a file.",
+      "mechanism": "parse_copy_args splits the args into `(n, Option<PathBuf>)`: empty -> (1,None), `2` -> (2,None), a non-numeric first token is treated as the whole path, and `0` is an error (copy.rs:42-60). run() returns `Action::CopyAssistantMessage{n, file_path}` (copy.rs:26-33); a file path also acts as the fallback when the clipboard is unreachable (copy.rs:3-7).",
+      "gate": "session-scoped (`session_scoped: true`, copy.rs:22); mode_support stays Both so it also works in minimal mode",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:18",
+        "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:29",
+        "crates/codegen/xai-grok-pager/src/slash/commands/copy.rs:53",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:111"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: copy (clipboard export of the last response)"
+      ]
+    },
+    {
+      "rawName": "dashboard",
+      "canonical": "dashboard",
+      "aliases": [
+        "agents-dashboard",
+        "sessions"
+      ],
+      "displayName": "dashboard",
+      "family": "collab",
+      "summary": "Opens the Agent Dashboard that lists every session and subagent.",
+      "mechanism": "run() returns `Action::OpenDashboard` (dashboard.rs:31-33). The aliases `agents-dashboard` and `sessions` redirect old muscle memory after the sessions picker modal was removed (dashboard.rs:20-23). It is FullscreenOnly via `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal is single-session\"})` (dashboard.rs:26-28), so minimal mode both hides it from completion and refuses a typed invocation with a hint naming `/fullscreen`.",
+      "gate": "feature-flag gated AND mode gated: hidden by default in CommandRegistry::new (registry.rs:156) and revealed only by `set_dashboard_visible(true)` from `dashboard_enabled()`; refused in minimal mode; `[dashboard].enabled = false` or `GROK_AGENT_DASHBOARD=0` makes the dispatcher refuse with a toast (dashboard.rs:7-8)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs + crates/codegen/xai-grok-pager/src/views/dashboard",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:19",
+        "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:26",
+        "crates/codegen/xai-grok-pager/src/slash/commands/dashboard.rs:32",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:156",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:377",
+        "crates/codegen/xai-grok-pager/src/slash/mode_support.rs:34"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: sessions-dashboard / agent dashboard"
+      ]
+    },
+    {
+      "rawName": "debug",
+      "canonical": "debug",
+      "aliases": [],
+      "displayName": "debug",
+      "family": "inspect",
+      "summary": "Toggles debug overlays (scroll HUD, FPS HUD, scroll flight recorder).",
+      "mechanism": "run() switches on the trimmed arg: empty -> `Action::ShowDebugStatus`, `scroll` -> `ToggleScrollDebugHud`, `fps` -> `ToggleFpsHud`, `log` -> `ToggleScrollLog`, anything else -> an Error listing the valid options (debug.rs:62-73). suggest_args is built from the same SUBCOMMANDS table used by neither duplicating strings (debug.rs:25-29, :48-60). The command is registered and fully functional on every binary; only menu listing is gated, by `visible()` returning `LISTED_IN_COMPLETIONS = cfg!(debug_assertions)` (debug.rs:22, :44-46).",
+      "gate": "registered always and executable in release; listed in dropdown/completion/highlight only on debug binaries (cfg!(debug_assertions))",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs + crates/codegen/xai-grok-pager/src/views/fps_hud.rs + xai-grok-pager-render input::scroll_log",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs:36",
+        "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs:45",
+        "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs:65",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:159"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: debug (hidden diagnostic overlay toggles)"
+      ]
+    },
+    {
+      "rawName": "delete",
+      "canonical": "delete",
+      "aliases": [],
+      "displayName": "delete",
+      "family": "session",
+      "summary": "Deletes the current session's history.",
+      "mechanism": "run() errors with \"No active session to delete\" when `ctx.session_id` is None, otherwise returns `Action::DeleteCurrentSession` (delete.rs:16-21). The command only signals intent; the dispatcher performs the deletion and decides the landing surface (welcome screen, or the dashboard when the session was attached) (delete.rs:1).",
+      "gate": "session-scoped (`session_scoped: true`, delete.rs:13) plus an explicit session_id check inside run()",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/delete.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/delete.rs:10",
+        "crates/codegen/xai-grok-pager/src/slash/commands/delete.rs:18",
+        "crates/codegen/xai-grok-pager/src/slash/commands/delete.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:151"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: delete-session"
+      ]
+    },
+    {
+      "rawName": "docs",
+      "canonical": "docs",
+      "aliases": [
+        "howto",
+        "guides"
+      ],
+      "displayName": "docs",
+      "family": "interface",
+      "summary": "Opens the in-TUI How-to Guides, the online Build docs, or a single guide by title.",
+      "mechanism": "run() resolves the arg three ways: empty or a how-to synonym -> `Action::OpenHowtoGuides`; a web synonym -> `Action::OpenUrl(BUILD_DOCS_URL)` where the URL is the hardcoded `https://docs.x.ai/build/overview` (docs.rs:14); otherwise `crate::docs::find_doc(title)` -> `Action::ShowReleaseNotes{title,content}`, and an unknown title is an Error listing the accepted forms (docs.rs:53-70). suggest_args prepends `how-to` and `web` then appends every in-TUI guide title from `all_titles()` (docs.rs:29-51).",
+      "gate": "always; `takes_args: true` with `args_required: false`",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs + crates/codegen/xai-grok-pager/src/docs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs:21",
+        "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs:56",
+        "crates/codegen/xai-grok-pager/src/slash/commands/docs.rs:62",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:141"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: docs / help-docs"
+      ]
+    },
+    {
+      "rawName": "doctor",
+      "canonical": "doctor",
+      "aliases": [
+        "terminal-setup",
+        "terminal-check",
+        "terminal-info"
+      ],
+      "displayName": "doctor",
+      "family": "inspect",
+      "summary": "Diagnoses terminal, colour/theme, clipboard and voice setup, and offers automatic fixes.",
+      "mechanism": "run() parses at most two tokens into a typed request: bare -> `CommandResult::Doctor(DoctorRequest::Report)`, `fix` -> `ListFixes`, `fix <id>` -> `Fix(id)` via `crate::diagnostics::resolve_fix_id`, anything longer -> a usage Error (doctor.rs:85-96). Dispatch special-cases the Doctor variant and hands it to `dispatch_doctor` (app/dispatch/prompt.rs:654-659). The report itself is assembled by `DoctorCommand::report_for_terminal`, which collects the shared TUI probe plus live runtime evidence (fullscreen active, kitty flags pushed, xtversion, notification protocol) before merging runtime findings (doctor.rs:15-40).",
+      "gate": "session-scoped (`session_scoped: true`, doctor.rs:50); the live report path needs the running TUI's probe state",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs + crates/codegen/xai-grok-pager/src/diagnostics",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs:45",
+        "crates/codegen/xai-grok-pager/src/slash/commands/doctor.rs:88",
+        "crates/codegen/xai-grok-pager/src/slash/command.rs:38",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:654",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:146"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: doctor (I-harness has a same-named command; grok's is terminal/TUI focused)"
+      ]
+    },
+    {
+      "rawName": "edit-prompt",
+      "canonical": "edit-prompt",
+      "aliases": [],
+      "displayName": "edit-prompt",
+      "family": "interface",
+      "summary": "Opens the composer text in an external editor.",
+      "mechanism": "run() errors with \"No active session\" when there is no session, else returns `Action::EditPromptExternal` (edit_prompt.rs:19-24). Dispatch special-cases that action so the composer is cleared first, because typed slash input occupies the composer (app/dispatch/prompt.rs:666-672). In the full TUI this is the only route to the editor because Ctrl+G belongs to the tasks pane there; in minimal it doubles as the fallback for terminals that reserve Ctrl+G (edit_prompt.rs:2-4).",
+      "gate": "session-scoped (`session_scoped: true`, edit_prompt.rs:16) plus an explicit session_id check; both minimal and fullscreen modes",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/edit_prompt.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/edit_prompt.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/edit_prompt.rs:21",
+        "crates/codegen/xai-grok-pager/src/slash/commands/edit_prompt.rs:23",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:666",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:102"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: external-editor / edit-prompt"
+      ]
+    },
+    {
+      "rawName": "effort",
+      "canonical": "effort",
+      "aliases": [],
+      "displayName": "effort",
+      "family": "model",
+      "summary": "Sets the reasoning effort on the current model without re-picking the model.",
+      "mechanism": "run() reads `ctx.models.current`, and with empty args builds a usage Error listing that model's offered effort ids; otherwise it resolves the token through `ctx.models.resolve_effort_for_model(&model_id, trimmed)` and returns `Action::SwitchModel{model_id, effort: Some(effort)}` (effort.rs:39-73). It is a thin wrapper over the same wire path as `/model <name> <effort>` (effort.rs:3). Empty-args errors are model-specific rather than a hardcoded low|medium|high list (effort.rs:18).",
+      "gate": "session-scoped (`session_scoped: true`, effort.rs:22) and `args_required: true`; errors when no model is active or the level is not offered by that model",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/effort.rs + crates/codegen/xai-grok-pager/src/slash/commands/effort_levels.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/effort.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/effort.rs:62",
+        "crates/codegen/xai-grok-pager/src/slash/commands/effort.rs:66",
+        "crates/codegen/xai-grok-pager/src/slash/commands/effort.rs:67",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:87"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: reasoning-effort (dsh/codex name it reasoning effort; I-harness may lack it)"
+      ]
+    },
+    {
+      "rawName": "expand",
+      "canonical": "expand",
+      "aliases": [],
+      "displayName": "expand",
+      "family": "interface",
+      "summary": "Re-prints the last collapsed block fully expanded, in minimal mode.",
+      "mechanism": "run() errors without a session, else returns `Action::MinimalExpandLast` (expand.rs:26-31). The mechanism exists because minimal mode prints finalized blocks once into the terminal's native scrollback with reasoning collapsed and large tool output truncated, and committed terminal text cannot be mutated, so expanding means re-printing below the conversation; `/expand` and the Ctrl+E chord walk the same most-recently-committed folded blocks (expand.rs:2-6).",
+      "gate": "session-scoped plus `ModeSupport::MinimalOnly(Remedy::UseInstead(\"press Tab to focus the scrollback, then → on the block\"))` (expand.rs:21-23): hidden in the full TUI and refused with an in-mode alternative",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/expand.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/expand.rs:17",
+        "crates/codegen/xai-grok-pager/src/slash/commands/expand.rs:21",
+        "crates/codegen/xai-grok-pager/src/slash/commands/expand.rs:30",
+        "crates/codegen/xai-grok-pager/src/slash/mode_support.rs:43",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:101"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: expand-collapsed-output (minimal-mode-only)"
+      ]
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "family": "interface",
+      "summary": "Exports the conversation transcript as Markdown to a file or the clipboard.",
+      "mechanism": "run() errors without a session, then maps empty args to `file_path: None` (clipboard) and otherwise to `Some(PathBuf::from(trimmed))`, returning `Action::ExportConversation{file_path}` (export.rs:36-49). suggest_args performs synchronous filesystem path completion with a 1000-entry pre-sort cap, using a trailing `/` on directory insert_text so the dropdown stays open for drill-down (export.rs:52-80).",
+      "gate": "session-scoped (`session_scoped: true`, export.rs:27) plus an explicit session_id check; args optional",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/export.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/export.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/export.rs:37",
+        "crates/codegen/xai-grok-pager/src/slash/commands/export.rs:48",
+        "crates/codegen/xai-grok-pager/src/slash/commands/export.rs:67",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:110"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: export (transcript to markdown)"
+      ]
+    },
+    {
+      "rawName": "feedback",
+      "canonical": "feedback",
+      "aliases": [],
+      "displayName": "feedback",
+      "family": "interface",
+      "summary": "Sends feedback about the current session, with an optional prefill.",
+      "mechanism": "run() branches on screen mode: in the full TUI it always opens the report card, with inline text becoming the pane's prefill; in minimal mode a bare `/feedback` opens the pane but `/feedback <text>` submits immediately via `Action::SendFeedback{text, images, trace: None}` (feedback.rs:19-41). It also emits a structured `feedback.command` unified-log event carrying screen mode, arg length and which action arm was taken (feedback.rs:42-61). Composer images cannot be seen by the command layer; dispatch drains them into the action before wiping the composer (app/dispatch/prompt.rs:680-692).",
+      "gate": "always; args optional",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/feedback.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/feedback.rs:12",
+        "crates/codegen/xai-grok-pager/src/slash/commands/feedback.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/feedback.rs:29",
+        "crates/codegen/xai-grok-pager/src/slash/commands/feedback.rs:53",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:684",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:144"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: feedback / bug-report"
+      ]
+    },
+    {
+      "rawName": "find",
+      "canonical": "find",
+      "aliases": [],
+      "displayName": "find",
+      "family": "interface",
+      "summary": "Opens an incremental search over the conversation scrollback.",
+      "mechanism": "run() trims the args and returns `Action::OpenScrollbackSearch(Some(query))`, or `None` for empty/whitespace args so the search opens blank (find.rs:25-30). It exists because in simple mode a bare `/` goes to the prompt, so simple-mode users cannot reach the vim `/` scrollback search; `/find` focuses the scrollback pane and opens the same search from either mode (find.rs:3-4).",
+      "gate": "session-scoped plus `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal has no scrollback pane: use your terminal's own search\"})` (find.rs:19-21)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/find.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:19",
+        "crates/codegen/xai-grok-pager/src/slash/commands/find.rs:29",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:112"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: find / scrollback-search"
+      ]
+    },
+    {
+      "rawName": "fork",
+      "canonical": "fork",
+      "aliases": [],
+      "displayName": "fork",
+      "family": "collab",
+      "summary": "Branches the current session into a peer top-level agent.",
+      "mechanism": "parse_fork_args consumes leading `--worktree` / `--no-worktree` flags (mutually exclusive, duplicates rejected) and treats everything after the last flag as the directive; `--at <turn>` is deliberately rejected with a friendly message even though the shell already supports `ForkSessionRequest::target_prompt_index` (fork.rs:24-81). run() returns `Action::Fork(ForkArgs{worktree_override, directive})` or an Error (fork.rs:96-101). The placeholder construction, modal routing and effect emission live in `dispatch::dispatch_fork`, and the fork itself is dispatched by `dispatch_fork_resolved` only after the worktree question is resolved and the placeholder spawn succeeds (fork.rs:5-6).",
+      "gate": "session-scoped (`session_scoped: true`, fork.rs:92); args optional; a worktree question modal is shown unless overridden by a flag",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/fork.rs + crates/codegen/xai-grok-pager/src/app/dispatch",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/fork.rs:35",
+        "crates/codegen/xai-grok-pager/src/slash/commands/fork.rs:65",
+        "crates/codegen/xai-grok-pager/src/slash/commands/fork.rs:87",
+        "crates/codegen/xai-grok-pager/src/slash/commands/fork.rs:98",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:91"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: fork (I-harness has a same-named command; grok's adds a worktree question)"
+      ]
+    },
+    {
+      "rawName": "gboom",
+      "canonical": "gboom",
+      "aliases": [],
+      "displayName": "gboom",
+      "family": "interface",
+      "summary": "Hidden easter egg that launches a small kitty-graphics raycaster game.",
+      "mechanism": "visible() returns false unconditionally, so it is never listed in the dropdown (gboom.rs:25-27). run() checks the args: with any non-whitespace argument it returns `CommandResult::PassThrough(\"/gboom {args}\")` so it behaves as if the command did not exist, and only the bare invocation returns `Action::OpenGboom` (gboom.rs:29-36). Its hiddenness is also the reference mechanism named in the registry for the per-command `visible()` gate (registry.rs:120).",
+      "gate": "hidden from the menu by `visible() == false` but still resolvable for dispatch; session-scoped (gboom.rs:21)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/gboom.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/gboom.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/gboom.rs:26",
+        "crates/codegen/xai-grok-pager/src/slash/commands/gboom.rs:33",
+        "crates/codegen/xai-grok-pager/src/slash/commands/gboom.rs:35",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:155"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: easter-egg (no cross-source equivalent expected)"
+      ]
+    },
+    {
+      "rawName": "help",
+      "canonical": "help",
+      "aliases": [],
+      "displayName": "help",
+      "family": "interface",
+      "summary": "Opens the command palette, which browses commands and keyboard shortcuts.",
+      "mechanism": "run() returns `Action::OpenCommandPalette` (help.rs:19-21), the same palette as Ctrl+P, hosted inline by the overlay app-modal host. In minimal mode there is no always-visible footer of hints, so `/help` is the discoverable entry point advertised in the status line (help.rs:2-4). Note the shell never advertises an ACP command named `help`: it is in the pager's BLOCKED_ACP_NAMES list so a colliding skill is advertised qualified instead (registry.rs:21-29).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/help.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/help.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/help.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:152"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: help (palette/shortcut browser)"
+      ]
+    },
+    {
+      "rawName": "history",
+      "canonical": "history",
+      "aliases": [],
+      "displayName": "history",
+      "family": "interface",
+      "summary": "Opens the fuzzy search overlay over the session's prior prompts.",
+      "mechanism": "run() returns `Action::OpenHistorySearch` (history.rs:21-23): a search mode over the same prompts the panel's Up-arrow browsing steps through, with Enter/Tab dropping the selection back into the composer. The slash pipeline clears the composer before dispatch, so the overlay always opens with an empty query over the full history (history.rs:5).",
+      "gate": "session-scoped (`session_scoped: true`, history.rs:18)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/history.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/history.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/history.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:108"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: history / prompt-history search"
+      ]
+    },
+    {
+      "rawName": "home",
+      "canonical": "home",
+      "aliases": [
+        "welcome"
+      ],
+      "displayName": "home",
+      "family": "session",
+      "summary": "Exits the current session and returns to the welcome screen.",
+      "mechanism": "run() returns `Action::ExitSession` (home.rs:16-18). Dispatch handles `Action::ExitSession` as a first-class arm that clears the composer and re-enters the main dispatcher (app/dispatch/prompt.rs:660-665). Registered as `home` with the alias `welcome` (home.rs:11).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/home.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/home.rs:10",
+        "crates/codegen/xai-grok-pager/src/slash/commands/home.rs:17",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:660",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:150"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: home / welcome (leave session, keep the app open)"
+      ]
+    },
+    {
+      "rawName": "hooks",
+      "canonical": "hooks",
+      "aliases": [],
+      "displayName": "hooks",
+      "family": "extension",
+      "summary": "Opens the extensions modal on the Hooks tab.",
+      "mechanism": "run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Hooks, trigger: ExtensionsModalTrigger::SlashCommand}` (plugin.rs:21-26). The module comment states all hook management (install, uninstall, trust) happens through the modal UI and no subcommands are passed through to the shell (plugin.rs:4). The shell's own hook subcommands (`hooks-add`, `hooks-list`, `hooks-remove`, `hooks-trust`, `hooks-untrust`, `reload-plugins`) are in BLOCKED_ACP_NAMES so the pager never offers them as ACP rows (registry.rs:21-29).",
+      "gate": "hidden by default in CommandRegistry::new and revealed by `set_plugins_visible(true)`; hidden means both absent from the dropdown and not executable (registry.rs:321-335)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs + crates/codegen/xai-grok-pager/src/views/extensions_modal.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:21",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:23",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:323",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:118"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: hooks"
+      ]
+    },
+    {
+      "rawName": "import-claude",
+      "canonical": "import-claude",
+      "aliases": [],
+      "displayName": "import-claude",
+      "family": "extension",
+      "summary": "Opens the interactive Claude settings import modal.",
+      "mechanism": "run() warns via tracing when arguments are supplied (they are ignored) and returns `Action::ImportClaudeSettings` (import_claude.rs:20-26). The dispatch handler scans `.claude/settings*.json`, `~/.claude.json` and `.mcp.json`, populates modal state, and overlays the modal on the active session with the same selection UI as the welcome screen's Ctrl-I shortcut (import_claude.rs:4-5).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs:23",
+        "crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs:25",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:147"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: import-claude-settings (migration from a competitor's config format)"
+      ]
+    },
+    {
+      "rawName": "jump",
+      "canonical": "jump",
+      "aliases": [],
+      "displayName": "jump",
+      "family": "interface",
+      "summary": "Opens a picker to jump to a turn in the conversation.",
+      "mechanism": "run() returns `Action::JumpShowPicker` (jump.rs:18-20). The picker is fullscreen-only because minimal scrolls with the terminal's native scrollback (jump.rs:13-15). Rewind takes input priority over this picker, and both rewind entry points call `agent.dismiss_jump_picker()` first so a stale picker cannot reappear (app/dispatch/rewind.rs:97-98).",
+      "gate": "session-scoped plus `ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal scrolls with your terminal's native scrollback\"})` (jump.rs:13-15)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs + crates/codegen/xai-grok-pager/src/app/agent_view/jump.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:9",
+        "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/jump.rs:19",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:98",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:100"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: jump-to-turn"
+      ]
+    },
+    {
+      "rawName": "login",
+      "canonical": "login",
+      "aliases": [],
+      "displayName": "login",
+      "family": "session",
+      "summary": "Logs in or re-authenticates with the account.",
+      "mechanism": "run() returns `Action::Login` (login.rs:13-15); the dispatcher owns the interactive flow. Auth state feeds other command gates: `AppView::apply_auth_meta` calls `apply_tier_restrictions`, which recomputes the tier deny list and mirrors it into every slash surface, so a login or a mid-session tier change lifts or imposes restrictions without a restart (app/app_view.rs:1737-1763).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/login.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/login.rs:8",
+        "crates/codegen/xai-grok-pager/src/slash/commands/login.rs:14",
+        "crates/codegen/xai-grok-pager/src/app/app_view.rs:1743",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:148"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: login / auth"
+      ]
+    },
+    {
+      "rawName": "logout",
+      "canonical": "logout",
+      "aliases": [],
+      "displayName": "logout",
+      "family": "session",
+      "summary": "Removes the stored credentials and returns to the login screen.",
+      "mechanism": "run() returns `Action::Logout` (logout.rs:15-17); the dispatcher performs the credential removal and the return to the login screen (logout.rs:1).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/logout.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/logout.rs:10",
+        "crates/codegen/xai-grok-pager/src/slash/commands/logout.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:149"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: logout"
+      ]
+    },
+    {
+      "rawName": "loop",
+      "canonical": "loop",
+      "aliases": [],
+      "displayName": "loop",
+      "family": "execution",
+      "summary": "Runs a prompt on a recurring interval by instructing the model to create a scheduled task.",
+      "mechanism": "run() returns `CommandResult::InjectSkill` with `display_as_skill: false`: it builds a `prompt_blocks` text from `loop_schedule_instruction(args, fire_mode)` while `display_text` is the literal `/loop <args>` the user sees (loop_cmd.rs:110-122). The fire mode is Detached or InSession depending on `ctx.pager_state.scheduler_background_loops` (loop_cmd.rs:97-101). It also attaches a provisional `ScheduledTaskPreview` so the tasks pane shows the loop immediately instead of waiting for the LLM round-trip through `scheduler_create`; dispatch inserts it under a `provisional-<id>` key that the real `ScheduledTaskCreated` notification replaces (loop_cmd.rs:13-21; app/dispatch/prompt.rs:719-736). An optional leading interval token is only used to seed the human-readable preview; the model derives the authoritative schedule (loop_cmd.rs:16-29).",
+      "gate": "tool-gated: `required_tools: LOOP_REQUIRED_TOOLS` = [\"scheduler_create\"], and the registry hides it fail-closed while the agent's toolset is unknown (loop_cmd.rs:12, :88; registry.rs:286-295)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/loop_cmd.rs + crates/codegen/xai-grok-tools/implementations/grok_build (scheduler)",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/loop_cmd.rs:12",
+        "crates/codegen/xai-grok-pager/src/slash/commands/loop_cmd.rs:82",
+        "crates/codegen/xai-grok-pager/src/slash/commands/loop_cmd.rs:88",
+        "crates/codegen/xai-grok-pager/src/slash/commands/loop_cmd.rs:110",
+        "crates/codegen/xai-grok-pager/src/slash/command.rs:59",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:721",
+        "crates/codegen/xai-grok-tools-api/src/slash_commands.rs:8"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: loop / cron-schedule (I-harness has no equivalent per the audit brief)"
+      ]
+    },
+    {
+      "rawName": "marketplace",
+      "canonical": "marketplace",
+      "aliases": [],
+      "displayName": "marketplace",
+      "family": "extension",
+      "summary": "Opens the extensions modal on the Marketplace tab.",
+      "mechanism": "run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Marketplace, trigger: SlashCommand}` (plugin.rs:58-63). It shares the file with hooks/plugins/skills: one module declares four commands from four separate `impl SlashCommand` blocks (plugin.rs:12, :30, :49, :67).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:53",
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:59",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:119"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: marketplace / plugin-store"
+      ]
+    },
+    {
+      "rawName": "mcps",
+      "canonical": "mcps",
+      "aliases": [],
+      "displayName": "mcps",
+      "family": "extension",
+      "summary": "Shows MCP server status.",
+      "mechanism": "run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::McpServers, trigger: SlashCommand}` (mcps.rs:13-18), reusing the shared extensions modal rather than printing a separate status view.",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/mcps.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/mcps.rs:8",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mcps.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:117"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: mcp-status (claude-code `/mcp`)"
+      ]
+    },
+    {
+      "rawName": "model",
+      "canonical": "model",
+      "aliases": [
+        "m"
+      ],
+      "displayName": "model",
+      "family": "model",
+      "summary": "Switches the active model, optionally with a reasoning effort.",
+      "mechanism": "run() prefers an exact full-string catalog match first, so a display name containing spaces (\"Grok 4.5\") is not stolen by a shorter prefix entry; that returns `Action::SetDefaultModel(id)`, which switches and persists (model.rs:49-53). Otherwise it splits a trailing token and, if the matched model advertises `supportsReasoningEffort`, resolves it as an effort and returns the session-scoped `Action::SwitchModel{model_id, effort}` (model.rs:55-74). suggest_args is a two-phase chain: a reasoning model followed by a space re-opens the dropdown in an effort sub-menu (model.rs:36-40, :124-126).",
+      "gate": "session-scoped, plus `offered_when_session_less: true` so the dashboard still offers it to configure the next spawned agent (model.rs:25-27)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/model.rs + crates/codegen/xai-grok-pager/src/acp/model_state.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/model.rs:49-53",
+        "crates/codegen/xai-grok-pager/src/slash/commands/model.rs:19",
+        "crates/codegen/xai-grok-pager/src/slash/commands/model.rs:26",
+        "crates/codegen/xai-grok-pager/src/slash/commands/model.rs:52",
+        "crates/codegen/xai-grok-pager/src/slash/commands/model.rs:68",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:88"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: model (I-harness has a same-named command)"
+      ],
+      "citationCorrected": {
+        "prepended": "crates/codegen/xai-grok-pager/src/slash/commands/model.rs:49-53",
+        "reason": "the sampled cite slash/commands/mod.rs:88 is a builtin_commands() registry vec entry; the exact-match-first ordering it claims lives in model.rs",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
+    },
+    {
+      "rawName": "multiline",
+      "canonical": "multiline",
+      "aliases": [
+        "ml"
+      ],
+      "displayName": "multiline",
+      "family": "interface",
+      "summary": "Toggles multiline input mode, swapping Enter and Shift+Enter.",
+      "mechanism": "run() computes `new = !ctx.pager_state.multiline_mode` and returns `Action::SetMultilineMode(new)` (multiline.rs:27-30); the dispatcher remains the single source of truth for the mutation. In multiline mode Enter inserts a newline and Shift+Enter sends; an empty-composer mid-turn Enter still force-sends the top queued follow-up (multiline.rs:3-5). It is per-session only with no disk persistence (multiline.rs:8).",
+      "gate": "session-scoped with `offered_when_session_less: true` (multiline.rs:22-24), so the dashboard can toggle its own compose flag",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:18",
+        "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:24",
+        "crates/codegen/xai-grok-pager/src/slash/commands/multiline.rs:29",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:128"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: multiline-input"
+      ]
+    },
+    {
+      "rawName": "new",
+      "canonical": "new",
+      "aliases": [
+        "clear"
+      ],
+      "displayName": "new",
+      "family": "session",
+      "summary": "Starts a new session, clearing the current conversation.",
+      "mechanism": "run() returns `Action::NewSession` (new.rs:17-19), which dispatch routes to `dispatch_new_session` (app/dispatch/router.rs:201). Registered as `new` with the alias `clear` (new.rs:12).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/new.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/new.rs:11",
+        "crates/codegen/xai-grok-pager/src/slash/commands/new.rs:18",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/router.rs:201",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:85"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: new / clear (I-harness has a same-named `/new`)"
+      ]
+    },
+    {
+      "rawName": "personas",
+      "canonical": "personas",
+      "aliases": [],
+      "displayName": "personas",
+      "family": "extension",
+      "summary": "Opens the agents modal directly on the Personas tab.",
+      "mechanism": "run() returns `Action::OpenConfigAgentsModal(Some(AgentsTab::Personas))` (personas.rs:17-19), i.e. the same modal as `/config-agents` but pre-selected on the Personas tab; the tab type comes from `crate::views::agents_modal::AgentsTab`.",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/personas.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/personas.rs:12",
+        "crates/codegen/xai-grok-pager/src/slash/commands/personas.rs:18",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:121"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: personas / agent-profiles (I-harness deliberately lacks it)"
+      ]
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "family": "plan",
+      "summary": "Enters plan mode, optionally starting a turn with a description.",
+      "mechanism": "run() splits on the args: empty -> `Action::SetPlanMode(PlanModeKind::On)`, non-empty -> `Action::EnterPlanMode{description}` (plan.rs:23-31). Dispatch's `dispatch_enter_plan_mode` checks `plan_mode_pending.unwrap_or(plan_mode_active)` for idempotency, sets an optimistic `plan_mode_pending = Some(true)`, and emits an ACP `SetSessionMode` with mode id \"plan\" — bundling the mode switch and the first prompt into one ordered effect (`SetModeThenPrompt`) when a description is present so the switch completes before the prompt is sent (app/dispatch/modes.rs:35-70).",
+      "gate": "session-scoped with `offered_when_session_less: true` (plan.rs:17-19), so the dashboard can start the next spawned agent in plan mode",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/plan.rs + crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plan.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/plan.rs:26",
+        "crates/codegen/xai-grok-pager/src/slash/commands/plan.rs:28",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:46",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:62",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:95"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: plan (codex has a plan mode; I-harness has `/plan`)"
+      ]
+    },
+    {
+      "rawName": "plugins",
+      "canonical": "plugins",
+      "aliases": [
+        "plugin"
+      ],
+      "displayName": "plugins",
+      "family": "extension",
+      "summary": "Opens the extensions modal on the Plugins tab.",
+      "mechanism": "run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Plugins, trigger: SlashCommand}` (plugin.rs:40-45). Registered as `plugins` with alias `plugin` (plugin.rs:35). It shares the plugins-visibility gate with `/hooks`: `set_plugins_visible` flips exactly the pair [\"hooks\",\"plugins\"] (registry.rs:321-335).",
+      "gate": "hidden by default and revealed by `set_plugins_visible(true)`; hidden means absent from the dropdown and not executable",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:34",
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:41",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:324",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:82"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: plugins"
+      ]
+    },
+    {
+      "rawName": "privacy",
+      "canonical": "privacy",
+      "aliases": [],
+      "displayName": "privacy",
+      "family": "safety",
+      "summary": "Opens the coding-data, retention and training settings row.",
+      "mechanism": "run() returns `Action::OpenSettingsFocus{key: \"coding_data_sharing\"}` (privacy.rs:6, :20-24). It declares no args and deliberately ignores trailing text rather than rejecting it, so `/privacy opt-in` from muscle memory lands on the page instead of erroring, and no hidden alias can change a privacy preference straight from the prompt (privacy.rs:19; test at :78-94).",
+      "gate": "always, in every screen mode (minimal suppresses the privacy banner, making the command the only route there: privacy.rs:59)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs + settings modal",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs:6",
+        "crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs:21",
+        "crates/codegen/xai-grok-pager/src/slash/commands/privacy.rs:82",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:145"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: privacy (data-sharing settings)"
+      ]
+    },
+    {
+      "rawName": "queue",
+      "canonical": "queue",
+      "aliases": [],
+      "displayName": "queue",
+      "family": "execution",
+      "summary": "Lists the prompts queued behind the running turn.",
+      "mechanism": "run() errors without a session and otherwise returns `Action::ShowQueue` (queue.rs:21-26). The dispatcher's `dispatch_show_queue` reads the merged server and local queue and commits a read-only list; editing the queue is out of scope and the interactive QueuePane remains the full-TUI route (queue.rs:5-6). Minimal mode has no interactive QueuePane, so `/queue` is the way to inspect what is waiting, and it works in every render mode (queue.rs:3-4).",
+      "gate": "session-scoped plus an explicit session_id check in run(); available in both screen modes",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs + crates/codegen/xai-grok-pager/src/views/queue_pane.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/queue.rs:25",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:103"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: queue (list pending prompts)"
+      ]
+    },
+    {
+      "rawName": "quit",
+      "canonical": "quit",
+      "aliases": [
+        "exit"
+      ],
+      "displayName": "quit",
+      "family": "session",
+      "summary": "Quits the application.",
+      "mechanism": "run() returns `Action::Quit` (exit.rs:23-25). The module also exports `is_exit_alias`, the bare-text list (exit | quit | :q | :q! | :wq | :wq!) shared by the agent prompt send path and the dashboard dispatch so vim/shell muscle memory resolves to a quit even outside slash resolution; dispatch checks it only when the input is not a slash invocation (app/dispatch/prompt.rs:759-763). Note the command's canonical name is `quit` with `exit` as the alias, not the reverse (exit.rs:17-18).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:6",
+        "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:17",
+        "crates/codegen/xai-grok-pager/src/slash/commands/exit.rs:24",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:759",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:153"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: quit / exit"
+      ]
+    },
+    {
+      "rawName": "recap",
+      "canonical": "recap",
+      "aliases": [
+        "summarize"
+      ],
+      "displayName": "recap",
+      "family": "context",
+      "summary": "Summarizes the session so far, answering \"where was I\".",
+      "mechanism": "run() returns `Action::SendRecap{auto: false}` (recap.rs:21-23). Dispatch emits `Effect::SendRecap` (app/dispatch/notes.rs:799), which fires the ACP ext method `x.ai/recap` with sessionId and auto=false (app/effects/mod.rs:3878-3910). The recap arrives asynchronously as a scrollback line (`SessionEvent::Recap`) and is never added to the model conversation (recap.rs:4-5). Storage-wise it is model-generated, not file-backed.",
+      "gate": "fail-closed: hidden by default in CommandRegistry::new and revealed only by `set_recap_visible(true)` from the shell's `sessionRecap` initialize meta (registry.rs:157, :381-385)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/recap.rs + crates/codegen/xai-grok-pager/src/app/effects/mod.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/recap.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/recap.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:157",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:383",
+        "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:3882",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/notes.rs:783"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: recap / summarize-session (I-harness lacks it; distinct from /compact, which rewrites history in place)"
+      ]
+    },
+    {
+      "rawName": "release-notes",
+      "canonical": "release-notes",
+      "aliases": [
+        "changelog"
+      ],
+      "displayName": "release-notes",
+      "family": "interface",
+      "summary": "Shows the release notes for the current version.",
+      "mechanism": "run() fetches synchronously through `xai_grok_shell::util::changelog::ChangelogManager::new().fetch()` and maps a markdown body to `Action::ShowReleaseNotes{title: \"Release Notes\", content}` or, when offline, to `Error(\"No release notes available (offline).\")` (release_notes.rs:14-23). Registered as `release-notes` with alias `changelog` (release_notes.rs:9).",
+      "gate": "always; degrades to an error when the changelog cannot be fetched",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/release_notes.rs + crates/codegen/xai-grok-shell-base/src/util/changelog.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/release_notes.rs:8",
+        "crates/codegen/xai-grok-pager/src/slash/commands/release_notes.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/release_notes.rs:21",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:142"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: release-notes / changelog (I-harness deliberately lacks it)"
+      ]
+    },
+    {
+      "rawName": "remember",
+      "canonical": "remember",
+      "aliases": [],
+      "displayName": "remember",
+      "family": "context",
+      "summary": "Saves a memory note, either inline or through remember mode.",
+      "mechanism": "run() returns `Action::EnterRememberMode` for empty args and `Action::SendRememberNote(text)` otherwise (remember.rs:16-23). Dispatch special-cases the note action into `send_remember_note`, which opens a `RememberNoteReview` modal and fires `Effect::RewriteMemoryNote` (app/dispatch/notes.rs:502-522); the rewrite goes out as ACP ext `x.ai/memory/rewrite` (app/effects/mod.rs:3771) and is handled shell-side by a one-shot LLM call (xai-grok-shell/src/extensions/memory.rs:17). Confirming the modal emits `Effect::SaveMemoryNote` (notes.rs:559-563), which calls `MemoryStorage::append_to_memory(MemoryScope::Global, &text)` (app/effects/mod.rs:3811-3823). Memory is file-backed Markdown: the global file is `$GROK_HOME/memory/MEMORY.md` and the workspace file lives under `$GROK_HOME/memory/{project-slug}-{hash8}/MEMORY.md` (xai-grok-memory/src/storage.rs:111-118).",
+      "gate": "always as a slash command; with no session the modal opens with raw content only and the LLM rewrite step is skipped (notes.rs:484-498)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs -> app/dispatch/notes.rs -> xai-grok-shell/src/extensions/memory.rs + crates/codegen/xai-grok-memory/src/storage.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:16-23",
+        "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:9",
+        "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:19",
+        "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:21",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/notes.rs:502",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/notes.rs:559",
+        "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:3815",
+        "crates/codegen/xai-grok-shell/src/extensions/memory.rs:68",
+        "crates/codegen/xai-grok-memory/src/storage.rs:113",
+        "crates/codegen/xai-grok-memory/src/storage.rs:216"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: remember / memory-note (claude-code's `#` memory shortcut; I-harness lacks it)"
+      ],
+      "citationCorrected": {
+        "prepended": "crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:16-23",
+        "reason": "the sampled cite xai-grok-memory/src/storage.rs:113 is a MEMORY.md path helper, not the command's run path",
+        "by": "adversarial verification sample (2026-09-12)"
+      }
+    },
+    {
+      "rawName": "rename",
+      "canonical": "rename",
+      "aliases": [
+        "title"
+      ],
+      "displayName": "rename",
+      "family": "session",
+      "summary": "Renames the current session, or resets the title to auto-generated.",
+      "mechanism": "run() errors without a session; it then sanitizes the args with the shell's `sanitize_rename_title` and treats a bare `--auto` (checked on both the sanitized and raw forms, so a trailing BEL does not defeat it) as `Action::ResetSessionTitleToAuto`, while `--auto` with trailing text is an explicit error; a real title longer than `MAX_TITLE_SCALARS` is rejected (rename.rs:43-71). suggest_args offers the current title as a ghost row only while the args are empty, because a row that survives typed input would steal Enter (rename.rs:23-41).",
+      "gate": "session-scoped and `args_required: true` (rename.rs:18-19) plus an explicit session_id check",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/rename.rs + crates/codegen/xai-grok-shell/src/session/persistence.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/rename.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/rename.rs:53",
+        "crates/codegen/xai-grok-pager/src/slash/commands/rename.rs:68",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:107"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: rename-session"
+      ]
+    },
+    {
+      "rawName": "resume",
+      "canonical": "resume",
+      "aliases": [],
+      "displayName": "resume",
+      "family": "session",
+      "summary": "Opens the session picker overlay to resume a previous session.",
+      "mechanism": "run() returns `Action::ShowSessionPicker` (resume.rs:15-17). The dashboard's alias `sessions` on `/dashboard` redirects old muscle memory for the removed sessions picker modal (dashboard.rs:20-23), but `/resume` still opens the real picker overlay.",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/resume.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/resume.rs:10",
+        "crates/codegen/xai-grok-pager/src/slash/commands/resume.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:92"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: resume (I-harness has a same-named command)"
+      ]
+    },
+    {
+      "rawName": "rewind",
+      "canonical": "rewind",
+      "aliases": [
+        "undo"
+      ],
+      "displayName": "rewind",
+      "family": "session",
+      "summary": "Rewinds the conversation to a previous turn.",
+      "mechanism": "run() returns `Action::RewindShowPicker` (rewind.rs:15-17). Dispatch hydrates a picker: if the session is busy it first offers to cancel the running turn; otherwise it stashes the composer draft and emits `Effect::FetchRewindPoints`, which calls ACP ext `x.ai/rewind/points` and deserializes a `RewindPointsResponse` (app/dispatch/rewind.rs:129-163; app/effects/mod.rs:4102-4159). Confirming a point emits `Effect::RewindExecute` -> ext `x.ai/rewind/execute` (app/effects/mod.rs:4161-4211); on success the pager truncates the scrollback from the matching user-prompt entry (`scrollback.remove_from`), drops the removed tail and releases retained memory, clears the persisted last-turn summary, and restores the stashed draft or the response's `prompt_text` back into the composer (app/dispatch/rewind.rs:445-487). File changes made after that turn are deliberately left as-is — rewind restores conversation state, not the filesystem (actions/defaults.rs:441).",
+      "gate": "session-scoped (`session_scoped: true`, rewind.rs:12); also reachable idle with an empty prompt via a double Esc within 800ms",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs + crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs + crates/codegen/xai-grok-pager/src/views/rewind.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs:8",
+        "crates/codegen/xai-grok-pager/src/slash/commands/rewind.rs:16",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:159",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:451",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/rewind.rs:478",
+        "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:4106",
+        "crates/codegen/xai-grok-pager/src/app/effects/mod.rs:4165",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:99"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: rewind / undo-turn (claude-code `/rewind`; I-harness lacks it)"
+      ]
+    },
+    {
+      "rawName": "scroll-debug",
+      "canonical": "scroll-debug",
+      "aliases": [],
+      "displayName": "scroll-debug",
+      "family": "inspect",
+      "summary": "Toggles the scroll-diagnostics HUD.",
+      "mechanism": "visible() returns false so it is never listed (scroll_debug.rs:21-23); run() returns `Action::ToggleScrollDebugHud` for a bare invocation and `CommandResult::PassThrough(\"/scroll-debug {args}\")` for any argument, behaving as if the command did not exist (scroll_debug.rs:25-31). It pairs with the `GROK_SCROLL_DEBUG=1` environment variable, which enables the HUD from startup, and flips the same state live (scroll_debug.rs:4). `/debug scroll` routes to the identical action, so the HUD has one toggle and two spellings (debug.rs:113).",
+      "gate": "hidden from the menu by `visible() == false` but still dispatchable by exact name; the HUD is also startable via the GROK_SCROLL_DEBUG env var",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/scroll_debug.rs + crates/codegen/xai-grok-pager/src/views/scroll_debug_hud.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/scroll_debug.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/scroll_debug.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/scroll_debug.rs:30",
+        "crates/codegen/xai-grok-pager/src/slash/commands/debug.rs:116",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:157"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: scroll-debug HUD (diagnostic; no cross-source equivalent expected)"
+      ]
+    },
+    {
+      "rawName": "session-info",
+      "canonical": "session-info",
+      "aliases": [],
+      "displayName": "session-info",
+      "family": "inspect",
+      "summary": "Shows session info: session ID, cwd, model and context usage.",
+      "mechanism": "run() errors without a session and otherwise returns `Action::ShowSessionInfo` (session_info.rs:17-23). It is instant and non-queued (session_info.rs:1).",
+      "gate": "session-scoped (`session_scoped: true`, session_info.rs:14) plus an explicit session_id check",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:11",
+        "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:19",
+        "crates/codegen/xai-grok-pager/src/slash/commands/session_info.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:105"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: session-info / status"
+      ]
+    },
+    {
+      "rawName": "settings",
+      "canonical": "settings",
+      "aliases": [
+        "config",
+        "preferences",
+        "prefs"
+      ],
+      "displayName": "settings",
+      "family": "interface",
+      "summary": "Opens the settings modal.",
+      "mechanism": "run() returns `Action::OpenSettings` unconditionally; there is no direct jump to one setting, args are silently discarded and the modal always opens, with in-modal `/` filtering as the search route (settings_cmd.rs:2-3, :19-21). Registered as `settings` with aliases `config`, `preferences`, `prefs` (settings_cmd.rs:14).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs + crates/codegen/xai-grok-pager/src/views/settings_modal",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/settings_cmd.rs:87",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:79"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: settings / config"
+      ]
+    },
+    {
+      "rawName": "share",
+      "canonical": "share",
+      "aliases": [],
+      "displayName": "share",
+      "family": "collab",
+      "summary": "Shares the session via a public URL (currently disabled, and the command returns that as a handled error).",
+      "mechanism": "run() ignores its context and returns `CommandResult::Error(\"Session sharing is temporarily disabled\")` (share.rs:14-17) — the capability is stubbed in this revision rather than implemented. The registry keeps it menu-hidden by default and revealed only by `set_share_visible(true)`; the menu-only hide means a fully typed `/share` still reaches the pager handler instead of falling through to the shell as an unknown command (registry.rs:162-165, :359-371).",
+      "gate": "menu-hidden by default (offered nowhere) but dispatchable when typed; the implementation currently always errors",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/share.rs + crates/codegen/xai-grok-pager/src/slash/registry.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/share.rs:8",
+        "crates/codegen/xai-grok-pager/src/slash/commands/share.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:165",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:363",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:207",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:106"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: share-session (I-harness deliberately lacks it)"
+      ]
+    },
+    {
+      "rawName": "skills",
+      "canonical": "skills",
+      "aliases": [],
+      "displayName": "skills",
+      "family": "extension",
+      "summary": "Opens the extensions modal on the Skills tab.",
+      "mechanism": "run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Skills, trigger: SlashCommand}` (plugin.rs:76-81). Actual skill invocation is a different path: the shell advertises skills as ACP AvailableCommands carrying `_meta` path/scope/pluginName, `SkillMeta::parse` classifies them, and `AcpSlashCommand::run` turns a real skill into `CommandResult::InjectSkill{display_as_skill: true}` (acp_command.rs:42-63, :126-144).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs + crates/codegen/xai-grok-pager/src/slash/acp_command.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:71",
+        "crates/codegen/xai-grok-pager/src/slash/commands/plugin.rs:77",
+        "crates/codegen/xai-grok-pager/src/slash/acp_command.rs:137",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:116"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: skills"
+      ]
+    },
+    {
+      "rawName": "tasks",
+      "canonical": "tasks",
+      "aliases": [],
+      "displayName": "tasks",
+      "family": "collab",
+      "summary": "Lists background tasks, subagents and scheduled tasks.",
+      "mechanism": "run() errors without a session and otherwise returns `Action::ShowTasks` (tasks.rs:20-25); `dispatch_show_tasks` reads the three task sources and commits a read-only list, with killing and attaching left to the full-TUI tasks pane (tasks.rs:3-4). Minimal mode has no interactive TasksPane, so this is the snapshot route there, and it works in every render mode (tasks.rs:1-2).",
+      "gate": "session-scoped plus an explicit session_id check; available in both screen modes",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:22",
+        "crates/codegen/xai-grok-pager/src/slash/commands/tasks.rs:24",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:114"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: tasks (background jobs / subagents / cron)"
+      ]
+    },
+    {
+      "rawName": "theme",
+      "canonical": "theme",
+      "aliases": [
+        "t"
+      ],
+      "displayName": "theme",
+      "family": "interface",
+      "summary": "Switches the colour theme, or cycles to the next one.",
+      "mechanism": "With no args run() finds the current kind's index in `ThemeKind::available()` and returns `Action::SetTheme(<next>)`, wrapping around (theme.rs:96-102); with a name it normalizes aliases through `ThemeKind::from_name` to the canonical display name, and an unknown name is an Error listing available themes (theme.rs:106-119). It is the only command implementing live preview: `preview_arg`/`cancel_preview` call `Theme::apply_kind` directly so navigating the dropdown never persists or toasts per keystroke (theme.rs:33-57, :7-8).",
+      "gate": "`ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"minimal renders with your terminal's own palette\"})` (theme.rs:27-29)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/theme.rs + crates/codegen/xai-grok-pager/src/theme",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/theme.rs:21",
+        "crates/codegen/xai-grok-pager/src/slash/commands/theme.rs:27",
+        "crates/codegen/xai-grok-pager/src/slash/commands/theme.rs:41",
+        "crates/codegen/xai-grok-pager/src/slash/commands/theme.rs:101",
+        "crates/codegen/xai-grok-pager/src/slash/command.rs:356",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:124"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: theme"
+      ]
+    },
+    {
+      "rawName": "timeline",
+      "canonical": "timeline",
+      "aliases": [],
+      "displayName": "timeline",
+      "family": "interface",
+      "summary": "Toggles the per-turn timeline sidebar.",
+      "mechanism": "run() computes the new value itself from the persisted appearance cache (`!crate::appearance::cache::load_show_timeline()`) and dispatches the typed `Action::SetTimeline(new)`, mirroring `/timestamps` (timeline.rs:3, :21-24).",
+      "gate": "`ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"the timeline rail needs the interactive scrollback pane\"})` (timeline.rs:16-18)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/timeline.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/timeline.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/timeline.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/timeline.rs:23",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:136"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: timeline-sidebar"
+      ]
+    },
+    {
+      "rawName": "timestamps",
+      "canonical": "timestamps",
+      "aliases": [],
+      "displayName": "timestamps",
+      "family": "interface",
+      "summary": "Toggles message timestamps on or off.",
+      "mechanism": "run() reads the persisted value with `crate::appearance::cache::load_timestamps()`, negates it, and dispatches the typed `Action::SetTimestamps(new)` (timestamps.rs:18-21). The declaration sets `arg_placeholder: \"on/off\"` while leaving `takes_args` at its default false, so the placeholder is not reachable through the normal arg path (timestamps.rs:15).",
+      "gate": "always",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/timestamps.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/timestamps.rs:12",
+        "crates/codegen/xai-grok-pager/src/slash/commands/timestamps.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/timestamps.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:130"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: timestamps"
+      ]
+    },
+    {
+      "rawName": "toggle-mouse-reporting",
+      "canonical": "toggle-mouse-reporting",
+      "aliases": [],
+      "displayName": "toggle-mouse-reporting",
+      "family": "interface",
+      "summary": "Toggles terminal mouse capture so click-drag becomes native copy/paste.",
+      "mechanism": "visible() returns `crate::app::mouse_reporting_toggle_enabled()`, cached at startup from `[ui] mouse_reporting_toggle` (toggle_mouse_reporting.rs:25-27). run() re-checks that flag: when on it returns `Action::ToggleMouseCapture` (the same path as the Ctrl+R scrollback shortcut), and when off it returns a `Message` naming the exact config key to set (toggle_mouse_reporting.rs:29-39), so a typed invocation is inert with a hint rather than an error.",
+      "gate": "config-gated opt-in: `[ui] mouse_reporting_toggle = true`; when off the command is hidden from the dropdown and prints a hint if typed",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/toggle_mouse_reporting.rs + crates/codegen/xai-grok-pager/src/app",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/toggle_mouse_reporting.rs:19",
+        "crates/codegen/xai-grok-pager/src/slash/commands/toggle_mouse_reporting.rs:26",
+        "crates/codegen/xai-grok-pager/src/slash/commands/toggle_mouse_reporting.rs:31",
+        "crates/codegen/xai-grok-pager/src/slash/commands/toggle_mouse_reporting.rs:33",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:131"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: mouse-reporting toggle (I-harness models its mouse behaviour on grok)"
+      ]
+    },
+    {
+      "rawName": "transcript",
+      "canonical": "transcript",
+      "aliases": [
+        "log"
+      ],
+      "displayName": "transcript",
+      "family": "context",
+      "summary": "Renders the full conversation transcript to a temp file and opens it in $PAGER.",
+      "mechanism": "run() errors without a session and otherwise returns `Action::OpenTranscriptPager` (transcript.rs:23-28); args are ignored and produce the same dispatch. The dispatcher writes the session transcript to a temp Markdown file and opens the user's pager (default `less`), suspending the inline TUI until the pager exits (transcript.rs:2-5). Primary motivation is minimal mode, where older blocks have already scrolled into native terminal history and there is no interactive scrollback pane, though it works in every render mode (transcript.rs:5-6).",
+      "gate": "session-scoped (`session_scoped: true`, transcript.rs:20) plus an explicit session_id check",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:16",
+        "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:25",
+        "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:27",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:109"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: transcript / pager-view"
+      ]
+    },
+    {
+      "rawName": "tutorial",
+      "canonical": "tutorial",
+      "aliases": [
+        "tour",
+        "onboarding"
+      ],
+      "displayName": "tutorial",
+      "family": "interface",
+      "summary": "Opens the onboarding tutorial overlay.",
+      "mechanism": "run() returns `Action::OpenTutorial` (tutorial.rs:25-27). It is purely opt-in: this command (also listed in the command palette) is the only way the tutorial opens and it never auto-shows (tutorial.rs:3-4). Mode support is a real gate rather than mere hiding, because minimal has no modal host and the overlay's input intercept would freeze the session invisibly (tutorial.rs:19).",
+      "gate": "`ModeSupport::FullscreenOnly(Remedy::SwitchMode{why: \"the tutorial overlay needs fullscreen\"})` (tutorial.rs:20-22)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/tutorial.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/tutorial.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/tutorial.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/tutorial.rs:26",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:78"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: tutorial / onboarding"
+      ]
+    },
+    {
+      "rawName": "usage",
+      "canonical": "usage",
+      "aliases": [
+        "cost"
+      ],
+      "displayName": "usage",
+      "family": "inspect",
+      "summary": "Shows session token and cost totals, and lets consumer accounts manage billing.",
+      "mechanism": "run() refuses with `Error(\"/usage is not available.\")` when `ctx.usage_command_visible` is false (usage.rs:88-90). On non-consumer installs only a bare `/usage` is accepted (anything else errors); on consumer accounts `show`/empty map to `Action::ShowUsage` and `manage` maps to `Action::ManageBilling` (usage.rs:91-104). Visibility, arg-taking and suggestions all read the same two AppCtx flags (`usage_command_visible`, `billing_surface_visible`), so the three stay in lockstep (usage.rs:58-85). External-auth installs are detected at startup by `detect_external_auth_provider` from the ACP auth-method meta `external_provider`, the `GROK_AUTH_PROVIDER_COMMAND` env var, or `grok_com_config.auth_provider_command` (usage.rs:15-47; app/dispatch/prompt.rs:550).",
+      "gate": "two independent gates: `visible()` requires `ctx.usage_command_visible` (false for external-auth deployments with no grok.com billing session), and the per-user tier deny list adds \"usage\" with \"imagine\", \"imagine-video\" and \"voice\" for the free / X Basic tiers — restricted commands still show in the dropdown for discoverability but `CommandRegistry::get` refuses them and invoking one shows the SuperGrok upsell (app/app_view.rs:550-551, :1743-1763; registry.rs:242-274)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs + crates/codegen/xai-grok-pager/src/app/app_view.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:51",
+        "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:59",
+        "crates/codegen/xai-grok-pager/src/slash/commands/usage.rs:89",
+        "crates/codegen/xai-grok-pager/src/app/app_view.rs:551",
+        "crates/codegen/xai-grok-pager/src/app/app_view.rs:1744",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:246",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:550"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: usage / cost (claude-code `/cost`; the `cost` alias exists here too)"
+      ]
+    },
+    {
+      "rawName": "view-plan",
+      "canonical": "view-plan",
+      "aliases": [
+        "show-plan",
+        "plan-view"
+      ],
+      "displayName": "view-plan",
+      "family": "plan",
+      "summary": "Opens the current saved plan preview.",
+      "mechanism": "run() returns `Action::ShowPlan` (view_plan.rs:18-20). `dispatch_show_plan` routes it two ways: if a plan-approval overlay is already active it reopens that approval view, otherwise it calls `AgentView::show_plan_preview()` (app/dispatch/modes.rs:15-24). The preview resolves the plan file to `$GROK_HOME/sessions/<urlencoded cwd>/<session id>/plan.md` and opens it as a markdown `LineViewer` with kind `PlanPreview`, falling back to an empty-plan placeholder and file title when no plan has been written yet (app/agent_view/plan.rs:28-39, :114-140).",
+      "gate": "session-scoped (`session_scoped: true`, view_plan.rs:15); needs a session to resolve the plan path",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/view_plan.rs + crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs + crates/codegen/xai-grok-pager/src/app/agent_view/plan.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/view_plan.rs:11",
+        "crates/codegen/xai-grok-pager/src/slash/commands/view_plan.rs:19",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/modes.rs:17",
+        "crates/codegen/xai-grok-pager/src/app/agent_view/plan.rs:33",
+        "crates/codegen/xai-grok-pager/src/app/agent_view/plan.rs:121",
+        "crates/codegen/xai-grok-pager/src/app/agent_view/plan.rs:173",
+        "crates/codegen/xai-grok-pager/src/app/agent_view/mod.rs:1495",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:96"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: view-plan / show-plan"
+      ]
+    },
+    {
+      "rawName": "vim-mode",
+      "canonical": "vim-mode",
+      "aliases": [],
+      "displayName": "vim-mode",
+      "family": "interface",
+      "summary": "Toggles vim-style scrollback keybindings (j/k, h/l, g/G, y/Y, …).",
+      "mechanism": "run() returns `Action::ToggleVimMode` (vim_mode.rs:19-21). When off (the default), bare-letter and Shift+letter keys in the scrollback jump focus to the prompt so the letter is typed into the textarea, covering j/k, h/l, g/G, y/Y, o/O, r, x, e/E, L/H and the `i` alternative; arrow/Tab/Esc/Space/PgUp/PgDn and all Ctrl+letter bindings stay active in both modes (vim_mode.rs:3-5).",
+      "gate": "always; the persisted value is read through the appearance cache (app/dispatch/prompt.rs:570)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/vim_mode.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/vim_mode.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/vim_mode.rs:20",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/prompt.rs:570",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:127"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: vim-mode (the audited harness modelled its keymap on grok)"
+      ]
+    },
+    {
+      "rawName": "voice",
+      "canonical": "voice",
+      "aliases": [],
+      "displayName": "voice",
+      "family": "interface",
+      "summary": "Toggles dictation; starts recording, and Esc or Enter stops (Enter also sends).",
+      "mechanism": "run() returns `Action::VoiceToggle` (voice.rs:39-42). description() is dynamic rather than constant: it reports \"Dictation (Ctrl+Space/F8; Esc/Enter to stop)\" when the terminal reports kitty key releases, and \"Toggle dictation\" otherwise, because hold-to-talk is impossible without key-release reporting (voice.rs:28-37). Nothing is written to config.toml and voice mode stays on for the rest of the process (voice.rs:1, :11). The Ctrl+Space/F8 keybinding is gated separately from the slash registry, since it bypasses it entirely (app/app_view.rs:549).",
+      "gate": "hard-hidden (fail-closed) until `CommandRegistry::set_voice_visible(true)` after the runtime gate resolves — the startup default is on but a remote kill switch may hide it (registry.rs:158-159, :387-391); also tier-restricted to free / X Basic; session-scoped with `offered_when_session_less: true` so the dashboard's dispatch input can use it (voice.rs:24-25)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/voice.rs + crates/codegen/xai-grok-pager/src/slash/registry.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/voice.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/voice.rs:32",
+        "crates/codegen/xai-grok-pager/src/slash/commands/voice.rs:41",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:159",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:389",
+        "crates/codegen/xai-grok-pager/src/app/app_view.rs:551",
+        "crates/codegen/xai-grok-pager/src/app/app_view.rs:1768"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: voice / dictation (I-harness deliberately lacks it)"
+      ]
+    },
+    {
+      "rawName": "workflow",
+      "canonical": "workflow",
+      "aliases": [],
+      "displayName": "workflow",
+      "family": "execution",
+      "summary": "Launches a saved workflow, lists runs, or manages a run (pause, resume, stop, save).",
+      "mechanism": "This command mostly forwards rather than executing: `run()` intercepts exactly `runs` outside minimal mode and returns `Action::ToggleWorkflows`, and otherwise returns `CommandResult::PassThrough(\"/workflow …\")` so the shell-builtin implementation handles launch and manage verbs (workflow.rs:418-430). suggest_args is a phase machine that offers saved workflow names plus the five ops (runs|pause|resume|stop|save, WORKFLOW_OPS at workflow.rs:335-344), switching to this session's live runs once an exact manage verb is typed so a manage verb never auto-picks a run (workflow.rs:366-416). `WorkflowChoice::from_acp` recognizes launchable definitions by the `_meta.workflowSource` key on incoming ACP commands, and the registry caches them in `saved_workflows` even for names skipped as reserved (command.rs:131-142; registry.rs:452-459).",
+      "gate": "`visible()` returns `ctx.workflows_available`, i.e. offered only while the shell advertises workflow support (workflow.rs:361-364), mirroring the ACP entry this builtin shadows; session-scoped (workflow.rs:357)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs + crates/codegen/xai-grok-pager/src/slash/registry.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs:335",
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs:351",
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs:363",
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs:424",
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflow.rs:429",
+        "crates/codegen/xai-grok-pager/src/slash/command.rs:132",
+        "crates/codegen/xai-grok-pager/src/slash/registry.rs:454",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:120"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: workflow (scripted multi-step runs; I-harness has no equivalent)"
+      ]
+    },
+    {
+      "rawName": "workflows",
+      "canonical": "workflows",
+      "aliases": [],
+      "displayName": "workflows",
+      "family": "extension",
+      "summary": "Browses the installed workflow catalog in the extensions modal.",
+      "mechanism": "run() returns `Action::OpenExtensionsModal{tab: ExtensionsTab::Workflows, trigger: SlashCommand}` (workflows.rs:18-23). Unlike `/workflow` it does not consult `workflows_available`: visibility is deliberately unconditional so the catalog stays reachable mid-reload, which the module's test pins for both flag values, and mode_support stays Both for parity with `/skills` (workflows.rs:46-63, :85).",
+      "gate": "always, in every render mode",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs + crates/codegen/xai-grok-pager/src/views/extensions_modal.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs:13",
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs:19",
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs:61",
+        "crates/codegen/xai-grok-pager/src/slash/commands/workflows.rs:85",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:81"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: workflows-catalog"
+      ]
+    },
+    {
+      "rawName": "imagine",
+      "canonical": "imagine",
+      "aliases": [],
+      "displayName": "imagine",
+      "family": "execution",
+      "summary": "Generates an image from a text description by injecting an image_gen instruction.",
+      "mechanism": "The name comes from a constant, not a literal: `name: IMAGINE_COMMAND_NAME` (imagine.rs:14), defined as \"imagine\" in crates/codegen/xai-grok-tools-api/src/slash_commands.rs:102. run() returns `Message(imagine_usage_message())` for an empty prompt and otherwise `CommandResult::InjectSkill` with `display_as_skill: false`, one text block built by `imagine_instruction(prompt)`, and no scheduled-task preview (imagine.rs:23-37). The prompt instructs the model to call the `image_gen` tool, which the command declares as a hard requirement (imagine.rs:8, :20).",
+      "gate": "tool-gated on \"image_gen\" (hidden fail-closed until the agent advertises it) AND tier-restricted: the shared TIER_RESTRICTED_COMMANDS deny list includes \"imagine\", so on the free / X Basic tiers it stays listed for discoverability but cannot execute (app/app_view.rs:550-551)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/imagine.rs + crates/codegen/xai-grok-tools/implementations/grok_build/image_gen",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine.rs:8",
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine.rs:14",
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine.rs:29",
+        "crates/codegen/xai-grok-tools-api/src/slash_commands.rs:99",
+        "crates/codegen/xai-grok-tools-api/src/slash_commands.rs:102",
+        "crates/codegen/xai-grok-pager/src/app/app_view.rs:551",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:138"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: imagine / image-generation (I-harness deliberately lacks it)"
+      ]
+    },
+    {
+      "rawName": "imagine-video",
+      "canonical": "imagine-video",
+      "aliases": [],
+      "displayName": "imagine-video",
+      "family": "execution",
+      "summary": "Generates a video from a text description by injecting an image_to_video instruction.",
+      "mechanism": "Like `/imagine`, the name is a constant: `name: IMAGINE_VIDEO_COMMAND_NAME` (imagine_video.rs:15), defined as \"imagine-video\" in crates/codegen/xai-grok-tools-api/src/slash_commands.rs:108. run() mirrors `/imagine`: a usage Message for an empty prompt, otherwise `CommandResult::InjectSkill` with `display_as_skill: false` and a single text block from `imagine_video_instruction(prompt)` (imagine_video.rs:24-38). Its generated instruction references both `image_to_video` and `reference_to_video`, while only `image_to_video` is declared as the hard tool requirement (imagine_video.rs:9; test at :85-92).",
+      "gate": "tool-gated on \"image_to_video\" (hidden fail-closed until advertised) AND tier-restricted via TIER_RESTRICTED_COMMANDS, which lists \"imagine-video\" alongside usage/imagine/voice (app/app_view.rs:550-551)",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/imagine_video.rs + crates/codegen/xai-grok-tools/implementations/grok_build/video_gen",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine_video.rs:9",
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine_video.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/imagine_video.rs:30",
+        "crates/codegen/xai-grok-tools-api/src/slash_commands.rs:105",
+        "crates/codegen/xai-grok-tools-api/src/slash_commands.rs:108",
+        "crates/codegen/xai-grok-pager/src/app/app_view.rs:551",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:139"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: imagine-video / video-generation (I-harness deliberately lacks it)"
+      ]
+    },
+    {
+      "rawName": "minimal",
+      "canonical": "minimal",
+      "aliases": [],
+      "displayName": "minimal",
+      "family": "interface",
+      "summary": "Switches this session from the full TUI to minimal scrollback-native rendering.",
+      "mechanism": "One of the two commands built from a single module: `ScreenModeSwitchCommand::minimal()` is a const fn returning `Self{to_minimal: true}` (screen_mode_switch.rs:15-17), and the shared impl computes `name()` from `target_label()`, which returns \"minimal\" when `to_minimal` is true (screen_mode_switch.rs:24-30, :34-36). run() errors without a session and otherwise returns `Action::RelaunchInScreenMode{minimal: true}` (screen_mode_switch.rs:70-80). Dispatch routes that action by first setting `app.pending_screen_mode_switch = Some(ScreenMode::Minimal)` for the in-process path, or, when `exec_switch_forced()` reports the in-process switch cannot run, registering a `ScreenModeRelaunch` and quitting for an exec relaunch (app/dispatch/router.rs:182-200); the in-process path drives `app::mode_switch`'s `transition_terminal` (input-reader parking, writer drain, LeaveAlternateScreen) plus `reseed_screen_mode`, which re-seeds every mode-derived piece of state — action registry, welcome prompt, per-agent prompt modes including subagent views — since startup decided them once (app/mode_switch.rs:1-2, :23-48, :62-100).",
+      "gate": "session-scoped (`session_scoped()` true, screen_mode_switch.rs:58-60) plus `ModeSupport::FullscreenOnly(Remedy::AlreadyInMode)` (screen_mode_switch.rs:62-68): offered only outside minimal, and a typed invocation while already minimal is refused with \"You're already in minimal mode.\"",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs + crates/codegen/xai-grok-pager/src/app/mode_switch.rs + crates/codegen/xai-grok-pager/src/app/dispatch/router.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:15",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:26",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:35",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:63",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/router.rs:184",
+        "crates/codegen/xai-grok-pager/src/app/mode_switch.rs:23",
+        "crates/codegen/xai-grok-pager/src/app/mode_switch.rs:62",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:133"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: minimal (I-harness registers a same-named command; grok's is a live in-process screen-mode switch, not a startup flag)"
+      ]
+    },
+    {
+      "rawName": "fullscreen",
+      "canonical": "fullscreen",
+      "aliases": [
+        "full"
+      ],
+      "displayName": "fullscreen",
+      "family": "interface",
+      "summary": "Switches this session from minimal rendering back to the alt-screen full TUI.",
+      "mechanism": "The second command from the same module: `ScreenModeSwitchCommand::fullscreen()` returns `Self{to_minimal: false}` (screen_mode_switch.rs:20-22), and the shared impl yields name \"fullscreen\", the alias `[\"full\"]` (the minimal sibling has no aliases), and the inverse description and usage (screen_mode_switch.rs:38-56). run() returns `Action::RelaunchInScreenMode{minimal: false}` (screen_mode_switch.rs:77-79), which dispatch turns into `pending_screen_mode_switch = Some(ScreenMode::Fullscreen)` for the in-process switch or an exec relaunch (app/dispatch/router.rs:182-200). Because both constructs are pushed into the same builtin vec as separate entries (mod.rs:133-134), the registry sees two independent commands with different names, aliases and mode gates rather than one command with a mode argument.",
+      "gate": "session-scoped plus `ModeSupport::MinimalOnly(Remedy::AlreadyInMode)` (screen_mode_switch.rs:62-68): offered only in minimal, refused with \"You're already in fullscreen mode.\" elsewhere",
+      "backendModule": "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs + crates/codegen/xai-grok-pager/src/app/mode_switch.rs",
+      "evidence": [
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:20",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:39",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:50",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:66",
+        "crates/codegen/xai-grok-pager/src/slash/commands/screen_mode_switch.rs:77",
+        "crates/codegen/xai-grok-pager/src/app/dispatch/router.rs:185",
+        "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:134"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: fullscreen (I-harness registers a same-named command; grok's carries the `full` alias and is minimal-only)"
+      ]
+    }
+  ],
+  "mechanisms": {
+    "commandSourceModel": "Two tiers at the registry plus three tiers at the badge. `CommandSource` (slash/registry.rs:31-38) has exactly two variants, `Builtin` (pager-local, e.g. /exit, /model) and `Acp` (advertised by the shell/agent through ACP AvailableCommandsUpdate), and it exists for replacement logic: `set_acp_commands`/`apply_acp_commands` strip every entry whose source is Acp and re-add the new set, never touching builtins (registry.rs:452-497). ACP names that collide with a builtin trigger, with an alias, or with BLOCKED_ACP_NAMES (help, hooks-add, hooks-list, hooks-remove, hooks-trust, hooks-untrust, reload-plugins) are skipped, because the shell already advertises colliding skills qualified as `acme:login` (registry.rs:21-29, :481-496). The three-tier view is `CommandProvenance` (slash/command.rs:195-217): Builtin, Shell (a non-skill ACP command), and Skill{source} (a skill, source = plugin install name or scope); `badge()` renders Builtin and Shell both as \"built-in\" and a skill as \"skill · {source}\", because the badge only has to separate a skill from whoever kept the bare name. `AcpSlashCommand::provenance` derives that from parsed `_meta` skill fields (SkillMeta::Absent/Foreign -> Shell, Skill -> Skill) (slash/acp_command.rs:31-63, :95-102). `CommandTrigger` (registry.rs:44-66) is the fuzzy-matcher entry, not the command: one per canonical name plus one per alias, each carrying display (`/exit`), match_text, description, usage, takes_args, args_required, an index into the command vector, its CommandSource and its CommandProvenance. `rebuild_triggers` regenerates the whole trigger list and the key-to-index map after every mutation, and that is where gating is applied: tool-unsatisfied commands are skipped entirely, hard-hidden commands get neither triggers nor key entries, while menu-hidden commands keep their key entries but emit no triggers so a typed invocation still resolves through `get_for_dispatch` (registry.rs:499-556). One extra trigger shape exists: a `bare_suffix_sibling()` for qualified skills so typing `/login` also offers `/acme:login` as a real trigger with honest scores (registry.rs:92-105). The registry's builtin set comes from `builtin_commands()` (slash/commands/mod.rs:75-161), whose order is also the menu tie-breaker after MRU recency, and the shell mirrors the same key list in `xai_grok_shell::session::PAGER_COMMAND_KEYS` (xai-grok-shell/src/session/slash_commands.rs:454-519), enforced by the pager contract test at slash/commands/mod.rs:766-787.",
+    "approval": "The approval model is one canonical enum projected onto one bool. `PermissionModeKind` (app/actions.rs:951-966) has Default, Ask, Auto and AlwaysApprove; the last is the only one that projects to `yolo_mode = true`, and the canonical strings (default/ask/auto/always-approve) are the persisted/settings vocabulary (app/actions.rs:967-979). `/always-approve` computes `!ctx.pager_state.yolo_mode` and returns `Action::SetYoloMode(new)` (slash/commands/always_approve.rs:21-24); `/auto` returns `Action::SetPermissionMode(Auto|Ask)` with the rule `currently_auto = auto_mode && !yolo_mode`, so yolo always wins over auto (slash/commands/auto.rs:23-32; the shared precedence helper is `effective_auto(yolo, auto) = !yolo && auto`, app/dispatch/modes.rs:206-211). The policy lives in the dispatcher: `set_yolo_mode` (modes.rs:353-399) and `set_permission_mode` (modes.rs:406-467) both route enabling through `yolo_enable_blocked`/`refuse_if_yolo_locked` (modes.rs:189-204), mutate state in `set_yolo_mode_inner` (modes.rs:263-336), and emit `Effect::PersistPermissionMode` with rollback to the previous canonical. Turning always-approve ON drains the entire pending `permission_queue`, answering each ACP RequestPermission with AllowOnce and falling back to Cancelled — never AllowAlways (modes.rs:288-317); the flag flip is deliberately ordered before the drain as a documented invariant (modes.rs:284-286). Two remote/policy gates shadow it: the managed-policy pin (`app.yolo_policy_block`) comes from a root-owned requirements.toml layer setting `[ui] disable_bypass_permissions_mode = true` or the legacy `[ui] yolo = false` (xai-grok-workspace/src/permission/resolution.rs:946-1010; wired in at app/event_loop.rs:1158), and the auto feature gate `app.auto_mode_gate` degrades any commit to Auto into Ask when off, while `downgrade_displayed_auto_if_gated` clears the per-agent auto flag so no badge can show Auto while disabled (app/dispatch/modes.rs:213-232, :410-418). `/auto` itself is hard-hidden at the registry until `set_auto_mode_available(true)` (registry.rs:160-161, :393-404). The classifier behind Auto is xai-grok-workspace/src/permission/auto_mode: `auto_mode_fast_path` allows allowlisted access kinds/tool names and exact no-op commands without a model call (auto_mode/mod.rs:1079-1160), otherwise `LlmPermissionClassifier` runs a transcript-aware structured {thinking, shouldBlock, reason} classification (auto_mode/mod.rs:1440-1576), and the permission manager records classifier provenance, latency and verdict on the permission event (permission/manager/request_classification.rs:22-99, permission/types.rs:32-46).",
+    "plan": "Plan state is modelled as an optimistic/confirmed pair on the agent plus a session mode on the shell. `/plan` with no args returns `Action::SetPlanMode(PlanModeKind::On)` and with a description returns `Action::EnterPlanMode{description}` (slash/commands/plan.rs:23-31). `dispatch_enter_plan_mode` reads `agent.plan_mode_pending.unwrap_or(agent.plan_mode_active)` for its idempotency check, so the optimistic value shadows the confirmed one everywhere (app/dispatch/modes.rs:46, :145); when already in plan mode it is a no-op with a toast pointing at `/view-plan` (modes.rs:47-50). It then sets `plan_mode_pending = Some(true)` and emits an ACP `SetSessionMode` with mode id \"plan\" — or `SetModeThenPrompt`, which bundles the mode switch and the first prompt into one spawned task to guarantee the switch completes before the prompt is sent (modes.rs:52-70). Turning plan mode off targets `SessionMode::Default`, not the user's prior mode (modes.rs:167-179). The plan body itself is a file: `plan_file_path()` resolves to `$GROK_HOME/sessions/<urlencoded cwd>/<session id>/plan.md` (app/agent_view/plan.rs:28-39). `/view-plan` returns `Action::ShowPlan` (slash/commands/view_plan.rs:18-20), which dispatch routes to the reopen of an existing approval overlay or to `AgentView::show_plan_preview()` (app/dispatch/modes.rs:15-24); the preview opens that file as a markdown LineViewer of kind PlanPreview, with an empty-plan placeholder when nothing was written (app/agent_view/plan.rs:114-140). A separate `plan_approval_view` holds the shell-initiated exit-plan-mode review (its field doc names the `exit_plan_mode` ext_method, app/agent_view/mod.rs:1495-1497), rendered as an overlay with comments and focus states; the approve handler consumes it by `take()` (app/agent_view/plan.rs:173-174), and `/view-plan` reopens that overlay when it is already present.",
+    "rewind": "`/rewind` (alias `/undo`) returns `Action::RewindShowPicker` (slash/commands/rewind.rs:15-17), which dispatch turns into a modal flow rather than a one-shot operation. `dispatch_rewind_show_picker` dismisses any lingering `/jump` picker, and if the session is busy it first offers a cancel-the-running-turn choice instead of listing points; otherwise it stashes the composer draft into `RewindState.stashed_draft` and emits `Effect::FetchRewindPoints` (app/dispatch/rewind.rs:129-163). That effect calls ACP ext `x.ai/rewind/points` with the sessionId and deserializes a `RewindPointsResponse` into `RewindPointInfo` rows (app/effects/mod.rs:4102-4159; view types at views/rewind.rs:11-31). Selecting a point either asks for confirmation or proceeds according to `confirm_before_rewind_enabled`, then emits `Effect::RewindExecute` -> ACP ext `x.ai/rewind/execute` (app/effects/mod.rs:4161-4211). Restoration on success is pager-side: it finds the scrollback entry for the target prompt index, calls `scrollback.remove_from(anchor_idx)` and explicitly drops the removed tail before releasing retained memory, clears the persisted last-turn summary (bumping the generation so a late SessionMetaFromDisk hydrate cannot restore it), then refills the composer from the response's `prompt_text` or the stashed draft and returns focus to the prompt pane (app/dispatch/rewind.rs:445-487). Filesystem state is explicitly not restored — the action's own documentation says file changes made after that turn are left as-is (actions/defaults.rs:428-441), and a separate workspace RPC exists for file rewind (`workspace.rewind_to`, xai-grok-workspace-types/src/rpc/session.rs:33-68), so `/rewind` restores the conversation, not the tree.",
+    "memory": "Two different things share the memory family in this surface. `/remember` (with args) returns `Action::SendRememberNote(text)` and (without args) `Action::EnterRememberMode` (slash/commands/remember.rs:16-23). Dispatch routes the note through `send_remember_note`, which clears the composer, records the note in prompt history only on the `#` composer path, opens a `RememberNoteReview` modal showing the raw text, and fires `Effect::RewriteMemoryNote` with a session context summary extracted from scrollback (recent user prompts, tool-call file paths, cwd and git branch) (app/dispatch/notes.rs:357-368, :454-523, :566-573). The rewrite goes out as ACP ext `x.ai/memory/rewrite` (app/effects/mod.rs:3771) and is handled shell-side as a one-shot LLM reformat call (xai-grok-shell/src/extensions/memory.rs:1-2, :17). Confirming the modal emits `Effect::SaveMemoryNote` (notes.rs:526-563), whose implementation calls `xai_grok_shell::session::memory::MemoryStorage::new(&cwd, None)` and `append_to_memory(MemoryScope::Global, &text)` (app/effects/mod.rs:3811-3823). Storage is human-editable Markdown in the grok home: the global file is `$GROK_HOME/memory/MEMORY.md` and workspace-scoped memory lives under `$GROK_HOME/memory/{project-slug}-{hash8}/MEMORY.md`, appends being separated by a blank line and skipped entirely for ephemeral temp-dir cwds (xai-grok-memory/src/storage.rs:1-4, :24-33, :111-118, :216-252). `/recap` (alias `/summarize`) is NOT file-backed: it returns `Action::SendRecap{auto: false}` (slash/commands/recap.rs:21-23), dispatch pushes a running `SessionEvent::Recap` block and emits `Effect::SendRecap` (app/dispatch/notes.rs:780-799), and the effect fires ACP ext `x.ai/recap` with auto=false (app/effects/mod.rs:3878-3910); the answer arrives asynchronously as a scrollback line and is never added to the model conversation (slash/commands/recap.rs:4-5). A separate `x.ai/memory/flush` ext method exists for flushing agent memory (xai-grok-shell/src/extensions/memory.rs:16, :40-61), and it is the same module that hosts the compact handler (line 15).",
+    "sandbox": "Yes — grok has real OS-level sandboxing, separate from and in addition to permission gating. The crate is crates/codegen/xai-grok-sandbox, whose module doc says it provides kernel-enforced sandboxing via nono (Landlock/Seatbelt) applied once at process startup, covers in-process tokio::fs calls and child processes, and leaves network open at the process level because the agent needs the LLM API while blocking child network per-subprocess via seccomp (xai-grok-sandbox/src/lib.rs:8-15). Enforcement is selected by profile: `apply_sandbox` resolves the profile from the sandbox settings, the `--sandbox` CLI flag, or a resumed session's saved profile, then on Linux decides whether read-deny, hook write-deny and data write-deny mounts are required, re-execs under bubblewrap when needed, and verifies the mounts actually took effect — refusing to start rather than running with denied paths unprotected, including against a spoofed `__GROK_INSIDE_BWRAP` marker (xai-grok-shell/src/config/mod.rs:1471-1579). Profiles and per-workspace definitions come from `$GROK_HOME/sandbox.toml` (xai-grok-config/src/loader.rs:100-101) and the sandbox config surface is gated by managed requirements, including a macOS MDM-provided `allowed_sandbox_modes` list read through CoreFoundation and deliberately not env-expanded (xai-grok-config/src/macos_managed.rs:105-137, :139-161). Two further links matter for the command surface: `should_auto_allow_bash()` requires both the `auto_allow_bash` setting and an active sandbox (lib.rs:100-106), so sandbox state feeds the approval model; and the requested-confinement profile disables leader mode with a warning (xai-grok-pager-bin/src/main.rs:1259-1280). The permission system (yolo / auto classifier) is a distinct, orthogonal layer: it decides whether a tool call is allowed to run at all, while the sandbox confines what the process and its children may touch once it does.",
+    "screenModeSwitch": "`/minimal` and `/fullscreen` are two commands from ONE module, and the mechanism is hand-implemented rather than macro-declared. screen_mode_switch.rs contains no `slash_meta!` at all: the struct is `ScreenModeSwitchCommand{to_minimal: bool}` with two const constructors, `minimal()` -> to_minimal true and `fullscreen()` -> to_minimal false (screen_mode_switch.rs:8-22). The `SlashCommand` impl computes every constant method from that bool: `name()` from `target_label()` (lines 24-36), `aliases()` returns an empty slice for minimal and `[\"full\"]` for fullscreen (38-40), `description()` and `usage()` branch on the same flag (42-56), `session_scoped()` is true for both (58-60), and `mode_support()` returns `FullscreenOnly(Remedy::AlreadyInMode)` for minimal and `MinimalOnly(Remedy::AlreadyInMode)` for fullscreen (62-68) — so each command is offered only in the mode it leaves, and a typed invocation in the wrong mode is refused with a mode-named message by the shared `ModeSupport::refusal` path (slash/mode_support.rs:34-53). `builtin_commands()` therefore pushes two separate entries into the same vec (slash/commands/mod.rs:132-134), and `run()` is shared: it errors when there is no session and otherwise returns `Action::RelaunchInScreenMode{minimal: self.to_minimal}` (70-80). Dispatch keeps the switch in-process where it can: it first sets `app.pending_screen_mode_switch` to the target `ScreenMode` and returns no effects, and only when `screen_mode_relaunch::exec_switch_forced()` says the in-process switch is unavailable does it register a `ScreenModeRelaunch`, unregister all active sessions and emit `Effect::Quit` for an exec relaunch (app/dispatch/router.rs:182-200). The in-process path is app::mode_switch, whose doc says it covers both the terminal transition and the re-seeding of every mode-derived piece of state that startup decided once: `transition_terminal` parks the input reader, waits for the writer to drain, and performs the alternate-screen transition, with rollback on failure (app/mode_switch.rs:61-100), while `reseed_screen_mode` re-applies screen-mode globals, resolves the regular theme at most once (an AtomicBool guard so a later round trip cannot clobber an in-session `/theme` choice), rebuilds the action registry, updates the welcome prompt and recurses into every agent's prompt mode including subagent views (app/mode_switch.rs:15-48)."
+  },
+  "added": [],
+  "unverified": []
+}

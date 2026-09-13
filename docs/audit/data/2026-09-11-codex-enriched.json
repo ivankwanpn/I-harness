@@ -1,0 +1,1196 @@
+{
+  "source": "codex",
+  "sourcePath": "D:/agent-complete/codex-rust-v0.149.1",
+  "version": "0.149.1",
+  "commandModelNote": "集中 enum + dispatch：全部命令是 codex-rs/tui/src/slash_command.rs:12 的 `pub enum SlashCommand`（58 個變體，非設計文件 §3 所寫的 59；我逐一數過 enum 本體，且與 commands JSON 的 58 筆完全對齊，無遺漏也無多餘）。輸入面與顯示面不同構：popup 與 `SlashCommand::command()` 走 IntoStaticStr（= strum 的 get_preferred_name，優先 to_string），使用者輸入的解析走 enum string（slash_command.rs:9 同時 derive EnumString 與 IntoStaticStr；實際查表在 bottom_pane/slash_commands.rs:112-126 的 `find_builtin_command` → `SlashCommand::from_str`）。關鍵修正：strum 0.28.0（Cargo.lock:13377）的 `get_serializations` 在 variant 同時有 serialize 與 to_string 時『兩者都註冊』，只有 to_string 時『只註冊 to_string』（strum_macros-0.28.0/src/helpers/variant_props.rs:59-71）。因此四列要修正/補註：(1) AutoReview 只有 `to_string = 'approve'`，所以可打的是 `/approve`，`auto-review` 不是可解析字串（反證：slash_command.rs:321-327 斷言 from_str('approve') == Ok(AutoReview)；commands JSON 把它記成 rawName='auto-review' 是機械套用 serialize_all 的結果，已在本檔更正為 approve）。(2) Stop 同時註冊 'clean' 與 'stop'（slash_command.rs:71,292-300；slash_commands.rs:201-207 斷言 find_builtin_command('stop') 也成立），popup 顯示 'stop'。(3) Pwd 同時註冊 'cwd' 與 'pwd'（slash_command.rs:53），popup 顯示 'pwd'。(4) Pets 同時註冊 'pet' 與 'pets'（slash_command.rs:60）。另有一個非 enum 的別名：`/gooooal`（任意多個 o）→ Goal（slash_commands.rs:113-117,194-199）。可見性/可用性規則集中在 slash_command.rs:161-274（supports_inline_args / available_in_side_conversation / available_during_task / is_visible），派發點在 chatwidget/slash_dispatch.rs:147-565（bare）與 :573-978（含參數），gating 由 BuiltinCommandFlags 決定（slash_commands.rs:56-82、slash_dispatch.rs:1088-1108）。",
+  "commands": [
+    {
+      "rawName": "agents",
+      "canonical": "agents",
+      "aliases": [],
+      "displayName": "agents",
+      "variant": "Agents",
+      "family": "collab",
+      "summary": "開啟跨 thread 的 agent 儀表板，用來檢視與切換所有作用中的 agent session。",
+      "mechanism": "bare dispatch 送 AppEvent::OpenAgentsOverview（slash_dispatch.rs:316-318）；由 codex-rs/tui/src/app/agents_overview.rs 的 App::open_agents_overview 處理（agents_overview.rs:43）。狀態放在 AgentsOverviewState：visible_thread_ids、每個 thread 的 input_states 與已派發請求（agents_overview.rs:31-40）。embedded app-server 模式下不提供儀表板，改為提示啟動背景 server 或連接遠端（agents_overview.rs:44-64）。",
+      "gate": "always（但在 embedded app-server 模式降級為提示；需 background/remote app-server 才有實際資料）",
+      "backendModule": "codex-rs/tui/src/app/agents_overview.rs（+ agents_overview_view.rs）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:43",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:316",
+        "codex-rs/tui/src/app/agents_overview.rs:43",
+        "codex-rs/tui/src/app/agents_overview.rs:31"
+      ],
+      "verified": true,
+      "crossSourceHints": ["agents dashboard / session switcher"]
+    },
+    {
+      "rawName": "app",
+      "canonical": "app",
+      "aliases": [],
+      "displayName": "app",
+      "variant": "App",
+      "family": "interface",
+      "summary": "把目前 session 交接到 Codex Desktop app 繼續（僅 macOS/Windows 顯示）。",
+      "mechanism": "is_visible 只允許 macOS/Windows（slash_command.rs:270）。dispatch 先要求已有 thread_id，否則報 'Session is still starting'，然後送 AppEvent::OpenDesktopThread { thread_id }（slash_dispatch.rs:250-259）。事件在 app/event_dispatch.rs:821 被消費（app 端開 thread）。",
+      "gate": "platform: cfg!(any(target_os = 'macos', target_os = 'windows'))（slash_command.rs:270）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/event_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:38",
+        "codex-rs/tui/src/slash_command.rs:270",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:250",
+        "codex-rs/tui/src/app/event_dispatch.rs:821"
+      ],
+      "verified": true,
+      "crossSourceHints": ["handoff to desktop/IDE client"]
+    },
+    {
+      "rawName": "apps",
+      "canonical": "apps",
+      "aliases": [],
+      "displayName": "apps",
+      "variant": "Apps",
+      "family": "extension",
+      "summary": "列出／管理 Codex Apps（connectors）整合。",
+      "mechanism": "dispatch 呼叫 add_connectors_output（slash_dispatch.rs:515-517），實作在 chatwidget/connectors.rs:160。popup 清單受 BuiltinCommandFlags.connectors_enabled 控制（slash_commands.rs:75），該旗標由 ChatWidget::builtin_command_flags 的 self.connectors_enabled() 決定（slash_dispatch.rs:1097-1107）；未啟用時 find_builtin_command 直接回 None（slash_commands.rs:112-126）。",
+      "gate": "flags.connectors_enabled（connectors 未啟用時命令從 popup 消失且無法派發）",
+      "backendModule": "codex-rs/tui/src/chatwidget/connectors.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:63",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:515",
+        "codex-rs/tui/src/bottom_pane/slash_commands.rs:75",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1097"
+      ],
+      "verified": true,
+      "crossSourceHints": ["connectors / apps / integrations"]
+    },
+    {
+      "rawName": "archive",
+      "canonical": "archive",
+      "aliases": [],
+      "displayName": "archive",
+      "variant": "Archive",
+      "family": "session",
+      "summary": "歸檔目前 session 並退出（先跳確認選單）。",
+      "mechanism": "dispatch 先顯示 SelectionView 確認（'Yes, archive and exit'），選項 action 送 AppEvent::ArchiveCurrentThread（slash_dispatch.rs:183-211）。事件由 app/event_dispatch.rs:281 處理。available_during_task() 為 false，任務進行中會被 slash_command_blocked_by_active_task 擋下（slash_command.rs:207、slash_dispatch.rs:134-164）。",
+      "gate": "always；但 !available_during_task（slash_command.rs:205-227）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/event_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:34",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:183",
+        "codex-rs/tui/src/app/event_dispatch.rs:281",
+        "codex-rs/tui/src/slash_command.rs:207"
+      ],
+      "verified": true,
+      "crossSourceHints": ["archive session"]
+    },
+    {
+      "rawName": "approve",
+      "canonical": "approve",
+      "aliases": [],
+      "displayName": "approve",
+      "variant": "AutoReview",
+      "family": "safety",
+      "summary": "手動核准一筆先前被自動審查（auto-review / guardian）拒絕的動作，讓 agent 重試一次。",
+      "mechanism": "命令字面值修正：variant 只有 #[strum(to_string='approve')]（slash_command.rs:25-26），無 serialize，EnumString 只註冊 to_string，因此使用者要打 `/approve`；`auto-review` 不可解析（slash_command.rs:321-327 的測試即斷言 from_str('approve')）。dispatch 呼叫 open_auto_review_denials_popup（slash_dispatch.rs:392-394），popup 讀 RecentAutoReviewDenials（僅收 status==Denied，最多 10 筆；auto_review_denials.rs:7-23、permission_popups.rs:168-226）。選取後送 AppEvent::ApproveRecentAutoReviewDenial → ChatWidget::approve_recent_auto_review_denial → AppCommand::approve_guardian_denied_action（permission_popups.rs:228-240、app_command.rs:238-240）；core 端 approve_guardian_denied_action 把『已核准的這個確切動作』以 developer message 注入既有對話（session/handlers.rs:695-733），不新開 turn。",
+      "gate": "always 可見；popup 內容取決於本 thread 是否已有 auto-review 拒絕紀錄（無則顯示 'No recent auto-review denials in this thread.'）",
+      "backendModule": "codex-rs/tui/src/chatwidget/permission_popups.rs + codex-rs/tui/src/auto_review_denials.rs（core 端 codex-rs/core/src/session/handlers.rs）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:25",
+        "codex-rs/tui/src/slash_command.rs:321",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:392",
+        "codex-rs/tui/src/auto_review_denials.rs:7",
+        "codex-rs/tui/src/chatwidget/permission_popups.rs:228",
+        "codex-rs/tui/src/app_command.rs:238",
+        "codex-rs/core/src/session/handlers.rs:695"
+      ],
+      "verified": true,
+      "crossSourceHints": ["approve-denied-action / permission retry（對應 IH 的 approval override）"]
+    },
+    {
+      "rawName": "btw",
+      "canonical": "side-conversation",
+      "aliases": ["side"],
+      "displayName": "btw",
+      "variant": "Btw",
+      "family": "collab",
+      "summary": "在暫時性 fork 中開一段側聊；帶參數時直接把該訊息當側聊第一句。",
+      "mechanism": "與 /side 共用同一 arm（slash_dispatch.rs:313-315）。bare 走 request_empty_side_conversation：需已有 thread_id，再送 AppEvent::StartSide { parent_thread_id, user_message: None }（slash_dispatch.rs:104-127）。帶參數時先組 UserMessage（含圖片與 mention bindings）再送 StartSide（slash_dispatch.rs:931-948）。在 review 模式中 /side 與 /btw 都被 ensure_side_command_allowed_outside_review 擋下（slash_dispatch.rs:1224-1235）。",
+      "gate": "always；側聊中僅 available_in_side_conversation 清單內的命令可用（slash_command.rs:188-202、slash_dispatch.rs:1212-1222）；review 模式中不可用",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/side.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:45",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:313",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:104",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1224"
+      ],
+      "verified": true,
+      "crossSourceHints": ["side conversation / ephemeral fork"]
+    },
+    {
+      "rawName": "cd",
+      "canonical": "cd",
+      "aliases": [],
+      "displayName": "cd",
+      "variant": "Cd",
+      "family": "session",
+      "summary": "變更目前 session 的工作目錄（bare `/cd` 等於回到 `~`）。",
+      "mechanism": "bare 形式在 dispatch 內遞迴呼叫帶參數版本並帶入 '~'（slash_dispatch.rs:468-470）；帶參數走 request_working_directory_change（slash_dispatch.rs:710）。前置條件由 can_change_working_directory 檢查：必須是同一 thread、非側聊、非 blocks_direct_input、非 ephemeral、無背景 terminal、無 pending turn、佇列與 pending_steers 皆空（working_directory.rs:7-20），否則顯示 'Changing directories requires an idle primary session without queued input.'；通過後送 AppEvent::ChangeWorkingDirectory { thread_id, requested_cwd }（working_directory.rs:42-45），由 app/event_dispatch.rs:61 處理。",
+      "gate": "always 可見；執行需 session 已設定且處於可變更狀態（working_directory.rs:7-40）",
+      "backendModule": "codex-rs/tui/src/chatwidget/working_directory.rs + codex-rs/tui/src/app/event_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:52",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:468",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:710",
+        "codex-rs/tui/src/chatwidget/working_directory.rs:7",
+        "codex-rs/tui/src/app/event_dispatch.rs:61"
+      ],
+      "verified": true,
+      "crossSourceHints": ["cd / change working directory"]
+    },
+    {
+      "rawName": "clean",
+      "canonical": "stop",
+      "aliases": ["stop"],
+      "displayName": "stop",
+      "variant": "Stop",
+      "family": "execution",
+      "summary": "停止所有背景 terminal 程序。",
+      "mechanism": "兩段式註冊：serialize 'clean'＋to_string 'stop'，故 `/clean` 與 `/stop` 都可解析（slash_command.rs:71、slash_commands.rs:201-207），popup 顯示 stop。dispatch 呼叫 clean_background_terminals（slash_dispatch.rs:503-505），它 submit_op(AppCommand::CleanBackgroundTerminals)（app_command.rs:106-108）、清空 unified_exec_processes 並同步 footer（chatwidget.rs:1482-1490）。",
+      "gate": "always（available_during_task 為 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs（+ codex-rs/tui/src/app_command.rs）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:71",
+        "codex-rs/tui/src/bottom_pane/slash_commands.rs:201",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:503",
+        "codex-rs/tui/src/chatwidget.rs:1482",
+        "codex-rs/tui/src/app_command.rs:106"
+      ],
+      "verified": true,
+      "crossSourceHints": ["kill background shells / stop processes"]
+    },
+    {
+      "rawName": "clear",
+      "canonical": "clear",
+      "aliases": [],
+      "displayName": "clear",
+      "variant": "Clear",
+      "family": "session",
+      "summary": "清空終端畫面並開始一個新對話（可帶新對話名稱）。",
+      "mechanism": "bare 送 AppEvent::ClearUi { name: None }（slash_dispatch.rs:240-242）；帶參數送 AppEvent::ClearUi { name: Some(trimmed) }（slash_dispatch.rs:773-777）。事件在 app/event_dispatch.rs:144 處理。available_during_task() 為 false（slash_command.rs:224）。",
+      "gate": "always；!available_during_task（slash_command.rs:224）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/event_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:73",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:240",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:773",
+        "codex-rs/tui/src/app/event_dispatch.rs:144",
+        "codex-rs/tui/src/slash_command.rs:224"
+      ],
+      "verified": true,
+      "crossSourceHints": ["clear / new chat"]
+    },
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "variant": "Compact",
+      "family": "context",
+      "summary": "手動觸發對話壓縮，產生摘要並以壓縮後的替代歷史取代當前 context window。",
+      "mechanism": "TUI：先 clear_token_usage、必要時 set_task_running(true)、設 input_queue.user_turn_pending_start=true，再送 AppEvent::CodexOp(Op::Compact)（slash_dispatch.rs:264-275；app_event_sender.rs:49；app_command.rs:226）。core：session/handlers.rs:635 分派到 tasks/compact.rs 的 CompactTask（kind=Compact），依 provider 能力三分支：Feature::TokenBudget → compact_token_budget::run_manual_compact_task；RemoteCompactionSupport V1/V2 → compact_remote[_v2]::run_remote_compact_task；Unsupported → 本機 compact::run_compact_task 並把 SUMMARIZATION_PROMPT 當 UserInput 送一輪（tasks/compact.rs:36-77、compact.rs:143-167）。本機路徑把摘要（SUMMARY_PREFIX + 最後一則 assistant 訊息）與最近使用者訊息重建成新歷史（compact.rs:347-393、build_compacted_history：compact.rs:639-717，使用者訊息上限 20k tokens：compact.rs:57），再呼叫 Session::replace_compacted_history。",
+      "gate": "always（blocks_direct_input 時報錯；可由 queue 的 ParseSlash 路徑延後執行）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs → codex-rs/core/src/tasks/compact.rs → codex-rs/core/src/compact.rs（另 compact_remote.rs / compact_remote_v2.rs / compact_token_budget.rs）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:40",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:264",
+        "codex-rs/core/src/tasks/compact.rs:36",
+        "codex-rs/core/src/compact.rs:143",
+        "codex-rs/core/src/compact.rs:639",
+        "codex-rs/prompts/templates/compact/prompt.md:1"
+      ],
+      "verified": true,
+      "crossSourceHints": ["compact / command-compact / context summarization"]
+    },
+    {
+      "rawName": "copy",
+      "canonical": "copy",
+      "aliases": [],
+      "displayName": "copy",
+      "variant": "Copy",
+      "family": "interface",
+      "summary": "把最後一則 agent 回覆以 markdown 原文複製到剪貼簿。",
+      "mechanism": "dispatch 呼叫 copy_last_agent_markdown（slash_dispatch.rs:404-406），實作讀 transcript.last_agent_markdown 後透過 clipboard_copy::copy_to_clipboard 複製並保存 clipboard_lease，成功／失敗都寫 history cell（interaction.rs:299-327）。Android 不顯示（slash_command.rs:269），且是少數可在側聊使用的命令之一（slash_command.rs:191）。",
+      "gate": "platform: !cfg!(target_os = 'android')（slash_command.rs:269）",
+      "backendModule": "codex-rs/tui/src/chatwidget/interaction.rs + codex-rs/tui/src/clipboard_copy.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:9",
+        "codex-rs/tui/src/slash_command.rs:269",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:404",
+        "codex-rs/tui/src/chatwidget/interaction.rs:299"
+      ],
+      "verified": true,
+      "crossSourceHints": ["copy last response"]
+    },
+    {
+      "rawName": "cwd",
+      "canonical": "pwd",
+      "aliases": ["pwd"],
+      "displayName": "pwd",
+      "variant": "Pwd",
+      "family": "inspect",
+      "summary": "顯示目前工作目錄。",
+      "mechanism": "serialize 'cwd' + to_string 'pwd'，兩者皆可解析（slash_command.rs:53），popup 顯示 pwd。bare dispatch 直接以 config.cwd 組 info message（slash_dispatch.rs:471-476）；帶參數時回 'Usage: /pwd' 錯誤（slash_dispatch.rs:711-713）。屬 inspect：不改狀態，只讀 config。",
+      "gate": "always（available_during_task、available_in_side_conversation 皆 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:53",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:471",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:711",
+        "codex-rs/tui/src/slash_command.rs:177"
+      ],
+      "verified": true,
+      "crossSourceHints": ["pwd / cwd"]
+    },
+    {
+      "rawName": "debug-config",
+      "canonical": "debug-config",
+      "aliases": [],
+      "displayName": "debug-config",
+      "variant": "DebugConfig",
+      "family": "inspect",
+      "summary": "印出 config 分層（layers）與 requirement 來源，供除錯。",
+      "mechanism": "dispatch 呼叫 add_debug_config_output（slash_dispatch.rs:485-487），實作呼叫 crate::debug_config::new_debug_config_output(&self.config, self.session_network_proxy.as_ref()) 並寫入 history（chatwidget.rs:1463-1468），實作主體在 codex-rs/tui/src/debug_config.rs。",
+      "gate": "always（visible 且 available_during_task）",
+      "backendModule": "codex-rs/tui/src/debug_config.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:56",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:485",
+        "codex-rs/tui/src/chatwidget.rs:1463"
+      ],
+      "verified": true,
+      "crossSourceHints": ["debug config / config layers"]
+    },
+    {
+      "rawName": "debug-m-drop",
+      "canonical": "debug-m-drop",
+      "aliases": [],
+      "displayName": "debug-m-drop",
+      "variant": "MemoryDrop",
+      "family": "inspect",
+      "summary": "記憶維護用的除錯命令，此版本已無實作，只回傳 stub 錯誤訊息。",
+      "mechanism": "enum 註解明確標示 // Debugging commands（slash_command.rs:78-80），描述為 'DO NOT USE'（slash_command.rs:121）。dispatch 只呼叫 add_app_server_stub_message('Memory maintenance')（slash_dispatch.rs:506-508），該函式 warn! 後寫入 '{feature}: {TUI_STUB_MESSAGE}' 錯誤 cell（chatwidget.rs:1571-1574）。並未對應任何 app-server RPC（此版本 app-server 只有 memory/reset 與 thread/memoryMode/set）。",
+      "gate": "always 可見（不在 is_visible 的 debug_assertions 白名單內，只有 Rollout/TestApproval 受限，slash_command.rs:271）；功能為 stub",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs（stub）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:79",
+        "codex-rs/tui/src/slash_command.rs:121",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:506",
+        "codex-rs/tui/src/chatwidget.rs:1571"
+      ],
+      "verified": true,
+      "crossSourceHints": ["memory maintenance (stub)"]
+    },
+    {
+      "rawName": "debug-m-update",
+      "canonical": "debug-m-update",
+      "aliases": [],
+      "displayName": "debug-m-update",
+      "variant": "MemoryUpdate",
+      "family": "inspect",
+      "summary": "記憶維護用的除錯命令，此版本已無實作，只回傳 stub 錯誤訊息。",
+      "mechanism": "與 debug-m-drop 同一個 stub arm（slash_dispatch.rs:509-511），add_app_server_stub_message('Memory maintenance') → 錯誤 cell（chatwidget.rs:1571-1574）。available_during_task() 為 false（slash_command.rs:227），佇列分類為 QueueDrain::Continue（slash_dispatch.rs:1130-1131）。",
+      "gate": "always 可見；!available_during_task（slash_command.rs:227）；功能為 stub",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs（stub）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:81",
+        "codex-rs/tui/src/slash_command.rs:227",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:509",
+        "codex-rs/tui/src/chatwidget.rs:1571"
+      ],
+      "verified": true,
+      "crossSourceHints": ["memory maintenance (stub)"]
+    },
+    {
+      "rawName": "delete",
+      "canonical": "delete",
+      "aliases": [],
+      "displayName": "delete",
+      "variant": "Delete",
+      "family": "session",
+      "summary": "永久刪除目前 session（含其 subagent thread）並退出，先跳確認選單。",
+      "mechanism": "dispatch 顯示確認 SelectionView，subtitle 明示 'Cannot be undone. Subagent threads will also be deleted.'，確認項送 AppEvent::DeleteCurrentThread（slash_dispatch.rs:212-239），由 app/event_dispatch.rs:284 處理。!available_during_task（slash_command.rs:209）。",
+      "gate": "always；!available_during_task（slash_command.rs:209）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/event_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:35",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:212",
+        "codex-rs/tui/src/app/event_dispatch.rs:284",
+        "codex-rs/tui/src/slash_command.rs:209"
+      ],
+      "verified": true,
+      "crossSourceHints": ["delete session/thread"]
+    },
+    {
+      "rawName": "diff",
+      "canonical": "diff",
+      "aliases": [],
+      "displayName": "diff",
+      "variant": "Diff",
+      "family": "inspect",
+      "summary": "顯示目前 git diff（含未追蹤檔案）。",
+      "mechanism": "dispatch 先 add_diff_in_progress()（僅 request_redraw，chatwidget.rs:1455-1457），再 clone workspace_command_runner 與 cwd，tokio::spawn 非同步執行 get_git_diff，結果以 AppEvent::DiffResult(cwd, text) 回送（slash_dispatch.rs:414-439）；非 git repo 時文字為 '/diff — _not inside a git repository_'。runner 不可用時回 'Failed to compute diff: workspace command runner unavailable'。",
+      "gate": "always（available_during_task 為 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/get_git_diff.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:49",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:414",
+        "codex-rs/tui/src/chatwidget.rs:1455"
+      ],
+      "verified": true,
+      "crossSourceHints": ["diff / git diff"]
+    },
+    {
+      "rawName": "exit",
+      "canonical": "exit",
+      "aliases": ["quit"],
+      "displayName": "exit",
+      "variant": "Exit",
+      "family": "session",
+      "summary": "直接離開 Codex（不經確認）。",
+      "mechanism": "與 /quit 共用 arm：Quit | Exit => request_quit_without_confirmation()（slash_dispatch.rs:398-400；chatwidget.rs:1408）。兩者描述同為 'exit Codex'（slash_command.rs:101）。",
+      "gate": "always（available_during_task 為 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:67",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:398",
+        "codex-rs/tui/src/chatwidget.rs:1408",
+        "codex-rs/tui/src/slash_command.rs:101"
+      ],
+      "verified": true,
+      "crossSourceHints": ["exit / quit"]
+    },
+    {
+      "rawName": "experimental",
+      "canonical": "experimental",
+      "aliases": [],
+      "displayName": "experimental",
+      "variant": "Experimental",
+      "family": "interface",
+      "summary": "開啟實驗功能選單，切換 Stage::Experimental 的功能旗標。",
+      "mechanism": "dispatch 呼叫 open_experimental_popup（slash_dispatch.rs:389-391）；實作掃 FEATURES，只保留 spec.stage.experimental_menu_name() 有值的（即 Stage::Experimental），用 config.features.enabled(spec.id) 標示現況，組成 ExperimentalFeaturesView（settings_popups.rs:89-110；Stage 定義 features/src/lib.rs:43-66）。",
+      "gate": "always；選單內容 = Stage::Experimental 的功能（features/src/lib.rs:46-51、61-66）",
+      "backendModule": "codex-rs/tui/src/chatwidget/settings_popups.rs + codex-rs/features/src/lib.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:24",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:389",
+        "codex-rs/tui/src/chatwidget/settings_popups.rs:89",
+        "codex-rs/features/src/lib.rs:43"
+      ],
+      "verified": true,
+      "crossSourceHints": ["experimental features toggle"]
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "variant": "Export",
+      "family": "interface",
+      "summary": "把完整對話匯出成 markdown（剪貼簿或檔案）。",
+      "mechanism": "bare dispatch 呼叫 show_transcript_export_popup（slash_dispatch.rs:407-409、701），popup 提供 Copy to clipboard 與 Save to file 兩項，分別送 AppEvent::ExportTranscript{destination:Clipboard} 與 AppEvent::OpenTranscriptExportFilePrompt（transcript_export.rs:20-52、54-59）。帶參數時先把 queue autosend 抑制（set_queue_autosend_suppressed(true)），再送 ExportTranscript{File(PathBuf::from(trimmed))}（slash_dispatch.rs:702-709）；此抑制也讓 /export 在 suppress_queue_autosend 期間被視為 blocked（slash_dispatch.rs:144）。",
+      "gate": "always（available_during_task 為 true；但 suppress_queue_autosend 期間會被視為 blocked）",
+      "backendModule": "codex-rs/tui/src/chatwidget/transcript_export.rs + codex-rs/tui/src/app/transcript_export.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:47",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:407",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:701",
+        "codex-rs/tui/src/chatwidget/transcript_export.rs:20"
+      ],
+      "verified": true,
+      "crossSourceHints": ["export transcript / conversation markdown"]
+    },
+    {
+      "rawName": "feedback",
+      "canonical": "feedback",
+      "aliases": [],
+      "displayName": "feedback",
+      "variant": "Feedback",
+      "family": "interface",
+      "summary": "送出日誌／回饋給維護者（先選類別）。",
+      "mechanism": "dispatch 先檢查 config.feedback_enabled：未啟用則顯示 feedback_disabled_params()，否則用 feedback_selection_params(app_event_tx) 開類別選單（slash_dispatch.rs:167-179），UI 建構在 bottom_pane 的 feedback_view。available_during_task 為 true（slash_command.rs:253）。",
+      "gate": "config: feedback_enabled（關閉時命令仍可見但顯示停用說明；slash_dispatch.rs:168-173）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/bottom_pane（feedback_view）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:68",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:167"
+      ],
+      "verified": true,
+      "crossSourceHints": ["feedback / send logs"]
+    },
+    {
+      "rawName": "fork",
+      "canonical": "fork",
+      "aliases": [],
+      "displayName": "fork",
+      "variant": "Fork",
+      "family": "session",
+      "summary": "從目前對話 fork 出新的 session（可命名）。",
+      "mechanism": "bare 送 AppEvent::ForkCurrentSession { name: None }（slash_dispatch.rs:246-249）；帶參數送 name: Some(trimmed)（slash_dispatch.rs:778-782）；事件在 app/event_dispatch.rs:287 處理。!available_during_task（slash_command.rs:210）。",
+      "gate": "always；!available_during_task（slash_command.rs:210）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/event_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:37",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:246",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:778",
+        "codex-rs/tui/src/app/event_dispatch.rs:287"
+      ],
+      "verified": true,
+      "crossSourceHints": ["fork session"]
+    },
+    {
+      "rawName": "goal",
+      "canonical": "goal",
+      "aliases": [],
+      "displayName": "goal",
+      "variant": "Goal",
+      "family": "plan",
+      "summary": "設定或檢視長時任務的目標（持久化於 SQLite），並驅動自動續跑循環。",
+      "mechanism": "bare dispatch 在 Feature::Goals 開啟時送 AppEvent::OpenThreadGoalMenu（slash_dispatch.rs:298-312），無 thread_id 時改印 GOAL_USAGE。帶參數支援子命令：clear → AppEvent::ClearThreadGoal；pause/resume → SetThreadGoalStatus(Paused/Active)；edit → OpenThreadGoalEditor；其餘視為新 objective，包成 GoalDraft 送 AppEvent::SetThreadGoalDraft{mode:ConfirmIfExists}（slash_dispatch.rs:825-930）。持久化在獨立 SQLite（goals_1.sqlite，state/src/sqlite.rs:30,67-73）的 thread_goals 表（每 thread 一列、PK thread_id、status CHECK 六態；state/goals_migrations/0001_thread_goals.sql:1-18），寫入為 ON CONFLICT DO UPDATE / UPDATE，不是 append-only 事件流；狀態列舉在 state/src/model/thread_goal.rs:14-21。RPC 面為 thread/goal/set|get|clear 與 thread/goal/updated|cleared 通知（app-server-protocol/src/protocol/common.rs:562-576、1817-1818）。",
+      "gate": "feature: goals（Feature::Goals，features/src/lib.rs:1408-1413：key 'goals'、Stage::Stable、default_enabled true）；TUI 檢查點 slash_dispatch.rs:299 與 826",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/thread_goal_actions.rs + codex-rs/state/src/runtime/goals.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:42",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:298",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:825",
+        "codex-rs/features/src/lib.rs:1408",
+        "codex-rs/state/goals_migrations/0001_thread_goals.sql:1",
+        "codex-rs/state/src/model/thread_goal.rs:14",
+        "codex-rs/state/src/sqlite.rs:30"
+      ],
+      "verified": true,
+      "crossSourceHints": ["goal / long-running objective（IH 無對等；cc 的 todo/plan 不同構）"]
+    },
+    {
+      "rawName": "hooks",
+      "canonical": "hooks",
+      "aliases": [],
+      "displayName": "hooks",
+      "variant": "Hooks",
+      "family": "extension",
+      "summary": "檢視與管理生命週期 hooks。",
+      "mechanism": "dispatch 呼叫 add_hooks_output（slash_dispatch.rs:450-452），它只送 AppEvent::FetchHooksList { cwd }（hooks.rs:11-15）；事件由 app/event_dispatch.rs:879 處理，回呼 on_hooks_loaded 後用 hooks_list_entry_for_cwd 過濾當前 cwd 並開 HooksBrowserView（hooks.rs:17-42）。hook 執行期在 codex-rs/hooks 與 core/src/hook_runtime.rs。",
+      "gate": "always（hook 定義來自 hooks.json；命令本身無 feature gate）",
+      "backendModule": "codex-rs/tui/src/chatwidget/hooks.rs + codex-rs/core/src/hook_runtime.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:30",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:450",
+        "codex-rs/tui/src/chatwidget/hooks.rs:11",
+        "codex-rs/tui/src/app/event_dispatch.rs:879"
+      ],
+      "verified": true,
+      "crossSourceHints": ["hooks / lifecycle hooks"]
+    },
+    {
+      "rawName": "ide",
+      "canonical": "ide",
+      "aliases": [],
+      "displayName": "ide",
+      "variant": "Ide",
+      "family": "context",
+      "summary": "把 IDE 的選取範圍、開啟檔案等內容納入送給模型的 context（可切換）。",
+      "mechanism": "bare dispatch 呼叫 handle_ide_command：切換 self.ide_context 的 enable/disable 並同步狀態指示（slash_dispatch.rs:482-484；ide_context.rs:34-43）。帶參數支援 on/off/status（ide_context.rs:45-64）。真正的 context 注入在送出 user turn 前：maybe_apply_ide_context 讀 fetch_ide_context(cwd, codex_home) 並 apply_ide_context_to_user_input 併入 items（ide_context.rs:67-77）。",
+      "gate": "always（available_during_task 與 available_in_side_conversation 皆 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget/ide_context.rs + codex-rs/tui/src/ide_context.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:16",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:482",
+        "codex-rs/tui/src/chatwidget/ide_context.rs:34",
+        "codex-rs/tui/src/chatwidget/ide_context.rs:67"
+      ],
+      "verified": true,
+      "crossSourceHints": ["IDE context / editor selection context"]
+    },
+    {
+      "rawName": "import",
+      "canonical": "import",
+      "aliases": [],
+      "displayName": "import",
+      "variant": "Import",
+      "family": "extension",
+      "summary": "從 Claude Code 匯入設定、專案與近期對話。",
+      "mechanism": "dispatch 只送 AppEvent::OpenExternalAgentConfigMigration（slash_dispatch.rs:446-449），由 app/event_dispatch.rs:233 處理並驅動 external-agent-migration 流程（crate codex-rs/external-agent-migration，state 端落點 state/src/runtime/external_agent_config_imports.rs）。!available_during_task（slash_command.rs:220）。",
+      "gate": "always 可見；!available_during_task（slash_command.rs:220）；匯入內容來自外部 agent 產品（描述為 Claude Code）",
+      "backendModule": "codex-rs/tui/src/app/event_dispatch.rs + codex-rs/external-agent-migration",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:29",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:446",
+        "codex-rs/tui/src/app/event_dispatch.rs:233",
+        "codex-rs/tui/src/slash_command.rs:220"
+      ],
+      "verified": true,
+      "crossSourceHints": ["import from other agent harness (Claude Code migration)"]
+    },
+    {
+      "rawName": "init",
+      "canonical": "init",
+      "aliases": [],
+      "displayName": "init",
+      "variant": "Init",
+      "family": "context",
+      "summary": "建立 AGENTS.md（專案指示檔），做法是送出一段內建提示當使用者訊息。",
+      "mechanism": "dispatch 以 include_str!('../../prompt_for_init_command.md') 取得固定提示（常數 INIT_PROMPT），直接 submit_user_message 成一般使用者訊息，讓模型自己去產生 AGENTS.md（slash_dispatch.rs:260-263）。!available_during_task（slash_command.rs:211）。",
+      "gate": "always；!available_during_task（slash_command.rs:211）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/prompt_for_init_command.md",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:39",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:260",
+        "codex-rs/tui/src/slash_command.rs:211"
+      ],
+      "verified": true,
+      "crossSourceHints": ["init / create AGENTS.md（≈ cc 的 /init）"]
+    },
+    {
+      "rawName": "keymap",
+      "canonical": "keymap",
+      "aliases": [],
+      "displayName": "keymap",
+      "variant": "Keymap",
+      "family": "interface",
+      "summary": "重新對應 TUI 快捷鍵；`/keymap debug` 顯示解析後的 keymap。",
+      "mechanism": "bare dispatch 呼叫 open_keymap_picker（slash_dispatch.rs:329-331；keymap_picker.rs:31）。帶參數只接受 'debug'：用 RuntimeKeymap::from_config(&self.config.tui_keymap) 解析設定，成功則 open_keymap_debug，失敗則顯示 'Invalid `tui.keymap` configuration'（slash_dispatch.rs:731-744）。!available_during_task（slash_command.rs:214）。",
+      "gate": "always 可見；!available_during_task（slash_command.rs:214）；行為受 config key tui.keymap 影響",
+      "backendModule": "codex-rs/tui/src/chatwidget/keymap_picker.rs + codex-rs/tui/src/keymap.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:18",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:329",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:731",
+        "codex-rs/tui/src/chatwidget/keymap_picker.rs:31"
+      ],
+      "verified": true,
+      "crossSourceHints": ["keybindings / keymap"]
+    },
+    {
+      "rawName": "logout",
+      "canonical": "logout",
+      "aliases": [],
+      "displayName": "logout",
+      "variant": "Logout",
+      "family": "session",
+      "summary": "登出 Codex 帳號。",
+      "mechanism": "dispatch 送 AppEvent::Logout（slash_dispatch.rs:401-403）；由 app/event_dispatch.rs:661 以 app_server.logout_account() 執行。!available_during_task（slash_command.rs:225）。",
+      "gate": "always；!available_during_task（slash_command.rs:225）",
+      "backendModule": "codex-rs/tui/src/app/event_dispatch.rs（+ app-server logout RPC）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:65",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:401",
+        "codex-rs/tui/src/app/event_dispatch.rs:661",
+        "codex-rs/tui/src/slash_command.rs:225"
+      ],
+      "verified": true,
+      "crossSourceHints": ["logout / sign out"]
+    },
+    {
+      "rawName": "mcp",
+      "canonical": "mcp",
+      "aliases": [],
+      "displayName": "mcp",
+      "variant": "Mcp",
+      "family": "extension",
+      "summary": "列出已設定的 MCP 伺服器與工具／認證狀態（`/mcp verbose` 顯示完整資訊）。",
+      "mechanism": "bare dispatch 呼叫 add_mcp_output(McpServerStatusDetail::ToolsAndAuthOnly)（slash_dispatch.rs:512-514）；add_mcp_output 先放 loading spinner 再送 AppEvent::FetchMcpInventory { detail, thread_id }（chatwidget.rs:1593-1605），事件在 app/event_dispatch.rs:1112 處理，結果回來後 clear_mcp_inventory_loading（chatwidget.rs:1611-1624）。帶參數只接受 'verbose' → McpServerStatusDetail::Full，其餘回 'Usage: /mcp [verbose]'（slash_dispatch.rs:727-730）。",
+      "gate": "always（available_during_task 為 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs + codex-rs/tui/src/app/event_dispatch.rs（app-server MCP inventory RPC）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:62",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:512",
+        "codex-rs/tui/src/chatwidget.rs:1593",
+        "codex-rs/tui/src/app/event_dispatch.rs:1112"
+      ],
+      "verified": true,
+      "crossSourceHints": ["mcp / list MCP servers"]
+    },
+    {
+      "rawName": "memories",
+      "canonical": "memories",
+      "aliases": [],
+      "displayName": "memories",
+      "variant": "Memories",
+      "family": "context",
+      "summary": "設定記憶功能的使用與生成（不是檢視記憶內容）。",
+      "mechanism": "dispatch 呼叫 open_memories_popup（slash_dispatch.rs:395-397）。若 Feature::MemoryTool 未開，改開啟用提示，'yes' 送 AppEvent::UpdateFeatureFlags{MemoryTool:true} 並提示需要新 session 才生效（chatwidget.rs:1110-1146）。已開啟時建立 MemoriesSettingsView(use_memories, generate_memories, ...) 並 show_view（chatwidget.rs:1116-1122）；UI 在 bottom_pane/memories_settings_view.rs，接受設定時送 AppEvent::UpdateMemorySettings、重置走確認後送 AppEvent::ResetMemories（app/config_persistence.rs 落地為 config.toml 寫入 + thread/memoryMode/set 與 memory/reset RPC）。",
+      "gate": "feature: memories（Feature::MemoryTool，features/src/lib.rs:984-989：key 'memories'、Stage::Stable、default_enabled false）；未開時只給啟用提示",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs + codex-rs/tui/src/bottom_pane/memories_settings_view.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:27",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:395",
+        "codex-rs/tui/src/chatwidget.rs:1110",
+        "codex-rs/features/src/lib.rs:984",
+        "codex-rs/ext/memories/src/lib.rs:18"
+      ],
+      "verified": true,
+      "crossSourceHints": ["memory settings（cc 的 /memory 為編輯 CLAUDE.md，機制不同）"]
+    },
+    {
+      "rawName": "mention",
+      "canonical": "mention",
+      "aliases": [],
+      "displayName": "mention",
+      "variant": "Mention",
+      "family": "context",
+      "summary": "插入檔案 mention 觸發字元（'@'）到輸入框。",
+      "mechanism": "dispatch 只呼叫 self.insert_str('@')（slash_dispatch.rs:440-442；chatwidget.rs:1760），把 @ 放進 composer 以觸發 mention 選單；實際 mention 編碼／解碼在 tui/src/mention_codec.rs 與 codex-rs/utils/plugins 的 mention_syntax。available_during_task 為 true（slash_command.rs:236）。",
+      "gate": "always（available_during_task 為 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs + codex-rs/tui/src/mention_codec.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:50",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:440",
+        "codex-rs/tui/src/chatwidget.rs:1760",
+        "codex-rs/tui/src/slash_command.rs:236"
+      ],
+      "verified": true,
+      "crossSourceHints": ["file mention / @-reference"]
+    },
+    {
+      "rawName": "model",
+      "canonical": "model",
+      "aliases": [],
+      "displayName": "model",
+      "variant": "Model",
+      "family": "model",
+      "summary": "選擇模型與 reasoning effort（並可能附帶 service-tier 選項）。",
+      "mechanism": "dispatch 呼叫 open_model_popup() 後 defer_input_until_settings_applied()（slash_dispatch.rs:287-290）；popup 實作在 chatwidget/model_popups.rs:13，資料來自 model_catalog。service tier 命令會被掛在 /model 之後（commands_for_input：只有 cmd == Model 時擴充 service tier 項目，slash_commands.rs:90-99），且 service tier 為獨立型別走 handle_service_tier_command_dispatch（slash_dispatch.rs:55-67）。",
+      "gate": "always；service tier 子項需 flags.service_tier_commands_enabled（= self.fast_mode_enabled()，slash_dispatch.rs:1103）",
+      "backendModule": "codex-rs/tui/src/chatwidget/model_popups.rs + codex-rs/tui/src/model_catalog.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:15",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:287",
+        "codex-rs/tui/src/bottom_pane/slash_commands.rs:90",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:55"
+      ],
+      "verified": true,
+      "crossSourceHints": ["model selection / reasoning effort"]
+    },
+    {
+      "rawName": "new",
+      "canonical": "new",
+      "aliases": [],
+      "displayName": "new",
+      "variant": "New",
+      "family": "session",
+      "summary": "在對話進行中開始一個新對話（可命名）。",
+      "mechanism": "bare 送 AppEvent::NewSession { name: None }（slash_dispatch.rs:180-182）；帶參數送 name: Some(trimmed)（slash_dispatch.rs:768-772）；事件在 app/event_dispatch.rs:51 處理。!available_during_task（slash_command.rs:207）—— 也就是「進行中不能開新對話」，描述卻寫 'start a new chat during a conversation'（slash_command.rs:90），兩者並存。",
+      "gate": "always；!available_during_task（slash_command.rs:207）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/event_dispatch.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:33",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:180",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:768",
+        "codex-rs/tui/src/app/event_dispatch.rs:51"
+      ],
+      "verified": true,
+      "crossSourceHints": ["new session / new chat"]
+    },
+    {
+      "rawName": "permissions",
+      "canonical": "permissions",
+      "aliases": [],
+      "displayName": "permissions",
+      "variant": "Permissions",
+      "family": "safety",
+      "summary": "選擇 Codex 被允許做什麼：approval policy 與 permission profile 的預設組合。",
+      "mechanism": "dispatch 呼叫 open_permissions_popup() + defer_input_until_settings_applied()（slash_dispatch.rs:322-325）。popup 讀 builtin_approval_presets()，每組 preset 綁定 AskForApproval 與 PermissionProfile/ActivePermissionProfile（utils/approval-presets/src/lib.rs:28-61：read-only=OnRequest+read_only、auto=OnRequest+workspace_write、full-access=Never+Disabled）；亦在此讀 Feature::GuardianApproval 決定 auto-review 選項可否使用（permission_popups.rs:17-51），Windows 上 degraded（RestrictedToken）時把 'auto' 標為 '(non-admin sandbox)' 並顯示升級提示（permission_popups.rs:32-63）。explicit_permission_profile_mode 時改開 profile 專用 popup（permission_popups.rs:18-21）。",
+      "gate": "always；個別 preset 受 config 約束（approval_policy.can_set 會回錯誤並停用該項，permission_popups.rs:66-73）；Read Only preset 僅 Windows 顯示（permission_popups.rs:23,54-56）",
+      "backendModule": "codex-rs/tui/src/chatwidget/permission_popups.rs + codex-rs/utils/approval-presets/src/lib.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:17",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:322",
+        "codex-rs/tui/src/chatwidget/permission_popups.rs:17",
+        "codex-rs/utils/approval-presets/src/lib.rs:28",
+        "codex-rs/tui/src/chatwidget/permission_popups.rs:23"
+      ],
+      "verified": true,
+      "crossSourceHints": ["permissions / approval mode / sandbox mode"]
+    },
+    {
+      "rawName": "personality",
+      "canonical": "personality",
+      "aliases": [],
+      "displayName": "personality",
+      "variant": "Personality",
+      "family": "model",
+      "summary": "選擇 Codex 的溝通風格（Friendly / Pragmatic）。",
+      "mechanism": "dispatch 呼叫 open_personality_popup（slash_dispatch.rs:291-294）。popup 先檢查 session 已設定、且 current_model_supports_personality()，否則報錯；選項為 Personality::Friendly/Pragmatic（settings_popups.rs:19-87）。每個選項的 action 送三個事件：AppCommand::override_turn_context(..., Some(personality))（改 turn 設定）、AppEvent::UpdatePersonality、AppEvent::PersistPersonalitySelection（settings_popups.rs:47-64）。",
+      "gate": "feature: personality（flags.personality_command_enabled = Feature::Personality，slash_dispatch.rs:1104；features/src/lib.rs:292-293）；另需模型支援 personality 且 session 已設定",
+      "backendModule": "codex-rs/tui/src/chatwidget/settings_popups.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:74",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:291",
+        "codex-rs/tui/src/chatwidget/settings_popups.rs:19",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1104",
+        "codex-rs/features/src/lib.rs:292"
+      ],
+      "verified": true,
+      "crossSourceHints": ["personality / output style / communication style"]
+    },
+    {
+      "rawName": "pet",
+      "canonical": "pets",
+      "aliases": ["pets"],
+      "displayName": "pets",
+      "variant": "Pets",
+      "family": "interface",
+      "summary": "選擇或隱藏終端寵物（裝飾性動畫）。",
+      "mechanism": "serialize 'pet' + to_string 'pets'，兩者可解析（slash_command.rs:60）。bare dispatch 呼叫 open_pets_picker（slash_dispatch.rs:497-499；pets.rs:141-161，先 warn_if_pets_unsupported，再以 build_pet_picker_params 開選單並啟動預覽）。帶參數：disable/disabled/hide/hidden/off/none → AppEvent::PetDisabled；其他字串 → select_pet_by_id(args) → AppEvent::PetSelected（slash_dispatch.rs:962-972；pets.rs:163-169）。!available_during_task（slash_command.rs:262）。",
+      "gate": "always 可見；!available_during_task（slash_command.rs:262）；終端不支援圖片時 warn_if_pets_unsupported 會擋下（pets.rs:171+）",
+      "backendModule": "codex-rs/tui/src/chatwidget/pets.rs + codex-rs/tui/src/app/pets.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:60",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:497",
+        "codex-rs/tui/src/chatwidget/pets.rs:141",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:962"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "variant": "Plan",
+      "family": "plan",
+      "summary": "切換到 Plan 協作模式（只套用模式；帶參數時順便把該段文字當使用者訊息送出）。",
+      "mechanism": "bare dispatch 呼叫 apply_plan_slash_command（slash_dispatch.rs:295-297），其中先檢查 collaboration_modes_enabled()，再取 plan_mask(model_catalog) 並 set_collaboration_mask_from_user_action(mask)（slash_dispatch.rs:84-102）。plan_mask 從 builtin_collaboration_mode_presets 取 ModeKind::Plan 的 preset（collaboration_modes.rs:56-58；presets 定義 models-manager/src/collaboration_mode_presets.rs:16-28，developer_instructions = collaboration-mode-templates 的 PLAN 模板）。帶參數時先套 mask 再 submit_user_message_with_shell_escape_policy(..., Disallow)，未設定 session 時改走 queue_user_message_with_options(QueuedInputAction::ParseSlash)（slash_dispatch.rs:783-824）。模式本身是 world-state section：以 developer fragment 包在 <collaboration_mode> 標籤注入（core/src/context/world_state/collaboration_mode.rs:122-143），且 Plan 模式下 update_plan 工具會被拒絕（core/src/tools/handlers/plan.rs:84-88）。",
+      "gate": "flags.collaboration_modes_enabled（slash_commands.rs:74 過濾；slash_dispatch.rs:1098 由 self.collaboration_modes_enabled() 決定）；Plan preset 不存在時回 'Plan mode unavailable right now.'；!available_during_task（slash_command.rs:222）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/collaboration_modes.rs + codex-rs/collaboration-mode-templates",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:41",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:295",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:84",
+        "codex-rs/tui/src/collaboration_modes.rs:56",
+        "codex-rs/models-manager/src/collaboration_mode_presets.rs:20",
+        "codex-rs/core/src/context/world_state/collaboration_mode.rs:122"
+      ],
+      "verified": true,
+      "crossSourceHints": ["plan mode（grok/D2 的 plan mode；IH 目前無）"]
+    },
+    {
+      "rawName": "plugins",
+      "canonical": "plugins",
+      "aliases": [],
+      "displayName": "plugins",
+      "variant": "Plugins",
+      "family": "extension",
+      "summary": "瀏覽已安裝／可用的 plugins。",
+      "mechanism": "dispatch 呼叫 add_plugins_output（slash_dispatch.rs:518-520）。實作先檢查 Feature::Plugins，未開則顯示 'Plugins are disabled.' 並提示啟用（plugins.rs:64-71）；開啟後設 plugins_active_tab_id、prefetch_plugins()，依 plugins_cache_for_current_cwd() 狀態決定開 popup、顯示錯誤或 loading popup（plugins.rs:73-88），快取狀態為 PluginsCacheState enum（plugins.rs:55-61）。",
+      "gate": "feature: plugins（flags.plugins_command_enabled = Feature::Plugins，slash_dispatch.rs:1100；commands_for_input 也會隱藏，slash_commands.rs:76）",
+      "backendModule": "codex-rs/tui/src/chatwidget/plugins.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:64",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:518",
+        "codex-rs/tui/src/chatwidget/plugins.rs:64",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1100",
+        "codex-rs/tui/src/bottom_pane/slash_commands.rs:76"
+      ],
+      "verified": true,
+      "crossSourceHints": ["plugins / extension marketplace"]
+    },
+    {
+      "rawName": "ps",
+      "canonical": "ps",
+      "aliases": [],
+      "displayName": "ps",
+      "variant": "Ps",
+      "family": "execution",
+      "summary": "列出背景 terminal 程序與其近期輸出。",
+      "mechanism": "dispatch 呼叫 add_ps_output（slash_dispatch.rs:500-502），實作把 self.unified_exec_processes 映射成 UnifiedExecProcessDetails{command_display, recent_chunks} 後寫 history cell（chatwidget.rs:1470-1480）。資料源是 TUI 追蹤的 unified-exec 程序清單（與 /stop 清空的是同一份）。",
+      "gate": "always（available_during_task 為 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:70",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:500",
+        "codex-rs/tui/src/chatwidget.rs:1470",
+        "codex-rs/tui/src/slash_command.rs:243"
+      ],
+      "verified": true,
+      "crossSourceHints": ["ps / list background processes"]
+    },
+    {
+      "rawName": "quit",
+      "canonical": "quit",
+      "aliases": ["exit"],
+      "displayName": "quit",
+      "variant": "Quit",
+      "family": "session",
+      "summary": "直接離開 Codex。",
+      "mechanism": "與 /exit 共用 arm：request_quit_without_confirmation()（slash_dispatch.rs:398-400；chatwidget.rs:1408）。描述與 Exit 共用 'exit Codex'（slash_command.rs:101）。",
+      "gate": "always（available_during_task 為 true）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:66",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:398",
+        "codex-rs/tui/src/chatwidget.rs:1408"
+      ],
+      "verified": true,
+      "crossSourceHints": ["quit / exit"]
+    },
+    {
+      "rawName": "raw",
+      "canonical": "raw",
+      "aliases": [],
+      "displayName": "raw",
+      "variant": "Raw",
+      "family": "interface",
+      "summary": "切換 raw scrollback 模式，讓終端選取與複製更乾淨。",
+      "mechanism": "bare dispatch 呼叫 toggle_raw_output_mode_and_notify() 並送 AppEvent::RawOutputModeChanged{enabled}（slash_dispatch.rs:410-413、emit_raw_output_event 在 :129-132）。set_raw_output_mode 會改 self.raw_output_mode 與 config.tui_raw_output_mode、更新兩個 stream controller 的 render mode 並 refresh_status_surfaces（chatwidget.rs:1659-1670）。帶參數僅接受 on/off，其餘回 RAW_USAGE（slash_dispatch.rs:745-755）。",
+      "gate": "always（available_during_task、available_in_side_conversation、supports_inline_args 皆 true，slash_command.rs:175,194,314-316）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:48",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:410",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:745",
+        "codex-rs/tui/src/chatwidget.rs:1659"
+      ],
+      "verified": true,
+      "crossSourceHints": ["raw output / plain text mode"]
+    },
+    {
+      "rawName": "rename",
+      "canonical": "rename",
+      "aliases": [],
+      "displayName": "rename",
+      "variant": "Rename",
+      "family": "session",
+      "summary": "重新命名目前 thread。",
+      "mechanism": "bare dispatch 先記 telemetry counter 'codex.thread.rename' 再 show_rename_prompt（slash_dispatch.rs:282-286）；prompt 用 CustomPromptView，提交時 normalize_thread_name 後 tx.set_thread_name(name)（interaction.rs:334-361）。帶參數則直接 normalize 並送 set_thread_name（slash_dispatch.rs:756-767），空字串報 'Thread name cannot be empty.'。",
+      "gate": "always（available_during_task 為 true）；另有 ensure_thread_rename_allowed 檢查（interaction.rs:363+）",
+      "backendModule": "codex-rs/tui/src/chatwidget/interaction.rs + codex-rs/tui/src/app_event_sender.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:32",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:282",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:756",
+        "codex-rs/tui/src/chatwidget/interaction.rs:334"
+      ],
+      "verified": true,
+      "crossSourceHints": ["rename session/thread"]
+    },
+    {
+      "rawName": "resume",
+      "canonical": "resume",
+      "aliases": [],
+      "displayName": "resume",
+      "variant": "Resume",
+      "family": "session",
+      "summary": "恢復已儲存的對話（無參數開挑選器，帶參數按 id/名稱恢復）。",
+      "mechanism": "bare 送 AppEvent::OpenResumePicker（slash_dispatch.rs:243-245；事件在 app/event_dispatch.rs:177 處理）；帶參數送 AppEvent::ResumeSessionByIdOrName(args)（slash_dispatch.rs:954-957）。被列為 !available_during_task，且在 slash_command_blocked_by_active_task 中額外要求（user_turn_pending_start 或 agent_turn_running 時擋下）（slash_command.rs:229、slash_dispatch.rs:141-143）。",
+      "gate": "always；!available_during_task 且受 user_turn_pending_start/agent_turn_running 額外限制（slash_command.rs:229、slash_dispatch.rs:141-143）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/resume_picker.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:36",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:243",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:954",
+        "codex-rs/tui/src/app/event_dispatch.rs:177"
+      ],
+      "verified": true,
+      "crossSourceHints": ["resume session"]
+    },
+    {
+      "rawName": "review",
+      "canonical": "review",
+      "aliases": [],
+      "displayName": "review",
+      "variant": "Review",
+      "family": "execution",
+      "summary": "對目前變更做程式碼審查並找出問題（可選基準分支／commit／自訂指示）。",
+      "mechanism": "bare dispatch 呼叫 open_review_popup 並在 MCP 啟動中就先把輸入延後（slash_dispatch.rs:276-281）。popup 提供四個 preset：Review against a base branch（開分支挑選）、Review uncommitted changes（直接送 ReviewTarget::UncommittedChanges）、Review a commit（開 commit 挑選）、Custom review instructions（開自訂提示輸入）（review_popups.rs:6-61）。帶參數時直接 submit_op(AppCommand::review(ReviewTarget::Custom { instructions: args }))（slash_dispatch.rs:949-953；app_command.rs:93-95,234-236）。core 端由 tasks/review.rs 的 ReviewTask 執行：另起 sub-codex 對話跑 review，輸出 ReviewOutputEvent（tasks/review.rs:36-80）。注意此模式下 /side、/btw 被禁（slash_dispatch.rs:1224-1235），且 review 進行中 steer 會被拒（core/src/session/turn_input.rs:507-519）。",
+      "gate": "always 可見；!available_during_task（slash_command.rs:221）；review 模式中 side/btw 不可用",
+      "backendModule": "codex-rs/tui/src/chatwidget/review_popups.rs → codex-rs/core/src/tasks/review.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:26",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:276",
+        "codex-rs/tui/src/chatwidget/review_popups.rs:6",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:949",
+        "codex-rs/core/src/tasks/review.rs:36"
+      ],
+      "verified": true,
+      "crossSourceHints": ["code review（≈ cc 的 /review；IH 無）"]
+    },
+    {
+      "rawName": "rollout",
+      "canonical": "rollout",
+      "aliases": [],
+      "displayName": "rollout",
+      "variant": "Rollout",
+      "family": "inspect",
+      "summary": "印出目前 session 的 rollout 檔路徑（僅 debug build 可見）。",
+      "mechanism": "is_visible 限制為 cfg!(debug_assertions)（slash_command.rs:271）。dispatch 讀 rollout_path()（回傳 self.current_rollout_path）並印 'Current rollout path: ...'，尚無則印 'Rollout path is not available yet.'（slash_dispatch.rs:521-533；chatwidget.rs:1915-1922）。",
+      "gate": "debug only: cfg!(debug_assertions)（slash_command.rs:271）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:69",
+        "codex-rs/tui/src/slash_command.rs:271",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:521",
+        "codex-rs/tui/src/chatwidget.rs:1920"
+      ],
+      "verified": true,
+      "crossSourceHints": ["transcript/rollout file path"]
+    },
+    {
+      "rawName": "sandbox-add-read-dir",
+      "canonical": "sandbox-add-read-dir",
+      "aliases": [],
+      "displayName": "sandbox-add-read-dir",
+      "variant": "SandboxReadRoot",
+      "family": "safety",
+      "summary": "讓 Windows sandbox 額外可讀一個絕對路徑目錄。",
+      "mechanism": "is_visible 僅 Windows（slash_command.rs:268）。bare dispatch 只回 'Usage: /sandbox-add-read-dir <absolute-directory-path>'（slash_dispatch.rs:384-388）；帶參數送 AppEvent::BeginWindowsSandboxGrantReadRoot { path: args }（slash_dispatch.rs:958-961）。TUI 端最終呼叫 codex_windows_sandbox::run_setup_refresh_with_extra_read_roots，並先驗證路徑為存在的絕對目錄（tui/src/windows_sandbox.rs:93-121）。!available_during_task（slash_command.rs:217）。",
+      "gate": "platform: cfg!(target_os = 'windows')（slash_command.rs:268）；!available_during_task（slash_command.rs:217）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/windows_sandbox.rs + codex-rs/windows-sandbox-rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:22",
+        "codex-rs/tui/src/slash_command.rs:268",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:958",
+        "codex-rs/tui/src/windows_sandbox.rs:93"
+      ],
+      "verified": true,
+      "crossSourceHints": ["sandbox read-root grant（Windows 專屬）"]
+    },
+    {
+      "rawName": "setup-default-sandbox",
+      "canonical": "setup-default-sandbox",
+      "aliases": [],
+      "displayName": "setup-default-sandbox",
+      "variant": "ElevateSandbox",
+      "family": "safety",
+      "summary": "在 Windows 上升級設定 elevated agent sandbox（由 restricted-token 降級模式升到 elevated）。",
+      "mechanism": "dispatch 受 cfg(target_os='windows') 包住，且只在 level==RestrictedToken 時才繼續；否則直接 return（slash_dispatch.rs:332-343）。接著從 builtin_approval_presets() 找 id=='auto' 的 preset，用 permissions.approval_policy.can_set 驗證可設定，記 telemetry 'codex.windows_sandbox.setup_elevated_sandbox_command'，送 AppEvent::BeginWindowsSandboxElevatedSetup { preset, profile_selection: None }（slash_dispatch.rs:345-376）。命令可見性另由 BuiltinCommandFlags.allow_elevate_sandbox 控制，該值只在 Windows 且 level==RestrictedToken 時為 true（slash_dispatch.rs:1088-1095、builtins_for_input 過濾：slash_commands.rs:73）。",
+      "gate": "platform: Windows + windows_sandbox_level == RestrictedToken（slash_dispatch.rs:332-343,1088-1095）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/chatwidget/windows_sandbox_prompts.rs + codex-rs/windows-sandbox-rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:21",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:332",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1088",
+        "codex-rs/tui/src/bottom_pane/slash_commands.rs:73"
+      ],
+      "verified": true,
+      "crossSourceHints": ["sandbox elevation setup（Windows 專屬）"]
+    },
+    {
+      "rawName": "side",
+      "canonical": "side-conversation",
+      "aliases": ["btw"],
+      "displayName": "side",
+      "variant": "Side",
+      "family": "collab",
+      "summary": "在暫時性 fork 中開側聊（帶參數時該訊息成為側聊第一句）。",
+      "mechanism": "與 /btw 同一 arm（slash_dispatch.rs:313-315），描述共用 'start a side conversation in an ephemeral fork'（slash_command.rs:132-134）。bare 走 request_empty_side_conversation → AppEvent::StartSide{parent_thread_id, user_message:None}（slash_dispatch.rs:117-127）；帶參數先組 UserMessage 再送 StartSide（slash_dispatch.rs:931-948）。側聊中大部分命令被 ensure_slash_command_allowed_in_side_conversation 擋下，白名單見 available_in_side_conversation（slash_dispatch.rs:1212-1222；slash_command.rs:188-202）。",
+      "gate": "always；需已有 thread_id；review 模式中不可用（slash_dispatch.rs:1224-1235）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/app/side.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:44",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:117",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:931",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1212"
+      ],
+      "verified": true,
+      "crossSourceHints": ["side conversation / ephemeral fork"]
+    },
+    {
+      "rawName": "skills",
+      "canonical": "skills",
+      "aliases": [],
+      "displayName": "skills",
+      "variant": "Skills",
+      "family": "extension",
+      "summary": "開啟技能選單：列出技能，或啟用／停用個別技能。",
+      "mechanism": "dispatch 呼叫 open_skills_menu（slash_dispatch.rs:443-445）。選單兩項：List skills 送 AppEvent::OpenSkillsList、Enable/Disable Skills 送 AppEvent::OpenManageSkillsPopup；清單捷徑字元依 Feature::MentionsV2 決定為 '@' 或 '$'（chatwidget/skills.rs:31-67），open_skills_list 同樣只是 insert_str('@'|'$')（skills.rs:23-29）。切換開關在 bottom_pane/skills_toggle_view.rs，落地為 skills/config/write RPC 與 [[skills.config]]（config/src/skills_config.rs）。技能本身無 Feature::Skills 閘（features 中只有 SkillSearch/MentionsV2 等相鄰旗標）。",
+      "gate": "always（無 skills feature flag；mentions 觸發字元受 Feature::MentionsV2 影響：'@' vs '$'）",
+      "backendModule": "codex-rs/tui/src/chatwidget/skills.rs + codex-rs/bottom_pane/skills_toggle_view.rs（後端 codex-rs/ext/skills、codex-rs/skills）",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:28",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:443",
+        "codex-rs/tui/src/chatwidget/skills.rs:31",
+        "codex-rs/tui/src/chatwidget/skills.rs:23",
+        "codex-rs/ext/skills/src/host_roots.rs:85",
+        "codex-rs/ext/skills/src/fragments.rs:71"
+      ],
+      "verified": true,
+      "crossSourceHints": ["skills（DSH skill 工具、cc skills 同能力）"]
+    },
+    {
+      "rawName": "status",
+      "canonical": "status",
+      "aliases": [],
+      "displayName": "status",
+      "variant": "Status",
+      "family": "inspect",
+      "summary": "顯示目前 session 設定與 token 使用量（必要時順便刷新 rate limit）。",
+      "mechanism": "dispatch 用 should_prefetch_rate_limits 決定是否附帶刷新：需要時配置 request_id、以 refreshing_rate_limits=true 產生 status cell，並送 AppEvent::RefreshRateLimits{origin: StatusCommand{request_id}}；否則直接產生靜態 status（slash_dispatch.rs:453-467）。add_status_output 蒐集 token_info/total_usage、collaboration mode、模型與 reasoning effort、rate limit snapshots、agents summary，呼叫 status::new_status_output_with_rate_limits_handle 後寫 history；若 thread usage 可用，額外發 RPC 並回填（status_controls.rs:194-258）。刷新回來由 finish_status_rate_limit_refresh 更新對應 handle（status_controls.rs:261-298）。",
+      "gate": "always（available_during_task 為 true；rate-limit 刷新需後端帳號資訊）",
+      "backendModule": "codex-rs/tui/src/chatwidget/status_controls.rs + codex-rs/tui/src/status",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:51",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:453",
+        "codex-rs/tui/src/chatwidget/status_controls.rs:194",
+        "codex-rs/tui/src/chatwidget/status_controls.rs:261"
+      ],
+      "verified": true,
+      "crossSourceHints": ["status / session info"]
+    },
+    {
+      "rawName": "statusline",
+      "canonical": "statusline",
+      "aliases": [],
+      "displayName": "statusline",
+      "variant": "Statusline",
+      "family": "interface",
+      "summary": "設定狀態列要顯示哪些項目。",
+      "mechanism": "dispatch 呼叫 open_status_line_setup（slash_dispatch.rs:491-493）。實作以 configured_status_line_items()、config.tui_status_line_use_colors 與 status_surface_preview_data() 建 StatusLineSetupView 後 show_view（status_controls.rs:300-310）。!available_during_task 為 false（slash_command.rs:250-251 歸在 true 群組，實際為 true）。",
+      "gate": "always（available_during_task 為 true；Title 與 Statusline 一起被列在 true 分支，slash_command.rs:250-251）",
+      "backendModule": "codex-rs/tui/src/chatwidget/status_controls.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:58",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:491",
+        "codex-rs/tui/src/chatwidget/status_controls.rs:300"
+      ],
+      "verified": true,
+      "crossSourceHints": ["statusline configuration"]
+    },
+    {
+      "rawName": "subagents",
+      "canonical": "subagents",
+      "aliases": [],
+      "displayName": "subagents",
+      "variant": "MultiAgents",
+      "family": "collab",
+      "summary": "在目前 session 的 subagent 之間切換。",
+      "mechanism": "dispatch 送 AppEvent::OpenAgentPicker（slash_dispatch.rs:319-321；slash_command.rs:76 以 serialize='subagents' 讓字面值為 subagents，而非變體名 multi-agents）。事件在 app/event_dispatch.rs:2414 處理；picker 以 root thread 為範圍分頁呼叫 ThreadList，並以 source_kinds=SubAgentThreadSpawn 過濾，頁大小 100、上限 1000（app/agent_picker.rs:13-45）。描述為 'switch between this session's subagents'（slash_command.rs:131）。",
+      "gate": "always（available_during_task 為 true；需 root thread 與 subagent thread 存在）",
+      "backendModule": "codex-rs/tui/src/app/agent_picker.rs + codex-rs/tui/src/app/agent_navigation.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:76",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:319",
+        "codex-rs/tui/src/app/agent_picker.rs:13",
+        "codex-rs/tui/src/app/event_dispatch.rs:2414"
+      ],
+      "verified": true,
+      "crossSourceHints": ["subagents / agent switcher（DSH subagent 工具對應）"]
+    },
+    {
+      "rawName": "test-approval",
+      "canonical": "test-approval",
+      "aliases": [],
+      "displayName": "test-approval",
+      "variant": "TestApproval",
+      "family": "safety",
+      "summary": "開發用：送出一個假的 apply_patch 審批請求，測試審批 UI。",
+      "mechanism": "is_visible 限 cfg!(debug_assertions)（slash_command.rs:271）。dispatch 直接構造 ApplyPatchApprovalRequestEvent（call_id/turn_id '1'、兩個 /tmp 檔案：Add 與 Update、grant_root=/tmp），呼叫 self.on_apply_patch_approval_request('1', event) 走正常審批流程（slash_dispatch.rs:534-564）。available_during_task 為 true（slash_command.rs:260）。",
+      "gate": "debug only: cfg!(debug_assertions)（slash_command.rs:271）",
+      "backendModule": "codex-rs/tui/src/chatwidget/slash_dispatch.rs + codex-rs/tui/src/approval_events.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:75",
+        "codex-rs/tui/src/slash_command.rs:271",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:534"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "theme",
+      "canonical": "theme",
+      "aliases": [],
+      "displayName": "theme",
+      "variant": "Theme",
+      "family": "interface",
+      "summary": "選擇語法高亮主題。",
+      "mechanism": "dispatch 呼叫 open_theme_picker（slash_dispatch.rs:494-496）。實作以 find_codex_home() 與 config.tui_theme 建 theme_picker::build_theme_picker_params 後 show_selection_view（settings_popups.rs:9-17）；主題清單與預覽在 tui/src/theme_picker.rs。!available_during_task（slash_command.rs:262）。",
+      "gate": "always 可見；!available_during_task（slash_command.rs:262）",
+      "backendModule": "codex-rs/tui/src/chatwidget/settings_popups.rs + codex-rs/tui/src/theme_picker.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:59",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:494",
+        "codex-rs/tui/src/chatwidget/settings_popups.rs:9"
+      ],
+      "verified": true,
+      "crossSourceHints": ["theme picker"]
+    },
+    {
+      "rawName": "title",
+      "canonical": "title",
+      "aliases": [],
+      "displayName": "title",
+      "variant": "Title",
+      "family": "interface",
+      "summary": "設定終端標題要顯示哪些項目。",
+      "mechanism": "dispatch 呼叫 open_terminal_title_setup（slash_dispatch.rs:488-490）。實作先把 config.tui_terminal_title 存入 terminal_title_setup_original_items（供取消還原），再用 configured_terminal_title_items() 與 preview data 建 TerminalTitleSetupView 並 show_view（status_controls.rs:312-322）。",
+      "gate": "always（available_during_task 為 true，slash_command.rs:250）",
+      "backendModule": "codex-rs/tui/src/chatwidget/status_controls.rs + codex-rs/tui/src/terminal_title.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:57",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:488",
+        "codex-rs/tui/src/chatwidget/status_controls.rs:312"
+      ],
+      "verified": true,
+      "crossSourceHints": ["terminal title configuration"]
+    },
+    {
+      "rawName": "usage",
+      "canonical": "usage",
+      "aliases": [],
+      "displayName": "usage",
+      "variant": "Usage",
+      "family": "inspect",
+      "summary": "檢視帳號用量，或使用一次用量限制重置額度。",
+      "mechanism": "bare dispatch 先經 ensure_usage_command_available（需 has_codex_backend_auth，否則提示 'Sign in with ChatGPT to use /usage.'）再 open_usage_menu（slash_dispatch.rs:477-481、1110-1116）；選單提供 Show usage（送 AppEvent::OpenTokenActivity）與重置額度選項，並在可用重置次數為 0 時送 AppEvent::RefreshRateLimits{origin: UsageMenu{request_id}} 重新查詢（usage.rs:17-60）。帶參數解析 tokens::TokenActivityView::parse(trimmed)（daily|weekly|cumulative），失敗回 'Usage: /usage [daily|weekly|cumulative]'（slash_dispatch.rs:714-723）。",
+      "gate": "auth: has_codex_backend_auth（commands_for_input 以 token_activity_command_enabled 隱藏，slash_commands.rs:77、slash_dispatch.rs:1101,1110-1116）",
+      "backendModule": "codex-rs/tui/src/chatwidget/usage.rs + codex-rs/tui/src/token_usage.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:55",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:477",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:1110",
+        "codex-rs/tui/src/chatwidget/usage.rs:17",
+        "codex-rs/tui/src/bottom_pane/slash_commands.rs:77"
+      ],
+      "verified": true,
+      "crossSourceHints": ["usage / rate limits"]
+    },
+    {
+      "rawName": "vim",
+      "canonical": "vim",
+      "aliases": [],
+      "displayName": "vim",
+      "variant": "Vim",
+      "family": "interface",
+      "summary": "切換輸入框的 Vim 模式。",
+      "mechanism": "dispatch 呼叫 toggle_vim_mode_and_notify()（slash_dispatch.rs:326-328；chatwidget.rs:1738），切換 composer 的 vim 編輯模式並提示。!available_during_task（slash_command.rs:215）。",
+      "gate": "always 可見；!available_during_task（slash_command.rs:215）",
+      "backendModule": "codex-rs/tui/src/chatwidget.rs + codex-rs/tui/src/bottom_pane/chat_composer.rs",
+      "evidence": [
+        "codex-rs/tui/src/slash_command.rs:19",
+        "codex-rs/tui/src/chatwidget/slash_dispatch.rs:326",
+        "codex-rs/tui/src/chatwidget.rs:1738",
+        "codex-rs/tui/src/slash_command.rs:215"
+      ],
+      "verified": true,
+      "crossSourceHints": ["vim mode"]
+    }
+  ],
+  "mechanisms": {
+    "compaction": "codex 的壓縮不改寫歷史檔，而是『追加一個檢查點 + 投影出替代歷史』。觸發：/compact 在 TUI 端先 clear_token_usage、必要時 set_task_running(true)、設 input_queue.user_turn_pending_start=true，再送 AppEvent::CodexOp(Op::Compact)（codex-rs/tui/src/chatwidget/slash_dispatch.rs:264-275）；core 端 session/handlers.rs:635 分派給 CompactTask（codex-rs/core/src/tasks/compact.rs:19-85），依 provider 能力選三條路：(a) Feature::TokenBudget → compact_token_budget::run_manual_compact_task；(b) RemoteCompactionSupport::V1/V2（且 RemoteCompactionV2 開啟時走 v2）→ compact_remote::run_remote_compact_task / compact_remote_v2::run_remote_compact_task（伺服器端壓縮，codex-api/src/endpoint/compact.rs:39 有對應 endpoint）；(c) Unsupported → 本機 compact::run_compact_task，把 SUMMARIZATION_PROMPT（prompts/templates/compact/prompt.md:1-9，'CONTEXT CHECKPOINT COMPACTION … handoff summary'）當成一則 UserInput 送一輪模型，取最後一則 assistant 訊息當摘要，加上 SUMMARY_PREFIX 後與最近的使用者訊息（上限 COMPACT_USER_MESSAGE_MAX_TOKENS=20_000）重建成新歷史 build_compacted_history（codex-rs/core/src/compact.rs:57,347-394,639-717）。落地方式：Session::replace_compacted_history 先把新歷史配上 item id、組成 CompactedItem{message, replacement_history:Some(items), window_number, window_id...}，再 state.replace_annotated_history(...) 換掉記憶體中的 context，最後 persist_rollout_items(&[RolloutItem::Compacted(item)])（codex-rs/core/src/session/mod.rs:3357-3401）——rollout 是 append-only，舊事件仍在檔案裡。重讀時是投影：rollout_reconstruction 從後往前掃，遇到帶 replacement_history 的 Compacted 就用它取代先前累積的歷史（codex-rs/core/src/session/rollout_reconstruction.rs:320-368，註解明說反向掃描會停在第一個帶 replacement_history 的壓縮點），legacy（replacement_history=None）者才用 build_compacted_history 重建（:349-367）。因此：不是重寫歷史，而是 shadow/projection——檔案保留全部原始事件，模型可見歷史由壓縮檢查點決定。另有自動壓縮走 run_inline_auto_compact_task（compact.rs:111-141），並在壓縮後送 warning 提醒長 thread 會降低準確度（compact.rs:389-392）。",
+    "guardian": "Guardian（/approve 對應的 auto-review）是『用另一個唯讀 codex 子 session 審批工具呼叫』的機制。路由條件：approval_policy 為 OnRequest 或 Granular 且 approvals_reviewer == AutoReview 時，審批不問使用者而交給 guardian（codex-rs/core/src/guardian/review.rs:177-201）；guardian 子 session 以 SessionSource::SubAgent(Other('guardian')) 標記（review.rs:203-211）。Review subagent：GuardianReviewSessionManager 建立/重用以 'guardian' 為 label 的 review thread（core/src/guardian/review_session.rs:47,73-75,827），它是一個真正的 codex thread——用 run_codex_thread_interactive、以自己的 SessionIo 送 TurnInputRequest，套 ThreadSettingsOverrides{approval_policy: Never, permission_profile: 由 read_only_guardian_permission_profile(intersect_with_read_only) 收斂成的唯讀 profile}，collaboration mode 固定 Default，模型與 effort 由 params 指定（review_session.rs:1128-1187；read_only 收斂在 :1372-1380,1411）；prompt 由 build_guardian_prompt_items_with_parent_turn 重建『使用者意圖 + 最近 assistant/tool 逐字稿』，token 上限 10k/10k、單筆 2k/1k、最近 40 筆（core/src/guardian/mod.rs:62-68）。JSON 合約：以 final_output_json_schema: Some(params.schema) 要求結構化終審（review_session.rs:1182），schema 為 {risk_level: low|medium|high|critical, user_authorization: unknown|low|medium|high, outcome: allow|deny, rationale: string}、只強制 outcome（core/src/guardian/prompt.rs:729-752，提示文字 :756-768）；解析端 GuardianAssessment 允許 JSON 被散文包住（取第一個 '{' 到最後一個 '}'），非 JSON 即失敗、缺 risk_level 時 allow→Low / deny→High（prompt.rs:669-722；struct 定義 core/src/guardian/mod.rs:117-123）。Timeout 與 fail-closed：GUARDIAN_REVIEW_TIMEOUT = 90 秒（mod.rs:53），deadline 在 review.rs:989 設定，逾時由 run_before_review_deadline 的 sleep_until 產生 GuardianReviewSessionOutcome::TimedOut（review_session.rs:1466-1482），且逾時會取消子 session 的 token（:1484-1495）。結果映射：Timeout → ReviewDecision::TimedOut 並送 EventMsg::GuardianWarning + GuardianAssessment(status=TimedOut)（review.rs:483-530）；Cancelled → Abort；PromptBuild/Session/Parse 錯誤 → 記 FailedClosed 並封閉失敗（review.rs:568-589）；頂層註解明示 'Fail closed on timeout, execution failure, or malformed output'（mod.rs:11）。Circuit breaker：GuardianRejectionCircuitBreaker 以 turn_id 為 key，記錄 consecutive_denials 與長度 50 的 recent_denials 滑窗（mod.rs:125-202）；Standard 策略門檻為連續 3 次或近 50 次內 10 次拒絕，CyberModel 策略為 1 次/1 次（mod.rs:55-59,166-175）；觸發時送 GuardianWarning('Automatic approval review rejected too many approval requests for this turn … interrupting the turn.') 並 abort_turn_if_active(Interrupted) + emit_thread_idle_lifecycle_if_idle（review.rs:243-293）；非拒絕結果會把 consecutive 歸零（mod.rs:190-194）。TUI 面：被拒的評語收進 RecentAutoReviewDenials（最多 10 筆，codex-rs/tui/src/auto_review_denials.rs:7-23），由 /approve 列出手動核准，核准後把該動作以 developer message 注入對話讓 agent 重試（core/src/session/handlers.rs:695-733；TUI 路徑 slash_dispatch.rs:392-394、permission_popups.rs:168-240）。相關 feature gate 為 Feature::GuardianApproval（key 'guardian_approval'，Stage::Stable、default true；features/src/lib.rs:1378-1383），GuardianV2 仍為 UnderDevelopment（:1402-1407）。",
+    "memories": "儲存是『SQLite + 檔案』兩層，兩者都在 $CODEX_HOME 下。/memories 本身不是檢視器而是設定視窗：Feature::MemoryTool 未開時只給啟用提示（送出 AppEvent::UpdateFeatureFlags{MemoryTool:true}，並提示需新 session 生效），已開則建 MemoriesSettingsView(use_memories, generate_memories)（codex-rs/tui/src/chatwidget.rs:1110-1146）；設定變更走 AppEvent::UpdateMemorySettings、重置走確認後的 AppEvent::ResetMemories。SQLite：memories_1.sqlite（codex-rs/state/src/sqlite.rs:31,75-81），表 stage1_outputs（thread_id PK、raw_memory、rollout_summary、generated_at、usage_count、last_usage、selected_for_phase2…）與 jobs（kind/job_key PK、status、lease_until、retry_at…），見 codex-rs/state/memory_migrations/0001_memories.sql:1-35。檔案面：$CODEX_HOME/memories 下的 memory_summary.md（讀路徑的唯一進入點）與 raw_memories.md、rollout_summaries/ 等（ext/memories/src/prompts.rs:27-45 讀 memory_summary.md 並依 MEMORY_TOOL_DEVELOPER_INSTRUCTIONS_SUMMARY_TOKEN_LIMIT=2500 tokens 截斷，ext/memories/src/lib.rs:16）。注入方式是 developer instructions：把 read_path.md 模板與記憶摘要渲染成開發者指示（prompts.rs:9-14,44-45）。模型工具為 namespace 'memories' 底下的 list / read / search / add_ad_hoc_note（ext/memories/src/lib.rs:18-22；工具註冊與 namespace 包裝 ext/memories/src/tools/mod.rs:40-57,59-78），且需 memories.dedicated_tools 開啟才會註冊——MemoriesConfig 預設 dedicated_tools=false、use_memories=true、generate_memories=true（config/src/types.rs:339-345），可調參數另有 max_raw_memories_for_consolidation / max_rollout_age_days / min_rollout_idle_hours 等（config/src/types.rs:291-320）。檢索排序在 DB 端：ORDER BY usage_count DESC, last_usage/source_updated_at DESC…（state/src/runtime/memories.rs:462-479），把『常用且新』的記憶排前面。除錯命令 /debug-m-drop 與 /debug-m-update 在此版本是純 stub（slash_dispatch.rs:506-511 → chatwidget.rs:1571-1574），沒有對應 RPC。",
+    "sandboxLevels": "兩套正交概念：平台無關的 SandboxMode/SandboxPolicy（ReadOnly / WorkspaceWrite / DangerFullAccess，定義 protocol/src/config_types.rs:95 附近與 protocol/src/protocol.rs:916 附近的 AskForApproval 並存），以及 Windows 專屬的三段 WindowsSandboxLevel {Disabled, RestrictedToken, Elevated}（codex-rs/protocol/src/config_types.rs:279-284）。(1) Disabled：不套 Windows sandbox；由 config [windows] sandbox 未設且 feature flag 全關時得到（core/src/windows_sandbox.rs:26-42；tui 版 tui/src/windows_sandbox.rs:23-35）。(2) RestrictedToken（unelevated，'degraded'）：以 CreateRestrictedToken 建 WRITE_RESTRICTED token、搭配 capability SID 的 allow ACE 來限制寫入（windows-sandbox-rs/src/token.rs:23 進 CreateRestrictedToken；spawn 端 create_readonly_token_with_cap / create_workspace_write_token_with_caps_from，windows-sandbox-rs/src/spawn_prep.rs:26-30）；能力有限——sandboxing/src/windows.rs:109-129 明列它『無法直接強制 split read restriction / deny-read，拒絕執行未沙箱化』，只能做 deny-write carveout（:171-206）。(3) Elevated：改用獨立的離線本機使用者身分 + ACL + WFP 網路過濾。setup 需要管理員權限，透過 ShellExecuteExW 的 'runas' 動詞啟動 setup helper（windows-sandbox-rs/src/setup.rs:916,967-986），會建立沙箱使用者與密碼並以 DPAPI 保存（identity.rs:146 require_logon_sandbox_creds；setup.rs:200 sandbox_users_path），命令以 CreateProcessWithLogonW 以該身分啟動（windows-sandbox-rs/src/elevated/runner_client.rs:41,348），可套用額外 deny-read 路徑與明確 read/write roots（sandboxing/src/windows.rs:213-358），網路由 WFP 引擎（FwpmEngineOpen0，windows-sandbox-rs/src/wfp.rs:42,114-122）與 wfp/filter_specs.rs 控制，並可選擇 private desktop（core/src/windows_sandbox.rs:52-57 的 windows.sandbox_private_desktop，預設 true）。啟動分流在 windows-sandbox-rs/src/unified_exec/mod.rs:45-52（Elevated → backends::elevated，其餘 → legacy restricted-token）。設定面：config key [windows] sandbox = 'elevated' | 'unelevated'（WindowsSandboxModeToml，config/src/types.rs:159；解析 core/src/windows_sandbox.rs:26-30,45-50）；舊的 feature flags Feature::WindowsSandbox / WindowsSandboxElevated 在此版本已被標為 Stage::Removed（features/src/lib.rs:1068-1079，key 分別為 experimental_windows_sandbox / elevated_windows_sandbox），只在 from_features 的 fallback 路徑還被讀（core/src/windows_sandbox.rs:33-42）。與命令的關係：/permissions 提供 read-only / auto(workspace-write) / full-access 三個 preset（utils/approval-presets/src/lib.rs:28-61）；/setup-default-sandbox 只在 Windows 且目前是 RestrictedToken 時出現，用於升級到 elevated（slash_dispatch.rs:332-343,1088-1095）；/sandbox-add-read-dir 只在 Windows 可見，替 sandbox 追加可讀目錄（slash_command.rs:268；tui/src/windows_sandbox.rs:93-121）。",
+    "planGoal": "Plan 與 Goal 是兩套不同模型。Plan 模式不是資料庫狀態而是『協作模式』：ModeKind::{Default,Plan} 以 CollaborationModeMask{mode,model,reasoning_effort,developer_instructions} 呈現（models-manager/src/collaboration_mode_presets.rs:16-28：Plan preset 用 effort=Medium 並把 collaboration-mode-templates 的 PLAN 模板當 developer_instructions），/plan 就是取出該 mask 並 set_collaboration_mask_from_user_action（tui/src/chatwidget/slash_dispatch.rs:84-102；tui/src/collaboration_modes.rs:56-58）。效果有兩面：(a) 提示注入——模板以 role=developer、包在 <collaboration_mode>…</collaboration_mode> 的 fragment 進 world state（core/src/context/world_state/collaboration_mode.rs:122-143），並以 world-state snapshot（mode/model/instruction hash）支援差異重放（:54-119）；(b) 工具限制——Plan 模式下 update_plan 直接被拒（'update_plan is a TODO/checklist tool and is not allowed in Plan mode'，core/src/tools/handlers/plan.rs:84-88），而 update_plan 這支工具的內容（protocol/src/plan_tool.rs:17-28 的 UpdatePlanArgs{explanation, plan:[{step,status}]}）是以 EventMsg::PlanUpdate 事件呈現，不是持久檔案。Goal 才是持久狀態：獨立 SQLite goals_1.sqlite（state/src/sqlite.rs:30,67-73）的 thread_goals 表，一 thread 一列（PK thread_id）、status CHECK 為 active/paused/blocked/usage_limited/budget_limited/complete，另有 token_budget/tokens_used/time_used_seconds（state/goals_migrations/0001_thread_goals.sql:1-18；狀態列舉 state/src/model/thread_goal.rs:12-42，is_terminal = budget_limited|complete）；寫入是 upsert/UPDATE（state/src/runtime/goals.rs），不是事件溯源。RPC 面為 thread/goal/set|get|clear 與 thread/goal/updated|cleared 通知（app-server-protocol/src/protocol/common.rs:562-576,1817-1818）。/goal 的 TUI 子命令：bare → OpenThreadGoalMenu；clear / pause / resume / edit → 對應事件；其他文字 → GoalDraft + AppEvent::SetThreadGoalDraft{mode:ConfirmIfExists}（tui/src/chatwidget/slash_dispatch.rs:825-930）。自主續跑：goal 以隱藏內部 context 注入（continuation_steering_item 渲染 templates/goals/continuation.md，ext/goal/src/steering.rs:9-14,45-78），thread idle 時 runtime 讀 goals DB、要求 status==Active，然後 start_turn_if_idle(ResponseItem) 自己開下一輪（ext/goal/src/runtime.rs:391-424）。閘門：Feature::Goals key 'goals'、Stage::Stable、default_enabled true（features/src/lib.rs:1408-1413；TUI 檢查 slash_dispatch.rs:299,826）。",
+    "inputQueue": "codex 有兩層佇列，且『queued』與『steered』是兩條不同管線。TUI 記憶體內：InputQueueState{queued_user_messages, queued_user_message_history_records, user_turn_pending_start, rejected_steers_queue, rejected_steer_history_records, pending_steers, submit_pending_steers_after_interrupt, suppress_queue_autosend}（codex-rs/tui/src/chatwidget/input_queue.rs:21-45）。送入時機由 handle_composer_input_result 判斷 should_submit_now = configured && !plan_streaming && !suppress_queue_autosend && (!user_turn_pending_start || agent_turn_running)，true 走 submit、false 走 queue（chatwidget/input_flow.rs:32-52）。佇列項（queued）只會在 turn 結束後被取出：TurnComplete 觸發 maybe_send_next_queued_input，一次放行一則並以 submit_user_message… 開『新 turn』（chatwidget/turn_runtime.rs:208-209；input_flow.rs:150-165）。steer（插隊）則是在 turn 進行中把文字 append 到『當前 turn 的輸入流』：TUI 先試 turn/steer（app/thread_routing.rs:663-672），RPC 為 TurnSteer（app-server-protocol/src/protocol/common.rs:967-972），server 端 turn_processor 轉 thread.steer_turn，core 的 Session::steer_input 要求存在 active turn、turn kind 必須是 Regular（Review/Compact 會被拒為 ActiveTurnNotSteerable）、可選 expected_turn_id 需相符，最後 extend_pending_input_and_accept_mailbox_delivery_for_turn_state 把內容併入當前 turn（core/src/session/turn_input.rs:478-565）。被打回的 steer 進 rejected_steers_queue 稍後重試（input_queue.rs:32-33）。durable queue 是另一個子系統：SQLite queue_1.sqlite（state/src/sqlite.rs:32）的 queued_items 表（id PK、thread_id、payload_json、queue_order、created_at_ms/updated_at_ms + UNIQUE(thread_id,queue_order)，state/queue_migrations/0001_queued_items.sql:1-11），由 ext/queue 的 service 在 thread idle 時 claim→start→成功後 delete（沒有 lease/ack 欄位），唯一會寫入它的是 `codex queue` CLI 路徑，而非 TUI 互動輸入；TUI 的互動佇列是純記憶體、依 thread 快照保存/還原（input_restore.rs）。slash 命令走佇列時另有規則：以 '/' 開頭的延後輸入被標成 QueuedInputAction::ParseSlash，解析延到 drain 時在 submit_queued_slash_prompt 做（slash_dispatch.rs:980-1086），因此『排隊的 /goal』與『立即的 /goal』在事件時序上不同（slash_dispatch.rs:975-977 對 Goal 特判）。",
+    "skills": "技能探索是多來源、逐層覆蓋：roots 由 config 分層（Project/User/System）加上 plugin roots、extra roots 與 repo 祖先目錄組成，使用者層會產生 $CODEX_HOME/skills（deprecated）、~/.agents/skills 與 $CODEX_HOME/skills/.system，Project 層產生 <config_folder>/skills（SkillScope::Repo），System 層產生 <config_folder>/skills（SkillScope::Admin）（codex-rs/ext/skills/src/host_roots.rs:85-124，目錄名常數 .agents / skills 於 :24）；掃描有硬上限 MAX_SCAN_DEPTH=6、每 root 2000 個目錄、同時 8 個 root 掃描（ext/skills/src/loader/mod.rs:18,31-32）。技能檔以 SKILL.md 為標記（ext/skills/src/loader/mod.rs:19），name 上限 64 字元（:22）。選取有兩條路：一是把技能目錄以 developer 訊息注入（AvailableSkillsInstructions 包 <skills_instructions>…</skills_instructions>，ext/skills/src/fragments.rs:47-53，role() 為 'developer' 於 :38-41）；二是顯式 mention（sigil 常數 TOOL_MENTION_SIGIL='$'，解析在 codex-rs/skills/src/mentions.rs:76-83；TUI 在 MentionsV2 開啟時改用 '@' 觸發清單，tui/src/chatwidget/skills.rs:23-36）。被選中的技能不是以工具呼叫執行，而是把 SKILL.md 內容讀出來變成一則 role=user、包 <skill>…</skill> 的 context fragment 併入該輪輸入（ext/skills/src/fragments.rs:71-99），這與『技能即工具』的 harness 不同構。/skills 命令本身只開選單：List skills（等於插入 mention 觸發字元）與 Enable/Disable Skills（開關狀態存 skills 設定：SkillConfig{path|name, enabled} 與 SkillsConfig{bundled, include_instructions, max_context_tokens}，config/src/skills_config.rs:14-40，預設啟用 default_enabled()=true :14-16）；沒有 Feature::Skills 閘，技能預設恆開。"
+  },
+  "added": [],
+  "unverified": [
+    "設計文件 §3 寫 codex 有 59 個變體，實際 enum 為 58（我逐一讀過 codex-rs/tui/src/slash_command.rs:15-83 並數過；commands JSON 也是 58）。差異來源應是文件筆誤，非抽取遺漏——本檔未新增任何命令。",
+    "commands JSON 的 rawName='auto-review'（variant AutoReview）與 strum 實際解析行為不符：無 serialize 時只有 to_string 會被註冊成可解析字串，故使用者實際打的是 /approve（證據：slash_command.rs:25-26、321-327 的 in-repo 測試；strum_macros 0.28.0 helpers/variant_props.rs:59-71，該檔不在 repo 內、位於 Cargo registry 快取，Cargo.lock:13377 鎖定 0.28.0）。本檔已更正 rawName 為 approve 並保留 displayName。",
+    "Stop/Pwd/Pets 三列的可解析字串是『serialize ∪ to_string』（clean|stop、cwd|pwd、pet|pets），commands JSON 只記了 serialize 那一半；本檔以 aliases 補上另一半，並以 repo 內測試為證（slash_command.rs:292-306、slash_commands.rs:201-207）。",
+    "下列敘述來自平行子代理的偵察，我只親自核對了其中標注的關鍵行，未逐行重開的部分仍列為未驗證：memories 寫入路徑細節（phase1 claim job、storage.rs 由 DB rows 重建 raw_memories.md / rollout_summaries、phase2 consolidation sub-agent 的 spawn 點）與 memory citation 格式（<oai-mem-citation>）；skills 的 frontmatter 解析容錯與名稱去重計數（codex-rs/skills/src/parser.rs、name_counts.rs、selection.rs 的 ambiguity 規則）與 skills/config/write RPC 的完整落地路徑；queue 子系統的 ext/queue service 內部 claim/delete 行號（我僅核對了 SQL schema、TUI 佇列型別與 turn/steer 協議）。這些都不影響本檔 commands 陣列中的 verified 欄（每列至少一條我實際開過的行）。",
+    "guardian 的 review subagent 是否每次都新建 thread（vs 重用既有 guardian thread）我未逐行確認重用判準，只確認 manager 具備 cache/重用介面與 spawn 路徑（core/src/guardian/review_session.rs:416-510,827）。"
+  ]
+}

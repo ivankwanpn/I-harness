@@ -1,0 +1,268 @@
+{
+  "sampleSize": 27,
+  "verifier": "adversarial",
+  "lineTextAccuracy": {
+    "exactMatches": 27,
+    "staleOrInvented": 0,
+    "note": "Every one of the 27 sampled lineText values was compared against the cited file line and matched byte-for-byte. No stale or invented line numbers were found; the problems below are about line RELEVANCE, not line accuracy."
+  },
+  "verdicts": [
+    {
+      "source": "cc-custom",
+      "cmd": "add-dir",
+      "cite": "src/commands/add-dir/index.ts:5",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact at :5, but the cell's claim field is empty, so the sample asserts no mechanism for this command and there is nothing to confirm or falsify. The cited line is a command-descriptor listing (type/name/description/load at :3-9); no behavior is defined there.",
+      "correction": "No source error to correct. A mechanism claim would belong at src/commands/add-dir/add-dir.tsx (the module lazily imported at :8) or src/commands/add-dir/validation.ts."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "context",
+      "cite": "src/commands/context/index.ts:5",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact at :5, but the claim field is empty, so no assertion exists to verify. The cited line is the interactive command descriptor; the file also declares a second command with the SAME name ('context', :12-24) gated the opposite way.",
+      "correction": "Nothing to correct. If a claim is intended, note the real implementations are src/commands/context/context.tsx and src/commands/context/context-noninteractive.ts, with mutual gating by getIsNonInteractiveSession (:7 and :20-22)."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "init-verifiers",
+      "cite": "src/commands/init-verifiers.ts:5",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact at :5 and the claim field is empty, so there is no assertion to test. The cited line is the descriptor; the actual mechanism is the prompt payload returned by getPromptForCommand (:11-259).",
+      "correction": "Nothing to correct. The command's behavior is the prompt body at src/commands/init-verifiers.ts:11-259 (it instructs the model to write verifier skills under .claude/skills/, :165-167), not the name at :5."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "model",
+      "cite": "src/commands/model/index.ts:7",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact at :7 and the claim field is empty, so nothing is asserted. The cited object is a descriptor (:5-16) whose only behavior-bearing members are the lazy load (:15) and the immediate getter gated by shouldInferenceConfigCommandBeImmediate (:12-14).",
+      "correction": "Nothing to correct. The implementation is src/commands/model/model.tsx, reached through the lazy import at :15."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "security-review",
+      "cite": "src/commands/security-review.ts:199",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact at :199 and the claim field is empty, so there is no assertion to verify. The cited line sits inside a createMovedToPluginCommand(...) descriptor (:198-204) that delegates to a plugin named 'security-review'.",
+      "correction": "Nothing to correct. The in-repo behavior fallback is security-review.ts:205-243 (getPromptWhileMarketplaceIsPrivate, which parses SECURITY_REVIEW_MARKDOWN) and the factory is src/commands/createMovedToPluginCommand.ts:22; the plugin name/command mapping is at :203-204."
+    },
+    {
+      "source": "codex",
+      "cmd": "model",
+      "cite": "codex-rs/tui/src/slash_command.rs:15",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "type-decl",
+      "why": "lineText is exact at :15, but the claim field is empty so no mechanism is asserted. The cited line is an enum variant inside the SlashCommand type declaration (:12-83); it establishes that the name exists in the popup enum, not what /model does.",
+      "correction": "Nothing to correct. A behavior claim would have to cite the TUI slash dispatch arms that match SlashCommand::Model, which are outside this type declaration."
+    },
+    {
+      "source": "codex",
+      "cmd": "skills",
+      "cite": "codex-rs/tui/src/slash_command.rs:28",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "type-decl",
+      "why": "lineText is exact at :28, but the claim field is empty, so there is no assertion to test. The line is the Skills enum variant in the same type declaration; its user-visible description ('use skills to improve how Codex performs specific tasks', :107) is adjacent but still declarative metadata.",
+      "correction": "Nothing to correct. The mechanism lives in the dispatch code that matches SlashCommand::Skills, not at this variant."
+    },
+    {
+      "source": "codex",
+      "cmd": "compact",
+      "cite": "codex-rs/tui/src/slash_command.rs:40",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "type-decl",
+      "why": "lineText is exact at :40 and the claim field is empty, so nothing is asserted. The cited line is the Compact enum variant; the nearest descriptive text is the popup string 'summarize conversation to prevent hitting the context limit' (:92), which is still a declaration, not an implementation.",
+      "correction": "Nothing to correct. Compaction behavior is implemented in the dispatch path matching SlashCommand::Compact, not in this enum."
+    },
+    {
+      "source": "codex",
+      "cmd": "cd",
+      "cite": "codex-rs/tui/src/slash_command.rs:52",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "type-decl",
+      "why": "lineText is exact at :52, but the claim field is empty, so there is no assertion to verify. The cited line is the Cd enum variant only.",
+      "correction": "Nothing to correct. Behavior for /cd is in the dispatch arm matching SlashCommand::Cd, elsewhere in the TUI."
+    },
+    {
+      "source": "codex",
+      "cmd": "logout",
+      "cite": "codex-rs/tui/src/slash_command.rs:65",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "type-decl",
+      "why": "lineText is exact at :65 and the claim field is empty, so no mechanism is asserted. The cited line is the Logout enum variant; it sits next to Quit/Exit (:66-67) but carries no behavior.",
+      "correction": "Nothing to correct. The logout mechanism is in the dispatch arm matching SlashCommand::Logout."
+    },
+    {
+      "source": "dsh",
+      "cmd": "goal",
+      "cite": "packages/bundle/web-app/cordis.patch.yml:411",
+      "lineTextCheck": "exact",
+      "verdict": "WRONG_LINE",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact, but this is a bundle manifest entry, and the immediately following line 412 is 'disabled: true' — so the cited line does not describe what /goal does; read as evidence it says the plugin is switched OFF in the web-app bundle. The claim's mechanism is real, but it is implemented in the plugin source, not here.",
+      "correction": "The claim belongs to packages/goal/command-goal/src/index.ts:12-13 (name/inject) and :189-195 (apply() registers /goal with the quoted hint and attachments: true); the create/edit/pause/resume/clear/show behavior is :125-186. The manifest at packages/bundle/web-app/cordis.patch.yml:411-412 records that command-goal is DISABLED in that bundle."
+    },
+    {
+      "source": "dsh",
+      "cmd": "compact",
+      "cite": "packages/compaction/command-compact/src/index.ts:66",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "implementation",
+      "why": "lineText is exact and the line is the core of the manual-compaction path: executeCompact refuses arguments (:62-64), then awaits ctx.compaction.compactNow(...) (:66), treats null as 'No compactable history yet' (:67) and otherwise reports shadowed history items and tokens (:68-72). name/inject at :10-11 match the claim, and apply() registers /compact for composed adapters at :100-104.",
+      "correction": ""
+    },
+    {
+      "source": "dsh",
+      "cmd": "compact",
+      "cite": "packages/core/session/src/types.ts:427",
+      "verdict": "WRONG_LINE",
+      "evidenceKind": "doc-comment",
+      "why": "lineText is exact, but it is one bullet of the doc comment on the SurfaceOp union — a type declaration about how ANY event enters the ordered surface. It never mentions the /compact command, the command-compact plugin, its name/inject exports, or an automatic pressure threshold; the only link is the trailing phrase 'Used by compaction' (:431).",
+      "correction": "The claim belongs to packages/compaction/command-compact/src/index.ts:57-105 (executeCompact + apply) and :10-11 (name/inject). types.ts:427 documents the replace-shaped SurfaceOp that compaction happens to use, not the command."
+    },
+    {
+      "source": "dsh",
+      "cmd": "goal",
+      "cite": "packages/goal/command-goal/src/index.ts:12",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "implementation",
+      "why": "The claim's first clause is literally this line and inject = ['commands', 'goals'] is the next one (:13). apply() at :189-195 registers /goal with exactly the quoted input hint and attachments: true, and executeGoalCommand (:125-186) implements create/edit/pause/resume/clear plus the show path whose renderGoal prints roundsStarted/maxGoalRounds (:89), i.e. the round budget the claim mentions.",
+      "correction": ""
+    },
+    {
+      "source": "dsh",
+      "cmd": "permission",
+      "cite": "packages/interaction/permission-presets/src/index.ts:257",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "implementation",
+      "why": "The cited name is inside the exact registration the claim describes: ctx.inject(['commands'], ...) at :255, commands.register at :256, description 'Switch the permission preset (sandbox mode + approval policy)' at :258, and a handler (:263-273) that returns the current preset on empty input, errors on unknown names, and applies a known preset through this.ctx.approval.setPolicy (:271). The registration is owned by the permission-presets package itself, not a command-* package, as claimed.",
+      "correction": ""
+    },
+    {
+      "source": "grok",
+      "cmd": "remember",
+      "cite": "crates/codegen/xai-grok-memory/src/storage.rs:113",
+      "verdict": "WRONG_LINE",
+      "evidenceKind": "implementation",
+      "why": "lineText is exact, but the cited line is the body of Storage::global_memory_file(), a path helper returning <global_dir>/MEMORY.md; it is an implementation of an unrelated function in the memory crate and says nothing about /remember's argument handling or dispatch. The claim itself checks out at other lines.",
+      "correction": "The claim's run() is crates/codegen/xai-grok-pager/src/slash/commands/remember.rs:16-23 (empty args -> Action::EnterRememberMode :19; otherwise Action::SendRememberNote :21). The dispatch tail is .../app/dispatch/router.rs:1044 (Action::SendRememberNote -> dispatch_send_remember_note), defined at .../app/dispatch/notes.rs:358-359 and :454, which sets ActiveModal::RememberNoteReview (:486, :502)."
+    },
+    {
+      "source": "grok",
+      "cmd": "config-agents",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/config_agents.rs:11",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact and the cited name is slash_meta! metadata, but the mechanism is in the same impl block six lines below: run() returns CommandResult::Action(Action::OpenConfigAgentsModal(None)) at :17-19, and aliases: ['agents'] is :12, both exactly as claimed. /personas really is the same action with AgentsTab::Personas (slash/commands/personas.rs:18), so the cited unit carries the claim even though the cited line is metadata.",
+      "correction": ""
+    },
+    {
+      "source": "grok",
+      "cmd": "import-claude",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/import_claude.rs:23",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "implementation",
+      "why": "The cited line IS the mechanism the claim describes: run() (:20-26) trims args, warns via tracing when they are non-empty (:22-24) and returns Action::ImportClaudeSettings (:25). The dispatch tail also holds: router.rs:266 routes that action to dispatch_import_claude, which scans through xai_grok_shell::claude_import::scan_importable_settings and populates the modal (app/dispatch/import_claude.rs:7-30).",
+      "correction": ""
+    },
+    {
+      "source": "grok",
+      "cmd": "model",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/mod.rs:88",
+      "verdict": "WRONG_LINE",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact, but mod.rs:88 is one entry in the builtin_commands() registry vector (:75 onward) — it shows ModelCommand is registered and in menu order, not how /model resolves its argument. The ordering claim is nevertheless true.",
+      "correction": "The exact-full-string-first behavior is crates/codegen/xai-grok-pager/src/slash/commands/model.rs:49-53: the 'Prefer an exact full-string catalog match first' comment, ctx.models.resolve_by_name_or_id(trimmed), and the Action::SetDefaultModel(id) return; the multi-word-vs-shorter-prefix rule is pinned by the test at model.rs:408-425."
+    },
+    {
+      "source": "grok",
+      "cmd": "share",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/share.rs:8",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact; the cited name is slash_meta! metadata, and run() in the same impl block six lines below (:14-17) discards its context ('let _ = ctx;') and returns CommandResult::Error(\"Session sharing is temporarily disabled\") — exactly the claim, including that the capability is stubbed rather than implemented. session_scoped: true at :11 matches too.",
+      "correction": ""
+    },
+    {
+      "source": "ih",
+      "cmd": "quit",
+      "cite": "apps/tui/src/index.ts:199",
+      "verdict": "PARTIAL",
+      "evidenceKind": "implementation",
+      "why": "The cited line is a real implementation of the teardown tail the claim names: createTuiShutdownController's shutdown() stops, awaits close(), then tears down in a finally (:201), and it is wired in the real app at apps/tui/src/index.ts:954. But it carries none of the claim's operative facts — the ungated registration and ctx.quitApp() call are packages/tui/src/app/slash/impl/tools.ts:77-83 (quitApp at :81), wired at packages/tui/src/app/loop.ts:2496 ('quitApp: () => this.requestQuit()'), the same path the 'quit' key binding takes (loop.ts:1560).",
+      "correction": "For the command half cite packages/tui/src/app/slash/impl/tools.ts:77-83 (plus loop.ts:2496); apps/tui/src/index.ts:199-202 supports only the terminal-teardown half of the claim."
+    },
+    {
+      "source": "ih",
+      "cmd": "fs:decision",
+      "cite": "packages/fs/src/index.ts:151",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "implementation",
+      "why": "lineText is exact and it is the first guard inside the edit tool's execute() (:149-203). Every refusal the claim lists is real in that same block: empty old_string -> FS_AMBIGUOUS_EDIT (:151), non-regular file -> FS_NOT_REGULAR_FILE (:159), observedMtimeMs mismatch -> FS_STALE_VERSION (:160-161), old_string === new_string -> FS_AMBIGUOUS_EDIT (:163), binary/NUL or invalid UTF-8 -> FS_NOT_REGULAR_FILE via assertTextData (:165, packages/fs/src/text.ts:25 and :30), non-unique match -> FS_AMBIGUOUS_EDIT unless replace_all (:171), plus a post-read TOCTOU re-stat before the write (:174-181).",
+      "correction": ""
+    },
+    {
+      "source": "ih",
+      "cmd": "schedule:decision",
+      "cite": "packages/schedule/src/driver.ts:35",
+      "verdict": "PARTIAL",
+      "evidenceKind": "doc-comment",
+      "why": "The cited line is a doc comment on the deliveryErrors interface field and is explicitly scoped to '(append/onDue)' failures, so it asserts the no-silent-drop property but does not carry the claim's headline ordering. That ordering is real elsewhere in the same file: append is awaited first under the 'durable accept FIRST' comment (:99-100) before the occurrence is pushed and onDue awaited (:107-111); an append failure records the error and continues so nothing is delivered (:101-106); a corrupt stream is skipped with a reported deliveryError (:87-92). Two bounds on the absolute wording: an unknown session (events === undefined) is skipped with no deliveryError at all (:83), and an occurrence whose onDue later fails is still counted in 'delivered' (:108 runs before :111).",
+      "correction": "Cite packages/schedule/src/driver.ts:98-117 for the accept-before-deliver mechanism; :35 is only the field's doc comment and should not be the sole evidence for an order guarantee."
+    },
+    {
+      "source": "ih",
+      "cmd": "todo:const:in_progress limit default",
+      "cite": "packages/todo/src/index.ts:26",
+      "verdict": "SUPPORTED",
+      "evidenceKind": "implementation",
+      "why": "lineText is exact: validateTodoItems throws when !allowParallelInProgress && inProgress > 1 (:26-28), and the only caller passes deps.allowParallelInProgress ?? false (:55) while the dep is optional on TodoToolDeps (:12) — so the effective default really is a limit of one in_progress item with an explicit opt-in flag.",
+      "correction": ""
+    },
+    {
+      "source": "ih",
+      "cmd": "fork",
+      "cite": "packages/tui/src/backend/embedded.ts:559",
+      "verdict": "PARTIAL",
+      "evidenceKind": "implementation",
+      "why": "The cited line opens the conditional spread that defines the backend's forkSession member, implemented at :561-566: it calls opts.forkSession(sessionId) for the CURRENT session, rejects an empty id, and awaits this.open(id) — genuinely fork-then-switch, and the member is absent entirely when the seam was not wired. But the claim's registration/visibility/run-guard facts are not on this line; they are packages/tui/src/app/slash/impl/sessions.ts:56-72 (visible() = hasCapability(ctx,'fork') at :63, the 'fork: backend fork seam absent' guard at :65-67, optional title at :69-70).",
+      "correction": "Cite packages/tui/src/app/slash/impl/sessions.ts:56-72 for the command itself; embedded.ts:559-568 supports only the optional-seam/backend half of the claim."
+    },
+    {
+      "source": "opencode-fork",
+      "cmd": "init",
+      "cite": "packages/core/src/command.ts:15",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact at :15, but the claim field is empty so no mechanism is asserted. The cited line is an exported string constant; it is genuinely used (CommandV2.INIT at packages/opencode/src/session/legacy-session-execution.ts:210 and packages/opencode/src/project/project.ts:393), but the constant itself defines no behavior.",
+      "correction": "Nothing to correct. The /init behavior is the plugin registration that fills the template and description at packages/core/src/plugin/command.ts:14-18 (PROMPT_INITIALIZE), not the constant."
+    },
+    {
+      "source": "opencode-fork",
+      "cmd": "review",
+      "cite": "packages/core/src/command.ts:16",
+      "verdict": "UNCERTAIN",
+      "evidenceKind": "registry-listing",
+      "why": "lineText is exact at :16 and the claim field is empty, so there is no assertion to verify. The cited line is an exported string constant with no behavior.",
+      "correction": "Nothing to correct. The /review definition is packages/core/src/plugin/command.ts:19-23, which sets template = PROMPT_REVIEW, description 'review changes [commit|branch|pr], defaults to uncommitted', and subtask = true."
+    }
+  ],
+  "tally": {
+    "SUPPORTED": 8,
+    "PARTIAL": 3,
+    "WRONG_LINE": 4,
+    "UNSUPPORTED": 0,
+    "UNCERTAIN": 12
+  },
+  "notable": [
+    "12 of the 27 sampled cells (44%) carry an EMPTY claim string — all five cc-custom, all five codex, and both opencode-fork cells — so the audit asserts nothing there and no verdict about its content is possible (recorded as UNCERTAIN). Their lineText values are all exact, but every one is a registry/type-declaration listing rather than behavior: e.g. codex-rs/tui/src/slash_command.rs:15 ('Model,') is an enum variant in a type declaration, and cc-custom/src/commands/add-dir/index.ts:5 is a descriptor object. Any support rate computed over all 27 cells would be meaningless; only the 15 non-empty cells are gradeable.",
+    "packages/bundle/web-app/cordis.patch.yml:411 lists '- id: command-goal' and the VERY NEXT line (:412) is 'disabled: true': the cite cannot support a mechanism claim about /goal and, read as evidence, asserts the opposite of the plugin being active in that bundle. The claim's real loci are packages/goal/command-goal/src/index.ts:12-13 (name/inject) and :189-195 (apply/register), with behavior at :125-186 — this is the clearest instance of a bundle-manifest listing standing in for an implementation citation.",
+    "Four of the 15 non-empty claims (dsh command-goal, dsh command-compact, grok remember, grok model) are cited to a file that cannot carry them: packages/core/session/src/types.ts:427 is a SurfaceOp doc comment; crates/codegen/xai-grok-memory/src/storage.rs:113 is a MEMORY.md path helper for a claim about /remember (real run at .../slash/commands/remember.rs:16-23); .../slash/commands/mod.rs:88 is one entry of the builtin_commands() registry vector for a claim about /model's matching order (real logic at .../slash/commands/model.rs:49-53); and cordis.patch.yml:411 above. The recurring pattern is registry/list/doc listings cited as evidence for behavior.",
+    "packages/schedule/src/driver.ts:35 is a doc comment on the deliveryErrors interface field, and the file's own code bounds the 'never a silent drop' wording: an unknown session is skipped with no deliveryError (driver.ts:83), and an occurrence whose onDue throws is still counted in 'delivered' because driver.ts:108 runs before the await at :111. The accept-before-deliver ordering itself is real and implemented at driver.ts:99-106, so the claim is directionally true but its citation and its absolute phrasing overreach."
+  ]
+}

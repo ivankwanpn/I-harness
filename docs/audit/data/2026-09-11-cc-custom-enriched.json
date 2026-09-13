@@ -1,0 +1,1915 @@
+{
+  "source": "cc-custom",
+  "sourcePath": "D:/opencode-bugfix/cc-custom",
+  "sourceRev": null,
+  "version": "999.0.0-restored",
+  "commandModel": "directory+isEnabled",
+  "commandModelNote": "Commands are one directory (or one .ts/.tsx file) per command under src/commands/, each default-exporting or named-exporting a `Command` object typed by src/types/command.ts. The type union is three-way: (a) `type: 'local'` — metadata + `supportsNonInteractive` + `load: () => import('./x.js')` resolving `{ call }` returning a `LocalCommandResult` (`{type:'text'} | {type:'compact'} | {type:'skip'}`); (b) `type: 'local-jsx'` — same lazy `load` but `call(onDone, context, args)` returns a React node rendered by Ink; (c) `type: 'prompt'` — no `load`, instead `getPromptForCommand(args, context): Promise<ContentBlockParam[]>` plus `progressMessage`/`contentLength`/`source`. src/types/command.ts:75-79 (LocalCommand), :145-153 (LocalJSXCommand), :25-58 (PromptCommand), :183-189 (Command union + getCommandName), :192-194 (isCommandEnabled). COMMANDS() is memoized because the underlying helpers read config, which is unavailable at module-init time (src/commands.ts:215-217). Grouping by family in this file is the auditor's assignment, not a field in the source. Environment note: this is a 'restored' tree (version 999.0.0-restored): many files carry a `// @ts-nocheck -- restored transpiled artifact` marker and embedded base64 sourcemaps, and several `feature('X')` / `isEnvTruthy(...)` sites have bundler-time substitutions left un-substituted (e.g. the literal `\"external\" === 'ant'` at src/commands/mcp/mcp.tsx:81, src/commands/thinkback/thinkback.tsx:33, src/commands/terminalSetup/terminalSetup.tsx:123, src/screens/REPL.tsx:4572). Command count: 67 as extracted; 15 further directories under src/commands/ contain only a 73-byte disabled stub (`export default { isEnabled: () => false, isHidden: true, name: 'stub' };`) and are excluded per the extractor's `disabledStubs` list. One extractor discrepancy is recorded rather than propagated: the input JSON gives commandKind `text` for `pr-comments` and `security-review`, but both are built by `createMovedToPluginCommand`, which returns `type: 'prompt'` (src/commands/createMovedToPluginCommand.ts:31); the `prompt` value is recorded here. `context`, `context-window`, `max-output` and `auto-compact-window` each exist as TWO registered Command objects (interactive `local-jsx` and non-interactive `local`) under the same `name:`, gated on opposite values of `getIsNonInteractiveSession()`; the extractor's per-name dedup lists each once and the gate column records the interactive variant.",
+  "commands": [
+    {
+      "rawName": "add-dir",
+      "canonical": "add-dir",
+      "aliases": [],
+      "displayName": "add-dir",
+      "family": "safety",
+      "summary": "Adds a directory to the session's working-directory set so its files become tool-accessible.",
+      "mechanism": "The lazily loaded backend src/commands/add-dir/add-dir.tsx exports `call`, which validates the path with validateDirectoryForWorkspace (validation.ts:31) and then uses the inner helper handleAddDirectory. That helper builds an `addDirectories` PermissionUpdate, applies it with `applyPermissionUpdate` and calls `context.setAppState` (add-dir.tsx:80-84), pushes the path into bootstrap state with `setAdditionalDirectoriesForClaudeMd` (add-dir.tsx:90-93), refreshes the sandbox with `SandboxManager.refreshConfig()` (add-dir.tsx:94), and — when the user chose 'remember' — persists the update to the localSettings destination with `persistPermissionUpdate` (add-dir.tsx:96-99); otherwise session-only. With no path argument it renders the AddWorkspaceDirectory Ink form instead.",
+      "gate": "none (no `isEnabled` field on the Command object; src/commands/add-dir/index.ts:3-9; default is true per src/types/command.ts:192-194)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/add-dir/add-dir.tsx (export `call`); src/commands/add-dir/validation.ts (`validateDirectoryForWorkspace`, `addDirHelpMessage`); persistence via src/utils/permissions/PermissionUpdate.ts (`applyPermissionUpdate`, `persistPermissionUpdate`)",
+      "evidence": [
+        "src/commands/add-dir/index.ts:5",
+        "src/commands/add-dir/index.ts:8",
+        "src/commands/add-dir/add-dir.tsx:80",
+        "src/commands/add-dir/add-dir.tsx:90",
+        "src/commands/add-dir/add-dir.tsx:94",
+        "src/commands/add-dir/add-dir.tsx:98",
+        "src/types/command.ts:192"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: add-dir — no direct analogue expected in grok/codex/opencode; this is a Claude-Code-family capability (extra working directories outside cwd)"
+      ]
+    },
+    {
+      "rawName": "agents",
+      "canonical": "agents",
+      "aliases": [],
+      "displayName": "agents",
+      "family": "extension",
+      "summary": "Opens the interactive agent-configuration menu for viewing, creating, editing and deleting agent definitions.",
+      "mechanism": "src/commands/agents/agents.tsx `call` is a thin shell: it reads appState.toolPermissionContext, computes the tool list with `getTools` (agents.tsx:9) and returns `<AgentsMenu tools={tools} onExit={onDone} />` (agents.tsx:10). The real work is src/components/agents/AgentsMenu.tsx, which mutates AppState.agentDefinitions via `setAppState` (AgentsMenu.tsx:167) after persisting deletions with `deleteAgentFromFile` (AgentsMenu.tsx:166), a helper in agentFileUtils.ts:241 that unlinks the agent file (agentFileUtils.ts:251). Creation/editing go through `saveAgentToFile` (agentFileUtils.ts:166) and `updateAgentFile` (agentFileUtils.ts:208).",
+      "gate": "none (no `isEnabled`; src/commands/agents/index.ts:3-8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/agents/agents.tsx (`call`); src/components/agents/AgentsMenu.tsx (`AgentsMenu`); src/components/agents/agentFileUtils.ts (`saveAgentToFile`, `updateAgentFile`, `deleteAgentFromFile`)",
+      "evidence": [
+        "src/commands/agents/index.ts:5",
+        "src/commands/agents/index.ts:7",
+        "src/commands/agents/agents.tsx:9",
+        "src/commands/agents/agents.tsx:10",
+        "src/components/agents/AgentsMenu.tsx:166",
+        "src/components/agents/AgentsMenu.tsx:167",
+        "src/components/agents/agentFileUtils.ts:251"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: agents — cc-custom's agent-definition editor; I-harness analogue is its agent/subagent definitions surface rather than a slash command"
+      ]
+    },
+    {
+      "rawName": "agents-platform",
+      "canonical": "agents-platform",
+      "aliases": [],
+      "displayName": "agents-platform",
+      "family": "extension",
+      "summary": "Reserved internal command whose original platform-managed-agents backend is absent from this restored build; it returns a fixed text notice.",
+      "mechanism": "There is no external backend module: the `load` field is an inline async function (index.ts:7-18) resolving an object with `call`, which returns a literal `{ type: 'text', value }` string stating the command is not included in the restored workspace (index.ts:9-16). It mutates no state and writes no file — an explicit stub so callers fail cleanly. It is registered only via INTERNAL_ONLY_COMMANDS (src/commands.ts:211) and only when USER_TYPE === 'ant' and IS_DEMO is unset (src/commands.ts:287-289).",
+      "gate": "none at the Command level (no `isEnabled`; src/commands/agents-platform/index.ts:1-20). Registration-level gate: included only through INTERNAL_ONLY_COMMANDS, appended when `process.env.USER_TYPE === 'ant' && !process.env.IS_DEMO` (src/commands.ts:287-289)",
+      "commandKind": "local",
+      "backendModule": "src/commands/agents-platform/index.ts — inline `call` inside the `load` closure; no separate module exists in this tree",
+      "evidence": [
+        "src/commands/agents-platform/index.ts:2",
+        "src/commands/agents-platform/index.ts:7",
+        "src/commands/agents-platform/index.ts:8",
+        "src/commands/agents-platform/index.ts:12",
+        "src/commands.ts:211",
+        "src/commands.ts:287"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "auto-compact-window",
+      "canonical": "auto-compact-window",
+      "aliases": [],
+      "displayName": "auto-compact-window",
+      "family": "context",
+      "summary": "Reads or sets the context-window cap used by auto-compact (settings key `autoCompactWindowTokens`), with `auto`/`unset`/`off` clearing it.",
+      "mechanism": "Declared twice in src/commands/limit-controls.ts: the interactive `autoCompactWindow` (lines 274-284, `type: 'local-jsx'`) and `autoCompactWindowNonInteractive` (lines 286-299, `type: 'local'`). Both `load` inline with no separate module (`load: () => Promise.resolve({ call: callAutoCompactWindowImmediate })` at line 283, and `{ call: callAutoCompactWindow }` at line 298). `callAutoCompactWindow` (line 201) is produced by `createLimitCommand` (line 97) with `settingKey: 'autoCompactWindowTokens'` (line 204). createLimitCommand parses the argument with parseTokenCount (line 33) and persists via `updateUserSetting` (line 58) -> `updateSettingsForSource('userSettings', { [key]: value })` (line 62) followed by `settingsChangeDetector.notifyChange('userSettings')` (line 67); reset words ('auto','unset','off', line 19) write `undefined` to delete the key (line 117). The cap is consumed by getEffectiveContextWindowSize (src/services/compact/autoCompact.ts:41-44).",
+      "gate": "interactive variant: `isEnabled: () => !getIsNonInteractiveSession()` (src/commands/limit-controls.ts:279); non-interactive variant: `isEnabled() { return getIsNonInteractiveSession() }` (src/commands/limit-controls.ts:294-296) and `get isHidden() { return !getIsNonInteractiveSession() }` (line 291-293). Both also expose `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (line 280-282)",
+      "commandKind": "local-jsx (interactive, limit-controls.ts:275) and local (non-interactive, limit-controls.ts:287)",
+      "backendModule": "src/commands/limit-controls.ts — `createLimitCommand`, `callAutoCompactWindow`, `updateUserSetting`, `toImmediateCommand`; consumer src/services/compact/autoCompact.ts — `getEffectiveContextWindowSize`",
+      "evidence": [
+        "src/commands/limit-controls.ts:201",
+        "src/commands/limit-controls.ts:204",
+        "src/commands/limit-controls.ts:276",
+        "src/commands/limit-controls.ts:279",
+        "src/commands/limit-controls.ts:288",
+        "src/commands/limit-controls.ts:294",
+        "src/commands/limit-controls.ts:62",
+        "src/services/compact/autoCompact.ts:41"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: auto-compact-window — cc-custom-specific tuning knob for the auto-compaction threshold; no counterpart expected elsewhere"
+      ]
+    },
+    {
+      "rawName": "branch",
+      "canonical": "branch",
+      "aliases": [
+        "fork"
+      ],
+      "displayName": "branch",
+      "family": "session",
+      "summary": "Forks the current conversation into a new session file at this point and resumes into the fork.",
+      "mechanism": "src/commands/branch/branch.ts `call` (line 223) delegates to the private `createFork` (line 62), which reads the current transcript, filters to non-sidechain messages with isTranscriptMessage, rewrites every entry with a new randomUUID sessionId plus a forkedFrom marker, and writes a brand-new JSONL transcript via `writeFile(forkSessionPath, lines.join('\\n') + '\\n', { encoding: 'utf8', mode: 0o600 })` at branch.ts:162-165. Back in `call`, the title is persisted with `saveCustomTitle(sessionId, effectiveTitle, forkPath)` (branch.ts:253) after collision handling in getUniqueForkName (line 180), and the process switches sessions with `await context.resume(sessionId, forkLog, 'fork')` (branch.ts:281). The `fork` alias is conditional on a build feature: `aliases: feature('FORK_SUBAGENT') ? [] : ['fork']` (index.ts:8).",
+      "gate": "none (no `isEnabled`; src/commands/branch/index.ts:4-12)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/branch/branch.ts — `call`, `createFork`, `getUniqueForkName`; persistence via src/utils/sessionStorage.ts — `saveCustomTitle`",
+      "evidence": [
+        "src/commands/branch/index.ts:6",
+        "src/commands/branch/index.ts:8",
+        "src/commands/branch/branch.ts:162",
+        "src/commands/branch/branch.ts:223",
+        "src/commands/branch/branch.ts:253",
+        "src/commands/branch/branch.ts:281"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: branch — conversation forking; cc-custom implements it as a new session JSONL rather than an in-place fork"
+      ]
+    },
+    {
+      "rawName": "brief",
+      "canonical": "brief",
+      "aliases": [],
+      "displayName": "brief",
+      "family": "interface",
+      "summary": "Toggles brief-only mode, which routes user-facing output through the SendUserMessage (Brief) tool and injects a transition system-reminder.",
+      "mechanism": "The `load` returns an inline component with no separate module (brief.ts:58-122). Its `call` reads `context.getAppState().isBriefOnly` (line 64), flips it, refuses the on-transition when `!isBriefEntitled()` with 'Brief tool is not enabled for your account' (lines 69-80), then sets the in-memory bootstrap flag `setUserMsgOptIn(newState)` (line 87 -> src/bootstrap/state.ts:1049-1050; STATE.userMsgOptIn declared at line 70, seeded false at line 269) and updates AppState via `context.setAppState(prev => ... { ...prev, isBriefOnly: newState })` (lines 89-92). It logs tengu_brief_mode_toggled and closes with a `<system-reminder>` metaMessage instructing the model to use or stop using BRIEF_TOOL_NAME (lines 108-119). Nothing is written to disk: both flags are session-scoped. Registration of the command itself is behind the build feature at src/commands.ts:84-86.",
+      "gate": "`isEnabled: () => { if (feature('KAIROS_BRIEF')) { return getBriefConfig().enable_slash_command } return false }` (src/commands/brief.ts:51-56). getBriefConfig reads the GrowthBook key 'tengu_kairos_brief_config' (line 39) through `getFeatureValue_CACHED_MAY_BE_STALE`, which is a no-op stub returning its defaultValue in this tree (src/services/analytics/growthbook.ts:130-136), so DEFAULT_BRIEF_CONFIG `{ enable_slash_command: false }` (line 29-31) always wins and the command is effectively always disabled here. Registration also requires `feature('KAIROS_BRIEF')` (src/commands.ts:84-86)",
+      "commandKind": "local-jsx",
+      "backendModule": "no external module — inline `load: () => Promise.resolve({ async call(...) })` in src/commands/brief.ts (no import target). Supporting: src/bootstrap/state.ts `setUserMsgOptIn`; src/tools/BriefTool/BriefTool.ts `isBriefEntitled`",
+      "evidence": [
+        "src/commands/brief.ts:29",
+        "src/commands/brief.ts:49",
+        "src/commands/brief.ts:51",
+        "src/commands/brief.ts:64",
+        "src/commands/brief.ts:87",
+        "src/commands/brief.ts:89",
+        "src/bootstrap/state.ts:1049",
+        "src/services/analytics/growthbook.ts:130",
+        "src/commands.ts:84"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "btw",
+      "canonical": "btw",
+      "aliases": [],
+      "displayName": "btw",
+      "family": "collab",
+      "summary": "Asks a one-off side question in a forked agent that reuses the conversation's prompt cache without touching the main conversation.",
+      "mechanism": "src/commands/btw/btw.tsx `call` (line 229) requires a question, increments a persisted counter with `saveGlobalConfig(current => ({ ...current, btwUseCount: current.btwUseCount + 1 }))` (btw.tsx:237-240), then renders BtwSideQuestion (line 241). The model call lives in src/utils/sideQuestion.ts: BtwSideQuestion builds cache-safe params via buildCacheSafeParams and calls `runSideQuestion` (btw.tsx:92), which invokes `runForkedAgent` (sideQuestion.ts:80) with all tools denied through `canUseTool` (sideQuestion.ts:86-90), `maxTurns: 1` (sideQuestion.ts:93) and `skipCacheWrite: true` (sideQuestion.ts:95). The answer text is extracted by extractSideQuestionResponse (sideQuestion.ts:125) and nothing is appended to the main transcript — the command is marked `immediate: true` (index.ts:8).",
+      "gate": "none (no `isEnabled`; src/commands/btw/index.ts:3-11)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/btw/btw.tsx (`call`, `BtwSideQuestion`); src/utils/sideQuestion.ts (`runSideQuestion`, `extractSideQuestionResponse`); counter via src/utils/config.ts `saveGlobalConfig`",
+      "evidence": [
+        "src/commands/btw/index.ts:5",
+        "src/commands/btw/index.ts:8",
+        "src/commands/btw/btw.tsx:237",
+        "src/commands/btw/btw.tsx:241",
+        "src/utils/sideQuestion.ts:80",
+        "src/utils/sideQuestion.ts:93"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: btw — side question in a forked, tool-less agent; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "clear",
+      "canonical": "clear",
+      "aliases": [
+        "reset",
+        "new"
+      ],
+      "displayName": "clear",
+      "family": "session",
+      "summary": "Clears conversation history and session caches and starts a fresh session id, preserving session name/tag/color and background tasks.",
+      "mechanism": "src/commands/clear/clear.ts is a 7-line shim whose `call` awaits `clearConversation(context)` (clear.ts:5) and returns an empty text result (clear.ts:6). The work is in src/commands/clear/conversation.ts: `clearConversation` (line 53) runs SessionEnd hooks, empties messages with `setMessages(() => [])` (conversation.ts:111), drops session caches with `clearSessionCaches(preservedAgentIds)` (conversation.ts:129; `clearSessionCaches` defined at caches.ts:45), clears session metadata, regenerates the session id with `regenerateSessionId({ setCurrentAsParent: true })` (conversation.ts:219) and resets the transcript pointer with `await resetSessionFilePointer()` (conversation.ts:224). Preserved title/tag/agent-color are written back through restoreSessionMetadata and SessionStart hook messages are re-seeded with setMessages (conversation.ts:282). The command is explicitly non-persistable to disk-less runtimes: `supportsNonInteractive: false` with the comment 'Should just create a new session' (index.ts:15).",
+      "gate": "none (no `isEnabled`; src/commands/clear/index.ts:10-17)",
+      "commandKind": "local",
+      "backendModule": "src/commands/clear/clear.ts (`call`); src/commands/clear/conversation.ts (`clearConversation`); src/commands/clear/caches.ts (`clearSessionCaches`)",
+      "evidence": [
+        "src/commands/clear/index.ts:12",
+        "src/commands/clear/index.ts:14",
+        "src/commands/clear/index.ts:16",
+        "src/commands/clear/clear.ts:5",
+        "src/commands/clear/conversation.ts:111",
+        "src/commands/clear/conversation.ts:219",
+        "src/commands/clear/conversation.ts:224",
+        "src/commands/clear/caches.ts:45"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: clear — same capability as I-harness `/clear`/session reset and opencode's new-session action"
+      ]
+    },
+    {
+      "rawName": "code-review",
+      "canonical": "code-review",
+      "aliases": [],
+      "displayName": "code-review",
+      "family": "execution",
+      "summary": "Injects a code-review instruction prompt for the specified files or the current git diff.",
+      "mechanism": "A prompt command with no `load`; its builder module is imported eagerly at index.ts:2. src/commands/code-review/code-review.tsx defines CODE_REVIEW_PROMPT (line 3), interpolating user-supplied paths when provided and otherwise instructing the model to review `git diff` / `git diff HEAD` (line 8); `getPromptForCommand` (line 20) returns it as a single ContentBlockParam text block (line 21). The command mutates no app state and writes nothing to disk — the harness executes the resulting prompt.",
+      "gate": "none (no `isEnabled`; src/commands/code-review/index.ts:4-16)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/code-review/code-review.tsx (`getPromptForCommand`, `CODE_REVIEW_PROMPT`)",
+      "evidence": [
+        "src/commands/code-review/index.ts:5",
+        "src/commands/code-review/index.ts:6",
+        "src/commands/code-review/index.ts:13",
+        "src/commands/code-review/code-review.tsx:3",
+        "src/commands/code-review/code-review.tsx:20",
+        "src/commands/code-review/code-review.tsx:21"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: code-review — same capability family as grok-build/codex review commands and I-harness review skills"
+      ]
+    },
+    {
+      "rawName": "color",
+      "canonical": "color",
+      "aliases": [],
+      "displayName": "color",
+      "family": "interface",
+      "summary": "Sets or resets the prompt-bar colour used to identify the current session/agent.",
+      "mechanism": "src/commands/color/color.ts `call` (line 20) refuses swarm teammates via isTeammate() (line 26). Reset words ('default','reset','none','gray','grey', line 18) write the sentinel 'default' with `await saveAgentColor(sessionId, 'default', fullPath)` (line 51) and clear AppState via `context.setAppState(...) standaloneAgentContext.color: undefined` (line 53). A valid AGENT_COLORS name is persisted with `await saveAgentColor(sessionId, colorArg, fullPath)` (line 79) and mirrored into AppState at line 82. The transcript path comes from getTranscriptPath() (lines 47, 76), and the colours are user-visible only — the file carries the restored-build marker `// @ts-nocheck -- restored transpiled artifact; runtime-verified`.",
+      "gate": "none (no `isEnabled`; src/commands/color/index.ts:7-14)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/color/color.ts (`call`); persistence via src/utils/sessionStorage.ts (`saveAgentColor`, `getTranscriptPath`)",
+      "evidence": [
+        "src/commands/color/index.ts:8",
+        "src/commands/color/index.ts:9",
+        "src/commands/color/color.ts:51",
+        "src/commands/color/color.ts:53",
+        "src/commands/color/color.ts:79",
+        "src/utils/sessionStorage.ts:2479"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "commit",
+      "canonical": "commit",
+      "aliases": [],
+      "displayName": "commit",
+      "family": "execution",
+      "summary": "Builds and runs a prompt that stages and creates a single git commit from the current changes.",
+      "mechanism": "A prompt command defined entirely in the declaration file (no `load`). `getPromptForCommand` (commit.ts:65) calls getPromptContent (line 12), which embeds live shell substitutions (`!`git status``, `git diff HEAD`, `git branch --show-current`, `git log --oneline -10`, lines 22-25) plus attribution from getAttributionTexts and undercover instructions. It expands those embedded commands by awaiting `executeShellCommandsInPrompt` with the app state patched so ALLOWED_TOOLS (line 6: only `Bash(git add|status|commit)`) are pre-approved in `toolPermissionContext.alwaysAllowRules` (lines 67-86), returning the text block at line 88. Nothing is written to disk by the command itself; executeShellCommandsInPrompt (src/utils/promptShellExecution.ts:69) dispatches each span through `shellTool.call` (promptShellExecution.ts:115). Registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:196).",
+      "gate": "none at the Command level (no `isEnabled`; src/commands/commit.ts:57-59). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/commit.ts (`getPromptForCommand`, `getPromptContent`); expansion via src/utils/promptShellExecution.ts (`executeShellCommandsInPrompt`)",
+      "evidence": [
+        "src/commands/commit.ts:58",
+        "src/commands/commit.ts:59",
+        "src/commands/commit.ts:65",
+        "src/commands/commit.ts:67",
+        "src/commands/commit.ts:88",
+        "src/utils/promptShellExecution.ts:69",
+        "src/commands.ts:196",
+        "src/commands.ts:287"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: commit — same capability as I-harness git-commit flows; implemented here as a prompt with pre-approved git tools"
+      ]
+    },
+    {
+      "rawName": "commit-push-pr",
+      "canonical": "commit-push-pr",
+      "aliases": [],
+      "displayName": "commit-push-pr",
+      "family": "execution",
+      "summary": "Builds and runs a prompt that commits all changes, pushes the branch and creates or updates a GitHub pull request.",
+      "mechanism": "A prompt command defined in its declaration file. `getPromptForCommand` (commit-push-pr.ts:119) resolves the default branch with `await getDefaultBranch()` and PR attribution with `await getEnhancedPRAttribution(context.getAppState)` (lines 121-124), builds the body via getPromptContent (line 26) and appends user instructions (line 130); it expands embedded shell substitutions with `executeShellCommandsInPrompt` (line 133) after injecting ALLOWED_TOOLS (line 10: git checkout/add/status/push/commit, gh pr create/edit/view/merge, ToolSearch, Slack MCP tools) into `toolPermissionContext.alwaysAllowRules` (lines 142-147). `contentLength` is a getter measuring getPromptContent('main').length (line 115). The command persists nothing. Registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:197).",
+      "gate": "none at the Command level (no `isEnabled`; src/commands/commit-push-pr.ts:108-110). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/commit-push-pr.ts (`getPromptForCommand`, `getPromptContent`); helpers src/utils/git.ts `getDefaultBranch`, src/utils/attribution.ts `getEnhancedPRAttribution`; expansion via src/utils/promptShellExecution.ts (`executeShellCommandsInPrompt`)",
+      "evidence": [
+        "src/commands/commit-push-pr.ts:109",
+        "src/commands/commit-push-pr.ts:110",
+        "src/commands/commit-push-pr.ts:119",
+        "src/commands/commit-push-pr.ts:133",
+        "src/utils/promptShellExecution.ts:69",
+        "src/commands.ts:197",
+        "src/commands.ts:287"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: commit-push-pr — commit+push+PR automation; same family as I-harness PR flows"
+      ]
+    },
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "family": "context",
+      "summary": "Clears conversation history but keeps a model-written summary in context, optionally steered by custom summarisation instructions.",
+      "mechanism": "src/commands/compact/index.ts declares `type: 'local'`, `supportsNonInteractive: true`, `argumentHint: '<optional custom summarization instructions>'` and `load: () => import('./compact.js')` (index.ts:12). The work site src/commands/compact/compact.ts `call` (line 30) first slices history at the last compact boundary with getMessagesAfterCompactBoundary (line 34); when no custom instructions are given it tries session-memory compaction first via `trySessionMemoryCompaction` (line 46, from src/services/compact/sessionMemoryCompact.ts:514) and otherwise runs micro-compaction (`microcompactMessages`, line 74) before `compactConversation` (src/services/compact/compact.ts:357), passing the cache-sharing params built by getCacheSharingParams (line 135). The result is a `CompactionResult` object `{ boundaryMarker, summaryMessages, attachments, hookResults, messagesToKeep?, userDisplayMessage?, ... }` (src/services/compact/compact.ts:269-280) returned as `{ type: 'compact', compactionResult, displayText }` (compact.ts:96-100) — it does not itself rewrite the message array. The caller does: src/utils/processUserInput/processSlashCommand.tsx:579-604 appends the slash-command echo messages to `messagesToKeep` and returns `buildPostCompactMessages(...)` as the new messages array (processSlashCommand.tsx:601), where buildPostCompactMessages orders boundaryMarker, summaryMessages, messagesToKeep, attachments, hookResults (src/services/compact/compact.ts:300-308). On success it clears the getUserContext memo, runs runPostCompactCleanup (compact.ts:94), resets lastSummarizedMessageId (compact.ts:88) and suppresses the trailing compact warning (compact.ts:91).",
+      "gate": "`isEnabled: () => !isEnvTruthy(process.env.DISABLE_COMPACT)` (src/commands/compact/index.ts:9), with `isEnvTruthy` from src/utils/envUtils.ts:69. Downstream the same env var is checked a second time inside auto-compaction: autoCompactIfNeeded returns early when `isEnvTruthy(process.env.DISABLE_COMPACT)` (src/services/compact/autoCompact.ts:214-216)",
+      "commandKind": "local",
+      "backendModule": "src/commands/compact/compact.ts (`call`); src/services/compact/compact.ts (`compactConversation` at :357, `partialCompactConversation` at :737, `buildPostCompactMessages` at :300, `createCompactBoundaryMessage`); src/services/compact/sessionMemoryCompact.ts (`trySessionMemoryCompaction` at :514); src/services/compact/microCompact.ts (`microcompactMessages`); src/services/compact/autoCompact.ts (`getEffectiveContextWindowSize`, `getAutoCompactThreshold`, `autoCompactIfNeeded`)",
+      "evidence": [
+        "src/commands/compact/index.ts:5",
+        "src/commands/compact/index.ts:9",
+        "src/commands/compact/index.ts:12",
+        "src/commands/compact/compact.ts:34",
+        "src/commands/compact/compact.ts:46",
+        "src/commands/compact/compact.ts:74",
+        "src/commands/compact/compact.ts:77",
+        "src/services/compact/compact.ts:269",
+        "src/services/compact/compact.ts:300",
+        "src/services/compact/compact.ts:562",
+        "src/utils/processUserInput/processSlashCommand.tsx:601",
+        "src/services/compact/autoCompact.ts:214"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: compact — same capability as I-harness `/compact`, grok-build `compact`, codex SlashCommand::Compact and dsh's `command-compact` plugin"
+      ]
+    },
+    {
+      "rawName": "config",
+      "canonical": "config",
+      "aliases": [
+        "settings"
+      ],
+      "displayName": "config",
+      "family": "interface",
+      "summary": "Opens the settings panel, optionally landing on a specific tab.",
+      "mechanism": "src/commands/config/config.tsx is a small shim: `call` returns `<Settings onClose={onDone} context={context} defaultTab=\"Config\" />`. The state web is src/components/Settings/Settings.tsx (`Settings`, line 22, with a `useState(defaultTab)` at line 29) rendering src/components/Settings/Config.tsx (`Config`, line 81). Config snapshots each settings source at mount (`getSettingsForSource('localSettings')` / `('userSettings')`, lines 142-143) and writes during the session with `updateSettingsForSource` for individual keys — e.g. localSettings at Config.tsx:282 and userSettings at Config.tsx:329 — or `saveGlobalConfig` for the revert path, mirroring live values into AppState via setAppState.",
+      "gate": "none (no `isEnabled`; src/commands/config/index.ts:3-9)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/config/config.tsx (`call`); src/components/Settings/Settings.tsx (`Settings`); src/components/Settings/Config.tsx (`Config`); writes via src/utils/settings/settings.ts (`updateSettingsForSource`)",
+      "evidence": [
+        "src/commands/config/index.ts:4",
+        "src/commands/config/index.ts:6",
+        "src/commands/config/config.tsx:5",
+        "src/components/Settings/Config.tsx:282",
+        "src/components/Settings/Config.tsx:329"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: config — settings UI; I-harness analogue is its config/settings surface"
+      ]
+    },
+    {
+      "rawName": "context",
+      "canonical": "context",
+      "aliases": [],
+      "displayName": "context",
+      "family": "context",
+      "summary": "Visualises current context-window usage as a coloured grid in the REPL, with a separate non-interactive markdown-table variant.",
+      "mechanism": "src/commands/context/index.ts has NO default export: it exports two named Command objects under the same `name: 'context'` — `context` (interactive Ink grid, lines 4-10) and `contextNonInteractive` (lines 12-24) — imported separately at src/commands.ts:15 and registered at src/commands.ts:227-228. The interactive backend src/commands/context/context.tsx `call` (line 21) transforms history with getMessagesAfterCompactBoundary (lines 18-20), applies `microcompactMessages` so the view matches what is actually sent to the API (line 35), collects data with `analyzeContextUsage` (line 43) and renders it to an ANSI string via renderToAnsiString before calling onDone (lines 51-52); no persistent state is mutated. The non-interactive backend src/commands/context/context-noninteractive.ts `call` (line 70) reuses `collectContextData` (line 32, which calls analyzeContextUsage at line 52) and returns a markdown table built by formatContextAsMarkdownTable (line 81) at line 77. That collector is also imported by the headless path at src/cli/print.ts:225.",
+      "gate": "interactive: `isEnabled: () => !getIsNonInteractiveSession()` (src/commands/context/index.ts:7); non-interactive: `isEnabled() { return getIsNonInteractiveSession() }` (index.ts:20-22) plus `get isHidden() { return !getIsNonInteractiveSession() }` (index.ts:17-19)",
+      "commandKind": "local-jsx (interactive, index.ts:8) and local (non-interactive, index.ts:13)",
+      "backendModule": "src/commands/context/context.tsx (`call`); src/commands/context/context-noninteractive.ts (`call`, `collectContextData`, `formatContextAsMarkdownTable`); src/utils/analyzeContext.ts (`analyzeContextUsage` at :919)",
+      "evidence": [
+        "src/commands/context/index.ts:6",
+        "src/commands/context/index.ts:7",
+        "src/commands/context/index.ts:21",
+        "src/commands/context/context.tsx:35",
+        "src/commands/context/context.tsx:43",
+        "src/commands/context/context-noninteractive.ts:52",
+        "src/commands/context/context-noninteractive.ts:70",
+        "src/utils/analyzeContext.ts:919",
+        "src/commands.ts:227"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: context — context-usage view; I-harness analogue is its context/usage surface"
+      ]
+    },
+    {
+      "rawName": "context-window",
+      "canonical": "context-window",
+      "aliases": [],
+      "displayName": "context-window",
+      "family": "model",
+      "summary": "Reads or sets the effective context-window token budget (settings key `contextWindowTokens`), with `auto`/`unset`/`off` clearing it.",
+      "mechanism": "Declared twice in src/commands/limit-controls.ts: the interactive `contextWindow` (lines 220-230, `type: 'local-jsx'`) and `contextWindowNonInteractive` (lines 232-245, `type: 'local'`); both `load` inline with no separate module (lines 229 and 244). `callContextWindow` (line 176) is produced by `createLimitCommand` (line 97) with `settingKey: 'contextWindowTokens'` (line 179). createLimitCommand parses the argument via parseTokenCount (line 33) and persists through `updateUserSetting` (line 58) -> `updateSettingsForSource('userSettings', { [key]: value })` (line 62) plus `settingsChangeDetector.notifyChange('userSettings')` (line 67); reset words ('auto','unset','off', line 19) write `undefined` to delete the key (line 117). The status lines are produced by renderStatus using getContextWindowForModel and getEffectiveContextWindowSize (lines 180-188).",
+      "gate": "interactive variant: `isEnabled: () => !getIsNonInteractiveSession()` (src/commands/limit-controls.ts:225); non-interactive variant: `isEnabled() { return getIsNonInteractiveSession() }` (lines 240-242) with `get isHidden() { return !getIsNonInteractiveSession() }` (lines 237-239). Interactive variant also has `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (lines 226-228)",
+      "commandKind": "local-jsx (interactive, limit-controls.ts:221) and local (non-interactive, limit-controls.ts:233)",
+      "backendModule": "src/commands/limit-controls.ts — `createLimitCommand`, `callContextWindow`, `updateUserSetting`, `toImmediateCommand`; status reads src/utils/context.ts `getContextWindowForModel` and src/services/compact/autoCompact.ts `getEffectiveContextWindowSize`",
+      "evidence": [
+        "src/commands/limit-controls.ts:176",
+        "src/commands/limit-controls.ts:179",
+        "src/commands/limit-controls.ts:222",
+        "src/commands/limit-controls.ts:225",
+        "src/commands/limit-controls.ts:233",
+        "src/commands/limit-controls.ts:240",
+        "src/commands/limit-controls.ts:62",
+        "src/services/compact/autoCompact.ts:34"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "copy",
+      "canonical": "copy",
+      "aliases": [],
+      "displayName": "copy",
+      "family": "interface",
+      "summary": "Copies a recent assistant message (or one of its code blocks) to the clipboard and mirrors it into a temp file.",
+      "mechanism": "src/commands/copy/copy.tsx `call` (line 334) walks messages newest-first with collectRecentAssistantTexts (line 50, capped at MAX_LOOKBACK = 20 at line 25), resolves `/copy N` to an age index (lines 341-355), and either copies immediately when copyFullResponse is set or there are no code blocks (line 365) or renders the CopyPicker Ink selector (line 369). `copyOrWriteToFile` (line 81) issues the OSC 52 escape sequence with `setClipboard` (line 82, src/ink/termio/osc.js) and always mirrors the text to disk under `join(tmpdir(), 'claude')` via mkdir + writeFile (lines 73-79). Choosing 'always' persists the preference with saveGlobalConfig (line 191).",
+      "gate": "none (no `isEnabled`; src/commands/copy/index.ts:7-13)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/copy/copy.tsx (`call`, `copyOrWriteToFile`, `collectRecentAssistantTexts`, `CopyPicker`)",
+      "evidence": [
+        "src/commands/copy/index.ts:8",
+        "src/commands/copy/index.ts:9",
+        "src/commands/copy/copy.tsx:82",
+        "src/commands/copy/copy.tsx:334",
+        "src/commands/copy/copy.tsx:365"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: copy — clipboard copy of the last response; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "cost",
+      "canonical": "cost",
+      "aliases": [],
+      "displayName": "cost",
+      "family": "inspect",
+      "summary": "Prints the session's total cost, API and wall durations, line changes and per-model usage.",
+      "mechanism": "src/commands/cost/cost.ts is a 6-line shim: `call` (line 4) returns `{ type: 'text', value: formatTotalCost() }` (line 5), importing formatTotalCost from '../../cost-tracker.js' (line 1). src/cost-tracker.ts:223 `formatTotalCost` composes formatCost(getTotalCostUSD()) (line 225) with an unknown-model caveat via hasUnknownModelCost() (lines 226-228), formatDuration(getTotalAPIDuration()) and formatDuration(getTotalDuration()) (lines 234-235), getTotalLinesAdded()/getTotalLinesRemoved() (line 236) and formatModelUsage() (line 230). Every counter is imported from './bootstrap/state.js' (cost-tracker.ts:3-29) — in-memory bootstrap state, not recomputed from the transcript; per-model USD pricing comes from calculateUSDCost (./utils/modelCost.js, imported at line 43). Session totals can also be persisted/restored via getStoredSessionCosts (line 82, reading project config keys lastCost/lastDuration/lastModelUsage) and saveCurrentSessionCosts. The command mutates nothing and writes nothing.",
+      "gate": "none (no `isEnabled`; src/commands/cost/index.ts:7-13)",
+      "commandKind": "local",
+      "backendModule": "src/commands/cost/cost.ts (`call`); src/cost-tracker.ts (`formatTotalCost` at :223, `getStoredSessionCosts` at :82) over src/bootstrap/state.js counters",
+      "evidence": [
+        "src/commands/cost/index.ts:8",
+        "src/commands/cost/index.ts:9",
+        "src/commands/cost/index.ts:12",
+        "src/commands/cost/cost.ts:5",
+        "src/cost-tracker.ts:3",
+        "src/cost-tracker.ts:223",
+        "src/cost-tracker.ts:225",
+        "src/cost-tracker.ts:235"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: cost — session cost/duration report; I-harness analogue is its cost/usage command"
+      ]
+    },
+    {
+      "rawName": "diff",
+      "canonical": "diff",
+      "aliases": [],
+      "displayName": "diff",
+      "family": "inspect",
+      "summary": "Opens an interactive dialog showing uncommitted git changes and per-turn conversation diffs.",
+      "mechanism": "src/commands/diff/diff.tsx `call` (line 3) dynamically imports the dialog (line 6) and returns `<DiffDialog messages={context.messages} onDone={onDone} />` (line 7); it mutates no state and persists nothing. DiffDialog (src/components/diff/DiffDialog.tsx:55) pulls live git data via `useDiffData` (line 61, src/hooks/useDiffData.ts:34) and per-turn diffs via useTurnDiffs (line 62). The git read is fetchGitDiff/fetchGitDiffHunks (useDiffData.ts:49-50) in src/utils/gitDiff.ts, shelling out with `git --no-optional-locks diff HEAD --shortstat` (gitDiff.ts:64) and `git --no-optional-locks diff HEAD` (gitDiff.ts:126).",
+      "gate": "none (no `isEnabled`; src/commands/diff/index.ts:3-8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/diff/diff.tsx (`call`); src/components/diff/DiffDialog.tsx (`DiffDialog`); src/hooks/useDiffData.ts (`useDiffData`); src/utils/gitDiff.ts (`fetchGitDiff`, `fetchGitDiffHunks`)",
+      "evidence": [
+        "src/commands/diff/index.ts:5",
+        "src/commands/diff/diff.tsx:7",
+        "src/components/diff/DiffDialog.tsx:61",
+        "src/hooks/useDiffData.ts:49",
+        "src/utils/gitDiff.ts:64"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: diff — uncommitted/per-turn change viewer; I-harness analogue is its diff review surface"
+      ]
+    },
+    {
+      "rawName": "doctor",
+      "canonical": "doctor",
+      "aliases": [],
+      "displayName": "doctor",
+      "family": "inspect",
+      "summary": "Runs installation and settings diagnostics and renders the Doctor screen, unless the DISABLE_DOCTOR_COMMAND env flag is set.",
+      "mechanism": "src/commands/doctor/doctor.tsx `call` (line 4) simply resolves `<Doctor onDone={onDone} />` (line 5). src/screens/Doctor.tsx (`Doctor`, line 56) loads DiagnosticInfo from getDoctorDiagnostic (imported at line 23) and context warnings from checkContextWarnings (line 22) in an async effect, rendering installation type/version/path and version-lock state. `getDoctorDiagnostic` is implemented at src/utils/doctorDiagnostic.ts:275 and reads on-disk config, e.g. managed-settings.json via `readFile(join(getManagedFilePath(), 'managed-settings.json'))` (doctorDiagnostic.ts:203-204). The command itself writes nothing.",
+      "gate": "`isEnabled: () => !isEnvTruthy(process.env.DISABLE_DOCTOR_COMMAND)` (src/commands/doctor/index.ts:7)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/doctor/doctor.tsx (`call`); src/screens/Doctor.tsx (`Doctor`); src/utils/doctorDiagnostic.ts (`getDoctorDiagnostic`)",
+      "evidence": [
+        "src/commands/doctor/index.ts:5",
+        "src/commands/doctor/index.ts:7",
+        "src/commands/doctor/doctor.tsx:5",
+        "src/screens/Doctor.tsx:56",
+        "src/utils/doctorDiagnostic.ts:275",
+        "src/utils/doctorDiagnostic.ts:203"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: doctor — installation/health diagnostics; also exists as a CLI subcommand `claude doctor` (src/main.tsx:3287)"
+      ]
+    },
+    {
+      "rawName": "effort",
+      "canonical": "effort",
+      "aliases": [],
+      "displayName": "effort",
+      "family": "model",
+      "summary": "Reads or sets the model reasoning-effort level, persisting it to user settings and mirroring it into AppState.",
+      "mechanism": "src/commands/effort/effort.tsx `call` (line 196) handles help text, renders EffortPicker for an empty argument (line 224), and otherwise applies through ApplyEffortAndClose. `setEffortValue` (line 26) converts with toPersistableEffort and persists via `updateSettingsForSource('userSettings', { effortLevel: persistable })` (line 29); `unsetEffortLevel` (line 75) deletes the key by writing `effortLevel: undefined` (line 76). The in-memory value is set with `setAppState(prev => ({ ...prev, effortValue: ... }))` (lines 133/140 for the picker, line 172 for the inline path), and each call emits a `tengu_effort_command` analytics event. `executeEffort` (line 97) validates with isEffortLevel and reports protocol-specific options via getCurrentApiProtocol (lines 103-107). The declaration exposes `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (index.ts:9-11).",
+      "gate": "none (no `isEnabled`; src/commands/effort/index.ts:4-13)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/effort/effort.tsx (`call`, `setEffortValue`, `unsetEffortLevel`, `executeEffort`, `EffortPickerWrapper`)",
+      "evidence": [
+        "src/commands/effort/index.ts:5",
+        "src/commands/effort/index.ts:6",
+        "src/commands/effort/effort.tsx:29",
+        "src/commands/effort/effort.tsx:76",
+        "src/commands/effort/effort.tsx:172",
+        "src/commands/effort/effort.tsx:224"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: effort — reasoning-effort level control; cc-custom-specific naming, closest analogue elsewhere is a thinking/reasoning-budget setting"
+      ]
+    },
+    {
+      "rawName": "exit",
+      "canonical": "exit",
+      "aliases": [
+        "quit"
+      ],
+      "displayName": "exit",
+      "family": "session",
+      "summary": "Exits the REPL, detaching instead of killing when inside a background tmux session and prompting first when a worktree session is active.",
+      "mechanism": "src/commands/exit/exit.tsx `call` (line 14) first checks `feature('BG_SESSIONS') && isBgSession()`: it calls onDone() and spawns `tmux detach-client` via spawnSync with stdio 'ignore' (lines 18-23), leaving the REPL alive. If getCurrentWorktreeSession() is non-null it renders ExitFlow and returns (lines 25-27). Otherwise it calls `onDone(getRandomGoodbyeMessage())` (line 29) and then `await gracefulShutdown(0, 'prompt_input_exit')` (line 30). That routine (src/utils/gracefulShutdown.ts:391) runs SessionEnd hooks, cleans terminal modes and prints a resume hint (lines 436-437), arms a failsafe timer that calls forceExit -> process.exit (lines 417-425) and sets process.exitCode (line 429). The command itself writes no file; the REPL marks it `immediate: true` (index.ts:8).",
+      "gate": "none (no `isEnabled`; src/commands/exit/index.ts:3-10)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/exit/exit.tsx (`call`); src/components/ExitFlow.tsx (`ExitFlow`); src/utils/gracefulShutdown.ts (`gracefulShutdown` at :391)",
+      "evidence": [
+        "src/commands/exit/index.ts:4",
+        "src/commands/exit/index.ts:6",
+        "src/commands/exit/exit.tsx:20",
+        "src/commands/exit/exit.tsx:27",
+        "src/commands/exit/exit.tsx:30",
+        "src/utils/gracefulShutdown.ts:391",
+        "src/utils/gracefulShutdown.ts:429"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: exit — REPL exit; distinct from the CLI exit helpers in src/cli/exit.ts (`cliOk`/`cliError`), which belong to the commander subcommand layer"
+      ]
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "family": "session",
+      "summary": "Exports the current conversation as ANSI-stripped plain text, either straight to a .txt file in the cwd or through a dialog offering clipboard or file.",
+      "mechanism": "src/commands/export/export.tsx `call` (line 53) renders the transcript with exportWithReactRenderer (lines 49-51) -> renderMessagesToPlainText(context.messages, tools) (src/utils/exportRenderer.tsx:91, which renders the Ink <Messages> tree in chunks and pushes stripAnsi(chunk) into parts). With a filename argument it forces a `.txt` extension (line 60), joins it onto getCwd() (line 61) and writes synchronously with `writeFileSync_DEPRECATED(filepath, content, { encoding: 'utf-8', flush: true })` (lines 63-66). Without arguments it derives a default name from the first prompt (extractFirstPrompt, line 76; sanitizeFilename, line 42) plus a timestamp (line 77) and returns `<ExportDialog content={content} defaultFilename={defaultFilename} .../>` (line 87); the dialog's file branch repeats `join(getCwd(), ...)` + writeFileSync_DEPRECATED (ExportDialog.tsx:59-61) and its clipboard branch copies via the clipboard path (ExportDialog.tsx:44-50). It mutates no AppState.",
+      "gate": "none (no `isEnabled`; src/commands/export/index.ts:3-9)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/export/export.tsx (`call`, `extractFirstPrompt`, `sanitizeFilename`, `exportWithReactRenderer`); src/utils/exportRenderer.tsx (`renderMessagesToPlainText` at :91); src/components/ExportDialog.tsx (`ExportDialog`)",
+      "evidence": [
+        "src/commands/export/index.ts:4",
+        "src/commands/export/export.tsx:60",
+        "src/commands/export/export.tsx:61",
+        "src/commands/export/export.tsx:63",
+        "src/utils/exportRenderer.tsx:91",
+        "src/components/ExportDialog.tsx:61"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: export — transcript export to text file/clipboard"
+      ]
+    },
+    {
+      "rawName": "fast",
+      "canonical": "fast",
+      "aliases": [],
+      "displayName": "fast",
+      "family": "model",
+      "summary": "Toggles fast mode — the premium high-speed tier — for the fast-mode model.",
+      "mechanism": "fast.tsx `call` (line 248) handles 'on'/'off' through handleFastModeShortcut() (line 226) and otherwise renders FastModePicker. Both converge on `applyFastMode` (fast.tsx:16), which calls clearFastModeCooldown() (line 17), then `updateSettingsForSource('userSettings', { fastMode: enable ? true : undefined })` (lines 18-20), and mutates AppState via setAppState: setting `fastMode: true` and switching `mainLoopModel` to `getFastModeModel()` when the current model lacks fast-mode support (lines 22-33), or `fastMode: false` on disable (lines 35-38). It persists the `fastMode` key in user settings.json and logs tengu_fast_mode_toggled.",
+      "gate": "`isEnabled: () => isFastModeEnabled()` (src/commands/fast/index.ts:14), plus `get isHidden() { return !isFastModeEnabled() }` (index.ts:15-17) and `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (index.ts:19-21). isFastModeEnabled is src/utils/fastMode.js, imported at fast.tsx:12",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/fast/fast.tsx (`call`, `applyFastMode`, `handleFastModeShortcut`, `FastModePicker`); helpers src/utils/fastMode.js (`isFastModeEnabled`, `getFastModeModel`, `clearFastModeCooldown`)",
+      "evidence": [
+        "src/commands/fast/index.ts:10",
+        "src/commands/fast/index.ts:14",
+        "src/commands/fast/fast.tsx:16",
+        "src/commands/fast/fast.tsx:18",
+        "src/commands/fast/fast.tsx:31",
+        "src/commands/fast/fast.tsx:248"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "files",
+      "canonical": "files",
+      "aliases": [],
+      "displayName": "files",
+      "family": "context",
+      "summary": "Lists every file currently in the model's context (ant-only).",
+      "mechanism": "src/commands/files/files.ts `call` (line 7) reads `context.readFileState` through `cacheKeys()` (line 11) and returns a text result joining paths relativised with `relative(getCwd(), file)` (line 17), answering 'No files in context' when empty (line 14). No state mutation and no disk writes. It is ant-gated and `supportsNonInteractive: true` (index.ts:8).",
+      "gate": "`isEnabled: () => process.env.USER_TYPE === 'ant'` (src/commands/files/index.ts:7)",
+      "commandKind": "local",
+      "backendModule": "src/commands/files/files.ts (`call`)",
+      "evidence": [
+        "src/commands/files/index.ts:5",
+        "src/commands/files/index.ts:7",
+        "src/commands/files/index.ts:8",
+        "src/commands/files/files.ts:11",
+        "src/commands/files/files.ts:17"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: files — list of in-context files; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "heapdump",
+      "canonical": "heapdump",
+      "aliases": [],
+      "displayName": "heapdump",
+      "family": "inspect",
+      "summary": "Writes a JS heap snapshot plus a diagnostics JSON to the desktop.",
+      "mechanism": "src/commands/heapdump/heapdump.ts `call` (line 3) awaits `performHeapDump()` from src/utils/heapDumpService.ts (line 221) and returns heapPath/diagPath. The service sets `dumpDir = getDesktopPath()` (heapDumpService.ts:240), builds heapPath/diagPath (lines 246-247), writes the diagnostics JSON with writeFile (line 250) and the snapshot with `writeHeapSnapshot` (line 256). The command is hidden rather than gated.",
+      "gate": "none — no `isEnabled`; the command is hidden instead via `isHidden: true` (src/commands/heapdump/index.ts:7)",
+      "commandKind": "local",
+      "backendModule": "src/commands/heapdump/heapdump.ts (`call`) -> src/utils/heapDumpService.ts (`performHeapDump` at :221)",
+      "evidence": [
+        "src/commands/heapdump/index.ts:5",
+        "src/commands/heapdump/index.ts:7",
+        "src/commands/heapdump/heapdump.ts:3",
+        "src/utils/heapDumpService.ts:221",
+        "src/utils/heapDumpService.ts:240",
+        "src/utils/heapDumpService.ts:256"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "help",
+      "canonical": "help",
+      "aliases": [],
+      "displayName": "help",
+      "family": "interface",
+      "summary": "Renders the help screen with the available commands.",
+      "mechanism": "src/commands/help/help.tsx `call` (line 4) renders `<HelpV2 commands={commands} onClose={onDone} />` (line 9) using the command list from context.options. HelpV2 (src/components/HelpV2/HelpV2.tsx:20) splits commands into builtin (non-hidden) versus custom and builds tabs general / commands / custom-commands / ant-only (HelpV2.tsx:82, 92, 104, 117). No state is mutated and nothing is persisted.",
+      "gate": "none (no `isEnabled`; src/commands/help/index.ts:3-8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/help/help.tsx (`call`) -> src/components/HelpV2/HelpV2.tsx (`HelpV2`)",
+      "evidence": [
+        "src/commands/help/index.ts:4",
+        "src/commands/help/index.ts:5",
+        "src/commands/help/help.tsx:4",
+        "src/commands/help/help.tsx:9",
+        "src/components/HelpV2/HelpV2.tsx:20",
+        "src/components/HelpV2/HelpV2.tsx:82"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: help"
+      ]
+    },
+    {
+      "rawName": "hooks",
+      "canonical": "hooks",
+      "aliases": [],
+      "displayName": "hooks",
+      "family": "extension",
+      "summary": "Opens a read-only browser of the configured hook event/matcher/hook entries.",
+      "mechanism": "src/commands/hooks/hooks.tsx `call` (line 6) logs tengu_hooks_command, reads appState.toolPermissionContext, derives toolNames via `getTools(permissionContext).map(t => t.name)` (line 10) and renders `<HooksConfigMenu toolNames onExit={onDone} />` (line 11). HooksConfigMenu is explicitly read-only and never writes settings (its own header states 'a read-only browser for configured hooks… To add or modify hooks, users should edit settings.json directly', HooksConfigMenu.tsx:3-12); it reads merged settings via getSettings_DEPRECATED() (lines 73, 257) and policy flags via getSettingsForSource('policySettings') (lines 75-76), and collects entries through getAllHooks() (src/utils/hooks/hooksSettings.ts:101), which loops userSettings/projectSettings/localSettings and reads `sourceSettings.hooks` (hooksSettings.ts:133-148). The settings key is `hooks` (schema at src/utils/settings/types.ts:470-472); policy flags read are `disableAllHooks` and `allowManagedHooksOnly`.",
+      "gate": "none (no `isEnabled`; src/commands/hooks/index.ts:3-9). The declaration sets `immediate: true` (index.ts:7)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/hooks/hooks.tsx (`call`) -> src/components/hooks/HooksConfigMenu.tsx (`HooksConfigMenu`); src/utils/hooks/hooksSettings.ts (`getAllHooks` at :101); grouping src/utils/hooks/hooksConfigManager.ts (`groupHooksByEventAndMatcher`)",
+      "evidence": [
+        "src/commands/hooks/index.ts:4",
+        "src/commands/hooks/index.ts:7",
+        "src/commands/hooks/hooks.tsx:6",
+        "src/commands/hooks/hooks.tsx:11",
+        "src/components/hooks/HooksConfigMenu.tsx:3",
+        "src/components/hooks/HooksConfigMenu.tsx:73",
+        "src/utils/hooks/hooksSettings.ts:101",
+        "src/utils/hooks/hooksSettings.ts:134",
+        "src/utils/settings/types.ts:470"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: hooks — event hook configuration surface; cc-custom's is read-only in the TUI"
+      ]
+    },
+    {
+      "rawName": "ide",
+      "canonical": "ide",
+      "aliases": [],
+      "displayName": "ide",
+      "family": "extension",
+      "summary": "Manages IDE integrations: connects/disconnects an IDE MCP server, installs the extension, or opens the project.",
+      "mechanism": "src/commands/ide/ide.tsx `call` (line 419) with argument 'open' detects IDEs and shells out to `code <path>` via execFileNoThrow (line 455); when no extension is installed it invokes `context.onInstallIDEExtension(ide)` (line 480). The default path returns IDECommandFlow, which writes a dynamic MCP server entry `newConfig.ide = { type: 'ws-ide'|'sse-ide', url, ideName, authToken, scope: 'dynamic' }` (lines 586-593) and calls `onChangeDynamicMcpConfig(newConfig)` (line 596); on disconnect it clears the server cache and removes the ide client/tools from AppState via setAppState (lines 570-579).",
+      "gate": "none (no `isEnabled`; src/commands/ide/index.ts:3-9)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/ide/ide.tsx (`call`, `IDECommandFlow`, `formatWorkspaceFolders`)",
+      "evidence": [
+        "src/commands/ide/index.ts:4",
+        "src/commands/ide/index.ts:5",
+        "src/commands/ide/ide.tsx:419",
+        "src/commands/ide/ide.tsx:455",
+        "src/commands/ide/ide.tsx:480",
+        "src/commands/ide/ide.tsx:586",
+        "src/commands/ide/ide.tsx:596"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: ide — editor/IDE integration surface; I-harness has no direct analogue"
+      ]
+    },
+    {
+      "rawName": "init",
+      "canonical": "init",
+      "aliases": [],
+      "displayName": "init",
+      "family": "context",
+      "summary": "Runs a prompt that makes the model write or refresh CLAUDE.md (and optionally CLAUDE.local.md, skills and hooks).",
+      "mechanism": "A prompt command: `getPromptForCommand()` (src/commands/init.ts:239) first calls `maybeMarkProjectOnboardingComplete()` (line 240) — the only state change — then returns a single text block whose content is NEW_INIT_PROMPT (line 249; constant at line 28) when `feature('NEW_INIT') && (USER_TYPE === 'ant' || isEnvTruthy(CLAUDE_CODE_NEW_INIT))`, else OLD_INIT_PROMPT (line 6). The `description` getter is likewise feature-conditional (lines 229-235). The prompt body instructs the model to write ./CLAUDE.md, ./CLAUDE.local.md and .claude/skills/<name>/SKILL.md; the command itself performs no file I/O.",
+      "gate": "none at the Command level (no `isEnabled`; src/commands/init.ts:226-228). The prompt VARIANT is gated on `feature('NEW_INIT')` plus `USER_TYPE === 'ant' || isEnvTruthy(process.env.CLAUDE_CODE_NEW_INIT)` (init.ts:230-232, 246-248)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/init.ts (`getPromptForCommand`, and the prompt constants OLD_INIT_PROMPT at :6 and NEW_INIT_PROMPT at :28); state change via `maybeMarkProjectOnboardingComplete` (src/projectOnboardingState.ts)",
+      "evidence": [
+        "src/commands/init.ts:227",
+        "src/commands/init.ts:228",
+        "src/commands/init.ts:239",
+        "src/commands/init.ts:240",
+        "src/commands/init.ts:246",
+        "src/commands/init.ts:249",
+        "src/commands/init.ts:6"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: init — project-instruction file bootstrap (CLAUDE.md ~ AGENTS.md); I-harness analogue is its project-memory/init flow"
+      ]
+    },
+    {
+      "rawName": "init-verifiers",
+      "canonical": "init-verifiers",
+      "aliases": [],
+      "displayName": "init-verifiers",
+      "family": "extension",
+      "summary": "Runs a prompt that creates verifier skill(s) for automated functional verification of code changes.",
+      "mechanism": "A prompt command: `getPromptForCommand()` (src/commands/init-verifiers.ts:11) returns one static text block (line 15) containing a five-phase instruction set. The command itself does no I/O and changes no state; the prompt directs the model to write each verifier to `.claude/skills/<verifier-name>/SKILL.md` (line 167) and to include 'verifier' in the folder name so the Verify agent discovers it (line 124). Registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:201).",
+      "gate": "none at the Command level (no `isEnabled`; src/commands/init-verifiers.ts:3-10). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/init-verifiers.ts (`getPromptForCommand`)",
+      "evidence": [
+        "src/commands/init-verifiers.ts:4",
+        "src/commands/init-verifiers.ts:5",
+        "src/commands/init-verifiers.ts:11",
+        "src/commands/init-verifiers.ts:15",
+        "src/commands/init-verifiers.ts:167",
+        "src/commands.ts:201"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: init-verifiers — generates verifier skills; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "insights",
+      "canonical": "insights",
+      "aliases": [],
+      "displayName": "insights",
+      "family": "inspect",
+      "summary": "Generates a shareable HTML insights report over the user's Claude Code sessions and hands the summary to the model.",
+      "mechanism": "A prompt command: `getPromptForCommand()` (src/commands/insights.ts:2843) awaits `generateUsageReport()` (line 2844) — implemented at insights.ts:2606, which aggregates session facets and writes the HTML report with `writeFile(htmlPath, htmlReport, ...)` where `htmlPath = join(getDataDir(), 'report.html')` (lines 2808-2809) — then returns one text block containing the report URL `file://${htmlPath}` (line 2846), the facets dir and instructions to print a fixed 'Your shareable insights report is ready' message. The command is the file's single exported Command: `const usageReport: Command = {...}` (line 2836), `name: 'insights'` (line 2838), `type: 'prompt'` (line 2837). It is loaded through a lazy shim so the 113KB module is only imported on invocation: `const usageReport: Command = { ... async getPromptForCommand(args, context) { const real = (await import('./commands/insights.js')).default; ... } }` (src/commands.ts:155-169). Registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:202); the file's `INSIGHT_SECTIONS` table at insights.ts:1156 is a prompt-section table, not a command list.",
+      "gate": "none at the Command level (no `isEnabled`; src/commands/insights.ts:2836-2843). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/insights.ts (`usageReport` default export at :2930, `getPromptForCommand` at :2843, `generateUsageReport` at :2606, HTML write at :2808); registered via the lazy shim in src/commands.ts:157-169",
+      "evidence": [
+        "src/commands/insights.ts:2836",
+        "src/commands/insights.ts:2837",
+        "src/commands/insights.ts:2838",
+        "src/commands/insights.ts:2843",
+        "src/commands/insights.ts:2844",
+        "src/commands/insights.ts:2606",
+        "src/commands/insights.ts:2808",
+        "src/commands.ts:157",
+        "src/commands.ts:202"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: insights — session-analytics report; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "install-slack-app",
+      "canonical": "install-slack-app",
+      "aliases": [],
+      "displayName": "install-slack-app",
+      "family": "collab",
+      "summary": "Opens the Slack marketplace page for the Claude app and records that the user clicked install.",
+      "mechanism": "src/commands/install-slack-app/install-slack-app.ts `call` (line 8) logs tengu_install_slack_app_clicked (line 9), increments a global-config counter via `saveGlobalConfig(current => ({ ...current, slackAppInstallCount: (current.slackAppInstallCount ?? 0) + 1 }))` (lines 12-15), then calls `openBrowser('https://slack.com/marketplace/A08SF47R6P4-claude')` (line 17; constant at line 6) and returns a text result. The declaration sets `supportsNonInteractive: false` (index.ts:7).",
+      "gate": "none (no `isEnabled`; src/commands/install-slack-app/index.ts:3-9)",
+      "commandKind": "local",
+      "backendModule": "src/commands/install-slack-app/install-slack-app.ts (`call`); src/utils/browser.ts (`openBrowser`)",
+      "evidence": [
+        "src/commands/install-slack-app/index.ts:5",
+        "src/commands/install-slack-app/index.ts:7",
+        "src/commands/install-slack-app/install-slack-app.ts:9",
+        "src/commands/install-slack-app/install-slack-app.ts:12",
+        "src/commands/install-slack-app/install-slack-app.ts:17"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "keybindings",
+      "canonical": "keybindings",
+      "aliases": [],
+      "displayName": "keybindings",
+      "family": "interface",
+      "summary": "Creates the keybindings.json template if missing and opens it in the user's editor.",
+      "mechanism": "src/commands/keybindings/keybindings.ts `call` (line 11) re-checks `isKeybindingCustomizationEnabled()` and returns an explanatory string when disabled (lines 12-18); otherwise it resolves `getKeybindingsPath()` (line 20) = `join(getClaudeConfigHomeDir(), 'keybindings.json')` (loadUserBindings.ts:116), mkdirs the parent (line 25), writes `generateKeybindingsTemplate()` with `flag: 'wx'` — catching EEXIST to detect an existing file without a TOCTOU stat (lines 27-37) — and then calls `editFileInEditor(keybindingsPath)` (line 40), reporting whether the file was created or merely opened. The declaration duplicates the gate and sets `supportsNonInteractive: false` (index.ts:7-8).",
+      "gate": "`isEnabled: () => isKeybindingCustomizationEnabled()` (src/commands/keybindings/index.ts:7), where isKeybindingCustomizationEnabled returns `getFeatureValue_CACHED_MAY_BE_STALE('tengu_keybinding_customization_release', false)` (src/keybindings/loadUserBindings.ts:41-46) — a no-op stub in this tree (src/services/analytics/growthbook.ts:130-136), so the effective value is always false here",
+      "commandKind": "local",
+      "backendModule": "src/commands/keybindings/keybindings.ts (`call`); src/keybindings/loadUserBindings.ts (`getKeybindingsPath` at :116, `isKeybindingCustomizationEnabled` at :41); src/keybindings/template.ts (`generateKeybindingsTemplate`)",
+      "evidence": [
+        "src/commands/keybindings/index.ts:5",
+        "src/commands/keybindings/index.ts:7",
+        "src/commands/keybindings/index.ts:10",
+        "src/commands/keybindings/keybindings.ts:20",
+        "src/commands/keybindings/keybindings.ts:27",
+        "src/commands/keybindings/keybindings.ts:40",
+        "src/keybindings/loadUserBindings.ts:41",
+        "src/keybindings/loadUserBindings.ts:116",
+        "src/services/analytics/growthbook.ts:130"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: keybindings — editable keybinding config; I-harness/openCode analogues are their keymap settings surfaces"
+      ]
+    },
+    {
+      "rawName": "loop",
+      "canonical": "loop",
+      "aliases": [],
+      "displayName": "loop",
+      "family": "execution",
+      "summary": "Starts, stops or reports autonomous loop mode with a tick interval.",
+      "mechanism": "src/commands/loop/loop.ts `call` (line 19): no argument returns getStatusText(); `/loop <N s|m|h|d>` parses the interval (line 104), clears queued tick meta-messages via `removeByFilter` over the messageQueueManager (lines 94-101), then calls `activateProactive('command')` (line 61), `setLoopIntervalMs(intervalMs)` (line 62) and `setNextTickAt(null)` (line 63). `/loop off` clears queued ticks, nulls nextTickAt/loopInterval and calls `deactivateProactive()` (lines 37-40). Tick messages are identified by the `TICK_TAG` meta-message prefix (lines 95-101). All loop state is module-level in-memory in src/proactive/index.ts — nothing is persisted to disk.",
+      "gate": "none (no `isEnabled`; src/commands/loop/index.ts:3-10). The declaration sets `supportsNonInteractive: false` (index.ts:7)",
+      "commandKind": "local",
+      "backendModule": "src/commands/loop/loop.ts (`call`, `getStatusText`, `clearQueuedTicks`, `parseIntervalMs`); state in src/proactive/index.ts (`activateProactive`, `deactivateProactive`, `setLoopIntervalMs`, `setNextTickAt`); queue via src/utils/messageQueueManager.ts (`removeByFilter`)",
+      "evidence": [
+        "src/commands/loop/index.ts:4",
+        "src/commands/loop/index.ts:7",
+        "src/commands/loop/loop.ts:19",
+        "src/commands/loop/loop.ts:40",
+        "src/commands/loop/loop.ts:61",
+        "src/commands/loop/loop.ts:95"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: loop — autonomous repeating-tick mode; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "max-output",
+      "canonical": "max-output",
+      "aliases": [],
+      "displayName": "max-output",
+      "family": "model",
+      "summary": "Reads or sets the default max-output token budget (settings key `maxOutputTokens`), with `auto`/`unset`/`off` clearing it.",
+      "mechanism": "Declared twice in src/commands/limit-controls.ts: the interactive `maxOutput` (lines 247-257, `type: 'local-jsx'`) and `maxOutputNonInteractive` (lines 259-272, `type: 'local'`); both `load` inline with no separate module (lines 256 and 271). `callMaxOutput` (line 191) is produced by `createLimitCommand` (line 97) with `settingKey: 'maxOutputTokens'` (line 194). createLimitCommand parses the argument with parseTokenCount (line 33) and persists via `updateUserSetting` (line 58) -> `updateSettingsForSource('userSettings', { [key]: value })` (line 62) plus `settingsChangeDetector.notifyChange('userSettings')` (line 67); reset words ('auto','unset','off', line 19) write `undefined` to delete the key (line 117). Its status line reports getMaxOutputTokensForModel(model) (line 197).",
+      "gate": "interactive variant: `isEnabled: () => !getIsNonInteractiveSession()` (src/commands/limit-controls.ts:252); non-interactive variant: `isEnabled() { return getIsNonInteractiveSession() }` (lines 267-269) with `get isHidden() { return !getIsNonInteractiveSession() }` (lines 264-266). Interactive variant also has `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (lines 253-255)",
+      "commandKind": "local-jsx (interactive, limit-controls.ts:248) and local (non-interactive, limit-controls.ts:260)",
+      "backendModule": "src/commands/limit-controls.ts — `createLimitCommand`, `callMaxOutput`, `updateUserSetting`, `toImmediateCommand`; status reads src/services/api/claude.ts `getMaxOutputTokensForModel`",
+      "evidence": [
+        "src/commands/limit-controls.ts:191",
+        "src/commands/limit-controls.ts:194",
+        "src/commands/limit-controls.ts:249",
+        "src/commands/limit-controls.ts:252",
+        "src/commands/limit-controls.ts:261",
+        "src/commands/limit-controls.ts:267",
+        "src/commands/limit-controls.ts:62"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "mcp",
+      "canonical": "mcp",
+      "aliases": [],
+      "displayName": "mcp",
+      "family": "extension",
+      "summary": "Views and toggles MCP servers, reconnects one server, or opens the MCP settings panes.",
+      "mechanism": "src/commands/mcp/mcp.tsx `call` (line 64) dispatches on arguments: 'no-redirect' -> `<MCPSettings>` (line 70); 'reconnect <name>' -> `<MCPReconnect>` (line 73); 'enable|disable [name|all]' -> `<MCPToggle>` (line 76), which enumerates appState.mcp.clients (excluding the 'ide' client, lines 58-60) and calls `toggleMcpServer(name)` from useMcpToggleEnabled() per target (line 39, via src/services/mcp/MCPConnectionManager.js). With no arguments it renders MCPSettings (line 84); the ant-only redirect to plugin settings at line 81 is unreachable in this restored build because the guard literal is the un-substituted string `\"external\" === 'ant'`. MCPSettings is a view-state machine over { list, server-menu, server-tools, server-tool-detail, agent-server-menu } (src/components/mcp/types.ts:47-52) switched at MCPSettings.tsx:153, with the list pane grouping servers by scope project/local/user/enterprise/dynamic (MCPListPanel.tsx:37-68). Config is read from src/services/mcp/config.ts (`getMcpConfigsByScope` at :792, `getClaudeCodeMcpConfigs` at :972) — project `.mcp.json` nearest-wins, user global config, project-local config, enterprise `managed-mcp.json` — while enable/disable state is stored as `disabledMcpServers` on the current project config (config.ts:1380-1407). The declaration sets `immediate: true` and an argument hint (index.ts:7-8).",
+      "gate": "none (no `isEnabled`; src/commands/mcp/index.ts:3-10)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/mcp/mcp.tsx (`call`, `MCPToggle`); src/components/mcp/MCPSettings.tsx (`MCPSettings`); src/components/mcp/MCPListPanel.tsx; config layer src/services/mcp/config.ts; per-command registration helpers src/commands/mcp/addCommand.ts (`registerMcpAddCommand`) and src/commands/mcp/xaaIdpCommand.ts (`registerMcpXaaIdpCommand`), both called from src/main.tsx:2901-2903",
+      "evidence": [
+        "src/commands/mcp/index.ts:5",
+        "src/commands/mcp/index.ts:7",
+        "src/commands/mcp/mcp.tsx:39",
+        "src/commands/mcp/mcp.tsx:64",
+        "src/commands/mcp/mcp.tsx:70",
+        "src/commands/mcp/mcp.tsx:76",
+        "src/commands/mcp/mcp.tsx:81",
+        "src/components/mcp/types.ts:47",
+        "src/services/mcp/config.ts:792",
+        "src/services/mcp/config.ts:972"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: mcp — MCP server management; every source in this audit has an MCP surface but with different command names"
+      ]
+    },
+    {
+      "rawName": "memory",
+      "canonical": "memory",
+      "aliases": [],
+      "displayName": "memory",
+      "family": "context",
+      "summary": "Opens a selector of memory files (CLAUDE.md variants and memory folders) and opens the chosen one in $EDITOR.",
+      "mechanism": "src/commands/memory/memory.tsx `call` (line 83) calls `clearMemoryFileCaches()` then awaits `getMemoryFiles()` (lines 86-87, src/utils/claudemd.ts:790, memoized) to prime the list, and renders a Dialog containing MemoryFileSelector. On selection, handleSelectMemoryFile (line 21) mkdirs the config home dir when the path is under it (lines 25-27), creates the file empty with `writeFile(memoryPath, '', { encoding: 'utf8', flag: 'wx' })` swallowing EEXIST (lines 33-40), then opens it with `editFileInEditor(memoryPath)` (line 42) and reports the relative path via getRelativeMemoryPath (line 56). The command writes no memory content itself. The selector's list is getMemoryFiles() plus two synthesised entries: `join(getClaudeConfigHomeDir(),'CLAUDE.md')` and `join(getOriginalCwd(),'CLAUDE.md')` (MemoryFileSelector.tsx:51-52), with optional folder rows for getAutoMemPath(), the team-memory path and agent memory (lines 114-150).",
+      "gate": "none (no `isEnabled`; src/commands/memory/index.ts:3-8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/memory/memory.tsx (`call`, `MemoryCommand`, `handleSelectMemoryFile`); src/components/memory/MemoryFileSelector.tsx (`MemoryFileSelector`); src/utils/claudemd.ts (`getMemoryFiles` at :790); path resolution src/utils/config.ts (`getMemoryPath` at :1628) and src/memdir/paths.ts (`getAutoMemEntrypoint` at :229)",
+      "evidence": [
+        "src/commands/memory/index.ts:5",
+        "src/commands/memory/memory.tsx:33",
+        "src/commands/memory/memory.tsx:42",
+        "src/commands/memory/memory.tsx:83",
+        "src/commands/memory/memory.tsx:86",
+        "src/components/memory/MemoryFileSelector.tsx:51",
+        "src/components/memory/MemoryFileSelector.tsx:52",
+        "src/utils/claudemd.ts:790",
+        "src/utils/config.ts:1628",
+        "src/memdir/paths.ts:229"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: memory — persistent instruction memory; cc-custom backs /memory with CLAUDE.md-family files, while opencode uses AGENTS.md and I-harness its own project-memory files"
+      ]
+    },
+    {
+      "rawName": "model",
+      "canonical": "model",
+      "aliases": [],
+      "displayName": "model",
+      "family": "model",
+      "summary": "Sets the main-loop model (or shows the current one) via an inline argument or the model picker.",
+      "mechanism": "src/commands/model/model.tsx `call` (line 264): info arguments render ShowModelAndClose; any other argument renders SetModelAndClose, which validates (isModelAllowed / isOpus1mUnavailable / isSonnet1mUnavailable / isKnownAlias / validateModel) and then sets AppState `{ mainLoopModel, mainLoopModelForSession: null }` (lines 195-199), force-disabling fastMode when the new model does not support it (lines 205-208); the no-argument path renders ModelPickerWrapper whose handleSelect sets the same two AppState fields (lines 52-56). The command performs no direct settings write — persistence happens through the AppState change hook, where `onChangeAppState` calls `updateSettingsForSource('userSettings', { model: newState.mainLoopModel })` (src/state/onChangeAppState.ts:70). The declaration's `description` getter renders the current model (index.ts:8-10) and it exposes `get immediate() { return shouldInferenceConfigCommandBeImmediate() }` (index.ts:12-14).",
+      "gate": "none (no `isEnabled`; src/commands/model/index.ts:5-16)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/model/model.tsx (`call`, `SetModelAndClose`, `ModelPickerWrapper`, `ShowModelAndClose`); persistence via src/state/onChangeAppState.ts:70",
+      "evidence": [
+        "src/commands/model/index.ts:7",
+        "src/commands/model/index.ts:10",
+        "src/commands/model/model.tsx:52",
+        "src/commands/model/model.tsx:195",
+        "src/commands/model/model.tsx:264",
+        "src/state/onChangeAppState.ts:70"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: model"
+      ]
+    },
+    {
+      "rawName": "output-style",
+      "canonical": "output-style",
+      "aliases": [],
+      "displayName": "output-style",
+      "family": "interface",
+      "summary": "Deprecated stub that tells the user to use /config or the settings file instead.",
+      "mechanism": "src/commands/output-style/output-style.tsx `call` (line 2) only invokes onDone with the deprecation string '/output-style has been deprecated. Use /config to change your output style, or set it in your settings file. Changes take effect on the next session.' and `display: 'system'` (lines 3-5). No state is mutated and nothing is written to disk. The command is hidden rather than gated, and its description carries the same deprecation note (index.ts:6-7).",
+      "gate": "none — no `isEnabled`; hidden instead via `isHidden: true` (src/commands/output-style/index.ts:7)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/output-style/output-style.tsx (`call`) — nothing else",
+      "evidence": [
+        "src/commands/output-style/index.ts:5",
+        "src/commands/output-style/index.ts:6",
+        "src/commands/output-style/index.ts:7",
+        "src/commands/output-style/output-style.tsx:2",
+        "src/commands/output-style/output-style.tsx:3"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: output-style — output-style selection, superseded here by /config; the underlying outputStyles/ subsystem still exists (src/outputStyles/)"
+      ]
+    },
+    {
+      "rawName": "permissions",
+      "canonical": "permissions",
+      "aliases": [
+        "allowed-tools"
+      ],
+      "displayName": "permissions",
+      "family": "safety",
+      "summary": "Views and edits allow/ask/deny tool-permission rules, workspace directories and the default permission mode.",
+      "mechanism": "src/commands/permissions/permissions.tsx `call` (line 5) renders PermissionRuleList, passing onExit=onDone and an onRetryDenials handler that appends a retry message via `context.setMessages(prev => [...prev, createPermissionRetryMessage(commands)])` (lines 6-8). PermissionRuleList imports applyPermissionUpdate and persistPermissionUpdate (PermissionRuleList.tsx:8); persistence goes through `persistPermissionUpdate` (src/utils/permissions/PermissionUpdate.ts:234) into the settings source named by the update's `destination` — only localSettings/userSettings/projectSettings persist (supportsPersistence at PermissionUpdate.ts:220-228). Written keys all live under the settings `permissions` object: `permissions.allow|deny|ask` (addRules -> addPermissionRulesToSettings at line 246; removeRules at 301-305; replaceRules at 346-350), `permissions.additionalDirectories` (271-275 add, 321-325 remove) and `permissions.defaultMode` for setMode (333-337). Rule deletion from the UI rewrites `settingsData.permissions[rule.ruleBehavior]` in deletePermissionRuleFromSettings (permissionsLoader.ts:204-212). The in-memory half is AppState.toolPermissionContext, updated by the component at PermissionRuleList.tsx:960-970.",
+      "gate": "none (no `isEnabled`; src/commands/permissions/index.ts:3-9)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/permissions/permissions.tsx (`call`); src/components/permissions/rules/PermissionRuleList.tsx (`PermissionRuleList` at :474); src/utils/permissions/PermissionUpdate.ts (`applyPermissionUpdate` at :61, `persistPermissionUpdate` at :234); src/utils/permissions/permissionsLoader.ts (`addPermissionRulesToSettings`, `deletePermissionRuleFromSettings`)",
+      "evidence": [
+        "src/commands/permissions/index.ts:5",
+        "src/commands/permissions/index.ts:6",
+        "src/commands/permissions/permissions.tsx:5",
+        "src/commands/permissions/permissions.tsx:6",
+        "src/components/permissions/rules/PermissionRuleList.tsx:8",
+        "src/utils/permissions/PermissionUpdate.ts:220",
+        "src/utils/permissions/PermissionUpdate.ts:234",
+        "src/utils/permissions/PermissionUpdate.ts:333",
+        "src/utils/permissions/permissionsLoader.ts:204"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: permissions — allow/deny rule management; codex calls this its approval/sandbox policy surface"
+      ]
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "family": "plan",
+      "summary": "Enters plan mode, or displays/opens the current session plan when already in plan mode.",
+      "mechanism": "src/commands/plan/plan.tsx `call` (line 64) reads `appState.toolPermissionContext.mode` (line 70). If it is not 'plan', it calls `handlePlanModeTransition(currentMode, 'plan')` (line 74) — which only toggles the module-level needsPlanModeExitAttachment flag (src/bootstrap/state.ts:1258-1272) — then `setAppState(prev => ({ ...prev, toolPermissionContext: applyPermissionUpdate(prepareContextForPlanMode(prev.toolPermissionContext), { type: 'setMode', mode: 'plan', destination: 'session' }) }))` (lines 75-82). Because the destination is `'session'`, entering plan mode is NOT written to settings.json (persistPermissionUpdate only writes for localSettings/userSettings/projectSettings). `prepareContextForPlanMode` (src/utils/permissions/permissionSetup.ts:1448) stashes the prior mode as prePlanMode (line 1478) and, under `feature('TRANSCRIPT_CLASSIFIER')`, either keeps auto active (stripping dangerous permissions) or deactivates auto and restores dangerous permissions (lines 1453-1473). When already in plan mode it reads `getPlan()`/`getPlanFilePath()` (lines 95-96), opens the plan file in the editor for the `open` argument (lines 104-111), or renders it via renderToString (lines 115-119).",
+      "gate": "none (no `isEnabled`; src/commands/plan/index.ts:3-9)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/plan/plan.tsx (`call`, `PlanDisplay`); src/utils/permissions/permissionSetup.ts (`prepareContextForPlanMode` at :1448); src/bootstrap/state.ts (`handlePlanModeTransition` at :1258); plan storage src/utils/plans.ts (`getPlan`, `getPlanFilePath`)",
+      "evidence": [
+        "src/commands/plan/index.ts:5",
+        "src/commands/plan/plan.tsx:70",
+        "src/commands/plan/plan.tsx:74",
+        "src/commands/plan/plan.tsx:78",
+        "src/commands/plan/plan.tsx:80",
+        "src/utils/permissions/permissionSetup.ts:1448",
+        "src/utils/permissions/permissionSetup.ts:1478",
+        "src/bootstrap/state.ts:1258"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: plan — plan mode; I-harness implements plan mode as a capability with an exit-plan tool"
+      ]
+    },
+    {
+      "rawName": "plugin",
+      "canonical": "plugin",
+      "aliases": [
+        "plugins",
+        "marketplace"
+      ],
+      "displayName": "plugin",
+      "family": "extension",
+      "summary": "Manages installed plugins and marketplaces through a four-tab settings UI (discover / installed / marketplaces / errors).",
+      "mechanism": "src/commands/plugin/plugin.tsx `call` (line 4) renders `<PluginSettings onComplete={onDone} args={args} />` (line 5). PluginSettings parses the raw arguments with parsePluginArgs (PluginSettings.tsx:739) and exposes `TabId = 'discover' | 'installed' | 'marketplaces' | 'errors'` (line 31), rendered as Tab elements at lines 983 (Discover), 999 (Installed), 1012 (Marketplaces) and 1032 (errors). Persistent state it manages: known marketplaces at `<plugins dir>/known_marketplaces.json` (marketplaceManager.ts:101-103) with the marketplace checkout cache under `<plugins dir>/marketplaces` (lines 109-111); the declarative settings key `extraKnownMarketplaces`, written by saveMarketplaceToSettings -> `updateSettingsForSource(settingSource, { extraKnownMarketplaces })` (marketplaceManager.ts:246-258, schema at src/utils/settings/types.ts:604); installed-plugin metadata at `<plugins dir>/installed_plugins.json` (getInstalledPluginsFilePath, installedPluginsManager.ts:78-79, load/save at 315 and 367-384); and the settings key `enabledPlugins` (src/utils/settings/types.ts:594-602), which PluginSettings also prunes when a marketplace is removed (PluginSettings.tsx:337-354). The declaration sets `immediate: true` (index.ts:7) and two aliases (index.ts:5).",
+      "gate": "none (no `isEnabled`; src/commands/plugin/index.tsx:2-9)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/plugin/plugin.tsx (`call`); src/commands/plugin/PluginSettings.tsx (`PluginSettings`, `parsePluginArgs`); src/utils/plugins/marketplaceManager.ts (`saveMarketplaceToSettings`, `addMarketplaceSource`, `removeMarketplaceSource`); src/utils/plugins/installedPluginsManager.ts",
+      "evidence": [
+        "src/commands/plugin/index.tsx:4",
+        "src/commands/plugin/index.tsx:5",
+        "src/commands/plugin/index.tsx:7",
+        "src/commands/plugin/plugin.tsx:5",
+        "src/commands/plugin/PluginSettings.tsx:31",
+        "src/commands/plugin/PluginSettings.tsx:983",
+        "src/commands/plugin/PluginSettings.tsx:337",
+        "src/utils/plugins/marketplaceManager.ts:102",
+        "src/utils/plugins/marketplaceManager.ts:257",
+        "src/utils/plugins/installedPluginsManager.ts:79",
+        "src/utils/settings/types.ts:594",
+        "src/utils/settings/types.ts:604"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: plugin — plugin/marketplace management; the CLI mirror is `claude plugin …` (src/main.tsx:3126-3243)"
+      ]
+    },
+    {
+      "rawName": "pr-comments",
+      "canonical": "pr-comments",
+      "aliases": [],
+      "displayName": "pr-comments",
+      "family": "collab",
+      "summary": "Builds a prompt that fetches and formats GitHub pull-request comments, with a moved-to-plugin notice for internal builds.",
+      "mechanism": "src/commands/pr_comments/index.ts default-exports `createMovedToPluginCommand({ name: 'pr-comments', pluginName: 'pr-comments', pluginCommand: 'pr-comments', getPromptWhileMarketplaceIsPrivate })` (index.ts:3-8). The helper returns a plain Command object literal with `type: 'prompt'` (src/commands/createMovedToPluginCommand.ts:31), `source: 'builtin'` (line 39), `userFacingName() { return name }` (lines 36-38) and a `getPromptForCommand` (line 40) that returns a fixed 'this command has been moved to a plugin' text — including the exact command `claude plugin install <pluginName>@claude-code-marketplace` and the instruction 'Do not attempt to run the command' — when `process.env.USER_TYPE === 'ant'` (lines 44-59), and otherwise delegates to the caller-supplied prompt builder (line 62). For pr-comments that builder starts at index.ts:9 and instructs the model to use `gh pr view --json number,headRepository` and `gh api /repos/{owner}/{repo}/issues/{number}/comments` / `/pulls/{number}/comments` (index.ts:19). Nothing is persisted. NOTE: the input extractor recorded commandKind `text` for this command; the implementation's actual `type` is `prompt` (createMovedToPluginCommand.ts:31).",
+      "gate": "none — the factory-built Command has no `isEnabled`; only the prompt body branches, on `process.env.USER_TYPE === 'ant'` (src/commands/createMovedToPluginCommand.ts:44)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/pr_comments/index.ts (`getPromptWhileMarketplaceIsPrivate`); src/commands/createMovedToPluginCommand.ts (`createMovedToPluginCommand` at :22)",
+      "evidence": [
+        "src/commands/pr_comments/index.ts:3",
+        "src/commands/pr_comments/index.ts:4",
+        "src/commands/pr_comments/index.ts:9",
+        "src/commands/pr_comments/index.ts:19",
+        "src/commands/createMovedToPluginCommand.ts:22",
+        "src/commands/createMovedToPluginCommand.ts:31",
+        "src/commands/createMovedToPluginCommand.ts:36",
+        "src/commands/createMovedToPluginCommand.ts:44",
+        "src/commands/createMovedToPluginCommand.ts:62"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: pr-comments — GitHub PR comment retrieval; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "protocol",
+      "canonical": "protocol",
+      "aliases": [],
+      "displayName": "protocol",
+      "family": "model",
+      "summary": "Switches the API protocol between the Messages and Responses APIs, or reports the current one.",
+      "mechanism": "src/commands/protocol/protocol.tsx `call` (line 150): info arguments render ShowProtocolAndClose; 'messages'|'responses' renders SetProtocolAndClose, whose effect sets AppState `{ protocol }` via setAppState (lines 104-107); no argument renders ProtocolPickerWrapper, whose handleSelect does the same (lines 55-58) after warning when the current model is incompatible. The command itself writes no settings file — `onChangeAppState` persists the AppState change with `updateSettingsForSource('userSettings', { protocol })` and mirrors it into the runtime override via `setRuntimeProtocolOverride` (src/utils/protocol/protocolState.ts:98-101, which also sets `process.env.CLAUDE_CODE_PROTOCOL`). The declaration's `description` getter renders the active protocol (index.ts:10-12).",
+      "gate": "none (no `isEnabled`; src/commands/protocol/index.ts:7-15)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/protocol/protocol.tsx (`call`, `ProtocolPickerWrapper`, `SetProtocolAndClose`, `ShowProtocolAndClose`); src/utils/protocol/protocolState.ts (`setRuntimeProtocolOverride` at :98, `getCurrentApiProtocol`, `renderProtocol`); persistence via src/state/onChangeAppState.ts",
+      "evidence": [
+        "src/commands/protocol/index.ts:8",
+        "src/commands/protocol/index.ts:9",
+        "src/commands/protocol/protocol.tsx:55",
+        "src/commands/protocol/protocol.tsx:104",
+        "src/commands/protocol/protocol.tsx:150",
+        "src/utils/protocol/protocolState.ts:98"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: protocol — API wire-protocol selection; fork-specific, no counterpart in the other sources"
+      ]
+    },
+    {
+      "rawName": "provider",
+      "canonical": "provider",
+      "aliases": [],
+      "displayName": "provider",
+      "family": "model",
+      "summary": "Adds, switches, edits, deletes and reloads runtime API providers stored in providers.json.",
+      "mechanism": "src/commands/provider/provider.tsx `call` (line 723) routes list / show / use|switch / set|add|update / oauth / remove|delete / reload (argument hint at index.ts:13). Mutation happens in src/utils/providers/providerStore.ts: `upsertProvider(id, provider, { setActive: true })` sets store.activeProviderId and calls saveProviderStore (lines 115-119), which writeFileSyncs `<claude config home>/providers.json` (getProviderStorePath at lines 52-53; write at 83-85). `applyActiveProviderToEnv()` (provider.tsx:925) then sets `process.env.CLAUDE_CODE_ACTIVE_PROVIDER_ID` (line 186), deletes CLAUDE_CODE_USE_BEDROCK/VERTEX/FOUNDRY (lines 189-191) and for api-key providers sets ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_MODELS_URL plus mirrored OPENAI_BASE_URL / OPENAI_API_KEY (lines 193-201). In-session, syncProviderState (provider.tsx:68) calls `setMainLoopModelOverride(active ? undefined : null)` and resets AppState mainLoopModel/mainLoopModelForSession to null (lines 72-77). It does not touch settings.json. The store is also applied at process start from src/bootstrap-entry.ts.",
+      "gate": "none (no `isEnabled`; src/commands/provider/index.ts:4-15)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/provider/provider.tsx (`call` at :723, `syncProviderState` at :68, `setProvider` at :910, `useProvider`, `deleteProvider`, `reloadProvider`); src/utils/providers/providerStore.ts (`upsertProvider` at :115, `saveProviderStore` at :79, `applyActiveProviderToEnv` at :171)",
+      "evidence": [
+        "src/commands/provider/index.ts:5",
+        "src/commands/provider/index.ts:13",
+        "src/commands/provider/provider.tsx:68",
+        "src/commands/provider/provider.tsx:723",
+        "src/commands/provider/provider.tsx:925",
+        "src/utils/providers/providerStore.ts:52",
+        "src/utils/providers/providerStore.ts:83",
+        "src/utils/providers/providerStore.ts:194"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: provider — runtime model-provider switching; the fork's headline feature (package.json description: 'Third-party-provider-only Claude Code fork')"
+      ]
+    },
+    {
+      "rawName": "reload-plugins",
+      "canonical": "reload-plugins",
+      "aliases": [],
+      "displayName": "reload-plugins",
+      "family": "extension",
+      "summary": "Applies pending plugin changes to the running session and reports the resulting counts.",
+      "mechanism": "src/commands/reload-plugins/reload-plugins.ts `call` (line 5) awaits `refreshActivePlugins(context.setAppState)` (line 6). refreshActivePlugins (src/utils/plugins/refresh.ts:72-73) loads enabled/disabled plugins, commands, agents, hooks, MCP and LSP servers and applies them to AppState through `setAppState(prev => ({ ...prev, plugins: { ...prev.plugins, enabled, disabled, commands, errors, needsRefresh: false }, agentDefinitions, mcp: { ...prev.mcp, pluginReconnectKey: prev.mcp.pluginReconnectKey + 1 } }))` (refresh.ts:123-138). The command then formats the returned counts into 'Reloaded: …' plus an error line (reload-plugins.ts:8-25). The declaration documents that SDK callers use the `query.reloadPlugins()` control request instead, and sets `supportsNonInteractive: false` (index.ts:11-14).",
+      "gate": "none (no `isEnabled`; src/commands/reload-plugins/index.ts:7-16)",
+      "commandKind": "local",
+      "backendModule": "src/commands/reload-plugins/reload-plugins.ts (`call`); src/utils/plugins/refresh.ts (`refreshActivePlugins` at :72)",
+      "evidence": [
+        "src/commands/reload-plugins/index.ts:8",
+        "src/commands/reload-plugins/index.ts:9",
+        "src/commands/reload-plugins/index.ts:14",
+        "src/commands/reload-plugins/reload-plugins.ts:5",
+        "src/commands/reload-plugins/reload-plugins.ts:6",
+        "src/commands/reload-plugins/reload-plugins.ts:19",
+        "src/utils/plugins/refresh.ts:72",
+        "src/utils/plugins/refresh.ts:123"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "rename",
+      "canonical": "rename",
+      "aliases": [],
+      "displayName": "rename",
+      "family": "session",
+      "summary": "Renames the current conversation, generating a kebab-case name with Haiku when no name is given.",
+      "mechanism": "src/commands/rename/rename.ts `call` (line 17) first refuses when isTeammate() is true (line 23). With no arguments it derives messages via `getMessagesAfterCompactBoundary(context.messages)` and calls `generateSessionName(messages, signal)` (line 33), which issues a Haiku query with a JSON schema and returns the `name` field (src/commands/rename/generateSessionName.ts:20-55); otherwise it uses the trimmed argument. It then persists twice into the current session transcript (path from getTranscriptPath(), src/utils/sessionStorage.ts:198-200): `saveCustomTitle(sessionId, newName, fullPath)` (rename.ts:53), which appends a `{ type: 'custom-title', customTitle, sessionId }` entry to the JSONL (sessionStorage.ts:2266-2270), and `saveAgentName(sessionId, newName, fullPath)` (rename.ts:56), which appends `{ type: 'agent-name', agentName, sessionId }` (sessionStorage.ts:2467). Finally it patches AppState standaloneAgentContext.name via setAppState (lines 57-63). The declaration sets `immediate: true` (index.ts:7).",
+      "gate": "none (no `isEnabled`; src/commands/rename/index.ts:3-10)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/rename/rename.ts (`call`); src/commands/rename/generateSessionName.ts (`generateSessionName`); src/utils/sessionStorage.ts (`saveCustomTitle` at :2266, `saveAgentName` at :2467, `getTranscriptPath` at :198)",
+      "evidence": [
+        "src/commands/rename/index.ts:5",
+        "src/commands/rename/index.ts:7",
+        "src/commands/rename/rename.ts:33",
+        "src/commands/rename/rename.ts:53",
+        "src/commands/rename/rename.ts:56",
+        "src/commands/rename/rename.ts:57",
+        "src/utils/sessionStorage.ts:2266",
+        "src/utils/sessionStorage.ts:200"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: rename — conversation title/session naming"
+      ]
+    },
+    {
+      "rawName": "resume",
+      "canonical": "resume",
+      "aliases": [
+        "continue"
+      ],
+      "displayName": "resume",
+      "family": "session",
+      "summary": "Resumes a previous conversation by id, title or search term, or from a picker of past sessions.",
+      "mechanism": "src/commands/resume/resume.tsx `call` (line 195) defines onResume, which delegates to the host callback `context.resume?.(sessionId, log, entrypoint)` with entrypoint 'slash_command_session_id' / 'slash_command_title' / 'slash_command_picker' (lines 198, 229, 253; ResumeEntrypoint type at src/types/command.ts:101-106). Candidate sessions are enumerated with `loadSameRepoMessageLogs(worktreePaths)` (line 216); a UUID argument matching a 'lite' index entry is hydrated with `loadFullLog(log)` (line 228), falling back to `getLastSessionLog(sessionId)` (line 236) and to `searchSessionsByCustomTitle` for title matches (line 245). `loadFullLog` (src/utils/sessionStorage.ts:2590) takes log.fullPath and calls `loadTranscriptFile(sessionFile)` (line 2622) — the actual JSONL parser at sessionStorage.ts:3113 — after which buildConversationChain rebuilds the chain from the latest leaf. Cross-project and worktree cases are handled by checkCrossProjectResume (line 19) and getWorktreePaths (line 20).",
+      "gate": "none (no `isEnabled`; src/commands/resume/index.ts:3-10)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/resume/resume.tsx (`call`); src/utils/sessionStorage.ts (`loadFullLog` at :2590, `loadTranscriptFile` at :3113, `loadSameRepoMessageLogs`, `getLastSessionLog`, `searchSessionsByCustomTitle`); src/components/LogSelector.js (`LogSelector`)",
+      "evidence": [
+        "src/commands/resume/index.ts:5",
+        "src/commands/resume/index.ts:7",
+        "src/commands/resume/index.ts:9",
+        "src/commands/resume/resume.tsx:198",
+        "src/commands/resume/resume.tsx:216",
+        "src/commands/resume/resume.tsx:228",
+        "src/utils/sessionStorage.ts:2590",
+        "src/utils/sessionStorage.ts:3113"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: resume — session resume with picker; the CLI mirror is `--continue` / `--resume` (src/main.tsx:884) and `claude --resume` in the commander layer"
+      ]
+    },
+    {
+      "rawName": "review",
+      "canonical": "review",
+      "aliases": [],
+      "displayName": "review",
+      "family": "collab",
+      "summary": "Runs a static prompt that reviews a GitHub pull request via the gh CLI.",
+      "mechanism": "src/commands/review.ts is a static prompt command (`type: 'prompt'`, line 29). `getPromptForCommand(args)` (line 35) returns exactly one text block built by `LOCAL_REVIEW_PROMPT(args)` (line 36; builder at line 4), which instructs the model to run `gh pr list`, `gh pr view <number>` and `gh pr diff <number>` and to produce a structured review (lines 7-25). No state is mutated and nothing is written to disk.",
+      "gate": "none (no `isEnabled`; src/commands/review.ts:28-38)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/review.ts — the file itself (`LOCAL_REVIEW_PROMPT` at :4, `getPromptForCommand` at :35); no `load` target",
+      "evidence": [
+        "src/commands/review.ts:28",
+        "src/commands/review.ts:29",
+        "src/commands/review.ts:30",
+        "src/commands/review.ts:35",
+        "src/commands/review.ts:36",
+        "src/commands/review.ts:4"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: review — PR review; /code-review is the local-diff sibling in the same source"
+      ]
+    },
+    {
+      "rawName": "rewind",
+      "canonical": "rewind",
+      "aliases": [
+        "checkpoint",
+        "undo"
+      ],
+      "displayName": "rewind",
+      "family": "session",
+      "summary": "Restores the code, the conversation, or both to a previous user-message checkpoint.",
+      "mechanism": "src/commands/rewind/rewind.ts is a 13-line shim: its `call` invokes `context.openMessageSelector()` and returns `{ type: 'skip' }` (rewind.ts:8-12). That callback is wired in src/screens/REPL.tsx:2243-2247 to `setIsMessageSelectorVisible(true)`, which mounts `<MessageSelector>` (REPL.tsx:4583); the selector offers code / conversation / both (MessageSelector.tsx:217-232). Code restore runs REPL's onRestoreCode -> `fileHistoryRewind(updater, message.uuid)` (REPL.tsx:4584-4589), which applies file backups to disk; conversation restore runs `onRestoreMessage={handleRestoreMessage}` (REPL.tsx:4661) -> restoreMessageSync -> rewindConversationTo, which does `setMessages(prev.slice(0, messageIndex))` (REPL.tsx:3460) plus `setConversationId(randomUUID())` (line 3462), `resetMicrocompactState()` (line 3464) and a setAppState restoring the message's permissionMode and clearing promptSuggestion (lines 3466-3481). File backup content is persisted outside the transcript at `{configDir}/file-history/{sessionId}/{sha256(filePath)[0:16]}@vN` (src/utils/fileHistory.ts:734-742), while snapshot metadata is appended to the session transcript via recordFileHistorySnapshot -> `getProject().insertFileHistorySnapshot` (fileHistory.ts:320, sessionStorage.ts:1326-1336). The rewind path writes no transcript deletions: rewound-away messages remain in the JSONL, and the only transcript-removing call (`removeTranscriptMessage`) is used at REPL.tsx:2426 for tombstoned streaming messages.",
+      "gate": "none (no `isEnabled`; src/commands/rewind/index.ts:3-11). The declaration sets `supportsNonInteractive: false` (index.ts:9)",
+      "commandKind": "local",
+      "backendModule": "src/commands/rewind/rewind.ts (`call`); real work in src/utils/fileHistory.ts (`fileHistoryRewind` at :348, `applySnapshot` at :538, `resolveBackupPath` at :734) and src/components/MessageSelector.tsx; host wiring in src/screens/REPL.tsx (`rewindConversationTo` at :3450, `restoreMessageSync` at :3487)",
+      "evidence": [
+        "src/commands/rewind/index.ts:5",
+        "src/commands/rewind/index.ts:6",
+        "src/commands/rewind/index.ts:10",
+        "src/commands/rewind/rewind.ts:8",
+        "src/screens/REPL.tsx:3460",
+        "src/screens/REPL.tsx:4584",
+        "src/screens/REPL.tsx:4661",
+        "src/utils/fileHistory.ts:348",
+        "src/utils/fileHistory.ts:383",
+        "src/utils/fileHistory.ts:738"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: rewind — checkpoint restore of both files and conversation; the headless sibling is `--rewind-files <user-message-id>` (src/main.tsx:886, src/cli/print.ts:683-716)"
+      ]
+    },
+    {
+      "rawName": "sandbox",
+      "canonical": "sandbox-toggle",
+      "aliases": [],
+      "displayName": "sandbox",
+      "family": "safety",
+      "summary": "Shows or toggles the OS-level command sandbox and can add command patterns to the sandbox exclusion list.",
+      "mechanism": "src/commands/sandbox-toggle/sandbox-toggle.tsx `call` renders `<SandboxSettings>` with no arguments; selecting a mode calls `SandboxManager.setSandboxSettings({...})` (src/components/sandbox/SandboxSettings.tsx:115/124/133), which writes the `sandbox.*` keys through `updateSettingsForSource('localSettings', ...)` (src/utils/sandbox/sandbox-adapter.ts:692-703) — i.e. it is a SETTINGS-FILE key, not AppState and not an env var; the resolved file is `.claude/settings.local.json` (src/utils/settings/settings.ts:312) and the command surfaces that path itself. The `exclude` subcommand calls `addToExcludedCommands(cleanPattern)` (sandbox-toggle.tsx:64), appending to `sandbox.excludedCommands` in the same file (sandbox-adapter.ts:841-887). The declaration's live `description` getter reads SandboxManager.isSandboxingEnabled / isAutoAllowBashIfSandboxedEnabled / areUnsandboxedCommandsAllowed / areSandboxSettingsLockedByPolicy / checkDependencies (index.ts:8-12), and the command is marked `immediate: true` (index.ts:45). The display name is `sandbox` (index.ts:6) even though the directory is sandbox-toggle.",
+      "gate": "none (no `isEnabled`; src/commands/sandbox-toggle/index.ts:6-48). Availability is expressed as `get isHidden() { return (!SandboxManager.isSupportedPlatform() || !SandboxManager.isPlatformInEnabledList()) }` (src/commands/sandbox-toggle/index.ts:39-44)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/sandbox-toggle/sandbox-toggle.tsx (`call`); state layer src/utils/sandbox/sandbox-adapter.ts (export `SandboxManager` at :940, `setSandboxSettings`, `addToExcludedCommands`, `isSandboxingEnabled` at :545); UI src/components/sandbox/SandboxSettings.tsx",
+      "evidence": [
+        "src/commands/sandbox-toggle/index.ts:6",
+        "src/commands/sandbox-toggle/index.ts:39",
+        "src/commands/sandbox-toggle/index.ts:45",
+        "src/commands/sandbox-toggle/index.ts:47",
+        "src/commands/sandbox-toggle/sandbox-toggle.tsx:64",
+        "src/utils/sandbox/sandbox-adapter.ts:692",
+        "src/utils/sandbox/sandbox-adapter.ts:878",
+        "src/components/sandbox/SandboxSettings.tsx:115"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: sandbox — OS-level command confinement; codex-rust has an analogous sandbox mode (seatbelt/landlock) in its enum"
+      ]
+    },
+    {
+      "rawName": "security-review",
+      "canonical": "security-review",
+      "aliases": [],
+      "displayName": "security-review",
+      "family": "safety",
+      "summary": "Expands to a built-in security-review prompt over the pending branch changes, with git status/diff/log inlined into the prompt.",
+      "mechanism": "`export default createMovedToPluginCommand({...})` (src/commands/security-review.ts:198-242). The factory RETURNS a plain Command object literal (src/commands/createMovedToPluginCommand.ts:30-64) with `type: 'prompt'` (line 31), the given name/description/progressMessage, `contentLength: 0`, `userFacingName() { return name }` (lines 36-38), `source: 'builtin'` (line 39), and a `getPromptForCommand` (line 40) that returns a fixed text — including `claude plugin install security-review@claude-code-marketplace` and 'Do not attempt to run the command' — when `process.env.USER_TYPE === 'ant'` (lines 44-59), and otherwise delegates to the caller-supplied `getPromptWhileMarketplaceIsPrivate` (line 62). That callback parses the embedded SECURITY_REVIEW_MARKDOWN frontmatter with parseFrontmatter + parseSlashCommandToolsFromFrontmatter, stashes the parsed allowed-tools into the returned appState's `toolPermissionContext.alwaysAllowRules.command` (security-review.ts:219-231), runs `` !`cmd` `` substitutions with `executeShellCommandsInPrompt` (line 215) and returns a single text ContentBlockParam (lines 236-241). It persists nothing and mutates no global state. NOTE: the input extractor recorded commandKind `text` for this command; the implementation's actual `type` is `prompt`.",
+      "gate": "none — the factory-built Command has no `isEnabled`; only the prompt body branches, on `process.env.USER_TYPE === 'ant'` (src/commands/createMovedToPluginCommand.ts:44)",
+      "commandKind": "prompt",
+      "backendModule": "src/commands/security-review.ts (`getPromptWhileMarketplaceIsPrivate`, `SECURITY_REVIEW_MARKDOWN`); src/commands/createMovedToPluginCommand.ts (`createMovedToPluginCommand`); shell expansion via src/utils/promptShellExecution.ts (`executeShellCommandsInPrompt`)",
+      "evidence": [
+        "src/commands/security-review.ts:198",
+        "src/commands/security-review.ts:199",
+        "src/commands/security-review.ts:205",
+        "src/commands/security-review.ts:215",
+        "src/commands/security-review.ts:219",
+        "src/commands/security-review.ts:236",
+        "src/commands/createMovedToPluginCommand.ts:22",
+        "src/commands/createMovedToPluginCommand.ts:31",
+        "src/commands/createMovedToPluginCommand.ts:44",
+        "src/commands/createMovedToPluginCommand.ts:62"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: security-review — security review of pending changes; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "skills",
+      "canonical": "skills",
+      "aliases": [],
+      "displayName": "skills",
+      "family": "extension",
+      "summary": "Opens a dialog listing the skills/commands currently loaded for this session, grouped by source.",
+      "mechanism": "The load target is a 7-line component shim: `call` returns `<SkillsMenu onExit={onDone} commands={context.options.commands} />` (src/commands/skills/skills.tsx:6). SkillsMenu filters that list to `cmd.type === 'prompt' && (cmd.loadedFrom === 'skills' || cmd.loadedFrom === 'commands_DEPRECATED' || cmd.loadedFrom === 'plugin')` (SkillsMenu.tsx:214), groups by `skill.source` and renders the dialog titled 'Skills' with per-source subtitles from getSkillsPath (lines 106, 118-124). It reads no disk itself and writes nothing; group headers show estimated description tokens via estimateSkillFrontmatterTokens (line 205).",
+      "gate": "none (no `isEnabled`; src/commands/skills/index.ts:3-8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/skills/skills.tsx (`call`) -> src/components/skills/SkillsMenu.tsx (`SkillsMenu` at :44 / filtered listing at :214)",
+      "evidence": [
+        "src/commands/skills/index.ts:5",
+        "src/commands/skills/skills.tsx:6",
+        "src/components/skills/SkillsMenu.tsx:214",
+        "src/components/skills/SkillsMenu.tsx:106",
+        "src/components/skills/SkillsMenu.tsx:205"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: skills — skill listing/invocation surface; skills themselves are loaded as prompt commands via getSkillDirCommands (src/commands.ts:130-133, 304-317) and getBundledSkills (src/skills/bundledSkills.js)"
+      ]
+    },
+    {
+      "rawName": "stats",
+      "canonical": "stats",
+      "aliases": [],
+      "displayName": "stats",
+      "family": "inspect",
+      "summary": "Shows historical Claude Code usage statistics (activity heatmap, model token usage, session counts) read from on-disk transcripts.",
+      "mechanism": "The load target returns `<Stats onClose={onDone} />` (src/commands/stats/stats.tsx:5). Stats.tsx calls `aggregateClaudeCodeStatsForRange('all')` (src/components/Stats.tsx:65, and line 153 for other ranges) from src/utils/stats.ts:718. That walks every project transcript: `getProjectsDir()` then fs.readdir of each project dir collecting `*.jsonl` plus `{sessionId}/subagents/agent-*.jsonl` (stats.ts:375-413), parsed with readJSONLFile. Aggregation is memoised to disk through src/utils/statsCache.ts — cache path `join(getClaudeConfigHomeDir(), 'stats-cache.json')` (statsCache.ts:77-78), written by saveStatsCache (statsCache.ts:214) under withStatsCacheLock (stats.ts:648). The transcripts themselves are only read.",
+      "gate": "none (no `isEnabled`; src/commands/stats/index.ts:3-8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/stats/stats.tsx (`call`) -> src/components/Stats.tsx -> src/utils/stats.ts (`aggregateClaudeCodeStatsForRange` at :718); src/utils/statsCache.ts (`saveStatsCache` at :214)",
+      "evidence": [
+        "src/commands/stats/index.ts:5",
+        "src/commands/stats/stats.tsx:5",
+        "src/components/Stats.tsx:65",
+        "src/utils/stats.ts:718",
+        "src/utils/stats.ts:375",
+        "src/utils/statsCache.ts:77",
+        "src/utils/statsCache.ts:214"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: stats — usage statistics view"
+      ]
+    },
+    {
+      "rawName": "status",
+      "canonical": "status",
+      "aliases": [],
+      "displayName": "status",
+      "family": "inspect",
+      "summary": "Opens the Settings dialog pre-selected on the Status tab (version, model, account, API connectivity, tool/IDE/sandbox diagnostics).",
+      "mechanism": "The load target returns `<Settings onClose={onDone} context={context} defaultTab=\"Status\" />` (src/commands/status/status.tsx:6). Settings.tsx types defaultTab as 'Status' | 'Config' | 'Gates' (src/components/Settings/Settings.tsx:20), seeds `useState(defaultTab)` (line 29) and renders the Status tab as `<Status context diagnosticsPromise={buildDiagnostics()} />` (line 72). src/components/Settings/Status.tsx builds its rows from buildPrimarySection (lines 20, 114) and buildSecondarySection (lines 38, 121), and its async diagnostics from `buildDiagnostics()` (line 55), which calls the src/utils/status.tsx builders (buildSandboxProperties at :28, buildInstallationDiagnostics at :175, buildAccountProperties at :195, getModelDisplayLabel at :349). `immediate: true` (status/index.ts:8) renders it without a prior message. Read-only: no disk writes.",
+      "gate": "none (no `isEnabled`; src/commands/status/index.ts:3-10). The declaration sets `immediate: true` (index.ts:8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/status/status.tsx (`call`) -> src/components/Settings/Settings.tsx (`Settings`) -> src/components/Settings/Status.tsx (`Status`, `buildDiagnostics` at :55); src/utils/status.tsx",
+      "evidence": [
+        "src/commands/status/index.ts:4",
+        "src/commands/status/index.ts:8",
+        "src/commands/status/status.tsx:6",
+        "src/components/Settings/Settings.tsx:29",
+        "src/components/Settings/Settings.tsx:72",
+        "src/components/Settings/Status.tsx:55",
+        "src/utils/status.tsx:175"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: status — session/install status view"
+      ]
+    },
+    {
+      "rawName": "statusline",
+      "canonical": "statusline",
+      "aliases": [],
+      "displayName": "statusline",
+      "family": "interface",
+      "summary": "Emits a model-facing prompt that spawns the statusline-setup subagent to configure the user's status line.",
+      "mechanism": "This is a prompt command, not a config writer: `type: 'prompt'` (src/commands/statusline.tsx:5) with `getPromptForCommand(args)` (lines 15-21) returning one text block, `Create an ${AGENT_TOOL_NAME} with subagent_type \"statusline-setup\" and the prompt \"${prompt}\"` (line 19), where the prompt defaults to 'Configure my statusLine from my shell PS1 configuration' (line 16). The command therefore performs no disk write itself; the write is delegated to that Agent-tool subagent, which the command pre-authorises with `allowedTools: [AGENT_TOOL_NAME, 'Read(~/**)', 'Edit(~/.claude/settings.json)']` (line 12). Other fields: `source: 'builtin'` (line 13), `disableNonInteractive: true` (line 14), `aliases: []` (line 9), `contentLength: 0` (line 7).",
+      "gate": "none (no `isEnabled`; src/commands/statusline.tsx:4-22)",
+      "commandKind": "prompt",
+      "backendModule": "none — self-contained in src/commands/statusline.tsx (default-export object with `getPromptForCommand`; no `load` target)",
+      "evidence": [
+        "src/commands/statusline.tsx:5",
+        "src/commands/statusline.tsx:9",
+        "src/commands/statusline.tsx:10",
+        "src/commands/statusline.tsx:12",
+        "src/commands/statusline.tsx:15",
+        "src/commands/statusline.tsx:19"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: statusline — status-line configuration; the actual persisted key is the settings `statusLine` field edited by the subagent"
+      ]
+    },
+    {
+      "rawName": "stickers",
+      "canonical": "stickers",
+      "aliases": [],
+      "displayName": "stickers",
+      "family": "interface",
+      "summary": "Opens the Claude Code sticker-ordering page in the user's browser.",
+      "mechanism": "The load target is a 16-line module: `call()` sets `const url = 'https://www.stickermule.com/claudecode'` (stickers.ts:5) and calls `openBrowser(url)` (line 6) from src/utils/browser.ts:39; on success it returns the text result 'Opening sticker page in browser…' (line 9), otherwise the URL as fallback text (lines 11-14). No state is mutated and nothing is persisted. The declaration sets `supportsNonInteractive: false` (index.ts:7).",
+      "gate": "none (no `isEnabled`; src/commands/stickers/index.ts:3-9)",
+      "commandKind": "local",
+      "backendModule": "src/commands/stickers/stickers.ts (`call`) + src/utils/browser.ts (`openBrowser`)",
+      "evidence": [
+        "src/commands/stickers/index.ts:5",
+        "src/commands/stickers/index.ts:7",
+        "src/commands/stickers/stickers.ts:5",
+        "src/commands/stickers/stickers.ts:6",
+        "src/utils/browser.ts:39"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "tag",
+      "canonical": "tag",
+      "aliases": [],
+      "displayName": "tag",
+      "family": "session",
+      "summary": "Adds, replaces or removes a searchable tag on the current session transcript (ant-only).",
+      "mechanism": "src/commands/tag/tag.tsx `call` dispatches on arguments: info/help or empty arguments render `<ShowHelp>` (lines 207-212), otherwise `<ToggleTagAndClose tagName={args} />` (line 213). That component reads the current tag with `getCurrentSessionTag(id)` (line 107); a different name writes via `await saveTag(id, normalizedTag, getTranscriptPath())` (lines 117-118), and an identical name opens the ConfirmRemoveTag dialog (line 110) whose confirm path calls `await saveTag(sessionId, \"\", fullPath)` (line 141). `saveTag` appends a `{ type: 'tag', tag, sessionId }` entry to the session transcript file with `appendEntryToFile` (src/utils/sessionStorage.ts:2331-2334) and caches it in memory as getProject().currentSessionTag (line 2337). Tag text is normalised with `recursivelySanitizeUnicode(...).trim()` (tag.tsx:82).",
+      "gate": "`isEnabled: () => process.env.USER_TYPE === 'ant'` (src/commands/tag/index.ts:7)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/tag/tag.tsx (`call`) -> src/utils/sessionStorage.ts (`saveTag` at :2331, `getCurrentSessionTag`, `getTranscriptPath`)",
+      "evidence": [
+        "src/commands/tag/index.ts:5",
+        "src/commands/tag/index.ts:7",
+        "src/commands/tag/tag.tsx:118",
+        "src/commands/tag/tag.tsx:141",
+        "src/commands/tag/tag.tsx:213",
+        "src/utils/sessionStorage.ts:2331",
+        "src/utils/sessionStorage.ts:2334"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: tag — session tagging for later search/resume"
+      ]
+    },
+    {
+      "rawName": "tasks",
+      "canonical": "tasks",
+      "aliases": [
+        "bashes"
+      ],
+      "displayName": "tasks",
+      "family": "execution",
+      "summary": "Lists and manages the session's background tasks (agents, shells, teammates, workflows) with drill-in detail and stop actions.",
+      "mechanism": "The load target discards the context and returns `<BackgroundTasksDialog onDone={onDone} />` (src/commands/tasks/tasks.tsx:5-7). The dialog reads live task state from AppState: `const tasks = useAppState(s => s.tasks)` (src/components/tasks/BackgroundTasksDialog.tsx:120) plus foregroundedTaskId and expandedView (lines 121-122), then lists `Object.values(tasks ?? {}).filter(isBackgroundTask)` (lines 113, 169; `isBackgroundTask` is src/tasks/types.ts:34). Tasks live IN MEMORY: AppStateStore declares `tasks: { [taskId: string]: TaskState }` (src/state/AppStateStore.ts:138) initialised to `{}` (line 397), and the store comment notes AppState.tasks is always empty in remote-viewer mode because those tasks live in a different process (lines 119-123). The dialog persists nothing; it only mutates AppState and calls onDone with a dismissal message. Task kinds come from src/tasks/types.ts and the per-kind modules imported at BackgroundTasksDialog.tsx:9-19 (DreamTask, InProcessTeammateTask, LocalAgentTask, LocalShellTask, and LocalWorkflowTask / MonitorMcpTask behind `feature()` at lines 99 and 106).",
+      "gate": "none (no `isEnabled`; src/commands/tasks/index.ts:3-9)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/tasks/tasks.tsx (`call`) -> src/components/tasks/BackgroundTasksDialog.tsx (`BackgroundTasksDialog`); src/tasks/types.ts (`isBackgroundTask` at :34); state in src/state/AppStateStore.ts:138",
+      "evidence": [
+        "src/commands/tasks/index.ts:5",
+        "src/commands/tasks/index.ts:6",
+        "src/commands/tasks/tasks.tsx:5",
+        "src/components/tasks/BackgroundTasksDialog.tsx:113",
+        "src/components/tasks/BackgroundTasksDialog.tsx:120",
+        "src/state/AppStateStore.ts:138",
+        "src/state/AppStateStore.ts:397",
+        "src/tasks/types.ts:34"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: tasks — background task listing/management; I-harness has a task surface (tasks.ts, src/tasks/) but not as a slash command"
+      ]
+    },
+    {
+      "rawName": "terminal-setup",
+      "canonical": "terminal-setup",
+      "aliases": [],
+      "displayName": "terminal-setup",
+      "family": "interface",
+      "summary": "Installs a Shift+Enter (or Option+Enter on Apple Terminal) newline key binding for the detected terminal.",
+      "mechanism": "src/commands/terminalSetup/terminalSetup.tsx `call` short-circuits when the terminal natively supports the CSI u / Kitty keyboard protocol (lines 144-150), refuses unsupported terminals (lines 153-182), then runs `setupTerminal(context.options.theme)` (line 183). setupTerminal switches on `env.terminal` (lines 82-103) and dispatches to installBindingsForVSCodeTerminal (line 195, which backs up then rewrites `<userDir>/keybindings.json` via addItemToJSONCArray + writeFile at lines 259-264), installBindingsForAlacritty (line 374, writes `alacritty.toml` at line 454), installBindingsForZed (line 463, writes `~/.config/zed/keymap.json`), or enableOptionAsMetaForTerminal (line 311, driving `/usr/libexec/PlistBuddy` on the Terminal.app plist at lines 276/282/301 and `killall cfprefsd` at line 356 after backupTerminalPreferences at line 314). It then persists completion flags through `saveGlobalConfig`: `shiftEnterKeyBindingInstalled` / `optionAsMetaKeyInstalled` (lines 104-119). The declaration's `description` is terminal-conditional (index.ts:15-18) and it carries the restored-build marker plus an un-substituted `\"external\" === 'ant'` literal at line 123.",
+      "gate": "none (no `isEnabled`; src/commands/terminalSetup/index.ts:12-21). Hidden instead via `isHidden: env.terminal !== null && env.terminal in NATIVE_CSIU_TERMINALS` (index.ts:19)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/terminalSetup/terminalSetup.tsx (`call`, `setupTerminal`); persistence via src/utils/config.ts (`saveGlobalConfig`)",
+      "evidence": [
+        "src/commands/terminalSetup/index.ts:14",
+        "src/commands/terminalSetup/index.ts:19",
+        "src/commands/terminalSetup/terminalSetup.tsx:109",
+        "src/commands/terminalSetup/terminalSetup.tsx:183",
+        "src/commands/terminalSetup/terminalSetup.tsx:262",
+        "src/commands/terminalSetup/terminalSetup.tsx:276"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: terminal-setup — terminal key-binding installation; distinctive to this source"
+      ]
+    },
+    {
+      "rawName": "theme",
+      "canonical": "theme",
+      "aliases": [],
+      "displayName": "theme",
+      "family": "interface",
+      "summary": "Opens the interactive theme picker and saves the chosen theme setting.",
+      "mechanism": "The load target renders `<Pane color=\"permission\"><ThemePicker onThemeSelect={t1} onCancel={t2} skipExitHandling /></Pane>` (src/commands/theme/theme.tsx:45), where t1 does `setTheme(setting); onDone(`Theme set to ${setting}`)` (lines 22-23). setTheme comes from `const [, setTheme] = useTheme()` (line 18; the setter is ThemeProvider's setThemeSetting, ThemeProvider.tsx:127). Calling it updates ThemeContext state, clears the preview and calls `onThemeSave` (ThemeProvider.tsx:85-94), whose default `defaultSaveTheme` writes global config: `saveGlobalConfig(current => ({ ...current, theme: setting }))` (lines 38-43), with the initial value read via `getGlobalConfig().theme` (line 36).",
+      "gate": "none (no `isEnabled`; src/commands/theme/index.ts:3-8)",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/theme/theme.tsx (`call`) -> src/components/design-system/ThemeProvider.tsx (`useTheme` at :127, `ThemeProvider`, `defaultSaveTheme` at :38)",
+      "evidence": [
+        "src/commands/theme/index.ts:5",
+        "src/commands/theme/theme.tsx:22",
+        "src/commands/theme/theme.tsx:45",
+        "src/components/design-system/ThemeProvider.tsx:38",
+        "src/components/design-system/ThemeProvider.tsx:94"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: theme"
+      ]
+    },
+    {
+      "rawName": "think-back",
+      "canonical": "think-back",
+      "aliases": [],
+      "displayName": "think-back",
+      "family": "extension",
+      "summary": "Installs/enables the `thinkback` marketplace plugin and plays or regenerates a personalised 'year in review' animation.",
+      "mechanism": "It is a plugin/marketplace feature plus an animation runner. ThinkbackFlow first renders `<ThinkbackInstaller>` (src/commands/thinkback/thinkback.tsx:518), whose effect checks loadKnownMarketplacesConfig and `isPluginInstalled(pluginId)` with pluginId `thinkback@<marketplace>` (lines 38-40, 171-175), then runs `addMarketplaceSource` for the GitHub repo `anthropics/claude-plugins-official` (or `anthropics/claude-code-marketplace` for USER_TYPE 'ant') (lines 30-36, 182), `refreshMarketplace` (line 198), `installSelectedPlugins([pluginId])` (line 211) and `enablePluginOp` (line 230). It then resolves the skill dir as `join(thinkbackPlugin.path, 'skills', 'thinkback')` (line 54). The exported `playAnimation(skillDir)` (line 60) requires `year_in_review.js` and `player.js` in that dir (lines 64-65, readFile guards at 76 and 91), takes over the terminal via `instances.get(process.stdout)` + `enterAlternateScreen()` (lines 107-114), runs `await execa('node', [playerPath], { stdio: 'inherit', cwd: skillDir, reject: false })` (lines 116-120), restores the screen (line 124) and then opens `year_in_review.html` in the browser (lines 128-132). The menu's edit/fix/regenerate actions simply hand the model a prompt invoking the 'thinkback' skill with mode=edit|fix|regenerate (lines 385-387, 472-481). The animation code itself is NOT in this repo — no year_in_review.js/player.js exists under src; they ship inside the plugin. The file carries the restored-build marker `// @ts-nocheck -- restored transpiled artifact; runtime-verified` as line 1.",
+      "gate": "`isEnabled: () => checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_thinkback')` (src/commands/thinkback/index.ts:8-9). That helper is a no-op stub in this tree — `export function checkStatsigFeatureGate_CACHED_MAY_BE_STALE(gate: string): boolean { void gate; return false }` (src/services/analytics/growthbook.ts:157-162) — so the command is effectively always disabled here",
+      "commandKind": "local-jsx",
+      "backendModule": "src/commands/thinkback/thinkback.tsx (`playAnimation` at :60, `call` at :549, `ThinkbackInstaller`, `ThinkbackFlow`); animation ships in the installed plugin's skills/thinkback/{player.js,year_in_review.js}",
+      "evidence": [
+        "src/commands/thinkback/index.ts:6",
+        "src/commands/thinkback/index.ts:8",
+        "src/commands/thinkback/index.ts:10",
+        "src/commands/thinkback/thinkback.tsx:1",
+        "src/commands/thinkback/thinkback.tsx:60",
+        "src/commands/thinkback/thinkback.tsx:114",
+        "src/commands/thinkback/thinkback.tsx:116",
+        "src/commands/thinkback/thinkback.tsx:211",
+        "src/services/analytics/growthbook.ts:161"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: think-back — plugin-installed year-in-review animation; no analogue in any other source"
+      ]
+    },
+    {
+      "rawName": "thinkback-play",
+      "canonical": "thinkback-play",
+      "aliases": [],
+      "displayName": "thinkback-play",
+      "family": "extension",
+      "summary": "Hidden command that replays the already-generated thinkback animation, invoked by the thinkback skill after generation.",
+      "mechanism": "The load target's `call` loads the installed-plugin registry with `loadInstalledPluginsV2()` and looks up `v2Data.plugins['thinkback@' + marketplace]` (src/commands/thinkback-play/thinkback-play.ts:20-22), returning guidance text if there is no installation (lines 24-30) or no installPath (lines 32-38). It then composes `join(firstInstall.installPath, 'skills', 'thinkback')` (line 40) and delegates to `playAnimation(skillDir)` imported from `../thinkback/thinkback.js` (line 5, called at line 41), returning result.message as text (line 42). The declaration comment states its purpose: 'Hidden command that just plays the animation / Called by the thinkback skill after generation is complete' (index.ts:4-5), and sets `isHidden: true` plus `supportsNonInteractive: false` (index.ts:12-13).",
+      "gate": "`isEnabled: () => checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_thinkback')` (src/commands/thinkback-play/index.ts:10-11) — the same no-op-false stub (src/services/analytics/growthbook.ts:157-162), so permanently disabled here. Also `isHidden: true` (index.ts:12)",
+      "commandKind": "local",
+      "backendModule": "src/commands/thinkback-play/thinkback-play.ts (`call`); delegates to src/commands/thinkback/thinkback.tsx (`playAnimation`)",
+      "evidence": [
+        "src/commands/thinkback-play/index.ts:8",
+        "src/commands/thinkback-play/index.ts:10",
+        "src/commands/thinkback-play/index.ts:12",
+        "src/commands/thinkback-play/index.ts:14",
+        "src/commands/thinkback-play/thinkback-play.ts:20",
+        "src/commands/thinkback-play/thinkback-play.ts:40",
+        "src/commands/thinkback-play/thinkback-play.ts:41",
+        "src/services/analytics/growthbook.ts:157"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: thinkback-play — hidden replay entry point for think-back"
+      ]
+    },
+    {
+      "rawName": "tui",
+      "canonical": "tui",
+      "aliases": [],
+      "displayName": "tui",
+      "family": "interface",
+      "summary": "Toggles fullscreen (alt-screen, virtualized-scroll) TUI mode on/off/toggle and persists the choice.",
+      "mechanism": "src/commands/tui/tui.ts `call` parses on|off|toggle (lines 24-33; anything else returns usage text at lines 35-42), then does two things: `setUserFullscreenPreference(newPref)` for immediate in-session effect (line 45) and `saveGlobalConfig(current => ({ ...current, fullscreenMode: newMode }))` to persist 'on'/'off' (lines 48-51). The in-memory half is a module-level `let userFullscreenPreference: boolean | null = null` in src/utils/fullscreen.ts:13 (setter at lines 16-18), reloaded at startup by loadFullscreenPreferenceFromConfig (lines 29-40). Fullscreen is then decided by isFullscreenEnvEnabled (fullscreen.ts:147-151: explicit preference wins, else CLAUDE_CODE_NO_FLICKER falsy/truthy, else tmux -CC auto-disable, else `USER_TYPE === 'ant'`). It does NOT restart the process — it prints 'Restart or send a new message for the change to take full effect.' when the new preference differs from the env-derived state (tui.ts:66-69); the alt-screen wrapper is chosen at render time in `if (isFullscreenEnvEnabled()) return <AlternateScreen ...>` (src/screens/REPL.tsx:4671-4675). The declaration sets `supportsNonInteractive: false` (index.ts:8).",
+      "gate": "none (no `isEnabled`; src/commands/tui/index.ts:3-11)",
+      "commandKind": "local",
+      "backendModule": "src/commands/tui/tui.ts (`call`) + src/utils/fullscreen.ts (`setUserFullscreenPreference` at :16, `isFullscreenEnvEnabled` at :147); rendered by src/screens/REPL.tsx:4671",
+      "evidence": [
+        "src/commands/tui/index.ts:4",
+        "src/commands/tui/index.ts:8",
+        "src/commands/tui/tui.ts:45",
+        "src/commands/tui/tui.ts:48",
+        "src/commands/tui/tui.ts:68",
+        "src/utils/fullscreen.ts:13",
+        "src/utils/fullscreen.ts:147",
+        "src/screens/REPL.tsx:4671"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: tui — fullscreen/alt-screen UI mode toggle"
+      ]
+    },
+    {
+      "rawName": "version",
+      "canonical": "version",
+      "aliases": [],
+      "displayName": "version",
+      "family": "inspect",
+      "summary": "Prints the version this running session was built from (not what autoupdate has downloaded).",
+      "mechanism": "Fully self-contained: the `load` returns a resolved module `{ call }` instead of an import (src/commands/version.ts:19), and `call` is an in-file LocalCommandCall returning a text result built from the compile-time macros `MACRO.VERSION` and `MACRO.BUILD_TIME` (lines 6-8: `${MACRO.VERSION} (built ${MACRO.BUILD_TIME})` when BUILD_TIME exists, else MACRO.VERSION). No state mutation and no disk IO. It is `supportsNonInteractive: true` (line 18) and registered only through INTERNAL_ONLY_COMMANDS (src/commands.ts:202).",
+      "gate": "`isEnabled: () => process.env.USER_TYPE === 'ant'` (src/commands/version.ts:17). Registration-level gate: INTERNAL_ONLY_COMMANDS, appended only when `USER_TYPE === 'ant' && !IS_DEMO` (src/commands.ts:287-289)",
+      "commandKind": "local",
+      "backendModule": "none — src/commands/version.ts (const `call` at :3, default export `version` at :12; `load: () => Promise.resolve({ call })` at :19)",
+      "evidence": [
+        "src/commands/version.ts:3",
+        "src/commands/version.ts:6",
+        "src/commands/version.ts:13",
+        "src/commands/version.ts:17",
+        "src/commands/version.ts:19",
+        "src/commands.ts:202"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: version — same as the `--version` CLI fast path (src/entrypoints/cli.tsx:34-38)"
+      ]
+    },
+    {
+      "rawName": "vim",
+      "canonical": "vim",
+      "aliases": [],
+      "displayName": "vim",
+      "family": "interface",
+      "summary": "Toggles the prompt input between Vim and normal (readline) editing modes.",
+      "mechanism": "src/commands/vim/vim.ts `call` reads `config.editorMode || 'normal'` from getGlobalConfig, normalises the legacy 'emacs' value to 'normal' (lines 10-15), computes `newMode = currentMode === 'normal' ? 'vim' : 'normal'` (line 17) and persists it with `saveGlobalConfig(current => ({ ...current, editorMode: newMode }))` (lines 19-22), logging `tengu_editor_mode_changed` (lines 24-28). It returns a text result describing the new mode (lines 30-37). No AppState is touched; the mode is read back from global config by the input layer. The declaration sets `supportsNonInteractive: false` (index.ts:6).",
+      "gate": "none (no `isEnabled`; src/commands/vim/index.ts:3-9)",
+      "commandKind": "local",
+      "backendModule": "src/commands/vim/vim.ts (`call`); persistence via src/utils/config.ts (`getGlobalConfig` / `saveGlobalConfig`)",
+      "evidence": [
+        "src/commands/vim/index.ts:4",
+        "src/commands/vim/index.ts:7",
+        "src/commands/vim/vim.ts:10",
+        "src/commands/vim/vim.ts:17",
+        "src/commands/vim/vim.ts:19"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: vim — vim editing mode toggle for the prompt input"
+      ]
+    }
+  ],
+  "registry": "One central registry module, not per-package plugins: src/commands.ts imports every built-in command module by relative path and composes them into a single memoized array. Registration is (1) static ESM imports at the top of src/commands.ts (e.g. src/commands.ts:2-58, 108-154) for unconditional commands, (2) `require()` inside a `feature('X')` ternary for build-flag-eliminated commands — proactive (PROACTIVE), brief (KAIROS_BRIEF), workflows (WORKFLOW_SCRIPTS), torch (TORCH), fork (FORK_SUBAGENT), buddy (BUDDY) (src/commands.ts:81-106, 346-351), (3) `const agentsPlatform = process.env.USER_TYPE === 'ant' ? require('./commands/agents-platform/index.js').default : null` (src/commands.ts:47-50), and (4) a lazy shim object for the 113KB insights prompt so the heavy module is only imported on invocation (src/commands.ts:155-169). The array itself is `const COMMANDS = memoize((): Command[] => [ ... ])` — declared as a function precisely so config reads cannot run at module-initialisation time (src/commands.ts:215-217) — and ends with the conditional splats `...(forkCmd ? [forkCmd] : [])`, `...(buddy ? [buddy] : [])`, `...(workflowsCmd ? [workflowsCmd] : [])`, `...(torch ? [torch] : [])` and `...(process.env.USER_TYPE === 'ant' && !process.env.IS_DEMO ? INTERNAL_ONLY_COMMANDS : [])` (src/commands.ts:271-289). INTERNAL_ONLY_COMMANDS is a separate 20-entry list marked 'Commands that get eliminated from the external build' and `.filter(Boolean)`-ed because two of its members can be null (src/commands.ts:191-213). ALIASING is not a lookup table: each Command may carry an `aliases?: string[]` field (src/types/command.ts:163), resolution happens in `findCommand`, which matches `_.name === commandName || getCommandName(_) === commandName || _.aliases?.includes(commandName)` (src/commands.ts:539-549), `getCommandName` falls back to an optional `userFacingName()` override (src/types/command.ts:186-189), and `builtInCommandNames()` flattens name + aliases into a Set used for dedup (src/commands.ts:292-295). ENABLEMENT is a per-command `isEnabled?: () => boolean` predicate re-evaluated on every call — `getCommands` filters with `isCommandEnabled(_)` after the expensive loading has been memoized, deliberately so auth changes such as /login take effect immediately (src/commands.ts:393-405; `isCommandEnabled` defaults to true at src/types/command.ts:191-194). Command ORDER is composition order and matters: bundled skills, builtin plugin skills, skill-dir skills, workflow commands, plugin commands, plugin skills, then COMMANDS() (src/commands.ts:382-390), with dynamic skills spliced in immediately before the first built-in name (src/commands.ts:421-434); --safe-mode short-circuits to bundled skills + builtin plugin skills + built-ins only (src/commands.ts:372-380). Cache invalidation is layered: clearCommandMemoizationCaches() clears only the command/skill-tool memoizations, while clearCommandsCache() also clears plugin-command, plugin-skill and skill-dir caches (src/commands.ts:440-451).",
+  "registryEvidence": [
+    "src/commands.ts:2",
+    "src/commands.ts:15",
+    "src/commands.ts:47",
+    "src/commands.ts:59",
+    "src/commands.ts:81",
+    "src/commands.ts:84",
+    "src/commands.ts:157",
+    "src/commands.ts:191",
+    "src/commands.ts:192",
+    "src/commands.ts:213",
+    "src/commands.ts:215",
+    "src/commands.ts:217",
+    "src/commands.ts:287",
+    "src/commands.ts:292",
+    "src/commands.ts:372",
+    "src/commands.ts:382",
+    "src/commands.ts:398",
+    "src/commands.ts:405",
+    "src/commands.ts:434",
+    "src/commands.ts:440",
+    "src/commands.ts:446",
+    "src/commands.ts:539",
+    "src/types/command.ts:155",
+    "src/types/command.ts:163",
+    "src/types/command.ts:186",
+    "src/types/command.ts:191"
+  ],
+  "pluginCommandMigration": "Some previously built-in prompt commands were moved OUT of the core binary into the plugin marketplace. The mechanism is a factory, `createMovedToPluginCommand` (src/commands/createMovedToPluginCommand.ts:22-65), which does not implement the old behaviour at all — it returns a plain Command literal with `type: 'prompt'` (line 31), `source: 'builtin'` (line 39) and a `userFacingName()` that returns the declaration name (lines 36-38). Its `getPromptForCommand` (line 40) branches on the internal user type: when `process.env.USER_TYPE === 'ant'` it returns a fixed instruction text telling the model the command 'has been moved to a plugin', giving the exact install line `claude plugin install <pluginName>@claude-code-marketplace`, telling the user to invoke `/<pluginName>:<pluginCommand>` afterwards, and ending 'Do not attempt to run the command. Simply inform the user about the plugin installation.' (lines 44-59). For everyone else — the comment says 'The prompt to use while the marketplace is private. External users will get this prompt. Once the marketplace is public, this parameter and the fallback logic can be removed.' (lines 11-15) — it delegates to the caller-supplied `getPromptWhileMarketplaceIsPrivate(args, context)` (line 62), i.e. the real prompt is still shipped in-binary but only for external builds. Two commands in this tree use it, both with pluginName === pluginCommand === their own name, so the installed plugin command is `/pr-comments:pr-comments` and `/security-review:security-review`: (1) src/commands/pr_comments/index.ts:3-8 wrapping the inline `gh`-based comment fetcher at index.ts:9-49; (2) src/commands/security-review.ts:198-242 wrapping the SECURITY_REVIEW_MARKDOWN prompt with frontmatter-parsed allowed-tools and `!`cmd`` shell expansion (security-review.ts:205-241). Both remain registered in the ordinary COMMANDS() array (src/commands.ts:252 for pr_comments, :266 for securityReview), so the 'moved' command is still a first-class built-in that merely redirects. Note the extractor had recorded commandKind `text` for both; the implementation's `type` is `prompt` (src/commands/createMovedToPluginCommand.ts:31).",
+  "cliSubcommands": [
+    {
+      "name": "mcp",
+      "behaviour": "Commander group 'mcp' - Configure and manage MCP servers. Subcommands: serve (Start the Claude Code MCP server, -d/--debug, --verbose), add (registered by registerMcpAddCommand, src/commands/mcp/addCommand.ts:33), xaa-idp (registered by registerMcpXaaIdpCommand, src/commands/mcp/xaaIdpCommand.ts), remove <name> (-s/--scope), list, get <name>, add-json <name> <json> (-s/--scope, --client-secret), add-from-claude-desktop (Mac and WSL only), reset-project-choices. Handlers live in src/cli/handlers/mcp.tsx and are dynamically imported per subcommand.",
+      "evidence": "src/main.tsx:2883"
+    },
+    {
+      "name": "server",
+      "behaviour": "Start a Claude Code session server. Options --port (default 0), --host (default 0.0.0.0), --auth-token, --unix <path>, --workspace <dir>, --idle-timeout <ms> (default 600000), --max-sessions (default 32). Probes for an already-running server via probeRunningServer and exits 1 if found; generates a random sk-ant-cc- token; wires startServer + SessionManager + DangerousBackend + writeServerLock. Gated on feature('DIRECT_CONNECT').",
+      "evidence": "src/main.tsx:2951"
+    },
+    {
+      "name": "ssh <host> [dir]",
+      "behaviour": "Run an installed cc-custom CLI on a remote host over SSH using the remote provider configuration. Options --permission-mode, --dangerously-skip-permissions, --local (spawn the child CLI locally to exercise the SSH NDJSON transport).",
+      "evidence": "src/main.tsx:3035"
+    },
+    {
+      "name": "open <cc-url>",
+      "behaviour": "Connect to a Claude Code server via cc:// URLs. Options -p/--print [prompt], --output-format text|json|stream-json. Gated on feature('DIRECT_CONNECT'); cc:// argv rewriting happens in main() before parse.",
+      "evidence": "src/main.tsx:3048"
+    },
+    {
+      "name": "auth",
+      "behaviour": "Commander group 'auth' - Manage authentication. Subcommands: status (--json default, --text), login (--provider <id>, default chatgpt-codex; connects a coding-plan OAuth subscription), logout (--provider <id>). Handlers in src/cli/handlers/auth.ts (authStatus / connectSubscriptionProvider / logoutSubscriptionProvider).",
+      "evidence": "src/main.tsx:3089"
+    },
+    {
+      "name": "plugin (alias: plugins)",
+      "behaviour": "Commander group 'plugin' - Manage Claude Code plugins. Subcommands: validate <path>, list (--json, --available), marketplace { add <source> (--sparse, --scope), list (--json), remove <name> (alias rm), update [name] }, install <plugin> (alias i, -s/--scope), uninstall <plugin> (aliases remove, rm; -s/--scope, --keep-data), enable <plugin>, disable [plugin] (-a/--all), update <plugin>. Handlers in src/cli/handlers/plugins.ts backed by src/services/plugins/pluginCliCommands.js.",
+      "evidence": "src/main.tsx:3126"
+    },
+    {
+      "name": "agents",
+      "behaviour": "List configured agents, with --setting-sources <sources> (user, project, local). Handler src/cli/handlers/agents.ts uses getAgentDefinitionsWithOverrides / getActiveAgentsFromList.",
+      "evidence": "src/main.tsx:3245"
+    },
+    {
+      "name": "auto-mode",
+      "behaviour": "Commander group 'auto-mode' - Inspect auto mode classifier configuration. Subcommands: defaults (print the default external auto-mode environment/allow/deny rules as JSON), config (print the effective merged config as JSON), critique (--model, AI feedback on custom rules via sideQuery). Handlers in src/cli/handlers/autoMode.ts. Nested inside a feature gate at this site.",
+      "evidence": "src/main.tsx:3256"
+    },
+    {
+      "name": "doctor",
+      "behaviour": "Check Claude Code health. The welcome text warns that the workspace trust dialog is skipped and that stdio servers from .mcp.json are spawned for health checks. Renders the Ink Doctor screen via src/cli/handlers/util.tsx (DoctorWithPlugins).",
+      "evidence": "src/main.tsx:3287"
+    },
+    {
+      "name": "up",
+      "behaviour": "[ANT-ONLY] Initialize or upgrade the local dev environment using the '# claude up' section of the nearest CLAUDE.md. Registered only inside the ant-only branch.",
+      "evidence": "src/main.tsx:3301"
+    },
+    {
+      "name": "log",
+      "behaviour": "[ANT-ONLY] Manage conversation logs. Argument [number|sessionId]; displays a specific log by index or session id (validateLogId).",
+      "evidence": "src/main.tsx:3317"
+    },
+    {
+      "name": "error",
+      "behaviour": "[ANT-ONLY] View error logs. Optional numeric argument selects a specific log entry.",
+      "evidence": "src/main.tsx:3325"
+    },
+    {
+      "name": "export",
+      "behaviour": "[ANT-ONLY] Export a conversation to a text file: `claude export <source> <outputFile>` where source is a session id, a log index, or a path to a .json/.jsonl log file. Distinct from the /export slash command.",
+      "evidence": "src/main.tsx:3333"
+    },
+    {
+      "name": "task",
+      "behaviour": "[ANT-ONLY] Manage task list tasks. Subcommands: create <subject> (-d/--description, -l/--list), list (-l/--list, --pending, --json), get <id>, update <id> (-s/--status, --subject, -d/--description, --owner, --clear-owner), dir (-l/--list, prints the tasks directory path).",
+      "evidence": "src/main.tsx:3345"
+    },
+    {
+      "name": "completion <shell>",
+      "behaviour": "Hidden command: generate a shell completion script (bash, zsh or fish), optionally --output <file>. Dynamically imports './cli/handlers/ant.js' for completionHandler. NOTE: that module does not exist in this restored tree - src/cli/handlers/ contains only agents.ts, auth.ts, autoMode.ts, mcp.tsx, plugins.ts and util.tsx - so this subcommand would fail at import time if reached.",
+      "evidence": "src/main.tsx:3397"
+    },
+    {
+      "name": "ps | logs | attach | kill, and --bg/--background",
+      "behaviour": "Session management against the ~/.claude/sessions/ registry, dispatched before the full CLI loads: ps -> bg.psHandler, logs -> bg.logsHandler, attach -> bg.attachHandler, kill -> bg.killHandler, and --bg/--background -> bg.handleBgFlag. Module src/cli/bg.js, gated on feature('BG_SESSIONS').",
+      "evidence": "src/entrypoints/cli.tsx:99"
+    },
+    {
+      "name": "daemon (and --daemon-worker=<kind>)",
+      "behaviour": "Long-running supervisor (daemonMain from src/daemon/main.js) and its spawned per-worker entry point runDaemonWorker from src/daemon/workerRegistry.js. Both are fast-paths in the bootstrap entry before the full CLI loads; gated on feature('DAEMON').",
+      "evidence": "src/entrypoints/cli.tsx:79"
+    },
+    {
+      "name": "new | list | reply",
+      "behaviour": "Template job commands dispatched to templatesMain in src/cli/handlers/templateJobs.js, exiting with process.exit(0) because the mounted Ink view can leave event-loop handles. Gated on feature('TEMPLATES').",
+      "evidence": "src/entrypoints/cli.tsx:126"
+    },
+    {
+      "name": "environment-runner",
+      "behaviour": "Headless BYOC runner: environmentRunnerMain in src/environment-runner/main.js. Gated on feature('BYOC_ENVIRONMENT_RUNNER').",
+      "evidence": "src/entrypoints/cli.tsx:140"
+    },
+    {
+      "name": "self-hosted-runner",
+      "behaviour": "Headless self-hosted runner targeting the SelfHostedRunnerWorkerService API (register + poll; poll IS heartbeat): selfHostedRunnerMain in src/self-hosted-runner/main.js. Gated on feature('SELF_HOSTED_RUNNER').",
+      "evidence": "src/entrypoints/cli.tsx:152"
+    },
+    {
+      "name": "default action (no subcommand) = the session itself",
+      "behaviour": "`program.name('claude').argument('[prompt]')` with the full flag set: -p/--print headless mode (handled by runHeadless in src/cli/print.ts:419), --output-format text|json|stream-json, --bare, --safe-mode, --resume/--continue/--fork-session/--resume-session-at/--from-pr, --rewind-files <user-message-id>, --model/--effort/--agent/--fallback-model, --permission-mode (choices PERMISSION_MODES), --allowedTools/--disallowedTools/--tools, --mcp-config/--strict-mcp-config, --system-prompt[-file]/--append-system-prompt[-file], --add-dir, --settings, --session-id, -n/--name, --agents, --plugin-dir, --effort, --worktree/--tmux, --ide, --tasks (ant-only). In print mode subcommand registration is skipped entirely (src/main.tsx:2872-2879).",
+      "evidence": "src/main.tsx:863"
+    }
+  ],
+  "cliHandlerFiles": [
+    {
+      "name": "src/cli/handlers/agents.ts",
+      "behaviour": "Agents subcommand handler - prints the list of configured agents; dynamically imported only when `claude agents` runs. Uses AGENT_SOURCE_GROUPS / resolveAgentModelDisplay / resolveAgentOverrides from src/tools/AgentTool/agentDisplay.js and getActiveAgentsFromList / getAgentDefinitionsWithOverrides from loadAgentsDir.js.",
+      "evidence": "src/cli/handlers/agents.ts:1"
+    },
+    {
+      "name": "src/cli/handlers/auth.ts",
+      "behaviour": "Auth subcommand handlers (authStatus etc.) over the subscription-provider runtime: getActiveProvider / isSubscriptionProvider / connectSubscriptionProvider / logoutSubscriptionProvider, with getConfiguredApiKeyHelper and getAPIProvider for the api-key path.",
+      "evidence": "src/cli/handlers/auth.ts:1"
+    },
+    {
+      "name": "src/cli/handlers/autoMode.ts",
+      "behaviour": "Auto-mode subcommand handlers - dump default/merged classifier rules and critique user-written rules (autoModeDefaultsHandler writes JSON to stdout); uses yoloClassifier's getDefaultExternalAutoModeRules and getAutoModeConfig.",
+      "evidence": "src/cli/handlers/autoMode.ts:1"
+    },
+    {
+      "name": "src/cli/handlers/mcp.tsx",
+      "behaviour": "MCP subcommand handlers extracted from main.tsx for lazy loading - add/remove/list/get/add-json/add-from-claude-desktop/reset-project-choices/serve, plus Ink dialogs (MCPServerDesktopImportDialog, MCPConnectionManager). Config writes go through addMcpConfig / removeMcpConfig in src/services/mcp/config.js.",
+      "evidence": "src/cli/handlers/mcp.tsx:1"
+    },
+    {
+      "name": "src/cli/handlers/plugins.ts",
+      "behaviour": "Plugin and marketplace subcommand handlers extracted from main.tsx for lazy loading; backed by src/services/plugins/pluginCliCommands.js (installPlugin, uninstallPlugin, enablePlugin, disablePlugin, disableAllPlugins, updatePluginCli).",
+      "evidence": "src/cli/handlers/plugins.ts:1"
+    },
+    {
+      "name": "src/cli/handlers/util.tsx",
+      "behaviour": "Miscellaneous subcommand handlers extracted from main.tsx for lazy loading - currently the doctor handler (DoctorWithPlugins wrapping the lazily imported screens/Doctor.js with useManagePlugins + AppStateProvider + MCPConnectionManager).",
+      "evidence": "src/cli/handlers/util.tsx:1"
+    },
+    {
+      "name": "src/cli/exit.ts",
+      "behaviour": "CLI exit helpers for subcommand handlers - consolidates the copy-pasted 'print + lint-suppress + exit' block. cliError(msg) writes to stderr via console.error and process.exit(1); cliOk(msg) writes to stdout via process.stdout.write and process.exit(0); both return `never` so TypeScript narrows at call sites.",
+      "evidence": "src/cli/exit.ts:19"
+    },
+    {
+      "name": "src/cli/print.ts",
+      "behaviour": "Headless (-p/--print) runtime, 183KB. runHeadless (line 419) parses options, sets up StructuredIO, installs the stream-json stdout guard, surfaces sandbox-unavailable reasons, runs setup/SessionStart hooks, loads initial messages, handles --rewind-files (lines 683-716), then streams through runHeadlessStreaming and prints text/json/stream-json results; SIGINT aborts and shuts down gracefully. Also hosts the SDK control-protocol surface (mcp_set_servers, seed_read_state, reload_plugins, elicitation) and the --rewind-files helper handleRewindFiles.",
+      "evidence": "src/cli/print.ts:419"
+    },
+    {
+      "name": "src/cli/structuredIO.ts",
+      "behaviour": "NDJSON control-protocol IO layer used by print mode: structured reads/writes, outbound queue, sandbox ask callback, MCP message/elicitation routing.",
+      "evidence": "src/cli/structuredIO.ts:1"
+    },
+    {
+      "name": "src/cli/ndjsonSafeStringify.ts",
+      "behaviour": "Safe JSON serialisation helper for NDJSON output lines (one JSON document per line).",
+      "evidence": "src/cli/ndjsonSafeStringify.ts:1"
+    }
+  ],
+  "mechanisms": {
+    "compaction": "Three-layer compaction, all in src/services/compact/, driven from src/commands/compact/compact.ts. (1) Manual /compact: `call` slices history at the last boundary with getMessagesAfterCompactBoundary (compact.ts:34), tries session-memory compaction first when no custom instructions were given (`trySessionMemoryCompaction`, compact.ts:46 -> sessionMemoryCompact.ts:514), otherwise runs `microcompactMessages` (compact.ts:74) then `compactConversation` (src/services/compact/compact.ts:357) with cache-sharing params from getCacheSharingParams (compact.ts:135), and returns `{ type: 'compact', compactionResult, displayText }`. (2) Auto: `autoCompactIfNeeded` (autoCompact.ts:203) checks the threshold each turn and calls the same compactConversation with isAutoCompact=true, with a circuit breaker after MAX_CONSECUTIVE_AUTOCOMPACT_FAILURES = 3 and a MIN_TURNS_BEFORE_RECOMPACT = 3 floor. (3) Micro: microCompact.ts trims tool results before a full summarisation. WHAT IT DOES TO HISTORY — the model-visible history is REWRITTEN (a new in-memory array), while the stored transcript is APPEND-ONLY and then SHADOWED on load. The result object is `{ boundaryMarker, summaryMessages, messagesToKeep?, attachments, hookResults, userDisplayMessage?, preCompactTokenCount?, postCompactTokenCount?, truePostCompactTokenCount?, compactionUsage? }` (src/services/compact/compact.ts:269-280) plus a `SystemCompactBoundaryMessage` built by `createCompactBoundaryMessage('auto'|'manual', preCompactTokenCount, lastUuid)` (compact.ts:562-566) that also carries `compactMetadata.preCompactDiscoveredTools` so already-loaded deferred tool schemas keep being sent (compact.ts:570-575). The caller rewrites the array: `buildPostCompactMessages` returns `[boundaryMarker, ...summaryMessages, ...messagesToKeep, ...attachments, ...hookResults]` (compact.ts:300-308), and src/utils/processUserInput/processSlashCommand.tsx:591-604 appends the slash-command echo messages to `messagesToKeep` and hands the rebuilt array to the REPL as the new `messages`. The summary itself is a synthetic user message marked `isCompactSummary: true, isVisibleInTranscriptOnly: true` (compact.ts:578-588) whose text is produced by getCompactUserSummaryMessage and includes the transcript path. On disk nothing is truncated: transcript writes go through `appendEntryToFile`, which uses `fs.appendFileSync(fullPath, line, { mode: 0o600 })` (src/utils/sessionStorage.ts:2203-2215), and recordTranscript only appends cleaned messages (sessionStorage.ts:1215-1227) — the comments explicitly describe `messagesToKeep` sharing UUIDs with pre-compaction entries and being dedup-skipped (sessionStorage.ts:1200-1214). Instead the boundary SHADOWS: `getMessagesAfterCompactBoundary` scans backwards for the last `compact_boundary` system message and returns `messages.slice(boundaryIndex)` (src/utils/messages.ts:4554-4588), and on resume for files larger than SKIP_PRECOMPACT_THRESHOLD = 5MB (src/utils/sessionStoragePortable.ts:505) the loader reads the post-boundary byte range only, tracking `wasTruncated` (sessionStorage.ts:3187-3209). Two further details: partial/reactive compaction can PRESERVE a suffix or prefix of messages, recorded on the boundary by `annotateBoundaryWithPreservedSegment(boundary, anchorUuid, messagesToKeep)` with `{ headUuid, anchorUuid, tailUuid }` so the loader can relink preserved messages in memory (compact.ts:319-337) — the preserved messages keep their original parentUuids on disk and are spliced in after parse. `autoCompactWindow` (the /auto-compact-window command, settings key `autoCompactWindowTokens`) is a CAP on the window used to compute the auto-compact threshold: `getEffectiveContextWindowSize(model)` (autoCompact.ts:34-55) starts from getContextWindowForModel, then takes `Math.min(contextWindow, settings.autoCompactWindowTokens)` when set (lines 41-44) and `Math.min(contextWindow, parseInt(process.env.CLAUDE_CODE_AUTOCOMPACT_WINDOW))` when that env var is set (lines 46-52), finally subtracting a summary reserve of `Math.min(getMaxOutputTokensForModel(model), MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000)` (lines 31, 35-38). The threshold is that value minus AUTOCOMPACT_BUFFER_TOKENS = 13_000 (autoCompact.ts:68, 85-104), with test overrides CLAUDE_AUTOCOMPACT_PCT_OVERRIDE and CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE. Master kill switches: DISABLE_COMPACT disables both manual and auto (src/commands/compact/index.ts:9, autoCompact.ts:161, 214), DISABLE_AUTO_COMPACT disables only the automatic path (autoCompact.ts:165) while leaving /compact working, and the user config key `autoCompactEnabled` is the last check (autoCompact.ts:169-170).",
+    "memory": "/memory is backed by files, not a database: it opens a selector over the CLAUDE.md family and hands the chosen file to $EDITOR. The command writes no memory content itself — src/commands/memory/memory.tsx `call` (line 83) clears and primes the memory-file cache (lines 86-87) and renders MemoryFileSelector; on selection it mkdirs the config home if needed, creates the file empty with `flag: 'wx'` swallowing EEXIST, then calls `editFileInEditor(memoryPath)` (lines 33-42). Path resolution is `getMemoryPath(memoryType)` (src/utils/config.ts:1628) over src/utils/memory/types.ts MemoryType: User -> `join(getClaudeConfigHomeDir(), 'CLAUDE.md')` (config.ts:1633, i.e. $CLAUDE_CONFIG_DIR or the runtime-root .claude dir per src/utils/envUtils.ts:43-51), Local -> `join(cwd, 'CLAUDE.local.md')` (config.ts:1635), Project -> `join(cwd, 'CLAUDE.md')` (config.ts:1637, with `.claude/CLAUDE.md` and `.claude/rules/*.md` also read by the loader at src/utils/claudemd.ts:886-899), Managed -> `join(getManagedFilePath(), 'CLAUDE.md')` (config.ts:1639; platform paths /Library/Application Support/ClaudeCode, C:\\Program Files\\ClaudeCode, /etc/claude-code per src/utils/settings/managedPath.ts:8-25), AutoMem -> `getAutoMemEntrypoint()` = getAutoMemPath() + 'MEMORY.md' (config.ts:1641, src/memdir/paths.ts:229-231), TeamMem -> `join(getAutoMemPath(),'team','MEMORY.md')` (src/memdir/teamMemPaths.ts). getAutoMemPath() itself (src/memdir/paths.ts:211-223) resolves, in order: the CLAUDE_COWORK_MEMORY_PATH_OVERRIDE env var (validated at lines 149-154), `autoMemoryDirectory` from policySettings/flagSettings/localSettings/userSettings only — projectSettings is deliberately excluded for security (lines 156-174) — else `join(getClaudeConfigHomeDir(),'projects',sanitizePath(gitRootOrProjectRoot),'memory')` (lines 217-220), memoized on project root. The loader src/utils/claudemd.ts (`getMemoryFiles`, memoized, line 790) walks Managed -> User -> Project -> Local and merges `@path` includes. Separately, a distinct auto-memory subsystem exists beside the editor: `isAutoMemoryEnabled()` (memdir/paths.ts:29-48, gated by CLAUDE_CODE_DISABLE_AUTO_MEMORY, --bare/SIMPLE, and the `autoMemoryEnabled` setting) plus background extraction (`isExtractModeActive`, paths.ts:62-70) and session-scoped memory (src/services/SessionMemory/sessionMemory.ts, used by /compact via trySessionMemoryCompaction).",
+    "permissionsSandbox": "TWO SEPARATE LAYERS. (A) Policy/permission rules — a settings-backed allow/ask/deny model plus permission MODES. Rules live in the `permissions` object of a settings file and are edited by /permissions (src/commands/permissions/permissions.tsx:5-8 renders PermissionRuleList), with persistence via `persistPermissionUpdate` (src/utils/permissions/PermissionUpdate.ts:234) into the source named by the update's `destination`: localSettings (`<cwd>/.claude/settings.local.json`), projectSettings (`<cwd>/.claude/settings.json`) or userSettings (`<claude config home>/settings.json`) — supportsPersistence rejects everything else (PermissionUpdate.ts:220-228). Written keys: `permissions.allow|deny|ask` (addRules at :246, removeRules at :301-305, replaceRules at :346-350), `permissions.additionalDirectories` (:271-275 add, :321-325 remove) and `permissions.defaultMode` for setMode (:333-337). Modes: EXTERNAL_PERMISSION_MODES = ['acceptEdits','bypassPermissions','default','dontAsk','plan'] (src/types/permissions.ts:16-22); InternalPermissionMode adds 'auto' and 'bubble' (types/permissions.ts:28-29); INTERNAL_PERMISSION_MODES = the external set plus 'auto' only when feature('TRANSCRIPT_CLASSIFIER') (types/permissions.ts:33-36), and PERMISSION_MODES aliases it (:38). Human titles in src/utils/permissions/PermissionMode.ts:45-91 — default='Manual', plan='Plan Mode', acceptEdits='Accept edits', bypassPermissions='Bypass Permissions', dontAsk=\"Don't Ask\", auto='Auto mode'; isExternalPermissionMode excludes 'auto'/'bubble' for ant users (:97-105). Rule behaviours enum: 'allow' | 'deny' | 'ask' | 'hard_deny' (types/permissions.ts:44). (B) OS-level confinement — REAL, and delegated to an external package rather than implemented here. src/utils/sandbox/sandbox-adapter.ts is explicitly 'Adapter layer that wraps @anthropic-ai/sandbox-runtime with Claude CLI-specific integrations' (lines 1-5) and imports `SandboxManager as BaseSandboxManager, SandboxRuntimeConfigSchema, SandboxViolationStore from '@anthropic-ai/sandbox-runtime'` (lines 18-22); the package is present in node_modules. Command execution is wrapped by `BaseSandboxManager.wrapWithSandbox(command, binShell, customConfig, abortSignal)` (adapter :732-737), reached from the shell layer at src/utils/Shell.ts:279 (`commandString = await SandboxManager.wrapWithSandbox(...)`); the runtime is initialised with `await BaseSandboxManager.initialize(runtimeConfig, wrappedCallback)` (adapter :786) and hot-reloaded when settings change (:789-794). Configuration is the `sandbox` object of settings (enabled, autoAllowBashIfSandboxed, allowUnsandboxedCommands, excludedCommands, enabledPlatforms, failIfUnavailable, network/filesystem restriction config), read by `getSandboxEnabledSetting()` (adapter :472-480) and written by the /sandbox command through `setSandboxSettings` -> `updateSettingsForSource('localSettings', ...)` (adapter :692-703). `isSandboxingEnabled()` requires a supported platform AND zero dependency errors AND the platform to be in enabledPlatforms AND the setting (adapter :545-560), and `getSandboxUnavailableReason()` (adapter :575-601) exists so an explicitly-enabled-but-unavailable sandbox is surfaced rather than silently ignored. Platform support and the concrete OS mechanisms come from the runtime package: `isSupportedPlatform` delegates to `BaseSandboxManager.isSupportedPlatform()` (adapter :504-506), the mechanism names appear in this tree's dependency UI as `seatbelt: built-in (macOS)` for macOS and `bubblewrap (bwrap)` + `socat` + `seccomp filter` for Linux/WSL (src/components/sandbox/SandboxDependenciesTab.tsx:57, :85), and the runtime's own files are node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/{macos-sandbox-utils.js (invokes `sandbox-exec`, :500),linux-sandbox-utils.js (bwrap + generated seccomp filters, :11, :117, :202-208)}. No landlock reference exists under src, and the Windows path is documented as unavailable (`sandbox is unavailable (bwrap/sandbox-exec are …)`, src/tools/PowerShellTool/PowerShellTool.tsx:206). WSL1 is explicitly unsupported (adapter :585).",
+    "rewind": "Per-user-message checkpoints over BOTH the filesystem and the conversation, entered through the interactive message selector. /rewind itself is a 13-line shim: `context.openMessageSelector()` then `return { type: 'skip' }` (src/commands/rewind/rewind.ts:8-12); the callback is wired at src/screens/REPL.tsx:2243-2247 to `setIsMessageSelectorVisible(true)`, mounting `<MessageSelector>` (REPL.tsx:4583), which offers code / conversation / both (src/components/MessageSelector.tsx:217-232). FILE restore: REPL passes `onRestoreCode` = `await fileHistoryRewind(updater, message.uuid)` (REPL.tsx:4584-4589); `fileHistoryRewind` (src/utils/fileHistory.ts:348-398) captures the current FileHistoryState with a no-op updater (the comment at :358-359 states 'Rewind is a pure filesystem side-effect and does not mutate FileHistoryState'), finds the snapshot whose messageId matches (:367-377) and calls `applySnapshot(captured, targetSnapshot)` (:383), which iterates state.trackedFiles and either `unlink`s the file when the target version recorded a null backup or `restoreBackup`s it when the on-disk file differs. Backup content lives OUTSIDE the transcript at `{configDir}/file-history/{sessionId}/{sha256(filePath)[0:16]}@vN` (resolveBackupPath, fileHistory.ts:734-742); snapshot metadata `{ messageId, trackedFileBackups, timestamp }` — a FileHistorySnapshot — is appended INTO the session transcript via recordFileHistorySnapshot -> getProject().insertFileHistorySnapshot (fileHistory.ts:320, src/utils/sessionStorage.ts:1326-1336), capped at MAX_SNAPSHOTS = 100. Snapshots are CREATED on prompt submission for each selectable user message (`fileHistoryMakeSnapshot`, src/utils/handlePromptSubmit.ts:539-553), after edits were staged by fileHistoryTrackEdit (fileHistory.ts:87). CONVERSATION restore: in the REPL, `onRestoreMessage={handleRestoreMessage}` (REPL.tsx:4661) -> restoreMessageSync (REPL.tsx:3487-3514) -> `rewindConversationTo(message)` (REPL.tsx:3450-3482), which does `setMessages(prev.slice(0, messageIndex))` (line 3460), then `setConversationId(randomUUID())` (:3462), `resetMicrocompactState()` (:3464), restores the message's permissionMode into toolPermissionContext and clears the stale promptSuggestion (:3466-3481), and finally re-populates the prompt input and re-attaches pasted images (:3489-3513). The rewind path performs NO transcript deletion — the only removeTranscriptMessage call site is REPL.tsx:2426 for tombstoned streaming messages — so rewound-away messages stay in the .jsonl and simply stop being in the active array. The headless/SDK sibling restores FILES only: `--rewind-files <user-message-id>` (src/main.tsx:886) is handled by handleRewindFiles (src/cli/print.ts:4008-4054, invoked at :699), requires --resume, and exits after restoring. There is also a 'summarize from here' path on the same selector (`onSummarize`, REPL.tsx:4590-4660) which calls partialCompactConversation and is a compaction operation, not a rewind.",
+    "extensions": "Four extension surfaces, all settings- or directory-backed. (1) HOOKS — the settings key `hooks` (schema src/utils/settings/types.ts:470-472), read from userSettings/projectSettings/localSettings by `getAllHooks` (src/utils/hooks/hooksSettings.ts:101, reading `sourceSettings.hooks` at :133-148) and grouped by event/matcher via groupHooksByEventAndMatcher (src/utils/hooks/hooksConfigManager.ts:270-302); /hooks is a READ-ONLY browser (HooksConfigMenu.tsx:3-12 says users must edit settings.json directly) and policy flags read are `disableAllHooks` and `allowManagedHooksOnly`. Hook execution points include tool permission hooks (src/hooks/toolPermission/), SessionStart/Setup/PostCompact hooks (src/utils/hooks.js, src/utils/sessionStart.ts) and elicitation hooks (src/services/mcp/elicitationHandler.js). (2) MCP — server definitions come from project `.mcp.json` (nearest wins walking root->cwd), the user global config `mcpServers`, the project-local config `mcpServers`, enterprise `managed-mcp.json` (exclusive when present), and plugin-provided servers (src/services/mcp/config.ts:792-930, :972-1015); enable/disable state is `disabledMcpServers` on the current project config (config.ts:1380-1407) and transport kinds include stdio/sse/http/sdk plus ws-ide/sse-ide for the IDE integration. (3) PLUGINS — installed-plugin metadata at `<plugins dir>/installed_plugins.json` (src/utils/plugins/installedPluginsManager.ts:78-79), marketplaces at `<plugins dir>/known_marketplaces.json` with a checkout cache under `<plugins dir>/marketplaces` (src/utils/plugins/marketplaceManager.ts:101-111), declarative settings key `extraKnownMarketplaces` (types.ts:604-614) and the enable list `enabledPlugins` (types.ts:594-602). Plugin commands/skills are loaded as ordinary Commands: `getPluginCommands()` / `getPluginSkills()` (src/utils/plugins/loadPluginCommands.js, used at src/commands.ts:136-141) return entries with `source: 'plugin'` and `pluginInfo.pluginManifest` (src/types/command.ts:33-37), described with a `(pluginName)` prefix by formatDescriptionWithSource (src/commands.ts:588-594). (4) SKILLS — skills from skill directories, bundled skills and builtin-plugin skills arrive as prompt commands through getSkillDirCommands / getBundledSkills / getBuiltinPluginSkillCommands (src/commands.ts:129-135, 297-343) and are listed by /skills (src/components/skills/SkillsMenu.tsx:214); model invocability is filtered by getSkillToolCommands and getSlashCommandToolSkills on `type === 'prompt'`, `disableModelInvocation`, `source` and `loadedFrom` (src/commands.ts:455-500). Additionally, workflows (`kind: 'workflow'`, src/types/command.ts:176, loaded by createWorkflowCommand when feature('WORKFLOW_SCRIPTS')) and user slash commands from `.claude/commands` (`loadedFrom: 'commands_DEPRECATED'`) join the same registry.",
+    "thinkback": "There IS a thinkback concept, and it is unlike anything else in this audit: a plugin-installed 'year in review' animation, not a memory or reasoning feature. `/think-back` (display name 'think-back', directory `thinkback`, src/commands/thinkback/index.ts:6-7, description 'Your 2025 Claude Code Year in Review') is an installer plus a launcher. src/commands/thinkback/thinkback.tsx renders ThinkbackFlow, which first mounts `ThinkbackInstaller` (line 518): its effect checks `loadKnownMarketplacesConfig()` and `isPluginInstalled('thinkback@<marketplace>')` (lines 38-40, 171-175), and if missing performs `addMarketplaceSource({ source: 'github', repo: 'anthropics/claude-plugins-official' })` — or `anthropics/claude-code-marketplace` for USER_TYPE 'ant' (lines 30-36, 182) — then `refreshMarketplace` (line 198), `installSelectedPlugins([pluginId])` (line 211) and `enablePluginOp` (line 230). The skill directory is resolved from the installed plugin as `join(thinkbackPlugin.path, 'skills', 'thinkback')` (line 54). Generation is DELEGATED TO THE MODEL, not done in-process: the menu's 'Edit content', 'Fix errors' and 'Regenerate' options call onDone with prompts like `Use the Skill tool to invoke the \"thinkback\" skill with mode=regenerate ...` (lines 385-387, dispatched at lines 472-481), so the model runs the plugin's `thinkback` skill to produce the animation. Playback is the exported `playAnimation(skillDir)` (line 60): it requires two generated files in the skill dir — `year_in_review.js` and `player.js` (lines 64-65, with readFile guards at 76 and 91) — grabs the Ink instance with `instances.get(process.stdout)`, calls `inkInstance.enterAlternateScreen()` (lines 107-114), shells out with `await execa('node', [playerPath], { stdio: 'inherit', cwd: skillDir, reject: false })` (lines 116-120), restores the screen in a finally block (line 124) and then opens `year_in_review.html` in the browser with open/start/xdg-open for video download (lines 128-132). The companion `/thinkback-play` is a hidden, non-interactive re-entry point into the same function: src/commands/thinkback-play/thinkback-play.ts reads the installed-plugin registry with `loadInstalledPluginsV2()` and looks up `v2Data.plugins['thinkback@<marketplace>']` (lines 20-22), then calls `playAnimation(join(firstInstall.installPath, 'skills', 'thinkback'))` (lines 40-41); its declaration comment says 'Hidden command that just plays the animation / Called by the thinkback skill after generation is complete' (index.ts:4-5) and it sets `isHidden: true, supportsNonInteractive: false` (index.ts:12-13). GATING: both commands use the identical predicate `isEnabled: () => checkStatsigFeatureGate_CACHED_MAY_BE_STALE('tengu_thinkback')` (thinkback/index.ts:8-9, thinkback-play/index.ts:10-11) — a remote Statsig gate whose helper is a NO-OP STUB in this build: `export function checkStatsigFeatureGate_CACHED_MAY_BE_STALE(gate: string): boolean { void gate; return false }` (src/services/analytics/growthbook.ts:157-162, 'No-op stub: returns false (GrowthBook disabled)'). Both commands are therefore permanently disabled in this tree, and the animation code itself is not present under src at all — it ships inside the plugin's skills/thinkback directory as `year_in_review.js` and `player.js`.",
+    "contextAndCost": "/context reads the live context composition; /cost reads in-memory session counters. /context has two registered variants under one name (src/commands/context/index.ts:4-24). The interactive `context` (local-jsx) lazily loads src/commands/context/context.tsx, whose `call` (line 21) projects history with getMessagesAfterCompactBoundary (lines 18-20), runs `microcompactMessages` so the visualisation matches the API payload (line 35), then calls `analyzeContextUsage` (line 43, src/utils/analyzeContext.ts:919) and renders an ANSI string via renderToAnsiString before onDone (lines 51-52). The non-interactive `context` (local, supportsNonInteractive) loads src/commands/context/context-noninteractive.ts, whose `collectContextData` (line 32) does the same projection (line 47) + microcompact (line 49) + `analyzeContextUsage` (line 52) and returns structured data, formatted as a markdown table by formatContextAsMarkdownTable (line 81) in `call` (line 70) — that same collector is reused by the headless path (src/cli/print.ts:225 imports collectContextData). So /context reads: the post-boundary message array, the microcompacted view of it, the tool list, the agent definitions, the system/user prompt overrides and the model's context window — it never reads disk. /cost is a 6-line shim: `call` returns `{ type: 'text', value: formatTotalCost() }` (src/commands/cost/cost.ts:5), and formatTotalCost (src/cost-tracker.ts:223-239) composes formatCost(getTotalCostUSD()) with a hasUnknownModelCost() caveat, formatDuration(getTotalAPIDuration()), formatDuration(getTotalDuration()), getTotalLinesAdded()/getTotalLinesRemoved() and formatModelUsage(). All of those come from './bootstrap/state.js' (cost-tracker.ts:3-29) — in-memory per-session counters maintained by addToTotalSessionCost (cost-tracker.ts:273-299, priced by calculateUSDCost in ./utils/modelCost.js) — not recomputed from the transcript. Cost state can be restored on resume via getStoredSessionCosts (cost-tracker.ts:82-118), which reads project-config keys lastCost / lastAPIDuration / lastDuration / lastModelUsage only when projectConfig.lastSessionId matches."
+  },
+  "added": [
+    "src/commands.ts is the single central registry for all 67 commands (memoized COMMANDS() array + INTERNAL_ONLY_COMMANDS + per-command isEnabled) — the mechanism this source was chosen to illustrate.",
+    "src/commands/createMovedToPluginCommand.ts implements the 'command moved to a plugin' migration shim used by pr-comments and security-review.",
+    "CLI subcommand surface found in src/main.tsx (commander) and src/entrypoints/cli.tsx (bootstrap fast-paths), with handlers in src/cli/handlers/* plus src/cli/{print,structuredIO,ndjsonSafeStringify,exit}.ts.",
+    "src/services/compact/ contains three distinct compaction layers (compactConversation, sessionMemoryCompact, microCompact) plus autoCompact threshold logic and autoCompactWindow.",
+    "src/utils/sandbox/sandbox-adapter.ts shows real OS-level confinement delegated to @anthropic-ai/sandbox-runtime (seatbelt on macOS, bubblewrap+socat+seccomp on Linux/WSL2) rather than policy-only prompts.",
+    "src/utils/fileHistory.ts implements per-user-message file checkpoints with content backups at {configDir}/file-history/{sessionId}/{hash}@vN — the storage behind /rewind.",
+    "The thinkback pair (/think-back, /thinkback-play) is a plugin-marketplace-installed animation feature gated by a remote Statsig flag that is a no-op stub in this build."
+  ],
+  "unverified": [
+    "feature('X') build flags (KAIROS_BRIEF, PROACTIVE, WORKFLOW_SCRIPTS, TORCH, FORK_SUBAGENT, BUDDY, TRANSCRIPT_CLASSIFIER, BG_SESSIONS, DAEMON, TEMPLATES, DIRECT_CONNECT, BYOC_ENVIRONMENT_RUNNER, SELF_HOSTED_RUNNER, NEW_INIT, DUMP_SYSTEM_PROMPT, COORDINATOR_MODE, AGENT_TRIGGERS, EXTRACT_MEMORIES, STREAMLINED_OUTPUT, COMMIT_ATTRIBUTION, HARD_FAIL, BUDDY) resolve at runtime from the Bun 'bun:bundle' module, which is not present in this tree; their values could not be resolved from source, so any gate that depends on them (brief, branch's `fork` alias, server/open, ps/logs/attach/kill, daemon, templates, environment-runner, self-hosted-runner, the `auto` permission mode) is recorded as written rather than as evaluated.",
+    "All GrowthBook/Statsig-backed gates are inert here: getFeatureValue_CACHED_MAY_BE_STALE returns its defaultValue and checkStatsigFeatureGate_CACHED_MAY_BE_STALE returns false (src/services/analytics/growthbook.ts:130-136, 157-162). Affected commands: think-back, thinkback-play (always disabled) and keybindings (always disabled), plus brief's config lookup.",
+    "The concrete OS confinement syscalls for the sandbox live in the external @anthropic-ai/sandbox-runtime package; this tree only names seatbelt / bubblewrap+socat+seccomp in its dependency UI (src/components/sandbox/SandboxDependenciesTab.tsx:57, :85) and comments. The runtime internals themselves were read from node_modules/@anthropic-ai/sandbox-runtime/dist/sandbox/*, not from src/.",
+    "Three uncited directories exist under src/commands/ with no files at all (passes, session, mobile, voice, mock-limits, reset-limits are empty on disk) and therefore contribute no commands; the extractor's disabledStubs list covers the 15 stub directories separately. Also present but not commands: src/commands/install.tsx (no `name:` and not imported by src/commands.ts) and src/commands/mcp/{addCommand.ts,xaaIdpCommand.ts} (commander registrars, not slash commands).",
+    "Six files carry the restored-build marker `// @ts-nocheck -- restored transpiled artifact; runtime-verified` (e.g. src/commands/thinkback/thinkback.tsx:1, src/commands/memory/memory.tsx is a transpiled artifact with an embedded base64 sourcemap, src/screens/REPL.tsx, src/commands/mcp/mcp.tsx, src/commands/model/model.tsx and others): their line contents are authoritative but their provenance is a transpile, and several bundler substitutions were left in place (the literal `\"external\" === 'ant'` at src/commands/mcp/mcp.tsx:81, src/commands/thinkback/thinkback.tsx:33, src/commands/terminalSetup/terminalSetup.tsx:123, src/screens/REPL.tsx:4572), making those branches dead code in this tree.",
+    "The input extractor's commandKind for pr-comments and security-review was `text`; the implementation type is `prompt`. Recorded as `prompt` here with the discrepancy noted rather than silently copied.",
+    "src/commands/insights.ts has no command named `project_areas`; that string is INSIGHT_SECTIONS[0].name (insights.ts:1158). The file's single command is `insights` (insights.ts:2838, type `prompt`), per the parent agent's correction."
+  ]
+}
