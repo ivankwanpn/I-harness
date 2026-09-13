@@ -338,7 +338,7 @@
         },
         {
           "name": "plugin-inventory-rpc-and-configurable-settings-surfaces",
-          "what": "PluginInventoryGateway is a TypertRemoteService exposing a single @Remote('list') that reads ctx.loader.entries() on every call, skips group entries, and projects each entry's Cordis Fiber.state into a serializable phase (pending/loading/active/failed/overloaded as null for disposed), appending agent-preset composition rows when an agentPresets roster is composed instead of caching a second lifecycle truth. The browser half ui-settings-plugin-inventory contributes a lazy read-only tab (id 'all', order 10) into the settings.plugins.tab slot and calls ctx.remote.pluginInventory.list() per open. The companion ui-settings-plugins package mounts the configurable tab and ships per-plugin cards (shell/bash, agent loop, web search, subagent model selection) whose controllers bind a settings namespace through ctx.settingsScope and refresh on credentials/reference-updated, llm/adapters-updated, settings/document-updated and connection/reset.",
+          "what": "PluginInventoryGateway is a TypertRemoteService exposing a single @Remote('list') that reads ctx.loader.entries() on every call, skips group entries, and projects each entry's Cordis Fiber.state into a serializable phase (pending, loading, active, failed, unloading, or null for disposed), appending agent-preset composition rows when an agentPresets roster is composed instead of caching a second lifecycle truth. The browser half ui-settings-plugin-inventory contributes a lazy read-only tab (id 'all', order 10) into the settings.plugins.tab slot and calls ctx.remote.pluginInventory.list() per open. The companion ui-settings-plugins package mounts the configurable tab and ships per-plugin cards (shell/bash, agent loop, web search, subagent model selection) whose controllers bind a settings namespace through ctx.settingsScope and refresh on credentials/reference-updated, llm/adapters-updated, settings/document-updated and connection/reset.",
           "invariants": [
             "The inventory is derived from the Loader on every call and never becomes a second source of plugin lifecycle state.",
             "A settings card writes only through its own bound settings namespace scope, so cards stay unaware of one another.",
@@ -962,7 +962,7 @@
         "lsp/lsp-stdio": "contributes none to retrieval: it is the stdio language-server implementation of the extension-domain ctx.lsp seam",
         "lsp/tool-lsp": "contributes none to retrieval: model-facing code-navigation tool registered from the extension domain",
         "skill/skill": "contributes none to retrieval: Cordis Service Definition plumbing for the ctx.skills provider registry (extension domain)",
-        "skill/skill-badge": "contributes none to retrieval: bundled bundled-content skill provider for the extension domain",
+        "skill/skill-badge": "contributes none to retrieval: bundled-content skill provider for the extension domain",
         "skill/skill-filesystem": "contributes none to retrieval: local skill discovery is extension-domain catalog state, not a query index over session or file content",
         "skill/tool-skill": "contributes none to retrieval: the durable skill catalog is extension state injected into context, not a searchable index",
         "hooks/hook-protocol": "contributes none to retrieval: shared hook execution/matcher/merge library for the extension domain",

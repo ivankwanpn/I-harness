@@ -1,17 +1,17 @@
-audit(d3-phase3): per-domain crosswalk brief
+audit(d3): per-source inventory validator (quantifies partial deliveries)
 
-The highest-judgement step of D3, written once so the twelve domain agents can be
-dispatched with short prompts. It states the failure mode in both directions:
-over-merging silently claims two different designs are one and HIDES a real
-difference; under-merging scatters one capability across seven rows and hides
-that anyone agrees. Neither is a cosmetic error -- both make the matrix lie.
+Judging one delivered D3 inventory against the gates that will actually decide
+whether it can be assembled, without needing all seven sources present. It
+reports mechanisms, verified count, missing evidence, module coverage resolved
+through the pattern matcher, hint corrections and absent domains, then says
+plainly whether the source PASSES or would block assembly.
 
-The instruction when unsure is explicit: do not merge, and the pair lands in the
-unreconciled appendix. A row left separate out of caution costs the reader a
-little; a wrong merge costs them the truth.
+It exists because "an agent delivered a file" and "an agent delivered something
+assemblable" are different claims, and only the second matters. Measured result
+at the time of writing:
 
-It also carries the rule that matters most for honesty: 已存在 and
-improved-writing are FORBIDDEN without an ih member, so a row cannot claim
-I-harness already has something it does not. And where a source's mechanism is
-present-but-unwired -- as I-harness's own compaction is -- the disposition must
-reflect that rather than reading as a working feature.
+  grok      23 mechanisms, 23/23 verified, 0 missing evidence
+            BUT 0/82 modules accounted for, 7 domains empty -> FAILS
+  opencode   0 mechanisms, empty stub                          -> FAILS
+
+Both are partial drafts, not inventories.

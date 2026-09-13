@@ -1,0 +1,199 @@
+{
+  "hintGroups": [
+    {
+      "modules": ["session-query/session-query", "session-query/session-query-sqlite", "session-query/tool-session-query", "session-query/session-log-export"],
+      "hintDomain": "loop",
+      "correctedDomain": "retrieval",
+      "reason": "These are the session search/index/export stack (SQLite FTS5 corpus, ranked search, /export archive), not the turn engine."
+    },
+    {
+      "modules": ["context/agent-instructions"],
+      "hintDomain": "loop",
+      "correctedDomain": "context",
+      "reason": "AGENTS.md/CLAUDE.md discovery and baseline injection is context assembly; the loop only consumes the projected user message."
+    },
+    {
+      "modules": ["core/agent-tool-presentation"],
+      "hintDomain": "loop",
+      "correctedDomain": "tools",
+      "reason": "The plugin only calls ctx.tools.presentAs('native'|'ptc'|'both'); it is the tool exposure-model switch, not a loop concern."
+    },
+    {
+      "modules": ["session/session-turn-outline"],
+      "hintDomain": "loop",
+      "correctedDomain": "session",
+      "reason": "It is a SessionProjectionDefinition folding turn/step events into an outline; it registers no loop behaviour."
+    },
+    {
+      "modules": ["api/workspace-controller", "api/workspace-files"],
+      "hintDomain": "tools",
+      "correctedDomain": "service",
+      "reason": "Both are Typert @Remote facades over the workspace/fs services exposed to the browser; the tools live in packages/fs and packages/workspace."
+    },
+    {
+      "modules": ["skill/skill-filesystem", "skill/tool-skill", "lsp/tool-lsp", "extensions/tool-cordis"],
+      "hintDomain": "tools",
+      "correctedDomain": "extension",
+      "reason": "Hinted on tools/extension. Each is the model-facing tool of an extension subsystem (skill registry, LSP client, dynamic Cordis plugins); the mechanism is the extension surface, not the tool runtime."
+    },
+    {
+      "modules": ["guard/repeat-tool-reminder"],
+      "hintDomain": "tools",
+      "correctedDomain": "safety",
+      "reason": "An advisory pre-dispatch guard that injects a reminder on repeated identical calls; it is a guard, not a tool-execution mechanism."
+    },
+    {
+      "modules": ["session/session-stats", "session/session-telemetry", "session/session-telemetry-otel"],
+      "hintDomain": "session",
+      "correctedDomain": "ops",
+      "reason": "Telemetry capture, OTLP export and the stats projection are observability, not persistence/lifecycle."
+    },
+    {
+      "modules": ["web/web-search-deepseek", "web/web-search-exa", "web/web-search-perplexity", "web/web-fetch-http", "web/tool-web"],
+      "hintDomain": "service",
+      "correctedDomain": "retrieval",
+      "reason": "Web search providers and HTTP fetch are retrieval capability (with the model-facing tool in web/tool-web), not the external transport surface."
+    },
+    {
+      "modules": ["interaction/user-questions"],
+      "hintDomain": "service",
+      "correctedDomain": "interface",
+      "reason": "A waterfall seam whose answerers are UI packages; it is an engine/presentation seam, not a transport."
+    },
+    {
+      "modules": ["interaction/commands"],
+      "hintDomain": "service",
+      "correctedDomain": "service",
+      "reason": "Hint stands - the commands registry is exposed as the commands.list/commands.execute Remote namespace."
+    },
+    {
+      "modules": ["core/scope"],
+      "hintDomain": "unmapped",
+      "correctedDomain": "loop",
+      "reason": "The classifier had no domain for it. dsh-scope (createScope / scopeTarget / ScopedLayers / bindScopeParent) is the primitive behind agent-scoped composition and agent-scoped event routing."
+    },
+    {
+      "modules": ["context/time-context"],
+      "hintDomain": "infra",
+      "correctedDomain": "context",
+      "reason": "'infra' is not one of the 12 taxonomy domains; this plugin injects durable time/turn context at the pre-step boundary."
+    },
+    {
+      "modules": ["guard/timeout-policy"],
+      "hintDomain": "infra",
+      "correctedDomain": "tools",
+      "reason": "'infra' is not a taxonomy domain; it is a policy seam consumed by the shell/terminal/spill tools."
+    },
+    {
+      "modules": ["session/session-format", "session/session-format-catalog", "session/session-format-v0-to-v1", "session/session-format-v1-to-v2", "session/session-format-v2-to-v3"],
+      "hintDomain": "infra",
+      "correctedDomain": "session",
+      "reason": "'infra' is not a taxonomy domain; these are the persisted-log schema version chain and its migration publishers."
+    },
+    {
+      "modules": ["util/atomic-write"],
+      "hintDomain": "infra",
+      "correctedDomain": "session",
+      "reason": "'infra' is not a taxonomy domain; it is the atomic-rename primitive the JSONL persistence backend writes through."
+    },
+    {
+      "modules": ["util/output-retention", "util/timeout", "util/native-command"],
+      "hintDomain": "infra",
+      "correctedDomain": "tools",
+      "reason": "'infra' is not a taxonomy domain; these bound tool output and process execution."
+    },
+    {
+      "modules": ["util/crypto"],
+      "hintDomain": "infra",
+      "correctedDomain": "ops",
+      "reason": "'infra' is not a taxonomy domain; it supplies the hashing/identity primitives used by telemetry attribution and session digests."
+    },
+    {
+      "modules": ["util/http-proxy"],
+      "hintDomain": "infra",
+      "correctedDomain": "model",
+      "reason": "'infra' is not a taxonomy domain; it installs the outbound proxy policy every provider adapter's HTTP transport goes through."
+    },
+    {
+      "modules": ["client/ui-brand-official", "client/ui-theme", "client/ui-primitives", "client/ui-layout", "client/ui-slots", "client/ui-dockkit", "client/ui-chat", "client/ui-conversation", "client/ui-renderer", "client/ui-trajectory", "client/ui-tool", "client/ui-workspace", "client/ui-sidebar", "client/ui-sidebar-files", "client/ui-sidebar-right", "client/ui-sidebar-documentpreview", "client/ui-plan", "client/ui-reference", "client/ui-session", "client/ui-settings", "client/ui-settings-general", "client/ui-deliverables", "client/ui-attachment", "client/ui-directory-picker-browse", "client/ui-directory-picker-native", "client/ui-input-trigger", "client/ui-agent-preset", "client/ui-model-selection", "client/ui-settings-models", "client/ui-settings-plugins", "client/ui-settings-plugin-inventory", "client/ui-skill", "client/ui-goal", "client/ui-jobs", "client/ui-schedule", "client/ui-subagent", "client/ui-workflow-run", "client/web", "client/store", "client/modules", "client/locale", "client/resources", "client/file-upload"],
+      "hintDomain": "service|tools|loop|model|subagent|extension|session",
+      "correctedDomain": null,
+      "reason": "Browser-side Cordis presentation plugins: they contribute rendering, layout and local state on the client and are deliberately outside the backend interface scope (which covers only the event/stream contract, presentation-mode policy and capability detection). No backend mechanism."
+    },
+    {
+      "modules": ["client/hmr"],
+      "hintDomain": "service",
+      "correctedDomain": null,
+      "reason": "Development-only client reload chain."
+    },
+    {
+      "modules": ["client/connection", "client/ui-commands", "client/ui-message-feedback", "client/ui-open-in-app", "client/ui-user-questions", "client/ui-approval", "client/ui-permission-presets"],
+      "hintDomain": "service|safety",
+      "correctedDomain": "interface",
+      "reason": "These client plugins do carry a real engine seam (stream reconnection, host command catalog merge, sessionFeedback Remote, open-in-app Remote, user-questions and approval waterfall answerers) and are recorded under interface/safety."
+    },
+    {
+      "modules": ["test-support/agent-loop-testkit", "test-support/client-runtime", "test-support/llm-mock-server", "test-support/llm-replay", "test-support/loader-smoke", "test-support/session-snapshot"],
+      "hintDomain": "infra",
+      "correctedDomain": null,
+      "reason": "'infra' is not a taxonomy domain and these are test-only support packages mounted by no shipped composition."
+    },
+    {
+      "modules": ["util/brand", "util/chunked-list", "util/deque", "util/home-paths", "util/launch-environment", "util/package-manifest", "util/time", "util/values", "util/workspace-path"],
+      "hintDomain": "infra",
+      "correctedDomain": null,
+      "reason": "'infra' is not a taxonomy domain; these are Cordis/type plumbing primitives with no capability of their own."
+    },
+    {
+      "modules": ["experimental/client-ui-agent-team"],
+      "hintDomain": "loop",
+      "correctedDomain": null,
+      "reason": "Browser UI for the unshipped agent-teams stack; presentation only, and not mounted by any shipped composition."
+    },
+    {
+      "modules": ["experimental/agent-team-profile", "experimental/agent-team-web-profile"],
+      "hintDomain": "loop",
+      "correctedDomain": "extension",
+      "reason": "src/index.ts is literally `export {}`; all content is cordis.patch.yml composing other packages, so the module is a composition patch, not a loop capability."
+    },
+    {
+      "modules": ["todo/tool-todo"],
+      "hintDomain": "tools",
+      "correctedDomain": "extension",
+      "reason": "Durable model-owned todo state; the tool is only its write surface."
+    },
+    {
+      "modules": ["plan/plan-mode"],
+      "hintDomain": "subagent",
+      "correctedDomain": "loop",
+      "reason": "A logged session-state machine that gates write tools until a plan is approved; it constrains the loop's tool admission rather than delegating work."
+    },
+    {
+      "modules": ["settings/settings", "settings/settings-file"],
+      "hintDomain": "interface",
+      "correctedDomain": "interface",
+      "reason": "Hint stands - settings is the engine/presentation seam; the file provider is its persistence backend."
+    },
+    {
+      "modules": ["identity/anonymous-user-id"],
+      "hintDomain": "safety",
+      "correctedDomain": "ops",
+      "reason": "It feeds attribution headers (x-deepseek-harness-user-id) and telemetry, not confinement or approval."
+    },
+    {
+      "modules": ["preset/persona"],
+      "hintDomain": "safety",
+      "correctedDomain": "loop",
+      "reason": "It only registers the system-prompt persona prefix/suffix sections; no safety mechanism."
+    },
+    {
+      "modules": ["webhook/webhook", "webhook/webhook-github"],
+      "hintDomain": "service",
+      "correctedDomain": "service",
+      "reason": "Hint stands - HMAC-verified unauthenticated ingress plus its GitHub driver."
+    }
+  ],
+  "domainsAbsent": [],
+  "pluginKernel": "dsh runs on Cordis, and that shapes every other domain: the harness is not a library with a CLI but a tree of plugins mounted by a Loader against a cordis.yml composition, where every capability is a Service looked up from the context. A plugin is a function or a `{ name, apply }` object; `apply(ctx, config)` receives a context that is a child Fiber of the mounting entry, and `export const inject = [...]` declares the service names it needs -- an entry whose dependencies are absent simply stays in FiberState.PENDING rather than failing, which is why the same package set can be composed into web, CLI, SDK and ACP profiles. Services register with `super(ctx, 'key')` and augment `interface Context` through `declare module '@deepseek-ai/cordis'`, so `ctx.llm`, `ctx.tools`, `ctx.agentLoop`, `ctx.sessionProjections`, `ctx.compaction` and `ctx.tokenMeter` are typed lookups resolved along the fiber tree. Teardown is structural, not conventional: `ctx.effect(() => disposer, 'label')` (or a generator effect yielding several disposers, which run LIFO) unwinds exactly the registrations made through that context, and `ctx.fiber.assertActive()` plus the FiberState set gate work against a lifecycle that is already dead. Events are the other half of the kernel: every extension point is a named event dispatched as `emit` (fire-and-forget, with failures contained per listener so one listener cannot starve a later one), `serial` (awaited in order, first bail wins) or `waterfall` (around-middleware with a `next` default) -- the loop's `agent/pre-step`, `agent/request` and `agent/request-error` are all waterfalls, and agent-subject events are dispatched through a fused carrier built by `agentEvents()` so the payload's `agent` field and the scope key cannot diverge. Composition is data, not code: shipped profiles (`packages/bundle/*`, `apps/*`) and per-agent presets (`agent.cordis.yml`) are cordis.yml trees, and `dsh-agent-presets` mounts a preset's subtree under a standing scope key to which that agent's context is parented, so its rows apply only to that agent. The scoping primitive underneath is `@deepseek-ai/dsh-scope`: registrations inherit DOWN the scope chain while event admission extends UP it, which is what makes a per-agent tool, prompt section or listener both local to the agent and visible to the agent's own dispatches. Boot is deliberately fail-loud: after the Loader tree settles, `assertEntriesLoaded` and `assertEntriesActivated` reject any enabled entry that failed to import, rejected during activation, or is still pending -- naming the missing services -- and `installFailLoud` turns a late unhandled rejection into one labelled stderr diagnostic followed by exit(1), waiting at most 2000 ms for a terminal-owning disposer to hand the terminal back. Layered over the same services is Typert, dsh's RPC plane: a `TypertRemoteService` subclass binds its Cordis service key to a wire namespace, `@Remote`-decorated methods become invocable endpoints (`@Remote('name')`, `@Remote({ mode: 'stream' })`, `@RemoteScope`), and a lookup/context registry maps wire ids back to host objects. That is why dsh's operational surface is an RPC namespace rather than a slash-command table: a capability is exposed by publishing a Remote, and the browser client, the SDK stdio runtime, the ACP bridge and the CLI are all thin adapters over the same service tree.",
+  "notes": "Mechanism-level inventory of dsh 0.1.5-rc.2 for D3. 12/12 taxonomy domains carry mechanisms; nothing was recorded in domainsAbsent. Module-count-only rows were deliberately avoided. Command-surface note: dsh has no central slash-command table -- a capability is exposed either as a Cordis service method, as a model-facing tool, or as a Typert @Remote endpoint, and the three standalone command packages (/compact, /feedback, /goal) plus the inline /permission, /plan and /export registrations are thin adapters over those. Evidence policy: every mechanism carries at least one path:line or path:line-line reference into src/, and every cited line was opened by the agent that recorded it; all 986 references across the file were additionally machine-checked to resolve to an existing file with in-range line numbers (0 missing, 0 out of range), and a sample of the first citation of every mechanism was read back and matched against its claim. Where a capability exists but has no shipped production caller this is stated in the mechanism's `what` (for example: the agent-teams stack is unshipped, storage-sqlite and the v0-to-v1/v1-to-v2 session-format migrations have no production importer, session-log-deepseek defaults to disabled, queueHostSubagentPrompt has no production caller, experimental/inspector's host endpoint is unmounted, and no job_start/job_wait tool exists). Nothing in this file is an evaluation of the design."
+}

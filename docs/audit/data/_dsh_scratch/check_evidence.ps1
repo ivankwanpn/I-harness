@@ -2,15 +2,22 @@ param(
   [string]$Dir = 'D:\I-harness-main\docs\audit\data\_dsh_scratch',
   [string]$Root = 'D:\agent-complete\deepseek-harness-dsh-v0.1.5-rc.2'
 )
-# Validate every evidence citation in every salvaged mechanism entry.
-# Reports: how many citations resolve to a real file+line range, and the failures.
-$files = Get-ChildItem $Dir -File -Filter '*.json'
-$report = @()
-$grandTotal = 0; $grandOk = 0
-foreach ($f in $files) {
+# Validate EVERY evidence citation in every salvaged mechanism entry, across both
+# scratch shapes: flat {mechanisms:[...]} and nested {domains:{<id>:{mechanisms:[...]}}}.
+function Get-Mechs($j) {
+  $out = @()
+  if ($j.mechanisms) { $out += $j.mechanisms }
+  if ($j.domains) { foreach ($p in $j.domains.PSObject.Properties) { if ($p.Value.mechanisms) { $out += $p.Value.mechanisms } } }
+  return $out
+}
+$grandTotal = 0; $grandOk = 0; $allProblems = @()
+foreach ($f in (Get-ChildItem $Dir -File -Filter '*.json' | Sort-Object Name)) {
   try { $j = Get-Content $f.FullName -Raw | ConvertFrom-Json } catch { Write-Output "SKIP(unparseable) $($f.Name)"; continue }
+  $mechs = Get-Mechs $j
+  if ($mechs.Count -eq 0) { continue }
   $total = 0; $ok = 0; $problems = @()
-  foreach ($m in $j.mechanisms) {
+  foreach ($m in $mechs) {
+    if (-not $m.evidence) { $problems += "NOEVIDENCE $($m.name)"; continue }
     foreach ($e in $m.evidence) {
       $total++
       if ($e -notmatch '^(?<p>[^:]+):(?<a>\d+)(?:-(?<b>\d+))?$') { $problems += "BADFORMAT  $($m.name) :: $e"; continue }
@@ -22,10 +29,9 @@ foreach ($f in $files) {
       $ok++
     }
   }
-  $grandTotal += $total; $grandOk += $ok
-  $report += [pscustomobject]@{ file = $f.Name; mechs = $j.mechanisms.Count; evidence = $total; resolved = $ok; problems = $problems.Count }
-  Write-Output "### $($f.Name): mechs=$($j.mechanisms.Count) evidence=$total resolved=$ok problems=$($problems.Count)"
-  $problems | Select-Object -First 25 | ForEach-Object { Write-Output "    $_" }
+  $grandTotal += $total; $grandOk += $ok; $allProblems += $problems
+  Write-Output "### $($f.Name): mechs=$($mechs.Count) evidence=$total resolved=$ok problems=$($problems.Count)"
+  $problems | ForEach-Object { Write-Output "    $_" }
 }
 Write-Output ""
-Write-Output "==== TOTAL evidence citations: $grandTotal ; resolved to a real line: $grandOk ; unresolvable: $($grandTotal-$grandOk) ===="
+Write-Output "==== TOTAL citations: $grandTotal ; resolved: $grandOk ; unresolvable: $($grandTotal-$grandOk) ===="
