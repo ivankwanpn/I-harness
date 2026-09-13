@@ -16,7 +16,7 @@
 
 import { readFileSync, existsSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { SOURCES, buildUnion, loadSources } from "./lib-union.mjs"
+import { SOURCES, buildUnion, loadSources, coverageAccountsFor } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const DATA = join(ROOT, "docs/audit/data")
@@ -283,7 +283,7 @@ if (!d3Modules) {
     }
     const expected = (d3Modules.sources[key]?.modules ?? []).map((m) => m.name)
     const cov = body.moduleCoverage ?? {}
-    const missing = expected.filter((n) => !(n in cov))
+    const missing = expected.filter((n) => !coverageAccountsFor(cov, n))
     expectedTotal += expected.length
     coveredTotal += expected.length - missing.length
     if (missing.length) uncovered.push({ key, reason: `${missing.length} unaccounted`, missing })
