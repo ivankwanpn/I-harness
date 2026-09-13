@@ -28,7 +28,7 @@
 //   node scripts/audit/verify-citations.mjs --sample 25     # emit N cells to judge
 //   node scripts/audit/verify-citations.mjs --json
 
-import { readFileSync, existsSync, readdirSync } from "node:fs"
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
 import { carrierClass } from "./lib-union.mjs"
 
@@ -106,9 +106,11 @@ const stats = {
   docComment: 0,
   noOverlap: 0,
   noCitation: 0,
+  directoryOnly: 0,
 }
 const lineUse = new Map()
 const cells = []
+const dirOnly = []
 const docOnly = []
 
 
@@ -138,6 +140,27 @@ function checkClaim(source, cmd, field, claimText, citations) {
     }
     const ls = lines(abs)
     if (!ls) {
+      // A DIRECTORY is a resolvable location, just not a line-numbered one.
+      // Calling it "unreadable" was wrong and produced three false alarms on
+      // codex citations of codex-rs/vendor/bubblewrap,
+      // codex-rs/collaboration-mode-templates and
+      // codex-rs/ext/extension-api/src/contributors -- each a real subsystem the
+      // claim was pointing at. It is weaker evidence than file:line (it cannot
+      // show WHICH part carries the claim), so it is counted separately rather
+      // than as a defect.
+      let isDir = false
+      try {
+        isDir = statSync(abs).isDirectory()
+      } catch {
+        isDir = false
+      }
+      if (isDir) {
+        stats.directoryOnly++
+        dirOnly.push({ source, cmd: cmd.rawName, cite })
+        anyResolved = true
+        stats.resolved++
+        continue
+      }
       stats.missingFile++
       problems.push({ source, cmd: cmd.rawName, kind: "UNREADABLE", detail: cite })
       continue
