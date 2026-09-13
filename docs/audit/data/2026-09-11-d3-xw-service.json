@@ -1,6 +1,6 @@
 {
   "domain": "service",
-  "note": "GROK'S EMPTY CELL IS NOT A FINDING. grok's domains.service array is empty as an absence of MATERIAL, not as evidence that grok has no service plane. grok's own moduleCoverage records three service-domain modules that were read but never written up as mechanisms: xai-grok-workspace-daemon ('Service-domain process plumbing' - double-fork + setsid, single-instance pidfile lock, preview-proxy supervision, daemon-owned files opened O_NOFOLLOW mode 0600), xai-acp-lib ('The ACP transport itself: agent/client channel pair, gateway sender/receiver, message boxing, line-buffered and stdin readers, normalization ... belongs to service'), and xai-grok-http ('Infrastructure underneath the service and ops domains; contributes no mechanism of its own' - four shared reqwest clients). hintCorrections additionally remaps xai-grok-tools-api and xai-grok-voice INTO service. grok's service plane therefore demonstrably exists; it just carries no verbatim mechanism names in the inventory, so hard rule 1 forbids citing any of them in members. Read this domain's grok column as 'not inventoried', never as 'absent by design'. Note also that grok's domains.model and domains.ops are empty under the same deferral, and that the two domains.service items in the harvest file are xai-grok-pager slash-command renderings (/scroll-debug, /settings), i.e. TUI command material rather than transport, so they are not mechanisms of this domain and are excluded from the counts.",
+  "note": "RE-RUN of the service domain. The previous pass was built while grok's domains.service array was empty, so grok's service plane could only be carried as a member-less row. grok is now inventoried with 8 verbatim service mechanisms (xai-grok-workspace-daemon, xai-grok-diag-server, xai-grok-http, xai-acp-lib, xai-grok-voice, xai-grok-workspace-client/-types, xai-grok-tools-api; hintCorrections moved the acp, http, tools-api and voice crates into service) and all 8 are placed by name: the previously member-less service-daemon-process-management row gained its real grok member, the two xai-acp-lib mechanisms joined acp-server (the old blocker was hard rule 1, not a judgement that grok's ACP layer was a different capability), grok's frozen workspace RPC contract joined typed-remote-rpc-plane, and four grok-only capabilities became their own rows (sidecar supervision with health-resetting restart backoff, the loopback readiness/status/log diagnostics server, the shared HTTP client pool with poison-pool escape, and streaming STT dictation with out-of-process capture). The other six sources are unchanged, so every row that did not gain a grok member is carried over from the previous pass verbatim. Coverage is now 64 mechanisms seen and 64 placed (was 56). Exclusions, unchanged: grok's two harvest domains.service items are xai-grok-pager slash-command renderings (/scroll-debug, /settings), i.e. TUI command material rather than transport, so they are not mechanisms of this domain.",
   "rows": {
     "http-service-host-surface": {
       "domain": "service",
@@ -171,10 +171,12 @@
         "ih": ["acp-v1-server-for-the-automation-subset"],
         "dsh": ["acp-agent-client-protocol"],
         "opencode": ["acp-stdio-agent-adapter"],
-        "opencode-fork": ["acp-agent-protocol"]
+        "opencode-fork": ["acp-agent-protocol"],
+        "grok": ["acp-gateway-channel-pair-and-fire-and-forget-notifications", "acp-stdio-line-transport-hardening"]
       },
       "disposition": "已存在",
-      "rationale": "IH 有 ACP 自動化子集；權限簡化"
+      "rationale": "IH 有 ACP 自動化子集；權限簡化",
+      "note": "grok joins with TWO mechanisms from xai-acp-lib and both are the transport half, not the lifecycle half: acp-gateway-channel-pair-and-fire-and-forget-notifications is the agent/client channel pair (a oneshot responder slot per request), the gateway sender/receiver whose run loop never blocks on a handler, deliberately fire-and-forget session_notification and ext_notification because blocking on a degraded relay can stall a session, and typed channel failures carried as a discriminant in the error data (xaiAcpChannelFailure with send_failed / recv_failed) rather than by matching message text; acp-stdio-line-transport-hardening is the bounded stdin reader (a depth-64 channel with blocking_send so stdin backpressures instead of buffering without bound), the normalizer that rewrites only the single escaped-slash form the pinned acp envelope would otherwise drop and forwards everything else byte-identical, and a 64 MiB per-line ceiling that is a typed InvalidData error rather than memory growth. grok records no initialize/session/prompt/permission surface for this domain, so this row's 已存在 must not be read as grok shipping a full ACP server like the other four members; the ACP entry in unmergedDoubts records that flattening."
     },
     "service-self-auth": {
       "domain": "service",
@@ -219,10 +221,12 @@
       "domain": "service",
       "label": "型別化遠端 RPC 呼叫平面",
       "members": {
-        "dsh": ["typert-remote-rpc-plane"]
+        "dsh": ["typert-remote-rpc-plane"],
+        "grok": ["workspace-rpc-client-over-a-frozen-wire-contract"]
       },
       "disposition": "rewrite",
-      "rationale": "值得做；命名空間方法取代斜線命令"
+      "rationale": "值得做；型別化 RPC 取代斜線命令",
+      "note": "grok's single mechanism bundles the client and the contract: WorkspaceClient keeps a connected latch and fast-fails NotConnected with no round trip, maps a non-retryable workspace_unavailable to a distinct WorkspaceHibernated (do not retry) that deliberately does NOT trip the latch while a NetworkError or a protocol_error-coded Custom error does; xai-grok-workspace-types keeps every wire enum adjacently tagged, method names in const METHOD, and a const ACTIVITY with no default so a new RPC method cannot compile without declaring whether it keeps the workspace awake; the envelope carries turn_active / hub_error / unknown_method codes and matches the legacy 'unknown workspace method:' prefix so an older hub is still understood; and xai-grok-tools-api contributes generated protobuf types, shared config validation so save-time checks cannot drift from bind-time enforcement, and the canonical slash-command wording plus tool names that gate those commands. dsh's member is the server/dispatch half and grok's is the client/contract half; unmergedDoubts records both that split and why grok's frozen-contract half was not routed to the vendor/codegen row."
     },
     "config-and-credentials-rpc-plane": {
       "domain": "service",
@@ -339,10 +343,52 @@
     "service-daemon-process-management": {
       "domain": "service",
       "label": "服務常駐化與單實例鎖",
-      "members": {},
+      "members": {
+        "grok": ["double-fork-daemonize-with-single-instance-pidfile-lock"]
+      },
       "disposition": "遠期",
-      "rationale": "GROK 未成機制，僅模組覆蓋記載",
-      "ihNote": "成員刻意留空：grok 的 xai-grok-workspace-daemon（double-fork + setsid、pidfile 單實例鎖、preview-proxy 監督、守護行程檔案一律 O_NOFOLLOW 且 0600）只存在於 grok 的 moduleCoverage，未寫成 domains.service 機制，硬規則 1 不允許引用。此列存在是為了不讓那塊能力在跨源表中消失。"
+      "rationale": "單實例鎖可借；fork 常駐化暫緩",
+      "note": "The previously member-less row is now real: grok wrote xai-grok-workspace-daemon up as a mechanism, so these clauses are citable verbatim - the advisory flock held for the daemon's whole life (the PID text is diagnostic only; exclusion comes from the lock, and a contended acquire returns Ok(None) so the caller exits quietly instead of running a second instance), acquire_or_take_over escalation against a live predecessor (read the recorded PID, signal gracefully, poll for TAKEOVER_GRACE, force kill, poll for TAKEOVER_KILL_GRACE, declining if a newer spawn won the lock instead), the ordering rule that double-fork and setsid must run before anything starts threads (grok daemonizes before it builds the tokio runtime), the shared helper that opens every daemon-owned file (log, pidfile, preview-proxy log) with O_NOFOLLOW and mode 0600, and fail-soft oom_score_adj adjustment. Disposition unchanged at 遠期: the fail-closed single-instance lock is the borrowable half, but the residency half (fork/setsid/chdir to root/stdio repointing) has no Windows equivalent and shipping IH as an installed resident daemon is a product decision rather than a gap; grok itself only daemonizes under --daemonize, which defaults off."
+    },
+    "sidecar-supervision-with-backoff-restart": {
+      "domain": "service",
+      "label": "輔助行程監督與健康退避重啟",
+      "members": {
+        "grok": ["preview-proxy-supervision-with-loopback-activity-scraping"]
+      },
+      "disposition": "遠期",
+      "rationale": "IH 無 sidecar 可監督；產品級",
+      "note": "grok's supervisor execs exactly one child (the preview proxy), captures its stdout/stderr into a daemon-owned log that is served back through the diagnostics endpoints, spawns it with kill_on_drop inside a restart loop whose 1 s base delay doubles to a 30 s cap and RESETS after a run lasting PREVIEW_PROXY_HEALTHY_RUN_SECS so a crash loop converges on a fixed interval, re-checks getppid() beside PR_SET_PDEATHSIG(SIGKILL) to close the fork/exec race (which is why the task must run on long-lived workers), and scrapes the child's loopback /__control/activity (idle withholding) and /__control/metrics (preview_proxy_ prefix every 60 s). Gated by --preview-enabled, default off. 遠期 rather than rewrite because the supervised artifact is grok's preview product and IH has no sidecar plane to supervise; the health-resetting backoff and activity-scraped idle detection are the reusable parts."
+    },
+    "loopback-readiness-and-log-diagnostics-server": {
+      "domain": "service",
+      "label": "回環就緒狀態與日誌診斷端點",
+      "members": {
+        "grok": ["loopback-diagnostics-readiness-server"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；就緒契約與日誌尾端上限",
+      "note": "Three unauthenticated GET routes on a loopback-only listener that never goes through the sandbox port mapping: /ready is 200 only when the hub state is Connected and 503 otherwise, with the body served either way so naive HTTP probes and state parsers agree, and its field set is a FROZEN contract with the sandbox readiness gate (additions only, never rename or remove); /statusz flattens those fields plus os and advisory image_capabilities that is explicitly never an authorization input because the guest can forge the markers; /logs tails the daemon log at a 64 KiB default clamped to a 256 KiB hard cap, returns 404 when there is no log file, and answers a generic 500 on I/O error so the log path is never echoed. State latching is deliberately sticky (set_failed is terminal, a 4100-4199 close code survives set_disconnected, revive_connected only for an allow-listed code). Always started by grok's workspace server, which advertises diag: true; the Unix socket is 0600 and the TCP listener exists only on Windows, so DEFAULT_DIAG_PORT is inert on Unix. IH's web surface has no readiness/status/log endpoint, no frozen probe contract and no bounded log-tail read, so this is rewrite, not 已存在."
+    },
+    "shared-http-client-pool-with-poison-escape": {
+      "domain": "service",
+      "label": "共用 HTTP 連線池與毒化池逃逸",
+      "members": {
+        "grok": ["shared-http-clients-with-poison-pool-escape"]
+      },
+      "disposition": "rewrite",
+      "rationale": "值得做；末次重試逃離毒化池",
+      "note": "Four shared clients with deliberately different pool policies: an HTTP/2 keepalive general client (30 s pool idle timeout, a client-mode header), an HTTP/1.1-only upload client with pool_max_idle_per_host(2) and a 10 s idle timeout because a degraded multiplexed connection silently drops multipart bodies, a blocking startup client whose STARTUP_FETCH_TIMEOUT is both the connect and the read ceiling, and a pool-less never-cached client. The mechanism is the policy rather than the constructors: send_with_retry_escaping_pool runs early attempts on the pooled client and swaps the LAST attempt of a multi-attempt run onto the pool-less client so a tight budget escapes a reset or GOAWAY immediately instead of waiting for pool eviction, and transport failures are classified by walking the cause chain with certificate verdicts separated from plain connect failures (an untrusted issuer must not read as an unreachable host). Two compile-time asserts pin the budget relationships between the startup timeouts. grok's own moduleCoverage still calls xai-grok-http infrastructure that contributes no mechanism of its own while its hintCorrections assigns the crate to service; the verbatim domains.service entry is what hard rule 1 requires, and that entry itself argues the pool-escape policy plus the classifier are the mechanism. IH has no shared outbound client pool or transport-failure classifier in this domain, so rewrite."
+    },
+    "streaming-stt-dictation-with-out-of-process-capture": {
+      "domain": "service",
+      "label": "串流語音聽寫與行程外麥克風擷取",
+      "members": {
+        "grok": ["streaming-stt-dictation-with-out-of-process-mic-capture"]
+      },
+      "disposition": "遠期",
+      "rationale": "依賴外部 STT 服務；產品級緩辦",
+      "note": "A streaming STT client plus a pipeline task rather than a renderer concern: press/release/shutdown commands, binary PCM followed by an audio.done frame on the STT websocket, server events mapped to Created/Partial/Done/Error, a NO_SPEECH_TIMEOUT watchdog that tears down a silent session with microphone guidance instead of streaming a dead input, and a bounded BACKLOG_MAX_CHUNKS backlog so capture never backpressures during the handshake (holding the sender defers the writer's audio.done until the backlog drains). Capture is deliberately out of process, where the audio stack is expensive: the binary re-execs itself as a hidden __mic-capture helper speaking a one-line READY handshake, Linux falls back to system recorders probed with a short --raw check, and the whole feature is compile-time gated by the audio cargo feature. grok's hintCorrections moved xai-grok-voice into service (hintWas interface) because it is an outbound service integration plus an event stream, which is why it is this domain's business. 遠期: real and well bounded, but a hosted STT dependency plus microphone capture is a product-level addition with no IH counterpart."
     },
     "inert-permission-context-logging": {
       "domain": "service",
@@ -356,8 +402,8 @@
   },
   "unmergedDoubts": [
     {
-      "mechanisms": ["codex:sandbox-helper-and-arg0-dispatch", "grok:xai-grok-workspace-daemon (moduleCoverage only)"],
-      "whyNotMerged": "Both are 'one binary/process serving several service roles' and codex's modules list includes exec-server. I did not merge because the codex mechanism's four helper roles (apply-patch, linux sandbox, windows sandbox, filesystem helper) are confinement helpers owned by the safety domain, so the shared content is only the argv[0] multiplexing trick; and grok's daemon has no verbatim name in domains.service, so hard rule 1 already forbids citing it. The grok half is carried as a member-less row instead."
+      "mechanisms": ["codex:sandbox-helper-and-arg0-dispatch", "grok:double-fork-daemonize-with-single-instance-pidfile-lock"],
+      "whyNotMerged": "Both are 'one process/binary serving several service roles' and codex's modules list includes exec-server. Re-examined on this re-run now that grok's daemon mechanism has a verbatim name (it was moduleCoverage-only before): still not merged. The codex mechanism's four helper roles (apply-patch, linux sandbox, windows sandbox, filesystem helper) are confinement helpers owned by the safety domain, so the shared content is only the argv[0] multiplexing trick, whereas grok's mechanism is residency plus single-instance exclusion with no role multiplexing at all. The grok half now sits in its own row with a real member instead of a member-less one."
     },
     {
       "mechanisms": ["dsh:browser-http-api-transport", "dsh:remote-stream-websocket-mux", "ih:web-service-surface-unary-http-routes-one-websocket-mux", "opencode:http-server-listener-and-lifecycle", "opencode-fork:http-server-and-openapi-spec"],
@@ -400,8 +446,8 @@
       "whyNotMerged": "Merged into one workspace-routing/control-plane row, but the two are not the same maturity: upstream has a RequestPlan parser plus the /experimental/control-plane/move-session operation, while the fork has the full reverse proxy (HTTP and WebSocket) and the x-opencode-sync fence wait. A reader should not read the merged row as 'both do proxying'."
     },
     {
-      "mechanisms": ["opencode:acp-stdio-agent-adapter", "opencode-fork:acp-agent-protocol", "ih:acp-v1-server-for-the-automation-subset", "dsh:acp-agent-client-protocol"],
-      "whyNotMerged": "All four are one ACP server over stdio and are merged, which flattens two differences. (1) Maturity: upstream's adapter is initialize+prompt with runUntilIdle gating, the fork implements the full load/fork/list/resume/close lifecycle. (2) Permission philosophy: IH uses a binary autoApprove switch with no session/request_permission flow (a refused prompt never reaches the session service), dsh downgrades to one-shot allow-once/reject-once so a client response can never become a durable grant, and the opencode pair route prompts through the engine. That divergence is why the row is 已存在 rather than rewrite."
+      "mechanisms": ["opencode:acp-stdio-agent-adapter", "opencode-fork:acp-agent-protocol", "ih:acp-v1-server-for-the-automation-subset", "dsh:acp-agent-client-protocol", "grok:acp-gateway-channel-pair-and-fire-and-forget-notifications", "grok:acp-stdio-line-transport-hardening"],
+      "whyNotMerged": "All six are one ACP surface over stdio and are merged, which flattens three differences. (1) Maturity: upstream's adapter is initialize+prompt with runUntilIdle gating, the fork implements the full load/fork/list/resume/close lifecycle. (2) Permission philosophy: IH uses a binary autoApprove switch with no session/request_permission flow (a refused prompt never reaches the session service), dsh downgrades to one-shot allow-once/reject-once so a client response can never become a durable grant, and the opencode pair route prompts through the engine. That divergence is why the row is 已存在 rather than rewrite. (3) NEW on this re-run: grok's two members are the transport half only (channel pair with typed failures, spawn-per-message gateway dispatch, fire-and-forget notifications; bounded stdin reader, one-escape normalizer, line ceiling) and grok's inventory records no lifecycle or permission surface at all, so the merged row mixes four lifecycle implementations with one wire library. The previous pass named xai-acp-lib as the strongest candidate for this row and refused it only because hard rule 1 blocked a moduleCoverage name; with verbatim names the merge is now made, and this entry is the record of what it hides."
     },
     {
       "mechanisms": ["dsh:service-self-auth-token-cookie", "opencode:service-basic-auth-with-ticket-bypass", "opencode-fork:service-basic-auth", "codex:websocket-listener-authentication"],
@@ -412,13 +458,33 @@
       "whyNotMerged": "codex and cc-custom both expose the harness itself as an MCP server over stdio and are merged; cc-custom's control-channel bridge stayed separate because it carries MCP traffic in the opposite direction (servers the SDK consumer registered in-process, inside the SDK protocol). Merging would have conflated 'IH as MCP server' with 'MCP over the IH control channel'."
     },
     {
-      "mechanisms": ["grok:xai-acp-lib", "grok:xai-grok-http", "grok:xai-grok-tools-api", "grok:xai-grok-voice", "grok:xai-grok-workspace-daemon"],
-      "whyNotMerged": "These are the five modules grok's own moduleCoverage/hintCorrections assign to service, including the ACP wire layer, which would otherwise be the strongest candidate for the ACP row. None may be cited in members because grok's domains.service array is empty and hard rule 1 requires verbatim presence in the inventory for this domain. Recorded here so the empty grok column is read as an inventory hole, not a design choice; the daemon module is given a member-less row so it is not dropped on the floor."
+      "mechanisms": ["grok:double-fork-daemonize-with-single-instance-pidfile-lock", "grok:preview-proxy-supervision-with-loopback-activity-scraping"],
+      "whyNotMerged": "Both belong to xai-grok-workspace-daemon, and the previous pass carried that module as ONE member-less row described as double-fork + pidfile lock + preview-proxy supervision, so a single daemon-process-management row was arguable. Kept as two because the capabilities and their failure postures are opposite: residency and exclusivity fail CLOSED (a contended flock declines and the process exits quietly), while sidecar supervision is fail-SOFT (a spawn or log-open failure backs off and retries, an unreachable proxy is a quiet no-op on the activity path). A merged row would also have hidden that the reusable part - health-resetting restart backoff, PDEATHSIG ordering, activity scraped for idle detection - is not the same capability as daemonizing."
+    },
+    {
+      "mechanisms": ["grok:loopback-diagnostics-readiness-server", "ih:web-service-surface-unary-http-routes-one-websocket-mux", "dsh:web-host-static-and-launch", "opencode:http-server-listener-and-lifecycle", "opencode-fork:http-server-and-openapi-spec", "codex:websocket-listener-authentication"],
+      "whyNotMerged": "grok's diagnostics server is a SECOND HTTP listener in the same process and was a candidate for the HTTP service host row. Not merged because it is deliberately separate from the main surface: three fixed unauthenticated GET routes on its own loopback or unix-socket bind that never goes through the sandbox port mapping, a /ready field set frozen against an external readiness gate, and /logs serving the daemon's own log - whereas the host-surface row is the main API/UI surface with routing, static serving and authentication, and a merged row would have to explain why an unauthenticated listener is not a trust problem. The same reasoning keeps codex's unauthenticated /healthz and /readyz clauses out of the diagnostics row: they live inside codex:websocket-listener-authentication, and rule 2 forbids citing that mechanism a second time."
+    },
+    {
+      "mechanisms": ["grok:acp-stdio-line-transport-hardening", "cc-custom:ndjson-stream-integrity-guard"],
+      "whyNotMerged": "Both keep a newline-delimited stdio channel honest and one cross-source row was considered. Kept apart because they defend opposite directions with different policies: cc-custom guards the OUTBOUND stream for line-oriented consumers (escape U+2028 and U+2029, wrap process.stdout.write and divert non-JSON lines to stderr, fail-soft), while grok hardens the INBOUND reader (a depth-64 blocking_send channel so stdin backpressures instead of buffering, a normalizer limited to the one escaped-slash form the pinned acp envelope would drop with everything else forwarded byte-identical, and a 64 MiB line ceiling as a typed error). The only shared property is that the framing layer is a trust boundary; merging would have claimed a shared capability neither source states."
+    },
+    {
+      "mechanisms": ["grok:workspace-rpc-client-over-a-frozen-wire-contract", "dsh:typert-remote-rpc-plane", "codex:app-server-schema-and-sdk-contract-export", "opencode:openapi-spec-and-sdk-codegen"],
+      "whyNotMerged": "grok's mechanism was merged into the typed-remote-RPC row with dsh, which flattens the halves: dsh's member is the server/dispatch side (decorators, descriptor registry, gateway interception of the shared /api channel, conservative SRC fallback, one RemoteError discriminated by code and never by instanceof) while grok's is the client/contract side (a connected latch with NotConnected fast-fail, a non-retryable WorkspaceHibernated that must NOT clear the latch, adjacently-tagged wire enums, const ACTIVITY with no default so every new RPC method must declare its idle-hibernation class, a turn_active / hub_error / unknown_method envelope with a legacy prefix matcher, plus xai-grok-tools-api's protobuf types and shared save-time/bind-time validation). grok's frozen-contract half was also a candidate for the vendor/codegen row; it was not placed there because that row is about ARTIFACTS exported for consumers (TypeScript plus JSON Schema bundles, a served OpenAPI document, an SDK generator) and grok's contract crate publishes nothing outward."
+    },
+    {
+      "mechanisms": ["grok:shared-http-clients-with-poison-pool-escape", "grok:xai-grok-sampler (moduleCoverage, model domain)"],
+      "whyNotMerged": "Placed as its own row, but the crate boundary is genuinely split and a reader should know it: grok's moduleCoverage still files xai-grok-http as infrastructure for the service and ops domains that contributes no mechanism of its own, while the inventory's mechanism entry argues the pool-escape policy and the transport-failure classifier ARE the mechanism, and xai-grok-sampler (model domain) is the consumer that carries the pooled HTTP/2 client plus the pool-less HTTP/1.1 fallback into sampling. Only mechanisms present in domains.service may be cited, so the sampler reference stays prose."
+    },
+    {
+      "mechanisms": ["grok:streaming-stt-dictation-with-out-of-process-mic-capture"],
+      "whyNotMerged": "No merge was attempted; recorded because the DOMAIN is contested by the source itself. grok's hintCorrections moved xai-grok-voice from interface to service on the grounds that dictation is an outbound service integration plus an event stream rather than a backend-interface seam, and the mechanism is placed here on that reasoning. A reader who expects voice input under interface should read this entry first: the pipeline, the STT websocket, the no-speech watchdog and the out-of-process mic helper carry no rendering or screen-mode policy, which is what this audit's interface domain covers."
     }
   ],
   "coverage": {
-    "mechanismsSeen": 56,
-    "mechanismsPlaced": 56,
+    "mechanismsSeen": 64,
+    "mechanismsPlaced": 64,
     "perSource": {
       "ih": 5,
       "dsh": 15,
@@ -426,8 +492,8 @@
       "opencode": 7,
       "opencode-fork": 8,
       "cc-custom": 12,
-      "grok": 0
+      "grok": 8
     },
-    "note": "56 = the sum of domains.service lengths across the seven sources (ih 5, dsh 15, codex 9, opencode-upstream 7, opencode-fork 8, cc-custom 12, grok 0). Each of the 56 appears in exactly one row; every source mechanism is cited at most once. Rows carrying an ihNote describe behaviour IH does have but whose mechanism is cited in another row (IH's web-service mechanism spans HTTP surface + mux + trust fence and can only be cited once)."
+    "note": "64 = the sum of domains.service lengths across the seven sources (ih 5, dsh 15, codex 9, opencode-upstream 7, opencode-fork 8, cc-custom 12, grok 8). The previous pass counted 56 because grok's array was empty; the other six sources are unchanged, so 56 of these 64 are the same mechanisms as before and all 8 grok mechanisms are new placements. Each of the 64 appears in exactly one row and no source mechanism is cited twice; grok's 8 are split as 2 in acp-server, 1 in typed-remote-rpc-plane, 1 in service-daemon-process-management (the row that was previously member-less) and 4 in grok-only rows (sidecar supervision, loopback readiness and log diagnostics, shared HTTP client pool with poison-pool escape, streaming STT dictation). Rows carrying an ihNote or note describe behaviour a source has but whose mechanism is cited in another row, or record a placement decision the counts cannot show (IH's single web-service mechanism spans HTTP surface + mux + trust fence and can only be cited once)."
   }
 }
