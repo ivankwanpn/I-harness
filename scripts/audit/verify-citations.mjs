@@ -178,11 +178,23 @@ function checkClaim(source, cmd, field, claimText, citations) {
 
 const files = readdirSync(DATA).filter((f) => f.endsWith(".json") && !f.includes("-surface"))
 for (const f of files) {
+  // An enriched file SUPERSEDES its raw extraction; reading both would verify
+  // the same command twice and inflate every count.
+  if (f.endsWith("-commands.json")) {
+    const enriched = f.replace("-commands.json", "-enriched.json")
+    if (files.includes(enriched)) continue
+  }
   const data = readJson(join(DATA, f))
   if (!data || !data.commands) continue
   const source = data.source
   if (!SOURCE_PATHS[source]) continue
-  for (const cmd of data.commands) {
+  const all = [...data.commands]
+  // `added` entries are commands the source really has but the mechanical
+  // extractor missed; they are part of the claim set and must be verified too.
+  for (const a of data.added ?? []) {
+    if (a && typeof a === "object") all.push(a)
+  }
+  for (const cmd of all) {
     const claimText = `${cmd.summary ?? ""} ${cmd.mechanism ?? ""}`
     checkClaim(source, cmd, "mechanism", claimText, cmd.evidence)
   }

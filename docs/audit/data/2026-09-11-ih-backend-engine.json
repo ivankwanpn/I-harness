@@ -1,0 +1,1463 @@
+{
+  "group": "engine",
+  "packages": [
+    {
+      "name": "core-agent",
+      "responsibility": "The agent turn loop: one session's LLM turn (append turn/start+user/message → per-step derive messages → stream the model → append assistant/tool events → execute the step's tool calls → step/end → turn/end), plus the per-session serial input lane (createSessionExecutor) that admits four-tier inputs into the durable Inbox.",
+      "publicSurface": [
+        "createAgent",
+        "Agent",
+        "AgentConfig",
+        "AgentDeps",
+        "AgentResult",
+        "AgentBudgetConfig",
+        "AgentRegistry",
+        "createAgentRegistry",
+        "executeToolCalls",
+        "BatchCall",
+        "ExecuteToolCallsOptions",
+        "TOOL_ABORTED_BEFORE_DISPATCH",
+        "createSessionExecutor",
+        "createSessionExecutorRegistry",
+        "mapSubmitToAdmission",
+        "SessionExecutor",
+        "SessionExecutorDeps",
+        "SessionExecutorRegistry",
+        "InputSubmit",
+        "AgentRunSurface",
+        "ReasoningEffort (re-exported from llm-seam)"
+      ],
+      "designDecisions": [
+        {
+          "decision": "All context control is step-boundary-only: the steer-tier input claim, the M11 compaction pressure check, the M20 budget ladder and the agent/pre-step emit all run at the TOP of a step, before messages are derived and the model is called. Nothing rewrites the surface mid-stream.",
+          "rationale": "Keeps the model surface for one request stable and makes every surface change replayable as a log append that precedes the step.",
+          "evidence": [
+            "packages/core-agent/src/index.ts:195",
+            "packages/core-agent/src/index.ts:209"
+          ]
+        },
+        {
+          "decision": "Three-layer overflow ladder: (1) compaction summary, (2) pure resetWindow keeping the last resetRetainLast events, (3) fail-closed throw `prompt_too_long`. Budget config is validated LOUDLY at createAgent (finite positive contextWindow, non-negative integer resetRetainLast/overheadTokens) because a NaN contextWindow made every comparison false and silently killed the whole ladder.",
+          "rationale": "A silent budget is worse than a loud one; the ladder's reachability is guaranteed at construction time, not at the moment of overflow.",
+          "evidence": [
+            "packages/core-agent/src/index.ts:106",
+            "packages/core-agent/src/index.ts:151"
+          ]
+        },
+        {
+          "decision": "Layer 2 (reset) is only reachable when a compaction engine exists: the guard is `if (compactor && resetAllowed)`, and the compactor only exists when deps.compact is configured. A budget-only agent therefore goes straight from a failed compaction to fail-closed.",
+          "rationale": "resetWindow is a method of the compaction engine, so budget.resetWindow cannot stand alone without deps.compact (a real coupling a maintainer must know).",
+          "evidence": [
+            "packages/core-agent/src/index.ts:130",
+            "packages/core-agent/src/index.ts:164"
+          ]
+        },
+        {
+          "decision": "Tool calls are collected during the stream, then executed after it ends by a bounded rolling pool with a model-order commit lane: a group is a maximal run of concurrency-safe calls (exclusive calls are singleton groups that never overlap), only the tool body (dispatch) overlaps while prepare and finalize run in the ordered lane, and commit order is enforced by a head-of-line cursor.",
+          "rationale": "Approval/policy hooks stay deterministic (model order) while slow tool bodies still overlap; the commit lane is what makes the log order independent of completion order.",
+          "evidence": [
+            "packages/core-agent/src/execute-tool-calls.ts:31",
+            "packages/core-agent/src/execute-tool-calls.ts:138"
+          ]
+        },
+        {
+          "decision": "Batch failure policy: throw-fails-turn — stop starting, drain started calls, rethrow the first error with NO fabricated results for unstarted calls. Abort dominates a coincident failure: started-but-unsettled slots get a synthetic failure fill so already-settled siblings still commit REAL results, never-started calls get a TOOL_ABORTED_BEFORE_DISPATCH result, then `agent aborted` is thrown.",
+          "rationale": "Fabricating results would make the replayed log lie to the model; the synthetic fill exists only so the head-of-line cursor cannot stall forever and orphan a successful sibling.",
+          "evidence": [
+            "packages/core-agent/src/execute-tool-calls.ts:182",
+            "packages/core-agent/src/execute-tool-calls.ts:7",
+            "packages/core-agent/src/execute-tool-calls.ts:103"
+          ]
+        },
+        {
+          "decision": "Per-session serial lane, cross-session parallel: every submit appends a pump onto ONE promise chain (one turn at a time per executor), each pump drains the pending FIFO to empty, and a turn failure is captured (not propagated into the chain) then re-thrown by drain() so a host exit code can never report success on a failed turn.",
+          "rationale": "Serial-per-session without a queue server, while keeping the failure observable at exactly one place (the drain caller).",
+          "evidence": [
+            "packages/core-agent/src/executor.ts:75",
+            "packages/core-agent/src/executor.ts:141",
+            "packages/core-agent/src/executor.ts:49"
+          ]
+        }
+      ],
+      "failurePolicy": "Mixed by layer. Turn/tool integrity is fail-closed: maxTurns exceeded throws (src/index.ts:192), budget cap throws `prompt_too_long` (src/index.ts:169), a model stream `error` event throws (src/index.ts:264-266), the tool batch rethrows the first failure (src/execute-tool-calls.ts:224-228). The compaction layer is fail-soft by contract: with no compact config the agent returns a no-op `{compacted:false}` (src/index.ts:324-326) and the engine itself never throws. Configuration is fail-closed at creation (src/index.ts:114-127).",
+      "events": [
+        "turn/start",
+        "user/message",
+        "step/start",
+        "tool/call",
+        "tool/result",
+        "assistant/message",
+        "step/end",
+        "turn/end",
+        "ctx plugin events (not SessionEvents): agent/pre-step, agent/post-tool, agent/stop"
+      ],
+      "keyConstants": [
+        {
+          "name": "maxTurns (default)",
+          "value": "20",
+          "evidence": "packages/core-agent/src/index.ts:101"
+        },
+        {
+          "name": "maxParallelToolCalls (default)",
+          "value": "10",
+          "evidence": "packages/core-agent/src/index.ts:102"
+        },
+        {
+          "name": "budget.reserveRatio (default)",
+          "value": "0.9",
+          "evidence": "packages/core-agent/src/index.ts:29"
+        },
+        {
+          "name": "budget.resetRetainLast (default)",
+          "value": "20",
+          "evidence": "packages/core-agent/src/index.ts:136"
+        },
+        {
+          "name": "budget.overheadTokens (default)",
+          "value": "0",
+          "evidence": "packages/core-agent/src/index.ts:155"
+        },
+        {
+          "name": "TOOL_ABORTED_BEFORE_DISPATCH",
+          "value": "\"TOOL_ABORTED_BEFORE_DISPATCH\"",
+          "evidence": "packages/core-agent/src/execute-tool-calls.ts:7"
+        }
+      ],
+      "gaps": [
+        "Retry observability is explicitly deferred: M12 guard-retry and M20 provider retry are silent by design and expose no callback/event seam, so core-agent emits NO retry/start telemetry; the comment calls adding a retry hook to those packages 'follow-up' (packages/core-agent/src/index.ts:229-235).",
+        "The string model selector was dropped for M1: because `model?: string` would collide with AgentDeps.model (the ModelClient) under AgentDeps & AgentConfig, LLMRequest.model is never populated by the loop (packages/core-agent/src/index.ts:45-49)."
+      ],
+      "evidence": [
+        "packages/core-agent/src/index.ts:100",
+        "packages/core-agent/src/index.ts:178",
+        "packages/core-agent/src/execute-tool-calls.ts:53",
+        "packages/core-agent/src/executor.ts:49"
+      ]
+    },
+    {
+      "name": "core-plugin",
+      "responsibility": "The plugin/event kernel: a scope tree (child scopes via scope.mount) holding a service registry, plain listeners, waterfalls, cascades and guards, plus plugin mount/unmount with synchronous reclamation of everything a plugin registered.",
+      "publicSurface": [
+        "createContext",
+        "PluginContext",
+        "Plugin",
+        "NextFn",
+        "Listener",
+        "WaterfallHandler",
+        "CascadeHandler",
+        "GuardFn",
+        "CASCADE_REDISPATCH",
+        "markCascadeRedispatch",
+        "isCascadeRedispatch",
+        "corePluginVersion"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Four distinct extension channels with deliberately different contracts: plain listeners (return values ignored unless a waterfall exists for the event), waterfall (every handler MUST call next(), forgetting throws, double-next throws — no arity heuristics), cascade (around-hooks over one `final`; skipping next() legally short-circuits, double-next throws), guards (deny-only string reason).",
+          "rationale": "The failure mode being designed out is a silent veto: a waterfall handler that never releases the chain is an error, not a decision.",
+          "evidence": [
+            "packages/core-plugin/src/index.ts:171",
+            "packages/core-plugin/src/index.ts:203",
+            "packages/core-plugin/src/index.ts:147"
+          ]
+        },
+        {
+          "decision": "Ancestor composition is explicit and monotonic: guards walk self→root with first-deny-wins (a child allow can never re-allow a parent deny), cascades are collected root-FIRST so ancestor handlers wrap child dispatches outermost, and decisions are nearest-wins.",
+          "rationale": "A child scope (subagents) must not be able to escape a root-mounted policy handler; guard denial must be monotone down the tree.",
+          "evidence": [
+            "packages/core-plugin/src/index.ts:329",
+            "packages/core-plugin/src/index.ts:217",
+            "packages/core-plugin/src/index.ts:341"
+          ]
+        },
+        {
+          "decision": "A separate resolveAncestorDecision that skips `self` exists solely because the per-scope decision map is a shared slot across in-flight emits (the M13 decision-slot race): the local scope's decision already arrives via emit's return value, so only ancestor decisions are looked up here.",
+          "rationale": "Reading self's recorded decision during a concurrent dispatch would surface another dispatch's value.",
+          "evidence": [
+            "packages/core-plugin/src/index.ts:353",
+            "packages/core-plugin/src/index.ts:255"
+          ]
+        },
+        {
+          "decision": "Decision seeding is detection of 'a value was produced', not object identity: only a plain-listener non-undefined return seeds the waterfall chain payload and records a decision, and the decision entry is cleared at the start of every emit so decisions never leak across repeated emits.",
+          "rationale": "Prevents every incidental listener return (e.g. `calls.push(x)` → a number) from rewriting what other listeners/parent scopes receive.",
+          "evidence": [
+            "packages/core-plugin/src/index.ts:245"
+          ]
+        },
+        {
+          "decision": "Unmount is synchronous reclamation with an async cap: registry removal, nested reclaim and listener/waterfall/cascade deregistration all happen synchronously so a caller that fires ctx.unmount and proceeds immediately sees the plugin gone; only promise-returning disposers are awaited, raced against UNMOUNT_TIMEOUT_MS (unref'd timer).",
+          "rationale": "A teardown must never hang the process, and the plugin must be observably gone before the next statement.",
+          "evidence": [
+            "packages/core-plugin/src/index.ts:393",
+            "packages/core-plugin/src/index.ts:432"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed on protocol violations (waterfall forgot/double next throws at src/index.ts:186-197, duplicate service registration throws at src/index.ts:294, unknown service throws at src/index.ts:300), but fail-open on teardown: a disposer that exceeds the 5s cap logs via console.error and the unmount completes anyway (src/index.ts:437-451).",
+      "events": [],
+      "keyConstants": [
+        {
+          "name": "UNMOUNT_TIMEOUT_MS",
+          "value": "5000",
+          "evidence": "packages/core-plugin/src/index.ts:74"
+        },
+        {
+          "name": "corePluginVersion",
+          "value": "\"0.1.0\"",
+          "evidence": "packages/core-plugin/src/index.ts:468"
+        },
+        {
+          "name": "CASCADE_REDISPATCH",
+          "value": "Symbol.for(\"i-harness.cascade.redispatch\")",
+          "evidence": "packages/core-plugin/src/index.ts:16"
+        }
+      ],
+      "gaps": [
+        "None marked in code. The channels are generic strings, so the package itself declares no event vocabulary — which event names exist is only discoverable from the producers (e.g. core-agent's agent/pre-step, agent/post-tool, agent/stop)."
+      ],
+      "evidence": [
+        "packages/core-plugin/src/index.ts:1",
+        "packages/core-plugin/src/index.ts:91",
+        "packages/core-plugin/src/index.ts:464"
+      ]
+    },
+    {
+      "name": "core-session",
+      "responsibility": "The session data model and its projections: the SessionEvent union, an append-only event log with seq assignment, deriveMessages (the exact LLM surface), the small derived views (plan mode, title, prune substitutes, rewind cuts), JSONL (de)serialization, and the durable input Inbox.",
+      "publicSurface": [
+        "SessionEvent",
+        "Session",
+        "SessionHeader",
+        "createSession",
+        "append",
+        "subscribe",
+        "deriveMessages",
+        "deriveSearchText",
+        "derivePlanMode",
+        "deriveSessionTitle",
+        "derivePruneSubstitutes",
+        "renderPruneSubstitute",
+        "rewindCuts",
+        "toJSONL",
+        "fromJSONL",
+        "assertVersion",
+        "migrate",
+        "CURRENT_FORMAT_VERSION",
+        "PlanModeView",
+        "SessionTitleView",
+        "PruneRecord",
+        "RewindCut",
+        "TodoItem",
+        "TodoItemStatus",
+        "GoalPhase",
+        "GoalOperation",
+        "GoalRef",
+        "GoalSnapshot",
+        "ImageInput",
+        "ImageMediaType",
+        "IMAGE_MEDIA_TYPES",
+        "MAX_IMAGE_BYTES_PER_MESSAGE",
+        "LLMMessage",
+        "LLMContentPart",
+        "Inbox",
+        "SYSTEM_INPUT_PLUGIN",
+        "AdmittedInput",
+        "PendingInput",
+        "InputDelivery",
+        "InputIntent",
+        "InputSynthetic"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Append-only iron rule with projection-only hiding: the raw log is never rewritten or truncated. Every removal is a marker — compaction/summary.shadowedSeqs, compaction/reset.removedSeqs, compaction/prune records, rewind/point windows. deriveMessages does ONE pre-pass collecting the shadow set + melded rewind cuts, then a render pass; skip is the UNION (`shadowed.has(seq) || hideByRewind(seq)`), so a rewind never un-shadows a compaction's removed seqs.",
+          "rationale": "Persistence backends are append-only, so in-place deletions never reached disk and a resumed session resurrected the deleted history; markers make resume a pure replay.",
+          "evidence": [
+            "packages/core-session/src/index.ts:411",
+            "packages/core-session/src/index.ts:394",
+            "packages/core-session/src/index.ts:256"
+          ]
+        },
+        {
+          "decision": "seq is assigned by append itself (`{...event, seq: session.events.length}`), and an event with seq === undefined can never be hidden by any mechanism. Malformed persisted markers contribute nothing (defensive `?? []` / typeof guards) because fromJSONL and CLI resume push events without running append validation.",
+          "rationale": "Unkeyed events include externally injected user messages the loop must retain; making 'unkeyed' mean 'never hidden' removes an entire class of data-loss bug.",
+          "evidence": [
+            "packages/core-session/src/index.ts:315",
+            "packages/core-session/src/index.ts:219",
+            "packages/core-session/src/index.ts:414"
+          ]
+        },
+        {
+          "decision": "deriveMessages enforces the wire shape of a step as one unit: tool/call events are buffered and flushed as assistant(content, toolCalls) followed by the tool results (never interleaved), the step's assistant/message folds INTO the same assistant message (M51/B2), a mid-step user/message is deferred until after that block (M52/L3), and step/end flushes so consecutive steps never merge into role-alternation-breaking runs.",
+          "rationale": "Anthropic-style Messages APIs require function_call before function_call_output and role alternation; folding also stops the model reading pre-tool narration as post-tool commentary.",
+          "evidence": [
+            "packages/core-session/src/index.ts:379",
+            "packages/core-session/src/index.ts:456",
+            "packages/core-session/src/index.ts:507"
+          ]
+        },
+        {
+          "decision": "The Inbox is a replay-once projection over three log events (agent/input/admitted|promoted|cancelled): every mutation is a session-log append, so persistence is the log's own and a cold resume rebuilds pending from the log alone. Only steer-delivery inputs are claimed at the step boundary; queue inputs wait for the turn boundary. Admission fails closed on duplicate ids and malformed fields.",
+          "rationale": "A memory-only mailbox would lose the ladder on restart; putting it in the log makes the pending set auditable and cancellable durably.",
+          "evidence": [
+            "packages/core-session/src/inbox.ts:21",
+            "packages/core-session/src/inbox.ts:38",
+            "packages/core-session/src/inbox.ts:106",
+            "packages/core-session/src/inbox.ts:120"
+          ]
+        },
+        {
+          "decision": "Image intake is validated fail-loud at append (the only point where images first attach to an event), while deriveMessages stays a pure projection with defensive handling of malformed persisted shapes (a truthy non-array output.images must not throw). Image bytes are never migrated out of the log: dataBase64 stays required and attachmentId is a purely additive store ref.",
+          "rationale": "Validation belongs at the write boundary; a read projection that throws on old/corrupt logs would make resume impossible.",
+          "evidence": [
+            "packages/core-session/src/index.ts:319",
+            "packages/core-session/src/index.ts:176",
+            "packages/core-session/src/index.ts:487"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed at the write/parse boundary (append throws on a foreign `source` on assistant/message src/index.ts:316-318, on non-canonical base64/unsupported media type/oversize aggregates src/index.ts:349-372; fromJSONL throws on an empty log or a version mismatch src/index.ts:669-680), deliberately fail-safe on read: every projection degrades instead of throwing on malformed persisted events (src/index.ts:219-221, 487-506, 522-527). No try/catch swallow anywhere; the split is by direction.",
+      "events": [
+        "defines the whole SessionEvent union (packages/core-session/src/index.ts:5-133)",
+        "produces via Inbox: agent/input/admitted, agent/input/promoted, agent/input/cancelled",
+        "produces via Inbox.claimAtStepBoundary: user/message",
+        "consumes: all types (deriveMessages / deriveSearchText / reference derivation)"
+      ],
+      "keyConstants": [
+        {
+          "name": "CURRENT_FORMAT_VERSION",
+          "value": "1",
+          "evidence": "packages/core-session/src/index.ts:289"
+        },
+        {
+          "name": "MAX_IMAGES_PER_MESSAGE (module-private)",
+          "value": "20",
+          "evidence": "packages/core-session/src/index.ts:342"
+        },
+        {
+          "name": "MAX_IMAGE_BYTES_PER_MESSAGE",
+          "value": "209715200 (200 * 1024 * 1024)",
+          "evidence": "packages/core-session/src/index.ts:343"
+        },
+        {
+          "name": "IMAGE_MEDIA_TYPES",
+          "value": "image/png, image/jpeg, image/webp, image/gif",
+          "evidence": "packages/core-session/src/index.ts:341"
+        },
+        {
+          "name": "SYSTEM_INPUT_PLUGIN",
+          "value": "\"i-harness/system-input\"",
+          "evidence": "packages/core-session/src/inbox.ts:19"
+        }
+      ],
+      "gaps": [
+        "migrate() is an explicit no-op placeholder: only v1 exists, so it throws for any other target and otherwise returns the session unchanged (packages/core-session/src/index.ts:682-687).",
+        "Goal round admission is declared out of scope and the seam is empty: no `blocked` phase, no blockedReason, no maxGoalRounds default, no roundsStarted (packages/core-session/src/index.ts:144-152).",
+        "Image byte migration out of the log is explicitly not done in v0: attachmentId coexists with inline bytes and dataBase64 stays required (packages/core-session/src/index.ts:181-185)."
+      ],
+      "evidence": [
+        "packages/core-session/src/index.ts:283",
+        "packages/core-session/src/index.ts:379",
+        "packages/core-session/src/index.ts:552",
+        "packages/core-session/src/inbox.ts:26"
+      ]
+    },
+    {
+      "name": "session-executor",
+      "responsibility": "The engine-owned session assembly and its global service: one createSessionAssembly builds the entire per-session environment (tools, guards, sandbox/shell/fs, MCP/LSP/teams/workflow/skills, runtime-context, rewind, agent, budget/compaction wiring), and createSessionService owns get-or-create lifecycle, the per-session queue projection, the task projection and the single-turn submit path.",
+      "publicSurface": [
+        "createSessionAssembly",
+        "createSessionService",
+        "createDurableSessionLoader",
+        "SessionAssembly",
+        "AssemblyOptions",
+        "ModelPolicy",
+        "ModelUnavailableError",
+        "SessionService",
+        "SessionServiceOptions",
+        "SessionQueueItem",
+        "SessionModelBindingResult",
+        "AgentTaskStatus (re-export)",
+        "AgentTaskView (re-export)",
+        "ReasoningEffort (re-export)",
+        "not re-exported from src/index.ts but exported by src/assembly.ts: estimateAssemblyOverhead, bindAuthRefreshStatus, RewindAssemblyHandle"
+      ],
+      "designDecisions": [
+        {
+          "decision": "ONE assembly implementation is shared by the one-shot headless run and the multi-turn web service. The model is resolved BEFORE any resource is mounted, a failed mount disposes the half-built assembly and rethrows, and dispose unmounts in reverse mount order best-effort.",
+          "rationale": "Two divergent assembly paths were the previous state; a single builder plus 'no partial assembly escapes' is what makes the two hosts behave identically.",
+          "evidence": [
+            "packages/session-executor/src/assembly.ts:1",
+            "packages/session-executor/src/assembly.ts:259",
+            "packages/session-executor/src/assembly.ts:702"
+          ]
+        },
+        {
+          "decision": "Model policy defaults to production-safe `required`: an omitted modelPolicy with no explicit client throws ModelUnavailableError, and a mock is only built when the caller explicitly opts into \"test-mock\".",
+          "rationale": "A test double must never be reachable by omission in production.",
+          "evidence": [
+            "packages/session-executor/src/assembly.ts:85",
+            "packages/session-executor/src/assembly.ts:262",
+            "packages/session-executor/src/assembly.ts:65"
+          ]
+        },
+        {
+          "decision": "Two-layer pacing with a stable public row id: the service creates the queue row id + a service-owned AbortController BEFORE its pacing chain (the caller signal is linked into it), then hands that same id through the A-region lane (lane.submit(..., id)). The queue projection merges service-front and lane rows by that public id, takes 'running' from the lane's currentInput (the lane is ground truth, the record's state can lag), and cancelQueued refuses to cancel a running row.",
+          "rationale": "One id per user-visible turn lets the queue surface, the lane and cancellation agree; consulting a lagging projection would abort a running turn and report a false success.",
+          "evidence": [
+            "packages/session-executor/src/service.ts:315",
+            "packages/session-executor/src/service.ts:378",
+            "packages/session-executor/src/service.ts:434",
+            "packages/session-executor/src/service.ts:506"
+          ]
+        },
+        {
+          "decision": "getOrCreate is single-flight per session (one shared creation promise, hooks fire once inside it) and closeSession waits for the session's chain, build and model binding before disposing only that assembly; a later request resolves and builds again.",
+          "rationale": "Concurrent racers must not double-attach the approval/question bridge (a per-ctx registration) or build two assemblies for one session.",
+          "evidence": [
+            "packages/session-executor/src/service.ts:241",
+            "packages/session-executor/src/service.ts:546"
+          ]
+        },
+        {
+          "decision": "Ownership of teardown is explicit: the assembly disposes what it mounted (mcp/lsp/team handles, skills, workflow, terminal, win32 ACL sandbox) but NEVER closes the coordinator or the telemetry stream — the owner does. Plugin MCP servers degrade with a warn + pluginMcpResults map, while core mounts fail loud.",
+          "rationale": "Shared resources must outlive one session; a plugin server this host cannot serve must not take the whole session down.",
+          "evidence": [
+            "packages/session-executor/src/assembly.ts:697",
+            "packages/session-executor/src/assembly.ts:506"
+          ]
+        },
+        {
+          "decision": "The durable-session loader copies restored events WITHOUT running append hooks and attaches the coordinator write-behind only to new live events; a turn/end triggers a flush.",
+          "rationale": "Re-mirroring restored history would re-append the whole log and double-count; only new events are new.",
+          "evidence": [
+            "packages/session-executor/src/durable-session.ts:7",
+            "packages/session-executor/src/assembly.ts:394"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed at the boundaries: missing/unconfigured model throws ModelUnavailableError (assembly.ts:262-267), submit rejects when the service is closed or the session is closing (service.ts:316-317), an unknown task id throws instead of silently succeeding (service.ts:594-598), and a lane drain rejection becomes the submit rejection (service.ts:397-411). Fail-open only for teardown: every unmount/dispose is individually try/catch'd and never throws (assembly.ts:702-733, service.ts:542).",
+      "events": [
+        "user/message (CONSUMED via subscribe — rewind recorder anchor)",
+        "turn/end (CONSUMED via subscribe — rewind finalize + coordinator flush trigger)",
+        "telemetry (not SessionEvents): turn/start, provider/call, provider/error, tool/start, tool/end, tool/error, turn/end, token/usage, mcp/server-status, session/request, session/queued, session/error, compaction/attempt"
+      ],
+      "keyConstants": [
+        {
+          "name": "shellTimeoutMs (default)",
+          "value": "120000",
+          "evidence": "packages/session-executor/src/assembly.ts:278"
+        },
+        {
+          "name": "shell retention maxBytes (default)",
+          "value": "64000",
+          "evidence": "packages/session-executor/src/assembly.ts:304"
+        },
+        {
+          "name": "mock default script",
+          "value": "[{ role: \"assistant\", text: \"ok\" }]",
+          "evidence": "packages/session-executor/src/assembly.ts:264"
+        }
+      ],
+      "gaps": [
+        "Rewind recording is append-onward only: the recorder subscription is wired after the live session exists, so host-seeded history is not recorded — documented in-code as 'a documented v1 scope' (packages/session-executor/src/assembly.ts:311-315).",
+        "A journal bound to another workspace leaves rewind entirely OFF (no recorder, no fs pre-image sink), and the assembly.rewind handle stays absent — the host renders 'not enabled' (packages/session-executor/src/assembly.ts:325-339).",
+        "estimateAssemblyOverhead and bindAuthRefreshStatus are exported from src/assembly.ts but NOT re-exported by src/index.ts, and package.json exposes only \".\": a host outside the package cannot reach them (packages/session-executor/src/assembly.ts:212, 226; packages/session-executor/src/index.ts:1-22)."
+      ],
+      "evidence": [
+        "packages/session-executor/src/assembly.ts:85",
+        "packages/session-executor/src/assembly.ts:259",
+        "packages/session-executor/src/assembly.ts:591",
+        "packages/session-executor/src/service.ts:150"
+      ]
+    },
+    {
+      "name": "session-persistence",
+      "responsibility": "The persistence coordinator and its policy layer over a PersistenceBackend: session create/append/load/list/profile/updateMeta, write-behind batching, the load-time format-version and event-type gates, log-semantic tail repair, opt-in ownership leases, session fork and the harness-home path defaults.",
+      "publicSurface": [
+        "createSessionCoordinator",
+        "SessionCoordinator",
+        "CoordinatorOptions",
+        "PersistenceBackend",
+        "SessionMeta",
+        "SessionModelSelection",
+        "SessionWriteBehind",
+        "SessionWriteBehindOptions",
+        "SessionFormatUnsupportedError",
+        "SessionLockConflictError",
+        "SessionLockUnsupportedError",
+        "SessionForkUnavailableError",
+        "registerUpgrade",
+        "registerEventType",
+        "resolveHarnessHome",
+        "resolveSessionStoreRoot",
+        "repairTurnTail",
+        "TOOL_ABORTED_BEFORE_DISPATCH",
+        "TOOL_ABORTED_RECOVERY_RESULT",
+        "forkSession",
+        "completedTurnPrefix",
+        "ForkSessionOptions",
+        "ForkSessionResult"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Version refusal happens BEFORE any repair: load reads, runs assertVersionSupported (refuse newer-than-build; refuse a hole in the upgrade chain), and only then calls backend.repair — because read is non-destructive while repair may truncate and rewrite a foreign-version file.",
+          "rationale": "The one operation that can destroy data must be unreachable for a file this build does not understand.",
+          "evidence": [
+            "packages/session-persistence/src/index.ts:375",
+            "packages/session-persistence/src/index.ts:455"
+          ]
+        },
+        {
+          "decision": "Two load flavours with different invariants: load() is READ-ONLY and only canonicalizes undefined seqs (max(index, maxDefined+1+k), uniqueness prioritized OVER monotonicity so shadowedSeqs/rewind/messageSeqs references never alias); loadOwned() enforces seq === index strictly, persists the repair through replaceEvents, and fails closed when the backend cannot rewrite.",
+          "rationale": "A resumed writable session must satisfy the seq===index invariant the append path assumes, while an ordinary read must never mutate the file.",
+          "evidence": [
+            "packages/session-persistence/src/index.ts:470",
+            "packages/session-persistence/src/index.ts:505"
+          ]
+        },
+        {
+          "decision": "The load gate refuses unknown event types unless they carry ignorable:true (deprecated and dropped) or were registered via registerEventType; the package registers its own set of new event types at module init so a persistence-only path still loads team/*, todo/write, goal/change, job/status, schedule/change, agent/input/*, session/title, plan/mode, subagent/*, reasoning, command/* and rewind/point. rewind/point is deliberately NOT ignorable, because dropping it would silently resurrect rewound turns.",
+          "rationale": "core-session must stay dependency-free, so the load gate has to own the vocabulary; 'ignore what you do not know' would be data loss for hide-markers.",
+          "evidence": [
+            "packages/session-persistence/src/index.ts:157",
+            "packages/session-persistence/src/index.ts:392",
+            "packages/session-persistence/src/index.ts:216"
+          ]
+        },
+        {
+          "decision": "Write-behind is fixed-deadline batching with failure retention and an explicit quiescence barrier: on a failed write the batch is put back at the FRONT of the queue and the automatic timer is paused until new work arrives; flush() cancels the wait and drains through a barrier that never rejects the producer.",
+          "rationale": "A background write failure must not lose events nor spin; a producer must never be failed by durability it did not await.",
+          "evidence": [
+            "packages/session-persistence/src/write-behind.ts:40",
+            "packages/session-persistence/src/write-behind.ts:121",
+            "packages/session-persistence/src/write-behind.ts:104"
+          ]
+        },
+        {
+          "decision": "Ownership lease is opt-in (lock.enabled defaults false; the CLI wiring turns it on), mutating paths run under it while readers (list/getDocument/profile) never lock, acquisition is single-flight per session, and ALL backend mutations for one session are linearized through a per-session operation chain whose gate promise never rejects.",
+          "rationale": "Two concurrent mutating paths in one process would otherwise conflict against each other's OS-level exclusive lock and fail closed spuriously.",
+          "evidence": [
+            "packages/session-persistence/src/index.ts:240",
+            "packages/session-persistence/src/index.ts:277",
+            "packages/session-persistence/src/index.ts:324"
+          ]
+        },
+        {
+          "decision": "Log-semantic repair is a separate PURE, DETERMINISTIC, TAIL-ONLY layer above the backend's structural repair: it adds a synthetic TOOL_ABORTED_BEFORE_DISPATCH tool/result for every unmatched tool/call in the LAST turn and closes an open step/turn. Earlier turns are never touched and the input array is never mutated.",
+          "rationale": "A crash mid-tool otherwise replays assistant(toolCalls) with no tool responses, which breaks Messages-API alternation on continue; purity keeps the raw log replayable byte-for-byte.",
+          "evidence": [
+            "packages/session-persistence/src/repair.ts:1",
+            "packages/session-persistence/src/repair.ts:63",
+            "packages/session-persistence/src/repair.ts:25"
+          ]
+        },
+        {
+          "decision": "Fork seeds a completed-turn prefix and applies the SOURCE's own hidden-region semantics: the rewind windows are extended back to the anchor turn's turn/start, rewind/point markers are DROPPED (a copied marker would assert a phantom cut over events the child never had), compaction markers are KEPT, and the kept events are renumbered with shadowedSeqs/removedSeqs/messageSeqs remapped into child coordinates.",
+          "rationale": "The child must see exactly what the parent's model saw; copying markers verbatim would resurrect or falsely hide turns in the child's own coordinate space.",
+          "evidence": [
+            "packages/session-persistence/src/fork.ts:99",
+            "packages/session-persistence/src/fork.ts:164",
+            "packages/session-persistence/src/fork.ts:87"
+          ]
+        }
+      ],
+      "failurePolicy": "Mixed and deliberate. Fail-closed: unsupported/newer format and missing upgrade path throw SessionFormatUnsupportedError (src/index.ts:360-390), unknown event types without the ignorable marker are refused (src/index.ts:392-403), a lock conflict throws SessionLockConflictError rather than queueing (src/index.ts:236-249), and loadOwned fails closed when the backend lacks replaceEvents (src/index.ts:525-530). Fail-open/by-report: documents report but never reject the caller (src/index.ts:573-577), close() is best-effort allSettled (src/index.ts:558-572), and background flush failures go to reportBackgroundFailure (src/index.ts:324-344).",
+      "events": [
+        "tool/result (synthetic TOOL_ABORTED_BEFORE_DISPATCH recovery result, PRODUCED by repair)",
+        "step/end (synthetic closer, PRODUCED by repair)",
+        "turn/end (synthetic closer, PRODUCED by repair)",
+        "load gate CONSUMES every event type: builtin KNOWN_EVENT_TYPES + registerEventType registrations, else refused unless ignorable:true"
+      ],
+      "keyConstants": [
+        {
+          "name": "maxDelayMs (write-behind default)",
+          "value": "200",
+          "evidence": "packages/session-persistence/src/index.ts:227"
+        },
+        {
+          "name": "lock.enabled (default)",
+          "value": "false (opt-in)",
+          "evidence": "packages/session-persistence/src/index.ts:240"
+        },
+        {
+          "name": "TOOL_ABORTED_BEFORE_DISPATCH",
+          "value": "\"TOOL_ABORTED_BEFORE_DISPATCH\"",
+          "evidence": "packages/session-persistence/src/repair.ts:25"
+        },
+        {
+          "name": "TOOL_ABORTED_RECOVERY_RESULT",
+          "value": "{ error: \"tool call aborted before dispatch\", code: TOOL_ABORTED_BEFORE_DISPATCH }",
+          "evidence": "packages/session-persistence/src/repair.ts:29"
+        }
+      ],
+      "gaps": [
+        "The upgrade chain is empty by design: registerUpgrade is exported but nothing in-tree registers an upgrade, because only v1 exists (packages/session-persistence/src/index.ts:150-155).",
+        "SessionWriteBehind is exported but only used inside this package (packages/session-persistence/src/index.ts:324-344); no other src consumer in-tree.",
+        "Ownership-lease support is Windows-only in M23: SessionLockUnsupportedError is thrown off-Windows (packages/session-persistence/src/index.ts:129-135)."
+      ],
+      "evidence": [
+        "packages/session-persistence/src/index.ts:224",
+        "packages/session-persistence/src/index.ts:420",
+        "packages/session-persistence/src/index.ts:546",
+        "packages/session-persistence/src/write-behind.ts:25",
+        "packages/session-persistence/src/repair.ts:63"
+      ]
+    },
+    {
+      "name": "session-persistence-jsonl",
+      "responsibility": "The JSONL on-disk PersistenceBackend: one file per session (header line + one JSON event per line) with create/append/read/list/repair/replaceEvents/profile/updateMeta, plus an atomic keyed document sidecar store.",
+      "publicSurface": [
+        "createJsonlBackend",
+        "internal (not exported from index.ts): serializeHeader, parseHeader, parseEventLines, hasTornTail, replaceSessionFile, readHeader, missingClosers, BLANK_PROBE_MAX_BYTES, HEADER_READ_MAX_BYTES"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Format is header line 0 (JSON SessionMeta) + one JSON event per line; parsing takes the contiguous committed prefix and stops at the first unparsable line, while hasTornTail separately detects a torn final line. This backend owns structural repair (truncate + append synthetic step/end, turn/end closers) — the semantic tool-result repair lives in session-persistence.",
+          "rationale": "A crash mid-write must yield a loadable prefix rather than a parse failure, and the two repair layers have clearly split responsibilities.",
+          "evidence": [
+            "packages/session-persistence-jsonl/src/format.ts:48",
+            "packages/session-persistence-jsonl/src/index.ts:110",
+            "packages/session-persistence-jsonl/src/index.ts:209"
+          ]
+        },
+        {
+          "decision": "Durability discipline: every whole-file rewrite is temp file (wx) + write + fsync + rename, with best-effort directory fsync; append writes at the committed byte offset and, on failure, truncates back to the previous committed size and re-syncs so a clean retry can never duplicate seqs.",
+          "rationale": "The log is the authority; a duplicate or half-written line corrupts every later seq reference.",
+          "evidence": [
+            "packages/session-persistence-jsonl/src/index.ts:14",
+            "packages/session-persistence-jsonl/src/index.ts:73"
+          ]
+        },
+        {
+          "decision": "Path safety is enforced in one artifactPath helper: an id is rejected when it is posix-absolute, has a win32 root, or resolves outside the store root — so session ids and document keys can never escape the store. Document keys may be namespaced subdirectories, and list() skips *.doc.jsonl plus transient *.tmp.",
+          "rationale": "Ids come from hosts and callers; path traversal would turn a session read into an arbitrary file read/write.",
+          "evidence": [
+            "packages/session-persistence-jsonl/src/index.ts:44",
+            "packages/session-persistence-jsonl/src/index.ts:102",
+            "packages/session-persistence-jsonl/src/index.ts:168"
+          ]
+        },
+        {
+          "decision": "profile() is honest-bounding rather than exact: an artifact at or under 1024 bytes is read whole for the exact blank answer (no turn/start yet); a larger one is served blank:false WITHOUT reading the body, and its header is read from a capped 64 KiB window on line 0.",
+          "rationale": "A cold list of many multi-megabyte logs must not decode every body; the trade is stated as 'may have content, never guessed blank'.",
+          "evidence": [
+            "packages/session-persistence-jsonl/src/index.ts:8",
+            "packages/session-persistence-jsonl/src/index.ts:133",
+            "packages/session-persistence-jsonl/src/index.ts:190"
+          ]
+        },
+        {
+          "decision": "updateMeta replaces ONLY line 0 (temp + rename) keeping every event line byte-exact, and parseHeader explicitly preserves workspaceId/title/modelSelection through read AND repair — a repair must never silently strip a session's model selection or workspace membership.",
+          "rationale": "A header rewrite is a metadata operation, not a log operation; dropping unknown header fields would silently change model resolution after a crash.",
+          "evidence": [
+            "packages/session-persistence-jsonl/src/index.ts:148",
+            "packages/session-persistence-jsonl/src/format.ts:8"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed on writes: an append failure rolls back to the committed byte length and rethrows (src/index.ts:82-88), create uses flag wx so an existing session file is never overwritten (src/index.ts:67-71), an empty/headerless file throws (src/index.ts:96, 156-158), and an out-of-root id throws (src/index.ts:53-55). Reads are tolerant by design (torn tail truncated to the committed prefix) and the blank probe never guesses.",
+      "events": [
+        "step/end (synthetic closer PRODUCED by repair)",
+        "turn/end (synthetic closer PRODUCED by repair)"
+      ],
+      "keyConstants": [
+        {
+          "name": "BLANK_PROBE_MAX_BYTES",
+          "value": "1024",
+          "evidence": "packages/session-persistence-jsonl/src/index.ts:12"
+        },
+        {
+          "name": "HEADER_READ_MAX_BYTES",
+          "value": "65536 (64 * 1024)",
+          "evidence": "packages/session-persistence-jsonl/src/index.ts:193"
+        },
+        {
+          "name": "backend capabilities",
+          "value": "{ seekableRead: false, rawArtifacts: true }",
+          "evidence": "packages/session-persistence-jsonl/src/index.ts:63"
+        }
+      ],
+      "gaps": [
+        "None marked in code. The 1024-byte blank-probe boundary is a deliberate approximation, stated in-code as honest-bounding (packages/session-persistence-jsonl/src/index.ts:8-11) rather than as unfinished work."
+      ],
+      "evidence": [
+        "packages/session-persistence-jsonl/src/index.ts:42",
+        "packages/session-persistence-jsonl/src/index.ts:93",
+        "packages/session-persistence-jsonl/src/format.ts:26"
+      ]
+    },
+    {
+      "name": "session-query",
+      "responsibility": "Full-text session search and lineage over the durable JSONL store: an independent, rebuildable sqlite FTS index reconciled before every read, the two model-facing tools (session_search, lineage), a process warning filter, and a legacy read-only opener for old index files.",
+      "publicSurface": [
+        "createFileBackedSessionQuery",
+        "createSessionQuery",
+        "createSessionQueryTools",
+        "closeSessionQueries",
+        "SessionQuery",
+        "SessionQueryError",
+        "SearchHit",
+        "SearchOptions",
+        "LineageNode",
+        "LineageOptions",
+        "InspectOutcome",
+        "FileBackedQueryOptions",
+        "suppressSqliteExperimentalWarning",
+        "isSqliteExperimentalWarning"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Reconcile-on-search with the JSONL store as sole authority: snapshot the store (readdir + stat revision dev:ino:size:mtimeNs:ctimeNs), diff against indexed_sessions, SKIP unchanged sessions without re-reading the file, and rebuild changed/removed sessions in one BEGIN IMMEDIATE txn each (delete + insert docs/lineage + fingerprint). A content fingerprint (sha256 of exactly the bytes that produced the rows) catches stat-only changes and just advances the revision.",
+          "rationale": "The index is a derivation, never a second truth; the cheapest correct answer to 'did this change' is the revision, and the fingerprint is the tie-breaker.",
+          "evidence": [
+            "packages/session-query/src/file-backed.ts:236",
+            "packages/session-query/src/file-backed.ts:366"
+          ]
+        },
+        {
+          "decision": "Fail loud instead of serving stale rows: any scan/read/decode failure raises SessionQueryError with code SESSION_QUERY_OBSERVE_FAILED; a foreign index (application_id mismatch or newer schema) raises SESSION_QUERY_INDEX_FOREIGN and is never touched. A write that races the read is re-observed up to STABLE_OBSERVATION_ATTEMPTS times, then fails.",
+          "rationale": "Silently returning rows from a torn/partial index is the failure mode being designed out; the index is disposable, so refusing is cheap.",
+          "evidence": [
+            "packages/session-query/src/file-backed.ts:48",
+            "packages/session-query/src/file-backed.ts:141",
+            "packages/session-query/src/file-backed.ts:383"
+          ]
+        },
+        {
+          "decision": "The index is self-describing and disposable: PRAGMA application_id 0x49485155 (\"IHQU\") + user_version 1, and a version mismatch WITH our own identity resets and rebuilds the derived tables instead of migrating them.",
+          "rationale": "A derived index needs no migration path — only an identity check to avoid clobbering someone else's database.",
+          "evidence": [
+            "packages/session-query/src/file-backed.ts:40",
+            "packages/session-query/src/file-backed.ts:121"
+          ]
+        },
+        {
+          "decision": "Query safety is by construction: every whitespace token of the user query becomes a quoted FTS phrase with embedded quotes doubled (so *, OR, NEAR, parentheses are literal text), and the limit is clamped into [1, MAX_LIMIT] with a non-integer rejected. Reconciles are serialized through a single-flight chain, and every opened DatabaseSync is tracked so hosts/tests can release handles on Windows.",
+          "rationale": "A model-supplied query string must not be able to express FTS syntax; concurrent reconciles must not interleave transactions.",
+          "evidence": [
+            "packages/session-query/src/file-backed.ts:402",
+            "packages/session-query/src/file-backed.ts:469",
+            "packages/session-query/src/index.ts:48"
+          ]
+        },
+        {
+          "decision": "The node:sqlite ExperimentalWarning is suppressed by a capture-and-redrive module side effect that must evaluate BEFORE node:sqlite: existing `warning` listeners are removed and re-driven from a filter that drops exactly that one warning and forwards everything else. Importing index.ts or file-backed.ts installs it.",
+          "rationale": "Node's default warning printer is itself a bootstrap listener, so merely adding a listener filters nothing; ordering is guaranteed by ESM dependency evaluation.",
+          "evidence": [
+            "packages/session-query/src/warning.ts:1",
+            "packages/session-query/src/warning.ts:53",
+            "packages/session-query/src/index.ts:1"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed: stale rows are never served — observe failures and foreign/ newer index files throw typed errors (src/file-backed.ts:48-71, 156-161, 301-306), an unknown session in lineage/search-with-sessionId throws (src/file-backed.ts:419-425), a lineage cycle throws (src/file-backed.ts:520-522), and the legacy opener throws when the events_fts schema is absent (src/index.ts:93-96). The only fail-open cases are a missing store directory (ENOENT → empty result, src/file-backed.ts:266-269) and a zero-byte file (skipped until its header is written, src/file-backed.ts:283).",
+      "events": [
+        "all event types are CONSUMED as text through core-session's deriveSearchText (index only); produces no SessionEvents"
+      ],
+      "keyConstants": [
+        {
+          "name": "DEFAULT_LIMIT",
+          "value": "20",
+          "evidence": "packages/session-query/src/index.ts:58"
+        },
+        {
+          "name": "MAX_LIMIT",
+          "value": "100",
+          "evidence": "packages/session-query/src/index.ts:59"
+        },
+        {
+          "name": "STABLE_OBSERVATION_ATTEMPTS",
+          "value": "2",
+          "evidence": "packages/session-query/src/file-backed.ts:46"
+        },
+        {
+          "name": "INDEX_DB_APPLICATION_ID",
+          "value": "0x49485155 (\"IHQU\")",
+          "evidence": "packages/session-query/src/file-backed.ts:40"
+        },
+        {
+          "name": "INDEX_DB_SCHEMA_VERSION",
+          "value": "1",
+          "evidence": "packages/session-query/src/file-backed.ts:41"
+        },
+        {
+          "name": "busy_timeout",
+          "value": "5000 ms",
+          "evidence": "packages/session-query/src/file-backed.ts:146"
+        },
+        {
+          "name": "snippet token budget",
+          "value": "12",
+          "evidence": "packages/session-query/src/file-backed.ts:488"
+        }
+      ],
+      "gaps": [
+        "The SQLite persistence backend is gone; createSessionQuery(dbPath) survives only as a READ-ONLY opener for existing/legacy index files over the old events_fts+sessions schema, and has no in-tree production caller (only packages/session-query/test/query.test.ts) — packages/session-query/src/index.ts:241-246.",
+        "closeSessionQueries is declared as a host/test handle-release surface; its only in-tree callers are this package's own tests (packages/session-query/src/index.ts:48-56).",
+        "SearchHit.time is NOT a recency signal: the JSONL log carries no per-event timestamp, so the file-backed index records the INDEX-REBUILD time for every row, and an unchanged row gets a new value on every re-index (packages/session-query/src/index.ts:12-17, packages/session-query/src/file-backed.ts:326)."
+      ],
+      "evidence": [
+        "packages/session-query/src/file-backed.ts:15",
+        "packages/session-query/src/file-backed.ts:264",
+        "packages/session-query/src/index.ts:89",
+        "packages/session-query/src/tools.ts:4"
+      ]
+    },
+    {
+      "name": "session-title",
+      "responsibility": "Derive and persist a short session title: a deterministic word-count fallback, a one-shot provider suggestion, append of a session/title log event, and a best-effort document mirror for list screens.",
+      "publicSurface": [
+        "TITLE_MAX_BYTES",
+        "TITLE_MAX_WORDS",
+        "fallbackTitle",
+        "normalizeTitle",
+        "suggestTitle",
+        "applyTitle",
+        "maybeAutoTitle"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Provider suggestion is fail-soft by construction: any stream error, any thrown error and an empty/whitespace provider output all degrade to the deterministic fallback (first maxWords whitespace words, ellipsis when truncated) — the function has a catch that returns source \"fallback\".",
+          "rationale": "A title is cosmetic; it must never fail a turn or block auto-titling.",
+          "evidence": [
+            "packages/session-title/src/index.ts:46",
+            "packages/session-title/src/index.ts:15"
+          ]
+        },
+        {
+          "decision": "Only REAL user messages are eligible inputs: any user/message carrying a `source` (runtime-context snapshots, plugin/system injections) is excluded, so dynamic context can never become the session title.",
+          "rationale": "The runtime-context snapshot is a plugin-sourced user message and would otherwise win the title.",
+          "evidence": [
+            "packages/session-title/src/index.ts:32"
+          ]
+        },
+        {
+          "decision": "Dual persistence: the durable title is a session/title event (latest-wins projection deriveSessionTitle) while a namespaced document (\"session-title/<id>\") is a best-effort mirror for the list screen; the mirror write is fired and caught so a coordinator failure never rejects the caller.",
+          "rationale": "The log is the truth for resume; the document exists only to make a session list cheap.",
+          "evidence": [
+            "packages/session-title/src/index.ts:68",
+            "packages/session-title/src/index.ts:81"
+          ]
+        },
+        {
+          "decision": "Auto-titling is idempotent and guarded: it returns early when a title already exists, returns when there are no eligible user messages, and byte-caps the normalized title (trim ends only; internal whitespace preserved).",
+          "rationale": "Re-titling an already-titled session would churn the log and the mirror.",
+          "evidence": [
+            "packages/session-title/src/index.ts:91",
+            "packages/session-title/src/index.ts:24"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-soft throughout: provider failure → deterministic fallback (src/index.ts:63-65); the coordinator document write is `.catch(() => {})` and session-persistence's putDocument itself reports rather than rejects (src/index.ts:86-89, 96-102). No throwing path except the underlying append validation of the session/title event.",
+      "events": [
+        "session/title (PRODUCED by applyTitle)"
+      ],
+      "keyConstants": [
+        {
+          "name": "TITLE_MAX_BYTES",
+          "value": "120",
+          "evidence": "packages/session-title/src/index.ts:6"
+        },
+        {
+          "name": "TITLE_MAX_WORDS",
+          "value": "8",
+          "evidence": "packages/session-title/src/index.ts:7"
+        },
+        {
+          "name": "provider input cap",
+          "value": "4000 chars (slice)",
+          "evidence": "packages/session-title/src/index.ts:51"
+        },
+        {
+          "name": "fallback title when no words",
+          "value": "\"New session\"",
+          "evidence": "packages/session-title/src/index.ts:17"
+        }
+      ],
+      "gaps": [
+        "The in-code comment labels this 'First-prompt mode (roadmap)' — the implementation is present and wired from apps/cli/src/run.ts, but the milestone framing is a roadmap note rather than a shipped-feature claim (packages/session-title/src/index.ts:72).",
+        "suggestTitle/fallbackTitle/applyTitle have no in-tree src caller outside this package; only maybeAutoTitle is wired (apps/cli/src/run.ts)."
+      ],
+      "evidence": [
+        "packages/session-title/src/index.ts:6",
+        "packages/session-title/src/index.ts:46"
+      ]
+    },
+    {
+      "name": "runtime-context",
+      "responsibility": "Dynamic system context as a durable snapshot: named sections rendered at each agent/pre-step and appended to the session log as a plugin-sourced user/message only when the rendered text changed.",
+      "publicSurface": [
+        "createRuntimeContext",
+        "installRuntimeContext",
+        "RuntimeContextService",
+        "ContextSection",
+        "RUNTIME_CONTEXT_SOURCE_PLUGIN",
+        "RUNTIME_CONTEXT_CLEARED"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Dynamic context goes into the LOG, not the system prompt: the host's static prompt stays the baseline and each change lands as a plugin-sourced user/message, so it is model-visible, replayable and durable through the session's own coordinator mirror.",
+          "rationale": "Log-resident context is the only form that survives resume and is visible to the same projection (deriveMessages) the meter and compaction price.",
+          "evidence": [
+            "packages/runtime-context/src/index.ts:16",
+            "packages/runtime-context/src/index.ts:50"
+          ]
+        },
+        {
+          "decision": "Change-only append with a representable empty state: an unchanged render appends nothing, and an empty render appends the explicit RUNTIME_CONTEXT_CLEARED notice — so 'nothing applies any more' is itself a value that dedupes and tells the model earlier snapshots are void.",
+          "rationale": "Without the cleared notice, stale context would remain the last word the model saw.",
+          "evidence": [
+            "packages/runtime-context/src/index.ts:46",
+            "packages/runtime-context/src/index.ts:5"
+          ]
+        },
+        {
+          "decision": "Replay on create: the service scans the log backwards for the last plugin-sourced user/message from this package and adopts its text as `retained`, so a resumed session keeps the same snapshot without re-appending.",
+          "rationale": "Reconstruction from the log is what makes the snapshot idempotent across restarts.",
+          "evidence": [
+            "packages/runtime-context/src/index.ts:27"
+          ]
+        },
+        {
+          "decision": "Snapshots are marked `internal: true`: model-visible but not a user-facing turn, so the scrollback skips them while deriveMessages keeps them.",
+          "rationale": "The model needs the context; the user must not see 'Current runtime context: none' as if they had typed it.",
+          "evidence": [
+            "packages/runtime-context/src/index.ts:57",
+            "packages/core-session/src/index.ts:9"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed only on duplicate section names (src/index.ts:63-66); the render path itself is append-only and has no swallow — a failing section getter or an invalid append propagates. No try/catch in the module.",
+      "events": [
+        "user/message (PRODUCED, with source { kind: \"plugin\", plugin: \"i-harness/runtime-context\" })",
+        "agent/pre-step (CONSUMED — PluginContext event, not a SessionEvent)"
+      ],
+      "keyConstants": [
+        {
+          "name": "RUNTIME_CONTEXT_SOURCE_PLUGIN",
+          "value": "\"i-harness/runtime-context\"",
+          "evidence": "packages/runtime-context/src/index.ts:5"
+        },
+        {
+          "name": "RUNTIME_CONTEXT_CLEARED",
+          "value": "\"Current runtime context: none. Earlier runtime-context snapshots no longer apply.\"",
+          "evidence": "packages/runtime-context/src/index.ts:6"
+        }
+      ],
+      "gaps": [
+        "None marked in code. Nothing in the package enforces a size cap on a snapshot; the sections it renders are expected to bound themselves (instructions does so with DEFAULT_INSTRUCTIONS_MAX_BYTES)."
+      ],
+      "evidence": [
+        "packages/runtime-context/src/index.ts:23",
+        "packages/runtime-context/src/index.ts:73"
+      ]
+    },
+    {
+      "name": "instructions",
+      "responsibility": "Discover and load AGENTS.md / CLAUDE.md instruction files and render them as one runtime-context section, with a byte cap and an mtime/size-keyed cache.",
+      "publicSurface": [
+        "createInstructionsSection",
+        "discoverInstructionPaths",
+        "loadInstructionFiles",
+        "renderInstructions",
+        "InstructionsConfig",
+        "DEFAULT_INSTRUCTIONS_MAX_BYTES"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Discovery precedence is global first, then workspace ancestors root→workspace, so the closest file renders LAST (most salient). A directory contributes AT MOST ONE candidate, AGENTS.md preferred over CLAUDE.md; globals are looked for in ~ and ~/.claude.",
+          "rationale": "Rendering order is the only salience signal a text section has; one-file-per-directory keeps the section from doubling when both names exist.",
+          "evidence": [
+            "packages/instructions/src/files.ts:13",
+            "packages/instructions/src/files.ts:7"
+          ]
+        },
+        {
+          "decision": "The section is rendered with a per-file `### <workspace-relative path>` header, joined blank-line separated, and hard-capped at maxBytes with a `(truncated)` suffix.",
+          "rationale": "Bounded prompt cost for an unbounded set of on-disk files.",
+          "evidence": [
+            "packages/instructions/src/files.ts:64",
+            "packages/instructions/src/index.ts:48"
+          ]
+        },
+        {
+          "decision": "The getter is SYNCHRONOUS because the runtime-context pre-step render seam is sync, and it caches by (file list | max mtimeMs | total size): an unchanged tree costs one stat per file per step boundary and no re-read.",
+          "rationale": "Change detection has to fit a synchronous render hook; mtime+size is the cheapest honest proxy.",
+          "evidence": [
+            "packages/instructions/src/index.ts:17"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed on real read errors: loadInstructionFiles rethrows anything that is not ENOENT/ENOTDIR (src/files.ts:57-59). Fail-open on stat: a statSync failure is swallowed and falls through to a full re-read on the next call (src/index.ts:35-37). Discovery uses existsSync, so a file that vanishes between stat and read is skipped, not fatal.",
+      "events": [],
+      "keyConstants": [
+        {
+          "name": "DEFAULT_INSTRUCTIONS_MAX_BYTES",
+          "value": "24000",
+          "evidence": "packages/instructions/src/index.ts:9"
+        },
+        {
+          "name": "CANDIDATES",
+          "value": "[\"AGENTS.md\", \"CLAUDE.md\"]",
+          "evidence": "packages/instructions/src/files.ts:7"
+        }
+      ],
+      "gaps": [
+        "Change detection is acknowledged as a future item in-code: the mtime/size compare is described as covering 'the roadmap's 變更檢測可後補 note' via runtime-context's snapshot-diff dedupe (packages/instructions/src/index.ts:20-22) — i.e. a content change that preserves mtime AND total size is not detected.",
+        "The package declares no dedicated context-section event; it is consumed only as a runtime-context section getter from the assembly (packages/session-executor/src/assembly.ts:445-448)."
+      ],
+      "evidence": [
+        "packages/instructions/src/index.ts:23",
+        "packages/instructions/src/files.ts:17"
+      ]
+    },
+    {
+      "name": "interaction",
+      "responsibility": "The interaction seams between host and engine: the approval answerer, the user-question provider, the command registry (register / run / list / parse) and the model-facing ask_user_input tool.",
+      "publicSurface": [
+        "registerApprovalAnswerer",
+        "ApprovalAnswerer",
+        "ApprovalRequest",
+        "ApprovalDecision",
+        "registerQuestionProvider",
+        "QuestionProvider",
+        "UserQuestion",
+        "askUser",
+        "registerCommand",
+        "runCommand",
+        "listCommands",
+        "listCommandNames",
+        "parseCommandLine",
+        "Command",
+        "CommandDescriptor",
+        "ParsedCommandLine",
+        "createAskUserInputTool",
+        "registerAskUserInput",
+        "AskUserInputToolDeps"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The approval seam is normalized to a BOOLEAN at registration: the plugin service stores `async (req) => (await fn(req)).approved`, so a host implementing the richer {approved} shape can never fail open by returning a truthy object.",
+          "rationale": "core-tools checks `if (!ok) throw`; a truthy object would be read as consent and a user denial would be ignored.",
+          "evidence": [
+            "packages/interaction/src/index.ts:21",
+            "packages/interaction/src/index.ts:5"
+          ]
+        },
+        {
+          "decision": "askUser is deliberately NOT async so a missing provider throws SYNCHRONOUSLY (NO_PROVIDER): callers that guard the call see the failure without awaiting, and the registered provider's ask still returns a Promise.",
+          "rationale": "A rejected promise is easy to forget to handle; a synchronous throw at the guard is fail-closed by construction.",
+          "evidence": [
+            "packages/interaction/src/index.ts:46",
+            "packages/interaction/src/index.ts:137"
+          ]
+        },
+        {
+          "decision": "One command-name grammar is shared by registration, parsing and listing: ^[a-z][a-z0-9_-]*$ is enforced as a TypeError at registration, and parseCommandLine parses the same alphabet (with an optional leading slash for the web palette) and returns the rest of the line as the handler input.",
+          "rationale": "A name that fails the grammar could be registered and listed but never executed — the grammar has to be identical on both sides.",
+          "evidence": [
+            "packages/interaction/src/index.ts:84",
+            "packages/interaction/src/index.ts:194"
+          ]
+        },
+        {
+          "decision": "Commands are UI-plane: dispatched through their own registry in the plugin services map (lazily created on first registration), results returned directly to the caller and NEVER fed into model history. runCommand is fail-loud on an unknown command while listCommands returns [] for a legal empty registry.",
+          "rationale": "The audit ruling (F05-6) is that a command result must not become model context.",
+          "evidence": [
+            "packages/interaction/src/index.ts:59",
+            "packages/interaction/src/index.ts:172"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed: a missing question provider throws synchronously (NO_PROVIDER, src/index.ts:49-56), registerCommand throws TypeError on a bad name (src/index.ts:84-86), runCommand throws on an unknown command (src/index.ts:102-105), and the approval answerer is boolean-normalized (src/index.ts:26-28). Fail-open only for discovery/listing, which returns [] rather than throwing (src/index.ts:167-192).",
+      "events": [
+        "consumes no SessionEvents; core-session declares command/run and command/done as appended by the EXECUTING HOST, not by this package (packages/core-session/src/index.ts:113-118)"
+      ],
+      "keyConstants": [
+        {
+          "name": "ask_user_input timeoutMs (default)",
+          "value": "600000",
+          "evidence": "packages/interaction/src/index.ts:134"
+        },
+        {
+          "name": "options maxItems",
+          "value": "10",
+          "evidence": "packages/interaction/src/index.ts:130"
+        },
+        {
+          "name": "COMMAND_NAME grammar",
+          "value": "^[a-z][a-z0-9_-]*$",
+          "evidence": "packages/interaction/src/index.ts:78"
+        }
+      ],
+      "gaps": [
+        "listCommandNames has no in-tree src caller (only packages/interaction/test/commands.test.ts:3) — it is a host-facing discovery surface (packages/interaction/src/index.ts:184-192)."
+      ],
+      "evidence": [
+        "packages/interaction/src/index.ts:26",
+        "packages/interaction/src/index.ts:121",
+        "packages/interaction/src/index.ts:167"
+      ]
+    },
+    {
+      "name": "plan-mode",
+      "responsibility": "The R-A7 plan-mode surface: the plan-mode system-prompt fragment, enter/exit helpers that append plan/mode log markers, and the exit_plan_mode tool plus its mount/withdraw helpers.",
+      "publicSurface": [
+        "PLAN_MODE_SYSTEM_PROMPT",
+        "enterPlanMode",
+        "exitPlanMode",
+        "createPlanModeTools",
+        "ensurePlanModeTool",
+        "withdrawPlanModeTool"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Mode is log state, not process state: entering appends { plan/mode, mode:\"on\", proposal } AND the proposal as a regular user/message (so the model sees the plan request), and the projection is latest-wins via derivePlanMode.",
+          "rationale": "A log-only mode marker makes plan mode survive resume and keeps attribution (the proposal) on the marker while the model-visible text stays a normal user turn.",
+          "evidence": [
+            "packages/plan-mode/src/index.ts:10",
+            "packages/core-session/src/index.ts:97",
+            "packages/core-session/src/index.ts:594"
+          ]
+        },
+        {
+          "decision": "Exit is soft and idempotent: exitPlanMode returns false when plan mode is not active instead of throwing, and the tool reports { active: exitPlanMode(session) }.",
+          "rationale": "A model may call exit_plan_mode twice or when never in plan mode; that is not an error condition.",
+          "evidence": [
+            "packages/plan-mode/src/index.ts:15",
+            "packages/plan-mode/src/index.ts:21"
+          ]
+        },
+        {
+          "decision": "The tool is mounted idempotently by name (ensurePlanModeTool checks tools.get first) and can be withdrawn by name, so a host can toggle plan mode on one registry without duplicating the tool.",
+          "rationale": "Registry duplication would surface two identical tools to the model.",
+          "evidence": [
+            "packages/plan-mode/src/index.ts:31"
+          ]
+        },
+        {
+          "decision": "The prompt fragment is a standalone exported constant composed by the assembly on top of the base/system preset prompt, not carried by the mode event.",
+          "rationale": "The prompt is per-assembly configuration; the event is per-session state.",
+          "evidence": [
+            "packages/plan-mode/src/index.ts:5",
+            "packages/session-executor/src/assembly.ts:597"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-soft: no throw anywhere except the underlying append validation (invalid session event). exitPlanMode answers false instead of raising (src/index.ts:15-19).",
+      "events": [
+        "plan/mode (PRODUCED, mode on|off)",
+        "user/message (PRODUCED on enter — the proposal text)"
+      ],
+      "keyConstants": [],
+      "gaps": [
+        "withdrawPlanModeTool has no in-tree caller (only the declaration at packages/plan-mode/src/index.ts:36); plan mode is mounted by the assembly but never withdrawn there."
+      ],
+      "evidence": [
+        "packages/plan-mode/src/index.ts:5"
+      ]
+    },
+    {
+      "name": "goal",
+      "responsibility": "The goal domain: a last-wins goal projection folded from goal/change session events, plus pure CAS mutation planning (create/edit/pause/resume/complete/clear) returning the durable event and the next view.",
+      "publicSurface": [
+        "GoalView",
+        "GoalStateError",
+        "GoalStateErrorCode",
+        "GoalMutationRequest",
+        "GoalMutationResult",
+        "foldGoal",
+        "applyGoalMutation"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Whole-snapshot events with a tombstone clear: every non-clear mutation carries the COMPLETE post-change goal (id, revision, objective, phase, optional maxGoalRounds) so the projection is a pure last-wins replay and there is no separate state store; a clear carries only a tombstone GoalRef and projects to null.",
+          "rationale": "The event IS the change (DSH goal parity): replay alone rebuilds the state, and a snapshot cannot drift from a log of deltas.",
+          "evidence": [
+            "packages/goal/src/index.ts:141",
+            "packages/goal/src/index.ts:108",
+            "packages/goal/src/index.ts:166"
+          ]
+        },
+        {
+          "decision": "Mutations are PURE planners: applyGoalMutation never mutates its input and never appends — it returns { event, next } and the caller owns the log. CAS is mandatory: every mutation needs a ref matching the current id AND revision, else GoalStateError(\"goal-stale-ref\").",
+          "rationale": "Separating planning from the log keeps the domain testable and makes the compare-and-set the only concurrency control (revision is bumped on every change).",
+          "evidence": [
+            "packages/goal/src/index.ts:192",
+            "packages/goal/src/index.ts:151",
+            "packages/goal/src/index.ts:72"
+          ]
+        },
+        {
+          "decision": "Typed error codes form the host contract: goal-invalid / goal-exists / goal-none / goal-stale-ref / goal-invalid-transition, with the route owning the HTTP status mapping. On create, field validation precedes the state check (DSH parity), and a COMPLETED goal may be replaced while any other phase must be cleared or resumed.",
+          "rationale": "The domain refuses to know about HTTP; the codes are the stable boundary.",
+          "evidence": [
+            "packages/goal/src/index.ts:48",
+            "packages/goal/src/index.ts:196"
+          ]
+        },
+        {
+          "decision": "Projection is defensive by posture, mutation is strict: a malformed or unknown goal/change event (bad revision, blank objective, unknown phase, malformed tombstone) leaves the projection unchanged rather than throwing, because a corrupted persisted log must not crash the fold; the write side is where validity is enforced.",
+          "rationale": "Same asymmetry as core-session: strict writes, forgiving reads.",
+          "evidence": [
+            "packages/goal/src/index.ts:141"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed for mutations: every invalid request throws a typed GoalStateError (src/index.ts:152-164, 192-265). Fail-safe for projection: malformed events return `undefined` and are skipped, a malformed clear tombstone keeps the previous view (src/index.ts:108-124).",
+      "events": [
+        "goal/change (PRODUCED as the returned event to append; CONSUMED by foldGoal)"
+      ],
+      "keyConstants": [],
+      "gaps": [
+        "Goal round admission is declared NOT implemented in v0: no goal enforcement, no turn-count logic; GoalView.round exists only as a wire-vocabulary seam and is never populated (packages/goal/src/index.ts:35-43, 8-11).",
+        "The domain is a documented simplification of DSH: no `blocked` phase / blockedReason and no mandatory maxGoalRounds (packages/goal/src/index.ts:6-11)."
+      ],
+      "evidence": [
+        "packages/goal/src/index.ts:28",
+        "packages/goal/src/index.ts:141",
+        "packages/goal/src/index.ts:186"
+      ]
+    },
+    {
+      "name": "token-meter",
+      "responsibility": "The token-estimation single source of truth: fixed-density per-message/content estimates and the context-budget check used by both the agent's overflow ladder and the compaction pressure gate.",
+      "publicSurface": [
+        "estimateMessage",
+        "estimateContent",
+        "activeTokens",
+        "breakdown",
+        "checkBudget",
+        "TokenBreakdown",
+        "BudgetResult",
+        "CHARS_PER_TOKEN",
+        "BLOCK_OVERHEAD",
+        "ROLE_OVERHEAD",
+        "IMAGE_TOKEN_ESTIMATE"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Single projection rule: activeTokens/breakdown price exactly deriveMessages(session) — what the model actually sees — and never touch raw events. Shadowed (compaction/reset), rewound and pruned events therefore cost nothing automatically, with no second hiding implementation.",
+          "rationale": "Any other measurement would disagree with the prompt and make the budget gate wrong precisely when it matters.",
+          "evidence": [
+            "packages/token-meter/src/breakdown.ts:10"
+          ]
+        },
+        {
+          "decision": "Fixed-density heuristics with explicit asymmetry: chars/4; a plain assistant string pays role overhead only, a message with toolCalls pays block overhead for its content and per-call name+args pricing; a multi-part user/tool message pays per-part block overhead and a flat per-image estimate.",
+          "rationale": "The estimate must be stable and cheap (no tokenizer dependency); the asymmetries mirror how the providers actually count a bare assistant turn versus a structured one.",
+          "evidence": [
+            "packages/token-meter/src/estimate.ts:12",
+            "packages/token-meter/src/estimate.ts:3"
+          ]
+        },
+        {
+          "decision": "Two estimators with different jobs: estimateMessage prices a full wire message (role+block overhead) while compaction's approxTokens prices a single content blob (ceil(chars/4), no overhead) — the module that needs a blob price must not reuse the message price.",
+          "rationale": "Region selection and summarizer trimming price fragments, not messages; reusing the message price would double-count overhead.",
+          "evidence": [
+            "packages/token-meter/src/estimate.ts:48",
+            "packages/compaction/src/tokens.ts:8"
+          ]
+        },
+        {
+          "decision": "The budget is inclusive of host-only overhead: checkBudget adds overheadTokens (system prompt + tool schemas, which the session log never carries) to the measured tokens, and the budget is floor(contextWindow * reserveRatio) with overflow only when tokens STRICTLY exceed it.",
+          "rationale": "Without the overhead term the gate could only see the conversation and would declare 'ok' while the real prompt was already over.",
+          "evidence": [
+            "packages/token-meter/src/budget.ts:10",
+            "packages/core-agent/src/index.ts:32"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-closed on parameters: checkBudget throws when reserveRatio is outside (0,1] or overheadTokens is not a non-negative integer (src/budget.ts:15-16). The measurement itself is NOT defensive — callers wrap it (compaction's safeActiveTokens, packages/compaction/src/index.ts:271-277).",
+      "events": [],
+      "keyConstants": [
+        {
+          "name": "CHARS_PER_TOKEN",
+          "value": "4",
+          "evidence": "packages/token-meter/src/estimate.ts:5"
+        },
+        {
+          "name": "BLOCK_OVERHEAD",
+          "value": "4",
+          "evidence": "packages/token-meter/src/estimate.ts:6"
+        },
+        {
+          "name": "ROLE_OVERHEAD",
+          "value": "4",
+          "evidence": "packages/token-meter/src/estimate.ts:7"
+        },
+        {
+          "name": "IMAGE_TOKEN_ESTIMATE",
+          "value": "1024",
+          "evidence": "packages/token-meter/src/estimate.ts:10"
+        },
+        {
+          "name": "reserveRatio (checkBudget default)",
+          "value": "0.9",
+          "evidence": "packages/token-meter/src/budget.ts:14"
+        },
+        {
+          "name": "overheadTokens (default)",
+          "value": "0",
+          "evidence": "packages/token-meter/src/budget.ts:14"
+        }
+      ],
+      "gaps": [
+        "Image pricing is a flat constant, stated as having no re-encode/pixel math in v0 (packages/token-meter/src/estimate.ts:8-10)."
+      ],
+      "evidence": [
+        "packages/token-meter/src/index.ts:1",
+        "packages/token-meter/src/estimate.ts:12",
+        "packages/token-meter/src/budget.ts:14"
+      ]
+    },
+    {
+      "name": "compaction",
+      "responsibility": "Context-pressure control: shadow-range selection, an LLM summary pass with an anchored (update-the-previous-summary) prompt, a model-free prune pass over large tool results, and the append-only pure-reset marker — all configured per model.",
+      "publicSurface": [
+        "createCompactionEngine",
+        "CompactionEngine",
+        "CompactionResult",
+        "selectShadowableRange",
+        "resolveConfig",
+        "resolveCompactSpec",
+        "resolveContextWindow",
+        "approxTokens",
+        "activeTokens",
+        "IMAGE_TOKEN_ESTIMATE",
+        "CompactionConfig",
+        "ModelCompactionPolicy",
+        "PruneConfig",
+        "ResolvedCompactionConfig",
+        "ResolvedPruneConfig"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Append-only shadow, never deletion: hiding is expressed entirely as markers — compaction/summary.shadowedSeqs, compaction/reset.removedSeqs, compaction/prune records — and the reset path deliberately appends a marker instead of truncating, because the persistence backends are append-only so an in-place deletion never reached disk and the history returned on every resume. Unkeyed events (seq undefined) are never removable.",
+          "rationale": "Replay from the log must reconstruct exactly the surface the live process had.",
+          "evidence": [
+            "packages/compaction/src/index.ts:233",
+            "packages/compaction/src/index.ts:131"
+          ]
+        },
+        {
+          "decision": "Fail-soft summarizer with a quality floor: any summarizer throw (including a degenerate-output throw after ONE same-model retry below minSummaryChars) warns and returns { compacted:false }, to be retried on the next step; only config resolution is fail-loud. Malformed persisted shapes must not escape as TypeErrors, so the meter read and the stringify are individually wrapped.",
+          "rationale": "The agent must never be blocked by compaction; the observable warning is what makes a sustained failure visible instead of silent.",
+          "evidence": [
+            "packages/compaction/src/index.ts:127",
+            "packages/compaction/src/summarizer.ts:155",
+            "packages/compaction/src/index.ts:265"
+          ]
+        },
+        {
+          "decision": "The auto path is a documented gate stack: (1) pressure gate including overheadTokens, (2) sticky state set by an auto success that STILL leaves the surface over threshold, (3) re-fire guard (no new non-marker events since the last compaction/end), (4) hysteresis (minTurnsBeforeRecompact turn/end events), (5) breaker (3 consecutive auto failures; new content releases the pause but only a success resets the counter). Explicit compact() is UNGATED and its success is the other release condition.",
+          "rationale": "Each gate exists to stop a specific hot loop — sticky covers the prune-only pass, which appends no compaction/end and would otherwise re-plan the same records every step.",
+          "evidence": [
+            "packages/compaction/src/index.ts:146",
+            "packages/compaction/src/index.ts:218",
+            "packages/compaction/src/index.ts:279"
+          ]
+        },
+        {
+          "decision": "Prune is a model-free shortcut available ONLY on the auto path: a plan of every tool/result whose stringified output exceeds thresholdChars (head 4096 / tail 1024 carving, middle byte count recorded) is priced against the visible surface, and if the substitute surface alone falls under the threshold the pass appends the prune marker and returns compacted:true with NO model call. Explicit compact() always summarizes.",
+          "rationale": "Pruning is the cheap fix; spending a summarizer call when trim alone resolves pressure is waste, but an explicit user-requested compact must do what was asked.",
+          "evidence": [
+            "packages/compaction/src/index.ts:65",
+            "packages/compaction/src/index.ts:330"
+          ]
+        },
+        {
+          "decision": "Anchored summarization is a PROMPT property, not an event-shape change: the last compaction/summary text is injected in a <previous-summary> block and the model is told to UPDATE rather than restate, and imperative shadow lines matching a marker list are prefilled VERBATIM into a Sensitive Instructions section (marker match is only a flag; original wording is never reworded or dropped). Each round still appends its own summary event.",
+          "rationale": "Incremental merging is what stops the summary from degrading round over round, and the user's exact instructions are the part that must never be paraphrased.",
+          "evidence": [
+            "packages/compaction/src/summarizer.ts:26",
+            "packages/compaction/src/summarizer.ts:85",
+            "packages/compaction/src/index.ts:108"
+          ]
+        },
+        {
+          "decision": "Context window is resolved catalog-first (provider profile modelContexts[modelId] → profile.contextWindow → config.contextWindow) and the effective policy is a per-model overlay on the global chain, keyed by exact \"provider/model\"; malformed policy keys fail loud at resolve. Telemetry emits one compaction/attempt event per attempt (success | prune-only | failure | skipped) with tokensBefore/After.",
+          "rationale": "A resolve-time failure is debuggable; a mid-compaction failure is not.",
+          "evidence": [
+            "packages/compaction/src/config.ts:151",
+            "packages/compaction/src/config.ts:112",
+            "packages/compaction/src/index.ts:85"
+          ]
+        }
+      ],
+      "failurePolicy": "Fail-soft at runtime, fail-closed at configuration. Runtime: a summarizer failure warns and returns compacted:false (index.ts:124-130), prune stringify failure degrades to 'not prunable' (index.ts:382-388), the analytics meter read degrades to undefined (index.ts:271-277), deriveSearchText failure degrades to '' inside renderShadowed (index.ts:432-437), and resetWindow returns { compacted:false } when nothing is removable (index.ts:259). Configuration: every bound is validated and throws at resolveConfig/resolvePrune time (config.ts:83-149), so a bad override fails at load, never mid-compaction.",
+      "events": [
+        "compaction/start (PRODUCED)",
+        "compaction/summary (PRODUCED, carries shadowedSeqs)",
+        "compaction/end (PRODUCED)",
+        "compaction/reset (PRODUCED, carries removedSeqs)",
+        "compaction/prune (PRODUCED, carries PruneRecord[])",
+        "telemetry (not a SessionEvent): compaction/attempt"
+      ],
+      "keyConstants": [
+        {
+          "name": "thresholdRatio (default)",
+          "value": "0.8",
+          "evidence": "packages/compaction/src/config.ts:87"
+        },
+        {
+          "name": "retainTokens (default)",
+          "value": "0",
+          "evidence": "packages/compaction/src/config.ts:91"
+        },
+        {
+          "name": "maxTokens (default)",
+          "value": "1024",
+          "evidence": "packages/compaction/src/config.ts:95"
+        },
+        {
+          "name": "minSummaryChars (default)",
+          "value": "500",
+          "evidence": "packages/compaction/src/config.ts:99"
+        },
+        {
+          "name": "minTurnsBeforeRecompact (default)",
+          "value": "3",
+          "evidence": "packages/compaction/src/config.ts:108"
+        },
+        {
+          "name": "prune defaults",
+          "value": "thresholdChars 8192, headChars 4096, tailChars 1024",
+          "evidence": "packages/compaction/src/config.ts:81"
+        },
+        {
+          "name": "BREAKER_MAX_FAILURES",
+          "value": "3",
+          "evidence": "packages/compaction/src/index.ts:284"
+        },
+        {
+          "name": "summarizer attempts",
+          "value": "2 (one retry)",
+          "evidence": "packages/compaction/src/summarizer.ts:167"
+        },
+        {
+          "name": "SENSITIVE_MIN_CHARS",
+          "value": "8",
+          "evidence": "packages/compaction/src/summarizer.ts:14"
+        }
+      ],
+      "gaps": [
+        "Image-aware summarization is deferred: a pruned tool/result renders as its substitute and drops the image bytes entirely on the summary-input surface ('v0 carve; image-aware summarize is still deferred'), and the real byte-level replay needs a multimodal summarizer plus store refs — only a descriptor path exists (packages/compaction/src/index.ts:403-417, 445-454).",
+        "The M20 image-descriptor rule explicitly REPLACES the descriptor union for a pruned event: the narrowed input drops the images along with the rest of the output (packages/compaction/src/index.ts:403-412).",
+        "The comment on the model-free prune-pass defaults states the defaults are 'the recommended carving (aligned with the retention caps)' — a stated recommendation, not an enforced relation; only headChars+tailChars <= thresholdChars is enforced (packages/compaction/src/config.ts:5-6, 145-147)."
+      ],
+      "evidence": [
+        "packages/compaction/src/index.ts:49",
+        "packages/compaction/src/index.ts:140",
+        "packages/compaction/src/index.ts:233",
+        "packages/compaction/src/config.ts:83",
+        "packages/compaction/src/summarizer.ts:85"
+      ]
+    }
+  ],
+  "coverage": {
+    "assigned": 15,
+    "covered": 15
+  }
+}

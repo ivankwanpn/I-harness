@@ -1,0 +1,1125 @@
+{
+  "group": "service",
+  "source": "ih",
+  "sourcePath": "D:\\I-harness-main",
+  "sourceRev": "13213ffa0694f24ad3749005c29aa09a233adacd",
+  "branch": "m62",
+  "packages": [
+    {
+      "name": "web-host",
+      "responsibility": "The web service surface: one node:http server with unary JSON HTTP routes (sessions/workspaces/settings/models/plugins/goal/jobs/feedback/attachments/commands) plus a single WebSocket mux at /api/mux that multiplexes named live streams. It is transport-only: it maps embedder seams (executor, coordinator, settings, plugin registry, bridges) onto wire shapes and never touches those packages' internals.",
+      "publicSurface": [
+        "createWebHost",
+        "WebHost",
+        "WebHostOptions",
+        "attachLiveSession (WebHost method)",
+        "WebSocketMuxServer",
+        "LiveSessionStreams",
+        "AgentState",
+        "ApprovalMuxBridge",
+        "ApprovalWaterfall",
+        "QuestionMuxBridge",
+        "QuestionWaterfall",
+        "paginateEvents",
+        "PaginateOptions",
+        "createAuth",
+        "AuthContext",
+        "AuthOptions"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Transport shape: HTTP unary routes + ONE WebSocket mux with named stream endpoints (session/chunk/reasoning/agent-state/approval/question/command), not per-feature sockets and not SSE.",
+          "rationale": "One socket multiplexes many streams addressed by streamId; each open is answered with {type:'ready'} then {type:'item'}... then {type:'end'}, is cancellable by {type:'cancel'}, and approval/question answers ride the same socket as non-open messages keyed by a globally unique id. History is served by the HTTP events route with paging; the live streams deliberately have no replay.",
+          "evidence": [
+            "packages/web-host/src/types.ts:88",
+            "packages/web-host/src/types.ts:97",
+            "packages/web-host/src/host.ts:598",
+            "packages/web-host/src/mux.ts:103",
+            "packages/web-host/src/mux.ts:146",
+            "packages/web-host/src/live.ts:28"
+          ]
+        },
+        {
+          "decision": "Auth is opt-in and layered on top of an ALWAYS-ON DNS-rebind/CORS fence: the Host header and (if present) the Origin header must be loopback for every HTTP request and for the mux upgrade, unconditionally; only then does the optional launch-token/HMAC-cookie check apply.",
+          "rationale": "When opts.auth is absent there is NO authentication at all (documented dev/test posture) — but the fence still runs, because browsers do not apply CORS to WebSocket frames. With auth present: a ?token=<launchToken> query bootstraps GET /api/auth/login, which sets an HttpOnly SameSite=Strict HMAC-signed cookie (hmacSecret must be >=32 chars); every route then answers 401 without a valid cookie or token, and the upgrade is destroyed before upgrade.",
+          "evidence": [
+            "packages/web-host/src/host.ts:319",
+            "packages/web-host/src/host.ts:716",
+            "packages/web-host/src/host.ts:740",
+            "packages/web-host/src/host.ts:750",
+            "packages/web-host/src/host.ts:876",
+            "packages/web-host/src/auth.ts:81",
+            "packages/web-host/src/auth.ts:94",
+            "packages/web-host/src/auth.ts:49"
+          ]
+        },
+        {
+          "decision": "The server is single-workspace: execution workspace is fixed at construction (opts.workspace, canonicalized once); a POST /api/sessions body `cwd` is only recorded into the workspace registry for grouping and returns a `workspaceWarning` string when it differs from the execution workspace.",
+          "rationale": "The executor roots runtime-context, shell default cwd and the sandbox writable root in the SERVER's workspace. The warning is a response FIELD, not a rejection and not a redirect: it does not change the session's workspace, does not move files/shell/sandbox, does not error, and is omitted entirely when opts.workspace is absent (no claim made). It only fires for the cwd path (canonicalCwd set), not for an explicit workspaceId, and only when both are non-empty and differ. With no workspaceRegistry seam, both `cwd` and `workspaceId` are deleted from the body and ignored entirely (never written into the session header).",
+          "evidence": [
+            "packages/web-host/src/host.ts:259",
+            "packages/web-host/src/host.ts:514",
+            "packages/web-host/src/host.ts:1199",
+            "packages/web-host/src/host.ts:1242",
+            "packages/web-host/src/host.ts:1247",
+            "packages/web-host/src/host.ts:352"
+          ]
+        },
+        {
+          "decision": "Live streams are per-session refcounted bundles with gen-forward rebind; persistence snapshots are never trusted as the live instance.",
+          "rationale": "coordinator.load() returns a fresh snapshot object, so a bundle built on it would never see appends. attachLiveSession() registers the real instance AND re-points already-open generators (reattach) instead of evicting them, so streams opened at session-select time switch to the live session on the next pull. The cache entry is pruned when the last stream for a session ends.",
+          "evidence": [
+            "packages/web-host/src/host.ts:20",
+            "packages/web-host/src/host.ts:629",
+            "packages/web-host/src/host.ts:2477",
+            "packages/web-host/src/live.ts:49"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed at the security boundary, explicit elsewhere: non-loopback Host/Origin -> 403 (and socket.destroy() on upgrade), missing/invalid credentials -> 401, before any dispatch (host.ts:718-728, 759-770, 745). Approval requests that are never answered resolve {approved:false} on a 30s timeout (fail-closed, approval.ts:44-51). Missing optional seams answer per-route 404 (or 500 for coordinator-required routes); an unexpected route throw becomes a JSON 500 via the owns-the-response catch, never an unhandled rejection (host.ts:685-693).",
+      "events": [
+        "consumes: every SessionEvent type via the mux `session` stream (subscribe-based, no replay) — packages/web-host/src/live.ts:63",
+        "consumes: job/status (SPA fold; host serves the durable doc + queue) — packages/web-host/src/host.ts:1765",
+        "produces: goal/change — the goal mutation routes append the goal package's event to the live session and flush — packages/web-host/src/host.ts:799",
+        "produces (mux frames, not SessionEvents): ready/item/end/error — packages/web-host/src/types.ts:111"
+      ],
+      "keyConstants": [
+        { "name": "DEFAULT_PAGE_LIMIT", "value": "200", "evidence": "packages/web-host/src/pagination.ts:14" },
+        { "name": "MAX_PAGE_LIMIT", "value": "500", "evidence": "packages/web-host/src/pagination.ts:16" },
+        { "name": "MAX_SESSION_TITLE_LENGTH", "value": "200 UTF-16 code units", "evidence": "packages/web-host/src/host.ts:135" },
+        { "name": "MAX_FILE_QUERY_LENGTH", "value": "200", "evidence": "packages/web-host/src/host.ts:139" },
+        { "name": "MAX_BUFFERED_BYTES (slow-consumer shed)", "value": "8 * 1024 * 1024", "evidence": "packages/web-host/src/mux.ts:27" },
+        { "name": "mux heartbeat interval", "value": "30_000 ms, ping only (no pong timeout)", "evidence": "packages/web-host/src/mux.ts:63" },
+        { "name": "DEFAULT_HOST_VERSION", "value": "\"0.1.0\"", "evidence": "packages/web-host/src/host.ts:297" },
+        { "name": "approval waterfall timeout default", "value": "30_000 ms -> {approved:false}", "evidence": "packages/web-host/src/approval.ts:22" },
+        { "name": "ATTACHMENT_ID_RE", "value": "^att-<uuid>$ (validated before any store call)", "evidence": "packages/web-host/src/host.ts:293" }
+      ],
+      "gaps": [
+        "GET /api/telemetry is deliberately absent: the route is not implemented and falls through to the JSON 404 (host.ts:2429-2430).",
+        "The mux heartbeat is ping-only with no pong-timeout liveness check; a silently dead peer is reaped by TCP timeout or the next failed write (mux.ts:59-62).",
+        "A client reconnecting mid-turn is seeded {status:'idle'} by agentState because subscribe() has no history replay; accepted as a documented minor (live.ts:224-228).",
+        "Prompt queue storage/reorder is explicitly not implemented: the only queue is the executor's per-session lane; 'no prompt storage, reorder deferred per the task brief' (host.ts:1764)."
+      ],
+      "evidence": [
+        "packages/web-host/src/host.ts:513",
+        "packages/web-host/src/host.ts:682",
+        "packages/web-host/src/host.ts:850",
+        "packages/web-host/src/index.ts:1"
+      ]
+    },
+    {
+      "name": "sdk",
+      "responsibility": "The external stdio SDK: NDJSON JSON-RPC 2.0 framing (protocol.ts), a client with low-level request exchange plus a high-level run(session) surface (client.ts), and an in-process SessionService-backed server entry (server.ts, subpath ./server) that the CLI wires to stdio as `i-harness sdk`.",
+      "publicSurface": [
+        "HarnessClient",
+        "HarnessSession",
+        "createHarnessClient",
+        "runHarness",
+        "SdkConnectionError",
+        "SdkRunError",
+        "ServerInfo",
+        "RunInput",
+        "RunResult",
+        "QueueState",
+        "HistoryOptions",
+        "(via `export * from ./protocol.ts`): PROTOCOL_VERSION, JSON-RPC error codes, RpcRequest/RpcNotification/RpcSuccess/RpcFailure, RpcError, JsonRpcLineTransport, encodeFrame/decodeFrame, all wire view types",
+        "(subpath ./server, NOT in index.ts): createSdkServer, SDK_SERVER_NAME, SDK_SERVER_PROTOCOL_VERSION, SdkServer, SdkServerOptions"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Wire protocol: ONE JSON-RPC 2.0 message per NDJSON line over a duplex (stdio); malformed lines are silently ignored and never echoed; request ids echo into responses.",
+          "rationale": "This file IS the wire contract. Framing is pure (no I/O): encodeFrame = JSON.stringify + '\\n'; decodeFrame returns undefined for any malformed/unknown-shape line, and the transport drops those lines before listeners. Client->server notifications are accepted-and-ignored in v1.",
+          "evidence": [
+            "packages/sdk/src/protocol.ts:1",
+            "packages/sdk/src/protocol.ts:533",
+            "packages/sdk/src/protocol.ts:541",
+            "packages/sdk/src/protocol.ts:566",
+            "packages/sdk/src/server.ts:688"
+          ]
+        },
+        {
+          "decision": "protocolVersion = 2, with an explicitly FROZEN v0 field-level contract and an additive-only versioning rule.",
+          "rationale": "The v0 surface (initialize / session/prompt / session/status / shutdown; session/event + session/status notifications) is declared FROZEN (M28 S-1, 2026-09-01) with a field-level drift sentinel test; v1 (M41a) and the v1.1/Task addenda only ADD capability rows and methods — changing or removing an existing shape/field/code is a breaking change requiring a version bump. protocolVersion stayed 2 across v1.1, Task 4, Task 11 and Task 12 addenda.",
+          "evidence": [
+            "packages/sdk/src/protocol.ts:14",
+            "packages/sdk/src/protocol.ts:19",
+            "packages/sdk/src/protocol.ts:46",
+            "packages/sdk/src/protocol.ts:216",
+            "packages/sdk/src/server.ts:70",
+            "packages/sdk/src/server.ts:266"
+          ]
+        },
+        {
+          "decision": "Host capabilities are advertised as capability rows, and a method whose host seam is absent answers -32601/-32603 rather than pretending to work; session/list with no listing source answers an honest blank.",
+          "rationale": "initialize returns capabilities whose rows are added only when the corresponding host operation exists (session-rewind only with a rewindFactory; session-create/session-fork/session-model only with the matching seam). With no listSessions source, session/list returns { sessions: [], listingUnavailable: true } instead of a fabricated empty list; a throwing source is -32603 (fail-closed).",
+          "evidence": [
+            "packages/sdk/src/protocol.ts:74",
+            "packages/sdk/src/server.ts:282",
+            "packages/sdk/src/server.ts:297",
+            "packages/sdk/src/server.ts:488",
+            "packages/sdk/src/protocol.ts:270"
+          ]
+        },
+        {
+          "decision": "The server is session-service backed and per-session serialized around one AbortController slot per in-flight submit; the client is transport-agnostic (in-process or spawned subprocess).",
+          "rationale": "session/prompt creates the per-session controller BEFORE service.submit, session/cancel aborts it, and the finally clears the slot only if it still holds this submit's controller — a staggered second submit is not clobbered early. Replay semantics are explicit: session/event is append-only and never replayed, while durable state resumes by sessionId.",
+          "evidence": [
+            "packages/sdk/src/protocol.ts:41",
+            "packages/sdk/src/server.ts:647",
+            "packages/sdk/src/server.ts:445",
+            "packages/sdk/src/server.ts:170"
+          ]
+        }
+      ],
+      "failurePolicy": "other — fail-open framing plus fail-closed request semantics: malformed lines are ignored (no error frame) and client notifications are dropped, while invalid params/unknown sessions answer -32602 with an explicit 'session not found' (no auto-create), unknown methods answer -32601, and host/engine errors answer -32603 with the raw message (protocol.ts:37, server.ts:479, server.ts:678, server.ts:763). session/cancel is the deliberate exception: an unknown session is answered inside the success payload as {cancelled:false, reason:'not-found'} — never an error frame (server.ts:432-453).",
+      "events": [
+        "session/event (server->client notification carrying any SessionEvent, one per append: packages/sdk/src/server.ts:174)",
+        "session/status (server->client notification: queued/idle/error: packages/sdk/src/server.ts:179)",
+        "consumes all SessionEvent types via core-session subscribe; appends the host's rewind marker via appendEvent (packages/sdk/src/server.ts:621)"
+      ],
+      "keyConstants": [
+        { "name": "PROTOCOL_VERSION", "value": "2", "evidence": "packages/sdk/src/protocol.ts:216" },
+        { "name": "HISTORY_DEFAULT_LIMIT", "value": "500", "evidence": "packages/sdk/src/server.ts:73" },
+        { "name": "HISTORY_LIMIT_CAP", "value": "1000", "evidence": "packages/sdk/src/server.ts:74" },
+        { "name": "REQUEST_TIMEOUT_MS (client)", "value": "60_000", "evidence": "packages/sdk/src/client.ts:98" },
+        { "name": "JSON-RPC error codes", "value": "PARSE_ERROR -32700, INVALID_REQUEST -32600, METHOD_NOT_FOUND -32601, INVALID_PARAMS -32602, INTERNAL_ERROR -32603", "evidence": "packages/sdk/src/protocol.ts:218" },
+        { "name": "SDK_SERVER_NAME", "value": "\"i-harness\"", "evidence": "packages/sdk/src/server.ts:69" }
+      ],
+      "gaps": [
+        "Client -> server notifications are accepted-and-ignored in v1 (a documented limitation, not an error): packages/sdk/src/server.ts:688.",
+        "INVALID_REQUEST (-32600) is defined but never emitted — malformed lines are ignored instead: packages/sdk/src/protocol.ts:37.",
+        "Historical events are never replayed to a fresh subscription; replay/resume is the client's problem via session/history: packages/sdk/src/protocol.ts:41."
+      ],
+      "evidence": [
+        "packages/sdk/src/index.ts:1",
+        "packages/sdk/src/client.ts:100",
+        "packages/sdk/src/server.ts:150",
+        "packages/sdk/package.json:7"
+      ]
+    },
+    {
+      "name": "acp",
+      "responsibility": "An Agent Client Protocol (ACP v1) server implementing the automation subset over the official @agentclientprotocol/sdk agent app: initialize, session/new, session/list, session/resume, session/close, session/prompt, and the session/cancel notification.",
+      "publicSurface": [
+        "createAcpServer",
+        "AcpServer",
+        "AcpServerOptions",
+        "ACP_SERVER_NAME",
+        "ACP_PROTOCOL_VERSION"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Implemented ACP subset is exactly the seven automation methods/notifications; everything else is a documented v0 drop-set.",
+          "rationale": "initialize (echoes ACP_PROTOCOL_VERSION = the SDK's PROTOCOL_VERSION, declares sessionCapabilities {list, close, resume}); session/new (coordinator-backed id when a coordinator is given, else randomUUID); session/list (coordinator list UNION sessions created here, unknown cwd reported as process.cwd()); session/resume (ownership adopt; unknown ids fail closed); session/close (abort in-flight + closeSession + flush + release ownership); session/prompt (await service.submit, stopReason 'end_turn' / 'cancelled'); session/cancel notification (abort all in-flight submits). Drop-set: MCP servers on session/new, per-session cwd execution, session/update mirroring, session/delete, session/fork, session/set_mode, session/set_config_option, terminal/fs/elicitation client-method calls, authentication methods.",
+          "evidence": [
+            "packages/acp/src/index.ts:5",
+            "packages/acp/src/index.ts:21",
+            "packages/acp/src/index.ts:106",
+            "packages/acp/src/index.ts:238"
+          ]
+        },
+        {
+          "decision": "The v0 permission face is a binary switch, not a round-trip: autoApprove (default true) = allow-once admission, autoApprove false = prompts refused.",
+          "rationale": "There is no client-side session/request_permission flow in v0, so a host that wants approvals must wait for v1 (the code names guardian/approval wiring + AgentContext.request as the v1 hook point). Refusal happens BEFORE admission, so the session service never sees the prompt.",
+          "evidence": [
+            "packages/acp/src/index.ts:14",
+            "packages/acp/src/index.ts:54",
+            "packages/acp/src/index.ts:199"
+          ]
+        },
+        {
+          "decision": "Session lifecycle races are handled by an explicit per-session close/generation protocol instead of a lock.",
+          "rationale": "closingSessions blocks new prompts and reopening; a monotonic lifecycleGeneration invalidates a suspended resume; concurrent closes share one closeFlights promise; concurrent ownership preparations share preparingOwnership. A resume that loses the race releases the ownership it just acquired (only if it did not own it before) and throws 'session close superseded resume'.",
+          "evidence": [
+            "packages/acp/src/index.ts:60",
+            "packages/acp/src/index.ts:142",
+            "packages/acp/src/index.ts:164",
+            "packages/acp/src/index.ts:82"
+          ]
+        },
+        {
+          "decision": "Only text content blocks are admitted as prompt input in v0.",
+          "rationale": "extractPromptText concatenates type==='text' blocks and everything else (resource links, images, tool calls) is dropped; an empty result throws 'session/prompt requires at least one text content block (v0)'.",
+          "evidence": [
+            "packages/acp/src/index.ts:246",
+            "packages/acp/src/index.ts:209"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed: unknown/closing sessions throw on resume/prompt/close (index.ts:145-147, 175-177, 204-207), autoApprove:false refuses the prompt before admission (index.ts:199-203), and an aborted prompt answers stopReason 'cancelled' rather than an error the client might retry (index.ts:224-229).",
+      "events": [
+        "none — the package produces no SessionEvent; session/update mirroring of session events is explicitly in the v0 drop-set (packages/acp/src/index.ts:23)"
+      ],
+      "keyConstants": [
+        { "name": "ACP_SERVER_NAME", "value": "\"i-harness\"", "evidence": "packages/acp/src/index.ts:32" },
+        { "name": "ACP_PROTOCOL_VERSION", "value": "= PROTOCOL_VERSION from @agentclientprotocol/sdk (v1)", "evidence": "packages/acp/src/index.ts:34" },
+        { "name": "server version default", "value": "\"0.1.0\"", "evidence": "packages/acp/src/index.ts:53" }
+      ],
+      "gaps": [
+        "The full v0 drop-set is declared in-code: no MCP servers on session/new, no per-session cwd (the service always runs on the CLI workspace), no session/update notification mirroring, no session/delete, no session/fork, no set_mode/set_config_option, no terminal/fs/elicitation client methods, no authentication methods (index.ts:21-25).",
+        "No session/request_permission round-trip: ask is impossible in v0 (index.ts:18-19).",
+        "session/list reports process.cwd() as the cwd for coordinator-adopted sessions (index.ts:135-137)."
+      ],
+      "evidence": [
+        "packages/acp/src/index.ts:52",
+        "packages/acp/src/index.ts:104",
+        "packages/acp/src/index.ts:197",
+        "packages/acp/package.json:8"
+      ]
+    },
+    {
+      "name": "subagent",
+      "responsibility": "Delegated child agents: role registry, spawn/fork into durable child sessions, an agent table + job registry with serialized followup drains, and the durable TASK protocol (task records + a notification outbox persisted through the coordinator document store). It mounts 13 model-facing tools (spawn_agent, wait_agent, list_agents, send_message, interrupt_agent, followup_task, close_agent, resume_agent, job_output, job_list, job_kill, get_task_output, stop_task).",
+      "publicSurface": [
+        "registerSubagent",
+        "RegisterSubagentOptions",
+        "RegisterSubagentResult",
+        "createTaskRegistry",
+        "taskDocKey",
+        "notificationMessageId",
+        "classifyRestoredTasks",
+        "isSessionCancelledChain",
+        "TaskIdentityConflictError",
+        "TaskConcurrencyLimitError",
+        "TaskRegistry / TaskRecord / TaskStatus / TaskOutcome / TaskDelivery / TaskIdentity / TaskNotificationRecord / TaskProtocolDocument / OutboxStatus / RecoveryReason",
+        "createJobRegistry / JobRegistry / JobSnapshot / JobStatus",
+        "createRoleRegistry / builtinRoles / SubagentRole / RoleRegistry",
+        "createAgentTable / AgentTable / ChildStatus / ChildAgentEntry",
+        "spawnChild / SpawnOptions / forkTurns",
+        "createSubagentTools / SubagentToolDeps / driveFollowups / ensureResidentAgent / sweepPendingInbox / FollowupDeps",
+        "restoreState / wireSubagentPersistence / SubagentPersistence / SubagentStateSnapshot",
+        "projectAgentTasks / projectAgentTaskDetail / projectStatus / projectWorkflowRows / AgentTaskView / AgentTaskStatus / AgentTaskGroup / SubagentTaskSource / TaskSourceStatus / WorkflowTaskRow",
+        "createNotificationDrain / ParentInputAdmission / NotificationDrainOptions"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The durable task protocol is the source of truth for delegated work: task status state machine accepted -> running -> {completed | error | cancelled | recovery-required}, keyed by a three-part identity (parentSessionId + callEventSeq, else toolCallId, else a fresh anon key), persisted as one coordinator document `task-<stateId>`.",
+          "rationale": "submit() records 'accepted' immediately (identity-keyed: an exact retry ADOPTS the existing record, a mismatched retry throws TaskIdentityConflictError); claim() is the only accepted->running edge and is called in spawn_agent AFTER spawnChild returns — i.e. after the child's initial run has already started (child.ts starts agent.run before returning), so 'running' is a recorded observation, not a gate. Terminalization is CAS (a record with an outcome is never re-settled) and enqueues a parent-notification row for delivery=='parent'. The doc key uses a dash, not a colon, because a colon makes an NTFS alternate data stream that breaks rename.",
+          "evidence": [
+            "packages/subagent/src/task-protocol.ts:4",
+            "packages/subagent/src/task-protocol.ts:172",
+            "packages/subagent/src/task-protocol.ts:209",
+            "packages/subagent/src/task-protocol.ts:230",
+            "packages/subagent/src/tools.ts:163",
+            "packages/subagent/src/child.ts:137",
+            "packages/subagent/src/task-protocol.ts:48"
+          ]
+        },
+        {
+          "decision": "Two independent quotas: a CONCURRENCY quota (maxConcurrency over non-terminal accepted+running task records, fail-closed) and a DEPTH quota (maxDepth read from the caller session header delegationDepth, default 1).",
+          "rationale": "Concurrency: submit() throws TaskConcurrencyLimitError when runningCount() >= maxConcurrency; default Infinity means a host must opt in. Depth: default 1 means top-level callers (depth 0) may spawn but a subagent may not nest; the code documents a carried DEPTH-BINDING LIMITATION — the tool mount is shared and binds ONE root parent session, so every caller resolves depth from the root, and a host-raised maxDepth > 1 would under-enforce; it is moot in the shipped surface because no builtin role carries spawn_agent.",
+          "evidence": [
+            "packages/subagent/src/task-protocol.ts:190",
+            "packages/subagent/src/task-protocol.ts:306",
+            "packages/subagent/src/tools.ts:94",
+            "packages/subagent/src/tools.ts:78",
+            "packages/subagent/src/roles.ts:31"
+          ]
+        },
+        {
+          "decision": "Notification delivery is a durable outbox with an injectable admission seam; without the seam delivery is durable-only (rows stay pending).",
+          "rationale": "TaskNotificationRecord.status is pending|delivered|woken|error|suppressed; drain() re-checks each row's current status (idempotent, no double-admit), suppresses delivery when the parent chain was cancelled, and calls admit() with an XML-ish <task> framing (task_result / task_error). A failed admit records 'error' and the row is retried on the next drain; with no admit seam drain returns 0 and nothing is lost.",
+          "evidence": [
+            "packages/subagent/src/task-protocol.ts:8",
+            "packages/subagent/src/task-notification.ts:19",
+            "packages/subagent/src/task-notification.ts:45",
+            "packages/subagent/src/task-notification.ts:56",
+            "packages/subagent/src/index.ts:172"
+          ]
+        },
+        {
+          "decision": "Crash recovery never re-dispatches: ambiguous in-flight attempts are classified from the durable child log into completed or recovery-required.",
+          "rationale": "classifyRestoredTasks loads each unfinished task's child session (after seedLength) and looks for turn/end + the last assistant/message: turn/end present -> completed with that text; missing log -> 'dispatch-unknown'; log without turn/end -> 'response-interrupted'. Everything else in restore maps running->error ('interrupted by resume') while 'waiting' is preserved so a queued followup can be re-driven; the parent session log additionally gets a replayed terminal job/status so a log-only fold agrees with the doc.",
+          "evidence": [
+            "packages/subagent/src/task-protocol.ts:313",
+            "packages/subagent/src/task-protocol.ts:349",
+            "packages/subagent/src/persist.ts:107",
+            "packages/subagent/src/persist.ts:234"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed on quota and identity (submit throws TaskConcurrencyLimitError / TaskIdentityConflictError: task-protocol.ts:190, 195) and on unknown ids (job read/kill throw 'unknown job: <id>': jobs.ts:88, 121); terminalize is CAS so a cancelled task is never re-settled (task-protocol.ts:174). Persistence is report-never-reject at the document layer (saveChain swallows, task-protocol.ts:148) — the in-memory registry stays authoritative for the run. The cold-restore inbox sweep is fail-visible (entry.status='error', 'child log unavailable after resume') rather than a silent empty stub (index.ts:257-261).",
+      "events": [
+        "subagent/start (produced: packages/subagent/src/tools.ts:121)",
+        "subagent/end (produced: packages/subagent/src/tools.ts:155)",
+        "subagent/inbox (produced by send_message/followup_task: packages/subagent/src/tools.ts:261, tools.ts:290; consumed by the followup drain and the resume sweep: tools.ts:620, tools.ts:672)",
+        "job/status (produced per real job transition when a live parent session was handed in: packages/subagent/src/persist.ts:162, persist.ts:290)",
+        "turn/end + assistant/message (consumed for recovery classification: packages/subagent/src/task-protocol.ts:357)"
+      ],
+      "keyConstants": [
+        { "name": "maxConcurrency default", "value": "Infinity (host opt-in)", "evidence": "packages/subagent/src/task-protocol.ts:118" },
+        { "name": "maxDepth default", "value": "1", "evidence": "packages/subagent/src/tools.ts:95" },
+        { "name": "background:false wait timeout", "value": "300_000 ms", "evidence": "packages/subagent/src/tools.ts:166" },
+        { "name": "wait_agent timeout clamp", "value": "100 .. 300_000 ms (default 30_000)", "evidence": "packages/subagent/src/tools.ts:180" },
+        { "name": "get_task_output batch/clamp", "value": "1..20 task ids; timeout clamped 100..600_000 (default 30_000)", "evidence": "packages/subagent/src/tools.ts:456" },
+        { "name": "cancellation-chain walk bound", "value": "64 hops", "evidence": "packages/subagent/src/task-protocol.ts:339" },
+        { "name": "doc key", "value": "\"task-<stateId>\" (dash, not colon — NTFS ADS/rename hazard)", "evidence": "packages/subagent/src/task-protocol.ts:54" },
+        { "name": "notification message id", "value": "\"msg_task_\" + sha256(taskId) first 32 hex", "evidence": "packages/subagent/src/task-protocol.ts:58" }
+      ],
+      "gaps": [
+        "DEPTH-BINDING LIMITATION (documented in code): the shared tool mount binds one root parent session, so callerDepth always resolves to the root and a host-raised maxDepth > 1 would under-enforce; a per-session mount was evaluated and rejected for M24a (tools.ts:78-93).",
+        "Identity-less submissions get a fresh anon key each time and therefore never adopt on retry ('每次全新 → 永不 adopt'): task-protocol.ts:129.",
+        "restoreState stays SYNC with empty stub sessions; the async mirror rebuild runs behind the `ready` promise instead (persist.ts:96-99, index.ts:244).",
+        "In-file note that the plan's 'await save() unconditionally' was adapted so an empty cold-restore drain does not mint an empty task doc (task-notification.ts:74-78)."
+      ],
+      "evidence": [
+        "packages/subagent/src/index.ts:106",
+        "packages/subagent/src/jobs.ts:41",
+        "packages/subagent/src/projection.ts:77",
+        "packages/subagent/src/child.ts:64"
+      ]
+    },
+    {
+      "name": "agent-team",
+      "responsibility": "The Team scope: a lead plus named durable teammates over the SAME subagent machinery, with a shared task board, a durable mailbox, and edge-triggered activity waits. The team log IS the lead session's event log (four team/* event types), folded on every mount for crash recovery.",
+      "publicSurface": [
+        "mountAgentTeams",
+        "TeamDeps / TeamMountHandle / TeamSubagentDeps",
+        "AgentPath",
+        "LEAD_NAME",
+        "TEAM_CODES",
+        "TeamError",
+        "validateTeamConfig",
+        "foldTeam / applyTeamEvent / createFoldState / TeamFoldState",
+        "createTeamTransact / TeamLead / TeamTransaction",
+        "createRoster / RosterDeps",
+        "createTaskBoard / normalizeWriteScopes / TaskBoardDeps / TaskAction",
+        "createMailbox / MailboxDeps",
+        "createActivity / ActivityConfig / TeamWaitResult",
+        "createTeamTools / TeamToolDeps",
+        "types: TeamConfig, TeamMemberPhase, TeamMemberSnapshot, TeamMemberView, TeamTaskStatus, TeamTaskSnapshot, TeamTaskView, TeamMessageSnapshot, TeamEvent, TeamCaller"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Event sourcing on the parent session log: exactly four validated team/* events (team/member, team/task, team/message/queued, team/message/delivered) with strict zod structure validation, immutable member identity and +1 task revisions.",
+          "rationale": "foldTeam is a full replay (mixed non-team events are skipped); applyTeamEvent rejects unknown team/* types and version!=1, rejects member-name reuse, immutable identity-field changes and invalid phase transitions, enforces task revision==1-then-+1, and rejects delivered-without-queued / duplicate ids. The canonical teamId is recovered from the FIRST team/* event so restored member ids and queued-message keys stay addressable.",
+          "evidence": [
+            "packages/agent-team/src/types.ts:59",
+            "packages/agent-team/src/fold.ts:18",
+            "packages/agent-team/src/fold.ts:62",
+            "packages/agent-team/src/scheduler.ts:129"
+          ]
+        },
+        {
+          "decision": "Every mutation goes through a serialized transaction whose callback is PURE-READ: the callback runs against a CLONE, candidates are validated in order, then applied to the live state, appended to the log and flushed.",
+          "rationale": "'invalid never enters state or log' holds by construction — a misbehaving callback can only corrupt the throwaway clone. Events are applied+appended BEFORE flush (at-least-once): if flush rejects the caller rejects but the log keeps the events, and recovery replays them. onCommit fires only after flush resolves, which is what wakes waiters.",
+          "evidence": [
+            "packages/agent-team/src/transact.ts:27",
+            "packages/agent-team/src/transact.ts:47",
+            "packages/agent-team/src/transact.ts:58",
+            "packages/agent-team/src/scheduler.ts:166"
+          ]
+        },
+        {
+          "decision": "Delivery is durability-before-ack: a message counts delivered only after the target's session log is FLUSHED; a flush failure returns false and the message stays queued for recoverRoot.",
+          "rationale": "Lead target -> append subagent/inbox to the parent session + flush; teammate target -> append to the child's mirror + flush + (for wakeup) drive the shared serialized followup drain. Only then does the mailbox append team/message/delivered. recoverRoot re-attempts queued-not-delivered messages in FIFO order (skipping quiet-on-inactive), so a crash between delivery and ack replays the entry rather than losing it.",
+          "evidence": [
+            "packages/agent-team/src/scheduler.ts:278",
+            "packages/agent-team/src/scheduler.ts:286",
+            "packages/agent-team/src/scheduler.ts:326",
+            "packages/agent-team/src/mailbox.ts:67",
+            "packages/agent-team/src/mailbox.ts:84"
+          ]
+        },
+        {
+          "decision": "Lead-only authority plus advisory write scopes, and colliding team tools REPLACE the same-named subagent tools on the shared parent registry (restored on unmount).",
+          "rationale": "spawn_teammate and interrupt_agent are Lead-only at the DOMAIN layer (not just the tool layer); the teammate role's tool list is derived from the created tool list minus those two. write scopes are normalized (no absolute/.. drive-letter paths) and overlap only produces warnings on the task view — they never block. send_message/followup_task/wait_agent/interrupt_agent collide with the subagent surface, so a collision replaces and unmount restores, making unmount a true reverse of mount. One team per run is enforced by a module-level reservation that throws on a second mount.",
+          "evidence": [
+            "packages/agent-team/src/roster.ts:75",
+            "packages/agent-team/src/roster.ts:168",
+            "packages/agent-team/src/task-board.ts:8",
+            "packages/agent-team/src/scheduler.ts:423",
+            "packages/agent-team/src/scheduler.ts:87",
+            "packages/agent-team/src/scheduler.ts:118"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed: config validation runs before any side effect (scheduler.ts:103-115); provisioning fails closed when the child session cannot PROVE durability (no childSessions -> false, scheduler.ts:500; spawn checkpoint timeout -> member 'failed', roster.ts:101-121); delivery returns false on flush rejection so the message stays queued (scheduler.ts:286-294, 326-334); reconciling a provisioning member without a durability probe marks it failed rather than active (roster.ts:148-150).",
+      "events": [
+        "team/member (produced: packages/agent-team/src/roster.ts:87, 118, 130)",
+        "team/task (produced: packages/agent-team/src/task-board.ts:90)",
+        "team/message/queued (produced: packages/agent-team/src/mailbox.ts:62)",
+        "team/message/delivered (produced: packages/agent-team/src/mailbox.ts:71, mailbox.ts:95)",
+        "consumes/folds team/* via foldTeam (packages/agent-team/src/fold.ts:80)",
+        "also appends subagent/inbox to the lead session and to teammate child sessions (packages/agent-team/src/scheduler.ts:283, scheduler.ts:320)"
+      ],
+      "keyConstants": [
+        { "name": "maxMembers", "value": "8", "evidence": "packages/agent-team/src/scheduler.ts:105" },
+        { "name": "maxTasks", "value": "256 (non-deleted)", "evidence": "packages/agent-team/src/scheduler.ts:106" },
+        { "name": "maxPendingMessagesPerMember", "value": "64", "evidence": "packages/agent-team/src/scheduler.ts:107" },
+        { "name": "maxMessageBytes", "value": "65_536 (including the 'Team message <id> from <name>:' framing)", "evidence": "packages/agent-team/src/scheduler.ts:108" },
+        { "name": "startupTimeoutMs (durability checkpoint)", "value": "10_000", "evidence": "packages/agent-team/src/scheduler.ts:109" },
+        { "name": "wait window", "value": "min 10_000, max 3_600_000, default 30_000", "evidence": "packages/agent-team/src/types.ts:28" },
+        { "name": "listTasks default limit", "value": "50", "evidence": "packages/agent-team/src/task-board.ts:114" },
+        { "name": "LEAD_NAME", "value": "\"lead\" (reserved path segment; team tools live under lead/<name>)", "evidence": "packages/agent-team/src/agent-path.ts:4" }
+      ],
+      "gaps": [
+        "One team per run only — a second mountAgentTeams throws 'only one team per run is supported (M19)': scheduler.ts:87, scheduler.ts:117-119.",
+        "Durability gate fails closed without durable child sessions: with no coordinator the roster cannot prove a child holds its prompt, so members cannot go active (scheduler.ts:48-49, scheduler.ts:500).",
+        "Post-resume teammates carry status 'error' from the subagent restore mapping; deliver returns false (message stays queued) unless the optional ensureResident seam is injected (scheduler.ts:305-315)."
+      ],
+      "evidence": [
+        "packages/agent-team/src/index.ts:1",
+        "packages/agent-team/src/scheduler.ts:97",
+        "packages/agent-team/src/tools.ts:130",
+        "packages/agent-team/src/activity.ts:3"
+      ]
+    },
+    {
+      "name": "workflow",
+      "responsibility": "Static multi-step workflows defined as YAML files under <workspace>/workflow/*.yml; one run is executed as ONE background job (id `workflow-<n>`) in a workflow-owned job store, exposing an ExecService-like surface (runWorkflow/getOutput/listJobs/killJob) as the 'workflow/executor' service plus the model-facing workflow_run / workflow_list tools.",
+      "publicSurface": [
+        "parseWorkflowYaml",
+        "isValidWorkflowName",
+        "WORKFLOW_NAME_PATTERN",
+        "WorkflowParseError",
+        "WorkflowDefinition / WorkflowParamSpec / WorkflowStep",
+        "createWorkflowRegistry / WorkflowRegistry / WorkflowRegistryDeps",
+        "createWorkflowExecutor / WorkflowExecutor / WorkflowExecutorDeps",
+        "createWorkflowJobStore / WorkflowJobStore / WorkflowJobEntry",
+        "runWorkflow / runWorkflowIn / WorkflowRunHandle",
+        "createWorkflowRunTool / createWorkflowListTool / registerWorkflow",
+        "workflowRunName / workflowListName / workflowExecutorServiceName",
+        "WorkflowRunArgs / WorkflowRunOutput / WorkflowListEntry / WorkflowListOutput / WorkflowMountConfig / WorkflowMountHandle"
+      ],
+      "designDecisions": [
+        {
+          "decision": "One run = ONE background job in a workflow-owned store that deliberately mirrors ExecService's job contract, including the exact `unknown job: <id>` error string.",
+          "rationale": "This store is the THIRD layer of subagent's job_* fallback chain: subagent routes ids prefixed `workflow-` to deps.workflow (tools.ts:371), and job_output/job_kill pattern-match /unknown job/i to decide whether to fall through. The store defaults to a process-shared singleton so every workflow job in the process is visible through any executor; tests inject an isolated store. runId === jobId in v0, with distinct fields kept for future durable run records.",
+          "evidence": [
+            "packages/workflow/src/runner.ts:1",
+            "packages/workflow/src/runner.ts:55",
+            "packages/workflow/src/runner.ts:95",
+            "packages/workflow/src/runner.ts:112",
+            "packages/subagent/src/tools.ts:371"
+          ]
+        },
+        {
+          "decision": "Steps run strictly sequentially with no DAG/parallel/conditions/loops; any step failure marks the whole run errored.",
+          "rationale": "'Deliberately NOT implemented (YAGNI, ruling M24b-P4)'. on_failure: continue keeps the loop going but does NOT launder the failure — the run still ends 'error' with the first failing exit code. 'stop' skips the remaining steps (each gets a `skipped` progress line). Kill is a run-level AbortController threaded to the current step's exec signal, and status writes are guarded so a killed run stays killed. Progress lines ([step i/N name] started|ok|failed(exit=N)|skipped) plus step stdout go into the job output stream.",
+          "evidence": [
+            "packages/workflow/src/definition.ts:8",
+            "packages/workflow/src/runner.ts:26",
+            "packages/workflow/src/runner.ts:247",
+            "packages/workflow/src/runner.ts:255",
+            "packages/workflow/src/runner.ts:193"
+          ]
+        },
+        {
+          "decision": "Parameter interpolation is plain string substitution before spawn, with the same trust level as the bash tool; only DECLARED params interpolate and unknown ${...} stays verbatim.",
+          "rationale": "Params are model-authored command text, so no escaping is attempted; a missing required param fails loud BEFORE any job is created, while an optional unresolved slot stays visible in the command so the model can see the hole. Step commands are tokenized by getArgv (no shell interpretation).",
+          "evidence": [
+            "packages/workflow/src/runner.ts:31",
+            "packages/workflow/src/runner.ts:123",
+            "packages/workflow/src/runner.ts:135",
+            "packages/workflow/src/runner.ts:156"
+          ]
+        },
+        {
+          "decision": "Definitions are static YAML parsed by the generic `yaml` package with fail-loud schema validation; the registry caches the scan and warn-skips one bad file.",
+          "rationale": "A definition violating the schema throws a descriptive WorkflowParseError which the registry translates into warn+skip, so one bad file never breaks the registry. Unknown top-level keys are tolerated (forward-compatible: dsh's `phases` is deferred but must not reject files carrying it). Names are dsh kebab-case; the file stem is the fallback name; only top-level *.yml files are scanned, sorted for determinism.",
+          "evidence": [
+            "packages/workflow/src/definition.ts:1",
+            "packages/workflow/src/definition.ts:164",
+            "packages/workflow/src/registry.ts:41",
+            "packages/workflow/src/registry.ts:47",
+            "packages/workflow/src/definition.ts:37"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-loud then fail-visible: a schema/YAML violation throws WorkflowParseError (definition.ts:43, 166-193); the registry catches per file and warns+skips (registry.ts:47-49); a run never reports partial success — any failing step sets status 'error' with the first failing exit code (runner.ts:255); exec.run rejections are translated into an ordinary step failure with exitCode -1 so the same discipline applies (runner.ts:219-223).",
+      "events": ["none — the package imports no session-event types and appends no SessionEvent; run state lives in the WorkflowJobStore and job output is pulled through job_output/listJobs (runner.ts:35-37)"],
+      "keyConstants": [
+        { "name": "workflow_run tool timeoutMs (wait=true metadata ceiling)", "value": "600_000", "evidence": "packages/workflow/src/tool.ts:82" },
+        { "name": "WAIT_POLL_MS", "value": "20", "evidence": "packages/workflow/src/tool.ts:52" },
+        { "name": "WORKFLOW_NAME_PATTERN", "value": "/^[a-z0-9]+(?:-[a-z0-9]+)*$/", "evidence": "packages/workflow/src/definition.ts:37" },
+        { "name": "scan filter + sort", "value": "*.yml only, filename-sorted, name-sorted index", "evidence": "packages/workflow/src/registry.ts:41" },
+        { "name": "job id shape", "value": "`workflow-${n}` store-monotonic counter", "evidence": "packages/workflow/src/runner.ts:86" }
+      ],
+      "gaps": [
+        "DAG/parallel steps, conditions, loops and matrices are deliberately not implemented (definition.ts:8-9).",
+        "Registry has NO file watcher in v0: reload() must be called explicitly before reads (registry.ts:4, registry.ts:67).",
+        "dsh's `phases` meta is tolerated but deferred in v0 (definition.ts:164).",
+        "The executor service cannot be unregistered on unmount — core-plugin's service store has no unregister seam (tool.ts:128-131)."
+      ],
+      "evidence": [
+        "packages/workflow/src/index.ts:1",
+        "packages/workflow/src/definition.ts:166",
+        "packages/workflow/src/tool.ts:145",
+        "packages/workflow/src/registry.ts:25"
+      ]
+    },
+    {
+      "name": "hooks",
+      "responsibility": "User-configured hook handlers (CC-compatible semantics) mounted on the core-plugin seams: handlers are spawned as subprocesses, trust-hashed, and either gate an operation (fail-closed) or observe it (report and continue).",
+      "publicSurface": [
+        "createHookRegistry",
+        "HookRegistry",
+        "HookRegistryOptions",
+        "LoadedHandler",
+        "loadHooksConfig",
+        "resolveHooksConfigPath",
+        "runHookHandler",
+        "validateHookOutput",
+        "assertAllowed",
+        "verifyHandlerTrust",
+        "trustScriptPath",
+        "sha256File",
+        "(via `export * from ./types.ts`): HOOK_EVENTS, HookEventName, HookHandlerType, HookDecision, HookOutput, HookContext, HandlerMatcher, HookHandlerSpec, HooksConfig, HookConfigError, HookTrustError, HookOutputError, HookBlockedError, DEFAULT_HOOK_TIMEOUT_MS, HOOK_OUTPUT_CAP_BYTES"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The event list is exactly 9 events, and each event is classified as GATE or OBSERVER; gates fail closed, observers never fatal.",
+          "rationale": "HOOK_EVENTS = session/start, session/end, prompt/submit, pre-tool, post-tool, permission, stop, subagent/stop, notification. Gates: pre-tool/post-tool (tools/execute cascade wrap), prompt/submit (agent/pre-step waterfall), stop (agent/stop listener), and permission (tools/pre-execute ToolDecision). Observers: session/start, session/end, subagent/stop, notification — for these a trust failure or handler error is REPORTED (default console.warn) and skipped. fire() additionally rejects non-programmatic events with HookConfigError; only session/start, session/end, subagent/stop and notification are programmatic.",
+          "evidence": [
+            "packages/hooks/src/types.ts:9",
+            "packages/hooks/src/index.ts:73",
+            "packages/hooks/src/index.ts:182",
+            "packages/hooks/src/index.ts:196",
+            "packages/hooks/src/index.ts:346"
+          ]
+        },
+        {
+          "decision": "Handler types are command | mcpTool | prompt | agent, but in v1 the type only TAGS a handler for trust/audit — every handler is executed as `command.cmd args` and matching is by event + tool matcher.",
+          "rationale": "Validation requires a non-blank command.cmd for every handler regardless of type. Execution spawns with NO shell, passes the HookContext as one JSON object on stdin, requires exactly one JSON HookOutput object on stdout, kills after timeoutMs (default 1000, override per handler), and caps captured stdout/stderr at 64 KiB. Output validation is strict: unknown fields throw, wrong types throw, and block:true without a reason throws — nothing is interpreted loosely.",
+          "evidence": [
+            "packages/hooks/src/types.ts:22",
+            "packages/hooks/src/index.ts:131",
+            "packages/hooks/src/index.ts:135",
+            "packages/hooks/src/runner.ts:105",
+            "packages/hooks/src/runner.ts:24"
+          ]
+        },
+        {
+          "decision": "Per-run hash trust is a security boundary: the handler artifact's sha256 is recomputed on EVERY invocation and compared with the configured value; a mismatch denies at gates and skips at observers.",
+          "rationale": "trust.script is resolved against the config dir when relative and is the executed artifact; the hash check runs inside runHookHandler before spawn, not only at config load (load also records a load-time verdict so handlers() can report it). A gate with an invalid handler throws HookBlockedError before the tool body runs; the permission path returns {kind:'deny'}.",
+          "evidence": [
+            "packages/hooks/src/types.ts:65",
+            "packages/hooks/src/trust.ts:23",
+            "packages/hooks/src/runner.ts:77",
+            "packages/hooks/src/index.ts:198",
+            "packages/hooks/src/index.ts:225"
+          ]
+        },
+        {
+          "decision": "Config loading is strict about shape but lenient about EXISTENCE, and the distinction is explicit-configPath vs default path.",
+          "rationale": "The document must be a JSON object with version===1 and a handlers array; every handler is validated (id non-blank, known event, known type, command.cmd non-blank, required 64-hex trust.sha256, matcher must define tool and/or toolRegex, timeoutMs positive integer) and a bad regex is a config error. If the resolved path exists it is loaded; if it does NOT exist, an EXPLICIT configPath throws HookConfigError (the caller named a config) while a default-derived path yields zero handlers (the host may not use hooks at all). Default path: <configDir|$IH_CONFIG_DIR|~/.i-harness>/hooks.json.",
+          "evidence": [
+            "packages/hooks/src/index.ts:88",
+            "packages/hooks/src/index.ts:105",
+            "packages/hooks/src/index.ts:122",
+            "packages/hooks/src/index.ts:273",
+            "packages/hooks/src/index.ts:30"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed for gates, fail-open-but-visible for observers (the code's own words at index.ts:182-188): at a gate, deny/ask, block:true, continue:false, a handler error, an exit!=0, a timeout, unparseable stdout, and a trust mismatch ALL become HookBlockedError (assertAllowed, runner.ts:151; runHandlers, index.ts:206-213); at an observer they are reported and the loop continues (index.ts:208-211). A missing EXPLICIT config file is a hard HookConfigError; a missing default file is zero handlers (index.ts:276-280).",
+      "events": [
+        "none — no SessionEvent type is produced or consumed; the seam names it hooks into are core-plugin events: tools/execute (cascade), tools/pre-execute, agent/pre-step (waterfall), agent/stop (packages/hooks/src/index.ts:283, 310, 315, 329)",
+        "re-dispatch guard consumes isCascadeRedispatch from core-plugin so one logical tool call sees exactly one pre-tool/post-tool pair (packages/hooks/src/index.ts:290)"
+      ],
+      "keyConstants": [
+        { "name": "DEFAULT_HOOK_TIMEOUT_MS", "value": "1000", "evidence": "packages/hooks/src/types.ts:133" },
+        { "name": "HOOK_OUTPUT_CAP_BYTES", "value": "64 * 1024 (stdout and stderr each)", "evidence": "packages/hooks/src/types.ts:135" },
+        { "name": "HOOK_EVENTS", "value": "9 events (session/start, session/end, prompt/submit, pre-tool, post-tool, permission, stop, subagent/stop, notification)", "evidence": "packages/hooks/src/types.ts:9" },
+        { "name": "config file name / version", "value": "hooks.json, version must be 1", "evidence": "packages/hooks/src/index.ts:27" },
+        { "name": "matcher regex flags", "value": "case-insensitive ('i')", "evidence": "packages/hooks/src/index.ts:81" }
+      ],
+      "gaps": [
+        "ask is not wired: a permission decision of 'ask' has no question seam, so it is a fail-closed DENY in v1 ('ask is not wired to a question seam on main yet') — index.ts:241, types.ts:35-36.",
+        "Handler type (command/mcpTool/prompt/agent) is a trust/audit tag only in v1 — there is no distinct execution path per type: types.ts:22-24.",
+        "The M51 B1 re-dispatch skip means a guard-retry re-dispatch frame does not re-run pre-tool/post-tool (by design, to keep one pair per logical call): index.ts:285-290."
+      ],
+      "evidence": [
+        "packages/hooks/src/index.ts:258",
+        "packages/hooks/src/runner.ts:71",
+        "packages/hooks/src/trust.ts:8",
+        "packages/hooks/package.json:8"
+      ]
+    },
+    {
+      "name": "plugin-registry",
+      "responsibility": "The host-facing plugin lifecycle: register marketplace sources (local dir / http(s) marketplace.json / owner/repo / git URL), install/uninstall plugin packages under <root>/<id>, enable/disable with materialized read-only overlays (skills/, commands/) and re-keyed MCP config, plus a catalog and a pure runtime capability evaluator.",
+      "publicSurface": [
+        "PluginRegistry",
+        "validateCompatibility",
+        "installPlugin / uninstallPlugin / resolveInstallSource / resolveEntrySource / InstalledPlugin / InstallError",
+        "mcpServerKey / mcpServerKeyPrefix / readMcpServers / readMcpServersSync / pluginId",
+        "loadState / loadStateSync / saveState",
+        "fetchSource / parseManifest / cacheNameForSource / githubGitUrl / MarketplaceFetchError / MarketplaceManifest / MarketplaceEntry / PluginSource(+Directory/File/Git/GitSubdir/Github/Url)",
+        "inspectCapabilities / Capabilities / Capability",
+        "describeCommands / parseCommandMarkdown / CommandDescriptor / CommandConflict",
+        "evaluatePlugin / EvaluateResult / Observations / CapabilityStatus / CommandStatus / OverallStatus",
+        "materializePlugin / MaterializedPlugin",
+        "types: CatalogPlugin, PluginRecord, PluginSourceInfo, PluginState, RegistryOptions, RuntimeInputs, MCP_CONFIG_SHAPE, SourceConflictError, SourceNotFoundError, PluginArtifactError, PluginConflictError, PluginNotFoundError"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Plugin code is NEVER executed by this package — CONFIRMED from code, not README. Manifests, package.json and .mcp.json are only parsed; commands are only read as markdown; enable is a plain directory copy.",
+          "rationale": "capability.ts derives capabilities lexically ('A package.json is never imported/required/dynamically loaded; it is only JSON.parsed'); install.ts states 'Plugin code is never executed here: an install is a plain file copy'; materializePlugin is only rm+cp; parseCommandMarkdown only reads text; evaluatePlugin is a pure function that 'never executes plugin code'. The `executable` capability is therefore always reported 'unsupported' at runtime — a package-level fact, and a plugin whose ONLY advertised dimension is executable is overall 'failed' because its runtime surface can never become ready. The only process spawned anywhere in the package is the `git` binary for cloning a source (with GIT_TERMINAL_PROMPT=0 and timeouts), which is not plugin code.",
+          "evidence": [
+            "packages/plugin-registry/src/capability.ts:2",
+            "packages/plugin-registry/src/capability.ts:52",
+            "packages/plugin-registry/src/install.ts:29",
+            "packages/plugin-registry/src/materialize.ts:13",
+            "packages/plugin-registry/src/commands.ts:9",
+            "packages/plugin-registry/src/evaluate.ts:12",
+            "packages/plugin-registry/src/install.ts:293",
+            "packages/plugin-registry/src/marketplaces.ts:406"
+          ]
+        },
+        {
+          "decision": "Entry-source containment is a security boundary checked TWICE (lexical + realpath) before any copy; the install itself is a two-phase atomic swap.",
+          "rationale": "resolveEntrySource rejects `../` traversal, absolute paths outside manifestDir and any in-marketplace symlink whose realpath escapes the marketplace (git preserves symlinks). installPlugin copies into a temp dir INSIDE installRoot then renames; overwrite parks the old copy to `.id.old-<uuid>`, renames the staged copy in, then drops the parked copy, so an interruption leaves old or new plainly present — never nothing. Leftover crash artifacts are cleaned on the next install, and the installed .mcp.json is rewritten with server names re-keyed as `plugin:<id>:<server>` (both parts sanitized) so the host consumes one namespaced map.",
+          "evidence": [
+            "packages/plugin-registry/src/install.ts:20",
+            "packages/plugin-registry/src/install.ts:251",
+            "packages/plugin-registry/src/install.ts:3",
+            "packages/plugin-registry/src/install.ts:189",
+            "packages/plugin-registry/src/install.ts:201"
+          ]
+        },
+        {
+          "decision": "enable() validates BEFORE any state write, and naming conflicts (D5) are recorded rather than fatal.",
+          "rationale": "Order: installed? install dir present? any usable capability (skills/commands/mcp)? -> compute conflicts -> materialize -> write state. A broken enable throws PluginArtifactError and writes NOTHING (no partial enable); if a RE-install's materialization fails the plugin is atomically disabled with conflicts cleared and half-copied overlays dropped, so a mixed surface is never persisted. A command-name conflict with the host catalog or another enabled plugin does not reject: the plugin enables, the blocked commands are excluded from runtimeInputs and recorded as conflicts [{name, reason}] for the UI's partial badge; they reactivate on the next re-enable. The host never renames.",
+          "evidence": [
+            "packages/plugin-registry/src/index.ts:13",
+            "packages/plugin-registry/src/index.ts:396",
+            "packages/plugin-registry/src/index.ts:527",
+            "packages/plugin-registry/src/index.ts:344",
+            "packages/plugin-registry/src/index.ts:552"
+          ]
+        },
+        {
+          "decision": "catalog() serves cached manifests (offline-friendly) while refreshSource() re-pulls; runtimeInputs() rebuilds synchronously from state + disk on every call; running agents are never touched.",
+          "rationale": "collectSource reads a local dir in place, serves a usable cached copy without hitting the network, and only re-pulls when the cache is unusable. runtimeInputs() filters enabled records, warns-and-skips a plugin whose install dir vanished, and returns { skillDirs, mcpServerConfigs, commandDescriptors } — the next agent build picks up changes; no live agent is mutated.",
+          "evidence": [
+            "packages/plugin-registry/src/index.ts:474",
+            "packages/plugin-registry/src/index.ts:452",
+            "packages/plugin-registry/src/index.ts:23",
+            "packages/plugin-registry/src/index.ts:231"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed on artifacts and validation: install/enable throw typed errors (InstallError plugin-invalid|install-failed, PluginArtifactError, MarketplaceFetchError) and leave state untouched or atomically consistent (index.ts:17-18, 396-419, 344-362); a malformed .mcp.json is plugin-invalid (install.ts:90-99). Fail-CONTINUE but loud where a bad input must not break the whole surface: an unreadable source is warned and skipped in catalog() (index.ts:239-241), an unreadable command file is warned and skipped (commands.ts:77-80), a vanished install dir warns in runtimeInputs (index.ts:464-467).",
+      "events": ["none — no SessionEvent type is produced or consumed; mutations return views and the SPA refetches (no immediate events promised): packages/plugin-registry/src/index.ts:24-25, packages/web-host/src/host.ts:1942-1943"],
+      "keyConstants": [
+        { "name": "GIT_PLUGIN_CLONE_TIMEOUT_MS", "value": "60_000", "evidence": "packages/plugin-registry/src/install.ts:52" },
+        { "name": "GIT_CLONE_TIMEOUT_MS (marketplace)", "value": "60_000", "evidence": "packages/plugin-registry/src/marketplaces.ts:33" },
+        { "name": "HTTP_FETCH_TIMEOUT_MS", "value": "15_000", "evidence": "packages/plugin-registry/src/marketplaces.ts:30" },
+        { "name": "git maxBuffer", "value": "10 * 1024 * 1024", "evidence": "packages/plugin-registry/src/marketplaces.ts:409" },
+        { "name": "install/state layout", "value": "<root>/state.json, <root>/cache/<source>, <root>/<mkt>__<name>, <root>/skills/<id>, <root>/commands/<id>", "evidence": "packages/plugin-registry/src/index.ts:6" },
+        { "name": "manifest paths probed", "value": ".claude-plugin/marketplace.json then marketplace.json", "evidence": "packages/plugin-registry/src/marketplaces.ts:121" },
+        { "name": "command scan scope", "value": "top-level *.md files only (v1)", "evidence": "packages/plugin-registry/src/commands.ts:62" }
+      ],
+      "gaps": [
+        "The `executable` capability dimension is always 'unsupported' at runtime — the host never executes plugin code (D2), and an executable-only plugin is overall 'failed': evaluate.ts:12-16, evaluate.ts:141-145.",
+        "HTTP marketplace caching is documented as deferred/asymmetric: the cache dir is NOT removed before a re-pull and the manifest write is non-atomic (writeFile, not tmp+rename), unlike the git path which removes the dir first: marketplaces.ts:393-395, marketplaces.ts:402-403.",
+        "Duplicate plugin ids from normalization (e.g. 'a:b' and 'a/b' both -> 'a-b') are resolved first-registered-source-wins with a console warning — 'Documented v1 behavior': index.ts:246-255.",
+        "The command frontmatter parser is self-made and minimal (description + argument-hints only, no yaml dependency): commands.ts:1-5."
+      ],
+      "evidence": [
+        "packages/plugin-registry/src/index.ts:144",
+        "packages/plugin-registry/src/evaluate.ts:97",
+        "packages/plugin-registry/src/capability.ts:33",
+        "packages/plugin-registry/package.json:8"
+      ]
+    },
+    {
+      "name": "settings",
+      "responsibility": "The global/layered user settings document: schema + normalization (single source for every setting), two stores (single-file SettingsStore and layered LayeredSettingsStore), a section descriptor/mutate API with per-section revisions, and a polling hot-reload watcher.",
+      "publicSurface": [
+        "SettingsStore / SettingsStoreOptions / SettingsStoreSurface",
+        "LayeredSettingsStore / LayeredStoreOptions / createLayeredStore",
+        "LayerSource / LayerRaw / LayeredRoots / resolveLayeredSources / mergeRawLayers",
+        "patchJsonDocumentKeepingComments / SettingsPatchError",
+        "watchSettings / resolveSettingsPath / updateSettings / normalizeSettings / normalizeInputModalities",
+        "SETTINGS_DEFAULTS / Settings and every section type (SettingsTui, SettingsLlm, SettingsProviderConfig, SettingsModel, SettingsTheme, SettingsSandboxMode, SettingsPluginToggles, ...)",
+        "SETTINGS_THEMES / SETTINGS_THEMES_LOW_COLOR / SETTINGS_STATUS_LINE_SEGMENTS / SETTINGS_DEFAULT_WORD_SEPARATORS / FONT_SIZE_MIN / FONT_SIZE_MAX",
+        "(via `export * from ./sections.ts`): describeSection, mutateSection, section schemas, PROVIDER_PROTOCOLS, DEFAULT_PROVIDER_PROTOCOL, SEEDED_PROTOCOLS, resolveProviderProtocol, SettingsConflictError, SettingsValidationError, SectionView, SectionOp"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Layer precedence is global < workspace < project (later wins), merged as RAW documents deep per key with arrays/scalars replaced, then normalized ONCE.",
+          "rationale": "Merging raw (not normalized) documents lets unknown keys survive as long as a higher layer does not override them; deep-merge recurses only when both sides are plain objects. Roots are either explicit `files` (low->high, label 'file') or conventional roots where 'auto' resolves to <configDir>/settings.json, <workspace>/.i-harness/settings.json, <cwd>/settings.json. A layer whose file does not exist contributes nothing. WRITES go to the MASTER = the highest-priority EXISTING source (not necessarily the highest-priority layer), so a project file that does not exist is never created by a write to the global file.",
+          "evidence": [
+            "packages/settings/src/index.ts:894",
+            "packages/settings/src/index.ts:925",
+            "packages/settings/src/index.ts:944",
+            "packages/settings/src/index.ts:1162",
+            "packages/settings/src/index.ts:1206"
+          ]
+        },
+        {
+          "decision": "Hot reload is a dependency-free POLLING watcher on mtime+size (default 500 ms, unref'd timer), which then MERGES a change-detection gate before notifying.",
+          "rationale": "The first tick only snapshots, so a pre-existing state never fires; a change fires the callback with the changed path and the store reloads, but listeners and the telemetry emit happen only if the NORMALIZED view actually changed (compare against a pre-reload baseline) — the code notes this fixes the dormant store-level detection bug. The watcher can be disabled with watchIntervalMs:false and is disposed with the store. Polling is chosen over fs events/chokidar deliberately ('no new deps — no chokidar').",
+          "evidence": [
+            "packages/settings/src/index.ts:1250",
+            "packages/settings/src/index.ts:1262",
+            "packages/settings/src/index.ts:1269",
+            "packages/settings/src/index.ts:1316",
+            "packages/settings/src/index.ts:1338"
+          ]
+        },
+        {
+          "decision": "Comments ARE preserved on write, with a documented degraded mode: full-line comments and blank lines are stripped for parsing and re-anchored positionally when they are re-serialized.",
+          "rationale": "patchJsonDocumentKeepingComments strips FULL-LINE comments (//, #, /* ... */, *) and blank lines, parses the remainder, deep-merges the patch, re-serializes canonically and re-emits each extra line before its anchored structural line. Three ordered strategies: exact positional re-anchoring when counts match and the raw structural lines are byte-identical to the canonical re-serialization; anchor-by-surviving-line when a leaf set/unset changed the line count; and a DEGRADED preservation (leading + trailing comment blocks kept, interior extras relocated to the end) when the document is not in canonical layout. Degradation never deletes user data, and a document the commentary parser cannot read at all is left untouched with a thrown SettingsPatchError (write is fail-closed). Inline comments inside values are explicitly NOT supported (indistinguishable — fail-closed rather than corrupt).",
+          "evidence": [
+            "packages/settings/src/index.ts:1016",
+            "packages/settings/src/index.ts:1025",
+            "packages/settings/src/index.ts:1036",
+            "packages/settings/src/index.ts:977",
+            "packages/settings/src/index.ts:1239"
+          ]
+        },
+        {
+          "decision": "The document is atomically written JSON (tmp + rename) with a per-section `_revision` meta counter, and the section API is a validated leaf-patch protocol rather than a whole-document replace.",
+          "rationale": "Both stores write via tmp file + rename; `_revision` is written only once a section has been mutated. set() bumps only the sections present in the patch; mutateSection bumps only on a real change (no-op ops keep the revision) and guards expectedRevision with SettingsConflictError carrying {expected, actual}. normalizeSettings fills every absent field from defaults, so a partial/old document loads; there is deliberately NO migration chain (D5) — legacy shapes soft-upgrade at read (e.g. legacy tui.providers read as an in-memory migration).",
+          "evidence": [
+            "packages/settings/src/index.ts:861",
+            "packages/settings/src/index.ts:1244",
+            "packages/settings/src/index.ts:1171",
+            "packages/settings/src/index.ts:633",
+            "packages/settings/src/index.ts:255"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed on writes and explicit on reads: a document the comment-preserving patcher cannot parse is never rewritten, and the write throws SettingsPatchError (index.ts:1237-1240); section ops violating the schema throw SettingsValidationError -> HTTP 400 and a stale expectedRevision throws SettingsConflictError -> 409 (sections.ts, surfaced by web-host host.ts:222-243). READ normalization never throws — malformed values degrade to defaults (e.g. normalizeInputModalities returns undefined = text-only, index.ts:111-122). Cross-process concurrent writes are explicitly ACCEPTED as last-rename-wins (index.ts:865-869).",
+      "events": [
+        "settings/changed — the store is the producer of this telemetry code: emitted with data {path} on a detected on-disk change (packages/settings/src/index.ts:1271)",
+        "the same change also fires the store-surface onChange(path) callback (packages/settings/src/index.ts:1270)"
+      ],
+      "keyConstants": [
+        { "name": "FONT_SIZE_MIN / FONT_SIZE_MAX", "value": "13 / 16", "evidence": "packages/settings/src/index.ts:342" },
+        { "name": "watch poll interval default", "value": "500 ms (false disables)", "evidence": "packages/settings/src/index.ts:1257" },
+        { "name": "status-line command refreshMs floor", "value": "300 ms (default 1000 per the preferences schema)", "evidence": "packages/settings/src/index.ts:620" },
+        { "name": "SETTINGS_THEMES", "value": "6 ids: system, grok-night, grok-day, tokyo-night, rose-pine-moon, oscura-midnight", "evidence": "packages/settings/src/index.ts:41" },
+        { "name": "SETTINGS_THEMES_LOW_COLOR", "value": "3 ids: system, grok-night, grok-day", "evidence": "packages/settings/src/index.ts:52" },
+        { "name": "SETTINGS_STATUS_LINE_SEGMENTS", "value": "8 ids: cwd, branch, model, context, turn-timer, session, queue, tasks", "evidence": "packages/settings/src/index.ts:189" },
+        { "name": "source order map", "value": "{ global: 0, workspace: 1, project: 2 }", "evidence": "packages/settings/src/index.ts:918" },
+        { "name": "default sandboxMode", "value": "\"workspace-write\"", "evidence": "packages/settings/src/index.ts:289" }
+      ],
+      "gaps": [
+        "Language is zh only in v0; the field is durable and forward-compatible (index.ts:73).",
+        "Cross-process write safety is not provided: two processes writing the same file can lose a concurrent revision increment (last rename wins) — accepted in code (index.ts:865-869).",
+        "Comment preservation degrades for a document that is not in this package's canonical layout: only leading/trailing comment blocks keep their position, interior comments move to the end (index.ts:1038-1048); inline comments are unsupported (index.ts:977-980).",
+        "No migration chain by design (D5): old formats soft-upgrade at read or stay verbatim (index.ts:288-295, index.ts:305-311)."
+      ],
+      "evidence": [
+        "packages/settings/src/index.ts:1130",
+        "packages/settings/src/index.ts:1149",
+        "packages/settings/src/index.ts:703",
+        "packages/settings/src/index.ts:1365"
+      ]
+    },
+    {
+      "name": "telemetry",
+      "responsibility": "The host-side telemetry stream (separate from the session log and invisible to the agent): a fixed manifest of event codes, a multicasting Telemetry emitter with per-sink error isolation, and a stdout JSONL sink.",
+      "publicSurface": [
+        "createTelemetry",
+        "createJsonlSink",
+        "TELEMETRY_MANIFEST",
+        "TELEMETRY_EVENT_TYPES",
+        "(types) TelemetryEventType, TelemetryEvent, TelemetrySink, Telemetry, TelemetryEventCodeDoc"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The event vocabulary is a closed, manifest-level code registry — one row per code the runtime ACTUALLY emits (never a code without a producer), each row carrying a domain and cross-source refs.",
+          "rationale": "TELEMETRY_MANIFEST has 20 rows over the domains session|turn|tool|provider|token|retry|mcp|system, and TELEMETRY_EVENT_TYPES is derived from the manifest (single source). The `refs` field maps each IH code to the five-source audit's names so vocabulary drift is answered inside the repo while the IH codes stay stable.",
+          "evidence": [
+            "packages/telemetry/src/manifest.ts:1",
+            "packages/telemetry/src/manifest.ts:16",
+            "packages/telemetry/src/manifest.ts:39",
+            "packages/telemetry/src/types.ts:3"
+          ]
+        },
+        {
+          "decision": "Multicast emit with sink-error ISOLATION: a throwing (or rejecting) sink is warned about and never interrupts the other sinks.",
+          "rationale": "createTelemetry loops the sinks, wraps each onEvent in try/catch and additionally attaches a .catch to a returned Promise ('async sink 錯誤也隔離'). The TelemetrySink interface deliberately declares onEvent(ev): void (not void|Promise<void>) with an in-code note that the union return would lose TS's void assignability rule while the runtime still isolates rejections — semantics equivalent.",
+          "evidence": [
+            "packages/telemetry/src/telemetry.ts:4",
+            "packages/telemetry/src/telemetry.ts:11",
+            "packages/telemetry/src/types.ts:36"
+          ]
+        },
+        {
+          "decision": "The shipped sink is a stdout JSONL sink: one line per event as {ts, type, data}.",
+          "rationale": "createJsonlSink takes any WritableStream and defaults to process.stdout, so a host can pipe telemetry separately from the session log. There is no file rotation, no buffering and no in-repo consumer — the stream is the seam.",
+          "evidence": [
+            "packages/telemetry/src/jsonl.ts:4",
+            "packages/telemetry/src/jsonl.ts:7",
+            "packages/telemetry/src/index.ts:4"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-open / fail-visible: sink errors (sync throw or async rejection) are console.warn'd and isolated so one bad sink never breaks the others or the emitting code (telemetry.ts:8-14); close() is a v0 no-op, so flushing is the sink's own responsibility (types.ts:49-50).",
+      "events": [
+        "session/start",
+        "session/end",
+        "session/request",
+        "session/queued",
+        "session/error",
+        "turn/start",
+        "turn/end",
+        "tool/start",
+        "tool/end",
+        "tool/error",
+        "provider/call",
+        "provider/error",
+        "token/usage",
+        "retry/start",
+        "mcp/server-status",
+        "skill/selector-shadow",
+        "settings/changed",
+        "compaction/attempt",
+        "error",
+        "warn"
+      ],
+      "keyConstants": [
+        { "name": "manifest size", "value": "20 event codes across 8 domains", "evidence": "packages/telemetry/src/manifest.ts:16" },
+        { "name": "domains", "value": "session | turn | tool | provider | token | retry | mcp | system", "evidence": "packages/telemetry/src/manifest.ts:11" },
+        { "name": "event shape", "value": "{ type, ts: Date.now(), data: Record<string, unknown> }", "evidence": "packages/telemetry/src/types.ts:28" },
+        { "name": "sink line shape", "value": "{ ts, type, data } + '\\n'", "evidence": "packages/telemetry/src/jsonl.ts:7" }
+      ],
+      "gaps": [
+        "close() is a no-op in v0 ('需要 flush/close 的 sink 自行處理'): the emitter cannot flush or end sinks: types.ts:49-50.",
+        "No in-process consumer of the emitted stream exists in this package (the manifest and the sink are the whole surface); the web host's GET /api/telemetry route is deferred (packages/web-host/src/host.ts:2429)."
+      ],
+      "evidence": [
+        "packages/telemetry/src/index.ts:1",
+        "packages/telemetry/src/manifest.ts:7",
+        "packages/settings/src/index.ts:1271"
+      ]
+    },
+    {
+      "name": "jobs",
+      "responsibility": "A pure projection package for the web jobs surface: it folds `job/status` session events (realtime, last-wins by jobId) and maps the subagent durable persistence snapshot document into the same JobView shape, plus the kill-outcome vocabulary and the per-session command-queue view type.",
+      "publicSurface": [
+        "JobStatusView",
+        "JobView",
+        "JobsView",
+        "JobKillOutcome",
+        "JobKillUnknownJobError",
+        "CommandQueueView",
+        "projectJobsDoc",
+        "foldJobs"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Two independent data sources produce ONE shape: the durable doc is the initial snapshot (GET /api/sessions/:id/jobs) and the `job/status` event fold is the realtime update over the existing mux session stream — no new endpoint.",
+          "rationale": "The header states the web's jobs surface is BOTH a projection of job/status events (fold, last-wins by jobId, whole-job snapshot per event like goal/change) and a mapping of the subagent snapshot doc. foldJobs ignores other event types; projectJobsDoc preserves registry insertion order (the frontend sorts).",
+          "evidence": [
+            "packages/jobs/src/index.ts:1",
+            "packages/jobs/src/index.ts:121",
+            "packages/jobs/src/index.ts:96",
+            "packages/web-host/src/host.ts:1765"
+          ]
+        },
+        {
+          "decision": "The durable doc shape is INLINED STRUCTURALLY on purpose so web-host never depends on @i-harness/subagent.",
+          "rationale": "Depending on subagent would drag the whole subagent runtime into the web host's graph; core-session inlines team/* the same way. The producer (subagent persist.ts) owns the shape, and if it drifts the route's mapping warns loudly rather than silently mis-serving. A foreign/corrupt doc maps to [] (honest empty) and the ROUTE warns.",
+          "evidence": [
+            "packages/jobs/src/index.ts:11",
+            "packages/jobs/src/index.ts:72",
+            "packages/jobs/src/index.ts:88",
+            "packages/web-host/src/host.ts:1785"
+          ]
+        },
+        {
+          "decision": "The kill vocabulary is the live registry's, and an unknown job is an honest 409 rather than a silent 200.",
+          "rationale": "JobKillOutcome = 'cancellation-requested' | 'already-finished' — the SAME strings the model-facing job_kill tool reports and the subagent JobRegistry returns, so the popover's button promises exactly what the registry does. JobKillUnknownJobError is the explicit 'nothing to kill' answer the host maps to 409. CommandQueueView reports only the real busy state (running + registered-not-started turns) of the per-session command serialization chain — no prompt storage, no reorder.",
+          "evidence": [
+            "packages/jobs/src/index.ts:37",
+            "packages/jobs/src/index.ts:49",
+            "packages/jobs/src/index.ts:58",
+            "packages/web-host/src/host.ts:1804"
+          ]
+        }
+      ],
+      "failurePolicy": "other — honest-degradation rather than fail-open/closed: a missing/foreign/corrupt persistence doc maps to an empty list (projectJobsDoc returns [] for anything without a jobs array, index.ts:96-99) with a loud console.warn at the route (host.ts:1785-1788); an unknown kill target raises JobKillUnknownJobError so the transport can answer 409 instead of pretending success (index.ts:49-56, host.ts:1804).",
+      "events": ["consumes: job/status (SessionEvent; whole-job snapshot per event) — packages/jobs/src/index.ts:121-125"],
+      "keyConstants": [
+        { "name": "JobStatusView", "value": "\"running\" | \"completed\" | \"killed\" | \"error\"", "evidence": "packages/jobs/src/index.ts:18" },
+        { "name": "JobKillOutcome", "value": "\"cancellation-requested\" | \"already-finished\"", "evidence": "packages/jobs/src/index.ts:42" },
+        { "name": "fallback status for a doc row without status", "value": "\"error\"", "evidence": "packages/jobs/src/index.ts:102" },
+        { "name": "outputAvailable semantics", "value": "non-empty output string, NOT the output bytes (job_output remains the read path)", "evidence": "packages/jobs/src/index.ts:26" }
+      ],
+      "gaps": [
+        "No gap markers in src. The package is projection-only by design: it owns no store and can only report what the doc or the log offers ('exactly what the durable record offers — no invented fields', index.ts:20)."
+      ],
+      "evidence": [
+        "packages/jobs/src/index.ts:33",
+        "packages/jobs/src/index.ts:64",
+        "packages/jobs/package.json:7",
+        "packages/web-host/src/host.ts:1789"
+      ]
+    },
+    {
+      "name": "schedule",
+      "responsibility": "Durable per-session reminders whose state IS the session event stream: `schedule/change` v1 events with create/delete/dispatch operations folded last-wins per id, three rule kinds (after / at / every), plus a local driver that dispatches due occurrences and hands the reminder to an injectable deliverer.",
+      "publicSurface": [
+        "createAfterScheduleRecord / createAtScheduleRecord / createEveryScheduleRecord",
+        "decodeScheduleEvent / foldScheduleEvents / resolveEveryOccurrence / allocateScheduleId / scheduleView / renderReminderFraming",
+        "AfterScheduleRecord / AtScheduleRecord / EveryScheduleRecord / ScheduleRecord / ScheduleChange / ScheduleState / ScheduleView / ScheduleDeliveryMode / FoldedSchedules / EveryOccurrence",
+        "MIN_EVERY_INTERVAL_SECONDS / SCHEDULE_CHANGE_VERSION",
+        "ScheduleLogError / ScheduleInputError",
+        "(subpath ./driver, NOT in index.ts): createScheduleDriver, ScheduleDriver, ScheduleDriverOptions, ScheduleDue, ScheduleTickResult"
+      ],
+      "designDecisions": [
+        {
+          "decision": "The durable state IS the event stream: three operations (create/delete/dispatch) folded last-wins per id, with a dispatch event acting as the durable ACCEPTANCE record.",
+          "rationale": "One-shot records are REMOVED by their dispatch; `every` records advance via a generation-anchored occurrence (acceptedAt) without enumerating a backlog. Id reuse, deleting an inactive id and dispatching an inactive id are log corruptions that throw ScheduleLogError — the fold is projection-grade and callers must catch. Decoding is strictly key-exact (requireKeys), requires canonical four-digit-year RFC 3339 UTC instants, and rejects unknown kinds/versions.",
+          "evidence": [
+            "packages/schedule/src/index.ts:1",
+            "packages/schedule/src/index.ts:58",
+            "packages/schedule/src/index.ts:316",
+            "packages/schedule/src/index.ts:117",
+            "packages/schedule/src/index.ts:185"
+          ]
+        },
+        {
+          "decision": "The driver appends the dispatch event BEFORE delivering (durable accept first), and a corrupt session stream is skipped with a reported deliveryError.",
+          "rationale": "'a delivery without a durable accept is a duplicate risk — fail-closed path': if append fails the occurrence is not delivered and the error is recorded and logged. Restart re-drive is therefore free — a new driver over the same persisted events delivers exactly the still-overdue remainder. Per-session fold corruption skips that session and records it rather than aborting the tick.",
+          "evidence": [
+            "packages/schedule/src/driver.ts:11",
+            "packages/schedule/src/driver.ts:100",
+            "packages/schedule/src/driver.ts:85",
+            "packages/schedule/src/driver.ts:35"
+          ]
+        },
+        {
+          "decision": "Reminder text is framed injection-resistant: dynamic fields are JSON-escaped and the model is told the prompt is untrusted reminder content, not new instructions.",
+          "rationale": "renderReminderFraming emits a [SCHEDULE REMINDER] block with schedule_id_json, occurrence_at and reminder_prompt_json (JSON.stringify of the id/prompt) plus the explicit instruction to present it as untrusted content — dsh's renderReminderFraming parity.",
+          "evidence": [
+            "packages/schedule/src/index.ts:411",
+            "packages/schedule/src/index.ts:416",
+            "packages/schedule/src/index.ts:421"
+          ]
+        },
+        {
+          "decision": "Creation validation is strict and returns machine-coded ScheduleInputError: prompt non-empty after trim, target strictly in the future, four-digit-year instants only, and `every` at or above a fixed frequency floor.",
+          "rationale": "Codes: invalid_prompt, invalid_rule, not_future, time_out_of_range, frequency_too_high. `at` accepts a UTC-Z or numeric-offset RFC 3339 instant with 1-3 fractional digits and validates that the calendar date is real (a round-trip getUTCFullYear/Month/Date check). The floor exists so a model cannot create a hot reminder loop.",
+          "evidence": [
+            "packages/schedule/src/index.ts:20",
+            "packages/schedule/src/index.ts:97",
+            "packages/schedule/src/index.ts:208",
+            "packages/schedule/src/index.ts:231",
+            "packages/schedule/src/index.ts:289"
+          ]
+        }
+      ],
+      "failurePolicy": "other — fail-closed on delivery, fail-visible on corruption: a delivery is attempted ONLY after the durable dispatch append succeeds; if append or onDue fails the item lands in deliveryErrors and is logged, never silently dropped (driver.ts:98-117). A session whose schedule log is corrupt is skipped for the whole tick with a warning (driver.ts:85-92). Model input violations throw typed ScheduleInputError before any record exists (index.ts:208-299); log corruption throws ScheduleLogError from decode/fold (index.ts:88-94, 321-324).",
+      "events": [
+        "schedule/change (version 1) — produced by the driver with operation 'dispatch' (one-shot: no acceptedAt; every: acceptedAt ISO instant): packages/schedule/src/driver.ts:64-68",
+        "schedule/change (version 1) create/delete/dispatch — consumed and strictly decoded by decodeScheduleEvent/foldScheduleEvents: packages/schedule/src/index.ts:185, index.ts:321"
+      ],
+      "keyConstants": [
+        { "name": "MIN_EVERY_INTERVAL_SECONDS", "value": "300", "evidence": "packages/schedule/src/index.ts:20" },
+        { "name": "SCHEDULE_CHANGE_VERSION", "value": "1", "evidence": "packages/schedule/src/index.ts:22" },
+        { "name": "year window", "value": "0001-01-01T00:00:00.000Z .. 9999-12-31T23:59:59.999Z", "evidence": "packages/schedule/src/index.ts:24" },
+        { "name": "driver pollMs default", "value": "30_000", "evidence": "packages/schedule/src/driver.ts:73" },
+        { "name": "id shape", "value": "`schedule-<n>` — lowest free slot, ids never reused", "evidence": "packages/schedule/src/index.ts:363" },
+        { "name": "deliveryMode", "value": "\"session-local\" (the only value)", "evidence": "packages/schedule/src/index.ts:64" }
+      ],
+      "gaps": [
+        "v1 deferrals are declared in the module header: LocalAtInput (IANA local-calendar targets) and the direct prompt-injection deliverable are NOT ported — the driver stays UTC-instant-based and prompt delivery is an injected seam (index.ts:12-14).",
+        "The delivery wire itself is unfinished: 'onDue: Deliver a due reminder (the A1-inbox wire lands here later)' — this milestone ships only the seam (driver.ts:46-47).",
+        "No in-repo assembly mounts a schedule source: subagent's projection notes the 'schedule' group has no source in this repo's assemblies today (packages/subagent/src/projection.ts:15-17)."
+      ],
+      "evidence": [
+        "packages/schedule/src/index.ts:378",
+        "packages/schedule/src/index.ts:403",
+        "packages/schedule/src/driver.ts:71",
+        "packages/schedule/package.json:7"
+      ]
+    },
+    {
+      "name": "feedback",
+      "responsibility": "Per-message user feedback (like/dislike + optional note) for a session, persisted as ONE coordinator document per session keyed `feedback-<sessionId>` — the only consumer is the SPA over the web host's HTTP routes.",
+      "publicSurface": [
+        "createMessageFeedbackStore",
+        "MessageFeedbackStore",
+        "MessageFeedbackItem",
+        "MessageFeedbackPutRequest",
+        "MessageFeedbackSnapshot",
+        "MessageFeedbackRating",
+        "FEEDBACK_DOC_KEY_PREFIX",
+        "MAX_FEEDBACK_NOTE_BYTES",
+        "FeedbackBadRequestError",
+        "FeedbackNoteEmptyError",
+        "FeedbackNoteTooLargeError",
+        "FeedbackMessageNotFoundError",
+        "FeedbackVersionConflictError",
+        "FeedbackPersistenceError"
+      ],
+      "designDecisions": [
+        {
+          "decision": "Per-item optimistic concurrency: an integer `version` starting at 1 and incremented per successful put; a put WITHOUT ifVersion overwrites unconditionally (force) while a mismatched ifVersion is a version-conflict carrying `current`.",
+          "rationale": "The unconditional path is called out in-code as 'the one deliberate extension vs DSH, which always requires the exact version'. An identical-value put is a no-op (the stored item returns unchanged, version does not bump — DSH parity). Delete of an absent item succeeds regardless of version ({absent:true}); an existing item requires the exact version when one is supplied.",
+          "evidence": [
+            "packages/feedback/src/index.ts:21",
+            "packages/feedback/src/index.ts:285",
+            "packages/feedback/src/index.ts:293",
+            "packages/feedback/src/index.ts:319"
+          ]
+        },
+        {
+          "decision": "The target message identity is the event SEQ of a FINALIZED assistant/message event, verified against the durable log after a flush.",
+          "rationale": "messageId must be a non-negative integer decimal string; the store flushes the session (the live instance may hold an event the ≤200 ms write-behind has not written yet) and then checks that the log has an assistant/message at that seq — anything else is FeedbackMessageNotFoundError (HTTP 400).",
+          "evidence": [
+            "packages/feedback/src/index.ts:18",
+            "packages/feedback/src/index.ts:201",
+            "packages/feedback/src/index.ts:246",
+            "packages/feedback/src/index.ts:274"
+          ]
+        },
+        {
+          "decision": "Writes VERIFY AFTER WRITE because the coordinator's putDocument contract is report-never-reject.",
+          "rationale": "The document is re-read inside the same serialized op and deep-compared with the intended snapshot; a mismatch throws FeedbackPersistenceError so the host answers 500 instead of a silent 200 whose vote vanishes on refresh. This is recorded as a fix for a reviewer finding.",
+          "evidence": [
+            "packages/feedback/src/index.ts:38",
+            "packages/feedback/src/index.ts:231",
+            "packages/feedback/src/index.ts:238",
+            "packages/feedback/src/index.ts:147"
+          ]
+        },
+        {
+          "decision": "All read-modify-write cycles on the per-session document are serialized on one promise chain, reads included.",
+          "rationale": "Two feedback PUTs must never interleave and lose one's write; joining reads to the chain means a list during a mutation observes either the pre- or post-state, never a torn one. The chain tail stays alive after failures (chain = run.then(noop, noop)).",
+          "evidence": [
+            "packages/feedback/src/index.ts:34",
+            "packages/feedback/src/index.ts:214",
+            "packages/feedback/src/index.ts:217"
+          ]
+        }
+      ],
+      "failurePolicy": "fail-closed on durability and input: an unverifiable write throws FeedbackPersistenceError (host 500) instead of acknowledging (index.ts:238-244); input violations throw typed, machine-coded errors that the host maps to HTTP without string matching — feedback-invalid/note-blank/note-too-large/message-not-found -> 400, version-conflict -> 409, unknown session -> 404 (index.ts:45-48, web-host host.ts:1854-1875). Cheap-field validation runs BEFORE any session load so a malformed request answers 400 even for an unknown session (index.ts:267-272).",
+      "events": [
+        "none produced — the store appends no SessionEvent (state lives in the coordinator document `feedback-<sessionId>`)",
+        "consumes (read-only) the session log's assistant/message events to authorize a messageId: packages/feedback/src/index.ts:202-205"
+      ],
+      "keyConstants": [
+        { "name": "MAX_FEEDBACK_NOTE_BYTES", "value": "4096 (UTF-8 bytes)", "evidence": "packages/feedback/src/index.ts:62" },
+        { "name": "FEEDBACK_DOC_KEY_PREFIX", "value": "\"feedback-\"", "evidence": "packages/feedback/src/index.ts:56" },
+        { "name": "snapshot formatVersion", "value": "1", "evidence": "packages/feedback/src/index.ts:93" },
+        { "name": "version start/increment", "value": "1 at first put, +1 per succeeding put", "evidence": "packages/feedback/src/index.ts:73" },
+        { "name": "rating vocabulary", "value": "\"like\" | \"dislike\"", "evidence": "packages/feedback/src/index.ts:64" }
+      ],
+      "gaps": [
+        "Documented simplification vs DSH: the persisted item has no createdAt — only updatedAt ('simplified: no createdAt — the task ruling's shape'): index.ts:31-32.",
+        "Documented deliberate divergence: a put without ifVersion overwrites unconditionally (DSH always requires the exact version): index.ts:22-25.",
+        "There is no embedder seam: the store is composed inside web-host over the coordinator and the only consumer is the SPA over HTTP (index.ts:8-10)."
+      ],
+      "evidence": [
+        "packages/feedback/src/index.ts:214",
+        "packages/feedback/src/index.ts:257",
+        "packages/feedback/src/index.ts:98",
+        "packages/web-host/src/host.ts:545"
+      ]
+    }
+  ],
+  "coverage": {
+    "assigned": 13,
+    "covered": 13
+  }
+}

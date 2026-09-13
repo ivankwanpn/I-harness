@@ -1,0 +1,632 @@
+{
+  "source": "dsh",
+  "sourcePath": "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
+  "version": "0.1.5-rc.2",
+  "commandModelNote": "dsh has no central slash-command table and no slash-heavy CLI: a slash command exists only if some package calls `ctx.commands.register({name, description, input?, recordInput?, handler})` on the Cordis `commands` service, and the mechanically-listed `packages/<area>/command-<name>/` plugins are merely the three that ship as standalone packages (`/compact`, `/feedback`, `/goal`); three further commands (`/permission`, `/plan`, `/export`) are registered inline by their owning domain packages, so `packages/*/command-*/` is not the whole slash set. What dsh uses INSTEAD of a big slash surface is (a) the Typert `@Remote` RPC namespace published by `TypertRemoteService` subclasses — `commands.list`/`commands.execute`, `session.*` (prompt/cancel/fork/rename/selectModel/page/follow/control/...), `subagent.*`, `goals.*`, `sessionFeedback.*` — and (b) the browser client's `/` menu (`packages/client/ui-commands`) which merges the host command catalog with client-side contributions/decorations and submits a picked line through `remote.commands.execute`. Underneath both sit the four in-process Agent delivery tiers `send`/`followup`/`steer`/`inject`, which are the real 'interaction commands' of the harness; slash lines, RPC calls and the web UI are all thin adapters over them.",
+  "commands": [
+    {
+      "rawName": "compact",
+      "canonical": "compact",
+      "aliases": [],
+      "displayName": "compact",
+      "family": "context",
+      "summary": "Manually condense older conversation history into one summary node on demand, below the automatic pressure threshold.",
+      "mechanism": "The plugin exports `name = 'command-compact'` and `inject = ['commands', 'compaction']`, so it activates only where both a command registry and a compaction backend are composed; `apply()` registers `/compact` inside a `ctx.effect` whose teardown yields a drain of in-flight handler promises before unregistering (LIFO composite teardown). The handler rejects any argument (`Usage: /compact (no arguments)`), then calls `ctx.compaction.compactNow(agent, signal, commandId)` on the CompactionEngine seam and maps each expected `ManualCompactionError` code (busy/cancelled/changed/summary/commit/persistence) to human-only error text; success reports `CompactionResult.shadowedSeqs.length` and `shadowedTokenCount`, and `summarySeq` is returned as the result's `sourceEventSeq`. The shipped provider `compaction-basic` implements `compactNow` by reserving the idle phase via `agent.runMaintenance`, selecting a safe balanced range, then running one `compactSurfaceRegion` transaction: `compaction/start` is appended as the durable lock before summarization yields, the summarizer runs, stability of the selected span is re-asserted, then `compaction/summary` + a replacement `user/message` are appended together and `compaction/end` closes the bracket (a closure failure deliberately leaves the unmatched start detectable); the manual path additionally flushes persistence and reports a `persistence` failure. History is SHADOWED, not rewritten: the log stays append-only and the summary node enters the model-visible surface with `surfaceOp: { op: 'replace', startSeq, endSeq }`, whose `sourceEventSeqs` must cite every shadowed node — the surface deliberately shadows replaced ranges while append-origin events remain the durable human transcript.",
+      "gate": "requires a composed `commands` registry AND a composed `compaction` service (`inject = ['commands', 'compaction']`); in the shipped web-app bundle the host-plane row is explicitly disabled and the plugin is mounted per agent preset instead, so the command is scoped to the preset's agent rather than global",
+      "backendModule": "packages/compaction/command-compact/src/index.ts (command plugin) -> packages/compaction/compaction/src/index.ts (CompactionEngine seam) -> packages/compaction/compaction-basic/src/index.ts + src/region.ts (provider/transaction)",
+      "evidence": [
+        "packages/compaction/command-compact/src/index.ts:10",
+        "packages/compaction/command-compact/src/index.ts:11",
+        "packages/compaction/command-compact/src/index.ts:23",
+        "packages/compaction/command-compact/src/index.ts:62",
+        "packages/compaction/command-compact/src/index.ts:66",
+        "packages/compaction/command-compact/src/index.ts:70",
+        "packages/compaction/command-compact/src/index.ts:96",
+        "packages/compaction/command-compact/src/index.ts:100",
+        "packages/compaction/compaction/src/index.ts:139",
+        "packages/compaction/compaction-basic/src/index.ts:369",
+        "packages/compaction/compaction-basic/src/index.ts:376",
+        "packages/compaction/compaction-basic/src/region.ts:209",
+        "packages/compaction/compaction-basic/src/region.ts:235",
+        "packages/compaction/compaction-basic/src/region.ts:475",
+        "packages/compaction/compaction-basic/src/region.ts:490",
+        "packages/compaction/compaction-basic/src/region.ts:491",
+        "packages/core/session/src/types.ts:427",
+        "packages/core/session/src/surface.ts:53",
+        "packages/preset/agent-presets/presets/standard/agent.cordis.yml:148",
+        "packages/bundle/web-app/cordis.patch.yml:430"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: compact — same capability as I-harness `/compact`, grok-build `compact`, cc-custom `/compact` and the codex SlashCommand::Compact variant; dsh's distinct name form is the plugin package `command-compact`"
+      ]
+    },
+    {
+      "rawName": "feedback",
+      "canonical": "feedback",
+      "aliases": [],
+      "displayName": "feedback",
+      "family": "session",
+      "summary": "Record a free-text session-level remark without starting any model work.",
+      "mechanism": "Exports `name = 'command-feedback'` and `inject = ['commands']`; `apply()` registers `/feedback` with `input: { hint: '<text>' }` and `recordInput: false` so the invocation payload is not duplicated into the generic command event. The handler rejects blank input, then calls the shared `recordFeedback(session, entry)`, which trims the text and appends one authoritative log-only `feedback/record` event to `invocation.agent.session`; the acknowledgement names the session id and the anonymous installation id. The same `apply()` also mounts `SessionFeedbackService`, a `TypertRemoteService` declaring `static inject = ['sessions']` and publishing the `sessionFeedback.record` Remote that the Web feedback dialog uses — so the slash command and the UI dialog share one producer and one event vocabulary.",
+      "gate": "requires a composed `commands` registry; the sibling `sessionFeedback.record` Remote additionally requires a composed `sessions` service (headless/ACP entry points that mount neither get no slash command)",
+      "backendModule": "packages/feedback/command-feedback/src/index.ts",
+      "evidence": [
+        "packages/feedback/command-feedback/src/index.ts:39",
+        "packages/feedback/command-feedback/src/index.ts:40",
+        "packages/feedback/command-feedback/src/index.ts:57",
+        "packages/feedback/command-feedback/src/index.ts:59",
+        "packages/feedback/command-feedback/src/index.ts:72",
+        "packages/feedback/command-feedback/src/index.ts:76",
+        "packages/feedback/command-feedback/src/index.ts:84",
+        "packages/feedback/command-feedback/src/index.ts:100",
+        "packages/feedback/command-feedback/src/index.ts:116",
+        "packages/feedback/command-feedback/src/index.ts:118"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: feedback — no equivalent canonical command was identified in the sibling harnesses from this source alone; recorded as dsh-specific rather than force-matched"
+      ]
+    },
+    {
+      "rawName": "goal",
+      "canonical": "goal",
+      "aliases": [],
+      "displayName": "goal",
+      "family": "plan",
+      "summary": "Create, edit, pause, resume, clear or inspect the one persisted same-session goal and its round budget.",
+      "mechanism": "Exports `name = 'command-goal'` and `inject = ['commands', 'goals']`; `apply()` registers `/goal` with `input: { hint: '[<objective>|clear|edit <objective>|pause|resume]', attachments: true }` and a synchronous handler. `parseGoalCommand` owns only this command's grammar (empty input = show, the four control words, `edit <objective>`, anything else = a new objective) and every mutation goes through the goal domain (`ctx.goals.get/create/edit/pause/resume/clear`) using an explicit compare-and-set `GoalRef { id, revision }`, so the domain — not the command — owns persistence and model visibility; `GoalError` is converted into one state-invalid error result rather than surfacing compare-and-set internals. Attachments accepted on create/edit are forwarded as one ordinary user message via `agent.followup` so a later goal round reads them from normal session history. The registration comment names it the Codex-shaped `/goal` command.",
+      "gate": "requires a composed `commands` registry AND a composed `goals` service (`inject = ['commands', 'goals']`); in the web-app bundle the host-plane row is disabled and the preset mounts it into the preset's scoped command layer",
+      "backendModule": "packages/goal/command-goal/src/index.ts (command) -> packages/goal/goal/src/index.ts (goal domain, Typert @Remote get/edit/pause/resume/complete/clear/create)",
+      "evidence": [
+        "packages/goal/command-goal/src/index.ts:12",
+        "packages/goal/command-goal/src/index.ts:13",
+        "packages/goal/command-goal/src/index.ts:15",
+        "packages/goal/command-goal/src/index.ts:34",
+        "packages/goal/command-goal/src/index.ts:118",
+        "packages/goal/command-goal/src/index.ts:149",
+        "packages/goal/command-goal/src/index.ts:160",
+        "packages/goal/command-goal/src/index.ts:172",
+        "packages/goal/command-goal/src/index.ts:178",
+        "packages/goal/command-goal/src/index.ts:188",
+        "packages/goal/command-goal/src/index.ts:190",
+        "packages/preset/agent-presets/presets/standard/agent.cordis.yml:95",
+        "packages/bundle/web-app/cordis.patch.yml:411"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: goal — dsh's own registration comment calls this the 'Codex-shaped /goal command' (packages/goal/command-goal/src/index.ts:188), so it is a crosswalk candidate for a codex-family /goal rather than a dsh invention"
+      ]
+    }
+  ],
+  "interactionCommands": [
+    {
+      "rawName": "agent.send",
+      "canonical": "session-send",
+      "aliases": [],
+      "displayName": "agent.send",
+      "family": "session",
+      "summary": "Route one identified message to a chosen inbox boundary with an explicit wake decision — the single primitive all other delivery tiers are built from.",
+      "mechanism": "Declared on the Agent interface as `send(message: UserMessage, target: InboxTarget, wakeup: boolean): void`. The implementation carries the whole admission policy: waking input that arrives after an abort is re-targeted from `next-step` to `next-turn`; the message is spliced into `this.inbox` at the resolved boundary; and only a waking call enters `wakeDriver`. Every higher tier is a one-line specialization of this method.",
+      "gate": "in-process Agent API — available on any live Agent; no command registry, RPC gateway or UI is required",
+      "backendModule": "packages/core/agent-loop/src/agent.ts (implementation) / packages/core/agent/src/runtime-types.ts (contract)",
+      "evidence": [
+        "packages/core/agent/src/runtime-types.ts:215",
+        "packages/core/agent-loop/src/agent.ts:128",
+        "packages/core/agent-loop/src/agent.ts:133",
+        "packages/core/agent-loop/src/agent.ts:134"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "this is the primitive behind the whole session-send / session-followup / session-steer / session-inject family; the literal names `session-send` etc. do not exist in dsh 0.1.5-rc.2 source — the real names are the Agent methods below"
+      ]
+    },
+    {
+      "rawName": "agent.followup",
+      "canonical": "session-followup",
+      "aliases": [],
+      "displayName": "agent.followup",
+      "family": "session",
+      "summary": "Queue an ordinary follow-up turn at the `next-turn` boundary and wake the driver so it becomes the sole ordinary message of its own turn.",
+      "mechanism": "Declared as `followup(message: UserMessage): void` with the contract that the item becomes the sole ordinary message of its own turn. Implemented as the literal single call `this.send(input, 'next-turn', true)` — i.e. followup is the next-turn + wake tier of the send primitive, and carries no independent state. This is the tier the Host `session.prompt` mode `queue` and the subagent delivery mode `queue` both resolve to.",
+      "gate": "in-process Agent API",
+      "backendModule": "packages/core/agent-loop/src/agent.ts:137 (implementation) / packages/core/agent/src/runtime-types.ts:222 (contract)",
+      "evidence": [
+        "packages/core/agent/src/runtime-types.ts:222",
+        "packages/core/agent-loop/src/agent.ts:137",
+        "packages/core/agent-loop/src/agent.ts:138",
+        "packages/api/session-controller/src/commands.ts:364"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: session-followup — the next-turn/queue tier; sibling of a generic `send` and distinct from steering"
+      ]
+    },
+    {
+      "rawName": "agent.steer",
+      "canonical": "session-steer",
+      "aliases": [],
+      "displayName": "agent.steer",
+      "family": "session",
+      "summary": "Submit steering for the nearest step boundary, waking an idle driver but joining a running turn rather than opening a new one.",
+      "mechanism": "Declared as `steer(message: UserMessage): void`: an idle driver starts a turn, a running driver consumes the item at its next step boundary, a rejected step leaves steering parked in the inbox until the next wake, and cancellation or disposal may discard it. Implemented as `this.send(input, 'next-step', true)`. The loop consumes it inside the turn (asserted by the loop tests) and the Host surfaces it as `session.prompt` mode `steer` and `session.updateQueue` action `steer`.",
+      "gate": "in-process Agent API; the Host `updateQueue` steer action is additionally refused with `session/steer-unavailable` unless the item is still at `next-turn` and the agent is running",
+      "backendModule": "packages/core/agent-loop/src/agent.ts:141 (implementation) / packages/core/agent/src/runtime-types.ts:231 (contract)",
+      "evidence": [
+        "packages/core/agent/src/runtime-types.ts:231",
+        "packages/core/agent-loop/src/agent.ts:141",
+        "packages/core/agent-loop/src/agent.ts:142",
+        "packages/api/session-controller/src/commands.ts:363",
+        "packages/api/session-controller/src/commands.ts:463",
+        "packages/api/session-controller/src/commands.ts:483"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: session-steer — nearest-step interruption, the same capability other harnesses expose as interjecting/steering during a running turn"
+      ]
+    },
+    {
+      "rawName": "agent.inject",
+      "canonical": "session-inject",
+      "aliases": [],
+      "displayName": "agent.inject",
+      "family": "context",
+      "summary": "Queue model-facing context for the next pre-step WITHOUT waking the driver — the silent-context tier.",
+      "mechanism": "Declared as `inject(message: UserMessage): void`: a running driver claims it at the nearest later step boundary, an idle driver leaves it pending until a follow-up or steer wakes it, it may miss a request whose pre-step already claimed its batch, and cancellation or disposal may discard it. Implemented as `this.send(input, 'next-step', false)` — identical to steer except `wakeup` is false, which is exactly what separates the two tiers. It has no Host RPC face: every caller in the tree is an in-process plugin (plan-mode narration, approval prompts, hooks, jobs, subagent continuation, cordis host runner).",
+      "gate": "in-process Agent API only; not reachable through any Typert @Remote in this version",
+      "backendModule": "packages/core/agent-loop/src/agent.ts:145 (implementation) / packages/core/agent/src/runtime-types.ts:241 (contract)",
+      "evidence": [
+        "packages/core/agent/src/runtime-types.ts:241",
+        "packages/core/agent-loop/src/agent.ts:145",
+        "packages/core/agent-loop/src/agent.ts:146",
+        "packages/plan/plan-mode/src/index.ts:430",
+        "packages/interaction/user-approval/src/index.ts:180"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: session-inject — non-waking context injection; distinguishes dsh's four tiers (send/followup/steer/inject) into two axes: inbox boundary (next-turn vs next-step) x wake (true/false)"
+      ]
+    },
+    {
+      "rawName": "session.prompt",
+      "canonical": "session-prompt",
+      "aliases": [],
+      "displayName": "session.prompt",
+      "family": "session",
+      "summary": "Host RPC that admits one browser-authored prompt after resume, attachment and model-capability validation, delivering it as queue or steer.",
+      "mechanism": "Published as `@Remote('prompt')` on the session controller and typed by `SessionPromptRequest` whose `mode` is `'queue' | 'steer'`. The implementation rejects empty content, canonicalizes/validates `clientTimeZone`, resolves the Agent, dedupes by `requestId`, and requires the selected provider route to be served; image prompts are serialized per Agent and checked against the model's `inputModalities` before admission. After `attachments.admitPromptContent` the content becomes a `UserMessage` with `source: { kind: 'user', rpcId }`, then the delivery branch is literally `if (request.mode === 'steer') agent.steer(message) else agent.followup(message)`, with file-upload receipts committed only after delivery is accepted.",
+      "gate": "Typert Gateway Remote; requires a live/resumable Session, a served provider route, and (for image parts) a model advertising image input plus an attachment store",
+      "backendModule": "packages/api/session-controller/src/index.ts:345 (Remote face) / packages/api/session-controller/src/commands.ts:302 (admission + delivery)",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:345",
+        "packages/api/session-controller/src/commands.ts:302",
+        "packages/api/session-controller/src/commands.ts:303",
+        "packages/api/session-controller/src/commands.ts:353",
+        "packages/api/session-controller/src/commands.ts:363",
+        "packages/api/session-controller/src/commands.ts:364",
+        "packages/api/session-controller/src/types.ts:310",
+        "packages/api/session-controller/src/types.ts:314"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: prompt/send — this is the browser-facing union of dsh's followup (queue) and steer tiers; other harnesses expose it as the plain chat-submit path rather than a command"
+      ]
+    },
+    {
+      "rawName": "session.updateQueue",
+      "canonical": "session-update-queue",
+      "aliases": [],
+      "displayName": "session.updateQueue",
+      "family": "session",
+      "summary": "Edit, remove or promote-to-steer one still-pending inbox item on a live Agent without resuming a cold one.",
+      "mechanism": "Published as `@Remote('updateQueue')`; the implementation refuses non-text edits and blank edits, requires a live Agent, and enforces continuable-subagent ownership. It then locates the item in `agent.inbox.nextTurn` / `agent.inbox.nextStep` and dispatches on the action: `edit` calls `agent.inbox.replace` with a frozen message, `remove` calls `agent.inbox.remove` and retires the file-upload receipts, and `steer` removes the item and re-enters it through `agent.steer(message)`, which is why the action is pre-checked for `next-turn` + running status. A closed-union `assertNever` backstop guards the switch.",
+      "gate": "Typert Gateway Remote; the item must still be pending (`session/queue-item-not-found` otherwise) and the `steer` action additionally requires target `next-turn` and a running agent",
+      "backendModule": "packages/api/session-controller/src/index.ts:366 (Remote face) / packages/api/session-controller/src/commands.ts:424 (mutation)",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:366",
+        "packages/api/session-controller/src/commands.ts:424",
+        "packages/api/session-controller/src/commands.ts:454",
+        "packages/api/session-controller/src/commands.ts:468",
+        "packages/api/session-controller/src/commands.ts:474",
+        "packages/api/session-controller/src/commands.ts:481",
+        "packages/api/session-controller/src/commands.ts:483"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "session.cancel",
+      "canonical": "session-cancel",
+      "aliases": [],
+      "displayName": "session.cancel",
+      "family": "execution",
+      "summary": "Cancel one live Agent's active work while deliberately retaining its pending inbox.",
+      "mechanism": "Published as `@Remote('cancel')` and documented as 'cancel one active Agent turn without dropping its pending inbox'. It resolves the live Agent from the session id and delegates to the Agent cancel path, which aborts the active phase's AbortController; `Agent.cancel` itself only clears queued/steering work when `keepInbox` is not set, which is the option the Host path relies on to keep pending input. Cancellation is a no-op when no activity is active and does not arm later work.",
+      "gate": "Typert Gateway Remote; requires a live Agent for that session",
+      "backendModule": "packages/api/session-controller/src/index.ts:376 (Remote face) / packages/api/session-controller/src/commands.ts:497 / packages/core/agent-loop/src/agent.ts:149",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:376",
+        "packages/api/session-controller/src/commands.ts:497",
+        "packages/core/agent-loop/src/agent.ts:149",
+        "packages/core/agent-loop/src/agent.ts:154"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: cancel — the interrupting-stop capability other harnesses expose as Esc/Ctrl-C or `/cancel`"
+      ]
+    },
+    {
+      "rawName": "session.fork",
+      "canonical": "session-fork",
+      "aliases": [],
+      "displayName": "session.fork",
+      "family": "session",
+      "summary": "Fork a cold-readable completed-turn prefix of one Session into a new Session.",
+      "mechanism": "Published as `@Remote('fork')` on the session controller and delegated to the commands module, which creates the child Session from the source prefix (optionally anchored at a given event) and returns the new Session identity. It reads only a completed-turn prefix, so forking never depends on a live Agent and never mutates the source log — consistent with the Session model where history is an append-only log that derived surfaces fold.",
+      "gate": "Typert Gateway Remote; the source must be cold-readable and the prefix must end at a completed turn",
+      "backendModule": "packages/api/session-controller/src/index.ts:334 -> packages/api/session-controller/src/commands.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:334",
+        "packages/api/session-controller/src/index.ts:329"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: fork — branch-conversation-from-here, the same capability other harnesses name fork/branch"
+      ]
+    },
+    {
+      "rawName": "session.rename",
+      "canonical": "session-rename",
+      "aliases": [],
+      "displayName": "session.rename",
+      "family": "session",
+      "summary": "Rename one Session after explicitly resuming it, returning the accepted title and its durable event sequence.",
+      "mechanism": "Published as `@Remote('rename')` and delegated to the commands module, which resumes the Session and appends the title as durable session state, returning both the accepted title and the `seq` at which it landed so a client can correlate the rename with the log position it produced. The resume requirement is what makes the operation explicit rather than an implicit side effect of reading a cold Session.",
+      "gate": "Typert Gateway Remote; the Session is resumed by the call",
+      "backendModule": "packages/api/session-controller/src/index.ts:324 -> packages/api/session-controller/src/commands.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:324",
+        "packages/api/session-controller/src/index.ts:322"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "session.create",
+      "canonical": "session-create",
+      "aliases": [],
+      "displayName": "session.create",
+      "family": "session",
+      "summary": "Create or idempotently adopt one ordinary Session for a requested identity, location and agent preset.",
+      "mechanism": "Published as `@Remote('create')` and delegated to the commands module, returning the Session identity and the resolved preset when one is configured. Idempotent adoption means a repeated create for the same identity is not an error, so the RPC is safe as a client-side ensure-exists call rather than a strict constructor.",
+      "gate": "Typert Gateway Remote; the requested agent preset must resolve when one is named",
+      "backendModule": "packages/api/session-controller/src/index.ts:243 -> packages/api/session-controller/src/commands.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:243",
+        "packages/api/session-controller/src/index.ts:241"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: new-session — the equivalent of `/new` or `/clear` in slash-centric harnesses, expressed as an RPC rather than a command"
+      ]
+    },
+    {
+      "rawName": "session.list",
+      "canonical": "session-list",
+      "aliases": [],
+      "displayName": "session.list",
+      "family": "inspect",
+      "summary": "Read all visible Session rows ordered by activity, without resuming any Agent.",
+      "mechanism": "Published as `@Remote('list')` and implemented by delegating to the list-state reader with the caller's signal, returning `{ items }` of Session summaries ordered by activity. The explicit no-resume property is what makes it usable for a sidebar: listing sessions never activates an Agent or opens a live Session.",
+      "gate": "Typert Gateway Remote; read-only path, no live Agent required",
+      "backendModule": "packages/api/session-controller/src/index.ts:222 / packages/api/session-controller/src/list.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:222",
+        "packages/api/session-controller/src/index.ts:224"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: sessions-list — the read side of what other harnesses expose as `/sessions` or `/resume` pickers, here an RPC plus a sidebar UI"
+      ]
+    },
+    {
+      "rawName": "session.search",
+      "canonical": "session-search",
+      "aliases": [],
+      "displayName": "session.search",
+      "family": "inspect",
+      "summary": "Search visible Session content with a literal message-content query, again without resuming an Agent.",
+      "mechanism": "Published as `@Remote('search')`; the handler forwards the request query and signal to the list-state search reader and returns bounded authorized results. It shares the no-resume property with `session.list`, so full-text search over past sessions is a pure persistence read rather than a replay.",
+      "gate": "Typert Gateway Remote; read-only, no live Agent required",
+      "backendModule": "packages/api/session-controller/src/index.ts:233 / packages/api/session-controller/src/list.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:233",
+        "packages/api/session-controller/src/index.ts:235"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: session-search — the capability other harnesses expose as `/search` or a transcript finder"
+      ]
+    },
+    {
+      "rawName": "session.page",
+      "canonical": "session-history-page",
+      "aliases": [],
+      "displayName": "session.page",
+      "family": "inspect",
+      "summary": "Read one cold-safe, message-aligned page of Session history with a backward cursor and a page budget.",
+      "mechanism": "Published as `@Remote('page')` and served by the history module, which returns one chronological page for a durable address plus backward cursor. 'Cold-safe' and 'message-aligned' are the load-bearing properties: paging works against persistence without a live Agent and never cuts a message in half, which is what lets the client lazily load a long transcript.",
+      "gate": "Typert Gateway Remote; cold read over persistence",
+      "backendModule": "packages/api/session-controller/src/index.ts:387 / packages/api/session-controller/src/history.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:387",
+        "packages/api/session-controller/src/index.ts:389"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "session.follow",
+      "canonical": "session-follow",
+      "aliases": [],
+      "displayName": "session.follow",
+      "family": "inspect",
+      "summary": "Stream one Session log from its opening or resume cursor as a complete snapshot followed by gap-free durable event frames.",
+      "mechanism": "Declared as `@Remote({ mode: 'stream' })`, i.e. a Typert logical stream method, and served by the history module as an `AsyncIterable<SessionFollowFrame>`. The caller supplies the last committed sequence it already holds, and the stream answers with a complete opening snapshot then gap-free durable frames plus optional cursorless assistant-stream frames — so reconnection is expressed as 'resume from seq N' rather than as an event-replay protocol the client must reimplement.",
+      "gate": "Typert Gateway Remote stream mode; requires the caller's last committed seq",
+      "backendModule": "packages/api/session-controller/src/index.ts:399 / packages/api/session-controller/src/history.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:399",
+        "packages/api/session-controller/src/index.ts:400"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "session.control",
+      "canonical": "session-control",
+      "aliases": [],
+      "displayName": "session.control",
+      "family": "inspect",
+      "summary": "Stream a complete live-control baseline followed by replacement frames for the session's pending/queue/status control state.",
+      "mechanism": "Declared as `@Remote({ mode: 'stream' })` and implemented over the control-state module as an `AsyncIterable<SessionControlFrame>`. The stream opens with one complete baseline and then emits whole replacement frames rather than diffs, so the client's control view (pending inbox items, placements, status) is last-write-wins and never needs patch merging.",
+      "gate": "Typert Gateway Remote stream mode",
+      "backendModule": "packages/api/session-controller/src/index.ts:409 / packages/api/session-controller/src/control.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:409",
+        "packages/api/session-controller/src/index.ts:410"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "session.attachment",
+      "canonical": "session-attachment-read",
+      "aliases": [],
+      "displayName": "session.attachment",
+      "family": "inspect",
+      "summary": "Read one image attachment after proving the addressed Session log actually references it.",
+      "mechanism": "Published as `@Remote('attachment')`; the handler first builds the authoritative session read state, scans the referenced events for the attachment id, rejects with `session/attachment-invalid` when the log does not reference it, and only then reads the bytes from the attachment store, returning the durable ref plus base64 data. Referenced-ness is the authorization rule, so an attachment id alone is never sufficient to fetch content.",
+      "gate": "Typert Gateway Remote; the attachment must be referenced by that Session's log and readable from the attachment store",
+      "backendModule": "packages/api/session-controller/src/index.ts:356 / packages/api/session-controller/src/commands.ts:383",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:356",
+        "packages/api/session-controller/src/commands.ts:383",
+        "packages/api/session-controller/src/commands.ts:397",
+        "packages/api/session-controller/src/commands.ts:406"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "session.selectModel",
+      "canonical": "model-select",
+      "aliases": [],
+      "displayName": "session.selectModel",
+      "family": "model",
+      "summary": "Install one Session-local provider/model selection after explicitly resuming the Session, returning the normalized selection.",
+      "mechanism": "Published as `@Remote('selectModel')` and delegated to the commands module, which validates and installs the selection, then returns the normalized `{ provider, model }` that was actually installed. Normalization matters because the caller's requested string is not authoritative: the returned value is what later prompt assembly and `session/model-unavailable` checks compare against, and the selection is recorded as the log-only `model/selection` event rather than entering derived model history.",
+      "gate": "Typert Gateway Remote; the Session is resumed by the call and the requested route must normalize to a real selection",
+      "backendModule": "packages/api/session-controller/src/index.ts:253 -> packages/api/session-controller/src/commands.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:253",
+        "packages/api/session-controller/src/index.ts:251",
+        "packages/api/session-controller/src/types.ts:40"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: model — the equivalent of a `/model` selector in slash-centric harnesses, here an RPC driven by the model-selection UI"
+      ]
+    },
+    {
+      "rawName": "session.modelCatalog",
+      "canonical": "model-catalog",
+      "aliases": [],
+      "displayName": "session.modelCatalog",
+      "family": "model",
+      "summary": "Describe every currently routable model for Host-generation selectors, grouping by provider and isolating per-provider failures.",
+      "mechanism": "Published as `@Remote('modelCatalog')` and implemented by `buildModelCatalog(ctx)`, which walks the composed LLM adapters and returns provider-grouped models plus the deployment default; a provider whose catalog lookup fails is reported as an isolated failure entry instead of failing the whole call. This is the read side that makes `selectModel` offer only genuinely routable choices.",
+      "gate": "Typert Gateway Remote; depends on the composed `llm` service and its registered adapters",
+      "backendModule": "packages/api/session-controller/src/index.ts:262 / packages/api/session-controller/src/catalog.ts",
+      "evidence": [
+        "packages/api/session-controller/src/index.ts:262",
+        "packages/api/session-controller/src/index.ts:264"
+      ],
+      "verified": true,
+      "crossSourceHints": []
+    },
+    {
+      "rawName": "commands.list",
+      "canonical": "command-list",
+      "aliases": [],
+      "displayName": "commands.list",
+      "family": "extension",
+      "summary": "List the effective immutable command descriptors for one agent, after global-then-scoped shadowing, sorted by name.",
+      "mechanism": "Published as `@Remote` on `CommandRuntime`, which is constructed as `super(ctx, 'commands')`, i.e. the wire namespace is the Cordis service key `commands`. `list(agent)` resolves `this.view(agent)` — global registrations followed by exact scoped shadows for that agent — maps them to `CommandDescriptor` (name/description/input, never the handler) and freezes a name-sorted array. It is the discovery half of the command surface: the browser `/` menu calls it per session, and `commands/change` notifications tell clients when to invalidate.",
+      "gate": "Typert Gateway Remote on the `commands` service; the caller supplies the receiving Agent so scoped shadowing resolves per session",
+      "backendModule": "packages/interaction/commands/src/index.ts (CommandRuntime, TypertRemoteService subclass)",
+      "evidence": [
+        "packages/interaction/commands/src/index.ts:258",
+        "packages/interaction/commands/src/index.ts:272",
+        "packages/interaction/commands/src/index.ts:309",
+        "packages/interaction/commands/src/index.ts:310",
+        "packages/interaction/commands/src/index.ts:465",
+        "packages/interaction/commands/src/index.ts:474",
+        "packages/client/ui-commands/src/client/service.ts:92"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: command-list — the enumeration surface other harnesses expose as a slash-command menu/completion source"
+      ]
+    },
+    {
+      "rawName": "commands.execute",
+      "canonical": "command-execute",
+      "aliases": [],
+      "displayName": "commands.execute",
+      "family": "extension",
+      "summary": "Parse and execute one known slash line without sending it to the model, logging a paired command/run -> command/done lifecycle.",
+      "mechanism": "Published as `@Remote` on the same `commands` service. `parseCommand` applies the `/^\\/([a-z][a-z0-9_-]*)(?=$|[\\t\\n\\r ])/u` grammar and returns undefined on a syntax or unknown-name miss, in which case nothing is logged because no handler was entered. On a hit it mints a `CommandId` (monotonic counter plus an instance token so a resumed log never repeats an id), appends the log-only `command/run` event, enforces attachment admission at the registry boundary (declared `input.attachments`, composed attachment store, image limit, cancellation during admission), invokes the handler under `withAbort`, normalizes the `CommandResult`, and appends the paired `command/done`. A command handler error is contained: `command/done` records kind `error` and the handler's own error stays the reported failure.",
+      "gate": "Typert Gateway Remote on the `commands` service; the line must parse and resolve for the receiving Agent, and attachments are rejected unless the definition declares `input.attachments`",
+      "backendModule": "packages/interaction/commands/src/index.ts (CommandRuntime.execute) / packages/interaction/commands/src/types.ts (event vocabulary)",
+      "evidence": [
+        "packages/interaction/commands/src/index.ts:122",
+        "packages/interaction/commands/src/index.ts:355",
+        "packages/interaction/commands/src/index.ts:356",
+        "packages/interaction/commands/src/index.ts:363",
+        "packages/interaction/commands/src/index.ts:368",
+        "packages/interaction/commands/src/index.ts:375",
+        "packages/interaction/commands/src/index.ts:420",
+        "packages/interaction/commands/src/index.ts:441",
+        "packages/interaction/commands/src/types.ts:103",
+        "packages/interaction/commands/src/types.ts:110",
+        "packages/client/ui-commands/src/client/service.ts:374"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: command-execute — the slash-dispatch entry point; in dsh it is a Remote the browser calls, not a host-side parser loop"
+      ]
+    },
+    {
+      "rawName": "subagent.prompt",
+      "canonical": "subagent-prompt",
+      "aliases": [],
+      "displayName": "subagent.prompt",
+      "family": "collab",
+      "summary": "Deliver one browser-authored message to a continuable direct child through the exact live parent, as queue or steer delivery.",
+      "mechanism": "Published as `@Remote('prompt')` with `SubagentPromptRequest` typed `mode: 'continuable'` and `delivery: 'queue' | 'steer'`. The handler validates the address, canonicalizes the client time zone, requires the parent Agent to be live, admits image parts into durable attachment references before delivery (so the child inbox only ever accepts Host-persisted attachments), then routes through the internal `deliverSubagentPrompt` symbol, which branches `delivery === 'steer'` to the steering path and otherwise queues. Success returns the accepted message's inbox identity; later execution is independent of the call.",
+      "gate": "Typert Gateway Remote; requires a live direct parent Agent, a continuable child address, and (for images) an attachment store plus a child model accepting image input",
+      "backendModule": "packages/subagent/subagent/src/index.ts:412 / packages/subagent/subagent/src/inbox.ts / packages/subagent/subagent/src/continuation-activation.ts",
+      "evidence": [
+        "packages/subagent/subagent/src/index.ts:412",
+        "packages/subagent/subagent/src/index.ts:414",
+        "packages/subagent/subagent/src/index.ts:451",
+        "packages/subagent/subagent/src/index.ts:275",
+        "packages/subagent/subagent/src/control-types.ts:98",
+        "packages/subagent/subagent/src/control-types.ts:106",
+        "packages/subagent/subagent/src/inbox.ts:53",
+        "packages/subagent/subagent/src/continuation-activation.ts:318"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: subagent-message — the collaboration tier; note it reuses the same queue|steer delivery vocabulary as `session.prompt`, i.e. one delivery model for both sessions and children"
+      ]
+    },
+    {
+      "rawName": "subagent.interruptByParent",
+      "canonical": "subagent-interrupt",
+      "aliases": [],
+      "displayName": "subagent.interruptByParent",
+      "family": "collab",
+      "summary": "Cancel one continuable child from its durable parent address without requiring the parent Agent to be online.",
+      "mechanism": "Published as `@Remote('interruptByParent')` taking the child id, the claimed parent id and the `mode: 'continuable'` discriminator. The implementation deliberately runs no catalog, history, persistence or parent-Agent lookup: it authorizes the address against the live Activation and delegates to the core `interrupt` primitive, which keeps a live child interruptible while its parent Agent is offline; absent, idle and already-completed targets are accepted no-ops, and the receipt acknowledges that the cancel signal was admitted, not that the target is quiescent.",
+      "gate": "Typert Gateway Remote; the claimed parent must own the live target (`subagent/unauthorized` otherwise)",
+      "backendModule": "packages/subagent/subagent/src/index.ts:479 (Remote face) over the subagent core interrupt primitive",
+      "evidence": [
+        "packages/subagent/subagent/src/index.ts:479",
+        "packages/subagent/subagent/src/index.ts:485",
+        "packages/subagent/subagent/src/index.ts:487"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: subagent-interrupt — the child-cancellation half of the collaboration tier"
+      ]
+    }
+  ],
+  "equivalentSurface": "dsh's equivalent of a slash-command surface is a three-layer stack, and a slash command is only the thinnest optional layer of it. LAYER 1, the Typert Remote RPC plane: every host capability is a `@Remote`-decorated method on a `TypertRemoteService` subclass, where the wire namespace defaults to the Cordis service key (`super(ctx, 'commands')`, `super(ctx, 'compaction')`, ...) and `@Remote('name')` re-exports a method under a different endpoint name while `@Remote({ mode: 'stream' })` marks an `AsyncIterable` logical stream ('packages/typert/protocol/src/index.ts:174', 'packages/typert/protocol/src/index.ts:183'); the API entry point registers the selected Cordis event source with the gateway (`packages/api/remotes/src/index.ts:36', ':41'). This is where the bulk of what other harnesses expose as slash commands actually lives: session lifecycle (`session.create/list/search/rename/fork/page`), interaction (`session.prompt` with mode `queue|steer`, `session.updateQueue`, `session.cancel`), model control (`session.selectModel`, `session.modelCatalog`), history streaming (`session.follow`, `session.control`), commands themselves (`commands.list`, `commands.execute`), collaboration (`subagent.prompt`, `subagent.interruptByParent`, `subagent.list`), plus goal (`goals.get/edit/pause/resume/complete/clear/create`), feedback (`sessionFeedback.record`, `messageFeedback.*`), settings/credentials, workspace and skill catalogs. LAYER 2, the browser client's `/` menu: `packages/client/ui-commands` registers a `/` input-trigger source whose candidates merge the host catalog (fetched through `remote.commands.list`) with client-side contributions and decorations; picking or typing a line resolves it against the per-session directory and either opens a popup, returns a leading-input claim, or calls `remote.commands.execute(sessionId, line, attachments)` ('packages/client/ui-commands/src/client/service.ts:98', ':200', ':280', ':374'), invalidating on the forwarded `commands/change` event ('packages/client/ui-commands/src/client/service.ts:107'). LAYER 3, the four in-process Agent delivery tiers that everything routes through: `send(message, target, wakeup)` is the primitive, and `followup` = send(next-turn, wake) / `steer` = send(next-step, wake) / `inject` = send(next-step, no wake) are its three named specializations ('packages/core/agent-loop/src/agent.ts:128', ':137', ':141', ':145'). Two consequences worth recording: the four tiers differ on exactly two axes — inbox boundary (next-turn vs next-step) and whether delivery wakes the driver — and `inject` (the silent-context tier) has no Remote or slash face at all, being plugin-only. The CLI hosts remain process launchers, not command planes: `apps/cli/src/args.ts` declares a root command plus a `web` alias and a `plugin` pnpm-forwarder ('apps/cli/src/args.ts:175', ':190'), which is why the mechanical count of slash commands is small by design rather than by omission.",
+  "added": [
+    {
+      "rawName": "permission",
+      "canonical": "permission",
+      "aliases": [],
+      "displayName": "permission",
+      "family": "safety",
+      "summary": "Switch the session's permission preset (sandbox mode + approval policy) from the command plane.",
+      "mechanism": "Registered by the permission-presets package itself, not by a `command-*` package: `ctx.inject(['commands'], commandCtx => commandCtx.commands.register({ name: 'permission', ... }))`. The handler returns the current preset and the available names for bare input, rejects an unknown name, and otherwise calls the preset `apply` with a callback that installs the resolved policy through `this.ctx.approval.setPolicy(agent, policy)` — so the command is the one write path the web client uses, with the popup contribution merely submitting the picked preset as this line. Its description is present in the client's localized host-description table.",
+      "gate": "the `commands` registry is injected on a child scope, so the command exists only when a command registry is composed",
+      "backendModule": "packages/interaction/permission-presets/src/index.ts",
+      "evidence": [
+        "packages/interaction/permission-presets/src/index.ts:255",
+        "packages/interaction/permission-presets/src/index.ts:256",
+        "packages/interaction/permission-presets/src/index.ts:257",
+        "packages/interaction/permission-presets/src/index.ts:271",
+        "packages/client/ui-commands/src/client/service.ts:68"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: permissions — the approval/sandbox-mode switch other harnesses expose as `/permissions` or `/approvals`"
+      ]
+    },
+    {
+      "rawName": "plan",
+      "canonical": "plan",
+      "aliases": [],
+      "displayName": "plan",
+      "family": "plan",
+      "summary": "Enter or leave plan mode, optionally carrying the instruction message that becomes the plan request.",
+      "mechanism": "Registered inline by the plan-mode package: `ctx.inject(['commands'], commandCtx => commandCtx.commands.register({ name: 'plan', description: 'Enter or leave plan mode', input: { hint: '[off|message]', attachments: true }, ... }))`. `plan off` is refused with attachments and otherwise switches the mode off via the package's set path, reporting whether the change committed or was queued for the next step; any other input switches plan mode on and, when a message or attachments were supplied, forwards them as one user message through `agent.steer`, so the plan request joins the running turn at its next step. Plan state is per-agent, which is why the package is mounted inside a per-agent isolate group in the preset rather than on the host plane.",
+      "gate": "the `commands` registry is injected on a child scope; plan state is per-agent, and the web-app bundle disables the host-plane row so the preset mounts it instead",
+      "backendModule": "packages/plan/plan-mode/src/index.ts",
+      "evidence": [
+        "packages/plan/plan-mode/src/index.ts:224",
+        "packages/plan/plan-mode/src/index.ts:225",
+        "packages/plan/plan-mode/src/index.ts:226",
+        "packages/plan/plan-mode/src/index.ts:234",
+        "packages/plan/plan-mode/src/index.ts:251",
+        "packages/plan/plan-mode/src/index.ts:253",
+        "packages/client/ui-commands/src/client/service.ts:69",
+        "packages/preset/agent-presets/presets/standard/agent.cordis.yml:105",
+        "packages/bundle/web-app/cordis.patch.yml:417"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: plan-mode — the same capability other harnesses name plan mode / `/plan`; note it is paired with an `exit_plan_mode` tool rather than only a slash toggle"
+      ]
+    },
+    {
+      "rawName": "export",
+      "canonical": "export",
+      "aliases": [],
+      "displayName": "export",
+      "family": "inspect",
+      "summary": "Download the current Session log as a ZIP archive (Web composition only, no path argument).",
+      "mechanism": "Registered by the session-log-export package in its `apply()`: `ctx.effect(() => ctx.commands.register({ name: 'export', description: 'Download this Session log as a ZIP archive', handler: ... }))`. The handler itself is intentionally inert — a bare invocation returns a fixed 'Session log download requested.' success result and any argument is refused — because the actual work is the authenticated GET/HEAD fetch route the same `apply()` registers at `SESSION_LOG_EXPORT_PATH = '/api/session.export'`, which validates the `sessionId` (and `includeDescendants`) query parameters and streams a DEFLATE-compressed archive at the configured compression level. The command is therefore an acknowledgement that hands off to a browser navigation; the ZIP is built by the route, not the handler.",
+      "gate": "registers on `ctx.commands`, so it needs a composed command registry; its description is present in the client's localized host-description table, and the download route requires an authenticated connection",
+      "backendModule": "packages/session-query/session-log-export/src/index.ts",
+      "evidence": [
+        "packages/session-query/session-log-export/src/index.ts:42",
+        "packages/session-query/session-log-export/src/index.ts:67",
+        "packages/session-query/session-log-export/src/index.ts:78",
+        "packages/session-query/session-log-export/src/index.ts:81",
+        "packages/session-query/session-log-export/src/index.ts:85",
+        "packages/client/ui-commands/src/client/service.ts:65",
+        "packages/bundle/web-app/cordis.patch.yml:60"
+      ],
+      "verified": true,
+      "crossSourceHints": [
+        "canonical: export — the transcript-export capability other harnesses expose as `/export`"
+      ]
+    }
+  ],
+  "unverified": []
+}

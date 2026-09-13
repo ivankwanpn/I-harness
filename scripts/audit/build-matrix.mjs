@@ -123,8 +123,20 @@ function ensureRow(key, family, display) {
 for (const { key: src } of SOURCES) {
   const bundle = loaded[src]
   if (!bundle) continue
-  const list = bundle.enriched?.commands ?? bundle.raw?.commands ?? []
+  const list = [...(bundle.enriched?.commands ?? bundle.raw?.commands ?? [])]
+  // `added` holds commands the source genuinely has but the mechanical
+  // extractor missed. They belong in the union: dropping them silently
+  // under-counts the source (dsh would show 3 instead of 6).
+  for (const a of bundle.enriched?.added ?? []) {
+    if (typeof a === "string") list.push({ rawName: a, canonical: a })
+    else if (a && typeof a === "object") list.push(a)
+  }
+  // dsh's second layer: the interaction commands are real rows too.
+  for (const a of bundle.enriched?.interactionCommands ?? []) {
+    if (a && typeof a === "object") list.push(a)
+  }
   for (const cmd of list) {
+    if (!cmd || (!cmd.rawName && !cmd.canonical)) continue
     const primary = norm(cmd.canonical || cmd.rawName)
     // Hints let a source declare "this is really the same thing as X".
     const hints = (cmd.crossSourceHints ?? []).map(norm).filter(Boolean)
