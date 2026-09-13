@@ -1,0 +1,6657 @@
+{
+  "extractedAt": "2026-09-13",
+  "rowUnit": "mechanism",
+  "sources": {
+    "ih": {
+      "root": "D:/I-harness-main",
+      "moduleCount": 69,
+      "byDomain": {
+        "service": [
+          "acp",
+          "interaction",
+          "sdk",
+          "web",
+          "web-host",
+          "cli"
+        ],
+        "loop": [
+          "agent-team",
+          "core-agent",
+          "session-executor",
+          "session-query"
+        ],
+        "retrieval": [
+          "attachment"
+        ],
+        "context": [
+          "compaction",
+          "instructions",
+          "output-retention",
+          "runtime-context",
+          "token-meter"
+        ],
+        "extension": [
+          "core-plugin",
+          "hooks",
+          "lsp",
+          "mcp-client",
+          "plugin-registry",
+          "skills"
+        ],
+        "session": [
+          "core-session",
+          "fs-lock",
+          "rewind",
+          "session-persistence",
+          "session-persistence-jsonl",
+          "session-title"
+        ],
+        "tools": [
+          "core-tools",
+          "exec",
+          "fs",
+          "fs-search",
+          "fs-watch",
+          "guard-approval",
+          "guard-repeat-tool",
+          "guard-retry",
+          "shell",
+          "terminal",
+          "text-diff",
+          "tool-search",
+          "workspace"
+        ],
+        "model": [
+          "credentials",
+          "llm-anthropic",
+          "llm-bedrock",
+          "llm-gemini",
+          "llm-mock",
+          "llm-openai",
+          "llm-openai-compatible",
+          "llm-seam",
+          "provider",
+          "provider-runtime"
+        ],
+        "ops": [
+          "feedback",
+          "telemetry"
+        ],
+        "subagent": [
+          "goal",
+          "jobs",
+          "plan-mode",
+          "schedule",
+          "subagent",
+          "todo",
+          "workflow"
+        ],
+        "infra": [
+          "guard-timeout"
+        ],
+        "safety": [
+          "preset",
+          "sandbox",
+          "sandbox-local",
+          "sandbox-policy",
+          "sandbox-windows-acl"
+        ],
+        "interface": [
+          "settings",
+          "tui",
+          "tui-core"
+        ]
+      },
+      "unmapped": [],
+      "modules": [
+        {
+          "name": "compaction",
+          "path": "packages/compaction",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "instructions",
+          "path": "packages/instructions",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "output-retention",
+          "path": "packages/output-retention",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "runtime-context",
+          "path": "packages/runtime-context",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "token-meter",
+          "path": "packages/token-meter",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "core-plugin",
+          "path": "packages/core-plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "hooks",
+          "path": "packages/hooks",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "lsp",
+          "path": "packages/lsp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 17
+        },
+        {
+          "name": "mcp-client",
+          "path": "packages/mcp-client",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 25
+        },
+        {
+          "name": "plugin-registry",
+          "path": "packages/plugin-registry",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "skills",
+          "path": "packages/skills",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "guard-timeout",
+          "path": "packages/guard-timeout",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "settings",
+          "path": "packages/settings",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "tui",
+          "path": "packages/tui",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 193
+        },
+        {
+          "name": "tui-core",
+          "path": "packages/tui-core",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 42
+        },
+        {
+          "name": "agent-team",
+          "path": "packages/agent-team",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 21
+        },
+        {
+          "name": "core-agent",
+          "path": "packages/core-agent",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "session-executor",
+          "path": "packages/session-executor",
+          "domain": "loop",
+          "alsoMatches": [
+            "session",
+            "tools"
+          ],
+          "files": 10
+        },
+        {
+          "name": "session-query",
+          "path": "packages/session-query",
+          "domain": "loop",
+          "alsoMatches": [
+            "session"
+          ],
+          "files": 9
+        },
+        {
+          "name": "credentials",
+          "path": "packages/credentials",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "llm-anthropic",
+          "path": "packages/llm-anthropic",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "llm-bedrock",
+          "path": "packages/llm-bedrock",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "llm-gemini",
+          "path": "packages/llm-gemini",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "llm-mock",
+          "path": "packages/llm-mock",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "llm-openai",
+          "path": "packages/llm-openai",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "llm-openai-compatible",
+          "path": "packages/llm-openai-compatible",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "llm-seam",
+          "path": "packages/llm-seam",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "provider",
+          "path": "packages/provider",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "provider-runtime",
+          "path": "packages/provider-runtime",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "feedback",
+          "path": "packages/feedback",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "telemetry",
+          "path": "packages/telemetry",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "attachment",
+          "path": "packages/attachment",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "preset",
+          "path": "packages/preset",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "sandbox",
+          "path": "packages/sandbox",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "sandbox-local",
+          "path": "packages/sandbox-local",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "sandbox-policy",
+          "path": "packages/sandbox-policy",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "sandbox-windows-acl",
+          "path": "packages/sandbox-windows-acl",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 26
+        },
+        {
+          "name": "acp",
+          "path": "packages/acp",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "cli",
+          "path": "apps/cli",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 15
+        },
+        {
+          "name": "interaction",
+          "path": "packages/interaction",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "sdk",
+          "path": "packages/sdk",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "web",
+          "path": "packages/web",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "web-host",
+          "path": "packages/web-host",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 29
+        },
+        {
+          "name": "core-session",
+          "path": "packages/core-session",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "fs-lock",
+          "path": "packages/fs-lock",
+          "domain": "session",
+          "alsoMatches": [
+            "tools"
+          ],
+          "files": 5
+        },
+        {
+          "name": "rewind",
+          "path": "packages/rewind",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "session-persistence",
+          "path": "packages/session-persistence",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "session-persistence-jsonl",
+          "path": "packages/session-persistence-jsonl",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "session-title",
+          "path": "packages/session-title",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "goal",
+          "path": "packages/goal",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "jobs",
+          "path": "packages/jobs",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "plan-mode",
+          "path": "packages/plan-mode",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "schedule",
+          "path": "packages/schedule",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "subagent",
+          "path": "packages/subagent",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 22
+        },
+        {
+          "name": "todo",
+          "path": "packages/todo",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "workflow",
+          "path": "packages/workflow",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "core-tools",
+          "path": "packages/core-tools",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "exec",
+          "path": "packages/exec",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "fs",
+          "path": "packages/fs",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "fs-search",
+          "path": "packages/fs-search",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "fs-watch",
+          "path": "packages/fs-watch",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "guard-approval",
+          "path": "packages/guard-approval",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety",
+            "interface"
+          ],
+          "files": 13
+        },
+        {
+          "name": "guard-repeat-tool",
+          "path": "packages/guard-repeat-tool",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 2
+        },
+        {
+          "name": "guard-retry",
+          "path": "packages/guard-retry",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 2
+        },
+        {
+          "name": "shell",
+          "path": "packages/shell",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "terminal",
+          "path": "packages/terminal",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "text-diff",
+          "path": "packages/text-diff",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "tool-search",
+          "path": "packages/tool-search",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "workspace",
+          "path": "packages/workspace",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 4
+        }
+      ]
+    },
+    "dsh": {
+      "root": "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
+      "moduleCount": 267,
+      "byDomain": {
+        "service": [
+          "acp/acp",
+          "api/gateway",
+          "api/remotes",
+          "api/settings-controller",
+          "boot/app-boot",
+          "boot/cmdline",
+          "bundle/acp-app",
+          "bundle/base",
+          "bundle/headless",
+          "bundle/sdk-app",
+          "bundle/sdk-minimal",
+          "bundle/web-app",
+          "client/connection",
+          "client/file-upload",
+          "client/hmr",
+          "client/locale",
+          "client/modules",
+          "client/resources",
+          "client/store",
+          "client/ui-attachment",
+          "client/ui-chat",
+          "client/ui-commands",
+          "client/ui-conversation",
+          "client/ui-deliverables",
+          "client/ui-directory-picker-browse",
+          "client/ui-directory-picker-native",
+          "client/ui-dockkit",
+          "client/ui-layout",
+          "client/ui-message-feedback",
+          "client/ui-open-in-app",
+          "client/ui-plan",
+          "client/ui-primitives",
+          "client/ui-reference",
+          "client/ui-renderer",
+          "client/ui-settings",
+          "client/ui-settings-general",
+          "client/ui-sidebar",
+          "client/ui-sidebar-documentpreview",
+          "client/ui-sidebar-files",
+          "client/ui-sidebar-right",
+          "client/ui-slots",
+          "client/ui-theme",
+          "client/ui-trajectory",
+          "client/ui-user-questions",
+          "client/web",
+          "e2b/e2b",
+          "experimental/webworker-packer",
+          "experimental/webworker-runtime",
+          "host/directory-picker",
+          "host/directory-picker-auto",
+          "host/directory-picker-browse",
+          "host/directory-picker-native",
+          "host/frontend-static",
+          "host/open-in-app",
+          "host/webserver",
+          "interaction/commands",
+          "interaction/user-questions",
+          "sdk/client",
+          "sdk/protocol",
+          "sdk/server",
+          "typert/generator",
+          "typert/loader",
+          "typert/protocol",
+          "typert/registry",
+          "web/web",
+          "web/web-fetch-http",
+          "web/web-search-deepseek",
+          "web/web-search-exa",
+          "web/web-search-perplexity",
+          "webhook/webhook"
+        ],
+        "session": [
+          "api/session-controller",
+          "client/ui-session",
+          "context/session-reference",
+          "core/session",
+          "session/session-checkpoint-policy",
+          "session/session-log-deepseek",
+          "session/session-persistence",
+          "session/session-persistence-jsonl",
+          "session/session-projection",
+          "session/session-projection-cache",
+          "session/session-stats",
+          "session/session-telemetry",
+          "session/session-telemetry-otel",
+          "session/session-title",
+          "session/session-title-all-prompts-llm",
+          "session/session-title-first-prompt-llm",
+          "session/session-title-llm",
+          "storage/storage",
+          "storage/storage-domain",
+          "storage/storage-json",
+          "storage/storage-sqlite"
+        ],
+        "tools": [
+          "api/workspace-controller",
+          "api/workspace-files",
+          "client/ui-tool",
+          "client/ui-workspace",
+          "code-runtime/code-runtime",
+          "code-runtime/code-runtime-worker-thread",
+          "core/tools",
+          "e2b/fs-e2b",
+          "e2b/subprocess-e2b",
+          "experimental/code-runtime-python",
+          "extensions/tool-cordis",
+          "fs/fs",
+          "fs/fs-local",
+          "fs/fs-observation-policy",
+          "fs/fs-sandbox",
+          "fs/tool-fs",
+          "fs/tool-fs-search",
+          "fs/tool-present",
+          "fs/tool-str-replace-editor",
+          "goal/tool-goal",
+          "guard/repeat-tool-reminder",
+          "interaction/tool-ask-user",
+          "jobs/tool-jobs",
+          "lsp/tool-lsp",
+          "shell/bash-local",
+          "shell/bash-sandbox",
+          "shell/pwsh-local",
+          "shell/pwsh-sandbox",
+          "shell/shell",
+          "shell/shell-env",
+          "shell/tool-bash",
+          "shell/tool-bash-persistent",
+          "shell/tool-pwsh",
+          "shell/tool-pwsh-persistent",
+          "skill/skill-filesystem",
+          "skill/tool-skill",
+          "spill/spill",
+          "spill/spill-local",
+          "spill/spill-policy",
+          "subagent/tool-subagent",
+          "subagent/tool-subagent-control",
+          "subprocess/subprocess",
+          "subprocess/subprocess-local",
+          "subprocess/win32-process",
+          "terminal/terminal",
+          "terminal/terminal-bash",
+          "terminal/tool-terminal",
+          "todo/tool-todo",
+          "web/tool-web",
+          "webhook/webhook-github",
+          "workflow/tool-ralph",
+          "workflow/tool-workflow",
+          "workspace/workspace"
+        ],
+        "retrieval": [
+          "attachment/attachment",
+          "attachment/attachment-local"
+        ],
+        "loop": [
+          "client/ui-agent-preset",
+          "client/ui-input-trigger",
+          "context/agent-instructions",
+          "core/agent",
+          "core/agent-default-model",
+          "core/agent-loop",
+          "core/agent-tool-presentation",
+          "experimental/agent-team",
+          "experimental/agent-team-profile",
+          "experimental/agent-team-web-profile",
+          "experimental/client-ui-agent-team",
+          "experimental/tool-agent-team",
+          "preset/agent-presets",
+          "session/session-turn-outline",
+          "session-query/session-log-export",
+          "session-query/session-query",
+          "session-query/session-query-sqlite",
+          "session-query/tool-session-query"
+        ],
+        "safety": [
+          "client/ui-approval",
+          "client/ui-permission-presets",
+          "identity/anonymous-user-id",
+          "interaction/permission-presets",
+          "interaction/user-approval",
+          "preset/persona",
+          "sandbox/sandbox",
+          "sandbox/sandbox-local",
+          "sandbox/sandbox-policy",
+          "sandbox/sandbox-windows-acl"
+        ],
+        "infra": [
+          "client/ui-brand-official",
+          "context/time-context",
+          "guard/timeout-policy",
+          "session/session-format",
+          "session/session-format-catalog",
+          "session/session-format-v0-to-v1",
+          "session/session-format-v1-to-v2",
+          "session/session-format-v2-to-v3",
+          "test-support/agent-loop-testkit",
+          "test-support/client-runtime",
+          "test-support/llm-mock-server",
+          "test-support/llm-replay",
+          "test-support/loader-smoke",
+          "test-support/session-snapshot",
+          "util/atomic-write",
+          "util/brand",
+          "util/chunked-list",
+          "util/crypto",
+          "util/deque",
+          "util/home-paths",
+          "util/http-proxy",
+          "util/launch-environment",
+          "util/native-command",
+          "util/output-retention",
+          "util/package-manifest",
+          "util/time",
+          "util/timeout",
+          "util/values",
+          "util/workspace-path"
+        ],
+        "subagent": [
+          "client/ui-goal",
+          "client/ui-jobs",
+          "client/ui-schedule",
+          "client/ui-subagent",
+          "client/ui-workflow-run",
+          "goal/command-goal",
+          "goal/goal",
+          "goal/goal-round-driver",
+          "jobs/jobs",
+          "jobs/jobs-local",
+          "plan/plan-mode",
+          "schedule/schedule",
+          "subagent/subagent",
+          "subagent/subagent-acp",
+          "subagent/subagent-claude-code",
+          "subagent/subagent-codex",
+          "subagent/subagent-dsh-sdk",
+          "subagent/subagent-fork-in-process",
+          "subagent/subagent-in-process-driver",
+          "subagent/subagent-spawn-in-process",
+          "workflow/workflow",
+          "workflow/workflow-worker-thread"
+        ],
+        "model": [
+          "client/ui-model-selection",
+          "client/ui-settings-models",
+          "credentials/authorization",
+          "credentials/credentials",
+          "credentials/credentials-local",
+          "llm/deepseek-llm-api-extensions",
+          "llm/llm",
+          "llm/llm-deepseek",
+          "llm/llm-pi-ai",
+          "llm/llm-retry",
+          "llm/plugin-package-inventory-deepseek"
+        ],
+        "extension": [
+          "client/ui-settings-plugin-inventory",
+          "client/ui-settings-plugins",
+          "client/ui-skill",
+          "extensions/cordis-client-runner",
+          "extensions/cordis-host-runner",
+          "extensions/ui-cordis",
+          "hooks/hook-protocol",
+          "hooks/hooks-claude-code",
+          "hooks/hooks-codex",
+          "host/plugin-inventory",
+          "lsp/lsp",
+          "lsp/lsp-stdio",
+          "mcp/mcp-client",
+          "skill/skill",
+          "skill/skill-badge"
+        ],
+        "context": [
+          "compaction/command-compact",
+          "compaction/compaction",
+          "compaction/compaction-basic",
+          "compaction/compaction-tool-result-pruner",
+          "context/file-reference",
+          "context/file-reference-local",
+          "context/tmux-context",
+          "core/system-prompt",
+          "llm/token-meter"
+        ],
+        "unmapped": [
+          "core/scope"
+        ],
+        "ops": [
+          "experimental/inspector",
+          "feedback/command-feedback",
+          "feedback/message-feedback",
+          "runtime-diagnostics/invariants"
+        ],
+        "interface": [
+          "settings/settings",
+          "settings/settings-file"
+        ]
+      },
+      "unmapped": [
+        "core/scope"
+      ],
+      "modules": [
+        {
+          "name": "compaction/command-compact",
+          "path": "packages/compaction/command-compact",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "compaction/compaction",
+          "path": "packages/compaction/compaction",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "compaction/compaction-basic",
+          "path": "packages/compaction/compaction-basic",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "compaction/compaction-tool-result-pruner",
+          "path": "packages/compaction/compaction-tool-result-pruner",
+          "domain": "context",
+          "alsoMatches": [
+            "tools"
+          ],
+          "files": 5
+        },
+        {
+          "name": "context/file-reference",
+          "path": "packages/context/file-reference",
+          "domain": "context",
+          "alsoMatches": [
+            "retrieval"
+          ],
+          "files": 4
+        },
+        {
+          "name": "context/file-reference-local",
+          "path": "packages/context/file-reference-local",
+          "domain": "context",
+          "alsoMatches": [
+            "retrieval"
+          ],
+          "files": 4
+        },
+        {
+          "name": "context/tmux-context",
+          "path": "packages/context/tmux-context",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "core/system-prompt",
+          "path": "packages/core/system-prompt",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "llm/token-meter",
+          "path": "packages/llm/token-meter",
+          "domain": "context",
+          "alsoMatches": [
+            "model"
+          ],
+          "files": 16
+        },
+        {
+          "name": "client/ui-settings-plugin-inventory",
+          "path": "packages/client/ui-settings-plugin-inventory",
+          "domain": "extension",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 8
+        },
+        {
+          "name": "client/ui-settings-plugins",
+          "path": "packages/client/ui-settings-plugins",
+          "domain": "extension",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 24
+        },
+        {
+          "name": "client/ui-skill",
+          "path": "packages/client/ui-skill",
+          "domain": "extension",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 8
+        },
+        {
+          "name": "extensions/cordis-client-runner",
+          "path": "packages/extensions/cordis-client-runner",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 18
+        },
+        {
+          "name": "extensions/cordis-host-runner",
+          "path": "packages/extensions/cordis-host-runner",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 13
+        },
+        {
+          "name": "extensions/ui-cordis",
+          "path": "packages/extensions/ui-cordis",
+          "domain": "extension",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 19
+        },
+        {
+          "name": "hooks/hook-protocol",
+          "path": "packages/hooks/hook-protocol",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "hooks/hooks-claude-code",
+          "path": "packages/hooks/hooks-claude-code",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "hooks/hooks-codex",
+          "path": "packages/hooks/hooks-codex",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "host/plugin-inventory",
+          "path": "packages/host/plugin-inventory",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 3
+        },
+        {
+          "name": "lsp/lsp",
+          "path": "packages/lsp/lsp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "lsp/lsp-stdio",
+          "path": "packages/lsp/lsp-stdio",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "mcp/mcp-client",
+          "path": "packages/mcp/mcp-client",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 13
+        },
+        {
+          "name": "skill/skill",
+          "path": "packages/skill/skill",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "skill/skill-badge",
+          "path": "packages/skill/skill-badge",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "client/ui-brand-official",
+          "path": "packages/client/ui-brand-official",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "context/time-context",
+          "path": "packages/context/time-context",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "guard/timeout-policy",
+          "path": "packages/guard/timeout-policy",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "session/session-format",
+          "path": "packages/session/session-format",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "session/session-format-catalog",
+          "path": "packages/session/session-format-catalog",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "session/session-format-v0-to-v1",
+          "path": "packages/session/session-format-v0-to-v1",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "session/session-format-v1-to-v2",
+          "path": "packages/session/session-format-v1-to-v2",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "session/session-format-v2-to-v3",
+          "path": "packages/session/session-format-v2-to-v3",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "test-support/agent-loop-testkit",
+          "path": "packages/test-support/agent-loop-testkit",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "test-support/client-runtime",
+          "path": "packages/test-support/client-runtime",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "test-support/llm-mock-server",
+          "path": "packages/test-support/llm-mock-server",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "test-support/llm-replay",
+          "path": "packages/test-support/llm-replay",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "test-support/loader-smoke",
+          "path": "packages/test-support/loader-smoke",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "test-support/session-snapshot",
+          "path": "packages/test-support/session-snapshot",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 25
+        },
+        {
+          "name": "util/atomic-write",
+          "path": "packages/util/atomic-write",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/brand",
+          "path": "packages/util/brand",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/chunked-list",
+          "path": "packages/util/chunked-list",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/crypto",
+          "path": "packages/util/crypto",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/deque",
+          "path": "packages/util/deque",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "util/home-paths",
+          "path": "packages/util/home-paths",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/http-proxy",
+          "path": "packages/util/http-proxy",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "util/launch-environment",
+          "path": "packages/util/launch-environment",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/native-command",
+          "path": "packages/util/native-command",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "util/output-retention",
+          "path": "packages/util/output-retention",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/package-manifest",
+          "path": "packages/util/package-manifest",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/time",
+          "path": "packages/util/time",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/timeout",
+          "path": "packages/util/timeout",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "util/values",
+          "path": "packages/util/values",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "util/workspace-path",
+          "path": "packages/util/workspace-path",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "settings/settings",
+          "path": "packages/settings/settings",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "settings/settings-file",
+          "path": "packages/settings/settings-file",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "client/ui-agent-preset",
+          "path": "packages/client/ui-agent-preset",
+          "domain": "loop",
+          "alsoMatches": [
+            "safety",
+            "service",
+            "interface"
+          ],
+          "files": 17
+        },
+        {
+          "name": "client/ui-input-trigger",
+          "path": "packages/client/ui-input-trigger",
+          "domain": "loop",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 19
+        },
+        {
+          "name": "context/agent-instructions",
+          "path": "packages/context/agent-instructions",
+          "domain": "loop",
+          "alsoMatches": [
+            "context"
+          ],
+          "files": 8
+        },
+        {
+          "name": "core/agent",
+          "path": "packages/core/agent",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "core/agent-default-model",
+          "path": "packages/core/agent-default-model",
+          "domain": "loop",
+          "alsoMatches": [
+            "model"
+          ],
+          "files": 3
+        },
+        {
+          "name": "core/agent-loop",
+          "path": "packages/core/agent-loop",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 34
+        },
+        {
+          "name": "core/agent-tool-presentation",
+          "path": "packages/core/agent-tool-presentation",
+          "domain": "loop",
+          "alsoMatches": [
+            "tools"
+          ],
+          "files": 2
+        },
+        {
+          "name": "experimental/agent-team",
+          "path": "packages/experimental/agent-team",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 23
+        },
+        {
+          "name": "experimental/agent-team-profile",
+          "path": "packages/experimental/agent-team-profile",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 2
+        },
+        {
+          "name": "experimental/agent-team-web-profile",
+          "path": "packages/experimental/agent-team-web-profile",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent",
+            "service"
+          ],
+          "files": 2
+        },
+        {
+          "name": "experimental/client-ui-agent-team",
+          "path": "packages/experimental/client-ui-agent-team",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent",
+            "service",
+            "interface"
+          ],
+          "files": 9
+        },
+        {
+          "name": "experimental/tool-agent-team",
+          "path": "packages/experimental/tool-agent-team",
+          "domain": "loop",
+          "alsoMatches": [
+            "tools",
+            "subagent"
+          ],
+          "files": 2
+        },
+        {
+          "name": "preset/agent-presets",
+          "path": "packages/preset/agent-presets",
+          "domain": "loop",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 30
+        },
+        {
+          "name": "session-query/session-log-export",
+          "path": "packages/session-query/session-log-export",
+          "domain": "loop",
+          "alsoMatches": [
+            "session"
+          ],
+          "files": 17
+        },
+        {
+          "name": "session-query/session-query",
+          "path": "packages/session-query/session-query",
+          "domain": "loop",
+          "alsoMatches": [
+            "session"
+          ],
+          "files": 17
+        },
+        {
+          "name": "session-query/session-query-sqlite",
+          "path": "packages/session-query/session-query-sqlite",
+          "domain": "loop",
+          "alsoMatches": [
+            "session"
+          ],
+          "files": 6
+        },
+        {
+          "name": "session-query/tool-session-query",
+          "path": "packages/session-query/tool-session-query",
+          "domain": "loop",
+          "alsoMatches": [
+            "session",
+            "tools"
+          ],
+          "files": 8
+        },
+        {
+          "name": "session/session-turn-outline",
+          "path": "packages/session/session-turn-outline",
+          "domain": "loop",
+          "alsoMatches": [
+            "session"
+          ],
+          "files": 6
+        },
+        {
+          "name": "client/ui-model-selection",
+          "path": "packages/client/ui-model-selection",
+          "domain": "model",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 13
+        },
+        {
+          "name": "client/ui-settings-models",
+          "path": "packages/client/ui-settings-models",
+          "domain": "model",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 31
+        },
+        {
+          "name": "credentials/authorization",
+          "path": "packages/credentials/authorization",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "credentials/credentials",
+          "path": "packages/credentials/credentials",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "credentials/credentials-local",
+          "path": "packages/credentials/credentials-local",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "llm/deepseek-llm-api-extensions",
+          "path": "packages/llm/deepseek-llm-api-extensions",
+          "domain": "model",
+          "alsoMatches": [
+            "extension",
+            "service"
+          ],
+          "files": 3
+        },
+        {
+          "name": "llm/llm",
+          "path": "packages/llm/llm",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 27
+        },
+        {
+          "name": "llm/llm-deepseek",
+          "path": "packages/llm/llm-deepseek",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 27
+        },
+        {
+          "name": "llm/llm-pi-ai",
+          "path": "packages/llm/llm-pi-ai",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 29
+        },
+        {
+          "name": "llm/llm-retry",
+          "path": "packages/llm/llm-retry",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "llm/plugin-package-inventory-deepseek",
+          "path": "packages/llm/plugin-package-inventory-deepseek",
+          "domain": "model",
+          "alsoMatches": [
+            "extension"
+          ],
+          "files": 3
+        },
+        {
+          "name": "experimental/inspector",
+          "path": "packages/experimental/inspector",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 175
+        },
+        {
+          "name": "feedback/command-feedback",
+          "path": "packages/feedback/command-feedback",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "feedback/message-feedback",
+          "path": "packages/feedback/message-feedback",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "runtime-diagnostics/invariants",
+          "path": "packages/runtime-diagnostics/invariants",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "attachment/attachment",
+          "path": "packages/attachment/attachment",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "attachment/attachment-local",
+          "path": "packages/attachment/attachment-local",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 17
+        },
+        {
+          "name": "client/ui-approval",
+          "path": "packages/client/ui-approval",
+          "domain": "safety",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 8
+        },
+        {
+          "name": "client/ui-permission-presets",
+          "path": "packages/client/ui-permission-presets",
+          "domain": "safety",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 11
+        },
+        {
+          "name": "identity/anonymous-user-id",
+          "path": "packages/identity/anonymous-user-id",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "interaction/permission-presets",
+          "path": "packages/interaction/permission-presets",
+          "domain": "safety",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 7
+        },
+        {
+          "name": "interaction/user-approval",
+          "path": "packages/interaction/user-approval",
+          "domain": "safety",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 6
+        },
+        {
+          "name": "preset/persona",
+          "path": "packages/preset/persona",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "sandbox/sandbox",
+          "path": "packages/sandbox/sandbox",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "sandbox/sandbox-local",
+          "path": "packages/sandbox/sandbox-local",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "sandbox/sandbox-policy",
+          "path": "packages/sandbox/sandbox-policy",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "sandbox/sandbox-windows-acl",
+          "path": "packages/sandbox/sandbox-windows-acl",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 23
+        },
+        {
+          "name": "acp/acp",
+          "path": "packages/acp/acp",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "api/gateway",
+          "path": "packages/api/gateway",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "api/remotes",
+          "path": "packages/api/remotes",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "api/settings-controller",
+          "path": "packages/api/settings-controller",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 5
+        },
+        {
+          "name": "boot/app-boot",
+          "path": "packages/boot/app-boot",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 10
+        },
+        {
+          "name": "boot/cmdline",
+          "path": "packages/boot/cmdline",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "bundle/acp-app",
+          "path": "packages/bundle/acp-app",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 3
+        },
+        {
+          "name": "bundle/base",
+          "path": "packages/bundle/base",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "bundle/headless",
+          "path": "packages/bundle/headless",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "bundle/sdk-app",
+          "path": "packages/bundle/sdk-app",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 3
+        },
+        {
+          "name": "bundle/sdk-minimal",
+          "path": "packages/bundle/sdk-minimal",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "bundle/web-app",
+          "path": "packages/bundle/web-app",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 6
+        },
+        {
+          "name": "client/connection",
+          "path": "packages/client/connection",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 33
+        },
+        {
+          "name": "client/file-upload",
+          "path": "packages/client/file-upload",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "client/hmr",
+          "path": "packages/client/hmr",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "client/locale",
+          "path": "packages/client/locale",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 17
+        },
+        {
+          "name": "client/modules",
+          "path": "packages/client/modules",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "client/resources",
+          "path": "packages/client/resources",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "client/store",
+          "path": "packages/client/store",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "client/ui-attachment",
+          "path": "packages/client/ui-attachment",
+          "domain": "service",
+          "alsoMatches": [
+            "retrieval",
+            "interface"
+          ],
+          "files": 18
+        },
+        {
+          "name": "client/ui-chat",
+          "path": "packages/client/ui-chat",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 100
+        },
+        {
+          "name": "client/ui-commands",
+          "path": "packages/client/ui-commands",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 15
+        },
+        {
+          "name": "client/ui-conversation",
+          "path": "packages/client/ui-conversation",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 90
+        },
+        {
+          "name": "client/ui-deliverables",
+          "path": "packages/client/ui-deliverables",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 20
+        },
+        {
+          "name": "client/ui-directory-picker-browse",
+          "path": "packages/client/ui-directory-picker-browse",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 8
+        },
+        {
+          "name": "client/ui-directory-picker-native",
+          "path": "packages/client/ui-directory-picker-native",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 5
+        },
+        {
+          "name": "client/ui-dockkit",
+          "path": "packages/client/ui-dockkit",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 31
+        },
+        {
+          "name": "client/ui-layout",
+          "path": "packages/client/ui-layout",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 17
+        },
+        {
+          "name": "client/ui-message-feedback",
+          "path": "packages/client/ui-message-feedback",
+          "domain": "service",
+          "alsoMatches": [
+            "ops",
+            "interface"
+          ],
+          "files": 17
+        },
+        {
+          "name": "client/ui-open-in-app",
+          "path": "packages/client/ui-open-in-app",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 10
+        },
+        {
+          "name": "client/ui-plan",
+          "path": "packages/client/ui-plan",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 8
+        },
+        {
+          "name": "client/ui-primitives",
+          "path": "packages/client/ui-primitives",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 100
+        },
+        {
+          "name": "client/ui-reference",
+          "path": "packages/client/ui-reference",
+          "domain": "service",
+          "alsoMatches": [
+            "retrieval",
+            "interface"
+          ],
+          "files": 5
+        },
+        {
+          "name": "client/ui-renderer",
+          "path": "packages/client/ui-renderer",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 20
+        },
+        {
+          "name": "client/ui-settings",
+          "path": "packages/client/ui-settings",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 13
+        },
+        {
+          "name": "client/ui-settings-general",
+          "path": "packages/client/ui-settings-general",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 17
+        },
+        {
+          "name": "client/ui-sidebar",
+          "path": "packages/client/ui-sidebar",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 14
+        },
+        {
+          "name": "client/ui-sidebar-documentpreview",
+          "path": "packages/client/ui-sidebar-documentpreview",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 80
+        },
+        {
+          "name": "client/ui-sidebar-files",
+          "path": "packages/client/ui-sidebar-files",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 18
+        },
+        {
+          "name": "client/ui-sidebar-right",
+          "path": "packages/client/ui-sidebar-right",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 29
+        },
+        {
+          "name": "client/ui-slots",
+          "path": "packages/client/ui-slots",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 7
+        },
+        {
+          "name": "client/ui-theme",
+          "path": "packages/client/ui-theme",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 23
+        },
+        {
+          "name": "client/ui-trajectory",
+          "path": "packages/client/ui-trajectory",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 40
+        },
+        {
+          "name": "client/ui-user-questions",
+          "path": "packages/client/ui-user-questions",
+          "domain": "service",
+          "alsoMatches": [
+            "retrieval",
+            "interface"
+          ],
+          "files": 14
+        },
+        {
+          "name": "client/web",
+          "path": "packages/client/web",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "e2b/e2b",
+          "path": "packages/e2b/e2b",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "experimental/webworker-packer",
+          "path": "packages/experimental/webworker-packer",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "experimental/webworker-runtime",
+          "path": "packages/experimental/webworker-runtime",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 117
+        },
+        {
+          "name": "host/directory-picker",
+          "path": "packages/host/directory-picker",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "host/directory-picker-auto",
+          "path": "packages/host/directory-picker-auto",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "host/directory-picker-browse",
+          "path": "packages/host/directory-picker-browse",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "host/directory-picker-native",
+          "path": "packages/host/directory-picker-native",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "host/frontend-static",
+          "path": "packages/host/frontend-static",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "host/open-in-app",
+          "path": "packages/host/open-in-app",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 11
+        },
+        {
+          "name": "host/webserver",
+          "path": "packages/host/webserver",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "interaction/commands",
+          "path": "packages/interaction/commands",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "interaction/user-questions",
+          "path": "packages/interaction/user-questions",
+          "domain": "service",
+          "alsoMatches": [
+            "retrieval"
+          ],
+          "files": 3
+        },
+        {
+          "name": "sdk/client",
+          "path": "packages/sdk/client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "sdk/protocol",
+          "path": "packages/sdk/protocol",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "sdk/server",
+          "path": "packages/sdk/server",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "typert/generator",
+          "path": "packages/typert/generator",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 28
+        },
+        {
+          "name": "typert/loader",
+          "path": "packages/typert/loader",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "typert/protocol",
+          "path": "packages/typert/protocol",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "typert/registry",
+          "path": "packages/typert/registry",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "web/web",
+          "path": "packages/web/web",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "web/web-fetch-http",
+          "path": "packages/web/web-fetch-http",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "web/web-search-deepseek",
+          "path": "packages/web/web-search-deepseek",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "web/web-search-exa",
+          "path": "packages/web/web-search-exa",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "web/web-search-perplexity",
+          "path": "packages/web/web-search-perplexity",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "webhook/webhook",
+          "path": "packages/webhook/webhook",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "api/session-controller",
+          "path": "packages/api/session-controller",
+          "domain": "session",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 75
+        },
+        {
+          "name": "client/ui-session",
+          "path": "packages/client/ui-session",
+          "domain": "session",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 5
+        },
+        {
+          "name": "context/session-reference",
+          "path": "packages/context/session-reference",
+          "domain": "session",
+          "alsoMatches": [
+            "context",
+            "retrieval"
+          ],
+          "files": 10
+        },
+        {
+          "name": "core/session",
+          "path": "packages/core/session",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 25
+        },
+        {
+          "name": "session/session-checkpoint-policy",
+          "path": "packages/session/session-checkpoint-policy",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "session/session-log-deepseek",
+          "path": "packages/session/session-log-deepseek",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "session/session-persistence",
+          "path": "packages/session/session-persistence",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "session/session-persistence-jsonl",
+          "path": "packages/session/session-persistence-jsonl",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 29
+        },
+        {
+          "name": "session/session-projection",
+          "path": "packages/session/session-projection",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "session/session-projection-cache",
+          "path": "packages/session/session-projection-cache",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "session/session-stats",
+          "path": "packages/session/session-stats",
+          "domain": "session",
+          "alsoMatches": [
+            "ops"
+          ],
+          "files": 6
+        },
+        {
+          "name": "session/session-telemetry",
+          "path": "packages/session/session-telemetry",
+          "domain": "session",
+          "alsoMatches": [
+            "ops"
+          ],
+          "files": 4
+        },
+        {
+          "name": "session/session-telemetry-otel",
+          "path": "packages/session/session-telemetry-otel",
+          "domain": "session",
+          "alsoMatches": [
+            "ops"
+          ],
+          "files": 6
+        },
+        {
+          "name": "session/session-title",
+          "path": "packages/session/session-title",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 12
+        },
+        {
+          "name": "session/session-title-all-prompts-llm",
+          "path": "packages/session/session-title-all-prompts-llm",
+          "domain": "session",
+          "alsoMatches": [
+            "context",
+            "model"
+          ],
+          "files": 2
+        },
+        {
+          "name": "session/session-title-first-prompt-llm",
+          "path": "packages/session/session-title-first-prompt-llm",
+          "domain": "session",
+          "alsoMatches": [
+            "context",
+            "model"
+          ],
+          "files": 4
+        },
+        {
+          "name": "session/session-title-llm",
+          "path": "packages/session/session-title-llm",
+          "domain": "session",
+          "alsoMatches": [
+            "model"
+          ],
+          "files": 2
+        },
+        {
+          "name": "storage/storage",
+          "path": "packages/storage/storage",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "storage/storage-domain",
+          "path": "packages/storage/storage-domain",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "storage/storage-json",
+          "path": "packages/storage/storage-json",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "storage/storage-sqlite",
+          "path": "packages/storage/storage-sqlite",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "client/ui-goal",
+          "path": "packages/client/ui-goal",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 15
+        },
+        {
+          "name": "client/ui-jobs",
+          "path": "packages/client/ui-jobs",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 8
+        },
+        {
+          "name": "client/ui-schedule",
+          "path": "packages/client/ui-schedule",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 8
+        },
+        {
+          "name": "client/ui-subagent",
+          "path": "packages/client/ui-subagent",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 11
+        },
+        {
+          "name": "client/ui-workflow-run",
+          "path": "packages/client/ui-workflow-run",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 9
+        },
+        {
+          "name": "goal/command-goal",
+          "path": "packages/goal/command-goal",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "goal/goal",
+          "path": "packages/goal/goal",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "goal/goal-round-driver",
+          "path": "packages/goal/goal-round-driver",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "jobs/jobs",
+          "path": "packages/jobs/jobs",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "jobs/jobs-local",
+          "path": "packages/jobs/jobs-local",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "plan/plan-mode",
+          "path": "packages/plan/plan-mode",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "schedule/schedule",
+          "path": "packages/schedule/schedule",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "subagent/subagent",
+          "path": "packages/subagent/subagent",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 38
+        },
+        {
+          "name": "subagent/subagent-acp",
+          "path": "packages/subagent/subagent-acp",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 8
+        },
+        {
+          "name": "subagent/subagent-claude-code",
+          "path": "packages/subagent/subagent-claude-code",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "subagent/subagent-codex",
+          "path": "packages/subagent/subagent-codex",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "subagent/subagent-dsh-sdk",
+          "path": "packages/subagent/subagent-dsh-sdk",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 8
+        },
+        {
+          "name": "subagent/subagent-fork-in-process",
+          "path": "packages/subagent/subagent-fork-in-process",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "subagent/subagent-in-process-driver",
+          "path": "packages/subagent/subagent-in-process-driver",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "subagent/subagent-spawn-in-process",
+          "path": "packages/subagent/subagent-spawn-in-process",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "workflow/workflow",
+          "path": "packages/workflow/workflow",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "workflow/workflow-worker-thread",
+          "path": "packages/workflow/workflow-worker-thread",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "api/workspace-controller",
+          "path": "packages/api/workspace-controller",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 13
+        },
+        {
+          "name": "api/workspace-files",
+          "path": "packages/api/workspace-files",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 22
+        },
+        {
+          "name": "client/ui-tool",
+          "path": "packages/client/ui-tool",
+          "domain": "tools",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 49
+        },
+        {
+          "name": "client/ui-workspace",
+          "path": "packages/client/ui-workspace",
+          "domain": "tools",
+          "alsoMatches": [
+            "service",
+            "interface"
+          ],
+          "files": 23
+        },
+        {
+          "name": "code-runtime/code-runtime",
+          "path": "packages/code-runtime/code-runtime",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "code-runtime/code-runtime-worker-thread",
+          "path": "packages/code-runtime/code-runtime-worker-thread",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "core/tools",
+          "path": "packages/core/tools",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 22
+        },
+        {
+          "name": "e2b/fs-e2b",
+          "path": "packages/e2b/fs-e2b",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 2
+        },
+        {
+          "name": "e2b/subprocess-e2b",
+          "path": "packages/e2b/subprocess-e2b",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 8
+        },
+        {
+          "name": "experimental/code-runtime-python",
+          "path": "packages/experimental/code-runtime-python",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "extensions/tool-cordis",
+          "path": "packages/extensions/tool-cordis",
+          "domain": "tools",
+          "alsoMatches": [
+            "extension"
+          ],
+          "files": 8
+        },
+        {
+          "name": "fs/fs",
+          "path": "packages/fs/fs",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "fs/fs-local",
+          "path": "packages/fs/fs-local",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "fs/fs-observation-policy",
+          "path": "packages/fs/fs-observation-policy",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "fs/fs-sandbox",
+          "path": "packages/fs/fs-sandbox",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 4
+        },
+        {
+          "name": "fs/tool-fs",
+          "path": "packages/fs/tool-fs",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "fs/tool-fs-search",
+          "path": "packages/fs/tool-fs-search",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "fs/tool-present",
+          "path": "packages/fs/tool-present",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "fs/tool-str-replace-editor",
+          "path": "packages/fs/tool-str-replace-editor",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "goal/tool-goal",
+          "path": "packages/goal/tool-goal",
+          "domain": "tools",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 4
+        },
+        {
+          "name": "guard/repeat-tool-reminder",
+          "path": "packages/guard/repeat-tool-reminder",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 2
+        },
+        {
+          "name": "interaction/tool-ask-user",
+          "path": "packages/interaction/tool-ask-user",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 2
+        },
+        {
+          "name": "jobs/tool-jobs",
+          "path": "packages/jobs/tool-jobs",
+          "domain": "tools",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 2
+        },
+        {
+          "name": "lsp/tool-lsp",
+          "path": "packages/lsp/tool-lsp",
+          "domain": "tools",
+          "alsoMatches": [
+            "extension"
+          ],
+          "files": 7
+        },
+        {
+          "name": "shell/bash-local",
+          "path": "packages/shell/bash-local",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "shell/bash-sandbox",
+          "path": "packages/shell/bash-sandbox",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 7
+        },
+        {
+          "name": "shell/pwsh-local",
+          "path": "packages/shell/pwsh-local",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "shell/pwsh-sandbox",
+          "path": "packages/shell/pwsh-sandbox",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 4
+        },
+        {
+          "name": "shell/shell",
+          "path": "packages/shell/shell",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "shell/shell-env",
+          "path": "packages/shell/shell-env",
+          "domain": "tools",
+          "alsoMatches": [
+            "model"
+          ],
+          "files": 2
+        },
+        {
+          "name": "shell/tool-bash",
+          "path": "packages/shell/tool-bash",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "shell/tool-bash-persistent",
+          "path": "packages/shell/tool-bash-persistent",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "shell/tool-pwsh",
+          "path": "packages/shell/tool-pwsh",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "shell/tool-pwsh-persistent",
+          "path": "packages/shell/tool-pwsh-persistent",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "skill/skill-filesystem",
+          "path": "packages/skill/skill-filesystem",
+          "domain": "tools",
+          "alsoMatches": [
+            "extension"
+          ],
+          "files": 3
+        },
+        {
+          "name": "skill/tool-skill",
+          "path": "packages/skill/tool-skill",
+          "domain": "tools",
+          "alsoMatches": [
+            "extension"
+          ],
+          "files": 2
+        },
+        {
+          "name": "spill/spill",
+          "path": "packages/spill/spill",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "spill/spill-local",
+          "path": "packages/spill/spill-local",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "spill/spill-policy",
+          "path": "packages/spill/spill-policy",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "subagent/tool-subagent",
+          "path": "packages/subagent/tool-subagent",
+          "domain": "tools",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 14
+        },
+        {
+          "name": "subagent/tool-subagent-control",
+          "path": "packages/subagent/tool-subagent-control",
+          "domain": "tools",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 6
+        },
+        {
+          "name": "subprocess/subprocess",
+          "path": "packages/subprocess/subprocess",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "subprocess/subprocess-local",
+          "path": "packages/subprocess/subprocess-local",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 30
+        },
+        {
+          "name": "subprocess/win32-process",
+          "path": "packages/subprocess/win32-process",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "terminal/terminal",
+          "path": "packages/terminal/terminal",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "terminal/terminal-bash",
+          "path": "packages/terminal/terminal-bash",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "terminal/tool-terminal",
+          "path": "packages/terminal/tool-terminal",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "todo/tool-todo",
+          "path": "packages/todo/tool-todo",
+          "domain": "tools",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 9
+        },
+        {
+          "name": "web/tool-web",
+          "path": "packages/web/tool-web",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 9
+        },
+        {
+          "name": "webhook/webhook-github",
+          "path": "packages/webhook/webhook-github",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 8
+        },
+        {
+          "name": "workflow/tool-ralph",
+          "path": "packages/workflow/tool-ralph",
+          "domain": "tools",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 3
+        },
+        {
+          "name": "workflow/tool-workflow",
+          "path": "packages/workflow/tool-workflow",
+          "domain": "tools",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 5
+        },
+        {
+          "name": "workspace/workspace",
+          "path": "packages/workspace/workspace",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "core/scope",
+          "path": "packages/core/scope",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 8
+        }
+      ]
+    },
+    "codex": {
+      "root": "D:/agent-complete/codex-rust-v0.149.1",
+      "moduleCount": 102,
+      "byDomain": {
+        "loop": [
+          "agent-graph-store",
+          "agent-identity",
+          "external-agent-migration"
+        ],
+        "ops": [
+          "analytics",
+          "diagnostics",
+          "features",
+          "feedback",
+          "network-proxy",
+          "otel"
+        ],
+        "infra": [
+          "ansi-escape",
+          "arg0",
+          "async-utils",
+          "build-info",
+          "docs",
+          "git-utils",
+          "scripts",
+          "test-binary-support",
+          "utils",
+          "v8-poc",
+          "vendor"
+        ],
+        "service": [
+          "app-server",
+          "app-server-client",
+          "app-server-daemon",
+          "app-server-protocol",
+          "app-server-protocol-noop-macros",
+          "app-server-test-client",
+          "app-server-transport",
+          "backend-client",
+          "cli",
+          "codex-api",
+          "codex-client",
+          "codex-experimental-api-macros",
+          "codex-home",
+          "core-api",
+          "http-client",
+          "rmcp-client",
+          "stdio-to-uds",
+          "uds",
+          "websocket-client"
+        ],
+        "tools": [
+          "apply-patch",
+          "bwrap",
+          "exec",
+          "exec-server",
+          "exec-server-protocol",
+          "execpolicy",
+          "file-search",
+          "file-system",
+          "file-watcher",
+          "process-hardening",
+          "shell-command",
+          "shell-escalation",
+          "terminal-detection",
+          "tools"
+        ],
+        "model": [
+          "aws-auth",
+          "chatgpt",
+          "codex-backend-openapi-models",
+          "lmstudio",
+          "login",
+          "model-provider",
+          "model-provider-info",
+          "models-manager",
+          "ollama",
+          "responses-api-proxy"
+        ],
+        "interface": [
+          "cloud-config",
+          "config",
+          "tui"
+        ],
+        "subagent": [
+          "cloud-tasks",
+          "cloud-tasks-client",
+          "cloud-tasks-mock-client",
+          "workload-identity"
+        ],
+        "extension": [
+          "code-mode",
+          "code-mode-host",
+          "code-mode-protocol",
+          "code-mode-runtime",
+          "codex-mcp",
+          "collaboration-mode-templates",
+          "connectors",
+          "core-plugins",
+          "ext",
+          "hooks",
+          "mcp-server",
+          "plugin",
+          "skills"
+        ],
+        "context": [
+          "context-fragments",
+          "install-context",
+          "prompts",
+          "response-debug-context"
+        ],
+        "unmapped": [
+          "core",
+          "protocol"
+        ],
+        "session": [
+          "history",
+          "message-history",
+          "rollout",
+          "rollout-trace",
+          "state",
+          "thread-manager-sample",
+          "thread-store"
+        ],
+        "safety": [
+          "keyring-store",
+          "linux-sandbox",
+          "sandboxing",
+          "secrets",
+          "windows-sandbox-rs"
+        ],
+        "retrieval": [
+          "memories"
+        ]
+      },
+      "unmapped": [
+        "core",
+        "protocol"
+      ],
+      "modules": [
+        {
+          "name": "context-fragments",
+          "path": "codex-rs/context-fragments",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "install-context",
+          "path": "codex-rs/install-context",
+          "domain": "context",
+          "alsoMatches": [
+            "retrieval"
+          ],
+          "files": 1
+        },
+        {
+          "name": "prompts",
+          "path": "codex-rs/prompts",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "response-debug-context",
+          "path": "codex-rs/response-debug-context",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "code-mode",
+          "path": "codex-rs/code-mode",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 31
+        },
+        {
+          "name": "code-mode-host",
+          "path": "codex-rs/code-mode-host",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 28
+        },
+        {
+          "name": "code-mode-protocol",
+          "path": "codex-rs/code-mode-protocol",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "code-mode-runtime",
+          "path": "codex-rs/code-mode-runtime",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "codex-mcp",
+          "path": "codex-rs/codex-mcp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 37
+        },
+        {
+          "name": "collaboration-mode-templates",
+          "path": "codex-rs/collaboration-mode-templates",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "connectors",
+          "path": "codex-rs/connectors",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 20
+        },
+        {
+          "name": "core-plugins",
+          "path": "codex-rs/core-plugins",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 70
+        },
+        {
+          "name": "ext",
+          "path": "codex-rs/ext",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 184
+        },
+        {
+          "name": "hooks",
+          "path": "codex-rs/hooks",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 32
+        },
+        {
+          "name": "mcp-server",
+          "path": "codex-rs/mcp-server",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 20
+        },
+        {
+          "name": "plugin",
+          "path": "codex-rs/plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "skills",
+          "path": "codex-rs/skills",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "ansi-escape",
+          "path": "codex-rs/ansi-escape",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "arg0",
+          "path": "codex-rs/arg0",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "async-utils",
+          "path": "codex-rs/async-utils",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "build-info",
+          "path": "codex-rs/build-info",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "docs",
+          "path": "codex-rs/docs",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "git-utils",
+          "path": "codex-rs/git-utils",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "scripts",
+          "path": "codex-rs/scripts",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "test-binary-support",
+          "path": "codex-rs/test-binary-support",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "utils",
+          "path": "codex-rs/utils",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 80
+        },
+        {
+          "name": "v8-poc",
+          "path": "codex-rs/v8-poc",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "vendor",
+          "path": "codex-rs/vendor",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "cloud-config",
+          "path": "codex-rs/cloud-config",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "config",
+          "path": "codex-rs/config",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 65
+        },
+        {
+          "name": "tui",
+          "path": "codex-rs/tui",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 487
+        },
+        {
+          "name": "agent-graph-store",
+          "path": "codex-rs/agent-graph-store",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 5
+        },
+        {
+          "name": "agent-identity",
+          "path": "codex-rs/agent-identity",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent",
+            "safety"
+          ],
+          "files": 1
+        },
+        {
+          "name": "external-agent-migration",
+          "path": "codex-rs/external-agent-migration",
+          "domain": "loop",
+          "alsoMatches": [
+            "session",
+            "extension"
+          ],
+          "files": 64
+        },
+        {
+          "name": "aws-auth",
+          "path": "codex-rs/aws-auth",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "chatgpt",
+          "path": "codex-rs/chatgpt",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "codex-backend-openapi-models",
+          "path": "codex-rs/codex-backend-openapi-models",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "lmstudio",
+          "path": "codex-rs/lmstudio",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "login",
+          "path": "codex-rs/login",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 41
+        },
+        {
+          "name": "model-provider",
+          "path": "codex-rs/model-provider",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 17
+        },
+        {
+          "name": "model-provider-info",
+          "path": "codex-rs/model-provider-info",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "models-manager",
+          "path": "codex-rs/models-manager",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 12
+        },
+        {
+          "name": "ollama",
+          "path": "codex-rs/ollama",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "responses-api-proxy",
+          "path": "codex-rs/responses-api-proxy",
+          "domain": "model",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 5
+        },
+        {
+          "name": "analytics",
+          "path": "codex-rs/analytics",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "diagnostics",
+          "path": "codex-rs/diagnostics",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "features",
+          "path": "codex-rs/features",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "feedback",
+          "path": "codex-rs/feedback",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "network-proxy",
+          "path": "codex-rs/network-proxy",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 39
+        },
+        {
+          "name": "otel",
+          "path": "codex-rs/otel",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 31
+        },
+        {
+          "name": "memories",
+          "path": "codex-rs/memories",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 28
+        },
+        {
+          "name": "keyring-store",
+          "path": "codex-rs/keyring-store",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "linux-sandbox",
+          "path": "codex-rs/linux-sandbox",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "sandboxing",
+          "path": "codex-rs/sandboxing",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "secrets",
+          "path": "codex-rs/secrets",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "windows-sandbox-rs",
+          "path": "codex-rs/windows-sandbox-rs",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 63
+        },
+        {
+          "name": "app-server",
+          "path": "codex-rs/app-server",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 233
+        },
+        {
+          "name": "app-server-client",
+          "path": "codex-rs/app-server-client",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 3
+        },
+        {
+          "name": "app-server-daemon",
+          "path": "codex-rs/app-server-daemon",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 11
+        },
+        {
+          "name": "app-server-protocol",
+          "path": "codex-rs/app-server-protocol",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 718
+        },
+        {
+          "name": "app-server-protocol-noop-macros",
+          "path": "codex-rs/app-server-protocol-noop-macros",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 1
+        },
+        {
+          "name": "app-server-test-client",
+          "path": "codex-rs/app-server-test-client",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 9
+        },
+        {
+          "name": "app-server-transport",
+          "path": "codex-rs/app-server-transport",
+          "domain": "service",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 26
+        },
+        {
+          "name": "backend-client",
+          "path": "codex-rs/backend-client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "cli",
+          "path": "codex-rs/cli",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 76
+        },
+        {
+          "name": "codex-api",
+          "path": "codex-rs/codex-api",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 46
+        },
+        {
+          "name": "codex-client",
+          "path": "codex-rs/codex-client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "codex-experimental-api-macros",
+          "path": "codex-rs/codex-experimental-api-macros",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "codex-home",
+          "path": "codex-rs/codex-home",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "core-api",
+          "path": "codex-rs/core-api",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "http-client",
+          "path": "codex-rs/http-client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 27
+        },
+        {
+          "name": "rmcp-client",
+          "path": "codex-rs/rmcp-client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 63
+        },
+        {
+          "name": "stdio-to-uds",
+          "path": "codex-rs/stdio-to-uds",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "uds",
+          "path": "codex-rs/uds",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "websocket-client",
+          "path": "codex-rs/websocket-client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "history",
+          "path": "codex-rs/history",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "message-history",
+          "path": "codex-rs/message-history",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "rollout",
+          "path": "codex-rs/rollout",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 28
+        },
+        {
+          "name": "rollout-trace",
+          "path": "codex-rs/rollout-trace",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 34
+        },
+        {
+          "name": "state",
+          "path": "codex-rs/state",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 41
+        },
+        {
+          "name": "thread-manager-sample",
+          "path": "codex-rs/thread-manager-sample",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "thread-store",
+          "path": "codex-rs/thread-store",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 61
+        },
+        {
+          "name": "cloud-tasks",
+          "path": "codex-rs/cloud-tasks",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "cloud-tasks-client",
+          "path": "codex-rs/cloud-tasks-client",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 3
+        },
+        {
+          "name": "cloud-tasks-mock-client",
+          "path": "codex-rs/cloud-tasks-mock-client",
+          "domain": "subagent",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 2
+        },
+        {
+          "name": "workload-identity",
+          "path": "codex-rs/workload-identity",
+          "domain": "subagent",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 4
+        },
+        {
+          "name": "apply-patch",
+          "path": "codex-rs/apply-patch",
+          "domain": "tools",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 16
+        },
+        {
+          "name": "bwrap",
+          "path": "codex-rs/bwrap",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "exec",
+          "path": "codex-rs/exec",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 31
+        },
+        {
+          "name": "exec-server",
+          "path": "codex-rs/exec-server",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 123
+        },
+        {
+          "name": "exec-server-protocol",
+          "path": "codex-rs/exec-server-protocol",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 8
+        },
+        {
+          "name": "execpolicy",
+          "path": "codex-rs/execpolicy",
+          "domain": "tools",
+          "alsoMatches": [
+            "safety"
+          ],
+          "files": 13
+        },
+        {
+          "name": "file-search",
+          "path": "codex-rs/file-search",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "file-system",
+          "path": "codex-rs/file-system",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "file-watcher",
+          "path": "codex-rs/file-watcher",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "process-hardening",
+          "path": "codex-rs/process-hardening",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "shell-command",
+          "path": "codex-rs/shell-command",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "shell-escalation",
+          "path": "codex-rs/shell-escalation",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "terminal-detection",
+          "path": "codex-rs/terminal-detection",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "tools",
+          "path": "codex-rs/tools",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 32
+        },
+        {
+          "name": "core",
+          "path": "codex-rs/core",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 577
+        },
+        {
+          "name": "protocol",
+          "path": "codex-rs/protocol",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 50
+        }
+      ]
+    },
+    "opencode": {
+      "root": "D:/agent-complete/opencode-1.18.30",
+      "moduleCount": 97,
+      "byDomain": {
+        "interface": [
+          "app",
+          "tui",
+          "ui",
+          "core/config",
+          "opencode/config"
+        ],
+        "service": [
+          "cli",
+          "client",
+          "console",
+          "containers",
+          "desktop",
+          "enterprise",
+          "function",
+          "sdk",
+          "sdk-next",
+          "server",
+          "slack",
+          "web",
+          "core/control-plane",
+          "core/share",
+          "opencode/acp",
+          "opencode/cli",
+          "opencode/control-plane",
+          "opencode/server",
+          "opencode/share"
+        ],
+        "extension": [
+          "codemode",
+          "plugin",
+          "core/integration",
+          "core/plugin",
+          "core/skill",
+          "opencode/lsp",
+          "opencode/mcp",
+          "opencode/plugin",
+          "opencode/skill"
+        ],
+        "unmapped": [
+          "core",
+          "httpapi-codegen",
+          "opencode",
+          "protocol",
+          "script",
+          "core/id",
+          "core/v1",
+          "opencode/command",
+          "opencode/id",
+          "opencode/ide"
+        ],
+        "infra": [
+          "docs",
+          "effect-drizzle-sqlite",
+          "effect-sqlite-node",
+          "http-recorder",
+          "schema",
+          "storybook",
+          "core/effect",
+          "core/util",
+          "opencode/effect",
+          "opencode/format",
+          "opencode/util"
+        ],
+        "safety": [
+          "identity",
+          "core/permission",
+          "opencode/permission"
+        ],
+        "model": [
+          "llm",
+          "core/account",
+          "core/credential",
+          "core/oauth",
+          "opencode/account",
+          "opencode/auth",
+          "opencode/env",
+          "opencode/provider"
+        ],
+        "session": [
+          "session-ui",
+          "core/database",
+          "core/event",
+          "core/project",
+          "core/session",
+          "opencode/bus",
+          "opencode/project",
+          "opencode/session",
+          "opencode/storage",
+          "opencode/sync"
+        ],
+        "ops": [
+          "stats",
+          "core/flag",
+          "core/installation",
+          "core/observability",
+          "opencode/installation"
+        ],
+        "tools": [
+          "core/filesystem",
+          "core/github-copilot",
+          "core/pty",
+          "core/ripgrep",
+          "core/tool",
+          "opencode/git",
+          "opencode/patch",
+          "opencode/snapshot",
+          "opencode/tool",
+          "opencode/worktree"
+        ],
+        "retrieval": [
+          "core/image",
+          "core/reference",
+          "opencode/image",
+          "opencode/question"
+        ],
+        "context": [
+          "core/system-context"
+        ],
+        "loop": [
+          "opencode/agent"
+        ],
+        "subagent": [
+          "opencode/background"
+        ]
+      },
+      "unmapped": [
+        "core",
+        "httpapi-codegen",
+        "opencode",
+        "protocol",
+        "script",
+        "core/id",
+        "core/v1",
+        "opencode/command",
+        "opencode/id",
+        "opencode/ide"
+      ],
+      "modules": [
+        {
+          "name": "core/system-context",
+          "path": "packages/core/src/system-context",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "codemode",
+          "path": "packages/codemode",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 33
+        },
+        {
+          "name": "core/integration",
+          "path": "packages/core/src/integration",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/plugin",
+          "path": "packages/core/src/plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 42
+        },
+        {
+          "name": "core/skill",
+          "path": "packages/core/src/skill",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "opencode/lsp",
+          "path": "packages/opencode/src/lsp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "opencode/mcp",
+          "path": "packages/opencode/src/mcp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "opencode/plugin",
+          "path": "packages/opencode/src/plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "opencode/skill",
+          "path": "packages/opencode/src/skill",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "plugin",
+          "path": "packages/plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 36
+        },
+        {
+          "name": "core/effect",
+          "path": "packages/core/src/effect",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "core/util",
+          "path": "packages/core/src/util",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "docs",
+          "path": "packages/docs",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "effect-drizzle-sqlite",
+          "path": "packages/effect-drizzle-sqlite",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 22
+        },
+        {
+          "name": "effect-sqlite-node",
+          "path": "packages/effect-sqlite-node",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "http-recorder",
+          "path": "packages/http-recorder",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "opencode/effect",
+          "path": "packages/opencode/src/effect",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 12
+        },
+        {
+          "name": "opencode/format",
+          "path": "packages/opencode/src/format",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "opencode/util",
+          "path": "packages/opencode/src/util",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 23
+        },
+        {
+          "name": "schema",
+          "path": "packages/schema",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 71
+        },
+        {
+          "name": "storybook",
+          "path": "packages/storybook",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 24
+        },
+        {
+          "name": "app",
+          "path": "packages/app",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 599
+        },
+        {
+          "name": "core/config",
+          "path": "packages/core/src/config",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 20
+        },
+        {
+          "name": "opencode/config",
+          "path": "packages/opencode/src/config",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "tui",
+          "path": "packages/tui",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 204
+        },
+        {
+          "name": "ui",
+          "path": "packages/ui",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 247
+        },
+        {
+          "name": "opencode/agent",
+          "path": "packages/opencode/src/agent",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "core/account",
+          "path": "packages/core/src/account",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/credential",
+          "path": "packages/core/src/credential",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/oauth",
+          "path": "packages/core/src/oauth",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "llm",
+          "path": "packages/llm",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 105
+        },
+        {
+          "name": "opencode/account",
+          "path": "packages/opencode/src/account",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "opencode/auth",
+          "path": "packages/opencode/src/auth",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/env",
+          "path": "packages/opencode/src/env",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/provider",
+          "path": "packages/opencode/src/provider",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "core/flag",
+          "path": "packages/core/src/flag",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/installation",
+          "path": "packages/core/src/installation",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/observability",
+          "path": "packages/core/src/observability",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "opencode/installation",
+          "path": "packages/opencode/src/installation",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "stats",
+          "path": "packages/stats",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 83
+        },
+        {
+          "name": "core/image",
+          "path": "packages/core/src/image",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/reference",
+          "path": "packages/core/src/reference",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/image",
+          "path": "packages/opencode/src/image",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/question",
+          "path": "packages/opencode/src/question",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "core/permission",
+          "path": "packages/core/src/permission",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "identity",
+          "path": "packages/identity",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "opencode/permission",
+          "path": "packages/opencode/src/permission",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "cli",
+          "path": "packages/cli",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "client",
+          "path": "packages/client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "console",
+          "path": "packages/console",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 255
+        },
+        {
+          "name": "containers",
+          "path": "packages/containers",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/control-plane",
+          "path": "packages/core/src/control-plane",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "core/share",
+          "path": "packages/core/src/share",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "desktop",
+          "path": "packages/desktop",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 137
+        },
+        {
+          "name": "enterprise",
+          "path": "packages/enterprise",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "function",
+          "path": "packages/function",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "opencode/acp",
+          "path": "packages/opencode/src/acp",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 12
+        },
+        {
+          "name": "opencode/cli",
+          "path": "packages/opencode/src/cli",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 87
+        },
+        {
+          "name": "opencode/control-plane",
+          "path": "packages/opencode/src/control-plane",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "opencode/server",
+          "path": "packages/opencode/src/server",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 71
+        },
+        {
+          "name": "opencode/share",
+          "path": "packages/opencode/src/share",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "sdk",
+          "path": "packages/sdk",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 44
+        },
+        {
+          "name": "sdk-next",
+          "path": "packages/sdk-next",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "server",
+          "path": "packages/server",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 29
+        },
+        {
+          "name": "slack",
+          "path": "packages/slack",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "web",
+          "path": "packages/web",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "core/database",
+          "path": "packages/core/src/database",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 47
+        },
+        {
+          "name": "core/event",
+          "path": "packages/core/src/event",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/project",
+          "path": "packages/core/src/project",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "core/session",
+          "path": "packages/core/src/session",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 25
+        },
+        {
+          "name": "opencode/bus",
+          "path": "packages/opencode/src/bus",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/project",
+          "path": "packages/opencode/src/project",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "opencode/session",
+          "path": "packages/opencode/src/session",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 24
+        },
+        {
+          "name": "opencode/storage",
+          "path": "packages/opencode/src/storage",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "opencode/sync",
+          "path": "packages/opencode/src/sync",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "session-ui",
+          "path": "packages/session-ui",
+          "domain": "session",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 96
+        },
+        {
+          "name": "opencode/background",
+          "path": "packages/opencode/src/background",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/filesystem",
+          "path": "packages/core/src/filesystem",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "core/github-copilot",
+          "path": "packages/core/src/github-copilot",
+          "domain": "tools",
+          "alsoMatches": [
+            "model"
+          ],
+          "files": 24
+        },
+        {
+          "name": "core/pty",
+          "path": "packages/core/src/pty",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "core/ripgrep",
+          "path": "packages/core/src/ripgrep",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/tool",
+          "path": "packages/core/src/tool",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "opencode/git",
+          "path": "packages/opencode/src/git",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/patch",
+          "path": "packages/opencode/src/patch",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/snapshot",
+          "path": "packages/opencode/src/snapshot",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/tool",
+          "path": "packages/opencode/src/tool",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 27
+        },
+        {
+          "name": "opencode/worktree",
+          "path": "packages/opencode/src/worktree",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core",
+          "path": "packages/core",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 479
+        },
+        {
+          "name": "core/id",
+          "path": "packages/core/src/id",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/v1",
+          "path": "packages/core/src/v1",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "httpapi-codegen",
+          "path": "packages/httpapi-codegen",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "opencode",
+          "path": "packages/opencode",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 680
+        },
+        {
+          "name": "opencode/command",
+          "path": "packages/opencode/src/command",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/id",
+          "path": "packages/opencode/src/id",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/ide",
+          "path": "packages/opencode/src/ide",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "protocol",
+          "path": "packages/protocol",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 24
+        },
+        {
+          "name": "script",
+          "path": "packages/script",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 2
+        }
+      ]
+    },
+    "opencode-fork": {
+      "root": "D:/agent-complete/opencode-fork-private-999.0.15",
+      "moduleCount": 99,
+      "byDomain": {
+        "interface": [
+          "app",
+          "tui",
+          "ui",
+          "core/config",
+          "opencode/config"
+        ],
+        "service": [
+          "cli",
+          "client",
+          "console",
+          "containers",
+          "desktop",
+          "enterprise",
+          "function",
+          "sdk",
+          "sdk-next",
+          "server",
+          "slack",
+          "web",
+          "core/control-plane",
+          "core/share",
+          "opencode/acp",
+          "opencode/cli",
+          "opencode/control-plane",
+          "opencode/server",
+          "opencode/share"
+        ],
+        "extension": [
+          "codemode",
+          "plugin",
+          "core/integration",
+          "core/lsp",
+          "core/mcp",
+          "core/plugin",
+          "core/skill",
+          "opencode/lsp",
+          "opencode/plugin",
+          "opencode/skill"
+        ],
+        "unmapped": [
+          "core",
+          "httpapi-codegen",
+          "opencode",
+          "protocol",
+          "script",
+          "core/id",
+          "core/v1",
+          "opencode/command",
+          "opencode/compat",
+          "opencode/id",
+          "opencode/ide"
+        ],
+        "infra": [
+          "docs",
+          "effect-drizzle-sqlite",
+          "effect-sqlite-node",
+          "http-recorder",
+          "schema",
+          "storybook",
+          "core/effect",
+          "core/util",
+          "opencode/effect",
+          "opencode/format",
+          "opencode/util"
+        ],
+        "safety": [
+          "identity",
+          "core/permission",
+          "opencode/permission"
+        ],
+        "model": [
+          "llm",
+          "core/account",
+          "core/credential",
+          "core/oauth",
+          "opencode/account",
+          "opencode/auth",
+          "opencode/env",
+          "opencode/provider"
+        ],
+        "session": [
+          "session-ui",
+          "core/database",
+          "core/event",
+          "core/project",
+          "core/session",
+          "opencode/bus",
+          "opencode/project",
+          "opencode/session",
+          "opencode/storage",
+          "opencode/sync"
+        ],
+        "ops": [
+          "stats",
+          "core/flag",
+          "core/installation",
+          "core/observability",
+          "opencode/installation"
+        ],
+        "tools": [
+          "core/filesystem",
+          "core/github-copilot",
+          "core/pty",
+          "core/ripgrep",
+          "core/tool",
+          "opencode/git",
+          "opencode/patch",
+          "opencode/snapshot",
+          "opencode/tool",
+          "opencode/worktree"
+        ],
+        "retrieval": [
+          "core/image",
+          "core/reference",
+          "opencode/image",
+          "opencode/question"
+        ],
+        "context": [
+          "core/system-context"
+        ],
+        "loop": [
+          "opencode/agent"
+        ],
+        "subagent": [
+          "opencode/background"
+        ]
+      },
+      "unmapped": [
+        "core",
+        "httpapi-codegen",
+        "opencode",
+        "protocol",
+        "script",
+        "core/id",
+        "core/v1",
+        "opencode/command",
+        "opencode/compat",
+        "opencode/id",
+        "opencode/ide"
+      ],
+      "modules": [
+        {
+          "name": "core/system-context",
+          "path": "packages/core/src/system-context",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "codemode",
+          "path": "packages/codemode",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 33
+        },
+        {
+          "name": "core/integration",
+          "path": "packages/core/src/integration",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/lsp",
+          "path": "packages/core/src/lsp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "core/mcp",
+          "path": "packages/core/src/mcp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "core/plugin",
+          "path": "packages/core/src/plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 48
+        },
+        {
+          "name": "core/skill",
+          "path": "packages/core/src/skill",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "opencode/lsp",
+          "path": "packages/opencode/src/lsp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "opencode/plugin",
+          "path": "packages/opencode/src/plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 28
+        },
+        {
+          "name": "opencode/skill",
+          "path": "packages/opencode/src/skill",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "plugin",
+          "path": "packages/plugin",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 39
+        },
+        {
+          "name": "core/effect",
+          "path": "packages/core/src/effect",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "core/util",
+          "path": "packages/core/src/util",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "docs",
+          "path": "packages/docs",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "effect-drizzle-sqlite",
+          "path": "packages/effect-drizzle-sqlite",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 22
+        },
+        {
+          "name": "effect-sqlite-node",
+          "path": "packages/effect-sqlite-node",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "http-recorder",
+          "path": "packages/http-recorder",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "opencode/effect",
+          "path": "packages/opencode/src/effect",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "opencode/format",
+          "path": "packages/opencode/src/format",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "opencode/util",
+          "path": "packages/opencode/src/util",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 24
+        },
+        {
+          "name": "schema",
+          "path": "packages/schema",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 84
+        },
+        {
+          "name": "storybook",
+          "path": "packages/storybook",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 22
+        },
+        {
+          "name": "app",
+          "path": "packages/app",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 1343
+        },
+        {
+          "name": "core/config",
+          "path": "packages/core/src/config",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 20
+        },
+        {
+          "name": "opencode/config",
+          "path": "packages/opencode/src/config",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "tui",
+          "path": "packages/tui",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 216
+        },
+        {
+          "name": "ui",
+          "path": "packages/ui",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 200
+        },
+        {
+          "name": "opencode/agent",
+          "path": "packages/opencode/src/agent",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/account",
+          "path": "packages/core/src/account",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/credential",
+          "path": "packages/core/src/credential",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/oauth",
+          "path": "packages/core/src/oauth",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "llm",
+          "path": "packages/llm",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 107
+        },
+        {
+          "name": "opencode/account",
+          "path": "packages/opencode/src/account",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "opencode/auth",
+          "path": "packages/opencode/src/auth",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "opencode/env",
+          "path": "packages/opencode/src/env",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/provider",
+          "path": "packages/opencode/src/provider",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "core/flag",
+          "path": "packages/core/src/flag",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/installation",
+          "path": "packages/core/src/installation",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/observability",
+          "path": "packages/core/src/observability",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "opencode/installation",
+          "path": "packages/opencode/src/installation",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "stats",
+          "path": "packages/stats",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 80
+        },
+        {
+          "name": "core/image",
+          "path": "packages/core/src/image",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/reference",
+          "path": "packages/core/src/reference",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/image",
+          "path": "packages/opencode/src/image",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/question",
+          "path": "packages/opencode/src/question",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "core/permission",
+          "path": "packages/core/src/permission",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "identity",
+          "path": "packages/identity",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "opencode/permission",
+          "path": "packages/opencode/src/permission",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "cli",
+          "path": "packages/cli",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "client",
+          "path": "packages/client",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 26
+        },
+        {
+          "name": "console",
+          "path": "packages/console",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 234
+        },
+        {
+          "name": "containers",
+          "path": "packages/containers",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/control-plane",
+          "path": "packages/core/src/control-plane",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "core/share",
+          "path": "packages/core/src/share",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "desktop",
+          "path": "packages/desktop",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 830
+        },
+        {
+          "name": "enterprise",
+          "path": "packages/enterprise",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "function",
+          "path": "packages/function",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "opencode/acp",
+          "path": "packages/opencode/src/acp",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "opencode/cli",
+          "path": "packages/opencode/src/cli",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 90
+        },
+        {
+          "name": "opencode/control-plane",
+          "path": "packages/opencode/src/control-plane",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "opencode/server",
+          "path": "packages/opencode/src/server",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 72
+        },
+        {
+          "name": "opencode/share",
+          "path": "packages/opencode/src/share",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "sdk",
+          "path": "packages/sdk",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 122
+        },
+        {
+          "name": "sdk-next",
+          "path": "packages/sdk-next",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "server",
+          "path": "packages/server",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 54
+        },
+        {
+          "name": "slack",
+          "path": "packages/slack",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "web",
+          "path": "packages/web",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 21
+        },
+        {
+          "name": "core/database",
+          "path": "packages/core/src/database",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 61
+        },
+        {
+          "name": "core/event",
+          "path": "packages/core/src/event",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/project",
+          "path": "packages/core/src/project",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "core/session",
+          "path": "packages/core/src/session",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 61
+        },
+        {
+          "name": "opencode/bus",
+          "path": "packages/opencode/src/bus",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/project",
+          "path": "packages/opencode/src/project",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "opencode/session",
+          "path": "packages/opencode/src/session",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 26
+        },
+        {
+          "name": "opencode/storage",
+          "path": "packages/opencode/src/storage",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "opencode/sync",
+          "path": "packages/opencode/src/sync",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "session-ui",
+          "path": "packages/session-ui",
+          "domain": "session",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 98
+        },
+        {
+          "name": "opencode/background",
+          "path": "packages/opencode/src/background",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/filesystem",
+          "path": "packages/core/src/filesystem",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "core/github-copilot",
+          "path": "packages/core/src/github-copilot",
+          "domain": "tools",
+          "alsoMatches": [
+            "model"
+          ],
+          "files": 24
+        },
+        {
+          "name": "core/pty",
+          "path": "packages/core/src/pty",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "core/ripgrep",
+          "path": "packages/core/src/ripgrep",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/tool",
+          "path": "packages/core/src/tool",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 30
+        },
+        {
+          "name": "opencode/git",
+          "path": "packages/opencode/src/git",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/patch",
+          "path": "packages/opencode/src/patch",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/snapshot",
+          "path": "packages/opencode/src/snapshot",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/tool",
+          "path": "packages/opencode/src/tool",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "opencode/worktree",
+          "path": "packages/opencode/src/worktree",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core",
+          "path": "packages/core",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 650
+        },
+        {
+          "name": "core/id",
+          "path": "packages/core/src/id",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "core/v1",
+          "path": "packages/core/src/v1",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "httpapi-codegen",
+          "path": "packages/httpapi-codegen",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "opencode",
+          "path": "packages/opencode",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 649
+        },
+        {
+          "name": "opencode/command",
+          "path": "packages/opencode/src/command",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "opencode/compat",
+          "path": "packages/opencode/src/compat",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "opencode/id",
+          "path": "packages/opencode/src/id",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "opencode/ide",
+          "path": "packages/opencode/src/ide",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "protocol",
+          "path": "packages/protocol",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 38
+        },
+        {
+          "name": "script",
+          "path": "packages/script",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 3
+        }
+      ]
+    },
+    "grok": {
+      "root": "D:/agent-complete/grok-build-main",
+      "moduleCount": 82,
+      "byDomain": {
+        "tools": [
+          "ptyctl",
+          "ptyctl-cli",
+          "xai-fast-worktree",
+          "xai-fsnotify",
+          "xai-fuzzy-file-search",
+          "xai-gix-status",
+          "xai-grok-pager-diff",
+          "xai-grok-pager-pty-harness",
+          "xai-grok-shell",
+          "xai-grok-shell-base",
+          "xai-grok-shell-terminal",
+          "xai-grok-tools",
+          "xai-grok-tools-api",
+          "xai-grok-workspace",
+          "xai-grok-workspace-client",
+          "xai-grok-workspace-daemon",
+          "xai-hunk-tracker"
+        ],
+        "extension": [
+          "xai-acp-lib",
+          "xai-grok-extra-ca",
+          "xai-grok-hooks",
+          "xai-grok-mcp",
+          "xai-grok-plugin-marketplace"
+        ],
+        "loop": [
+          "xai-agent-lifecycle",
+          "xai-grok-agent",
+          "xai-prompt-queue"
+        ],
+        "session": [
+          "xai-chat-state",
+          "xai-grok-active-sessions",
+          "xai-grok-dashboard-store",
+          "xai-grok-foreign-sessions",
+          "xai-grok-session-events",
+          "xai-grok-session-search",
+          "xai-grok-shell-session-support",
+          "xai-sqlite-journal"
+        ],
+        "retrieval": [
+          "xai-codebase-graph",
+          "xai-grok-memory"
+        ],
+        "context": [
+          "xai-compaction-transcript",
+          "xai-token-estimation"
+        ],
+        "ops": [
+          "xai-crash-handler",
+          "xai-grok-announcements",
+          "xai-grok-gboom",
+          "xai-grok-telemetry",
+          "xai-grok-update",
+          "xai-grok-version",
+          "xai-mixpanel",
+          "xai-tracing-macros"
+        ],
+        "infra": [
+          "xai-dirs",
+          "xai-file-utils",
+          "xai-grok-config-types",
+          "xai-grok-paths",
+          "xai-grok-sampling-types",
+          "xai-grok-shared",
+          "xai-grok-test-support",
+          "xai-grok-workspace-types",
+          "xai-hooks-plugins-types",
+          "xai-tty-utils",
+          "common"
+        ],
+        "model": [
+          "xai-grok-auth",
+          "xai-grok-env",
+          "xai-grok-models",
+          "xai-grok-sampler"
+        ],
+        "service": [
+          "xai-grok-bundle",
+          "xai-grok-diag-server"
+        ],
+        "interface": [
+          "xai-grok-config",
+          "xai-grok-markdown",
+          "xai-grok-markdown-core",
+          "xai-grok-mermaid",
+          "xai-grok-pager",
+          "xai-grok-pager-bin",
+          "xai-grok-pager-minimal",
+          "xai-grok-pager-render",
+          "xai-grok-status-line",
+          "xai-grok-voice",
+          "xai-ratatui-inline",
+          "xai-ratatui-textarea"
+        ],
+        "unmapped": [
+          "xai-grok-http",
+          "xai-system-power",
+          "build",
+          "codegen"
+        ],
+        "safety": [
+          "xai-grok-sandbox",
+          "xai-grok-secrets"
+        ],
+        "subagent": [
+          "xai-grok-subagent-resolution",
+          "xai-workflow"
+        ]
+      },
+      "unmapped": [
+        "xai-grok-http",
+        "xai-system-power",
+        "build",
+        "codegen"
+      ],
+      "modules": [
+        {
+          "name": "xai-compaction-transcript",
+          "path": "crates/codegen/xai-compaction-transcript",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-token-estimation",
+          "path": "crates/codegen/xai-token-estimation",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-acp-lib",
+          "path": "crates/codegen/xai-acp-lib",
+          "domain": "extension",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 8
+        },
+        {
+          "name": "xai-grok-extra-ca",
+          "path": "crates/codegen/xai-grok-extra-ca",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 9
+        },
+        {
+          "name": "xai-grok-hooks",
+          "path": "crates/codegen/xai-grok-hooks",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "xai-grok-mcp",
+          "path": "crates/codegen/xai-grok-mcp",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "xai-grok-plugin-marketplace",
+          "path": "crates/codegen/xai-grok-plugin-marketplace",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "common",
+          "path": "crates/common",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 166
+        },
+        {
+          "name": "xai-dirs",
+          "path": "crates/codegen/xai-dirs",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-file-utils",
+          "path": "crates/codegen/xai-file-utils",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 12
+        },
+        {
+          "name": "xai-grok-config-types",
+          "path": "crates/codegen/xai-grok-config-types",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "xai-grok-paths",
+          "path": "crates/codegen/xai-grok-paths",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-sampling-types",
+          "path": "crates/codegen/xai-grok-sampling-types",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "xai-grok-shared",
+          "path": "crates/codegen/xai-grok-shared",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "xai-grok-test-support",
+          "path": "crates/codegen/xai-grok-test-support",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "xai-grok-workspace-types",
+          "path": "crates/codegen/xai-grok-workspace-types",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 50
+        },
+        {
+          "name": "xai-hooks-plugins-types",
+          "path": "crates/codegen/xai-hooks-plugins-types",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-tty-utils",
+          "path": "crates/codegen/xai-tty-utils",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "xai-grok-config",
+          "path": "crates/codegen/xai-grok-config",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 27
+        },
+        {
+          "name": "xai-grok-markdown",
+          "path": "crates/codegen/xai-grok-markdown",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 28
+        },
+        {
+          "name": "xai-grok-markdown-core",
+          "path": "crates/codegen/xai-grok-markdown-core",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-mermaid",
+          "path": "crates/codegen/xai-grok-mermaid",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "xai-grok-pager",
+          "path": "crates/codegen/xai-grok-pager",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 784
+        },
+        {
+          "name": "xai-grok-pager-bin",
+          "path": "crates/codegen/xai-grok-pager-bin",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "xai-grok-pager-minimal",
+          "path": "crates/codegen/xai-grok-pager-minimal",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 12
+        },
+        {
+          "name": "xai-grok-pager-render",
+          "path": "crates/codegen/xai-grok-pager-render",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 79
+        },
+        {
+          "name": "xai-grok-status-line",
+          "path": "crates/codegen/xai-grok-status-line",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "xai-grok-voice",
+          "path": "crates/codegen/xai-grok-voice",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "xai-ratatui-inline",
+          "path": "crates/codegen/xai-ratatui-inline",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "xai-ratatui-textarea",
+          "path": "crates/codegen/xai-ratatui-textarea",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "xai-agent-lifecycle",
+          "path": "crates/codegen/xai-agent-lifecycle",
+          "domain": "loop",
+          "alsoMatches": [
+            "subagent"
+          ],
+          "files": 15
+        },
+        {
+          "name": "xai-grok-agent",
+          "path": "crates/codegen/xai-grok-agent",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 31
+        },
+        {
+          "name": "xai-prompt-queue",
+          "path": "crates/codegen/xai-prompt-queue",
+          "domain": "loop",
+          "alsoMatches": [
+            "context"
+          ],
+          "files": 3
+        },
+        {
+          "name": "xai-grok-auth",
+          "path": "crates/codegen/xai-grok-auth",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "xai-grok-env",
+          "path": "crates/codegen/xai-grok-env",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-models",
+          "path": "crates/codegen/xai-grok-models",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-sampler",
+          "path": "crates/codegen/xai-grok-sampler",
+          "domain": "model",
+          "alsoMatches": [],
+          "files": 38
+        },
+        {
+          "name": "xai-crash-handler",
+          "path": "crates/codegen/xai-crash-handler",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "xai-grok-announcements",
+          "path": "crates/codegen/xai-grok-announcements",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-gboom",
+          "path": "crates/codegen/xai-grok-gboom",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "xai-grok-telemetry",
+          "path": "crates/codegen/xai-grok-telemetry",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 59
+        },
+        {
+          "name": "xai-grok-update",
+          "path": "crates/codegen/xai-grok-update",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "xai-grok-version",
+          "path": "crates/codegen/xai-grok-version",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "xai-mixpanel",
+          "path": "crates/codegen/xai-mixpanel",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-tracing-macros",
+          "path": "crates/codegen/xai-tracing-macros",
+          "domain": "ops",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "xai-codebase-graph",
+          "path": "crates/codegen/xai-codebase-graph",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 27
+        },
+        {
+          "name": "xai-grok-memory",
+          "path": "crates/codegen/xai-grok-memory",
+          "domain": "retrieval",
+          "alsoMatches": [],
+          "files": 17
+        },
+        {
+          "name": "xai-grok-sandbox",
+          "path": "crates/codegen/xai-grok-sandbox",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 22
+        },
+        {
+          "name": "xai-grok-secrets",
+          "path": "crates/codegen/xai-grok-secrets",
+          "domain": "safety",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "xai-grok-bundle",
+          "path": "crates/codegen/xai-grok-bundle",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-diag-server",
+          "path": "crates/codegen/xai-grok-diag-server",
+          "domain": "service",
+          "alsoMatches": [
+            "ops"
+          ],
+          "files": 1
+        },
+        {
+          "name": "xai-chat-state",
+          "path": "crates/codegen/xai-chat-state",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "xai-grok-active-sessions",
+          "path": "crates/codegen/xai-grok-active-sessions",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "xai-grok-dashboard-store",
+          "path": "crates/codegen/xai-grok-dashboard-store",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "xai-grok-foreign-sessions",
+          "path": "crates/codegen/xai-grok-foreign-sessions",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "xai-grok-session-events",
+          "path": "crates/codegen/xai-grok-session-events",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "xai-grok-session-search",
+          "path": "crates/codegen/xai-grok-session-search",
+          "domain": "session",
+          "alsoMatches": [
+            "retrieval"
+          ],
+          "files": 10
+        },
+        {
+          "name": "xai-grok-shell-session-support",
+          "path": "crates/codegen/xai-grok-shell-session-support",
+          "domain": "session",
+          "alsoMatches": [
+            "tools"
+          ],
+          "files": 2
+        },
+        {
+          "name": "xai-sqlite-journal",
+          "path": "crates/codegen/xai-sqlite-journal",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-subagent-resolution",
+          "path": "crates/codegen/xai-grok-subagent-resolution",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "xai-workflow",
+          "path": "crates/codegen/xai-workflow",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "ptyctl",
+          "path": "crates/codegen/ptyctl",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "ptyctl-cli",
+          "path": "crates/codegen/ptyctl-cli",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 6
+        },
+        {
+          "name": "xai-fast-worktree",
+          "path": "crates/codegen/xai-fast-worktree",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 76
+        },
+        {
+          "name": "xai-fsnotify",
+          "path": "crates/codegen/xai-fsnotify",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 19
+        },
+        {
+          "name": "xai-fuzzy-file-search",
+          "path": "crates/codegen/xai-fuzzy-file-search",
+          "domain": "tools",
+          "alsoMatches": [
+            "retrieval"
+          ],
+          "files": 1
+        },
+        {
+          "name": "xai-gix-status",
+          "path": "crates/codegen/xai-gix-status",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-pager-diff",
+          "path": "crates/codegen/xai-grok-pager-diff",
+          "domain": "tools",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-pager-pty-harness",
+          "path": "crates/codegen/xai-grok-pager-pty-harness",
+          "domain": "tools",
+          "alsoMatches": [
+            "interface"
+          ],
+          "files": 49
+        },
+        {
+          "name": "xai-grok-shell",
+          "path": "crates/codegen/xai-grok-shell",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 633
+        },
+        {
+          "name": "xai-grok-shell-base",
+          "path": "crates/codegen/xai-grok-shell-base",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "xai-grok-shell-terminal",
+          "path": "crates/codegen/xai-grok-shell-terminal",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 11
+        },
+        {
+          "name": "xai-grok-tools",
+          "path": "crates/codegen/xai-grok-tools",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 262
+        },
+        {
+          "name": "xai-grok-tools-api",
+          "path": "crates/codegen/xai-grok-tools-api",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 5
+        },
+        {
+          "name": "xai-grok-workspace",
+          "path": "crates/codegen/xai-grok-workspace",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 107
+        },
+        {
+          "name": "xai-grok-workspace-client",
+          "path": "crates/codegen/xai-grok-workspace-client",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 1
+        },
+        {
+          "name": "xai-grok-workspace-daemon",
+          "path": "crates/codegen/xai-grok-workspace-daemon",
+          "domain": "tools",
+          "alsoMatches": [
+            "service"
+          ],
+          "files": 3
+        },
+        {
+          "name": "xai-hunk-tracker",
+          "path": "crates/codegen/xai-hunk-tracker",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 17
+        },
+        {
+          "name": "build",
+          "path": "crates/build",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "codegen",
+          "path": "crates/codegen",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 2720
+        },
+        {
+          "name": "xai-grok-http",
+          "path": "crates/codegen/xai-grok-http",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "xai-system-power",
+          "path": "crates/codegen/xai-system-power",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 4
+        }
+      ]
+    },
+    "cc-custom": {
+      "root": "D:/opencode-bugfix/cc-custom",
+      "moduleCount": 36,
+      "byDomain": {
+        "interface": [
+          "assistant",
+          "buddy",
+          "components",
+          "ink",
+          "keybindings",
+          "proactive",
+          "screens",
+          "vim",
+          "voice"
+        ],
+        "service": [
+          "bootstrap",
+          "cli",
+          "server",
+          "services",
+          "ssh"
+        ],
+        "unmapped": [
+          "commands",
+          "entrypoints",
+          "moreright",
+          "outputStyles"
+        ],
+        "infra": [
+          "constants",
+          "native-ts",
+          "schemas",
+          "types",
+          "upstreamproxy",
+          "utils"
+        ],
+        "context": [
+          "context"
+        ],
+        "loop": [
+          "coordinator",
+          "query"
+        ],
+        "extension": [
+          "hooks",
+          "memdir",
+          "plugins",
+          "skills"
+        ],
+        "subagent": [
+          "jobs",
+          "tasks"
+        ],
+        "session": [
+          "migrations",
+          "state"
+        ],
+        "tools": [
+          "tools"
+        ]
+      },
+      "unmapped": [
+        "commands",
+        "entrypoints",
+        "moreright",
+        "outputStyles"
+      ],
+      "modules": [
+        {
+          "name": "context",
+          "path": "src/context",
+          "domain": "context",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "hooks",
+          "path": "src/hooks",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 93
+        },
+        {
+          "name": "memdir",
+          "path": "src/memdir",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 8
+        },
+        {
+          "name": "plugins",
+          "path": "src/plugins",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "skills",
+          "path": "src/skills",
+          "domain": "extension",
+          "alsoMatches": [],
+          "files": 16
+        },
+        {
+          "name": "constants",
+          "path": "src/constants",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 20
+        },
+        {
+          "name": "native-ts",
+          "path": "src/native-ts",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "schemas",
+          "path": "src/schemas",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "types",
+          "path": "src/types",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 18
+        },
+        {
+          "name": "upstreamproxy",
+          "path": "src/upstreamproxy",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "utils",
+          "path": "src/utils",
+          "domain": "infra",
+          "alsoMatches": [],
+          "files": 535
+        },
+        {
+          "name": "assistant",
+          "path": "src/assistant",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "buddy",
+          "path": "src/buddy",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "components",
+          "path": "src/components",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 367
+        },
+        {
+          "name": "ink",
+          "path": "src/ink",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 100
+        },
+        {
+          "name": "keybindings",
+          "path": "src/keybindings",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 15
+        },
+        {
+          "name": "proactive",
+          "path": "src/proactive",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "screens",
+          "path": "src/screens",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 3
+        },
+        {
+          "name": "vim",
+          "path": "src/vim",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 5
+        },
+        {
+          "name": "voice",
+          "path": "src/voice",
+          "domain": "interface",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "coordinator",
+          "path": "src/coordinator",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "query",
+          "path": "src/query",
+          "domain": "loop",
+          "alsoMatches": [],
+          "files": 73
+        },
+        {
+          "name": "bootstrap",
+          "path": "src/bootstrap",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "cli",
+          "path": "src/cli",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 10
+        },
+        {
+          "name": "server",
+          "path": "src/server",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 4
+        },
+        {
+          "name": "services",
+          "path": "src/services",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 122
+        },
+        {
+          "name": "ssh",
+          "path": "src/ssh",
+          "domain": "service",
+          "alsoMatches": [],
+          "files": 2
+        },
+        {
+          "name": "migrations",
+          "path": "src/migrations",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 7
+        },
+        {
+          "name": "state",
+          "path": "src/state",
+          "domain": "session",
+          "alsoMatches": [],
+          "files": 6
+        },
+        {
+          "name": "jobs",
+          "path": "src/jobs",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 0
+        },
+        {
+          "name": "tasks",
+          "path": "src/tasks",
+          "domain": "subagent",
+          "alsoMatches": [],
+          "files": 13
+        },
+        {
+          "name": "tools",
+          "path": "src/tools",
+          "domain": "tools",
+          "alsoMatches": [],
+          "files": 191
+        },
+        {
+          "name": "commands",
+          "path": "src/commands",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 160
+        },
+        {
+          "name": "entrypoints",
+          "path": "src/entrypoints",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 14
+        },
+        {
+          "name": "moreright",
+          "path": "src/moreright",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        },
+        {
+          "name": "outputStyles",
+          "path": "src/outputStyles",
+          "domain": "unmapped",
+          "alsoMatches": [],
+          "files": 1
+        }
+      ]
+    }
+  }
+}
