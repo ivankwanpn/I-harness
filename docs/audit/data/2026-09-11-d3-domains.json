@@ -1,0 +1,79 @@
+{
+  "version": "2026-09-11",
+  "note": "The row taxonomy for D3 (backend mechanism matrix). Rows are CAPABILITIES/MECHANISMS, never modules: codex ships 104 crates and grok ~90, but many are infrastructure (ansi-escape, async-utils, build-info, xai-ratatui-*) whose presence or absence says nothing about capability. Module counts are also not comparable across sources, so a module-to-module table would be both noisy and misleading.",
+  "rowUnit": "mechanism",
+  "domains": [
+    {
+      "id": "loop",
+      "label": "Agent 循環與輸入模型",
+      "scope": "The turn/step engine and how new input enters it: loop shape, per-session serialization, input tiering, steering, interruption, abort semantics, turn budgeting.",
+      "seedModules": ["core-agent", "xai-grok-agent", "xai-prompt-queue", "xai-message-delivery-core", "xai-interjection-core", "codex-rs/core", "opencode core/session", "cc-custom query|coordinator"]
+    },
+    {
+      "id": "session",
+      "label": "會話與持久化",
+      "scope": "Event log and its projections, replay, durability, crash repair/recovery, schema migration, session lifecycle, ownership locking.",
+      "seedModules": ["core-session", "session-persistence", "session-persistence-jsonl", "fs-lock", "session-executor", "xai-sqlite-journal", "xai-grok-session-events", "codex-rs/rollout", "codex-rs/thread-store", "codex-rs/state", "opencode core/database", "dsh storage|session"]
+    },
+    {
+      "id": "context",
+      "label": "上下文與壓縮",
+      "scope": "Context-window resolution, token accounting, compaction/summarisation strategy, pruning, shadow projection, budget ladders and their failure modes.",
+      "seedModules": ["compaction", "token-meter", "output-retention", "runtime-context", "xai-grok-compaction", "xai-compaction-transcript", "xai-token-estimation", "codex-rs/core compact", "opencode core/session", "cc-custom services/compact"]
+    },
+    {
+      "id": "tools",
+      "label": "工具與執行",
+      "scope": "Tool registry and exposure model, schema validation, parallel execution and commit ordering, timeouts/retries/repeat guards, output spill, file patching and diffing, process/PTY control.",
+      "seedModules": ["core-tools", "fs", "fs-search", "fs-watch", "shell", "exec", "terminal", "text-diff", "tool-search", "guard-*", "xai-tool-runtime", "xai-tool-protocol", "xai-grok-tools", "codex-rs/tools", "codex-rs/apply-patch", "opencode core/tool", "cc-custom tools"]
+    },
+    {
+      "id": "subagent",
+      "label": "子代理與多智能體",
+      "scope": "Delegation protocol and its durability, task state machines, cancellation trees, depth/concurrency quotas, background execution and parent wake, team/roster coordination, identity.",
+      "seedModules": ["subagent", "agent-team", "xai-grok-subagent-resolution", "xai-agent-lifecycle", "codex-rs/agent-graph-store", "codex-rs/agent-identity", "opencode core/session task", "dsh subagent", "cc-custom tasks|jobs|coordinator"]
+    },
+    {
+      "id": "safety",
+      "label": "沙箱與權限",
+      "scope": "OS-level confinement backends and what each actually restricts, read vs write isolation, approval flow, danger classification, escalation ladder, permission rule models, hooks as gates.",
+      "seedModules": ["sandbox", "sandbox-local", "sandbox-policy", "sandbox-windows-acl", "guard-approval", "xai-grok-sandbox", "codex-rs/sandboxing", "codex-rs/linux-sandbox", "codex-rs/windows-sandbox-rs", "codex-rs/execpolicy", "codex-rs/process-hardening", "opencode core/permission", "cc-custom utils/sandbox", "dsh sandbox|guard"]
+    },
+    {
+      "id": "model",
+      "label": "模型與供應商",
+      "scope": "Wire protocols, model catalogue and discovery, context/max-output metadata, reasoning-effort translation, provider registry and resolution chain, credential handling and auth.",
+      "seedModules": ["llm-*", "provider", "provider-runtime", "credentials", "preset", "llm-seam", "xai-grok-models", "xai-grok-sampler", "xai-grok-auth", "xai-grok-secrets", "codex-rs/model-provider", "codex-rs/models-manager", "codex-rs/secrets", "opencode core/credential|provider", "dsh llm|credentials"]
+    },
+    {
+      "id": "extension",
+      "label": "擴展面",
+      "scope": "MCP client/server, LSP, skills, hooks, plugins and marketplaces, workflow engines, scheduling, todos and goals as durable extension state.",
+      "seedModules": ["mcp-client", "lsp", "skills", "hooks", "plugin-registry", "workflow", "schedule", "todo", "goal", "plan-mode", "instructions", "xai-grok-mcp", "xai-grok-hooks", "xai-grok-plugin-marketplace", "xai-workflow", "codex-rs/rmcp-client", "codex-rs/mcp-server", "codex-rs/ext", "codex-rs/plugin", "opencode core/plugin|skill|lsp|mcp", "cc-custom plugins|skills|hooks|memdir"]
+    },
+    {
+      "id": "service",
+      "label": "服務與 API",
+      "scope": "Transport surface for external consumers: HTTP/WS, streaming and replay, SDK wire contract, ACP, app-server/RPC, authentication of the service itself.",
+      "seedModules": ["web-host", "web", "sdk", "acp", "interaction", "xai-acp-lib", "xai-grok-workspace-daemon", "xai-grok-http", "codex-rs/app-server", "codex-rs/app-server-protocol", "codex-rs/exec-server", "opencode packages/server|sdk", "dsh api|host|typert"]
+    },
+    {
+      "id": "retrieval",
+      "label": "檢索與記憶",
+      "scope": "Session search and lineage, full-text indexes, cross-session memory, codebase graphs, file search, attachment/multimodal ingestion.",
+      "seedModules": ["session-query", "session-title", "attachment", "xai-grok-session-search", "xai-grok-memory", "xai-codebase-graph", "xai-fuzzy-file-search", "codex-rs/memories", "codex-rs/file-search", "codex-rs/history", "opencode core/reference", "cc-custom memdir|services/memory"]
+    },
+    {
+      "id": "ops",
+      "label": "可觀測性與運維",
+      "scope": "Telemetry and event manifests, diagnostics, cost and token accounting, feedback channels, crash handling, distribution/update, benchmarking.",
+      "seedModules": ["telemetry", "feedback", "xai-grok-telemetry", "xai-grok-diag-server", "xai-crash-handler", "xai-grok-update", "xai-mixpanel", "codex-rs/otel", "codex-rs/analytics", "codex-rs/feedback", "codex-rs/diagnostics", "dsh runtime-diagnostics|feedback"]
+    },
+    {
+      "id": "interface",
+      "label": "介面與呈現",
+      "scope": "LIMITED TO THE BACKEND INTERFACE per the approved scope: only the seams where the presentation layer meets the engine — the event/stream contract a renderer consumes, screen-mode policy, and capability detection. Rendering internals, layout and theming are OUT of scope.",
+      "seedModules": ["tui", "tui-core", "xai-grok-pager", "xai-grok-pager-minimal", "xai-grok-pager-render", "xai-ratatui-*", "codex-rs/tui", "opencode packages/tui|session-ui", "cc-custom screens|ink|components"]
+    }
+  ]
+}
