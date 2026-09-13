@@ -23,7 +23,10 @@ import { join, resolve } from "node:path"
 import { SOURCE_PATHS, carrierClass } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
-const DATA = join(ROOT, "docs/audit/data")
+const DATA = (() => {
+  const i = process.argv.indexOf("--data")
+  return i >= 0 ? resolve(process.argv[i + 1]) : join(ROOT, "docs/audit/data")
+})()
 const args = process.argv.slice(2)
 const opt = (n, d) => {
   const i = args.indexOf(n)
