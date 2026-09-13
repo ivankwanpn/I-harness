@@ -18,7 +18,7 @@
 //
 // Usage: node scripts/audit/assemble-d3.mjs --crosswalk <json> [--dispositions <json>] [--front <md>] [--out <md>]
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs"
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { SOURCE_PATHS, carrierClass } from "./lib-union.mjs"
 
@@ -103,7 +103,45 @@ if (coverageProblems.length) {
 
 // ------------------------------------------------------------------- crosswalk
 // crosswalk: { rows: { "<canonical row id>": { domain, label, members: { "<source>": ["<mechanism name>", ...] } } } }
-const crosswalk = CROSSWALK ? (readJson(CROSSWALK)?.rows ?? {}) : {}
+//
+// Reconciliation is done PER DOMAIN, by the twelve domain agents in Phase 3, and
+// merged here from one file per domain. A single global crosswalk was the
+// original plan and it was the wrong shape: with roughly five hundred mechanism
+// entries across seven sources, one agent grouping all of them would be doing
+// twelve unrelated reconciliation jobs at once, and a mistake in one domain would
+// be invisible in the others. Per-domain files also mean a domain can be redone
+// without touching the rest.
+const crosswalkPaths = []
+for (let i = 0; i < args.length; i++) {
+  if (args[i] === "--crosswalk" && args[i + 1]) crosswalkPaths.push(resolve(args[i + 1]))
+}
+if (!crosswalkPaths.length && args.includes("--crosswalk-dir")) {
+  const dir = resolve(args[args.indexOf("--crosswalk-dir") + 1])
+  if (existsSync(dir)) {
+    for (const f of readdirSync(dir).filter((n) => n.endsWith(".json")).sort()) crosswalkPaths.push(join(dir, f))
+  }
+}
+
+const crosswalk = {}
+const crosswalkSources = []
+for (const p of crosswalkPaths) {
+  const doc = readJson(p)
+  if (!doc?.rows) {
+    console.error(`! crosswalk file has no rows: ${p}`)
+    continue
+  }
+  crosswalkSources.push({ file: p.split(/[\\/]/).pop(), rows: Object.keys(doc.rows).length })
+  for (const [rowId, row] of Object.entries(doc.rows)) {
+    // A row id claimed twice means two domain agents both think they own it,
+    // which would silently drop one of their member lists.
+    if (crosswalk[rowId]) {
+      console.error(`! crosswalk row id claimed by two files: ${rowId}`)
+      process.exitCode = 1
+      continue
+    }
+    crosswalk[rowId] = row
+  }
+}
 const claimed = new Set()
 for (const [rowId, row] of Object.entries(crosswalk)) {
   for (const [src, names] of Object.entries(row.members ?? {})) {
