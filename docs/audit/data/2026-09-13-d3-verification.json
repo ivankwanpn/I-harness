@@ -1,0 +1,211 @@
+{
+  "sampleSize": 21,
+  "verdicts": [
+    {
+      "source": "cc-custom",
+      "cmd": "All feature('X') gates imported from bun:bundle (~499 call sites, ~70 distinct flags: COORDINATOR_MODE, FORK_SUBAGENT, PROACTIVE, BUDDY, AGENT_TRIGGERS, WORKFLOW_SCRIPTS, MONITOR_TOOL, TREE_SITTER_BASH, TRANSCRIPT_CLASSIFIER, TOKEN_BUDGET, CONTEXT_COLLAPSE, HISTORY_SNIP, REACTIVE_COMPACT, CACHED_MICROCOMPACT, PROMPT_CACHE_BREAK_DETECTION, EXTRACT_MEMORIES, TEAMMEM, SSH_REMOTE, DIRECT_CONNECT, UNATTENDED_RETRY, ...)",
+      "cite": "package.json:115-121",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "config",
+      "why": "Text is present: package.json:115 is `\"scripts\": {`. But the cited range is the npm scripts block (dev/start/version/dev:restore-check/installer:build) and cannot carry a claim about bun:bundle feature gates. The gate mechanism itself is real and verifiable elsewhere: `import { feature } from 'bun:bundle'` appears in 153 files under src/, there are 556 `feature(` call sites, and 68 distinct feature names. The only quantified part of the claim that resolves on the cited artefact is wrong: package.json never mentions feature() or bun:bundle.",
+      "correction": "TRUE MECHANISM: src/**/*.ts(x) import `feature` solely from 'bun:bundle' (e.g. rg \"from 'bun:bundle'\" src/ -> 153 files; `rg -o \"feature\\\\(['\\\"]([A-Z0-9_]+)['\\\"]\\\\)\" src` -> 68 distinct flags). Correction: call sites are 556, not ~499. Config evidence class is wrong for the claim; the carrier must be a src/ file. package.json:115-121 witnesses only the scripts table."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "version",
+      "cite": "src/commands/version.ts:19",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Line matches exactly: `load: () => Promise.resolve({ call })`. The whole file is 22 lines and the quoted parts are all true: `call` is an in-file LocalCommandCall (src/commands/version.ts:3-10) returning `{ type: 'text', value: MACRO.BUILD_TIME ? `${MACRO.VERSION} (built ${MACRO.BUILD_TIME})` : MACRO.VERSION }`, and the description at :16 says 'Print the version this session is running (not what autoupdate downloaded)'. But the claim's 'Fully self-contained' framing omits the material fact one line earlier: the command is gated off for everyone but Anthropic staff.",
+      "correction": "src/commands/version.ts:17 `isEnabled: () => process.env.USER_TYPE === 'ant'`. The /version local command is inert unless USER_TYPE=ant; the claim should say so, and the cite should extend to :17 or :12-20 to carry it."
+    },
+    {
+      "source": "cc-custom",
+      "cmd": "parallel-tool-batching-and-commit-ordering",
+      "cite": "src/services/tools/toolOrchestration.ts:19-82",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Line 19 is exactly `export async function* runTools(` and the range does carry most of the claim: the partition loop (:26-29), concurrent safe batches (:30-53), the queued context-modifier commit applied in block order after the batch (:54-63), and the serial else-branch (:64-80). Arithmetic checks out: partitionToolCalls (:91-115) merges only when `isConcurrencySafe && acc[acc.length-1]?.isConcurrencySafe`, so unsafe tools are singleton batches; the safe check defaults false when the tool is unknown or inputSchema.safeParse fails or isConcurrencySafe throws (:98-108), i.e. conservative. Concurrency bound is real: getMaxToolUseConcurrency (:8-12) parses CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY with `|| 10` fallback, used at :175. What the range does NOT carry is the head of the claim and its 'strictly serial' half: runToolsSerially is at :118-150 and runToolsConcurrently at :152-177, both outside 19-82.",
+      "correction": "Extend the cite to src/services/tools/toolOrchestration.ts:19-177 (or add :118-177) to witness 'unsafe batches strictly serial'. As cited, 19-82 shows the dispatch to the serial path but not the serial path itself."
+    },
+    {
+      "source": "codex",
+      "cmd": "thread-spawn-topology-graph-store",
+      "cite": "codex-rs/agent-graph-store/src/lib.rs:1-13",
+      "verdict": "PARTIAL",
+      "evidenceClass": "doc-comment",
+      "why": "The whole file is 13 lines and every quoted token is present: :1 module doc 'Storage-neutral parent/child topology for thread-spawned agents.', :8-13 re-export error/local/store/types including `pub use local::LocalAgentGraphStore;` and `pub use types::ThreadSpawnEdgeStatus;`. But the cited range is a doc comment plus re-exports and restates the claim rather than implementing it. The substance lives one level down: the trait is store.rs:17-59; ThreadSpawnEdgeStatus Open/Closed is types.rs:4-12; LocalAgentGraphStore wrapping `Arc<StateRuntime>` (SQLite) is local.rs:10-14 with the four delegations at :31-110.",
+      "correction": "Cite codex-rs/agent-graph-store/src/store.rs:17-59 + src/local.rs:10-110 + src/types.rs:4-12. lib.rs:1-13 is module scaffolding only; it cannot witness 'a LocalAgentGraphStore implementation delegating to the SQLite state runtime' beyond the export name."
+    },
+    {
+      "source": "codex",
+      "cmd": "mcp-client-transport-and-startup-budget",
+      "cite": "codex-rs/features/src/lib.rs:1156-1161",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "registry-listing",
+      "why": "Text present: `FeatureSpec {` at :1156. The range is a feature-flag registry entry (id: Feature::Mcp20260728, key: \"mcp_2026_07_28\", stage: UnderDevelopment, default_enabled: false, ending :1161). It contains no transport variant, no transport recipe and no startup budget. The claimed mechanism is real but sits in a different crate: codex-rs/rmcp-client/src/rmcp_client.rs:103-120 defines PendingTransport with exactly the five claimed variants (InProcess{transport: tokio::io::DuplexStream}, Stdio{Box<StdioServerTransport>}, StreamableHttp, StreamableHttpWithOAuth{oauth_persistor: OAuthPersistor}, StreamableHttpWithAccessTokenOnly), :133-156 defines TransportRecipe, and the deadline guard is :154/:158-166 with InitializeDeadlineGuard.",
+      "correction": "Cite codex-rs/rmcp-client/src/rmcp_client.rs:103-120 (variants), :133-156 (recipe), :158-166 + the initialize_deadline plumbing. features/src/lib.rs:1156-1161 is a registry listing for a different flag and is the weakest evidence class in the sample."
+    },
+    {
+      "source": "codex",
+      "cmd": "renderer-notification-routing-and-bounded-replay",
+      "cite": "codex-rs/tui/src/app/thread_events.rs:41-113",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "Text present: `#[derive(Debug)]` at :41. The range genuinely carries one half: ThreadEventStore (:42-53) holds `buffer: VecDeque<ThreadBufferedEvent>` and `capacity: usize`, eviction is real (thread_event_buffer.rs:54-76 drains while `buffer.len() > capacity`), and the store handles `ServerNotification` rather than EventMsg (:115-167). The other two asserted halves are not at this location. Classification into Thread(ThreadId)/InvalidThreadId/AppScoped/Global is a different file and a different symbol: app_server_event_targets.rs:37-43 (enum) and :45-208 (`server_notification_thread_target`), consumed at app_server_events.rs:228-283. Delta coalescing is thread_event_buffer.rs:13-40 (MAX_COALESCED_AGENT_MESSAGE_DELTA_BYTES = 4 KiB at :9, 256 KiB budget at :10).",
+      "correction": "Split the cite: codex-rs/tui/src/app/thread_events.rs:41-53 + src/app/app_server_event_targets.rs:37-208 + src/app/thread_event_buffer.rs:9-76. As cited, thread_events.rs:41-113 witnesses the store shape, not the classification or the coalescing."
+    },
+    {
+      "source": "dsh",
+      "cmd": "performance-benchmark-budgets",
+      "cite": "benchmarks/active-stream-reconnect/reconnect.bench.client.ts:8-32",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Text present at :8 (`const EXPECTED_REPLACE_CI_MS = 50`) and the range is a genuine CI assertion file: :9 derives the budget through PERFORMANCE_BUDGET_HEADROOM, :13-15 asserts `toBeLessThanOrEqual`, :21 pins the derived budget with `expect(REPLACE_BUDGET_MS).toBe(63)`, :22-23 assert that over-budget values throw, :26-47 run three isolated built-worker samples and assert budgets; the gate is wired at scripts/run-gates.ts:247-248 (`case 'ci-bench': return [pnpmScript('bench', 'test:bench', ...)]`). Two of the claim's supporting numbers are not carried here and one is off: this file is one of five benchmark suites, not six (`*.bench.ts`/`*.bench.client.ts` exist under active-stream-reconnect, agent-continuation, conversation-fold, long-session-browser, session-open under vitest.bench.config.ts:17-20), and the 'session-open' detail (open/read/sessionRestore/projection, first history, cold Agent resume) is in session-open/session-open.bench.ts:41-58 and its worker, not here.",
+      "correction": "Correct 'Six suites exist' to five (or name the sixth). Cite session-open/session-open.bench.ts:32-58 for the session-open sub-claim. The 'cold-path ... CI assertions rather than reports' half is supported by this file plus run-gates.ts:247-248."
+    },
+    {
+      "source": "dsh",
+      "cmd": "team-roster-identity-and-provisioning",
+      "cite": "packages/experimental/agent-team/src/roster.ts:391-433",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "Text present at :391 (`private async reconcileProvisioning(root: Agent, signal: AbortSignal): Promise<void> {`), and the range does implement crash recovery of provisioning-only members (:392-432, including the `loaded.header.parentSession === root.id` check at :405 and `descriptor?.mode === 'continuable'` at :406). But the claim's subject is tryMembership, which is at :92-122. Worse for the claim, :100-101 grants teammate identity for BOTH phases - `if (member?.phase === 'active' || member?.phase === 'provisioning')` - so the claim's 'only for a durable member' (active-only) is falsified, and :107/:115 additionally grant a 'lead' identity to non-descriptor orphan children, which the claim omits entirely. The :93 identity check (`this.ctx.agents.get(agent.id) !== agent`) and the parentSession root resolution (:95-98) are both real.",
+      "correction": "Cite packages/experimental/agent-team/src/roster.ts:92-122. Fix the claim: teammate identity is granted for phase 'active' OR 'provisioning' (:100), and tryMembership also returns role 'lead' for a descriptor-less child whose parent is not a live agent (:107, :115)."
+    },
+    {
+      "source": "dsh",
+      "cmd": "per-runner-profile-synthesis-and-writable-roots",
+      "cite": "packages/sandbox/sandbox/src/roots.ts:52-55",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "Text present at :52 (`export function writableRoots(policy: SandboxExecutionPolicy): string[] {`), and writableRoots itself is exactly as the mechanism name implies: :53 `if (policy.mode !== 'workspace-write') return []`, :54 `[...new Set([policy.workspaceRoot, '/tmp', tmpdir()].map(canonicalPath))]`. But the claim's asserted content - bwrapProfileArgs and its flag spellings - is not in this file at all. It lives in packages/sandbox/sandbox-local/src/profiles.ts:16-23, where :17 is `['--ro-bind', '/', '/', '--dev', '/dev', '--unshare-pid', '--proc', '/proc', '--die-with-parent']` and :18-21 add `'--tmpfs', '/tmp'` plus `'--bind', policy.workspaceRoot, ...` under workspace-write. Flag spellings in the claim are correct; the carrier is wrong.",
+      "correction": "Cite packages/sandbox/sandbox-local/src/profiles.ts:16-23 for the bwrap dialect (and :30-36/:51-57 for landlock/seatbelt), keeping roots.ts:52-55 only for the writable-root half of the mechanism."
+    },
+    {
+      "source": "grok",
+      "cmd": "boundary-exact-token-gate-and-image-budget-hysteresis",
+      "cite": "crates/codegen/xai-chat-state/src/actor/request_builder.rs:63",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Text present exactly: `let budgeted = apply_image_budget(self.state.conversation.clone());`. That line does carry the image-budget half, and the hysteresis is real: image_budget.rs:41 IMAGE_COMPACT_TRIGGER_BYTES = MAX_REQUEST_BYTES - 3 MiB (47 MiB), :54 RECLAIM_TARGET = MAX_REQUEST_BYTES / 2 (25 MiB), :60 a compile-time assert pins reclaim < trigger, and :161-165 gates then batch-evicts down to the low-water mark. The token-gate half is elsewhere: it is not in this file. `exceeds_threshold` is xai-token-estimation/src/lib.rs:78-83 - `used.saturating_mul(100) >= context_window.saturating_mul(threshold_percent as u64)` - and its only chat-state caller is actor/queries.rs:94. The arithmetic in the claim is correct; the cited single line does not witness it.",
+      "correction": "Add crates/codegen/xai-token-estimation/src/lib.rs:78-83 (and actor/queries.rs:87-105 for the call site). request_builder.rs:63 witnesses only apply_image_budget; the separate pruning gate at :127-129 is `total_tokens > context_window.get() / 2`, a third, differently-shaped threshold."
+    },
+    {
+      "source": "grok",
+      "cmd": "export",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/export.rs:48",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Text present exactly as recorded. Every assertion checks out in the same function: :37-39 returns CommandResult::Error(\"No active session to export\") when ctx.session_id is none; :41-46 maps empty trimmed args to `None` (clipboard) and non-empty to `Some(PathBuf::from(trimmed))`; :48 returns `Action::ExportConversation { file_path }`. The claim's parenthetical range (:36-49) matches the actual function body. suggest_args at :31-34 does perform path completion via list_path_completions(ctx.cwd, args_query). The dispatch target exists: app/actions.rs:323 declares the variant and app/dispatch/router.rs:661-664 calls dispatch_export_conversation. The file-level doc at :1-5 corroborates the file/clipboard split.",
+      "correction": ""
+    },
+    {
+      "source": "grok",
+      "cmd": "transcript",
+      "cite": "crates/codegen/xai-grok-pager/src/slash/commands/transcript.rs:27",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Text present exactly. :23-28 is the whole run(): it takes `_args`, errors with \"No active session to view\" at :24-26 when ctx.session_id is none, and returns `CommandResult::Action(Action::OpenTranscriptPager)` at :27 with args genuinely ignored. The downstream claim is also carried by source, not just by the doc comment: app/dispatch/transcript.rs:234-273 renders via render_blocks_to_markdown (:245), writes `std::env::temp_dir().join(format!(\"grok-transcript-{}.md\", uuid...))` (:260-261), and arms app.pending_pager_path (:263); the event loop consumes it at app/event_loop.rs:866. The in-file test at :84-88 asserts 'Args are ignored; same dispatch'.",
+      "correction": ""
+    },
+    {
+      "source": "ih",
+      "cmd": "cli-host-surface-with-a-split-fail-loud-silent-fallback-discipline",
+      "cite": "apps/cli/src/index.ts:301-316",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "Text present at :301 (`const opts: HeadlessOptions = {`), but 301-316 is the tail of the `run` command body (HeadlessOptions assembly and the runHeadless call at :316), not the dispatch. The dispatch the claim describes is at :102-168: exact equality on args[0] for web (:102), sdk (:129), sessions (:134), acp (:139), tui (:145), __dist-selfcheck (:153), --version (:156), help (:160), and the negative that carries the claim - `if (args[0] !== \"run\") { return Promise.resolve(runTui(parseFlags(args))) }` at :164-168, so an unknown first token is silently the TUI. Note the claim's own example is inaccurate: `i-harness --sandbox x` IS rejected, because once args[0] === 'run' the sandbox value is validated against the allow-list at :183-191 (`--sandbox requires one of: ...`).",
+      "correction": "Cite apps/cli/src/index.ts:102-168 for the dispatch and the fall-through. Fix the example: the unvalidated-fall-through case is an unknown SUBCOMMAND token, not `--sandbox x`, which fails loud at :186-190."
+    },
+    {
+      "source": "ih",
+      "cmd": "llm-seam:const:backoffDelay (symmetric jitter)",
+      "cite": "packages/llm-seam/src/index.ts:128-133",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Text present at :128. The five-line body is exactly the asserted formula: :129 `const base = policy.initialDelayMs * 2 ** (attemptNo - 1)`, :130 `const capped = Math.min(base, policy.maxDelayMs)`, :131 `const jitter = (Math.random() * 2 - 1) * policy.jitterRatio * capped`, :132 `return Math.max(0, Math.round(capped + jitter))` - matching round(min(initial*2^(n-1), max) + random(-1..1)*jitterRatio*capped) floored at 0. The resolved policy fields exist and are validated upstream (ResolvedRetryBackoff at :45-49; resolveBackoff at :69-78 enforces jitterRatio in [0,1] and initial <= max).",
+      "correction": ""
+    },
+    {
+      "source": "ih",
+      "cmd": "telemetry:const:sink line shape",
+      "cite": "packages/telemetry/src/jsonl.ts:7",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Text present exactly: `stream.write(JSON.stringify({ ts: ev.ts, type: ev.type, data: ev.data }) + \"\\n\")`. The emitted shape matches the declared TelemetryEvent (packages/telemetry/src/types.ts: `type`, `ts` documented as Date.now() at emit time, `data: Record<string, unknown>`), so { ts, type, data } is not an ad-hoc subset. The default sink target is process.stdout (jsonl.ts:4). Caveat that does not break the claim: JSON.stringify drops undefined-valued fields, so a sink line can omit `data` when the caller leaves it undefined.",
+      "correction": ""
+    },
+    {
+      "source": "opencode",
+      "cmd": "code-mode-interpreter-sandbox",
+      "cite": "packages/codemode/src/codemode.ts:10-12",
+      "verdict": "PARTIAL",
+      "evidenceClass": "type-decl",
+      "why": "Text present at :10 (`export type ExecutionLimits = {`). The cited range is a TYPE DECLARATION of three independent budgets (timeoutMs/maxToolCalls/maxOutputBytes, each 'No default: absent means ...' at :11-16), which is not the claim's subject. The claim's two substantive halves are true and verifiable, just elsewhere: (a) the AST-walking interpreter is interpreter/runtime.ts:602-661 (`class Interpreter`, global scope seeded explicitly at :622-660 with only tools, Promise, undefined, Object, Math, JSON, Number, String, Boolean, Array, console, parseInt, parseFloat, Date, RegExp, Map, Set, URL, URLSearchParams, encodeURI/decodeURI*, error constructors, NaN/Infinity) - matching the claim's global list; (b) the MCP wiring is real but GATED OFF by default: tool/code-mode.ts:14 ('Run a confined orchestration script with access to connected MCP tools'), :210 pulls `mcp.tools()`, but session/tools.ts:388 `if (flags.experimentalCodeMode) return tools` means direct MCP tools are replaced only when OPENCODE_EXPERIMENTAL_CODE_MODE is set (effect/runtime-flags.ts:48), and tool/registry.ts:118 only imports the code-mode tool under the same flag.",
+      "correction": "Cite packages/codemode/src/interpreter/runtime.ts:602-661 for the interpreter/global-scope claim and packages/opencode/src/tool/code-mode.ts:188-241 for the MCP exposure. Add the gate: it is inert unless flags.experimentalCodeMode (session/tools.ts:388, tool/registry.ts:118); codemode.ts:10-16 witnesses only the budget knobs."
+    },
+    {
+      "source": "opencode",
+      "cmd": "openapi-spec-and-sdk-codegen",
+      "cite": "packages/opencode/src/cli/cmd/generate.ts:10-12",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Text present at :10 and the range does carry the SDK-generation end: generate.ts:9-12 calls `await Server.openapi()`, then :13-31 injects x-codeSamples and :32-52 formats and writes the spec. But the cited range does not carry the '/doc serves a lazily built, cached OpenApi.fromApi(PublicApi)' or the legacy transform, which are the claim's distinctive assertions. Those are true, in other files: server/server.ts:67-69 `return OpenApi.fromApi(PublicApi)`; routes/instance/httpapi/server.ts:183-192 - `const docResponse = lazy(() => HttpServerResponse.jsonUnsafe(OpenApi.fromApi(PublicApi)))` with the comment that jsonUnsafe caches the serialized body, mounted as GET /doc at :190; and PublicApi applies the transform at public.ts:530-535 (`transform: matchLegacyOpenApi`), whose :92-97 loop strips the null arm via stripOptionalNull (definition at :460-482).",
+      "correction": "Add packages/opencode/src/server/routes/instance/httpapi/server.ts:183-192 and .../httpapi/public.ts:82-103 + :530-535. generate.ts:10-12 witnesses only the generator reaching the same Server.openapi() entry point."
+    },
+    {
+      "source": "opencode",
+      "cmd": "queued-task-dispatch",
+      "cite": "packages/opencode/src/session/message-v2.ts:592-597",
+      "verdict": "SUPPORTED",
+      "evidenceClass": "implementation",
+      "why": "Text present at :592. :592-596 builds `tasks` by flatMap over messages, dropping messages not after `finished` and keeping only parts of type 'compaction' or 'subtask'; it is returned at :597 from `latest`. The consumer matches the claim exactly: session/prompt.ts:1096 destructures `tasks` from MessageV2.latest, :1142 `const task = tasks.pop()` inside the `while (true)` loop (:1088), :1144-1147 routes 'subtask' to handleSubtask in a child session then `continue`, and :1149-1159 routes 'compaction' to SessionCompaction.process (the `yield* compaction.process({...})` call at :1150), so one task is popped per iteration.",
+      "correction": ""
+    },
+    {
+      "source": "opencode-fork",
+      "cmd": "agent-selection-and-default",
+      "cite": "packages/core/src/agent.ts:45-74",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Text present at :45 (`const layer = Layer.effect(`). Two of the three asserted facts are carried inside the range: :10 `export const defaultID = ID.make(\"build\")`, and the guard at :67-68 `agent && agent.mode !== \"subagent\" && !agent.hidden` with the literal 'build' fallback at :73-74. The selection requirement is mis-stated for the path a caller would use: `select(id)` at :94-98 returns `{ id: selected, info: state.get().agents.get(selected) }` for an explicit id with NO existence/mode/hidden check at all - the guard only applies to the default-resolution chain (`selectedDefault()` :69-79). The generator exists at the corrected path packages/opencode/src/agent/generator.ts (plus agent/prompt/generate.txt), not packages/opencode/src/generator.ts.",
+      "correction": "Scope the claim to default resolution (agent.ts:67-79) and state that AgentV2.select(id) returns whatever the map holds (possibly undefined info) for an explicit id (:94-98). Fix the path to packages/opencode/src/agent/generator.ts."
+    },
+    {
+      "source": "opencode-fork",
+      "cmd": "tool-result-preparation",
+      "cite": "packages/core/src/session/kernel/coordinator.ts:62-67",
+      "verdict": "PARTIAL",
+      "evidenceClass": "implementation",
+      "why": "Text present at :62. The settlement half is carried and true: :62 defines `toolError`; :64-68 `selectSettlement` accepts a candidate only when `ToolResultValue.is(record.result)` and otherwise returns the fallback; it is consumed in the tool path at :578-586 (`selectSettlement(finalized, settlement)`), and toolError is used at :563/:567/:576/:580. The claim's framing sentence - that the normalisation producing the provider-facing value happens 'before a tool result is appended to the model context' - is not in this range; that is the projection in session/runner/to-llm-message.ts:86-99 (`ToolOutput.toResultValue(...)` then `ToolResultPart.make`), called through toLLMMessages (:222-223) at coordinator.ts:288. Durable state is what feeds it (tool.state.status/'completed'), so the claim's causal story is right but witnessed one file away.",
+      "correction": "Add packages/core/src/session/runner/to-llm-message.ts:86-99 (and the toLLMMessages call site coordinator.ts:288). coordinator.ts:62-67 alone witnesses the settlement guard, not the tool-result preparation."
+    },
+    {
+      "source": "opencode-fork",
+      "cmd": "parent-wake-on-task-completion",
+      "cite": "packages/core/src/tool/task.ts:414-419",
+      "verdict": "WRONG_LINE",
+      "evidenceClass": "implementation",
+      "why": "Text present at :414, but the recorded lineText is `agentPath,` - one argument in a submissions.submit({...}) call - and agentPath carries nothing about completion delivery. The actual carrier is :416 `completionDelivery: runInBackground ? \"parent\" : \"tool\",` inside the range 414-419. The claim itself is true end to end: task.ts:45-51 carries the model-facing description ('The parent session is automatically notified and woken when a task finishes.'); the closed union is session/task-submission.ts:30 `export type CompletionDelivery = \"tool\" | \"parent\"`; 'parent' writes the durable outbox at :401-421 (`insert(TaskNotificationOutboxTable).values({... status: \"pending\" ...})`) and signals at :516 (`if (result?.completionDelivery === \"parent\") yield* notifications.signal()`); the drain then admits a synthetic message that steers the parent (:151-158) and wakes it at session/task-notification.ts:183 (`yield* input.wake(...)`), marking the row 'woken' at :185-196.",
+      "correction": "Cite task.ts:416 (or :399-417) rather than :414; the lineText should be the completionDelivery assignment. Supporting witnesses: session/task-submission.ts:30, :401-421, :510-517 and session/task-notification.ts:151-196."
+    }
+  ],
+  "tally": {
+    "SUPPORTED": 8,
+    "PARTIAL": 7,
+    "WRONG_LINE": 6,
+    "UNSUPPORTED": 0,
+    "UNCERTAIN": 0
+  },
+  "notable": [
+    "Line numbers: ZERO stale or invented across all 21 cells. Every recorded lineText matched the source line byte-for-byte where I checked it (package.json:115, version.ts:19, toolOrchestration.ts:19, agent-graph-store/lib.rs:1, features/lib.rs:1156, thread_events.rs:41, reconnect.bench.client.ts:8, roster.ts:391, roots.ts:52, request_builder.rs:63, export.rs:48, transcript.rs:27, apps/cli/index.ts:301, llm-seam/index.ts:128, telemetry/jsonl.ts:7, codemode.ts:10, generate.ts:10, message-v2.ts:592, agent.ts:45, coordinator.ts:62, task.ts:414). The failure mode is exactly the predicted one: 13 of 21 lines are the right line number pointing at a line that cannot carry the claim.",
+    "Worst carrier class: 6 cells cite module scaffolding, a registry listing, a type declaration or an identifier-only line where the substantive mechanism is in a sibling file - features/src/lib.rs:1156 (feature-flag registry), agent-graph-store/lib.rs:1-13 (doc comment + pub use), codemode.ts:10-16 (type decl), roots.ts:52-55 (wrong module for the bwrap dialect), thread_events.rs:41-113 (store shape, not classification/coalescing), task.ts:414 (`agentPath,`).",
+    "Falsified negative/universal: dsh roster.ts:100 grants teammate identity for phase 'provisioning' as well as 'active' (`member?.phase === 'active' || member?.phase === 'provisioning'`), so the claim 'grants a teammate identity only for a durable member [active]' is wrong as written; roster.ts:107 and :115 also grant an unmentioned 'lead' identity.",
+    "Repeated pattern of 'the cited range contains the assertion but the pinpointed line does not': opencode-fork task.ts:414-419 (the carrier is :416) and cc-custom package.json:115-121 (the range is the scripts block). Both need re-pinning.",
+    "Gated/inert capabilities the claims did not flag: cc-custom src/commands/version.ts:17 `isEnabled: () => process.env.USER_TYPE === 'ant'`; opencode code mode is inert without OPENCODE_EXPERIMENTAL_CODE_MODE (session/tools.ts:388, tool/registry.ts:118, effect/runtime-flags.ts:48). Both claims present the capability as unconditionally available.",
+    "Corrected counts: cc-custom feature() call sites are 556 with 68 distinct flags (claim said ~499 / ~70); dsh has five benchmark suites under vitest.bench.config.ts:17-20 (claim said six); opencode-fork's agent-file generator is at packages/opencode/src/agent/generator.ts (claim said packages/opencode/src/generator.ts).",
+    "One claim mis-states its own example: apps/cli/src/index.ts:183-191 rejects `--sandbox x` with exit 1, so the 'unknown subcommand is not rejected' discipline is right (the fall-through is :164-168) but `i-harness --sandbox x` is a bad illustration.",
+    "No security-property claim in the sample survived as a clean negative: the strongest security-adjacent assertions (code-mode sandbox scope, roster identity) are both materially conditional (env gate; active-OR-provisioning phase), and the cleanly-verified security-shaped cell (dsh roots.ts writableRoots read-only => []) is not the line the cell cited."
+  ]
+}
