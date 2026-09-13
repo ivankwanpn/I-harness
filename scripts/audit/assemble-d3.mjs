@@ -279,6 +279,28 @@ L.push("| `?` | 該源在此域的盤點清單為空——**「本次未盤點�
 L.push("")
 L.push(`> 每格顯示該源的機制摘要與**最佳可得**的 \`file:line\`。單源獨有的機制列於各表末尾並標 \`(單源)\`——它們未被任何 crosswalk 認領，**不表示其他源沒有等價能力**，只表示名稱未能對帳。`)
 L.push("")
+// Name the inventory holes explicitly. A "?" tells a reader a cell is unknown,
+// but not WHICH cells or whether a source is wholly uninventoried in a domain
+// versus partly so. That distinction bites here: grok has mechanisms in ten
+// domains and none in two, so its "?" cells and its populated cells share a
+// column and would otherwise read as equally authoritative.
+if (INVENTORY_HOLES.size > 0) {
+  L.push(`### 盤點空洞（${INVENTORY_HOLES.size} 格）`, "")
+  L.push("以下 (源, 域) 的盤點清單為**空**，且該源未在 `domainsAbsent` 宣告此域不存在。**這是「本次未盤點」，不是「該源沒有這一層」。**", "")
+  L.push("| 源 | 域 | 該源自己歸在此域的模組 |")
+  L.push("|---|---|---|")
+  for (const key of [...INVENTORY_HOLES].sort()) {
+    const [src, dom] = key.split("::")
+    const body = perSource[src]
+    const mods = Object.entries(body?.moduleCoverage ?? {})
+      .filter(([, v]) => new RegExp(dom, "i").test(String(v)))
+      .map(([k]) => k)
+    L.push(`| ${src} | \`${dom}\` | ${mods.length ? mods.map((m) => `\`${m}\``).join("、") : "（該源未標註）"} |`)
+  }
+  L.push("")
+  L.push("> 這些模組在該源自己的 `moduleCoverage` 裡已被歸入該域，卻沒有產出帶行號的機制條目——**缺口在抽取，不在能力**。要補必須針對該域重跑抽取，而不是從現有資料推論。")
+  L.push("")
+}
 
 let total = 0
 for (const d of DOMAINS) {

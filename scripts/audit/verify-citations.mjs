@@ -129,7 +129,24 @@ function checkClaim(source, cmd, field, claimText, citations) {
   const claimTokens = tokens(claimText)
   let anyResolved = false
   let anyCode = false
-  for (const cite of citations) {
+  // Agents (correctly) use a shorthand for several lines of ONE file:
+  //   crates/.../workspace_server.rs:231, :408-411
+  // The bare ":line" continuations inherit the file from the first segment.
+  // Treating the whole string as a path made three citations look like missing
+  // files. Expand the shorthand before parsing -- it is clearer than repeating a
+  // long path three times, and the checker should handle a reasonable format
+  // rather than force the extractor to be verbose.
+  const expanded = []
+  for (const c of citations) {
+    const parts = String(c).split(/,\s*(?=:)/)
+    if (parts.length === 1) {
+      expanded.push(c)
+      continue
+    }
+    const head = parts[0].replace(/:\d+(-\d+)?$/, "")
+    for (const p of parts) expanded.push(p.startsWith(":") ? `${head}${p}` : p)
+  }
+  for (const cite of expanded) {
     stats.citations++
     const { path: rel, line, endLine } = parseCitation(cite)
     const abs = join(root, rel)
