@@ -18,6 +18,30 @@
 
 **證明強度聲明**：本盤點的所有機制主張來自**閱讀原始碼**，未執行任何程式碼。這是靜態審計，不是行為測試。
 
+## 驗證記錄
+
+| 關卡 | 方法 | 結果 |
+|---|---|---|
+| 覆蓋率 | `assemble-d1.mjs` 硬閘：表徵過的包集合必須**精確等於** `ih-surface.json` 的在範圍集合 | **65/65 PASS**（不足即拒絕產出文件並列出缺哪幾包） |
+| 引註（機械） | `verify-citations.mjs`：重開每一條引註，確認檔案存在、行號在範圍內、非空白行 | **985 條主張 / 3,037 條引註，全部解析成功，0 越界** |
+| 引註（對抗，第一輪） | 無利益關係的獨立代理抽 27 格，重讀原文判定引註是否真的支撐主張 | **0 條造假／過期行號**（每一條 `lineText` 與來源逐字元相符）；但 **4 條 WRONG_LINE**——主張為真，引註位置承載不了它 |
+| 引註（對抗，第二輪） | 全資料 enriched 後重新分層抽樣 22 格再判 | 見姊妹文件的驗證節 |
+
+**第一輪抓到的實際缺陷**（已修正，原始引註保留並就地記錄）：
+
+- `/goal` 的機制主張引到 `packages/bundle/web-app/cordis.patch.yml:411`——那是一條 bundle manifest 條目，**下一行就是 `disabled: true`**。讀成證據反而是在說該 bundle 把這個外掛**關掉了**。真實在 `packages/goal/command-goal/src/index.ts:189-195`。
+- `/compact` 引到 `packages/core/session/src/types.ts:427`（一句 `SurfaceOp` doc 註解），真實作在 `packages/compaction/command-compact/src/index.ts:57-105`。
+- grok `/remember` 引到 `xai-grok-memory/src/storage.rs:113`（一個 MEMORY.md 路徑輔助函式），真實作在 `slash/commands/remember.rs:16-23`。
+- grok `/model` 的「完全匹配優先」引到 `slash/commands/mod.rs:88`（`builtin_commands()` 的註冊 vec 條目），真實作在 `slash/commands/model.rs:49-53`。
+
+另有一條**部分修正**尚未併入資料檔，記於此以免遺失：`packages/schedule` 的「先接受後投遞、永不靜默丟棄」主張，其引註落在 `driver.ts:35`（`deliveryErrors` 欄位的註解），真正的順序實作在 `:99-106`；且該主張有兩個邊界——**未知 session 會被跳過且完全不產生 `deliveryError`**（`:83`），而 `onDue` 拋出的 occurrence **仍會被計入 `delivered`**（`:108` 在 `:111` 的 await 之前執行）。因此「永不靜默丟棄」**過強**，實際是「接受先於投遞，但投遞失敗的會計不完整」。
+
+**本審計自身工具的三個缺陷**（皆由上述驗證暴露，已修）：
+
+1. `verify-citations.mjs` 不解析**範圍引註**（`path:line-line`，設計明文允許），導致 **274 條有效引註被誤報為檔案不存在**——一場純粹由正則引起的假警報。
+2. 聯集折疊在「同源兩個命令正規化到同一 key」時**靜默丟掉一個**：codex 的 `Btw` 與 `Side` 都被正規化為 `side-conversation`，這既丟了一個命令，也讓 I-harness 自己的 `/btw` 列失去 codex 欄位。折疊邏輯現集中於 `lib-union.mjs`（原本有兩份手抄副本且已漂移），碰撞時**兩者都退回自己的名字**並回報。
+3. codex 抽取器在只有 `to_string` 而無 `serialize` 時誤用 `serialize_all` 推導，**發明了無法被呼叫的命令 `auto-review`**。正解：canonical 是 `IntoStaticStr`（`to_string` > `serialize` > kebab），可解析名是 `serialize` ∪ `to_string`。由 repo 內測試 `auto_review_command_is_approve` 證實。
+
 ## 怎麼讀這份文件
 
 每包一節，欄位固定。三處值得注意：
@@ -26,9 +50,9 @@
 - **「已知缺口」全部來自原始碼內的標記**（註解、未接線的匯出、宣告未實作），**不是推測**。沒標記的包就寫「無」。
 - 出處採 `path:line` 或 `path:line-line`。範圍形式代表該決策由一段程式碼共同承載。
 
-## 跨包主線（讀細節前先知道的六件事）
+## 跨包主線（讀細節前先知道的八件事）
 
-這六條是橫切 65 包、在單包視角下看不到的結構性事實。
+這八條是橫切 65 包、在單包視角下看不到的結構性事實。
 
 ### 1. 沙箱隔離**只覆蓋 shell，而且只是「請求」**
 
@@ -38,25 +62,43 @@
 
 > 這是本次盤點最重要的安全性發現：**「有 win-ACL 沙箱」不等於「所有檔案操作都被圍堵」**。寫入路徑的圍堵依賴 `resolvePath` 的相對路徑檢查，不是 OS 層隔離。
 
-### 2. 拒絕沙箱的後果是**整個 turn 失敗**，不是降級
+### 2. **讀隔離是宣告而非實作**，而且那道閘門在組合使用時從未上膛
+
+沒有任何後端宣告 `readIsolation:true`——兩個本機後端都宣告 `{readIsolation:false}`（`packages/sandbox-local/src/index.ts:47,71`）；Windows ACL 後端自己的檔頭就寫明「writes are restricted; reads, network, and process visibility are NOT」（`packages/sandbox-windows-acl/src/index.ts:23-25`）；Linux bwrap 用 `--ro-bind / /`，**整個檔案系統仍可讀**（`sandbox-local/src/profiles.ts:4`）。
+
+唯一相關機制是一道**拒絕閘**：`requireReadIsolation===true` 而能力未宣告時 `assertSandboxCapable` 拋錯（`packages/sandbox/src/index.ts:64-71`）。但 repo 全域 `requireReadIsolation` **只由測試設定**（`sandbox/test/enforcement.test.ts:13`、`exec/test/enforcement.test.ts:15`）——**在實際組合使用中這道閘從未上膛**。
+
+### 3. 拒絕沙箱的後果是**整個 turn 失敗**，不是降級
 
 `shell` 不接 `SandboxUnavailableError`：例外離開 tool body → `core-agent` 記 `tool/error` 後 rethrow 並**丟棄整個 tool batch**（`packages/core-agent/src/execute-tool-calls.ts:125-133,223-227`）。背景變體則變成 `status:"error"` 的 job（`packages/exec/src/index.ts:262-267`）。這是刻意的 fail-closed，代價是一條被拒絕的命令會殺掉整個 turn。
 
-### 3. 壓縮是**全程 append-only**，歷史永不改寫
+### 4. 壓縮是**全程 append-only**，歷史永不改寫
 
-`deriveMessages` 以**聯集**隱藏：summary 遮蔽 ∪ `compaction/reset` 的 `removedSeqs` ∪ rewind 的 cut 窗口 ∪ prune 的替身投影（`packages/core-session/src/index.ts:315,411-438`；`packages/compaction/src/index.ts:233-263`）。`seq` 由 append 指派，**無 key 的事件永遠無法被隱藏**。這是五源中唯一持久層不改寫的設計。
+`deriveMessages` 以**聯集**隱藏：summary 遮蔽 ∪ `compaction/reset` 的 `removedSeqs` ∪ rewind 的 cut 窗口 ∪ prune 的替身投影（`packages/core-session/src/index.ts:315,411-438`；`packages/compaction/src/index.ts:233-263`）。`seq` 由 append 指派，**無 key 的事件永遠無法被隱藏**。這是七源中唯一持久層不改寫的設計——codex、opencode、cc-custom、grok 都在某種程度上替換或改寫，dsh 用 `surfaceOp` 遮蔽但仍以 append 為本。
 
-### 4. 「能力閘」是**硬閘**，不是 UI 過濾
+### 5. 「能力閘」是**硬閘**，不是 UI 過濾
 
 `Loop.slashCapabilities()` 只推 8 個能力（`packages/tui/src/app/loop.ts:2419-2431`）。`plan-mode`、`guardian`、`vim-mode` **從不被推入**，因此 `/plan`、`/view-plan`、`/auto`、`/always-approve`、`/vim-mode` **在出貨的 TUI 中依建構即不可達**，其 `run` body 只是單一 toast（`run.ts:51,59`、`approval.ts:16`、`text-input.ts:69`）。未匹配的 slash 行變成 `Unsupported command: /<name>`，**永不觸達後端**（`loop.ts:2098-2113`）。
 
-### 5. 三個命令**繞過註冊表**
+### 6. 三個命令**繞過註冊表**
 
 `/settings`、`/provider`、`/model` 在 `registry.matches` **之前**就被 `tryG1SlashModal` 文字攔截（`loop.ts:2091-2094,3173-3195`）。它們在 `g1.ts` 的註冊項只是清單／轉發面（`g1.ts:1-10`）。讀「註冊表 = 命令真相」會漏掉這三個。
 
-### 6. 外掛程式碼**永不執行**——已用程式碼確認，非 README 聲稱
+### 7. 對外掛程式碼**永不執行**——已用程式碼確認，非 README 聲稱
 
 五處獨立的原始碼陳述：`capability.ts:2-9,52`（只 `JSON.parse` package.json，從不 import/require/eval）、`install.ts:29-30`（安裝是純檔案複製）、`materialize.ts:13`（只有 rm+cp）、`commands.ts:9-10`（只讀 markdown）、`evaluate.ts:110`（evaluator 把 `executable` 維度**無條件釘死為 `"unsupported"`**）。整個套件唯一 spawn 的進程是 `git`（原始碼複製用）。
+
+### 8. 有一批**已宣告、已測試、但無生產呼叫者**的表面
+
+這些不是「未完成」，而是「完成後沒接上」——盤點時最容易被誤讀為功能的部分：
+
+- **整個沙箱升級模組**（`WIDER_MODES`、`ESCALATION_TARGETS`、`approveEscalation`、`sandboxDenialMarker`、`escalationHintMarker`、`validateEscalationArgs`，以及 `roots.ts` 的 `writableRoots`／`canonicalPath`）在 repo 全域只出現在 `packages/sandbox/test/seam.test.ts`。**且沒有任何 tool schema 宣告它的 marker 文字所廣告的 `sandbox_permissions`／`justification` 參數**——也就是說那條升級階梯在生產路徑上不存在。
+- `guard-approval/src/remember.ts` 未 re-export、無 importer。
+- `provider` 的 `buildWireClient` 僅測試使用；`preset` 的 `mountPreset` 無生產呼叫者。
+- `sandbox-local/src/runner-failures.ts` 未 re-export，且 `exec` 從不掃描 `ConfinedArgv.denialSignatures`（只掃 `runnerFailureRules`）。
+- `session-executor` 的 `estimateAssemblyOverhead`／`bindAuthRefreshStatus` 由 `src/assembly.ts` 匯出但未經 `src/index.ts` re-export，`package.json` 只暴露 `"."`——**套件外不可達**。
+- `plan-mode` 的 `withdrawPlanModeTool`、`session-query` 的 legacy opener 與 `closeSessionQueries`、`session-persistence` 的 `registerUpgrade` 皆無生產呼叫者。
+
 
 ## 失敗策略的三分法（讀「失敗策略」欄前先知道）
 
@@ -148,13 +190,13 @@
 | `sandbox-policy` | safety-model | Resolves the effective sandbox mode for a session (last 'sandbox/mode' event wins over the… | 3 | 1 | 6 |
 | `sandbox-windows-acl` | safety-model | Windows write-restriction backend: builds a WRITE_RESTRICTED token whose restricting-SID l… | 6 | 5 | 23 |
 | `guard-approval` | safety-model | The tools/pre-execute approval policy (three layers plus a 'never' headless promotion) and… | 7 | 4 | 22 |
-| `guard-repeat-tool` | safety-model | Counts consecutive identical tool calls (tool name + JSON args) per Session and, at each c… | 4 | 1 | 6 |
+| `guard-repeat-tool` | safety-model | Counts consecutive identical tool calls (tool name + JSON args) per Session and, at each c… | 4 | 1 | 7 |
 | `guard-retry` | safety-model | Cascade guard on tools/execute that re-dispatches a tool call whose result carries the TOO… | 4 | 1 | 10 |
 | `guard-timeout` | safety-model | Cascade guard on tools/execute that enforces the tool's declared timeoutMs by swapping in … | 4 | 1 | 9 |
 | `llm-seam` | safety-model | The provider-agnostic model seam: the LLMStreamEvent/LLMRequest/ModelClient vocabulary, th… | 6 | 1 | 12 |
 | `llm-anthropic` | safety-model | Anthropic Messages wire adapter: streams SSE from POST {baseUrl}/v1/messages, assembles to… | 5 | 1 | 13 |
 | `llm-openai` | safety-model | OpenAI Responses wire adapter: streams SSE from POST {baseUrl}/v1/responses, maps neutral … | 5 | 1 | 11 |
-| `llm-openai-compatible` | safety-model | Chat Completions wire adapter for any OpenAI-compatible endpoint: streams SSE from POST {b… | 4 | 1 | 10 |
+| `llm-openai-compatible` | safety-model | Chat Completions wire adapter for any OpenAI-compatible endpoint: streams SSE from POST {b… | 4 | 1 | 11 |
 | `llm-gemini` | safety-model | Gemini generateContent wire adapter: streams SSE from POST {baseUrl}/v1beta/models/{model}… | 5 | 1 | 12 |
 | `llm-bedrock` | safety-model | AWS Bedrock Converse wire adapter: sends ConverseStreamCommand through the AWS SDK, walks … | 5 | 1 | 13 |
 | `llm-mock` | safety-model | A scripted mock ModelClient: each stream() call replays exactly one MockStep (its tool cal… | 2 | 1 | 4 |
@@ -176,7 +218,7 @@
 | `schedule` | service | Durable per-session reminders whose state IS the session event stream: `schedule/change` v… | 4 | 3 | 21 |
 | `feedback` | service | Per-message user feedback (like/dislike + optional note) for a session, persisted as ONE c… | 4 | 3 | 19 |
 
-合計 **65** 包、**299** 條設計決策、**1202** 條引註；**65** 包有原始碼內標記的已知缺口。
+合計 **65** 包、**299** 條設計決策、**1204** 條引註；**65** 包有原始碼內標記的已知缺口。
 
 ## 引擎與會話核心
 
@@ -1938,7 +1980,7 @@ Counts consecutive identical tool calls (tool name + JSON args) per Session and,
    - 出處：`packages/guard-repeat-tool/src/index.ts:59-63`
 2. **thresholds is a LIST, not a single limit — the default [3,5,8] fires a nudge at each of those counts.**
    - 理由：Escalating reminders instead of one hard stop; thresholds.includes(state.count) is the trigger.
-   - 出處：`packages/guard-repeat-tool/src/index.ts:11,65-78`
+   - 出處：`packages/guard-repeat-tool/src/index.ts:11`、`packages/guard-repeat-tool/src/index.ts:65-78`
 3. **Per-session state is a WeakMap keyed by the Session object.**
    - 理由：Stated reason: a Session has no durable id in memory and this works for the main session and every child; entries are GC'd with their session.
    - 出處：`packages/guard-repeat-tool/src/index.ts:44-47`
@@ -2086,10 +2128,10 @@ The provider-agnostic model seam: the LLMStreamEvent/LLMRequest/ModelClient voca
 |---|---|---|
 | `DEFAULT_MAX_RETRIES` | 5 | `packages/llm-seam/src/index.ts:63` |
 | `DEFAULT_INITIAL_DELAY_MS / DEFAULT_MAX_DELAY_MS / DEFAULT_JITTER_RATIO` | 500 / 10000 / 0.1 | `packages/llm-seam/src/index.ts:64-66` |
-| `DEFAULT_RETRYABLE_CODES` | ['RATE_LIMIT','SERVER','TIMEOUT','TRANSPORT','EMPTY_RESPONSE'] (CONTEXT_WINDOW_EXCEEDED and QUOTA are classified but not in the default retry set) | `packages/llm-seam/src/index.ts:16-23,67` |
+| `DEFAULT_RETRYABLE_CODES` | ['RATE_LIMIT','SERVER','TIMEOUT','TRANSPORT','EMPTY_RESPONSE'] (CONTEXT_WINDOW_EXCEEDED and QUOTA are classified at packages/llm-seam/src/index.ts:16-23 but are not in the default retry set) | `packages/llm-seam/src/index.ts:67` |
 | `backoffDelay (symmetric jitter)` | round(min(initial*2^(n-1), max) + random(-1..1)*jitterRatio*capped), floored at 0 | `packages/llm-seam/src/index.ts:128-133` |
-| `cause-chain walk depth` | 5 (both retryErrorCode and describeTransportError) | `packages/llm-seam/src/index.ts:109,300` |
-| `image placeholder base64 prefix` | 8 characters | `packages/llm-seam/src/index.ts:245,262` |
+| `cause-chain walk depth` | 5 (retryErrorCode; describeTransportError uses the same depth at packages/llm-seam/src/index.ts:300) | `packages/llm-seam/src/index.ts:109` |
+| `image placeholder base64 prefix` | 8 characters (also the mask group at packages/llm-seam/src/index.ts:262) | `packages/llm-seam/src/index.ts:245` |
 
 **已知缺口（原始碼內標記）**
 
@@ -2134,7 +2176,7 @@ Anthropic Messages wire adapter: streams SSE from POST {baseUrl}/v1/messages, as
 | `ADAPTIVE_THINKING_RE` | /\-4[-.](?:6\|7\|8\|9\|[1-9][0-9]+)/ | `packages/llm-anthropic/src/index.ts:54` |
 | `legacy budget table` | low 2048, medium 8192, high 16384; xhigh/max verbatim | `packages/llm-anthropic/src/index.ts:56-59` |
 | `anthropic-version header` | "2023-06-01" | `packages/llm-anthropic/src/index.ts:130` |
-| `default baseUrl / endpoint` | https://api.anthropic.com + /v1/messages | `packages/llm-anthropic/src/index.ts:94,128` |
+| `default baseUrl / endpoint` | https://api.anthropic.com (endpoint /v1/messages built at packages/llm-anthropic/src/index.ts:128) | `packages/llm-anthropic/src/index.ts:94` |
 
 **已知缺口（原始碼內標記）**
 
@@ -2176,9 +2218,9 @@ OpenAI Responses wire adapter: streams SSE from POST {baseUrl}/v1/responses, map
 
 | 名稱 | 值 | 出處 |
 |---|---|---|
-| `endpoint / default baseUrl` | /v1/responses + https://api.openai.com | `packages/llm-openai/src/index.ts:83,128` |
+| `endpoint / default baseUrl` | /v1/responses (base https://api.openai.com built at packages/llm-openai/src/index.ts:83) | `packages/llm-openai/src/index.ts:128` |
 | `effort mapping` | reasoning:{effort}; 'off' -> 'none' | `packages/llm-openai/src/index.ts:65-68` |
-| `SSE [DONE] sentinel` | data: [DONE] -> {type:'[DONE]'} | `packages/llm-openai/src/index.ts:70-80,198` |
+| `SSE [DONE] sentinel` | data: [DONE] -> {type:'[DONE]'} (consumed at packages/llm-openai/src/index.ts:198) | `packages/llm-openai/src/index.ts:70-80` |
 
 **已知缺口（原始碼內標記）**
 
@@ -2204,7 +2246,7 @@ Chat Completions wire adapter for any OpenAI-compatible endpoint: streams SSE fr
    - 出處：`packages/llm-openai-compatible/src/index.ts:149-165`、`packages/llm-openai-compatible/src/index.ts:228-237`
 3. **A missing tool-call id is synthesized as `call_${index}` and the id/name are overwritten by later deltas that carry them.**
    - 理由：Keeps the index-keyed accumulator usable on endpoints that omit ids in early deltas.
-   - 出處：`packages/llm-openai-compatible/src/index.ts:136,189-201`
+   - 出處：`packages/llm-openai-compatible/src/index.ts:136`、`packages/llm-openai-compatible/src/index.ts:189-201`
 4. **M59 configured headers (e.g. a gateway's x-opencode-session) merge under the adapter's own auth headers with a case-insensitive collision drop.**
    - 理由：Same Fetch comma-join hazard as the other adapters; the adapter's auth shape always wins.
    - 出處：`packages/llm-openai-compatible/src/index.ts:12-33`、`packages/llm-openai-compatible/src/index.ts:117`
@@ -2217,7 +2259,7 @@ Chat Completions wire adapter for any OpenAI-compatible endpoint: streams SSE fr
 
 | 名稱 | 值 | 出處 |
 |---|---|---|
-| `endpoint / default baseUrl` | /v1/chat/completions + https://api.openai.com | `packages/llm-openai-compatible/src/index.ts:93,115` |
+| `endpoint / default baseUrl` | /v1/chat/completions (base https://api.openai.com built at packages/llm-openai-compatible/src/index.ts:93) | `packages/llm-openai-compatible/src/index.ts:115` |
 | `synthetic call id prefix` | "call_" + index | `packages/llm-openai-compatible/src/index.ts:195` |
 | `effort mapping` | top-level reasoning_effort; 'off' -> 'none' | `packages/llm-openai-compatible/src/index.ts:53-56` |
 
@@ -2337,12 +2379,6 @@ A scripted mock ModelClient: each stream() call replays exactly one MockStep (it
 
 **事件**：`LLMStreamEvent only: "tool_call", "text/chunk", "end", "error" (packages/llm-mock/src/index.ts:23-31)`
 
-**關鍵常數**
-
-| 名稱 | 值 | 出處 |
-|---|---|---|
-| `` |  | `` |
-
 **已知缺口（原始碼內標記）**
 
 - none
@@ -2390,7 +2426,7 @@ The provider plane: protocol enum + ProviderProfile/registry, the unified model-
 | 名稱 | 值 | 出處 |
 |---|---|---|
 | `ProviderProtocol` | ['openai-responses','openai-compatible','anthropic-messages','gemini','bedrock'] | `packages/provider/src/index.ts:9` |
-| `PROBE_TIMEOUT_MS` | 10000 | `packages/provider/src/index.ts:265,447` |
+| `PROBE_TIMEOUT_MS` | 10000 (applied to every candidate fetch at packages/provider/src/index.ts:447) | `packages/provider/src/index.ts:265` |
 | `PROBE_CANDIDATE_PATHS` | ['/v1/models','/models'] | `packages/provider/src/index.ts:272` |
 | `COMPAT_BASE_SUFFIXES` | ['/anthropic','/api/claudecode','/api/anthropic','/api/coding','/claude','/step_plan','/apps/anthropic'] | `packages/provider/src/index.ts:280-288` |
 | `ANTHROPIC_API_VERSION` | "2023-06-01" | `packages/provider/src/index.ts:317` |
@@ -2493,7 +2529,7 @@ The ref-based credential store: one JSON document of ref -> value under the conf
 |---|---|---|
 | `REF_PATTERN` | /^[A-Za-z_][A-Za-z0-9_]*$/ (a valid environment-variable name) | `packages/credentials/src/index.ts:106-107` |
 | `file mode` | 0o600 (atomic-write temp mode + chmodSync best-effort) | `packages/credentials/src/index.ts:248-253` |
-| `error codes` | 'credential-invalid-ref' / 'credential-rejected' | `packages/credentials/src/index.ts:86,99` |
+| `error codes` | 'credential-invalid-ref' (CredentialRefError at packages/credentials/src/index.ts:86) / 'credential-rejected' (CredentialShadowedError at packages/credentials/src/index.ts:99) | `packages/credentials/src/index.ts:86` |
 
 **已知缺口（原始碼內標記）**
 

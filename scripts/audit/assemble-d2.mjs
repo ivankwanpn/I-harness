@@ -176,6 +176,102 @@ for (const { key, label } of SOURCES) {
   L.push("")
 }
 
+// Appendix B: reconciliation doubts. This is the honest counterpart to the
+// crosswalk -- the pairs the automated fold joined but a human should confirm,
+// plus the ones it refused to join. An empty appendix would mean either that the
+// seven sources name everything identically (they demonstrably do not) or that
+// the fold guessed silently.
+L.push("## 附錄 B — 未對帳與存疑對帳", "")
+L.push(
+  "本附錄列出**自動折疊做過判斷、但值得人工複核**的列。空著不代表對帳完美，而代表沒有觸發以下三種訊號。",
+)
+L.push("")
+
+L.push(`### B1. 同源名稱碰撞（${collisions.length}）`, "")
+if (collisions.length === 0) {
+  L.push("無。沒有任一源出現「兩個命令正規化到同一 key」的情況。", "")
+} else {
+  L.push("同一源的兩個命令被抽取代理正規化為同一個名字。**兩者都已退回自己的命令名**，否則其中一個會靜默消失。", "")
+  L.push("| 源 | 命令 A | 命令 B | 曾共同被正規化為 |")
+  L.push("|---|---|---|---|")
+  for (const c of collisions) {
+    L.push(`| ${c.source} | \`${c.names[0]}\` | \`${c.names[1]}\` | \`${c.canonical}\` |`)
+  }
+  L.push("")
+}
+
+// B2: rows joined across sources where the sources disagree about the family.
+// A disagreement is the clearest automatic signal that two differently-shaped
+// capabilities may have been folded into one row.
+const famDisagreements = allRows
+  .map((r) => {
+    const fams = [...new Set(Object.values(r.perSource).map((v) => v.family).filter(Boolean))]
+    return { row: r, fams }
+  })
+  .filter((x) => x.fams.length > 1)
+
+L.push(`### B2. 跨源家族不一致（${famDisagreements.length}）`, "")
+L.push(
+  "同一列在不同源被歸入不同家族。這**不一定是錯**（不少命令合理地跨家族），但它是最便宜的「這兩者真的是同一個東西嗎」訊號。",
+)
+L.push("")
+if (famDisagreements.length === 0) {
+  L.push("無。", "")
+} else {
+  L.push("| 命令 | 各源家族 | 參與的源 |")
+  L.push("|---|---|---|")
+  for (const { row, fams } of famDisagreements.slice(0, 40)) {
+    const detail = Object.entries(row.perSource)
+      .filter(([, v]) => v.family)
+      .map(([s, v]) => `${s}=${v.family}`)
+      .join(", ")
+    L.push(`| \`${row.key}\` | ${fams.join(" / ")} | ${detail} |`)
+  }
+  if (famDisagreements.length > 40) L.push(`| … | 其餘 ${famDisagreements.length - 40} 列 | |`)
+  L.push("")
+}
+
+// B3: single-source rows. These are NOT errors -- most are genuinely unique to
+// one harness -- but they are the rows where a hidden synonym would be invisible,
+// because there is no second source to disagree with.
+const singleSource = allRows.filter((r) => Object.keys(r.perSource).length === 1)
+L.push(`### B3. 單源獨有列（${singleSource.length}）`, "")
+L.push(
+  "只出現在一個源的命令。多數是該源真正獨有，但這也是**同義異名最難被發現的一類**——沒有第二個源可以反駁。",
+)
+L.push("")
+const singleBySource = {}
+for (const r of singleSource) {
+  const s = Object.keys(r.perSource)[0]
+  singleBySource[s] = (singleBySource[s] ?? 0) + 1
+}
+L.push(`分佈：${Object.entries(singleBySource).map(([s, n]) => `${s} ${n}`).join(" · ")}`, "")
+L.push(`清單：${singleSource.map((r) => `\`${r.key}\``).join("、")}`, "")
+
+// Appendix C: the crosswalk. Only rows where at least one source's own command
+// name differs from the row key are real mappings; everything else matched by
+// identical name and needs no table.
+L.push("## 附錄 C — crosswalk 對照表", "")
+L.push("只列出**至少一個源的命令名與本列 key 不同**的列；名字一致的列不需要對照。", "")
+L.push("| 列 key | " + SOURCES.map((s) => s.label).join(" | ") + " |")
+L.push("|---|" + SOURCES.map(() => "---").join("|") + "|")
+let xwalk = 0
+for (const r of allRows) {
+  const cells = SOURCES.map(({ key }) => {
+    const e = r.perSource[key]
+    if (!e) return ""
+    const names = [e.rawName, ...(e.aliases ?? [])].filter(Boolean)
+    const differs = names.some((n) => norm(n) !== r.key)
+    return differs ? names.map((n) => `\`${n}\``).join(" · ") : "="
+  })
+  if (!cells.some((c) => c && c !== "=")) continue
+  xwalk++
+  L.push(`| \`${r.key}\` | ${cells.join(" | ")} |`)
+}
+if (xwalk === 0) L.push(`| （無） | ${SOURCES.map(() => "").join(" | ")} |`)
+L.push("")
+L.push(`> \`=\` 表示該源以同名列參與此列。共 ${xwalk} 列涉及異名映射。`, "")
+
 const body = L.join("\n")
 const front = FRONT ? readFileSync(FRONT, "utf8").trimEnd() + "\n\n" : ""
 writeFileSync(OUT, front + body + "\n", "utf8")
