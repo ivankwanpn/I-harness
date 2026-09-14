@@ -4,6 +4,8 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { ExecService } from "@i-harness/exec"
 import { registerExec } from "@i-harness/exec"
+import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
+import { ESCALATION_TARGETS, SandboxUnavailableError } from "@i-harness/sandbox"
 import { createTextRetainer, createSpillStore, spillNotice, type RetentionMode, type SpillStore, type SpillStoreOptions } from "@i-harness/output-retention"
 
 export interface ResolvedShell {
@@ -153,6 +155,52 @@ export interface ShellToolDeps {
   sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
 }
 
+/**
+ * M62 Task 3 (Step 7): a REFUSAL the model can read, not a turn that dies.
+ *
+ * `exec`'s `resolveArgv` throws `SandboxUnavailableError` synchronously — both
+ * from `run` and from `runBackground` (`packages/exec/src/index.ts:112,122,241-246`)
+ * — when a confined policy reaches it with no provider composed. A throwing tool
+ * body fails the whole turn and appends no `tool/result`, so ONE bash call ended
+ * the turn and the model never learned why. The bash-absent branch below already
+ * returns a legible failure for the same class of fact ("this host cannot run
+ * what you asked"), and so does this one.
+ *
+ * TWO THINGS THIS MUST NOT DO.
+ *
+ * 1. It must not carry escalation guidance. `denialFor` attaches "retry with
+ *    sandbox_permissions set to …" whenever a wider mode exists, and here the
+ *    problem is that NO backend is usable — not that the mode is narrow. Sending
+ *    the model to ask for a wider mode points it at a request that cannot help.
+ *    So the denial is constructed literally. The shared thing is the TYPE
+ *    (`SandboxDenial`), which is what the Task 2 corrections settled on.
+ * 2. It must never fall back to running the command unconfined. Refusing is the
+ *    whole point; the confinement boundary is `exec` failing closed, and
+ *    swallowing the throw into a spawn would be strictly worse than the crash.
+ *
+ * `policy` is the policy THIS call handed to exec (the `mode` the model is told
+ * about); the fallback only covers the theoretical case where the thunk returns
+ * nothing after the throwing call already read a confined policy.
+ */
+function sandboxUnavailableFailure(
+  tool: "bash" | "pwsh",
+  surface: SandboxSurface,
+  policy: SandboxExecutionPolicy | undefined,
+): { stdout: string; stderr: string; exitCode: number } {
+  const denial: SandboxDenial = {
+    code: "SANDBOX_DENIED",
+    surface,
+    mode: policy?.mode ?? "read-only",
+    reason:
+      "no sandbox backend is usable on this host, so the confined mode in force cannot be enforced: " +
+      `refusing to run the ${tool} command unconfined. Asking for a wider mode cannot help — no backend ` +
+      "exists for any mode here. Use a file tool for a file operation, or ask the host to compose a sandbox.",
+  }
+  // exitCode -1 mirrors the bash-absent branch at each call site: -1 means "this
+  // host could not run it", never "it ran and failed".
+  return { stdout: "", stderr: JSON.stringify(denial), exitCode: -1 }
+}
+
 export function createShellTools(deps: ShellToolDeps): Tool[] {
   // Retention is OPT-IN: without `deps.retention` the tools behave exactly as
   // before. The resolved retainer here is only the "configured" flag — the
@@ -220,7 +268,15 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     description: "run a bash command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
-      properties: { command: { type: "string" }, background: { type: "boolean" } },
+      properties: {
+        command: { type: "string" },
+        background: { type: "boolean" },
+        // M62 Task 3: the denial text tells the model to retry with these two
+        // arguments; before this, no schema declared them. OPT-IN — absent from
+        // `required`, because an ordinary call passes neither.
+        sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+        justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
+      },
       required: ["command"],
     },
     timeoutMs: deps.timeoutMs,
@@ -245,12 +301,20 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       // Per CALL, never cached: the assembly's resolver re-reads the session's
       // last `sandbox/mode` event, so an escalation mid-session applies here.
       const sandboxResolved = deps.sandboxPolicy?.()
-      if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
-        return { job_id: jobId }
+      try {
+        if (args.background === true) {
+          const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          return { job_id: jobId }
+        }
+        const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+        return retainedRunResult(result, "bash-stdout")
+      } catch (err) {
+        // M62 Step 7: exec refuses this command because no backend is composed
+        // for the confined mode now in force. Returning the refusal keeps the
+        // turn alive so the model can adapt; see sandboxUnavailableFailure.
+        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("bash", "shell", sandboxResolved)
+        throw err
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
-      return retainedRunResult(result, "bash-stdout")
     },
   }
   const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
@@ -258,7 +322,13 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     description: "run a PowerShell command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
-      properties: { command: { type: "string" }, background: { type: "boolean" } },
+      properties: {
+        command: { type: "string" },
+        background: { type: "boolean" },
+        // M62 Task 3 — same two arguments as bash; see the note there.
+        sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+        justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
+      },
       required: ["command"],
     },
     timeoutMs: deps.timeoutMs,
@@ -267,12 +337,18 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const argv = [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
       // Per CALL — see the bash tool above.
       const sandboxResolved = deps.sandboxPolicy?.()
-      if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
-        return { job_id: jobId }
+      try {
+        if (args.background === true) {
+          const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          return { job_id: jobId }
+        }
+        const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+        return retainedRunResult(result, "pwsh-stdout")
+      } catch (err) {
+        // M62 Step 7 — see the bash tool above.
+        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("pwsh", "shell", sandboxResolved)
+        throw err
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
-      return retainedRunResult(result, "pwsh-stdout")
     },
   }
   return [bash, pwsh]

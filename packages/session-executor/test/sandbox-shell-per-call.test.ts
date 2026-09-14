@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createSession, append } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
+import type { SandboxDenial } from "@i-harness/sandbox"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
 
 /**
@@ -32,13 +33,17 @@ import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
  *    command runs unconfined and echoes normally. The two behaviors are opposite
  *    and both are observable in the model-facing tool result.
  *
- * HOW THE REFUSAL SURFACES: as a THROWN `SandboxUnavailableError` that fails the
- * turn, not as a returned tool failure. `exec`'s `resolveArgv` throws
- * synchronously, so it never becomes a `tool/result` event. This is the
- * documented, deliberate boundary — "every shell command failing loudly is the
- * honest outcome; silently running unconfined would not be" — so this test asserts
- * the loud failure rather than smoothing it into a returned error. A test that
- * wanted a tidy result here would be asking for the sandbox to be swallowed.
+ * HOW THE REFUSAL SURFACES (M62 Task 3 changed this; read the change before
+ * touching the assertion): it used to be a THROWN `SandboxUnavailableError` that
+ * failed the turn, because `exec`'s `resolveArgv` throws synchronously and no
+ * `tool/result` was ever appended. That made ONE bash call end the turn and left
+ * the model with nothing to adapt to — the opposite of a rule it can follow. The
+ * shell tools now CATCH that error and RETURN the refusal as a `SandboxDenial`,
+ * so the turn resolves and the model reads why. What did NOT change: no command
+ * runs, so `existsSync(trace)` stays false. That check is the independent proof
+ * that nothing executed, and it is the part that must survive — a version of
+ * this test that only looked at the returned JSON would pass against an
+ * implementation that swallowed the refusal and ran the command anyway.
  *
  * This is the escalation-ladder shape in the other direction (a session-mode event
  * tightening a session that started permissive), which is exactly why the snapshot
@@ -87,10 +92,21 @@ describe("the assembly hands the shell a per-call policy", () => {
       append(session, { type: "sandbox/mode", mode: "read-only" })
 
       // The shell resolved the NEW mode: the command carried a confined policy, so
-      // exec refused to run it unconfined and the child never existed. Asserted on
-      // the rejection because that (not a returned failure) is how this refusal is
-      // designed to surface.
-      await expect(runTurn(assembly)).rejects.toThrow(/no sandbox backend is usable on this host/)
+      // exec refused to run it unconfined and the child never existed. The turn
+      // RESOLVES: the refusal is a returned tool result the model can read, not a
+      // throw that ends its turn with no `tool/result` at all.
+      await expect(runTurn(assembly)).resolves.toBeUndefined()
+      const result = session.events.find((e) => e.type === "tool/result" && e.name === "bash")
+      expect(result, "the model must receive the refusal as a tool result").toBeDefined()
+      const output = (result as { output?: { stderr?: string } }).output
+      const denial = JSON.parse(output!.stderr!) as SandboxDenial
+      expect(denial).toMatchObject({ code: "SANDBOX_DENIED", surface: "shell", mode: "read-only" })
+      // The refusal must NOT advertise an escalation: no backend exists for ANY
+      // mode here, so sending the model to ask for a wider one points it at a
+      // request that cannot help.
+      expect(denial.escalation).toBeUndefined()
+      expect(JSON.stringify(denial)).not.toContain("sandbox_permissions")
+      // The independent proof that nothing ran — unchanged by the conversion.
       expect(existsSync(trace)).toBe(false)
     } finally {
       await assembly.dispose()

@@ -40,13 +40,18 @@ export function createSandboxPolicy(config: SandboxPolicyConfig = {}): SandboxPo
 }
 
 export function renderPolicyContext(policy: SandboxExecutionPolicy): string {
+  // M62 Task 3 (Step 6): this fragment is rendered into THIS harness's own system
+  // prompt, one line after DEFAULT_AGENT_PRESET's "You are I-harness"
+  // (packages/preset/src/default.ts:14). It said "Current DSH file policy" — a
+  // different product's name — in the same prompt. Pinned by
+  // test/policy.test.ts ("names THIS harness, not another product").
   switch (policy.mode) {
     case "read-only":
-      return "Current DSH file policy: read-only. Any available operation enforced by the DSH file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns."
+      return "Current I-harness file policy: read-only. Any available operation enforced by the I-harness file sandbox cannot modify files in the standing mode. Do not refuse a required modification from this policy alone: try an available tool normally and follow any denial and escalation guidance it returns."
     case "workspace-write":
-      return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`
+      return `Current I-harness file policy: workspace-write. Any available operation enforced by the I-harness file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`
     case "danger-full-access":
-      return "Current DSH file policy: danger-full-access. The DSH file sandbox does not restrict file modifications by available operations."
+      return "Current I-harness file policy: danger-full-access. The I-harness file sandbox does not restrict file modifications by available operations."
     default:
       return ""
   }

@@ -60,4 +60,17 @@ describe("renderPolicyContext", () => {
     expect(renderPolicyContext({ mode: "workspace-write", workspaceRoot: "/x" })).toContain("/x")
     expect(renderPolicyContext({ mode: "danger-full-access", workspaceRoot: "/x" })).toContain("danger-full-access")
   })
+
+  it("names THIS harness, not another product", () => {
+    // This fragment is rendered into IH's own system prompt, one line after the
+    // preset says "You are I-harness" — so a fragment naming a different product
+    // contradicts the sentence above it. The assertion is negative as well as
+    // positive on purpose: `toContain(<mode>)` alone (the test above) cannot see
+    // a product name at all, so the wording could regress silently.
+    for (const mode of ["read-only", "workspace-write", "danger-full-access"] as const) {
+      const text = renderPolicyContext({ mode, workspaceRoot: "/x" })
+      expect(text).toContain("I-harness")
+      expect(text).not.toContain("DSH")
+    }
+  })
 })

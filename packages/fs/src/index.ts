@@ -8,6 +8,7 @@ import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit } from "./text.ts"
 import { parsePatch, applyPatch, type RewindCapture } from "./patch.ts"
+import { ESCALATION_TARGETS } from "@i-harness/sandbox"
 
 export { FsToolError, softFail, type FsToolErrorCode, type FsToolFailure } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
@@ -131,6 +132,16 @@ function decodeUtf8Safely(bytes: Uint8Array): string | undefined {
   }
 }
 
+// M62 Task 3: the denial this package returns (`guardWrite` → `SandboxDenial`)
+// tells the model, in words, to "retry it with sandbox_permissions set to … and
+// a justification". Until the two properties below were declared on each
+// write-capable schema, that advice named arguments no schema defined — a model
+// could not act on it. They are OPT-IN and stay out of `required` (their absence
+// is the normal case); they are DECLARED here rather than validated, because
+// wiring a granted escalation to a single call is the escalation-ladder task,
+// not this one. Literal per schema rather than one shared object, so no schema's
+// declaration can move by editing another's.
+
 export function createFsTools(deps: FsToolDeps): Tool[] {
   const read: Tool<{ path: string }, { content: string } | FsToolFailure> = {
     name: "read",
@@ -143,7 +154,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
   const write: Tool<{ path: string; text: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } | FsToolFailure> = {
     name: "write",
     description: "write a file",
-    inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" } }, required: ["path", "text"] },
+    inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["path", "text"] },
     isReadOnly: false,
     execute: async ({ path, text }) => softFail(async () => {
       // M42 rewind: writeFileAtomic OVERWRITES without reading — when rewind
@@ -185,6 +196,8 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         new_string: { type: "string" },
         replace_all: { type: "boolean" },
         observedMtimeMs: { type: "number", description: "optional mtime observed from read; mismatch → reject (stale)" },
+        sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+        justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
       },
       required: ["path", "old_string", "new_string"],
     },
@@ -249,7 +262,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
   const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } | FsToolFailure> = {
     name: "apply_patch",
     description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update + @@ context)",
-    inputSchema: { type: "object", properties: { patch_content: { type: "string" } }, required: ["patch_content"] },
+    inputSchema: { type: "object", properties: { patch_content: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["patch_content"] },
     isReadOnly: false,
     execute: async ({ patch_content }) => softFail(async () => {
       // CRLF 正規化：patch 內容若帶 \r，parsePatch 會把 \r 當行內容 → replace 誤報
