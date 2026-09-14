@@ -208,6 +208,13 @@ describe("resolveCallPolicy", () => {
       expect(prompts).toHaveLength(1) // the question WAS asked; the answer refused
       expect(denial.mode).toBe("read-only")
       expect(denial.reason).toMatch(/workspace-write/)
+      // The SUBJECT reaches the model HERE, and only here. `approveEscalation`
+      // builds the approver's reason from the mode + justification
+      // (escalation.ts:74); `subject` appears in the rejection message alone
+      // (:79). So the host's approval prompt is NOT told which write it is
+      // approving -- the brief's "subject ... goes into the approval reason" is
+      // false about which string it lands in.
+      if (outcome === "rejected") expect(denial.reason).toContain(SUBJECT)
       expect(denial.escalation).toBeUndefined()
     }
 
