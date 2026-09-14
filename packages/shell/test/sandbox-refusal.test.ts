@@ -11,10 +11,13 @@ import { bashAvailable, createShellTools } from "../src/index.ts"
  * The brief was explicit that there are "four call sites, not two": `exec`'s
  * `resolveArgv` throws `SandboxUnavailableError` SYNCHRONOUSLY
  * (`packages/exec/src/index.ts:112,122`) and the background path reaches it
- * through `spawnChild` on a DIFFERENT line from the foreground one
- * (`packages/shell/src/index.ts:314` vs `:317` for bash, `:350` vs `:353` for
- * pwsh — the numbers this comment used to cite predated `sandboxUnavailableFailure`
- * being inserted at `:185`). Wrapping only the `await deps.exec.run(...)` line
+ * through `spawnChild`, in `runBackground`, from a DIFFERENT call site than the
+ * foreground `run` — four in all: `runBackground` and `run` in each of the bash
+ * and pwsh tool bodies of `packages/shell/src/index.ts`. (Named by SYMBOL, not by
+ * line number: this comment has now cited three different sets of numbers as the
+ * file moved under it — the pre-M62 ones, then the ones from before
+ * `sandboxUnavailableFailure` was inserted, then those plus this task's ladder.
+ * A symbol cannot rot.) Wrapping only the `await deps.exec.run(...)` path
  * typechecks, passes the end-to-end suite, and leaves a background call killing
  * the turn — which is exactly the behaviour this change exists to remove.
  *

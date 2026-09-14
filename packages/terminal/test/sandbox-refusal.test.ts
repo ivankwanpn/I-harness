@@ -18,8 +18,12 @@ import { createProcessTools, createTerminalTools } from "../src/tool.ts"
  * WHY THE REFUSAL IS PER CALL, NOT AT MOUNT. The spec's §3.4 first said "do not
  * mount the terminal when the mode is restricted", and that was withdrawn: a
  * mount-time decision cannot see a mid-session change, so a session mounted
- * `danger-full-access` and later tightened (which the escalation ladder is) would
- * keep unconfined PTY tools. The tools therefore mount ALWAYS and refuse per call.
+ * `danger-full-access` and later tightened would keep unconfined PTY tools.
+ * (What produces such a change is a HOST appending a `sandbox/mode` event. The
+ * escalation ladder is a different path and NOT a producer of one: a grant is
+ * per-call and transient and the standing mode never moves — spec §3.3 point 1 —
+ * which is why the ladder's own tests below are about a single call, not a mode
+ * change.) The tools therefore mount ALWAYS and refuse per call.
  *
  * WHY NOTHING HERE WRAPS THE PTY IN A RUNNER: it cannot be confined. A runner
  * around an interactive terminal would confine nothing while pretending the hole
@@ -97,10 +101,19 @@ function advisedMode(denial: Refusal["denial"]): string {
 
 /** Every call that must refuse, with the effect on the spy that proves it did
  * not reach the service, and the effect that proves a permitted retry DID. */
-const REFUSING_CALLS: Array<{ name: string; args: Record<string, unknown>; reached: (spy: Spy) => number }> = [
-  { name: "terminal_open", args: { command: "bash" }, reached: (spy) => spy.opened.length },
-  { name: "process_spawn", args: { command: "bash" }, reached: (spy) => spy.opened.length },
-  { name: "terminal_send", args: { id: "t1", data: "echo hi" }, reached: (spy) => spy.sent.length },
+const REFUSING_CALLS: Array<{
+  name: string
+  args: Record<string, unknown>
+  reached: (spy: Spy) => number
+  /** The exact operation string the tool passes to `resolveCallPolicy`, so a
+   *  prompt naming only the mode and the requester's justification cannot
+   *  satisfy the assertion that uses it (`terminal/src/tool.ts`). Per call,
+   *  because the three tools name three different operations. */
+  subject: string
+}> = [
+  { name: "terminal_open", args: { command: "bash" }, reached: (spy) => spy.opened.length, subject: "open a PTY running bash" },
+  { name: "process_spawn", args: { command: "bash" }, reached: (spy) => spy.opened.length, subject: "spawn a pty-backed process running bash" },
+  { name: "terminal_send", args: { id: "t1", data: "echo hi" }, reached: (spy) => spy.sent.length, subject: "write to terminal t1" },
 ]
 
 /** All nine tools as `registerTerminal` mounts them, over one spy. */
@@ -360,8 +373,11 @@ describe("terminal escalation ladder", () => {
       expect(prompts).toHaveLength(1)
       expect(prompts[0]!.toolName).toBe(call.name)
       expect(prompts[0]!.callId).toBe("call-pty")
-      // The prompt names the operation, not just the mode.
-      expect(prompts[0]!.reason.length).toBeGreaterThan("escalate sandbox to danger-full-access".length)
+      // The prompt names the OPERATION, not just the mode and the requester's
+      // justification. A length comparison against the mode-only sentence would
+      // pass for almost any longer string -- including one with the subject
+      // removed -- so this asserts the exact subject this call passes.
+      expect(prompts[0]!.reason).toContain(call.subject)
       // The real proof: the granted call REACHED the service. Under a fresh
       // re-read of the session thunk it would still be read-only and refuse.
       expect(call.reached(spy)).toBe(1)
