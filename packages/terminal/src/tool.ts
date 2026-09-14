@@ -1,7 +1,7 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { SandboxDenial, SandboxMode } from "@i-harness/sandbox"
-import { denialFor } from "@i-harness/sandbox"
+import type { EscalationApprover, SandboxDenial, SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
+import { ESCALATION_TARGETS, denialFor, resolveCallPolicy } from "@i-harness/sandbox"
 import { createTerminalService, filterConptyNoise, type TerminalService, type TerminalSignalName } from "./service.ts"
 
 export interface TerminalToolDeps {
@@ -15,7 +15,12 @@ export interface TerminalToolDeps {
   // reach the NEXT call, which is exactly what a mount-time snapshot cannot do
   // (see `confinement`). Absent → the host requested no sandbox and nothing is
   // refused; `undefined` from the thunk means the same thing.
-  sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+  sandboxPolicy?: () => SandboxExecutionPolicy | undefined
+  // M62: the approval-service ADAPTER, built once by the assembly. The per-call
+  // `EscalationContext` is composed in the tool body, because only that layer
+  // holds the `ToolExec` a prompt must name. Absent → an escalation request is
+  // refused (fail closed), never silently allowed.
+  escalationApprover?: EscalationApprover<unknown, string>
 }
 
 /**
@@ -45,28 +50,85 @@ const PTY_PERMITTED_MODE: SandboxMode = "danger-full-access"
  */
 function terminalRefusal(mode: SandboxMode, reason: string): { error: string; code: SandboxDenial["code"]; denial: SandboxDenial } {
   const denial = denialFor("terminal", mode, reason, PTY_PERMITTED_MODE)
-  return {
-    error: denial.escalation === undefined ? denial.reason : `${denial.reason} ${denial.escalation}`,
-    code: denial.code,
-    denial,
-  }
+  return { error: messageFor(denial), code: denial.code, denial }
+}
+
+/** The ladder's refusal, returned AS THE LADDER BUILT IT (spec §3.2 corollary 2).
+ *  Routing it back through `terminalRefusal` would rebuild the denial through
+ *  `denialFor(…, PTY_PERMITTED_MODE)` and re-attach the escalation sentence that
+ *  branches 1/5/6 of the ladder set `escalationTarget: null` to withhold — advice
+ *  to send the same refused request again. */
+function ladderRefusal(denial: SandboxDenial): { error: string; code: SandboxDenial["code"]; denial: SandboxDenial } {
+  return { error: messageFor(denial), code: denial.code, denial }
+}
+
+/** The model-facing sentence: the reason, plus the recovery route when the
+ *  refusal has one. A reader that only looks at `error` still learns what to do. */
+function messageFor(denial: SandboxDenial): string {
+  return denial.escalation === undefined ? denial.reason : `${denial.reason} ${denial.escalation}`
+}
+
+/**
+ * M62: the escalation ladder for this surface — the SAME per-call decision fs
+ * and the shell make. A refusal is RETURNED as a value, never thrown (a throwing
+ * tool body fails the whole turn and appends no `tool/result`).
+ *
+ * The `policy` it returns is the GRANTED one when an escalation was approved.
+ * Deciding confinement from a fresh `deps.sandboxPolicy?.()` read instead would
+ * be self-defeating: `danger-full-access` is exactly the mode that makes
+ * `confinement()` return undefined, so the re-read would refuse the very call
+ * the user just approved.
+ */
+async function resolveTerminalCall(
+  deps: TerminalToolDeps,
+  exec: ToolExec,
+  toolName: string,
+  args: { sandbox_permissions?: string; justification?: string },
+  subject: string,
+): Promise<
+  | { kind: "proceed"; mode: SandboxMode | undefined }
+  | { kind: "refused"; refusal: { error: string; code: SandboxDenial["code"]; denial: SandboxDenial } }
+> {
+  const escalation = deps.escalationApprover === undefined
+    ? undefined
+    : {
+        approver: deps.escalationApprover,
+        agent: exec,
+        callId: exec.callId ?? "unknown",
+        toolName,
+        ...(exec.abortSignal !== undefined ? { signal: exec.abortSignal } : {}),
+      }
+  const resolution = await resolveCallPolicy({
+    base: deps.sandboxPolicy?.(),
+    surface: "terminal",
+    subject,
+    args,
+    ...(escalation !== undefined ? { escalation } : {}),
+  })
+  if (resolution.kind === "refused") return { kind: "refused", refusal: ladderRefusal(resolution.denial) }
+  return { kind: "proceed", mode: confinement(resolution.policy) }
 }
 
 /**
  * The confining mode in force for THIS call, or undefined when unconfined.
  *
  * Resolved per call, never cached: a session mounted `danger-full-access` and
- * later tightened (the escalation ladder is a `sandbox/mode` event) must have
- * its NEXT terminal call refused. That is why the tools mount unconditionally
- * and refuse here rather than the terminal being unmounted at mount time.
+ * later tightened must have its NEXT terminal call refused. That is why the
+ * tools mount unconditionally and refuse here rather than the terminal being
+ * unmounted at mount time. What produces such a change is a HOST appending a
+ * `sandbox/mode` event — the escalation ladder is a different path and appends
+ * none (it is per-call and transient, spec §3.3 point 1); a granted escalation
+ * reaches this function through the policy the ladder returned.
+ *
+ * It takes the POLICY rather than the deps so the ladder's granted policy can be
+ * judged without a second read of the session thunk.
  *
  * `danger-full-access` is the one mode that does not confine — a PTY under it
  * runs exactly as it always did. `workspace-write` DOES confine: the PTY cannot
  * be kernel-confined at all, so it must not inherit a mode that claims to bound
  * writes to the workspace.
  */
-function confinement(deps: TerminalToolDeps): SandboxMode | undefined {
-  const policy = deps.sandboxPolicy?.()
+function confinement(policy: SandboxExecutionPolicy | undefined): SandboxMode | undefined {
   if (policy === undefined || policy.mode === "danger-full-access") return undefined
   return policy.mode
 }
@@ -119,14 +181,22 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
           args: { type: "array", items: { type: "string" } },
           cwd: { type: "string" },
           cols: { type: "number" }, rows: { type: "number" },
+          // M62: the refusal below tells the model to retry with these two; until
+          // now no terminal schema declared them, so the advice named arguments
+          // the model could not send. OPT-IN — absent from `required`.
+          sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+          justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
         },
         required: ["command"],
       },
-      execute: async (args: { command: string; args?: string[]; cwd?: string; cols?: number; rows?: number }, exec: ToolExec) => {
+      execute: async (args: { command: string; args?: string[]; cwd?: string; cols?: number; rows?: number; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
         // M62: this call CREATES the capability, so it is the one place a
         // confined mode can still be honoured — the PTY itself cannot be
-        // confined by the OS sandbox.
-        const mode = confinement(deps)
+        // confined by the OS sandbox. The ladder runs first: a granted mode
+        // lets the PTY open FOR THIS CALL.
+        const ladder = await resolveTerminalCall(deps, exec, "terminal_open", args, `open a PTY running ${args.command}`)
+        if (ladder.kind === "refused") return ladder.refusal
+        const mode = ladder.mode
         if (mode !== undefined) {
           return terminalRefusal(
             mode,
@@ -147,13 +217,26 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
     {
       name: "terminal_send",
       description: "Write text to a terminal's stdin (newlines are sent as '\\n').",
-      inputSchema: { type: "object", properties: { id: { type: "string" }, data: { type: "string" } }, required: ["id", "data"] },
-      execute: async (args: { id: string; data: string }, exec: ToolExec) => {
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          data: { type: "string" },
+          // M62 — same two arguments as terminal_open; see the note there.
+          sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+          justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
+        },
+        required: ["id", "data"],
+      },
+      execute: async (args: { id: string; data: string; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
         // M62: the PTY itself was opened outside this mode (or before it was
         // tightened), and it is unconfined — so driving it is still unconfined
         // execution. The refusal names the terminal so the model knows which
-        // handle it may not write to.
-        const mode = confinement(deps)
+        // handle it may not write to. A granted escalation lets THIS send
+        // through.
+        const ladder = await resolveTerminalCall(deps, exec, "terminal_send", args, `write to terminal ${args.id}`)
+        if (ladder.kind === "refused") return ladder.refusal
+        const mode = ladder.mode
         if (mode !== undefined) {
           return terminalRefusal(
             mode,
@@ -215,13 +298,24 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
         "Spawn a pty-backed process handle and return its id (use terminal_read/terminal_send to exchange I/O; process_kill to terminate).",
       inputSchema: {
         type: "object",
-        properties: { command: { type: "string" }, args: { type: "array", items: { type: "string" } }, cwd: { type: "string" }, env: { type: "object" } },
+        properties: {
+          command: { type: "string" },
+          args: { type: "array", items: { type: "string" } },
+          cwd: { type: "string" },
+          env: { type: "object" },
+          // M62 — same two arguments as terminal_open; see the note there.
+          sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+          justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
+        },
         required: ["command"],
       },
-      execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string> }, exec: ToolExec) => {
+      execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string>; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
         // M62: process_spawn creates the same unconfined capability as
-        // terminal_open (a pty-backed process), so it refuses on the same rule.
-        const mode = confinement(deps)
+        // terminal_open (a pty-backed process), so it refuses on the same rule —
+        // and takes the same ladder route out of it.
+        const ladder = await resolveTerminalCall(deps, exec, "process_spawn", args, `spawn a pty-backed process running ${args.command}`)
+        if (ladder.kind === "refused") return ladder.refusal
+        const mode = ladder.mode
         if (mode !== undefined) {
           return terminalRefusal(
             mode,
@@ -265,7 +359,11 @@ export function registerTerminal(
     cwd?: string
     // M62: the assembly's per-call policy read, passed straight through to the
     // tools. Absent → no sandbox was requested (nothing refused).
-    sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+    sandboxPolicy?: () => SandboxExecutionPolicy | undefined
+    // M62: the escalation approver, forwarded to the tool deps — see
+    // TerminalToolDeps.escalationApprover. Without this hop the ladder would be
+    // unreachable at runtime while every type still checked.
+    escalationApprover?: EscalationApprover<unknown, string>
   },
 ): TerminalMountHandle {
   const service = createTerminalService()
@@ -274,6 +372,7 @@ export function registerTerminal(
     service,
     ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
     ...(opts?.sandboxPolicy !== undefined ? { sandboxPolicy: opts.sandboxPolicy } : {}),
+    ...(opts?.escalationApprover !== undefined ? { escalationApprover: opts.escalationApprover } : {}),
   }
   for (const tool of [...createTerminalTools(deps), ...createProcessTools(deps)]) tools.register(tool)
   return { dispose: () => service.dispose() }

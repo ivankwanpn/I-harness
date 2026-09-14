@@ -155,6 +155,59 @@ describe("guard-approval policy", () => {
     expect(result.output).toEqual({ ok: true })
   })
 
+  // ── Layer 2 and the tool NAMES it classifies ──────────────────────────────
+  //
+  // Layer 2 is a directory whitelist: inside the workspace allows, outside (or
+  // unspecified) asks. A tool in NEITHER `SHELL_TOOLS` nor `WRITE_TOOLS` falls to
+  // the Layer-1 fallback and asks UNCONDITIONALLY — which is where `edit` used to
+  // sit, so an in-workspace `edit` prompted every single time while the
+  // wholesale-overwriting `write` beside it ran silently. The asymmetry was
+  // backwards on destructiveness (it pushed the model toward the blunter tool)
+  // and the loosening is nominal: `write` already reached every in-workspace byte
+  // without a prompt.
+  //
+  // Both directions are pinned, and so is the deliberate EXCEPTION —
+  // `apply_patch` stays out because it carries `patch_content` and can touch many
+  // paths, so Layer 2's single-`path` check cannot classify it. An unstated
+  // exception and an oversight look identical, which is how the `edit` omission
+  // survived; the schema/pin below is what keeps the reason attached.
+
+  const namedTool = (name: string): Tool => ({
+    name, description: "", inputSchema: {},
+    isReadOnly: false,
+    execute: async () => ({ ok: true }),
+  })
+
+  it("Layer 2: edit INSIDE the workspace allows without any approval", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd() })
+    registry.register(namedTool("edit"))
+    // A throwing answerer is the discriminating double: it proves the ask never
+    // happened, where "executes" alone cannot tell "never asked" from "approved".
+    registerApprovalAnswerer(ctx, async () => { throw new Error("must not be asked") })
+    const result = await registry.execute({ name: "edit", args: { path: "inside.txt", old_string: "a", new_string: "b" } })
+    expect(result.output).toEqual({ ok: true })
+  })
+
+  it("Layer 2: edit OUTSIDE the workspace still asks", async () => {
+    // The other direction: the ruling must not have turned `edit` into an
+    // unguarded tool.
+    const { registry } = setup({ workspace: process.cwd() })
+    registry.register(namedTool("edit"))
+    await expect(
+      registry.execute({ name: "edit", args: { path: "../outside.txt", old_string: "a", new_string: "b" } }),
+    ).rejects.toThrow(/approval|denied/i)
+  })
+
+  it("Layer 2 exception: apply_patch deliberately still asks for ANY path", async () => {
+    // Pinned so a later reader cannot "fix" the exception into a classification
+    // the tool's arguments cannot support.
+    const { registry } = setup({ workspace: process.cwd() })
+    registry.register(namedTool("apply_patch"))
+    await expect(
+      registry.execute({ name: "apply_patch", args: { patch_content: "*** Begin Patch\n*** End Patch" } }),
+    ).rejects.toThrow(/approval|denied/i)
+  })
+
   it("decide tolerates a payload that is already a decision object", async () => {
     const { ctx, registry } = setup({ workspace: process.cwd() })
     registry.register(makeBashTool((args) => args.command.split(" ")))

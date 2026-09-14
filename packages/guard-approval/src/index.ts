@@ -29,8 +29,11 @@ export const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 // decide() below — they used to describe an intent the code does not carry out):
 //
 //   readOnly tool .................. allow
-//   `write`, no path / path outside . ask
-//   any other non-readOnly tool .... ask          (the Layer 1 fallback)
+//   `write` / `edit`, path inside .. allow        (Layer 2, the directory whitelist)
+//   `write` / `edit`, no path or
+//     path outside the workspace ... ask
+//   any other non-readOnly tool .... ask          (the Layer 1 fallback —
+//                                                  `apply_patch` included, see WRITE_TOOLS)
 //   `bash` / `pwsh` ................ ask ONLY when classifyDanger() != "none"
 //
 // That last row is the asymmetry worth knowing: the shell tools are
@@ -51,7 +54,30 @@ export const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 // as a guarantee about shells; it is a guarantee about every OTHER tool.
 
 const SHELL_TOOLS = new Set(["bash", "pwsh"])
-const WRITE_TOOLS = new Set(["write"])
+// Layer 2 is a DIRECTORY WHITELIST: a tool named here is allowed silently when
+// its `path` is inside the workspace and asks when it is outside (or absent).
+//
+// `edit` belongs here with `write` (ruled 2026-09-15). It carries a `path`
+// argument exactly like `write` and is likewise `isReadOnly: false`, so leaving
+// it out did not make it safer — it made it fall through to the Layer-1
+// fallback, which asks UNCONDITIONALLY. The result was an in-workspace `write`
+// running silently while the equivalent in-workspace `edit` prompted every time,
+// an asymmetry that was backwards on destructiveness (`write` replaces a file
+// wholesale; `edit` performs a narrower replacement) and pushed the model toward
+// the blunter tool. The loosening is nominal: `write` already reached every
+// in-workspace byte without a prompt. Pinned in both directions by
+// "Layer 2: edit INSIDE the workspace allows" / "edit OUTSIDE the workspace
+// still asks".
+//
+// `apply_patch` STAYS OUT, deliberately — this is an exception, not an
+// oversight, which is why the reason is written down. It takes `patch_content`
+// (not `path`) and a single patch can add, delete and update many files across
+// many directories, so Layer 2's single-`path` test cannot classify it; admitting
+// it would silently allow an out-of-workspace write whenever the patch's first
+// path happened to be inside. It therefore keeps the Layer-1 fallback's
+// unconditional ask, pinned by "Layer 2 exception: apply_patch deliberately still
+// asks".
+const WRITE_TOOLS = new Set(["write", "edit"])
 
 export { parseGuardianAssessment, GUARDIAN_JSON_CONTRACT } from "./guardian/verdict.ts"
 export type { ParsedGuardianAssessment } from "./guardian/verdict.ts"
@@ -132,8 +158,10 @@ function decide(
         return { kind: "ask", reason }
       }
     } else if (WRITE_TOOLS.has(name)) {
-      // Layer 2: directory whitelist — write inside workspace allows,
-      // outside (or unspecified) asks.
+      // Layer 2: directory whitelist — a write inside the workspace allows,
+      // outside (or unspecified) asks. `edit` is classified here on the same
+      // rule as `write`; see WRITE_TOOLS for why, and for why `apply_patch` is
+      // not (it has no single `path` to classify).
       const pathArg = (call.args as { path?: string } | undefined)?.path
       if (pathArg === undefined) {
         return { kind: "ask", reason: "write target path not specified; approval required" }

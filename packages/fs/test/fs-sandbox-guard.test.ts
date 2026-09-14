@@ -148,3 +148,160 @@ describe("fs write confinement", () => {
     expect(result).toMatchObject({ content: "visible" })
   })
 })
+
+// ── The escalation ladder on the fs surface ─────────────────────────────────
+//
+// The ladder runs ONCE PER CALL, at the TOP of each tool body, and only the
+// resulting MODE travels into `guardWrite` — which stays synchronous because it
+// is called PER HUNK on the patch path (patch.ts:186-189). Awaiting the ladder
+// inside it would raise one approval prompt per hunk. These tests pin both
+// halves: the ask happens once, and the granted mode is what the check sees.
+
+type SeenPrompt = { agent: unknown; toolName: string; callId: string; reason: string }
+
+/** An `EscalationApprover` that records the prompts and answers with `outcome`. */
+function approverSaying(outcome: "allowed-once" | "rejected") {
+  const prompts: SeenPrompt[] = []
+  return {
+    prompts,
+    approver: {
+      async request(req: SeenPrompt) {
+        prompts.push({ agent: req.agent, toolName: req.toolName, callId: req.callId, reason: req.reason })
+        return outcome
+      },
+    },
+  }
+}
+
+const readOnly = (root: string) => () => ({ mode: "read-only" as const, workspaceRoot: root })
+
+describe("fs escalation ladder (one ask per call, granted mode reaches the check)", () => {
+  /** Every write tool, with args that would otherwise be a silent in-workspace write. */
+  const ESCALATING_CALLS: Array<{ name: string; args: (target: string) => Record<string, unknown>; prepare?: (target: string) => Promise<void> }> = [
+    { name: "write", args: (target) => ({ path: target, text: "hello" }) },
+    {
+      name: "edit",
+      args: (target) => ({ path: target, old_string: "before", new_string: "after" }),
+      prepare: async (target) => {
+        await run("write", { workspace }, { path: target, text: "before" })
+      },
+    },
+    {
+      name: "apply_patch",
+      // The patch names the file in its own dialect: apply_patch's subject is the
+      // path AS THE PATCH WRITES IT (`hunks[0].path`), because resolving it up
+      // front would turn one hunk's escape into a whole-call failure and break
+      // the per-hunk error model. So the patch here carries the native path.
+      args: (target) => ({
+        patch_content: ["*** Begin Patch", `*** Add File: ${target}`, "+patched", "*** End Patch"].join("\n"),
+      }),
+    },
+  ]
+
+  for (const call of ESCALATING_CALLS) {
+    it(`${call.name}: an approved escalation hands the GRANTED mode to writeGuard`, async () => {
+      const { approver, prompts } = approverSaying("allowed-once")
+      const modesSeen: Array<string | undefined> = []
+      const target = join(workspace, `${call.name}-inside.txt`)
+      if (call.prepare !== undefined) await call.prepare(target)
+      const result = await run(
+        call.name,
+        {
+          workspace,
+          sandboxPolicy: readOnly(workspace),
+          escalationApprover: approver as never,
+          // The check itself is a spy here: what is under test is the mode it is
+          // asked to judge under, not checkWrite's path rules.
+          writeGuard: (_abs: string, modeOverride?: string) => {
+            modesSeen.push(modeOverride)
+            return { ok: true as const }
+          },
+        },
+        {
+          ...call.args(target),
+          sandbox_permissions: "workspace-write",
+          justification: "the workspace write is blocked by read-only",
+        },
+      )
+      expect(result).toMatchObject({ ok: true })
+      expect(prompts).toHaveLength(1)
+      expect(prompts[0]!.toolName).toBe(call.name)
+      // The prompt must NAME THE OPERATION — a capability grant whose purpose the
+      // user cannot see is a rubber stamp, and the tool name alone does not say
+      // which file is about to change.
+      expect(prompts[0]!.reason).toContain(target)
+      // The grant is what the guard is asked to judge under. Without it the
+      // session's `read-only` mode reaches checkWrite and the write is refused.
+      expect(modesSeen).toEqual(["workspace-write"])
+    })
+  }
+
+  it("a refused escalation is returned AS ITSELF — never the guard's own refusal", async () => {
+    const { approver } = approverSaying("rejected")
+    let guardCalls = 0
+    const target = join(workspace, "never.txt")
+    const result = (await run(
+      "write",
+      {
+        workspace,
+        sandboxPolicy: readOnly(workspace),
+        escalationApprover: approver as never,
+        writeGuard: () => {
+          guardCalls += 1
+          return { ok: true as const }
+        },
+      },
+      { path: target, text: "x", sandbox_permissions: "workspace-write", justification: "please" },
+    )) as { error?: string; code?: string; denial?: SandboxDenial }
+    expect(result.code).toBe("SANDBOX_DENIED")
+    expect(result.denial?.surface).toBe("fs")
+    expect(result.denial?.mode).toBe("read-only")
+    expect(result.denial?.reason).toMatch(/rejected/)
+    // §3.2 corollary 2: the REQUEST was refused, not the operation, so the
+    // denial must not tell the model to retry with sandbox_permissions — that is
+    // advice to send the same refused request again.
+    expect(result.denial?.escalation).toBeUndefined()
+    expect(result.error).not.toContain("sandbox_permissions")
+    expect(guardCalls).toBe(0)
+    expect(existsSync(target)).toBe(false)
+  })
+
+  it("apply_patch asks ONCE for a five-hunk patch (the guard runs per hunk)", async () => {
+    // The redesign's whole point. `applyPatch` calls the guard inside
+    // `for (const hunk of hunks)`, so a ladder awaited there would raise five
+    // prompts for one tool call — and each grant would be scoped to a hunk
+    // rather than to the call the user was asked about.
+    const { approver, prompts } = approverSaying("allowed-once")
+    const files = [1, 2, 3, 4, 5].map((n) => join(workspace, `hunk-${n}.txt`))
+    const patch = [
+      "*** Begin Patch",
+      ...files.map((f) => `*** Add File: ${f.replace(/\\/g, "/")}\n+content`),
+      "*** End Patch",
+    ].join("\n")
+    const result = (await run(
+      "apply_patch",
+      {
+        workspace,
+        sandboxPolicy: readOnly(workspace),
+        escalationApprover: approver as never,
+        writeGuard: () => ({ ok: true as const }),
+      },
+      { patch_content: patch, sandbox_permissions: "workspace-write", justification: "five hunks" },
+    )) as { applied?: unknown[]; errors?: unknown[] }
+    expect(prompts).toHaveLength(1)
+    expect(result.errors ?? []).toHaveLength(0)
+    expect(result.applied).toHaveLength(5)
+    for (const f of files) expect(readFileSync(f, "utf8").trim()).toBe("content")
+  })
+
+  it("no escalation arguments means no ladder at all (nobody is asked)", async () => {
+    const { approver, prompts } = approverSaying("allowed-once")
+    const result = await run(
+      "write",
+      { workspace, sandboxPolicy: readOnly(workspace), escalationApprover: approver as never, writeGuard: guard },
+      { path: join(workspace, "plain.txt"), text: "x" },
+    )
+    expect(result).toMatchObject({ ok: true })
+    expect(prompts).toHaveLength(0)
+  })
+})

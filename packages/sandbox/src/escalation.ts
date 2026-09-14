@@ -71,7 +71,13 @@ export async function approveEscalation<A, C>(
     agent: approval.agent,
     toolName: approval.toolName,
     callId: approval.callId,
-    reason: `escalate sandbox to ${mode}: ${justification}`,
+    // The SUBJECT is in the prompt on purpose (Task B ruling, 2026-09-15): the
+    // human being asked to grant a capability must be told what it is FOR. Built
+    // from the mode and the requester's own justification, this sentence showed
+    // the justification without the operation -- the difference between consent
+    // and a rubber stamp. `subject` is still interpolated into the rejection
+    // message below, where it names the operation the user said no to.
+    reason: `escalate sandbox to ${mode} for ${subject}: ${justification}`,
     ...approval.signal ? { signal: approval.signal } : {},
   })
   switch (outcome) {

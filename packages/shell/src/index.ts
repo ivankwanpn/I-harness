@@ -5,7 +5,7 @@ import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { ExecService } from "@i-harness/exec"
 import { registerExec } from "@i-harness/exec"
 import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
-import { ESCALATION_TARGETS, SandboxUnavailableError } from "@i-harness/sandbox"
+import { ESCALATION_TARGETS, SandboxUnavailableError, resolveCallPolicy } from "@i-harness/sandbox"
 import { createTextRetainer, createSpillStore, spillNotice, type RetentionMode, type SpillStore, type SpillStoreOptions } from "@i-harness/output-retention"
 
 export interface ResolvedShell {
@@ -152,7 +152,74 @@ export interface ShellToolDeps {
   // about the mode in force. Every execute calls it, so the argv is confined
   // against the policy of THAT call. Returning `undefined` still means
   // "no policy ⇒ no sandbox field" (a host that requested no sandbox).
+  //
+  // What actually makes the per-call read pay off is a HOST appending a
+  // `sandbox/mode` event mid-session. The escalation ladder is a DIFFERENT path
+  // and not a producer of this one: a grant is per-call and transient, appends
+  // no `sandbox/mode` event, and never moves the standing mode (spec §3.3
+  // point 1). It reaches exec through the granted policy below, not through
+  // this thunk.
   sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+  // M62: the approval-service ADAPTER, built once by the assembly. The per-call
+  // `EscalationContext` is composed in the tool body, because only that layer
+  // holds the `ToolExec` a prompt must name. Absent → an escalation request is
+  // refused (fail closed), never silently allowed.
+  escalationApprover?: import("@i-harness/sandbox").EscalationApprover<unknown, string>
+}
+
+/**
+ * M62: the escalation ladder for the shell surface — the SAME per-call decision
+ * fs and the terminal make, in the one place that knows how a shell refusal is
+ * delivered.
+ *
+ * A refusal is a VALUE, never a throw: a throwing tool body fails the whole turn
+ * and appends no `tool/result` (`packages/fs/src/error.ts:19-31` records the same
+ * rule), so the model would read a hung call instead of an answer.
+ *
+ * It is returned HERE, as the ladder built it, and NOT through
+ * `sandboxUnavailableFailure`: that helper answers a different question (no
+ * backend exists for ANY mode), so routing this denial through it would answer
+ * with the wrong reason. Every ladder refusal withholds its escalation sentence
+ * by construction (`escalationTarget: null` in branches 1/5/6), which is exactly
+ * why the denial must not be rebuilt by a helper that has its own.
+ *
+ * `stderr` carries the JSON denial because that is the field this surface's
+ * refusals already use (see `sandboxUnavailableFailure`), and the shell tool's
+ * declared output has no `error`/`denial` slot.
+ */
+async function resolveShellCall(
+  deps: ShellToolDeps,
+  exec: ToolExec,
+  toolName: "bash" | "pwsh",
+  args: { sandbox_permissions?: string; justification?: string },
+  subject: string,
+): Promise<
+  | { kind: "proceed"; policy: SandboxExecutionPolicy | undefined }
+  | { kind: "refused"; refusal: { stdout: string; stderr: string; exitCode: number } }
+> {
+  const escalation = deps.escalationApprover === undefined
+    ? undefined
+    : {
+        approver: deps.escalationApprover,
+        agent: exec,
+        callId: exec.callId ?? "unknown",
+        toolName,
+        ...(exec.abortSignal !== undefined ? { signal: exec.abortSignal } : {}),
+      }
+  const resolution = await resolveCallPolicy({
+    base: deps.sandboxPolicy?.(),
+    surface: "shell",
+    subject,
+    args,
+    ...(escalation !== undefined ? { escalation } : {}),
+  })
+  if (resolution.kind === "refused") {
+    return { kind: "refused", refusal: { stdout: "", stderr: JSON.stringify(resolution.denial), exitCode: -1 } }
+  }
+  // The GRANTED policy when an escalation was approved, the session's otherwise.
+  // Re-reading `deps.sandboxPolicy?.()` here would refuse the very call the user
+  // just approved.
+  return { kind: "proceed", policy: resolution.policy }
 }
 
 /**
@@ -293,7 +360,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     // default shell (resolveShell can return pwsh on Windows without bash).
     // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
     // executing PowerShell.
-    execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
+    execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
       // M59: legible failure instead of a silent spawn-fail (-1 with empty
       // output) — the model can then pick the pwsh tool immediately.
       if (!bashAvailable()) {
@@ -306,9 +373,17 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         }
       }
       const argv = ["bash", "-c", args.command]
+      // M62: the ladder runs BEFORE exec is called and AFTER the availability
+      // check — asking a human to widen the sandbox for a command this host
+      // cannot run at all would be a prompt with no possible outcome.
+      const ladder = await resolveShellCall(deps, exec, "bash", args, `run ${argv[0]}`)
+      if (ladder.kind === "refused") return ladder.refusal
       // Per CALL, never cached: the assembly's resolver re-reads the session's
-      // last `sandbox/mode` event, so an escalation mid-session applies here.
-      const sandboxResolved = deps.sandboxPolicy?.()
+      // last `sandbox/mode` event, so a mode change a HOST appends mid-session
+      // applies here. (`ladder.policy` is the granted policy when this call
+      // carried an approved escalation — the ladder is per-call and transient
+      // and appends no `sandbox/mode` event of its own.)
+      const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
           const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
@@ -341,10 +416,14 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     },
     timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
-    execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
+    execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
       const argv = [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
-      // Per CALL — see the bash tool above.
-      const sandboxResolved = deps.sandboxPolicy?.()
+      // M62: the ladder runs once, before exec; `ladder.policy` is the granted
+      // policy when this call carried an approved escalation, and the session's
+      // per-call read otherwise — see the bash tool above.
+      const ladder = await resolveShellCall(deps, exec, "pwsh", args, `run ${argv[0]}`)
+      if (ladder.kind === "refused") return ladder.refusal
+      const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
           const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
@@ -372,11 +451,22 @@ export function registerShell(
     // M62: a resolver thunk passed straight through to the tools — see
     // ShellToolDeps.sandboxPolicy. The assembly hands over its per-call read.
     sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+    // M62: the escalation approver, forwarded to `createShellTools` — see
+    // ShellToolDeps.escalationApprover. Without this hop the ladder would be
+    // unreachable at runtime while every type still checked.
+    escalationApprover?: import("@i-harness/sandbox").EscalationApprover<unknown, string>
     /** D1 (m55): assembly workspace — the default cwd for bash/pwsh. */
     cwd?: string
   },
 ): void {
   registerExec(ctx, { sandbox: opts?.sandbox })
   const exec = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention, sandboxPolicy: opts?.sandboxPolicy, ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}) })) registry.register(tool)
+  for (const tool of createShellTools({
+    exec,
+    timeoutMs: opts?.timeoutMs,
+    retention: opts?.retention,
+    sandboxPolicy: opts?.sandboxPolicy,
+    ...(opts?.escalationApprover !== undefined ? { escalationApprover: opts.escalationApprover } : {}),
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+  })) registry.register(tool)
 }

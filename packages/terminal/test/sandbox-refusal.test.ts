@@ -313,3 +313,127 @@ describe("terminal refuses capability-creating calls under a confined mode", () 
     await expect(toolNamed(tools, "terminal_open").execute({ command: "bash" }, {})).resolves.toBeDefined()
   })
 })
+
+// ── The escalation ladder on the terminal surface ───────────────────────────
+//
+// Same per-call ladder as fs and the shell, at the top of each refusing tool's
+// body. TWO traps, both of which defeat the grant:
+//
+//  1. After a grant the confinement decision must use `resolution.policy`. A
+//     fresh `deps.sandboxPolicy?.()` read returns the SESSION's mode, and
+//     `danger-full-access` is exactly the mode that makes `confinement()` return
+//     undefined — so re-reading would refuse the very call just approved.
+//  2. The ladder's denial is returned UNCHANGED. Routing it back through
+//     `terminalRefusal` would rebuild it through `denialFor(…,
+//     PTY_PERMITTED_MODE)` and re-attach the escalation sentence that ladder
+//     branches 1/5/6 set `escalationTarget: null` to withhold.
+
+function approverSaying(outcome: "allowed-once" | "rejected") {
+  const prompts: Array<{ toolName: string; callId: string; reason: string }> = []
+  return {
+    prompts,
+    approver: {
+      async request(req: { toolName: string; callId: string; reason: string }) {
+        prompts.push({ toolName: req.toolName, callId: req.callId, reason: req.reason })
+        return outcome
+      },
+    },
+  }
+}
+
+describe("terminal escalation ladder", () => {
+  for (const call of REFUSING_CALLS) {
+    it(`${call.name}: a granted danger-full-access escalation opens it for THIS call`, async () => {
+      const spy = spyService()
+      const { approver, prompts } = approverSaying("allowed-once")
+      const deps = {
+        service: spy.service,
+        sandboxPolicy: () => ({ mode: "read-only" as const, workspaceRoot: "/ws" }),
+        escalationApprover: approver as never,
+      }
+      const tools = [...createTerminalTools(deps), ...createProcessTools(deps)]
+      const result = (await toolNamed(tools, call.name).execute(
+        { ...call.args, sandbox_permissions: "danger-full-access", justification: "the PTY cannot be confined" },
+        { callId: "call-pty" },
+      )) as Refusal
+      expect(result.code, "a granted escalation must not be refused again").toBeUndefined()
+      expect(prompts).toHaveLength(1)
+      expect(prompts[0]!.toolName).toBe(call.name)
+      expect(prompts[0]!.callId).toBe("call-pty")
+      // The prompt names the operation, not just the mode.
+      expect(prompts[0]!.reason.length).toBeGreaterThan("escalate sandbox to danger-full-access".length)
+      // The real proof: the granted call REACHED the service. Under a fresh
+      // re-read of the session thunk it would still be read-only and refuse.
+      expect(call.reached(spy)).toBe(1)
+    })
+
+    it(`${call.name}: a refused escalation returns the ladder's own denial`, async () => {
+      const spy = spyService()
+      const { approver } = approverSaying("rejected")
+      const deps = {
+        service: spy.service,
+        sandboxPolicy: () => ({ mode: "read-only" as const, workspaceRoot: "/ws" }),
+        escalationApprover: approver as never,
+      }
+      const tools = [...createTerminalTools(deps), ...createProcessTools(deps)]
+      const result = (await toolNamed(tools, call.name).execute(
+        { ...call.args, sandbox_permissions: "danger-full-access", justification: "please" },
+        {},
+      )) as Refusal
+      expect(result.denial?.code).toBe("SANDBOX_DENIED")
+      expect(result.denial?.surface).toBe("terminal")
+      expect(result.denial?.mode).toBe("read-only")
+      expect(result.denial?.reason).toMatch(/rejected/)
+      // §3.2 corollary 2 -- the REQUEST was refused, so no escalation sentence
+      // may be re-attached by `terminalRefusal`'s rebuild path.
+      expect(result.denial?.escalation).toBeUndefined()
+      expect(result.error).not.toContain("sandbox_permissions")
+      expect(call.reached(spy)).toBe(0)
+    })
+  }
+
+  it("a malformed escalation pair is refused without asking anyone", async () => {
+    const spy = spyService()
+    const { approver, prompts } = approverSaying("allowed-once")
+    const tools = createTerminalTools({
+      service: spy.service,
+      sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
+      escalationApprover: approver as never,
+    })
+    const result = (await toolNamed(tools, "terminal_open").execute(
+      { command: "bash", sandbox_permissions: "danger-full-access" },
+      {},
+    )) as Refusal
+    expect(result.denial?.reason).toMatch(/justification/)
+    expect(result.denial?.escalation).toBeUndefined()
+    expect(prompts).toHaveLength(0)
+    expect(spy.opened).toHaveLength(0)
+  })
+
+  it("the operation refusal still carries its hint when no escalation was requested", async () => {
+    // The other direction, so the ladder's arrival cannot silently strip the
+    // guidance an ordinary confined refusal must keep (Task 4's fix).
+    const spy = spyService()
+    const tools = createTerminalTools({
+      service: spy.service,
+      sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
+      escalationApprover: approverSaying("allowed-once").approver as never,
+    })
+    const result = (await toolNamed(tools, "terminal_open").execute({ command: "bash" }, {})) as Refusal
+    expect(advisedMode(result.denial)).toBe("danger-full-access")
+    expect(spy.opened).toHaveLength(0)
+  })
+
+  it("observation and shutdown tools stay allowed and never consult the ladder", async () => {
+    const spy = spyService()
+    const { approver, prompts } = approverSaying("allowed-once")
+    const tools = createTerminalTools({
+      service: spy.service,
+      sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
+      escalationApprover: approver as never,
+    })
+    await toolNamed(tools, "terminal_read").execute({ id: "t1", sandbox_permissions: "danger-full-access", justification: "x" }, {})
+    expect(spy.reads).toHaveLength(1)
+    expect(prompts).toHaveLength(0)
+  })
+})

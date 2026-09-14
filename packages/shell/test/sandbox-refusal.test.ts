@@ -12,10 +12,11 @@ import { bashAvailable, createShellTools } from "../src/index.ts"
  * `resolveArgv` throws `SandboxUnavailableError` SYNCHRONOUSLY
  * (`packages/exec/src/index.ts:112,122`) and the background path reaches it
  * through `spawnChild` on a DIFFERENT line from the foreground one
- * (`packages/shell/src/index.ts:307` vs `:309` for bash, `:343` vs `:345` for
- * pwsh). Wrapping only the `await deps.exec.run(...)` line typechecks, passes
- * the end-to-end suite, and leaves a background call killing the turn — which is
- * exactly the behaviour this change exists to remove.
+ * (`packages/shell/src/index.ts:314` vs `:317` for bash, `:350` vs `:353` for
+ * pwsh — the numbers this comment used to cite predated `sandboxUnavailableFailure`
+ * being inserted at `:185`). Wrapping only the `await deps.exec.run(...)` line
+ * typechecks, passes the end-to-end suite, and leaves a background call killing
+ * the turn — which is exactly the behaviour this change exists to remove.
  *
  * WHY THIS FILE EXISTS IN ADDITION TO `session-executor`'s END-TO-END TEST: the
  * assembly-level test drives ONE bash call, on the foreground path, and it needs
@@ -120,5 +121,131 @@ describe("a sandbox-unavailable refusal is RETURNED on every path", () => {
       sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
     }).find((t) => t.name === "pwsh")!
     await expect(pwsh.execute({ command: "true" }, {})).rejects.toThrow("spawn ENOENT")
+  })
+})
+
+// ── The escalation ladder on the shell surface ──────────────────────────────
+//
+// The shell runs the SAME per-call ladder as fs and the terminal, at the top of
+// its body — but where fs hands the granted MODE to a synchronous guard, the
+// shell hands the granted POLICY to `exec`. Two traps this pins:
+//
+//  1. After a grant, the confinement decision must use `resolution.policy`. A
+//     second read of `deps.sandboxPolicy?.()` (the session's standing mode)
+//     would refuse the very call the user just approved.
+//  2. The `SandboxUnavailableError` catch must NOT consult the ladder: that
+//     refusal means no backend exists for ANY mode, so no mode can be advised.
+
+/** An `ExecService` that records the policy each call carried and succeeds. */
+function recordingExec() {
+  const policies: Array<{ mode?: string } | undefined> = []
+  const exec: ExecService = {
+    run: async (cmd) => {
+      policies.push(cmd.sandbox as { mode?: string } | undefined)
+      return { stdout: "ran", stderr: "", exitCode: 0, timedOut: false }
+    },
+    runBackground: (cmd) => {
+      policies.push(cmd.sandbox as { mode?: string } | undefined)
+      return { jobId: "job-1" }
+    },
+    getOutput: () => { throw new Error("recordingExec: getOutput must not be reached") },
+    killJob: () => "already-finished",
+    listJobs: () => [],
+  }
+  return { exec, policies }
+}
+
+function approverSaying(outcome: "allowed-once" | "rejected") {
+  const prompts: Array<{ toolName: string; callId: string; reason: string }> = []
+  return {
+    prompts,
+    approver: {
+      async request(req: { toolName: string; callId: string; reason: string }) {
+        prompts.push({ toolName: req.toolName, callId: req.callId, reason: req.reason })
+        return outcome
+      },
+    },
+  }
+}
+
+const escalatingPwsh = (
+  exec: ExecService,
+  approver: unknown,
+  mode: "read-only" | "workspace-write" = "read-only",
+) =>
+  createShellTools({
+    exec,
+    sandboxPolicy: () => ({ mode, workspaceRoot: "/ws" }),
+    escalationApprover: approver as never,
+  }).find((t) => t.name === "pwsh")!
+
+describe("shell escalation ladder", () => {
+  it("an approved escalation runs the call under the GRANTED mode, not the session's", async () => {
+    const { exec, policies } = recordingExec()
+    const { approver, prompts } = approverSaying("allowed-once")
+    const result = await escalatingPwsh(exec, approver).execute(
+      { command: "true", sandbox_permissions: "workspace-write", justification: "the command writes outside the workspace" },
+      { callId: "call-9" },
+    )
+    expect(result).toMatchObject({ stdout: "ran", exitCode: 0 })
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]!.toolName).toBe("pwsh")
+    expect(prompts[0]!.reason).toContain("run ") // the operation is named
+    // THE assertion: the policy exec receives is the GRANTED one. A fresh read of
+    // the session thunk would carry `read-only` here and refuse the call the user
+    // just approved.
+    expect(policies).toEqual([{ mode: "workspace-write", workspaceRoot: "/ws" }])
+  })
+
+  it("a refused escalation is RETURNED, and the command never reaches exec", async () => {
+    const { exec, policies } = recordingExec()
+    const { approver } = approverSaying("rejected")
+    const result = (await escalatingPwsh(exec, approver).execute(
+      { command: "true", sandbox_permissions: "workspace-write", justification: "please" },
+      {},
+    )) as { stdout?: string; stderr?: string; exitCode?: number }
+    const denial = JSON.parse(result.stderr!) as SandboxDenial
+    expect(denial).toMatchObject({ code: "SANDBOX_DENIED", surface: "shell", mode: "read-only" })
+    // The request was refused, not the operation: no escalation sentence may be
+    // re-attached (§3.2 corollary 2).
+    expect(denial.escalation).toBeUndefined()
+    expect(result.exitCode).toBe(-1)
+    expect(policies).toHaveLength(0)
+  })
+
+  it("a malformed escalation pair is refused with the validation message", async () => {
+    const { exec } = recordingExec()
+    const result = (await escalatingPwsh(exec, approverSaying("allowed-once").approver).execute(
+      { command: "true", sandbox_permissions: "workspace-write" },
+      {},
+    )) as { stderr?: string }
+    const denial = JSON.parse(result.stderr!) as SandboxDenial
+    expect(denial.reason).toMatch(/justification/)
+    expect(denial.escalation).toBeUndefined()
+  })
+
+  it("no escalation arguments means exec sees the session's mode and nobody is asked", async () => {
+    const { exec, policies } = recordingExec()
+    const { approver, prompts } = approverSaying("allowed-once")
+    const result = await escalatingPwsh(exec, approver).execute({ command: "true" }, {})
+    expect(result).toMatchObject({ exitCode: 0 })
+    expect(prompts).toHaveLength(0)
+    expect(policies).toEqual([{ mode: "read-only", workspaceRoot: "/ws" }])
+  })
+
+  it("the sandbox-unavailable refusal keeps its no-hint denial and never asks", async () => {
+    // The ladder must NOT be consulted in the SandboxUnavailableError catch: no
+    // backend exists for ANY mode there, so escalation cannot help. This is the
+    // direction that was got backwards once already.
+    const { approver, prompts } = approverSaying("allowed-once")
+    const tools = createShellTools({
+      exec: refusingExec(),
+      sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
+      escalationApprover: approver as never,
+    })
+    const result = await tools.find((t) => t.name === "pwsh")!.execute({ command: "true" }, {}) as never
+    const denial = denialOf(result)
+    expect(denial.escalation).toBeUndefined()
+    expect(prompts).toHaveLength(0)
   })
 })
