@@ -277,10 +277,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const tools = createToolRegistry(ctx)
 
   // ── session: live source of truth + coordinator mirror (write-behind) ──────
-  // Created BEFORE the execution environment on purpose: the sandbox policy is
-  // resolved PER CALL against this session's `sandbox/mode` events (below), and
-  // the shell registration already needs one resolution at mount time — so the
-  // session has to exist first. Nothing here depends on the mounts.
+  // Created BEFORE the execution environment on purpose: the sandbox policy
+  // resolver below re-reads this session's `sandbox/mode` events (and its
+  // `policyFloor` is that session's length), so the session has to exist first.
+  // Nothing here depends on the mounts.
   const session = opts.session ?? createSession((ev) => {
     if (opts.coordinator === undefined || opts.sessionId === undefined) return
     opts.coordinator.enqueue(opts.sessionId, [ev])
@@ -288,12 +288,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   })
 
   // ── execution environment + policy ─────────────────────────────────────────
-  // Same sequence as runHeadless: terminal first (registerTerminal may be
-  // reclaimed via the handle in dispose), then shell+plaintext, web, fs.
   // D1 (m55): every exec-spawning tool gets the assembly workspace as its
   // default cwd — the fs tools already resolve against it (LSP too, below);
   // without this the shell/PTY ran in the PROCESS cwd, a different tree.
-  const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, { cwd: opts.workspace })
   const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
   // M16w final review (win32 composition): the sandbox-local wrapper returns a
   // bare SandboxProvider and DROPS the backend's dispose(), so this compose
@@ -338,12 +335,25 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const policyFloor = policyBase.events.length
   const sandboxPolicyNow = () =>
     sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) } })
+  // M62: the terminal is mounted HERE, not at the top of the environment,
+  // because its tools resolve the sandbox policy PER CALL and the resolver is
+  // defined just above. Mount order does not affect disposal — `dispose()`
+  // tears the terminal down explicitly by handle, not through the reverse-order
+  // mount list. (The comment this replaced claimed the terminal-first order
+  // "mirrored runHeadless"; there is no second sequence to mirror —
+  // `registerTerminal` has exactly one non-test caller, and `runHeadless` mounts
+  // nothing itself.)
+  const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
+    cwd: opts.workspace,
+    ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
+  })
   // M62: the shell gets the RESOLVER, not a value. It used to receive
   // `sandboxPolicyNow()` evaluated here — a mount-time snapshot — so a
   // mid-session mode change (which the escalation ladder is) reached the fs
   // guard but not the shell, and the two surfaces disagreed about the mode in
   // force. Every call site now invokes this thunk, so `bash`/`pwsh` confine
-  // against the policy of THAT call, exactly like the fs write guard.
+  // against the policy of THAT call, exactly like the fs write guard — and the
+  // terminal above refuses capability-creating calls on the same per-call read.
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },

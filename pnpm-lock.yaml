@@ -1012,6 +1012,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
