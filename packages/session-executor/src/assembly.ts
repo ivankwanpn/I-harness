@@ -388,8 +388,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // service was built once; `sandboxPolicyNow()` re-reads the session's last
   // `sandbox/mode` event, so a mode change mid-session reaches the fs tools on
   // their NEXT call. (The read is a reverse scan for that event — measured at
-  // ~0.08 ms over a 20k-event session; no cache, and no invalidation rule to
-  // get wrong, until a measurement says otherwise.)
+  // 0.056-0.125 ms over a 20k-event session across nine samples; no cache, and no
+  // invalidation rule to get wrong, until a measurement says otherwise.)
   const writeGuard =
     sandboxPolicyService === undefined
       ? undefined
