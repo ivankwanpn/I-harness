@@ -1322,7 +1322,7 @@ The bash and pwsh tools: resolves which shell executable to spawn, keeps a tool 
 
 | 名稱 | 值 | 出處 |
 |---|---|---|
-| `retention maxBytes default` | 64_000 | `packages/shell/src/index.ts:130` |
+| `retention maxBytes default` | 64_000 | `packages/shell/src/index.ts:132` |
 | `bash argv` | ['bash','-c',command] | `packages/shell/src/index.ts:238` |
 | `pwsh argv` | [resolvePwshExe(),'-NoLogo','-NoProfile','-NonInteractive','-Command',command] | `packages/shell/src/index.ts:258` |
 | `pwsh fallback path` | %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe | `packages/shell/src/index.ts:74` |
@@ -1418,7 +1418,7 @@ PTY-backed terminal and process control: a TerminalService owning node-pty sessi
 
 **已知缺口（原始碼內標記）**
 
-- No sandbox/confinement parameter on the PTY tools (packages/terminal/src/tool.ts:5-11, packages/terminal/src/tool.ts:164-174) and no timeoutMs on any of them (packages/terminal/src/tool.ts:42-160).
+- No sandbox/confinement parameter on the PTY tools (packages/terminal/src/tool.ts:7-24, packages/terminal/src/tool.ts:354-379) and no timeoutMs on any of them (packages/terminal/src/tool.ts:42-160).
 - Documented shortcoming: an offset earlier than the ring start is served from the ring start, and the dropped prefix is unrecoverable (packages/terminal/src/service.ts:73-75).
 - No gap markers (TODO/FIXME/deferred/limitation) beyond the ring-buffer note.
 
