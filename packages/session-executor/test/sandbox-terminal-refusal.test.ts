@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
-import type { SandboxDenial } from "@i-harness/sandbox"
+import type { SandboxDenial, SandboxMode } from "@i-harness/sandbox"
 import type { TerminalService } from "@i-harness/terminal"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
@@ -115,6 +115,61 @@ describe("the assembly hands the terminal a per-call policy", () => {
       rmWorkspaceSync(workspace)
     }
   })
+
+  it("the mode the denial advises, granted through the session, actually opens the PTY", async () => {
+    // THE END-TO-END FORM OF THE ADVICE TEST, and the one that would have caught
+    // the unactionable target: from a read-only assembly the refusal used to
+    // advise "workspace-write" (the first strictly-wider mode), which the terminal
+    // refuses in as well — the advised retry returned the IDENTICAL denial. A
+    // string assertion cannot see that; granting the advised mode and observing a
+    // real PTY can.
+    const workspace = mkdtempSync(join(tmpdir(), "i-harness-term-advice-"))
+    const session = createSession()
+    append(session, { type: "user/message", text: "go" })
+    const assembly = await createSessionAssembly({
+      workspace,
+      session,
+      sessionId: "s1",
+      approveAll: true,
+      modelPolicy: "test-mock",
+      // Two turns on one cassette: refuse, then retry after the grant.
+      mockScript: [
+        ...modelCallingTerminalOpen(),
+        ...modelCallingTerminalOpen(),
+      ],
+      sandbox: "read-only",
+    })
+    const terminals = assembly.ctx.services.get<TerminalService>("terminal/service")
+    let opened: string | undefined
+    try {
+      await assembly.agent.run("go")
+      const refused = terminalResult(assembly)
+      expect(refused.denial?.surface).toBe("terminal")
+      expect(terminals.list()).toEqual([])
+
+      const advised = /sandbox_permissions set to "([^"]+)"/.exec(refused.denial?.escalation ?? "")?.[1]
+      expect(advised, "the denial must name a mode").toBeDefined()
+      // The escalation ladder's shape: an approved request becomes the session's
+      // mode, and the NEXT call resolves against it.
+      append(session, { type: "sandbox/mode", mode: advised as SandboxMode })
+
+      await assembly.agent.run("retry with the mode the denial named")
+      const results = toolResults(assembly).filter((r) => r.name === "terminal_open")
+      expect(results, "the retry must produce a second tool/result").toHaveLength(2)
+      opened = (results[1]!.output as { id?: string }).id
+      expect(opened, `the advised retry to "${advised}" must open the PTY, not refuse again`).toBeDefined()
+      // A real PTY, in the service the assembly registered.
+      expect(terminals.list().map((v) => v.id)).toContain(opened)
+    } finally {
+      if (opened !== undefined) {
+        try { terminals.close(opened, { sessionId: "s1" }) } catch { /* already gone */ }
+      }
+      await assembly.dispose()
+      rmWorkspaceSync(workspace)
+    }
+    // The retry starts a real node-pty process (the refusal half never does), so
+    // this one carries the same explicit budget as the control below.
+  }, 30_000)
 
   it("CONTROL: a host that requested no sandbox still gets a working terminal_open", async () => {
     // Without this the two tests above could pass against a wiring that refuses

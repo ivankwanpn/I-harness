@@ -36,12 +36,28 @@ export interface SandboxDenial {
   escalation?: string
 }
 
-export function denialFor(surface: SandboxSurface, mode: SandboxMode, reason: string): SandboxDenial {
-  const wider = WIDER_MODES[mode]
+/**
+ * `escalationTarget` is the narrowest mode in which THIS operation would be
+ * PERMITTED — NOT merely a mode wider than the one in force. The two coincide for
+ * a THRESHOLD-shaped refusal (fs, shell): there a wider mode is precisely what
+ * the operation needs, so the default (the first strictly-wider mode) is right.
+ * They do NOT coincide for a surface that refuses in EVERY confined mode: the
+ * terminal cannot be kernel-confined at all, so from read-only the default
+ * ("workspace-write") is a target that refuses identically, and the advice sends
+ * the model to a retry that cannot work. Callers in that position name the
+ * sufficient mode; omitting the argument keeps the previous behaviour exactly.
+ */
+export function denialFor(
+  surface: SandboxSurface,
+  mode: SandboxMode,
+  reason: string,
+  escalationTarget?: SandboxMode,
+): SandboxDenial {
+  const target = escalationTarget ?? WIDER_MODES[mode]?.[0]
   const out: SandboxDenial = { code: "SANDBOX_DENIED", surface, mode, reason }
-  if (wider !== undefined && wider.length > 0) {
+  if (target !== undefined) {
     out.escalation =
-      `If this operation is genuinely required, retry it with sandbox_permissions set to "${wider[0]}" and a justification. ` +
+      `If this operation is genuinely required, retry it with sandbox_permissions set to "${target}" and a justification. ` +
       `That requests a wider mode for this call and may be approved.`
   }
   return out

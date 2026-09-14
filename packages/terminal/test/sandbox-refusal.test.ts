@@ -38,15 +38,20 @@ function spyService() {
   const sent: Array<{ id: string; data: string }> = []
   const signalled: Array<{ id: string; signal: string }> = []
   const closed: string[] = []
+  const reads: Array<{ id: string; offset?: number }> = []
+  const resized: Array<{ id: string; cols: number; rows: number }> = []
   let lists = 0
   const service = {
     open: (spec: Record<string, unknown>) => {
       opened.push(spec)
       return { id: "t1", pid: 1, cols: 80, rows: 24 }
     },
-    send: (id: string, data: string) => {
+    send: (id: string, data: string): void => {
       sent.push({ id, data })
-      return { id, sentChars: data.length }
+    },
+    read: (id: string, opts?: { offset?: number; maxBytes?: number; sessionId?: string }) => {
+      reads.push({ id, ...(opts?.offset !== undefined ? { offset: opts.offset } : {}) })
+      return { data: "", nextOffset: 0 }
     },
     signal: (id: string, signal: string) => {
       signalled.push({ id, signal })
@@ -56,13 +61,19 @@ function spyService() {
       closed.push(id)
       return { id, status: "closed" }
     },
+    resize: (id: string, cols: number, rows: number) => {
+      resized.push({ id, cols, rows })
+      return { id, cols, rows, status: "running" }
+    },
     list: () => {
       lists += 1
       return []
     },
   } as unknown as TerminalService
-  return { service, opened, sent, signalled, closed, listCount: () => lists }
+  return { service, opened, sent, signalled, closed, reads, resized, listCount: () => lists }
 }
+
+type Spy = ReturnType<typeof spyService>
 
 /** The refusal as a MODEL sees it — fields read off the returned object. */
 type Refusal = { error?: string; code?: string; denial?: { code: string; surface: string; mode: string; reason: string; escalation?: string } }
@@ -71,6 +82,31 @@ function toolNamed(tools: Tool[], name: string): Tool {
   const tool = tools.find((t) => t.name === name)
   expect(tool, `${name} must still be mounted`).toBeDefined()
   return tool!
+}
+
+/**
+ * The mode the refusal TELLS THE MODEL to retry with, read out of the sentence
+ * the model actually receives — not from a constant, so a denial that names the
+ * wrong mode cannot pass by agreeing with itself.
+ */
+function advisedMode(denial: Refusal["denial"]): string {
+  const match = /sandbox_permissions set to "([^"]+)"/.exec(denial?.escalation ?? "")
+  expect(match, "the denial must name a mode to retry with").not.toBeNull()
+  return match![1]!
+}
+
+/** Every call that must refuse, with the effect on the spy that proves it did
+ * not reach the service, and the effect that proves a permitted retry DID. */
+const REFUSING_CALLS: Array<{ name: string; args: Record<string, unknown>; reached: (spy: Spy) => number }> = [
+  { name: "terminal_open", args: { command: "bash" }, reached: (spy) => spy.opened.length },
+  { name: "process_spawn", args: { command: "bash" }, reached: (spy) => spy.opened.length },
+  { name: "terminal_send", args: { id: "t1", data: "echo hi" }, reached: (spy) => spy.sent.length },
+]
+
+/** All nine tools as `registerTerminal` mounts them, over one spy. */
+function mounted(spy: Spy, mode: () => "read-only" | "workspace-write" | "danger-full-access"): Tool[] {
+  const deps = { service: spy.service, sandboxPolicy: () => ({ mode: mode(), workspaceRoot: "/ws" }) }
+  return [...createTerminalTools(deps), ...createProcessTools(deps)]
 }
 
 describe("terminal refuses capability-creating calls under a confined mode", () => {
@@ -88,11 +124,13 @@ describe("terminal refuses capability-creating calls under a confined mode", () 
     expect(result.denial?.surface).toBe("terminal")
     expect(result.denial?.mode).toBe("read-only")
     expect(result.denial?.reason).toContain("read-only")
-    // The escalation guidance is what keeps the refusal actionable: read-only has
-    // strictly wider modes, so `denialFor` attaches the retry route. (This is the
-    // shell's "no backend exists" case inverted — there the guidance is ABSENT
-    // because asking for a wider mode cannot help; here it can.)
-    expect(result.denial?.escalation).toContain("workspace-write")
+    // The escalation guidance is what keeps the refusal actionable. The mode it
+    // must name is the narrowest mode in which THIS operation is permitted —
+    // `danger-full-access`, NOT the first strictly-wider mode `denialFor` picks
+    // by default ("workspace-write" from read-only), which `confinement` refuses
+    // too. The retry tests below are what actually hold this; the string here
+    // only documents it.
+    expect(advisedMode(result.denial)).toBe("danger-full-access")
     // The load-bearing assertion: refusing must not have spawned anything.
     expect(spy.opened).toHaveLength(0)
   })
@@ -124,8 +162,9 @@ describe("terminal refuses capability-creating calls under a confined mode", () 
     })
     const result = (await toolNamed(tools, "terminal_open").execute({ command: "bash" }, {})) as Refusal
     expect(result.denial?.mode).toBe("workspace-write")
-    // From workspace-write the only wider mode is danger-full-access.
-    expect(result.denial?.escalation).toContain("danger-full-access")
+    // From workspace-write the only mode a PTY is permitted in is
+    // danger-full-access, which is also its only strictly-wider mode.
+    expect(advisedMode(result.denial)).toBe("danger-full-access")
     expect(spy.opened).toHaveLength(0)
   })
 
@@ -136,13 +175,14 @@ describe("terminal refuses capability-creating calls under a confined mode", () 
       sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
     })
     // These can only observe or SHUT DOWN. Refusing them would strand live PTYs
-    // opened under a wider mode with no way to close them.
-    for (const name of ["terminal_read", "terminal_list", "terminal_close", "terminal_signal"]) {
-      toolNamed(tools, name)
-    }
+    // opened under a wider mode with no way to close them — so "mounted" is not
+    // the assertion; each one is EXERCISED and must reach the service.
     await toolNamed(tools, "terminal_list").execute({}, {})
     expect(spy.listCount()).toBe(1)
-    // Not just mounted — they still REACH the service.
+    await toolNamed(tools, "terminal_read").execute({ id: "t1" }, {})
+    expect(spy.reads).toEqual([{ id: "t1" }])
+    await toolNamed(tools, "terminal_signal").execute({ id: "t1", signal: "INT" }, {})
+    expect(spy.signalled).toEqual([{ id: "t1", signal: "INT" }])
     await toolNamed(tools, "terminal_close").execute({ id: "t1" }, {})
     expect(spy.closed).toEqual(["t1"])
   })
@@ -225,9 +265,44 @@ describe("terminal refuses capability-creating calls under a confined mode", () 
       service: spy.service,
       sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
     })
+    // Exercised, not merely mounted: resizing cannot create anything, and a
+    // refusal here would leave a live PTY whose geometry the model cannot fix.
     await toolNamed(tools, "process_kill").execute({ id: "t1" }, {})
     expect(spy.signalled).toEqual([{ id: "t1", signal: "TERM" }])
+    await toolNamed(tools, "process_resize_pty").execute({ id: "t1", cols: 100, rows: 40 }, {})
+    expect(spy.resized).toEqual([{ id: "t1", cols: 100, rows: 40 }])
   })
+
+  // ── The advice must WORK, not merely exist ────────────────────────────────
+  //
+  // A test that only asserts the denial's sentence contains a mode name passes
+  // on advice that cannot be followed — which is exactly what the first version
+  // of this file did: it pinned `escalation` to contain "workspace-write" for
+  // read-only, while `confinement` refuses under workspace-write too, so the
+  // advised retry returned the IDENTICAL denial and spawned nothing. The only
+  // assertion that can catch that is to FOLLOW the advice: take the mode the
+  // denial names, put it in force, retry the identical call, and require the
+  // operation to be permitted and to reach the service.
+  for (const startingMode of ["read-only", "workspace-write"] as const) {
+    for (const call of REFUSING_CALLS) {
+      it(`the advised retry succeeds: ${call.name} from ${startingMode}`, async () => {
+        const spy = spyService()
+        let mode: "read-only" | "workspace-write" | "danger-full-access" = startingMode
+        const tools = mounted(spy, () => mode)
+        const tool = toolNamed(tools, call.name)
+
+        const refused = (await tool.execute(call.args, {})) as Refusal
+        expect(refused.code, `${call.name} must refuse under ${startingMode}`).toBe("SANDBOX_DENIED")
+        expect(call.reached(spy)).toBe(0)
+
+        // The retry the denial advertises, with the mode it advertises.
+        mode = advisedMode(refused.denial) as typeof mode
+        const retry = (await tool.execute(call.args, {})) as Refusal
+        expect(retry.code, `the advised retry to "${mode}" must NOT be refused too`).toBeUndefined()
+        expect(call.reached(spy), `the advised retry to "${mode}" must reach the service`).toBe(1)
+      })
+    }
+  }
 
   it("the refusal is a returned value, not a throw", async () => {
     const spy = spyService()
