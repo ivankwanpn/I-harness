@@ -118,6 +118,19 @@ shell 與 fs 的拒絕要走同一個可分類的形狀，讓模型能用同一�
 
 **取用來源**：codex `sandbox-violation-classification`、dsh `shell-confinement-wrap-and-denial-classification`、cc `sandbox-violation-surfacing`。
 
+> **2026-09-15 補充：升級提示必須指名「足夠的」模式，不是「更寬的」模式。**
+>
+> 初版把升級提示寫成「附上可用 `sandbox_permissions` 提出」，而實作取的是 `WIDER_MODES[mode][0]`——**第一個更寬的模式**。Task 4 的審查在真實裝配上證明那是錯的：terminal 在 `read-only` 下拒絕、建議 `workspace-write`，**而它在 `workspace-write` 下也拒絕**，所以照著重試會拿到**一模一樣的拒絕、開出 0 個 PTY**。只有 `danger-full-access` 能解鎖。
+>
+> **規則應該是：拒絕要指名「這個操作會被允許的模式當中最窄的那一個」。** 兩者在**門檻形**的拒絕上重合（fs：`workspace-write` 就夠；shell 同理），在**所有受限模式都拒絕**的表面上分岔（terminal）。`denialFor` 因此在 2026-09-15 增加了一個可選的 `escalationTarget`；預設維持舊行為，所以 fs 與 shell 不動。
+>
+> **兩個推論，兩者都是同一類錯誤：**
+>
+> 1. **測試必須真的照著建議重試。** 只斷言「句子裡含有某個模式名稱」的測試，會在**無法照做的建議上照樣通過**——這正是它出貨的原因。
+> 2. **對「升級請求本身」的拒絕，不該附帶升級提示。** 參數錯、被使用者拒絕、被取消、管道不可用、要求的模式不是嚴格更寬——這些都是「**你的請求本身有問題**」，模型該做的是修正請求，不是重複它。附上提示等於叫它再送一次同樣的東西。
+>
+> **兩者共同的教訓**：一條**只被舉例、沒有被陳述**的規則，會在第三個例子上失效。`denialFor` 的「取第一個更寬的模式」對它被寫下時存在的兩個表面都是對的。
+
 ### 3.3 完成升級階梯
 
 **（a）** 工具 schema 宣告 `sandbox_permissions`／`justification`——這兩個名字**已經寫在標記文字裡**，只是沒有人宣告。
