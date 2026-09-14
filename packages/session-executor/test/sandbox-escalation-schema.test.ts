@@ -83,7 +83,7 @@ async function toolSchemasFor(names: readonly string[]): Promise<Record<string, 
 }
 
 describe("the escalation arguments the marker text advertises", () => {
-  it("every write-capable and shell tool declares the escalation arguments", async () => {
+  it("every ladder-declaring tool declares the escalation arguments", async () => {
     const names = [...ESCALATION_DECLARING_TOOLS]
     const schemas = await toolSchemasFor(names)
     for (const name of names) {

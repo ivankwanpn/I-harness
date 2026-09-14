@@ -198,14 +198,20 @@ describe("guard-approval policy", () => {
     ).rejects.toThrow(/approval|denied/i)
   })
 
-  it("Layer 2 exception: apply_patch deliberately still asks for ANY path", async () => {
+  it("Layer 2 exception: apply_patch takes the Layer-1 fallback, asking for ANY path", async () => {
     // Pinned so a later reader cannot "fix" the exception into a classification
     // the tool's arguments cannot support.
+    //
+    // The assertion is the REASON, not `/approval|denied/i`: an `apply_patch`
+    // admitted to `WRITE_TOOLS` would take Layer 2's `pathArg === undefined`
+    // branch and ask as well, so a loose matcher passes for precisely the change
+    // this test exists to forbid. Only the Layer-1 fallback says "tool '...'
+    // requires approval"; adding `apply_patch` to WRITE_TOOLS changes that string.
     const { registry } = setup({ workspace: process.cwd() })
     registry.register(namedTool("apply_patch"))
     await expect(
       registry.execute({ name: "apply_patch", args: { patch_content: "*** Begin Patch\n*** End Patch" } }),
-    ).rejects.toThrow(/approval|denied/i)
+    ).rejects.toThrow(/tool 'apply_patch' requires approval/)
   })
 
   it("decide tolerates a payload that is already a decision object", async () => {
