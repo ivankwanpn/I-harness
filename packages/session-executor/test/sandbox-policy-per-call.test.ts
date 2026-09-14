@@ -102,3 +102,55 @@ describe("sandbox policy is resolved per call", () => {
     expect(perCall).toBeLessThan(5)
   })
 })
+
+/**
+ * RESTORED HISTORY MUST NOT DECIDE THE MODE.
+ *
+ * Per-call resolution made the session's `sandbox/mode` events authoritative, and a
+ * resumed session carries events restored from persistence. A session once
+ * escalated to `danger-full-access` and later resumed under `--sandbox read-only`
+ * would then enforce the ESCALATED mode — a privilege escalation on resume,
+ * defeated by the very rule the surrounding code states in prose ("a resumed
+ * session's fully restored history must not silently override the requested mode").
+ *
+ * The rule the code implements: only events appended AFTER construction are this
+ * session's decisions. This test pins it. The reviewer's finding was that the
+ * opposite behavior was live and untested, with Task 3's escalation ladder as the
+ * producer that would make it reachable in production.
+ */
+describe("restored history does not decide the sandbox mode", () => {
+  it("a persisted sandbox/mode event does NOT override the mode this run requested", async () => {
+    const base = mkdtempSync(join(tmpdir(), "i-harness-restored-"))
+    const workspace = join(base, "ws")
+    const outside = join(base, "outside")
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(outside, { recursive: true })
+    const target = join(outside, "escalated.txt")
+    const session = createSession()
+    append(session, { type: "user/message", text: "write it" })
+    // RESTORED HISTORY: an escalation recorded by an earlier run, already present
+    // when this assembly is constructed.
+    append(session, { type: "sandbox/mode", mode: "danger-full-access" })
+    const assembly = await createSessionAssembly({
+      workspace,
+      session,
+      model: createMockClient([
+        { role: "assistant", toolCalls: [{ name: "write", args: { path: target, text: "escalated" } }] },
+        { role: "assistant", text: "done" },
+      ]),
+      approveAll: true,
+      // THIS run asks for read-only. The restored escalation must not win.
+      sandbox: "read-only",
+    })
+    try {
+      const executor = createSessionExecutor({ session, agent: assembly.agent, inbox: assembly.inbox })
+      executor.submit({ tier: "send", text: "go" })
+      await executor.drain()
+      expect(existsSync(target)).toBe(false)
+      expect(session.events.some((e) => JSON.stringify(e).includes("FS_SANDBOX_DENIED"))).toBe(true)
+    } finally {
+      await assembly.dispose()
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+})

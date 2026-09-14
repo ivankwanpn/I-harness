@@ -315,7 +315,21 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // against nothing forever, leaving every mid-session change invisible.
   const sandboxPolicyService =
     opts.sandbox === undefined ? undefined : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace })
-  const sandboxPolicyNow = () => sandboxPolicyService?.resolve({ session: opts.policySession ?? session })
+  // RESTORED HISTORY MUST NOT DECIDE THE MODE. A `sandbox/mode` event that came
+  // back from persistence records a decision made in an EARLIER run -- possibly an
+  // escalation to danger-full-access -- and letting it win would silently enforce
+  // that decision over the mode THIS run requested. That is a privilege escalation
+  // on resume: `i-harness run --resume X --sandbox read-only` on a session once
+  // escalated would run unrestricted. So only events appended AFTER this
+  // construction count as this session's decisions.
+  //
+  // The floor is taken from whichever session will actually be read, because
+  // `policySession` may be a different object from the live one. Slicing rather
+  // than tracking indices keeps `resolve`'s contract unchanged.
+  const policyBase = opts.policySession ?? session
+  const policyFloor = policyBase.events.length
+  const sandboxPolicyNow = () =>
+    sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) } })
   // The shell still receives a RESOLVED value (Task 2 owns converting its option
   // to a resolver thunk), so this is a mount-time snapshot by construction — named
   // so it cannot be mistaken for the live policy the fs guard reads per call.
