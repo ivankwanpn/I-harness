@@ -1,5 +1,7 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
+import type { SandboxDenial, SandboxMode } from "@i-harness/sandbox"
+import { denialFor } from "@i-harness/sandbox"
 import { createTerminalService, filterConptyNoise, type TerminalService, type TerminalSignalName } from "./service.ts"
 
 export interface TerminalToolDeps {
@@ -8,6 +10,53 @@ export interface TerminalToolDeps {
   // workspace. An explicit args.cwd from the model still wins; absent (both)
   // → no cwd field, so node-pty keeps its own contract (inherit the parent).
   cwd?: string
+  // M62: confinement for the PTY. A RESOLVER, not a value, and read PER CALL —
+  // the same thunk shape the shell takes. A mode that changes mid-session must
+  // reach the NEXT call, which is exactly what a mount-time snapshot cannot do
+  // (see `confinement`). Absent → the host requested no sandbox and nothing is
+  // refused; `undefined` from the thunk means the same thing.
+  sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+}
+
+/**
+ * M62: terminal refusals are RETURNED, never thrown.
+ *
+ * A throwing tool body fails the whole turn — core-agent discards the batch and
+ * appends no tool/result, so the model reads a hung call rather than an answer
+ * (`packages/fs/src/error.ts` states the same rule for the fs tools; terminal
+ * does not depend on `fs`, and pulling that package in for one helper would be
+ * the wrong edge, so the shape is repeated here and pinned by a test).
+ *
+ * The returned object carries the SHARED denial (spec §3.2), so one rule covers
+ * every surface a model can hit. `error` repeats the reason and the escalation
+ * sentence in one string for a reader that only looks at `error`.
+ */
+function terminalRefusal(mode: SandboxMode, reason: string): { error: string; code: SandboxDenial["code"]; denial: SandboxDenial } {
+  const denial = denialFor("terminal", mode, reason)
+  return {
+    error: denial.escalation === undefined ? denial.reason : `${denial.reason} ${denial.escalation}`,
+    code: denial.code,
+    denial,
+  }
+}
+
+/**
+ * The confining mode in force for THIS call, or undefined when unconfined.
+ *
+ * Resolved per call, never cached: a session mounted `danger-full-access` and
+ * later tightened (the escalation ladder is a `sandbox/mode` event) must have
+ * its NEXT terminal call refused. That is why the tools mount unconditionally
+ * and refuse here rather than the terminal being unmounted at mount time.
+ *
+ * `danger-full-access` is the one mode that does not confine — a PTY under it
+ * runs exactly as it always did. `workspace-write` DOES confine: the PTY cannot
+ * be kernel-confined at all, so it must not inherit a mode that claims to bound
+ * writes to the workspace.
+ */
+function confinement(deps: TerminalToolDeps): SandboxMode | undefined {
+  const policy = deps.sandboxPolicy?.()
+  if (policy === undefined || policy.mode === "danger-full-access") return undefined
+  return policy.mode
 }
 
 /**
@@ -39,6 +88,11 @@ function noNoiseLeak(tools: Tool[]): Tool[] {
   return tools.map((t) => ({ ...t, execute: (args, exec) => guardPtyErrors(() => t.execute(args, exec)) }))
 }
 
+// M62: terminal_read, terminal_signal, terminal_close and terminal_list are
+// DELIBERATELY not guarded. They can only observe or SHUT DOWN — refusing them
+// would strand live PTYs (opened under a wider mode, or before a tightening)
+// with no way to read or close them, which is a worse outcome than the reads.
+// process_kill and process_resize_pty below are the same class.
 export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
   const { service } = deps
   return noNoiseLeak([
@@ -57,6 +111,16 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
         required: ["command"],
       },
       execute: async (args: { command: string; args?: string[]; cwd?: string; cols?: number; rows?: number }, exec: ToolExec) => {
+        // M62: this call CREATES the capability, so it is the one place a
+        // confined mode can still be honoured — the PTY itself cannot be
+        // confined by the OS sandbox.
+        const mode = confinement(deps)
+        if (mode !== undefined) {
+          return terminalRefusal(
+            mode,
+            `refusing to start a PTY under ${mode}: an interactive terminal cannot be confined by the OS sandbox, so it would run unrestricted.`,
+          )
+        }
         const cwd = args.cwd ?? deps.cwd
         const spec = {
           command: args.command,
@@ -73,6 +137,17 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
       description: "Write text to a terminal's stdin (newlines are sent as '\\n').",
       inputSchema: { type: "object", properties: { id: { type: "string" }, data: { type: "string" } }, required: ["id", "data"] },
       execute: async (args: { id: string; data: string }, exec: ToolExec) => {
+        // M62: the PTY itself was opened outside this mode (or before it was
+        // tightened), and it is unconfined — so driving it is still unconfined
+        // execution. The refusal names the terminal so the model knows which
+        // handle it may not write to.
+        const mode = confinement(deps)
+        if (mode !== undefined) {
+          return terminalRefusal(
+            mode,
+            `refusing to write to terminal ${args.id} under ${mode}: the PTY was started outside this mode and driving it would run unrestricted.`,
+          )
+        }
         service.send(args.id, args.data, { sessionId: exec.sessionId })
         return { id: args.id, sentChars: args.data.length }
       },
@@ -132,6 +207,15 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
         required: ["command"],
       },
       execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string> }, exec: ToolExec) => {
+        // M62: process_spawn creates the same unconfined capability as
+        // terminal_open (a pty-backed process), so it refuses on the same rule.
+        const mode = confinement(deps)
+        if (mode !== undefined) {
+          return terminalRefusal(
+            mode,
+            `refusing to spawn a pty-backed process under ${mode}: an interactive terminal cannot be confined by the OS sandbox, so it would run unrestricted.`,
+          )
+        }
         const cwd = args.cwd ?? deps.cwd
         return service.open(
           { command: args.command, ...(args.args !== undefined ? { args: args.args } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(args.env !== undefined ? { env: args.env } : {}) },
@@ -165,11 +249,20 @@ export function registerTerminal(
   ctx: PluginContext,
   tools: { register(t: Tool): void },
   /** D1 (m55): assembly workspace — the default cwd for every PTY. */
-  opts?: { cwd?: string },
+  opts?: {
+    cwd?: string
+    // M62: the assembly's per-call policy read, passed straight through to the
+    // tools. Absent → no sandbox was requested (nothing refused).
+    sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+  },
 ): TerminalMountHandle {
   const service = createTerminalService()
   ctx.services.register("terminal/service", service)
-  const deps: TerminalToolDeps = { service, ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}) }
+  const deps: TerminalToolDeps = {
+    service,
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+    ...(opts?.sandboxPolicy !== undefined ? { sandboxPolicy: opts.sandboxPolicy } : {}),
+  }
   for (const tool of [...createTerminalTools(deps), ...createProcessTools(deps)]) tools.register(tool)
   return { dispose: () => service.dispose() }
 }
