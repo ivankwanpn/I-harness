@@ -409,12 +409,18 @@ describe("shell output retention", () => {
     expect(res.truncated).toBeUndefined()
   })
 
-  it("no retention config → today's behavior (exact shape, no stderr)", async () => {
+  it("no retention config → unchanged decode, and stderr is now carried", async () => {
     const tools = createShellTools({ exec: fakeExec({ stdout: "hi", stderr: "err", exitCode: 0 }) })
     const bash = tools.find((t) => t.name === "bash")!
-    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; exitCode: number }
-    // Exactly today's shape: stderr is dropped entirely, no truncated marker.
-    expect(res).toEqual({ stdout: "hi", exitCode: 0 })
+    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; stderr: string; exitCode: number }
+    // M62 Task 3: this used to assert `toEqual({ stdout, exitCode })` — "stderr is
+    // dropped entirely". That made the tool's most legible failure channel depend
+    // on retention being OFF, which is backwards: the RETAINED path below already
+    // returns `stderr`, and the refusals the shell returns (bash absent, sandbox
+    // unavailable) carry their whole reason in it. The declared output type names
+    // `stderr` too, so the shape and the value now agree on both paths. Still no
+    // `truncated` marker here — that remains retention's business.
+    expect(res).toEqual({ stdout: "hi", stderr: "err", exitCode: 0 })
   })
 
   it("pwsh also retains", async () => {

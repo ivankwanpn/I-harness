@@ -230,7 +230,11 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     },
     label: string,
   ) {
-    if (retention === null) return { stdout: result.stdout, exitCode: result.exitCode } // 現有 shape 不變
+    // M62 Task 3: `stderr` is carried here too (it used to be dropped). The
+    // declared output shape now names it, and this branch is the one path where
+    // the shape and the value disagreed — a stderr the caller can read is part of
+    // the contract, not an artifact of whether retention happens to be on.
+    if (retention === null) return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
     const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     so.push(result.stdout)
@@ -263,7 +267,11 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   }
   // execute: `return retainedRunResult(result)`——async fn 回 promise 自動展平（既有呼叫面不變）
 
-  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
+  // M62 Task 3: `stderr` is declared because the refusals below RETURN it — the
+  // bash-absent branch and `sandboxUnavailableFailure` both carry the reason in
+  // `stderr` (the field the model reads). It was absent from this type, so the
+  // refusal's most important field sat outside the declared output shape.
+  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string }> = {
     name: "bash",
     description: "run a bash command (background: true returns a job id instead of waiting)",
     inputSchema: {
@@ -317,7 +325,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       }
     },
   }
-  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
+  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string }> = {
     name: "pwsh",
     description: "run a PowerShell command (background: true returns a job id instead of waiting)",
     inputSchema: {

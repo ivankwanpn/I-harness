@@ -141,5 +141,10 @@ describe("the assembly hands the shell a per-call policy", () => {
       await assembly.dispose()
       rmSync(base, { recursive: true, force: true })
     }
-  })
+    // M62 Task 3 review: the budget is explicit. This case spawns a real
+    // `bash -c true` through a full assembly, and the default 5s left it on the
+    // edge under load — `workspace-cwd.test.ts` gives the identical call 30_000
+    // for the same reason. The refusal case above needs no budget (it never
+    // spawns), so only this one carries the override.
+  }, 30_000)
 })
