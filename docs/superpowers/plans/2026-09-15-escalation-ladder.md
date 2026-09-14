@@ -84,20 +84,32 @@ export async function resolveCallPolicy(input: {
 
 | Where | Change |
 |---|---|
-| `FsToolDeps` | **add** `sandboxPolicy?: () => SandboxExecutionPolicy \| undefined` (mirrors shell) and `escalation?: EscalationContext` |
+| `FsToolDeps` | **add** `sandboxPolicy?: () => SandboxExecutionPolicy \| undefined` (mirrors shell) and `escalationApprover?: EscalationApprover<unknown, string>` — the **approver**, not a prebuilt context; see the correction below |
 | `FsToolDeps.writeGuard` | **gains a second parameter**: `(absPath: string, modeOverride?: SandboxMode) => { ok: true } \| { ok: false; denial: SandboxDenial }`. The override is the escalation grant — without it a granted mode could not reach the check. |
-| `ShellToolDeps` | **add** `escalation?: EscalationContext`; `sandboxPolicy` stays the thunk it already is |
-| `assembly.ts` | builds the approver once, passes `escalation` + `sandboxPolicy` into both registrations, and gives `writeGuard` its override parameter |
+| `FsToolDeps` call sites | `guardWrite(deps, target)` → `guardWrite(deps, target, exec)` in `write`, `edit` and `apply_patch`: without `exec` the tool cannot reach `callId` for the approval |
+| `ShellToolDeps` | **add** `escalationApprover?: EscalationApprover<unknown, string>`; `sandboxPolicy` stays the thunk it already is |
+| `assembly.ts` | builds the approver once, passes it (plus `sandboxPolicy`) into both registrations, and gives `writeGuard` its override parameter |
 
 **The tool-side flow, identical in both packages** (this is the part that must not be written twice with different semantics):
 
 ```ts
+// The context is composed HERE, in the tool, because this is the only layer that
+// has `exec`. Passing a prebuilt context in through deps is impossible -- the
+// assembly mounts before any call exists.
+const escalation = deps.escalationApprover === undefined ? undefined : {
+  approver: deps.escalationApprover,
+  agent: exec,
+  callId: exec.callId ?? "unknown",
+  toolName: "write",
+  ...(exec.abortSignal !== undefined ? { signal: exec.abortSignal } : {}),
+}
+
 const resolution = await resolveCallPolicy({
   base: deps.sandboxPolicy?.(),          // shell / fs
   surface: "fs",                          // or "shell"
   subject: `write to ${path}`,            // or `run ${argv[0]}`
   args,                                   // the raw tool args carry the two fields
-  ...(deps.escalation !== undefined ? { escalation: deps.escalation } : {}),
+  ...(escalation !== undefined ? { escalation } : {}),
 })
 if (resolution.kind === "refused") {
   return { error: messageFor(resolution.denial), code: resolution.denial.code, denial: resolution.denial }
@@ -107,19 +119,29 @@ if (resolution.kind === "refused") {
 
 `messageFor(denial)` = `denial.reason` plus `denial.escalation` when present, so a reader that only looks at `error` still gets the recovery sentence. `guardWrite` in `fs` becomes **async** to await the ladder; `write`/`edit`/`apply_patch` already `await` through `softFail`.
 
-**In the assembly**, the call identity comes from the tool execution, not from a guess:
-```ts
-const escalation: EscalationContext = {
-  approver: createApprovalEscalationApprover(() => {
+**Who builds the escalation context — CORRECTED 2026-09-15 (controller).** An earlier draft of this plan had the **assembly** build the whole `EscalationContext`, including `agent: exec` and `callId: exec.callId`. **That is impossible**: the assembly runs at mount time and has no `ToolExec`; `exec` exists only inside a tool body, per call. Written that way, `callId` would have been invented or left `"unknown"` for every escalation, and the approval prompt could not name the call it is asking about.
+
+The split is forced by where the data lives:
+
+- **The assembly supplies the approver only** — a pure function of `ctx`, built once:
+  ```ts
+  escalationApprover: createApprovalEscalationApprover(() => {
     try { return ctx.services.get<ApprovalPrompt>("approval/answerer") } catch { return undefined }
-  }),
-  agent: exec,                 // the per-call ToolExec
-  callId: exec.callId ?? "unknown",
-  toolName: name,
-  ...(exec.abortSignal !== undefined ? { signal: exec.abortSignal } : {}),
-}
-```
-The getter is read **lazily per call** so a host that registers its answerer after mounting still works.
+  })
+  ```
+  The getter is read **lazily per call**, so a host that registers its answerer after mounting still works.
+- **The tool composes the context per call**, because it is the only layer holding `exec`:
+  ```ts
+  const escalation = deps.escalationApprover === undefined ? undefined : {
+    approver: deps.escalationApprover,
+    agent: exec,                       // the per-call ToolExec
+    callId: exec.callId ?? "unknown",
+    toolName: "write",                 // the tool's own name, not a variable the assembly cannot see
+    ...(exec.abortSignal !== undefined ? { signal: exec.abortSignal } : {}),
+  }
+  ```
+
+So the deps field is `escalationApprover?: EscalationApprover<unknown, string>`, **not** a prebuilt `EscalationContext`. Consequently `guardWrite` in `fs` must take the execution context: `guardWrite(deps, target, exec)` at each of its call sites (`write`, `edit`, `apply_patch`) — today it is called as `guardWrite(deps, target)` and has no way to reach `callId`.
 
 - [ ] **Steps:** failing assembly test first — a `read-only` assembly whose model calls `write` to an outside path **with** `sandbox_permissions: "workspace-write"` + a justification must (a) ask, (b) on approval land the write, (c) on rejection leave the file absent and return a classified denial. Then implement. Then **mutation proof: strip the `modeOverride` argument at the fs call site** and confirm the granted-write test goes red (the grant would no longer reach `checkWrite`). Restore and commit.
 
