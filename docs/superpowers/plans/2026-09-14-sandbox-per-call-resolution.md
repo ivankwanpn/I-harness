@@ -178,6 +178,152 @@ git commit -m "feat(sandbox): resolve the policy per call instead of once at ass
 
 ---
 
+### Task 1b: Close the three findings Task 1's review left open
+
+**Why this is a task and not a footnote.** Task 1 moved *enforcement* to per-call and left the *prompt* at mount time. Before Task 1 both were frozen together — stale, but consistent. After it they can disagree, and `assembly.ts:305-315` / `:658-663` still assert the invariant ("prompt and enforcement can never drift") that Task 1's own change broke. A comment claiming an invariant the code no longer satisfies is a defect in shipped code, not a wording preference. The prompt fragment also says **"Current DSH file policy"** — and it is not current. Task 2 widens the same drift to the shell, and Task 3 supplies the producer (a mid-session mode change) that makes it reachable.
+
+**Files:**
+- Modify: `packages/session-executor/src/assembly.ts` (`:130-135` doc; `:305-315` and `:658-663` comments; the system-prompt composition)
+- Modify: `packages/core-agent/src/index.ts` (`AgentConfig.systemPrompt` at `:39`; the request construction at `:219`)
+- Test: `packages/session-executor/test/sandbox-policy-per-call.test.ts` (extend)
+
+**Interfaces:**
+- Produces: `AgentConfig.systemPrompt: string | (() => string)` — resolved once per step. Additive: every existing caller passes a string and is unaffected; the loop already reads `deps.systemPrompt` at `:219` inside the step loop, so no loop restructuring.
+
+- [ ] **Step 1: Correct the contract the code already changed (review I-1)**
+
+`AssemblyOptions.policySession` (`:130-135`) still documents the pre-ruling contract — "Absent → resolve against nothing" — which is the **opposite** of shipped behavior and would tell a Task 2/3 implementer to resolve against the wrong thing. Replace the body with the shipped rule:
+
+```ts
+  /** The session the sandbox policy resolution READS for `sandbox/mode` events.
+   * Defaults to the LIVE session (`opts.policySession ?? session`): a host that
+   * passes only `session` (the web service) would otherwise resolve against
+   * nothing forever and never observe a mid-session change. `run.ts` passes the
+   * same object for both, so it is unaffected either way.
+   *
+   * ONLY events appended after the assembly is constructed count. Restored
+   * history records decisions made by EARLIER runs; letting it win would enforce
+   * them over the mode THIS run requested — `--resume X --sandbox read-only` on a
+   * session once escalated would run unrestricted. */
+```
+
+- [ ] **Step 2: Pin the precedence branch (review M-3(d))**
+
+No test covers the branch where `policySession` is a **different object** from the live `session`. Add to `sandbox-policy-per-call.test.ts`, inside the existing "restored history does not decide the sandbox mode" describe:
+
+```ts
+  it("a distinct policySession is what resolution reads, not the live session", async () => {
+    const live = createSession()
+    const policySession = createSession()
+    append(live, { type: "user/message", text: "go" })
+    const assembly = await createSessionAssembly({
+      workspace, session: live, policySession,
+      model: modelWritingTargets([first, second]),
+      approveAll: true,
+      sandbox: "danger-full-access",
+    })
+    try {
+      // CONTROL: the LIVE session tightens. Resolution does not read it, so the
+      // write still lands — this is what makes the next assertion meaningful
+      // rather than a test that would pass if resolution read nothing at all.
+      append(live, { type: "sandbox/mode", mode: "read-only" })
+      await runTurn(assembly)
+      expect(readFileSync(first, "utf8")).toBe("escaped")
+
+      // The resolution session tightens; the NEXT call must obey it.
+      append(policySession, { type: "sandbox/mode", mode: "read-only" })
+      await runTurn(assembly)
+      expect(existsSync(second)).toBe(false)
+    } finally { await assembly.dispose(); rmSync(base, { recursive: true, force: true }) }
+  })
+```
+
+- [ ] **Step 3: Mutation proof for Step 2**
+
+Change `const policyBase = opts.policySession ?? session` to `const policyBase = session`. Run the test. Expected: **FAIL on the second assertion** — the tightened `policySession` is ignored and the write lands. Restore.
+
+- [ ] **Step 4: Make the system prompt actually current (review M-2)**
+
+In `packages/core-agent/src/index.ts`:
+
+```ts
+export interface AgentConfig {
+  /** Prompt for every request. A STRING is fixed for the session. A FUNCTION is
+   * resolved at the start of each step, for prompts that carry a fact the
+   * session can change while the agent runs (the sandbox policy: see
+   * session-executor/src/assembly.ts). */
+  systemPrompt: string | (() => string)
+```
+
+and at `:219`:
+
+```ts
+        systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+```
+
+In `packages/session-executor/src/assembly.ts`, keep the base prompt and the plan-mode fragment as they are, but build the policy fragment per request from the SAME resolver the guards use, memoised by mode so the request stays byte-identical until the mode actually changes (a stable prefix matters to provider-side prompt caching):
+
+```ts
+    // The fragment says "Current", so it must BE current. Both the guards and
+    // this prompt read `sandboxPolicyNow()`, but the guards read it per CALL and
+    // the prompt is re-read per STEP — so a mid-session mode change moves both,
+    // and neither can describe a mode the other is not enforcing. Composed once
+    // per distinct mode: unchanged mode → identical string → stable prefix.
+    let promptCache: { mode: SandboxMode | undefined; text: string } | undefined
+    const systemPromptNow = (): string => {
+      const mode = sandboxPolicyNow()?.mode
+      if (promptCache !== undefined && promptCache.mode === mode) return promptCache.text
+      const policy = sandboxPolicyNow()
+      const text = policy === undefined ? baseSystemPrompt : `${baseSystemPrompt}\n\n${renderPolicyContext(policy)}`
+      promptCache = { mode, text }
+      return text
+    }
+```
+
+where `baseSystemPrompt` is the existing preset/default + plan-mode composition. Then pass `systemPrompt: systemPromptNow` to `createAgent`, and keep the overhead estimate on a concrete string (`estimateAssemblyOverhead(systemPromptNow(), tools.schemas())`).
+
+Correct the two comments that assert the invariant: `:305-315` ("the prompt and every enforcement site read through THIS one resolver" — the prompt read it once at mount) and `:658-663` ("composed ONCE … so prompt and enforcement cannot disagree" — that is exactly what changed).
+
+- [ ] **Step 5: Test that the model is told the CURRENT mode**
+
+Add to `sandbox-policy-per-call.test.ts`. Capture what the provider actually receives rather than reading assembly internals:
+
+```ts
+  it("the system prompt states the mode in force on the NEXT request", async () => {
+    const prompts: string[] = []
+    const inner = modelWritingTargets([target])
+    const model = { stream: (req: LLMRequest) => { prompts.push(req.systemPrompt); return inner.stream(req) } }
+    // ... construct with model, sandbox: "danger-full-access"
+    // Turn 1 — mount-time mode.
+    await runTurn(assembly)
+    expect(prompts.at(-1)).toContain("danger-full-access")
+    // The mode changes; the NEXT request must say so.
+    append(session, { type: "sandbox/mode", mode: "read-only" })
+    await runTurn(assembly)
+    expect(prompts.at(-1)).toContain("read-only")
+    expect(prompts.at(-1)).not.toContain("danger-full-access")
+  })
+```
+
+- [ ] **Step 6: Mutation proof for Step 5**
+
+Pass the mount-time string instead of the thunk (`systemPrompt: systemPromptNow()`). Run. Expected: **FAIL on the second assertion** — the model is still told `danger-full-access` while the guard refuses the write. Restore.
+
+- [ ] **Step 7: Run the affected suites and commit**
+
+`npx vitest run --root packages/session-executor`, `npx vitest run --root packages/core-agent`, `npx tsc -b` (or the repo's typecheck script), `node scripts/audit/check-thresholds.mjs`.
+
+```bash
+git add packages/core-agent/src/index.ts packages/session-executor/src/assembly.ts packages/session-executor/test/sandbox-policy-per-call.test.ts
+git commit -m "fix(sandbox): the prompt must state the mode in force, not the mode at mount
+
+Task 1 moved enforcement to per-call and left the prompt at mount time, so a
+mid-session sandbox/mode event changed what the guards enforce without changing
+what the model was told. The fragment says \"Current\"; it now is."
+```
+
+---
+
 ### Task 2: Shell resolves per call too, and one denial shape for both surfaces
 
 **Files:**
@@ -409,7 +555,7 @@ git commit -m "feat(sandbox): declare the escalation arguments the marker text a
 
 ## Self-Review
 
-**Spec coverage:** Spec §3.1 → Task 1. §3.2 → Task 2. §3.3(a) → Task 3. **§3.3(b)(c), §3.4 and §3.5 are NOT covered by this plan** and are not silently dropped: they need their own plans, and each has an open question the spec records (§7). Step 4 needs an approval-service design decision; step 5 needs an answer to "what would IH hide" before any code is worth writing.
+**Spec coverage:** Spec §3.1 → Task 1, **and Task 1b, which closes the three findings Task 1's independent review returned** (the stale `policySession` contract, the untested precedence branch, and the prompt/enforcement drift Task 1 itself introduced). §3.2 → Task 2. §3.3(a) → Task 3. **§3.3(b)(c), §3.4 and §3.5 are NOT covered by this plan** and are not silently dropped: they need their own plans, and each has an open question the spec records (§7). Step 4 needs an approval-service design decision; step 5 needs an answer to "what would IH hide" before any code is worth writing.
 
 **Placeholder scan:** No TBD/TODO. Every code step carries the actual code. Two steps deliberately measure rather than assert (`Task 1 Step 6`, and the shell test's `fakeExec` is specified by behaviour and pointed at existing fakes rather than inlined, because inventing an exec fake blind would be worse than copying a working one).
 
