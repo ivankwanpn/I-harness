@@ -147,7 +147,7 @@ grok 有企業政策來源可以列舉敏感路徑；IH 沒有。所以這一步
 | 拒絕分類 | **codex** 最精簡、**dsh** 最完整 | `sandbox-violation-classification`、`shell-confinement-wrap-and-denial-classification` |
 | 升級編排 | **dsh** | `escalation-ladder-and-approval-choreography` + `approval-service-policy-and-audit-pair` |
 | fs 圍堵 | **dsh** | `fs-mutation-containment-fence`（我修缺陷二時已做，語意對齊它） |
-| 權限規則引擎 | **cc-custom**／**opencode** | `permission-rule-decision-ladder`、`permission-rule-engine`（**只在 IH 決定要走向 B 類時才取**） |
+| 權限規則引擎 | **cc-custom**／**opencode** | `permission-rule-decision-ladder`、`permission-rule-engine`——**不取，見 §5**（本表列它是為了標明「知道它存在而且刻意不取」，不是備選方案） |
 | 安全閥 | **cc-custom** | `denial-tracking-circuit-breaker`、`dangerous-allow-rule-stripping`、`permission-rule-shadow-detection` |
 | 來源信任 | **grok** | `build-provenance-folder-trust-gate`（若 IH 要載入專案設定） |
 | 讀取拒絕 | **grok** | `bwrap-reexec-with-read-deny-placeholders` |
@@ -155,6 +155,8 @@ grok 有企業政策來源可以列舉敏感路徑；IH 沒有。所以這一步
 ---
 
 ## 5. 刻意**不**取的部分
+
+**本節是約束，不是建議。** 下列三項在後續實作中不得引入；要推翻必須先改這份文件並說明理由。
 
 **權限規則引擎（B 類的核心）**——cc-custom 與 opencode 的規則階梯很完整，但 IH 的邊界是 OS 圍堵，不是規則。引入一套可設定規則會產生**兩個真相來源**：規則說可以、沙箱說不行。IH 該做的是**把沙箱的判定講清楚**，而不是在上面再疊一層可繞過的規則。
 
