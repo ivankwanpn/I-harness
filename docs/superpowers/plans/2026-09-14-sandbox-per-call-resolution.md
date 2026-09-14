@@ -328,16 +328,34 @@ what the model was told. The fragment says \"Current\"; it now is."
 
 **Files:**
 - Modify: `packages/shell/src/index.ts:147`, `:240`, `:243`, `:260`, `:263`, `:277`
-- Modify: `packages/fs/src/error.ts` (the shared code), `packages/fs/src/index.ts` (`guardWrite`)
-- Create: `packages/sandbox-policy/src/denial.ts`
-- Test: `packages/shell/test/sandbox-per-call.test.ts` (create), `packages/sandbox-policy/test/denial.test.ts` (create)
+- Modify: `packages/fs/src/error.ts` (the shared code), `packages/fs/src/index.ts` (`guardWrite`), `packages/fs/test/fs-sandbox-guard.test.ts` (the stub guard at `:36-37`)
+- Modify: `packages/session-executor/src/assembly.ts` (`:407-413`, the production `writeGuard` — see the ruling below)
+- Modify: `packages/sandbox/src/index.ts` (re-export), `packages/fs/package.json` (dependency + `pnpm install`)
+- Create: `packages/sandbox/src/denial.ts`
+- Test: `packages/shell/test/sandbox-per-call.test.ts` (create), `packages/sandbox/test/denial.test.ts` (create)
 
 **Interfaces:**
-- Consumes: `SandboxExecutionPolicy` from `@i-harness/sandbox`; `SandboxMode` likewise.
-- Produces:
-  - `type SandboxSurface = "shell" | "fs" | "search" | "terminal"` (from `sandbox-policy`)
+- Consumes: `SandboxExecutionPolicy`, `SandboxMode`, `WIDER_MODES` — all from `@i-harness/sandbox`.
+- Produces (all from `@i-harness/sandbox`):
+  - `type SandboxSurface = "shell" | "fs" | "search" | "terminal"`
   - `interface SandboxDenial { code: "SANDBOX_DENIED"; surface: SandboxSurface; mode: SandboxMode; reason: string; escalation?: string }`
   - `function denialFor(surface: SandboxSurface, mode: SandboxMode, reason: string): SandboxDenial` — builds it, and fills `escalation` from `WIDER_MODES` when a wider mode exists.
+
+**RULING (2026-09-15, controller — two plan defects found while pre-checking this task):**
+
+1. **`denial.ts` lives in `@i-harness/sandbox`, not `@i-harness/sandbox-policy`.** `packages/fs` needs a dependency either way (it has neither package today — verified: its `node_modules/@i-harness` holds only `core-tools` and `text-diff`). `@i-harness/sandbox` is the lighter edge — zero dependencies of its own, whereas `sandbox-policy` pulls in `core-session` — and it is already the home of the vocabulary this shape quotes: `WIDER_MODES`, `ESCALATION_TARGETS`, `sandboxDenialMarker`, `escalationHintMarker`. Task 3 needs `ESCALATION_TARGETS` in `packages/fs/src/index.ts` too, so this single choice covers both tasks with ONE dependency. Spec §3.2 requires a unified shape; it does not name a package. Cost if wrong: a file sits in a different package than originally written down.
+
+2. **The production `writeGuard` is in `assembly.ts`, and this task must convert it.** Changing `FsToolDeps.writeGuard`'s return type without touching `packages/session-executor/src/assembly.ts:407-413` fails to typecheck — the assembly is the only production producer of that predicate. The plan originally listed only the fs side. Cost if wrong: none; the original text did not compile.
+
+**Dependency step, do this FIRST (both tasks depend on it):**
+
+```bash
+# packages/fs/package.json → dependencies gains:
+#   "@i-harness/sandbox": "workspace:*"
+pnpm install
+```
+
+Without the `pnpm install` the symlink is never created and `import ... from "@i-harness/sandbox"` fails to resolve (`moduleResolution: "bundler"`, no tsconfig `paths`, so resolution goes through `node_modules`).
 
 - [ ] **Step 1: Write the failing test for the shared shape**
 
@@ -365,14 +383,16 @@ describe("denialFor", () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `npx vitest run --root packages/sandbox-policy test/denial.test.ts`
+Run: `npx vitest run --root packages/sandbox test/denial.test.ts`
 Expected: FAIL — cannot resolve `../src/denial.ts`.
 
-- [ ] **Step 3: Implement `denial.ts`**
+- [ ] **Step 3: Implement `packages/sandbox/src/denial.ts`**
+
+Intra-package imports (it is the same package as the vocabulary — do not import `@i-harness/sandbox` from inside it):
 
 ```ts
-import type { SandboxMode } from "@i-harness/sandbox"
-import { WIDER_MODES } from "@i-harness/sandbox"
+import type { SandboxMode } from "./index.ts"
+import { WIDER_MODES } from "./escalation.ts"
 
 export type SandboxSurface = "shell" | "fs" | "search" | "terminal"
 
@@ -396,7 +416,7 @@ export function denialFor(surface: SandboxSurface, mode: SandboxMode, reason: st
 }
 ```
 
-Export it from `packages/sandbox-policy/src/index.ts`:
+Export it from `packages/sandbox/src/index.ts` alongside the escalation block:
 
 ```ts
 export { denialFor, type SandboxDenial, type SandboxSurface } from "./denial.ts"
@@ -404,7 +424,7 @@ export { denialFor, type SandboxDenial, type SandboxSurface } from "./denial.ts"
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `npx vitest run --root packages/sandbox-policy test/denial.test.ts`
+Run: `npx vitest run --root packages/sandbox test/denial.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: Make the fs denial use the shared shape**
@@ -412,7 +432,7 @@ Expected: PASS
 In `packages/fs/src/index.ts`, `guardWrite` currently throws `FsToolError("FS_SANDBOX_DENIED", decision.reason)`. Change `FsToolDeps.writeGuard`'s return type to carry the full denial:
 
 ```ts
-  writeGuard?: (absPath: string) => { ok: true } | { ok: false; denial: import("@i-harness/sandbox-policy").SandboxDenial }
+  writeGuard?: (absPath: string) => { ok: true } | { ok: false; denial: import("@i-harness/sandbox").SandboxDenial }
 ```
 
 and `guardWrite`:
@@ -425,7 +445,23 @@ function guardWrite(deps: FsToolDeps, target: string): void {
 }
 ```
 
-Update the fs test's stub guard to return `{ ok: false, denial: { code: "SANDBOX_DENIED", surface: "fs", mode: "read-only", reason: "denied" } }` and assert the error message parses back to that object.
+**Then convert the production producer** — `packages/session-executor/src/assembly.ts:407-413`. `checkWrite` still returns its own `PathDecision`, so the assembly wraps it:
+
+```ts
+  const writeGuard =
+    sandboxPolicyService === undefined
+      ? undefined
+      : (abs: string) => {
+          const policy = sandboxPolicyNow()
+          if (policy === undefined) return { ok: true as const }
+          const decision = checkWrite(policy, abs)
+          return decision.ok ? { ok: true as const } : { ok: false as const, denial: denialFor("fs", policy.mode, decision.reason) }
+        }
+```
+
+(`denialFor` needs importing from `@i-harness/sandbox` in that file.)
+
+Finally update the stub guard in `packages/fs/test/fs-sandbox-guard.test.ts:36-37` to return `{ ok: false, denial: { code: "SANDBOX_DENIED", surface: "fs", mode: "read-only", reason: \`denied: ${abs}\` } }`, and change the assertion at `:54` so it parses the thrown message back to that object instead of matching the substring "denied" — a substring check would pass on the word `SANDBOX_DENIED` even if the reason were dropped.
 
 - [ ] **Step 6: Make the shell resolve per call**
 
@@ -491,8 +527,9 @@ git commit -m "feat(sandbox): one denial shape, and the shell resolves per call"
 - Test: `packages/session-executor/test/sandbox-escalation-schema.test.ts` (create)
 
 **Interfaces:**
-- Consumes: `ESCALATION_TARGETS` from `@i-harness/sandbox` (already exported).
+- Consumes: `ESCALATION_TARGETS` from `@i-harness/sandbox` (already exported — verified in `packages/sandbox/src/index.ts:77`).
 - Produces: nothing new; this task only makes existing marker text actionable.
+- **Dependency:** `packages/fs` gains `@i-harness/sandbox` in **Task 2** (with the `pnpm install` that makes it resolve). `packages/shell` already declares it. Do not add it again here; if Task 2 has not landed, this task cannot compile.
 
 **Context:** `packages/sandbox/src/escalation.ts` renders `sandboxDenialMarker` / `escalationHintMarker` text telling the model to pass `sandbox_permissions` and `justification` — and **no tool schema declares either argument**. D1 recorded this; it is the reason the ladder has no production caller.
 
@@ -559,7 +596,9 @@ git commit -m "feat(sandbox): declare the escalation arguments the marker text a
 
 **Placeholder scan:** No TBD/TODO. Every code step carries the actual code. Two steps deliberately measure rather than assert (`Task 1 Step 6`, and the shell test's `fakeExec` is specified by behaviour and pointed at existing fakes rather than inlined, because inventing an exec fake blind would be worse than copying a working one).
 
-**Type consistency:** `SandboxDenial` is defined once in `sandbox-policy/src/denial.ts` and referenced by `fs` and `shell`. `denialFor(surface, mode, reason)` has the same three-parameter shape everywhere it is called. `SandboxSurface` values match the four strings `denialFor`'s test asserts. The resolver thunk type `() => SandboxExecutionPolicy | undefined` is identical in `shell` (Task 2 Step 6) and the assembly (Task 1 Step 3).
+**Type consistency:** `SandboxDenial` is defined once in `packages/sandbox/src/denial.ts` and referenced by `fs`, `shell` and the `session-executor` assembly. `denialFor(surface, mode, reason)` has the same three-parameter shape everywhere it is called. `SandboxSurface` values match the four strings `denialFor`'s test asserts. The resolver thunk type `() => SandboxExecutionPolicy | undefined` is identical in `shell` (Task 2 Step 6) and the assembly (Task 1 Step 3).
+
+**Plan defects found by pre-checking Task 2 (2026-09-15) and corrected in place:** (a) the production `writeGuard` lives in the assembly, not in `fs`, so a Task 2 that only changed `FsToolDeps` would not compile; (b) `packages/fs` depends on neither `@i-harness/sandbox` nor `@i-harness/sandbox-policy`, so the shared denial shape needs a declared workspace dependency plus `pnpm install` — the original text would have failed module resolution. Both are recorded in Task 2's RULING block rather than silently patched.
 
 **Known risk this plan does not remove — RESOLVED during execution.** Task 1 originally reached its guard through a test-only `writeGuardForTest` property, and this paragraph offered exporting the resolver as the alternative. The implementer found the third option, which is better than both: `packages/session-executor/test/sandbox-fs-confinement.test.ts` already drives a real turn through `createSessionExecutor` and reads the model-visible `FS_SANDBOX_DENIED`, so the test can be end-to-end with ZERO production surface. A synthetic guard call was never needed. Both the seam and the export are dropped.
 
