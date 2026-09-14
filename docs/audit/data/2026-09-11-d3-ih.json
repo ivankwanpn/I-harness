@@ -972,7 +972,7 @@
           {
             "name": "retention maxBytes default",
             "value": "64000",
-            "evidence": "packages/shell/src/index.ts:130"
+            "evidence": "packages/shell/src/index.ts:132"
           },
           {
             "name": "bash argv / pwsh argv",
@@ -1625,7 +1625,7 @@
           "packages/session-executor/src/assembly.ts:358-361",
           "packages/fs-search/src/index.ts:87",
           "packages/fs-search/src/index.ts:134",
-          "packages/terminal/src/tool.ts:5-11",
+          "packages/terminal/src/tool.ts:7-24",
           "packages/core-agent/src/execute-tool-calls.ts:125-133"
         ],
         "modules": [

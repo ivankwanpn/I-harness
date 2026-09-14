@@ -37,10 +37,31 @@ const TARGETS = [
   "docs/audit/2026-09-11-ih-backend-inventory.md",
   "docs/audit/data/2026-09-11-d3-ih.json",
   "docs/audit/data/2026-09-11-ih-backend-engine.json",
+  // Added 2026-09-15: the shell/terminal citations live here too, and this file
+  // was missing from the list — a repair that silently skips a target is the
+  // same failure as a checker that silently skips a node.
+  "docs/audit/data/2026-09-11-ih-backend-tools.json",
 ]
 
-// Longest-first so `:278` cannot be partially matched by a shorter rule.
+// Longest-first so `:278` cannot be partially matched by a shorter rule, and so
+// a RANGE rule runs before the plain rule that is a prefix of it.
+//
+// The M62 sandbox work shifted lines in four cited files. Each mapping below was
+// computed by reading what the line said at 627ca1c4 and finding that same
+// content now — never by taking the nearest non-blank line, which would silently
+// re-point a citation at whatever happens to be adjacent.
+//
+// TWO OF THE FIVE ARE RANGES, and both were rotated past each other:
+//   terminal/src/tool.ts:5-11    -> :7-24    TerminalToolDeps (grew 2 fields)
+//   terminal/src/tool.ts:164-174 -> :354-379 registerTerminal (grew the opts hop)
+// The second one is a trap: a plain `:164` rule applied first would have written
+// `:354-174`. Order matters, which is why the ranges are listed first.
 const RULES = [
+  ["packages/terminal/src/tool.ts:164-174", "packages/terminal/src/tool.ts:354-379"],
+  ["packages/terminal/src/tool.ts:5-11", "packages/terminal/src/tool.ts:7-24"],
+  ["packages/terminal/src/tool.ts:164", "packages/terminal/src/tool.ts:354"],
+  ["packages/shell/src/index.ts:270", "packages/shell/src/index.ts:444"],
+  ["packages/shell/src/index.ts:130", "packages/shell/src/index.ts:132"],
   ["packages/session-executor/src/assembly.ts:278", "packages/session-executor/src/assembly.ts:297"],
   ["packages/session-executor/src/assembly.ts:85", "packages/session-executor/src/assembly.ts:86"],
   ["packages/session-executor/src/assembly.ts:65", "packages/session-executor/src/assembly.ts:66"],

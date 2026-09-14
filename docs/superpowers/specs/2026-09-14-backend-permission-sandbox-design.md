@@ -163,6 +163,14 @@ IH 今天已有的審批縫是 `packages/interaction/src/index.ts` 的 `approval
 
 第三列是重點：**管道不存在時絕不靜默放行**。
 
+> **2026-09-15 補記（Task B 落地後）：`approveAll` 是一種「管道的內容」，而它讓每一次升級都免問。**
+>
+> `packages/session-executor/src/assembly.ts:461-463` 在 `opts.approveAll` 為真時註冊 `registerApprovalAnswerer(ctx, async () => ({ approved: true }))`；interaction 在服務邊界把 `{ approved: true }` 正規化成 `true`；`createApprovalEscalationApprover` 於是把它映成 `"allowed-once"`。**所以在 `--approve-all` 的宿主上，模型請求的每一次升級都會在沒有提示的情況下被授予。**
+>
+> 這與 `approveAll` 的語意一致（宿主已經說過「任何事都不要問我」），所以它**不是漏洞，而是宿主自己的既有決定被升級繼承**——但讀者應該被告知，而不是自己發現：用 `--approve-all` 開一個受限模式的人，等於同時把「放寬沙箱模式」也交了出去。真正的漏洞是**完全沒有管道**，那是上表第三列，fail closed。
+>
+> 兩個同日讀碼確認的相關事實：answerer 是**每次請求惰性讀取**（mount 之後才註冊的宿主仍然有效，Task A 的測試釘住）；而在 `approveAll` 的裝配上註冊第二個 answerer 會**拋** `duplicate service registration`（`packages/core-plugin/src/index.ts:294`）——響亮的失敗，不是靜默覆蓋。
+
 **（3）每一條非授予路徑都是 throw，而工具 body throw 會殺掉整個回合。**
 
 `approveEscalation`（`escalation.ts:79-81`）與 `validateEscalationArgs`（`:17,20,23`）都是丟例外。而 core-agent 的規則是：**工具 body 丟例外 → 整批結果丟棄、不附加 `tool/result`**，模型看到的是一次「卡住」的呼叫（`packages/fs/src/error.ts:19-31` 為 fs 寫下了同一條規則，`softFail` 就是為此存在）。**所以升級的呼叫端必須 catch 並回傳失敗，不可以讓它冒出去。** 這是這個功能最可能被寫錯的地方。
