@@ -66,15 +66,29 @@ The spec's §3.4 also asked to route ripgrep through the exec runner. **That was
 
 - [ ] **Step 2: Write the failing unit test**
 
-Create `packages/terminal/test/sandbox-refusal.test.ts`. Model the service stub on the existing `spy` in `packages/terminal/test/terminal.test.ts:106` — read that file first and reuse its shape rather than inventing one.
+Create `packages/terminal/test/sandbox-refusal.test.ts`.
+
+**CORRECTION (2026-09-15, controller) — this step was written against a shape that does not exist.** It originally said "copy the existing `spy` from `terminal.test.ts:106`" and then asserted `spy.opened` / `spy.listed`. The thing at that line is **not a spy object**: `packages/terminal/test/terminal.test.ts:99-104` is a bare literal with only an `open` method, cast `as unknown as TerminalService`, and the *test* owns the `specs` array. `spy.opened` would be `undefined`, and `.toHaveLength(0)` on `undefined` **throws** — so the file would have failed on a typo rather than on the behaviour under test. The stub is now written out below. It needs `list` too, because `terminal_list` calls it.
 
 ```ts
 import { describe, expect, it } from "vitest"
+import type { TerminalService } from "../src/service.ts"
 import { createProcessTools, createTerminalTools } from "../src/tool.ts"
 
 // A spy service that records every call, so "was a PTY actually spawned?" is a
 // real assertion rather than an inference from the returned object.
-function spyService() { /* copy the existing spy from terminal.test.ts */ }
+function spyService() {
+  const opened: Record<string, unknown>[] = []
+  let lists = 0
+  const service = {
+    open: (spec: Record<string, unknown>) => {
+      opened.push(spec)
+      return { id: "t1", pid: 1, cols: 80, rows: 24 }
+    },
+    list: () => { lists += 1; return [] },
+  } as unknown as TerminalService
+  return { service, opened, listCount: () => lists }
+}
 
 describe("terminal refuses capability-creating calls under a confined mode", () => {
   it("terminal_open refuses and never reaches the service", async () => {
@@ -115,7 +129,7 @@ describe("terminal refuses capability-creating calls under a confined mode", () 
       expect(tool, `${name} must still be mounted`).toBeDefined()
     }
     await tools.find((t) => t.name === "terminal_list")!.execute({}, {})
-    expect(spy.listed).toBe(1)
+    expect(spy.listCount()).toBe(1)
   })
 
   it("danger-full-access is not confined and must keep working", async () => {
@@ -299,6 +313,6 @@ shut down, and refusing them would strand live PTYs."
 
 **The two failure modes this plan is written around:** (a) refusing at MOUNT time, which misses a mid-session tightening — pinned by the per-call test and its mutation proof; (b) throwing instead of returning, which fails the whole turn and reads to the model as a hung call — pinned by asserting on the returned object.
 
-**Placeholder scan:** No TBD/TODO. Two steps deliberately point at existing code to copy rather than inlining it blind (`spyService` from `terminal.test.ts`, the mock-script shape from `workspace-cwd.test.ts`) — inventing a PTY service fake or an assembly mock script without reading the working ones would be worse than the pointer.
+**Placeholder scan:** No TBD/TODO. The terminal test's service stub is now **written out in full** rather than pointed at: the original pointer ("copy the existing spy") was wrong, because what exists at that line is not a spy object — see the correction at Step 2. One pointer remains, to the mock-script shape in `workspace-cwd.test.ts`, and it is a shape to follow rather than an object to reuse.
 
 **Known risk this plan does not remove:** a PTY opened while the mode was permissive stays alive after a tightening. `terminal_send` is refused so it cannot be *driven*, and `terminal_signal`/`terminal_close` still work so it can be shut down, but the process itself is not killed by the mode change. Killing live PTYs on a tightening is a product decision this plan does not take; if it is wanted, it belongs with the escalation ladder (spec §3.3(b)(c)), which is the component that produces mid-session changes in the first place.
