@@ -88,6 +88,16 @@
 >
 > **實質結論不變**：無論四個還是五個，**沒有任何宿主傳 `compact`**，headless 路徑讀的 `HeadlessOptions.compact`（`apps/cli/src/run.ts:231-233,258`）**沒有任何非測試檔案設定過**（只有 `apps/cli/test/cli.test.ts` 設過）。另有一個更細的條件：`service.ts:256-258` 是**析取**，所以即使傳了 compact config，只要 binding 沒有 `contextWindow` 也會被丟掉。
 >
+> **✅ 已修復（2026-09-14）**：本節描述的是盤點當下的狀態，該缺陷隨後已修。修法與 `sandbox` 在 M62 的處置同構——問題不在引擎，而在**宿主契約要求 `contextWindow` 必填，而唯一知道視窗的層無法提供它**，於是 CLI 從未設定 `compact`。實際改動：
+>
+> - 新增 `CompactionRequest`（視窗可選）作為**宿主邊界**型別；`CompactionConfig` 仍是引擎的必填契約
+> - `assembly` 負責填入視窗：優先用自己的 `contextWindow`，**回退到 config 裡帶的那個**（後者是既有呼叫者的合法用法；測試抓到了我第一版把它弄丟的回歸）
+> - 要求壓縮卻無視窗可解析時**發出警告**而非靜默停用
+> - `service.ts` 的析取**保留**（binding 是權威，其缺席即停用），但同樣改為出聲
+> - `settings` 新增 `compaction.auto`（預設 `true`），CLI 解析並可被 `--no-compact` 覆寫
+>
+> 驗證：`apps/cli/test/compaction-wiring.test.ts` mock 掉 `run.ts` 並斷言 `main` **實際建出的**選項——**變異測試證明把 `compact` 從 `main` 移除會讓它 4 個全紅**。我最初寫的版本直接呼叫 `runHeadless` 並自帶 `compact`，那個變異下**依然全綠**，等於沒測到缺陷所在的那層。
+>
 > 連鎖後果（每一環都有出處）：
 >
 > | 環節 | 出處 | 結果 |

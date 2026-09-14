@@ -11,7 +11,7 @@ import { summarizeWithModel } from "./summarizer.ts"
 export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
 export { resolveConfig, resolveCompactSpec, resolveContextWindow } from "./config.ts"
-export type { CompactionConfig, ModelCompactionPolicy, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
+export type { CompactionConfig, CompactionRequest, ModelCompactionPolicy, PruneConfig, ResolvedCompactionConfig, ResolvedPruneConfig } from "./config.ts"
 
 export interface CompactionResult {
   compacted: boolean

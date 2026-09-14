@@ -10,7 +10,7 @@ import { createSession, Inbox, subscribe, type Session } from "@i-harness/core-s
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
-import { approxTokens, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
+import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -110,7 +110,9 @@ export interface AssemblyOptions {
   skills?: { extraDirs?: string[] } // plugin overlay skill roots
   team?: Partial<TeamConfig> // M19: mount the agent-team domain
   sessionQuery?: SessionQuery // M10b: session_search + lineage tools
-  compact?: CompactionConfig // M11
+  // M11: the window is NOT part of the host contract — the assembly resolves it
+  // (see `CompactionRequest`) and fills it in before handing the engine a config.
+  compact?: CompactionRequest
   /** M42 G1: rewind engine — store root. When set (together with sessionId,
    * which keys the storage dir `rewind/<sessionId>/`) the assembly creates the
    * RewindStore + RewindRecorder, subscribes user/message → begin / turn/end →
@@ -610,25 +612,42 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ? undefined
       : estimateAssemblyOverhead(systemPrompt, tools.schemas())
 
+    // M11/M31 T3: the engine needs a window, and the assembly is the layer that
+    // resolved one. When a caller asked for compaction but no window is available,
+    // the request CANNOT be honoured — and the honest response is to say so. The
+    // previous code passed `opts.compact` through unchanged in that case, which
+    // meant a config without the field the engine requires; the CLI, meanwhile,
+    // never set `compact` at all, so in practice layer 1 of the budget ladder was
+    // dead everywhere and long sessions fell to the fail-closed `prompt_too_long`.
+    // A silent drop would be the same class of bug wearing a different hat.
+    // The window may arrive two ways and both are legitimate: the assembly's own
+    // `contextWindow` (resolved from the model binding), or one the host put
+    // directly in the compact config. The assembly's value wins when both exist;
+    // the config's is the fallback. Requiring only the first would break callers
+    // that already supply the second — a regression the assembly tests caught.
+    const compactWindow = opts.contextWindow ?? opts.compact?.contextWindow
+    let compactForAgent: CompactionConfig | undefined
+    if (opts.compact !== undefined) {
+      if (compactWindow !== undefined) {
+        compactForAgent = {
+          ...opts.compact,
+          contextWindow: compactWindow,
+          ...(opts.compact.overheadTokens === undefined && overheadEstimate !== undefined ? { overheadTokens: overheadEstimate } : {}),
+        }
+      } else {
+        console.warn(
+          "[i-harness] compaction was requested but no context window could be resolved, so auto-compaction is DISABLED for this session. " +
+            "Pressure will not trigger a summary; once the budget is exhausted the turn will be refused with prompt_too_long instead. " +
+            "Supply `contextWindow`, put one in the compact config, or use a model binding that carries one.",
+        )
+      }
+    }
+
     const agent = createAgent(ctx, {
       session, tools, model,
       systemPrompt,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
-      // M31 T3: when the assembly's window resolved, it feeds BOTH the M11
-      // compaction engine (catalog-first config window ← the unified value,
-      // "有值才供") and the M20 budget ladder. Without a resolved window the
-      // compact pass-through stays exactly as the caller wrote it (CLI path).
-      ...(opts.compact !== undefined
-        ? {
-            compact: opts.contextWindow !== undefined
-              ? {
-                  ...opts.compact,
-                  contextWindow: opts.contextWindow,
-                  ...(opts.compact.overheadTokens === undefined && overheadEstimate !== undefined ? { overheadTokens: overheadEstimate } : {}),
-                }
-              : opts.compact,
-          }
-        : {}),
+      ...(compactForAgent !== undefined ? { compact: compactForAgent } : {}),
       // M31 T3: AgentBudgetConfig.contextWindow is required — supply only when
       // a window was resolved (absent → no budget → pre-M20 behavior).
       ...(opts.contextWindow !== undefined && overheadEstimate !== undefined

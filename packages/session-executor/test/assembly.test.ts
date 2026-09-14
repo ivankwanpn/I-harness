@@ -203,6 +203,66 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
+  it("M34: a requested compaction with NO resolvable window is DISABLED and says so", async () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "initial work" })
+    const warnings: string[] = []
+    const original = console.warn
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map(String).join(" "))
+    }
+    let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+    try {
+      assembly = await createSessionAssembly({
+        workspace: process.cwd(),
+        session: s,
+        model: createMockClient([{ role: "assistant", text: "unused" }]),
+        // Requested, but neither `contextWindow` nor a window inside the config.
+        compact: { auto: true },
+      })
+    } finally {
+      console.warn = original
+    }
+    try {
+      // The request cannot be honoured, so the engine is absent and the manual
+      // surface reports nothing compacted — but the operator was TOLD, which is
+      // the part that used to be missing.
+      await expect(assembly!.compactNow()).resolves.toEqual({ compacted: false, shadowedSeqs: [] })
+      expect(warnings.some((w) => w.includes("auto-compaction is DISABLED"))).toBe(true)
+    } finally {
+      await assembly!.dispose()
+    }
+  }, 30_000)
+
+  it("M34: a window carried in the compact config ENABLES auto-compaction (the CLI's shape)", async () => {
+    // The positive direction, and it must go through the AUTO path: `compactNow`
+    // deliberately bypasses the pressure gate (compaction/src/index.ts calls
+    // compactOnce(..., "manual")), so asserting on it would pass no matter which
+    // window the engine received. Only a turn proves the engine is wired AND that
+    // its window is real.
+    const s = createSession()
+    append(s, { type: "user/message", text: "work ".repeat(400) }) // ~2000 chars ≈ 500 tokens
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      session: s,
+      model: createMockClient([
+        { role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) },
+        { role: "assistant", text: "done" },
+      ]),
+      // No `contextWindow` here — the window arrives ONLY in the config, which is
+      // exactly how the CLI now supplies it.
+      compact: { contextWindow: 100, auto: true },
+    })
+    try {
+      const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
+      executor.submit({ tier: "send", text: "go" })
+      await executor.drain()
+      expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(true)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
   it("does not duplicate persistence for a host-owned session", async () => {
     const mirrored: SessionEvent[] = []
     const coordinator = {
