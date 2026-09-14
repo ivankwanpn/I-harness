@@ -126,6 +126,48 @@ shell 與 fs 的拒絕要走同一個可分類的形狀，讓模型能用同一�
 
 **取用來源**：dsh `escalation-ladder-and-approval-choreography`（含稽核配對）、grok `permission-mode-projection-and-queue-drain`。
 
+> **2026-09-15 補寫。** 上面四行只說了「要做哪三塊」，沒說**升級到底是什麼語意**。動手前先把問題查清楚了，以下每一條都是從程式碼讀出來的，不是選出來的。
+
+**（1）升級是 per-call 且暫時的，不是改 session 模式。**
+
+這不是我挑的，是模組自己寫死的：`EscalationOutcome` 有一個字面上的 `"allowed-once"`（`packages/sandbox/src/escalation.ts:35`），而 `escalationHintMarker` 告訴模型「retry this exact … **once**」（同檔 `:31-33`）。
+
+**後果很重要，而且先前有人（我）搞錯過**：一次獲准的升級**不附加 `sandbox/mode` 事件**，session 的 standing mode 從頭到尾不動，系統提示也不用跟著改。所以升級**不是**「讓中途模式變更可達」的那個生產者——3.1 的 per-call 解析是為**宿主驅動**的模式變更準備的，兩者是不同的路徑。（也因為如此，它與 §5 不衝突：升級不放寬 standing mode，只放寬**一次呼叫**。）
+
+**（2）（b）是一個轉接器，不是一個子系統。**
+
+IH 今天已有的審批縫是 `packages/interaction/src/index.ts` 的 `approval/answerer`：`(req: ApprovalRequest) => Promise<boolean>`，而且**在服務邊界就正規化**，所以宿主回傳一個真值物件不可能意外 fail-open。對映是機械的：
+
+| approval/answerer | `EscalationOutcome` |
+|---|---|
+| `true` | `"allowed-once"` |
+| `false` | `"rejected"` |
+| 服務不存在（`ctx.services.get` 拋） | `"unavailable"` |
+
+第三列是重點：**管道不存在時絕不靜默放行**。
+
+**（3）每一條非授予路徑都是 throw，而工具 body throw 會殺掉整個回合。**
+
+`approveEscalation`（`escalation.ts:79-81`）與 `validateEscalationArgs`（`:17,20,23`）都是丟例外。而 core-agent 的規則是：**工具 body 丟例外 → 整批結果丟棄、不附加 `tool/result`**，模型看到的是一次「卡住」的呼叫（`packages/fs/src/error.ts:19-31` 為 fs 寫下了同一條規則，`softFail` 就是為此存在）。**所以升級的呼叫端必須 catch 並回傳失敗，不可以讓它冒出去。** 這是這個功能最可能被寫錯的地方。
+
+**（4）審批者只能從工具 deps 注入——沒有任何既有通道。**
+
+`ToolExec`（`packages/core-tools/src/index.ts:24-36`）只帶 `abortSignal`／`sessionId`／`callId`／`callEventSeq`；`tools/pre-execute` 的 `{kind:"ask"}` 決定也**沒有回到工具 body 的路**。所以做法與 `sandboxPolicy` 相同：裝配時把審批者放進 deps，工具每次呼叫自行組出 `EscalationApproval`（`agent` 用當次的 `ToolExec`，`callId` 用它帶的 `callId`）。
+
+**（5）沒有政策時，升級無意義——由型別強制。**
+
+`approveEscalation` 要求 `effectiveMode: SandboxMode`（非 optional）。宿主沒要求沙箱時 `sandboxPolicyNow()` 回 `undefined`，**連請求都組不出來**。所以那一格的行為是：**不諮詢升級、直接照常執行**（那個呼叫本來就無圍堵，而且沒有政策就不會產生叫模型去升級的拒絕）。
+
+**（6）fs 與 shell 必須共用同一段請求端邏輯，否則就是把 3.2 的錯再犯一次。**
+
+3.2 要求**拒絕**只有一個形狀；同一個論證適用於**請求**。兩個套件各自實作一次「驗證參數 → 組請求 → 問審批 → 用獲准的模式跑這次呼叫」，會產生兩份會漂移的實作。**放在 `@i-harness/sandbox`（`denialFor` 旁邊）的理由與 3.2 相同**：它是零依賴的詞彙套件，而且 `fs` 已經因為 3.2 依賴它了。
+
+**（7）子代理沒有特例。**
+
+子代理的註冊表是**父代理的工具物件**（`packages/subagent/src/child.ts:105-110`），所以子代理的升級會用父代理的審批者、問同一個使用者、拿到同樣的 per-call 授予。**不為子代理加規則**——加一條「子代理不得升級」會是發明政策，而不是執行既有政策。
+
+**（8）這一節不做什麼。** 不新增規則引擎（§5）；不改 standing mode；不把升級寫成一條可授予的持續權限。
+
 ### 3.4 把 `terminal` 與 `fs-search` 納入圍堵
 
 > **2026-09-15 更正。** 本節原本寫：`terminal`「**在 `sandbox !== "danger-full-access"` 時不掛載**」，`fs-search`「走 shell 的同一條 exec 路徑」。兩條都在動工前被推翻，理由如下，原文保留在上面供對照。推翻的理由不是偏好，是**照原文做會留下它想堵的洞**。
