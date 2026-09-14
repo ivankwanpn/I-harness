@@ -1438,6 +1438,72 @@ describe("headless CLI M14 multimodal (image-bearing user message)", () => {
   })
 })
 
+describe("M11 runHeadless compaction contract", () => {
+  // NOTE: these exercise `runHeadless` DIRECTLY, with the caller supplying
+  // `compact`. They therefore say nothing about whether the CLI supplies it —
+  // that is `main`'s job and it is covered by test/compaction-wiring.test.ts,
+  // which mocks run.ts and asserts on the options main builds. An earlier version
+  // of this block was named "CLI compaction wiring", and a mutation removing the
+  // field from `main` left it green: a test can pass while the defect it appears
+  // to cover is fully present.
+  it("a window in the compact config makes runHeadless auto-compact an over-pressure session", async () => {
+    // The defect this pins: `HeadlessOptions.compact` existed and runHeadless would
+    // have threaded it, but NOTHING ever set it — the CLI's option object carried
+    // workspace/approveAll/modelPolicy/sandbox and no compact. So the engine was
+    // never constructed on any shipped path, pressure never triggered a summary,
+    // and the three-layer budget ladder ran with its first layer dead.
+    //
+    // The observable is the SESSION, not exitCode: a compaction leaves
+    // `compaction/*` events behind, and `compactNow` is the manual surface that
+    // bypasses the pressure gate — so this has to be an auto path, i.e. a real run.
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m11-"))
+    try {
+      const model: ModelClient = {
+        async *stream() {
+          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("work ".repeat(400), {
+        workspace: dir,
+        approveAll: true,
+        model,
+        // No provider binding here (a model client was supplied), so the window
+        // arrives ONLY from the config — the same shape the CLI now produces.
+        compact: { contextWindow: 100, auto: true },
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("auto:false keeps the engine but does not auto-compact under pressure", async () => {
+    // The opt-out must be honoured in the same shape, or `compaction.auto:false`
+    // would be a setting that silently does nothing.
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m11-off-"))
+    try {
+      const model: ModelClient = {
+        async *stream() {
+          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("work ".repeat(400), {
+        workspace: dir,
+        approveAll: true,
+        model,
+        compact: { contextWindow: 100, auto: false },
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe("M16 CLI sandbox wiring", () => {
   it("runHeadless accepts --sandbox read-only and mounts the policy (no crash)", async () => {
     // The real bwrap deny e2e lives in Task 6; here we assert the wiring:

@@ -253,9 +253,23 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           const result = await bindingFor(sessionId)
           if (result.status !== "ready") throw new ModelUnavailableError(result.reason)
           const binding = result.binding
-          const compact = binding.contextWindow === undefined || opts.compact === undefined
-            ? undefined
-            : { ...opts.compact, contextWindow: binding.contextWindow }
+          // The BINDING is authoritative here: `modelBindingFor` exists so that
+          // state and construction share one resolution, so its window decides
+          // and its ABSENCE disables compaction. A window the host put in the
+          // config must not override a binding that deliberately has none — the
+          // service test for this supplies `contextWindow: 1`, which would leave
+          // the engine permanently over threshold.
+          //
+          // What changed is the SILENCE, not the rule: this used to drop the
+          // request without a word. It now says so, because the caller asked for
+          // compaction and will otherwise assume it is running.
+          const compact = binding.contextWindow !== undefined ? opts.compact : undefined
+          if (opts.compact !== undefined && binding.contextWindow === undefined) {
+            console.warn(
+              "[i-harness] the resolved model binding carries no contextWindow, so auto-compaction is DISABLED for this session despite the requested config. " +
+                "The binding is authoritative — a window from the config is not used to override its absence.",
+            )
+          }
           const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
           assembly = await createSessionAssembly({
             ...opts,

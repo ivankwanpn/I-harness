@@ -179,7 +179,15 @@ export async function main(argv: string[]): Promise<number> {
   // stays an embedder contract where unset means "no sandbox requested", so the
   // hidden __dist-selfcheck and the exported API keep their meaning.
   const sandboxIdx = args.indexOf("--sandbox")
+  const noCompact = args.includes("--no-compact")
   let sandboxMode: SandboxMode | undefined
+  // Load BEFORE reading either knob: an UNLOADED SettingsStore answers get() with
+  // DEFAULTS, so skipping this would silently ignore the operator's file (the same
+  // trap the web fix hit — see docs/audit/2026-09-10-m62-web-sandbox-not-wired.md).
+  // Loaded once for both, rather than per-knob.
+  const { SettingsStore } = await import("@i-harness/settings")
+  const settings = new SettingsStore()
+  await settings.load()
   if (sandboxIdx !== -1) {
     const value = args[sandboxIdx + 1]
     const allowed: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
@@ -191,14 +199,20 @@ export async function main(argv: string[]): Promise<number> {
     }
     sandboxMode = value as SandboxMode
   } else {
-    // Load before reading: an UNLOADED SettingsStore answers get() with DEFAULTS,
-    // so skipping this would silently ignore the operator's file (the same trap
-    // the web fix hit — see docs/audit/2026-09-10-m62-web-sandbox-not-wired.md).
-    const { SettingsStore } = await import("@i-harness/settings")
-    const settings = new SettingsStore()
-    await settings.load()
     sandboxMode = settings.get().sandboxMode
   }
+  // M11 wired at last. `HeadlessOptions.compact` existed and `runHeadless` would
+  // have threaded it, but nothing ever SET it, so on every shipped path the
+  // compaction engine was never constructed: pressure never triggered a summary
+  // and the three-layer budget ladder ran with its first layer dead, falling
+  // through to the fail-closed `prompt_too_long`. Manual `/compact` answered
+  // "No compactable history yet." for the same reason.
+  //
+  // This is the deliberate sibling of the `--sandbox` resolution above, and it
+  // resolves HERE for the same reason: `HeadlessOptions` stays an embedder
+  // contract where unset means "no compaction requested", so the exported API and
+  // the hidden __dist-selfcheck keep their meaning.
+  const compactAuto = noCompact ? false : settings.get().compaction.auto
   // M25: --telemetry enables the independent host event stream (stdout JSONL
   // sink, assembled in run.ts). Default OFF; I_HARNESS_TELEMETRY=1 is the
   // env-var equivalent.
@@ -304,6 +318,9 @@ export async function main(argv: string[]): Promise<number> {
     modelPolicy: "required",
     // Mirrors the web path: explicit flag wins, otherwise the operator's setting.
     sandbox: sandboxMode,
+    // The window is NOT supplied here — `runHeadless` resolves the model binding
+    // and the assembly fills it in. See the resolution above.
+    compact: { auto: compactAuto },
   }
   if (model) opts.model = model
   if (telemetry) opts.telemetry = "jsonl"

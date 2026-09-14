@@ -280,13 +280,30 @@ export interface Settings {
   /** Appended in this plan: previously-absent top-level key, additive-only. */
   llm: SettingsLlm
   onboarding: SettingsOnboarding
+  /** Compaction engine switch. Distinct from `tui.prefs.compact`, which is UI
+   *  density — this one governs whether context-pressure AUTO-compaction runs.
+   *  Kept local like SettingsSandboxMode so the settings package stays
+   *  dependency-free. A manual `/compact` is unaffected by `auto:false`. */
+  compaction: SettingsCompaction
   /** Appended M46a G1: TUI UI-preference knobs (M49 Task 6 — the provider
    * registry is the canonical llm.providers plane; presentation only here). */
   tui: SettingsTui
 }
 
+export interface SettingsCompaction {
+  /** false disables AUTO compaction ONLY. The engine is still constructed, so a
+   *  manual `/compact` and the pressure gate's other layers keep working. */
+  auto: boolean
+}
+
 export const SETTINGS_DEFAULTS: Settings = {
   sandboxMode: "workspace-write",
+  // ON by default, matching the engine's own default (`deps.compact?.auto ?? true`)
+  // and its designed ladder: layer 1 is pressure compaction at 80% of the window,
+  // layers 2-3 are the pure reset and the fail-closed refusal. Shipping with this
+  // unreachable meant layer 1 never ran and long sessions fell straight through to
+  // `prompt_too_long`. Turning it OFF is the opt-out, not the other way round.
+  compaction: { auto: true },
   // Amendment (seeded defaults removed): "" = UNset — no default model. Every
   // model now comes from the user section (llm.providers + llm.defaultModel)
   // or a per-session selection; the field is kept so an OLD file's written
@@ -638,10 +655,12 @@ export function normalizeSettings(raw: unknown): Settings {
       plugins: { ...base.plugins },
       llm: normalizeLlm(undefined, base.llm),
       onboarding: { ...base.onboarding },
+      compaction: { ...base.compaction },
       tui: normalizeTui(undefined, base.tui),
     }
   }
   const pluginsRaw = isRecord(raw.plugins) ? raw.plugins : {}
+  const compactionRaw = isRecord(raw.compaction) ? raw.compaction : {}
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
@@ -652,6 +671,7 @@ export function normalizeSettings(raw: unknown): Settings {
     transcriptMode: oneOf(raw.transcriptMode, TRANSCRIPT_MODES, base.transcriptMode),
     busyEnter: oneOf(raw.busyEnter, BUSY_ENTERS, base.busyEnter),
     searchBackend: oneOf(raw.searchBackend, SEARCH_BACKENDS, base.searchBackend),
+    compaction: { auto: booleanOf(compactionRaw.auto, base.compaction.auto) },
     plugins: {
       agentLoop: booleanOf(pluginsRaw.agentLoop, base.plugins.agentLoop),
       bash: booleanOf(pluginsRaw.bash, base.plugins.bash),

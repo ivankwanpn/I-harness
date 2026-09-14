@@ -1,6 +1,6 @@
 import { createSession, deriveMessages, type Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor } from "@i-harness/core-agent"
-import type { CompactionConfig, CompactionResult } from "@i-harness/compaction"
+import type { CompactionRequest, CompactionResult } from "@i-harness/compaction"
 import type { MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -80,7 +80,12 @@ export interface HeadlessOptions {
   // query when the store root is known (--session-dir) — a host-provided one
   // always wins (no override).
   sessionQuery?: SessionQuery
-  compact?: CompactionConfig // M11: enable context-pressure auto-compaction
+  // M11: enable context-pressure auto-compaction. The WINDOW is not part of this
+  // contract — `runHeadless` resolves the model binding itself and the assembly
+  // fills the window in. It used to require `contextWindow` here, which the CLI
+  // could not supply, so nothing ever set it and layer 1 of the budget ladder was
+  // dead on every shipped path.
+  compact?: CompactionRequest
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
@@ -228,9 +233,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       providerBinding = state.binding
     }
     const contextWindow = providerBinding?.contextWindow
-    const compact = contextWindow === undefined || opts.compact === undefined
-      ? opts.compact
-      : { ...opts.compact, contextWindow }
+    // The window is handed to the assembly as `contextWindow` either way; it is
+    // the assembly that feeds it INTO the compaction config. Merging it here as
+    // well was a second copy of that logic — and the copy was wrong: when no
+    // window resolved it passed `opts.compact` through unchanged, i.e. a config
+    // missing the field the engine requires, instead of declining.
     assembly = await createSessionAssembly({
       workspace: opts.workspace,
       ...(activeId !== undefined ? { sessionId: activeId } : {}),
@@ -255,7 +262,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.mcp !== undefined ? { mcp: opts.mcp } : {}),
       ...(opts.lsp !== undefined ? { lsp: opts.lsp } : {}),
       ...(opts.team !== undefined ? { team: opts.team } : {}),
-      ...(compact !== undefined ? { compact } : {}),
+      ...(opts.compact !== undefined ? { compact: opts.compact } : {}),
       ...(opts.sessionQuery !== undefined ? { sessionQuery: opts.sessionQuery } : {}),
       ...(opts.coordinator !== undefined ? { coordinator: opts.coordinator } : {}),
       ...(restoredState !== undefined ? { restoredState } : {}),
