@@ -311,8 +311,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // resolved PER CALL instead of once here. `resolve` re-reads the session's LAST
   // `sandbox/mode` event, so a mid-session mode change (which the escalation
   // ladder is) takes effect on the next call without rebuilding the assembly.
-  // C1's "prompt and enforcement can never drift" rule still holds: the prompt
-  // and every enforcement site read through THIS one resolver.
+  // NO ENFORCEMENT SITE caches a resolution: the fs write guard and the system
+  // prompt both read through THIS one resolver. The shell still takes a
+  // mount-time snapshot (Task 2 owns converting it), which the name below says
+  // out loud rather than hiding.
   //
   // The session read is the LIVE one. `policySession` (the documented host-seeded
   // override) wins when supplied — run.ts passes the same object for both — while
@@ -656,15 +658,26 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // authoritative (parsePreset validates name/systemPrompt/tools — a host
     // preset must satisfy the same contract). Plan-mode/sandbox fragments are
     // composed ON TOP (the default prompt never overrides those).
-    let systemPrompt = opts.preset !== undefined
+    let baseSystemPrompt = opts.preset !== undefined
       ? parsePreset(opts.preset).systemPrompt
       : DEFAULT_AGENT_PRESET.systemPrompt
-    if (opts.planMode) systemPrompt = `${systemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`
-    if (sandboxPolicyAtMount) {
-      // The system prompt is composed ONCE, so this is the mount-time policy —
-      // the same resolver the fs guard uses per call, read at the same moment as
-      // the shell registration, so prompt and enforcement cannot disagree.
-      systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicyAtMount)}`
+    if (opts.planMode) baseSystemPrompt = `${baseSystemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`
+    // The fragment says "Current", so it must BE current. Both the guards and
+    // this prompt read `sandboxPolicyNow()`, but the guards read it per CALL and
+    // the prompt is re-read per STEP — so a mid-session mode change moves both,
+    // and neither can describe a mode the other is not enforcing. Composed once
+    // per distinct mode: unchanged mode → identical string → stable prefix.
+    // The resolution happens ONCE per call here: one local, read for both the
+    // memo comparison and the render, so a mode that flipped between two reads
+    // could never be memoised under the wrong key.
+    let promptCache: { mode: SandboxMode | undefined; text: string } | undefined
+    const systemPromptNow = (): string => {
+      const policy = sandboxPolicyNow()
+      const mode = policy?.mode
+      if (promptCache !== undefined && promptCache.mode === mode) return promptCache.text
+      const text = policy === undefined ? baseSystemPrompt : `${baseSystemPrompt}\n\n${renderPolicyContext(policy)}`
+      promptCache = { mode, text }
+      return text
     }
 
     // M33 §3.2: when the window is resolved and the host did not supply an
@@ -673,7 +686,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // the M20 budget ladder).
     const overheadEstimate = opts.contextWindow === undefined
       ? undefined
-      : estimateAssemblyOverhead(systemPrompt, tools.schemas())
+      : estimateAssemblyOverhead(systemPromptNow(), tools.schemas())
 
     // M11/M31 T3: the engine needs a window, and the assembly is the layer that
     // resolved one. When a caller asked for compaction but no window is available,
@@ -708,7 +721,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
 
     const agent = createAgent(ctx, {
       session, tools, model,
-      systemPrompt,
+      systemPrompt: systemPromptNow,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       ...(compactForAgent !== undefined ? { compact: compactForAgent } : {}),
       // M31 T3: AgentBudgetConfig.contextWindow is required — supply only when
