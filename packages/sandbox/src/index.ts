@@ -89,3 +89,16 @@ export type {
 // M62: the ONE refusal shape for every confined surface (spec §3.2). Consumers
 // that must stay unaware of the policy resolver (fs, shell) import this.
 export { denialFor, type SandboxDenial, type SandboxSurface } from "./denial.ts"
+// M62 ladder Task A: the REQUEST side of escalation (spec §3.3(b)). A surface that
+// declares `sandbox_permissions` / `justification` composes an `EscalationContext`
+// per call and hands the raw args here; the refusal it returns is the same
+// `SandboxDenial` shape, with no escalation guidance (the request was refused, not
+// the operation).
+export {
+  createApprovalEscalationApprover,
+  resolveCallPolicy,
+  type ApprovalPrompt,
+  type CallPolicyResolution,
+  type EscalationArgs,
+  type EscalationContext,
+} from "./call-policy.ts"
