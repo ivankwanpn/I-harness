@@ -555,12 +555,21 @@ it("every write-capable and shell tool declares the escalation arguments", async
   const names = ["write", "edit", "apply_patch", "bash", "pwsh"]
   const schemas = await toolSchemasFor(names)
   for (const name of names) {
-    const props = schemas[name].properties as Record<string, unknown>
+    const schema = schemas[name]
+    expect(schema, `${name} must be registered`).toBeDefined()
+    // tools.schemas() returns { name, description, inputSchema, exposure } — the
+    // schema is NESTED, and ToolSchema.inputSchema is typed `unknown`.
+    const props = ((schema.inputSchema as { properties?: Record<string, unknown> }).properties) ?? {}
     expect(props.sandbox_permissions, `${name} must declare sandbox_permissions`).toBeDefined()
     expect(props.justification, `${name} must declare justification`).toBeDefined()
+    const required = (schema.inputSchema as { required?: string[] }).required ?? []
+    expect(required).not.toContain("sandbox_permissions")
+    expect(required).not.toContain("justification")
   }
 })
 ```
+
+**CORRECTION (2026-09-15, controller — the seventh defect in this plan's text).** This sketch originally read `schemas[name].properties`, which is **`undefined`**: `ToolRegistry.schemas()` (`packages/core-tools/src/index.ts:199-210`) maps to `{ name, description, inputSchema, exposure }`, and `ToolSchema.inputSchema` is `unknown` (`:62`). A test written from the original sketch would have failed on a typo rather than on the missing arguments — and the `required` assertions are new here: declaring the arguments is not the same as requiring them, and a schema that required them would break every ordinary call.
 
 (`toolSchemasFor` builds an assembly with `sandbox: "read-only"` and reads `tools.schemas()`; follow the pattern in `packages/session-executor/test/assembly.test.ts`.)
 
