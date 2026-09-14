@@ -509,8 +509,15 @@ if (SAMPLE_N > 0) {
     }
   }
   if (problems.length) {
-    console.log(`\nproblems (${problems.length}), first 30:`)
-    for (const p of problems.slice(0, 30)) console.log(`  ${p.kind.padEnd(24)} ${p.source}/${p.cmd}  ${p.detail}`)
+    // The default cap keeps the output readable, but it HIDES problems: with 52
+    // findings only the first 30 were visible, and the 4 remaining BLANK_LINE
+    // entries sat past the cut -- invisible to anyone reading the summary, which
+    // reports the true count. `--all-problems` prints every one. Default is
+    // unchanged so existing runs diff identically.
+    const showAll = process.argv.includes("--all-problems")
+    const shown = showAll ? problems.length : Math.min(problems.length, 30)
+    console.log(`\nproblems (${problems.length})${showAll ? "" : ", first 30 — pass --all-problems to see every one"}:`)
+    for (const p of problems.slice(0, shown)) console.log(`  ${p.kind.padEnd(24)} ${p.source}/${p.cmd}  ${p.detail}`)
   } else {
     console.log("\nno mechanical citation problems found")
   }

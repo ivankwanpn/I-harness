@@ -176,7 +176,7 @@
           {
             "name": "shellTimeoutMs (default)",
             "value": "120000",
-            "evidence": "packages/session-executor/src/assembly.ts:278"
+            "evidence": "packages/session-executor/src/assembly.ts:297"
           },
           {
             "name": "shell retention maxBytes (default)",

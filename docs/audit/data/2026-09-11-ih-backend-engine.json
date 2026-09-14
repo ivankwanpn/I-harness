@@ -398,9 +398,9 @@
           "decision": "Model policy defaults to production-safe `required`: an omitted modelPolicy with no explicit client throws ModelUnavailableError, and a mock is only built when the caller explicitly opts into \"test-mock\".",
           "rationale": "A test double must never be reachable by omission in production.",
           "evidence": [
-            "packages/session-executor/src/assembly.ts:85",
+            "packages/session-executor/src/assembly.ts:86",
             "packages/session-executor/src/assembly.ts:262",
-            "packages/session-executor/src/assembly.ts:65"
+            "packages/session-executor/src/assembly.ts:66"
           ]
         },
         {
@@ -448,7 +448,7 @@
         {
           "name": "shellTimeoutMs (default)",
           "value": "120000",
-          "evidence": "packages/session-executor/src/assembly.ts:278"
+          "evidence": "packages/session-executor/src/assembly.ts:297"
         },
         {
           "name": "shell retention maxBytes (default)",
@@ -467,7 +467,7 @@
         "estimateAssemblyOverhead and bindAuthRefreshStatus are exported from packages/session-executor/src/assembly.ts but NOT re-exported by packages/session-executor/src/index.ts, and package.json exposes only \".\": a host outside the package cannot reach them (packages/session-executor/src/assembly.ts:212; packages/session-executor/src/index.ts:1)."
       ],
       "evidence": [
-        "packages/session-executor/src/assembly.ts:85",
+        "packages/session-executor/src/assembly.ts:86",
         "packages/session-executor/src/assembly.ts:259",
         "packages/session-executor/src/assembly.ts:591",
         "packages/session-executor/src/service.ts:150"
