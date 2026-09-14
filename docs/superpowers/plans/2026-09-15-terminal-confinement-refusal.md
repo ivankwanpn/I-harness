@@ -291,6 +291,8 @@ Because the call is refused before any spawn, this test is fast — unlike the e
 
 The complementary control matters as much: a second test with **no** `sandbox` option must let `terminal_open` through, or the wiring could be refusing everything and the first test would still pass.
 
+**But the control test actually spawns a PTY, and the plan originally did not say so.** The refusal test is fast precisely because nothing is spawned; the control is not — it starts a real `node-pty` process on the host. Give it the same treatment `packages/session-executor/test/workspace-cwd.test.ts:161` already uses (`}, 30_000)`), spawn something that exits immediately (`process.execPath` with `["-e", "0"]`, the shape that file uses), and close the terminal in a `finally`. Without the explicit timeout a slow or hostile PTY start turns this into a hung suite rather than a failure — and without the close, a live PTY outlives the test.
+
 - [ ] **Step 9: Run the affected suites and commit**
 
 `npx vitest run --root packages/terminal`, `npx vitest run --root packages/session-executor`, `pwsh -Command "pnpm -r typecheck"`, `node scripts/audit/check-thresholds.mjs`. Expect only the two known `workspace-cwd.test.ts` failures.
