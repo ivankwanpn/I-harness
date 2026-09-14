@@ -428,7 +428,7 @@ The engine-owned session assembly and its global service: one createSessionAssem
    - 出處：`packages/session-executor/src/assembly.ts:1`、`packages/session-executor/src/assembly.ts:259`、`packages/session-executor/src/assembly.ts:702`
 2. **Model policy defaults to production-safe `required`: an omitted modelPolicy with no explicit client throws ModelUnavailableError, and a mock is only built when the caller explicitly opts into "test-mock".**
    - 理由：A test double must never be reachable by omission in production.
-   - 出處：`packages/session-executor/src/assembly.ts:85`、`packages/session-executor/src/assembly.ts:262`、`packages/session-executor/src/assembly.ts:65`
+   - 出處：`packages/session-executor/src/assembly.ts:86`、`packages/session-executor/src/assembly.ts:262`、`packages/session-executor/src/assembly.ts:66`
 3. **Two-layer pacing with a stable public row id: the service creates the queue row id + a service-owned AbortController BEFORE its pacing chain (the caller signal is linked into it), then hands that same id through the A-region lane (lane.submit(..., id)). The queue projection merges service-front and lane rows by that public id, takes 'running' from the lane's currentInput (the lane is ground truth, the record's state can lag), and cancelQueued refuses to cancel a running row.**
    - 理由：One id per user-visible turn lets the queue surface, the lane and cancellation agree; consulting a lagging projection would abort a running turn and report a false success.
    - 出處：`packages/session-executor/src/service.ts:315`、`packages/session-executor/src/service.ts:378`、`packages/session-executor/src/service.ts:434`、`packages/session-executor/src/service.ts:506`
@@ -450,7 +450,7 @@ The engine-owned session assembly and its global service: one createSessionAssem
 
 | 名稱 | 值 | 出處 |
 |---|---|---|
-| `shellTimeoutMs (default)` | 120000 | `packages/session-executor/src/assembly.ts:278` |
+| `shellTimeoutMs (default)` | 120000 | `packages/session-executor/src/assembly.ts:297` |
 | `shell retention maxBytes (default)` | 64000 | `packages/session-executor/src/assembly.ts:304` |
 | `mock default script` | [{ role: "assistant", text: "ok" }] | `packages/session-executor/src/assembly.ts:264` |
 
