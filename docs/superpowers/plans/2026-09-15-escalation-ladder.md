@@ -178,7 +178,7 @@ So the deps field is `escalationApprover?: EscalationApprover<unknown, string>`,
 
 - [ ] **Steps:** failing assembly test first — a `read-only` assembly whose model calls `write` to an outside path **with** `sandbox_permissions: "workspace-write"` + a justification must (a) ask, (b) on approval land the write, (c) on rejection leave the file absent and return a classified denial. Then implement. Then **mutation proof: strip the `modeOverride` argument at the fs call site** and confirm the granted-write test goes red (the grant would no longer reach `checkWrite`). Restore and commit.
 
-## Third declared item — the `edit` / `WRITE_TOOLS` asymmetry (added 2026-09-15, controller; user-delegated ruling)
+## Additional declared item — the `edit` / `WRITE_TOOLS` asymmetry (added 2026-09-15, controller; user-delegated ruling)
 
 **Folded in because it lands in the same subject (the approval service), not because it is part of the ladder.** Declare it to the reviewer as a stated item.
 
@@ -190,7 +190,7 @@ So the deps field is `escalationApprover?: EscalationApprover<unknown, string>`,
 
 **Tests, both directions:** an in-workspace `edit` produces **no** ask; an out-of-workspace `edit` **still asks**; `apply_patch` **deliberately still asks** (pin the exception so a later reader cannot "fix" it). Note that today **every Layer-2 test in that package uses the tool name `"write"`** — nothing covers `edit` or `apply_patch`, which is how the asymmetry survived.
 
-## Fourth declared item — the TERMINAL is a sixth surface (added 2026-09-15, controller)
+## Third declared item — the TERMINAL is a sixth surface (added 2026-09-15, controller)
 
 Task 4 made the terminal refuse `terminal_open` / `process_spawn` / `terminal_send` under a confined mode, and **the terminal tool schemas declare neither argument** — precisely the defect Task 3 closed for `write`/`edit`/`apply_patch`/`bash`/`pwsh`: an instruction the model cannot act on. Task 4's implementer raised it itself.
 
