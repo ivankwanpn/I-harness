@@ -9,6 +9,8 @@ TypeScript/ESM 單倉（pnpm workspace），Windows 一等，從模型對接到�
 
 ---
 
+> **要接手這個專案？** 先讀 [`docs/handoff/HANDOFF.md`](docs/handoff/HANDOFF.md)：目前分支／commit 狀態、驗證指令與**實測基準**、實際踩過的九個陷阱，以及「刻意沒做」的清單。同目錄另有 [`FINAL-REPORT.md`](docs/handoff/FINAL-REPORT.md)（上一個 goal 的完整報告）與 [`what-the-design-does-not-answer.md`](docs/handoff/what-the-design-does-not-answer.md)（設計未回答與已裁決不做的部分）。
+
 ## 這是一套什麼
 
 I-harness 是一個**完整的 Agent 產品後端 + 終端前端**：
