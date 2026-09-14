@@ -4,6 +4,7 @@ import type { Session } from "@i-harness/core-session"
 import { SANDBOX_MODES, effectiveSandboxMode } from "./session-mode.ts"
 
 export { SANDBOX_MODES, effectiveSandboxMode }
+export { checkWrite, realTarget, type PathDecision } from "./paths.ts"
 
 export interface SandboxPolicyConfig {
   mode?: SandboxMode
