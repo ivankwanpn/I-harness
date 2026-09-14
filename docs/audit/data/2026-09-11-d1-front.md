@@ -65,6 +65,17 @@
 **但 `fs` 完全沒有沙箱整合**：`packages/fs/src` 內零個 sandbox 符號，`FsToolDeps` 只有 workspace ＋ rewind（`packages/fs/src/index.ts:38-49`），組裝點也沒傳（`packages/session-executor/src/assembly.ts:358-361`）。fs 的「圍堵」只是 `resolvePath` 拒絕 `..` 逃逸，而**絕對路徑可以穿過並指向 workspace 之外**（`packages/fs/src/index.ts:26-36`）。`fs-search`（rg 無 sandbox 欄位）與 `terminal`（PTY 無沙箱、無 timeout）同理。
 
 > 這是本次盤點最重要的安全性發現：**「有 win-ACL 沙箱」不等於「所有檔案操作都被圍堵」**。寫入路徑的圍堵依賴 `resolvePath` 的相對路徑檢查，不是 OS 層隔離。
+>
+> **⚠ 更正記錄（2026-09-14，動手修復時）**：本節初稿寫「`fs` 完全沒有沙箱整合」，那個描述**太強且不精確**。實際情況是 **fs 的閘是「審批」而不是「強制」**：
+>
+> - `guard-approval` 有 Layer 2——工作區外的寫入回 `{ kind: "ask", reason: "write target outside workspace requires approval" }`（`packages/guard-approval/src/index.ts:134-143`）。**閘是存在的**，我漏看了它。
+> - **但它不查沙箱模式**，只問人。而 `approveAll`（CLI 的 `--yes`，`apps/cli/src/index.ts:317`）會**自動批准**。
+> - 所以精確的缺陷是：**`sandbox: "read-only"` 在 fs 路徑上完全不被諮詢**。同一模式下 shell 是核心層拒絕的，而 `i-harness run --yes` 的 `write` 工具可以寫到磁碟任何位置。
+> - `WRITE_TOOLS` 只有 `"write"`；`edit` 與 `apply_patch` 走 Layer 1 的「任何非 readOnly 工具都要審批」——同樣是審批，同樣被 `approveAll` 自動滿足。
+>
+> **✅ 已修復**：新增 `checkWrite`（`packages/sandbox-policy/src/paths.ts`）作為**與審批無關的政策強制**——`read-only` 拒絕一切寫入、`workspace-write` 只允許工作區內、`danger-full-access` 不限制。fs 的四個寫入點全部接上。實作會解析符號連結（避免用工作區內的連結洗路徑），且**刻意不給暫存目錄例外**：bwrap 後端只綁定工作區，給 tmp 會讓 fs 比 shell 更寬鬆，而那個方向才是真的破口。
+>
+> **未修的部分，如實記錄**：`terminal` 的 PTY 仍無沙箱（`registerTerminal` 的簽名只有 `{ cwd? }`，需要另一次設計），`fs-search` 的 rg 子行程同理；**讀取隔離仍未實作**（每個後端都允許讀，fs 也維持一致，見 `paths.ts` 的說明）。
 
 ### 2. **讀隔離是宣告而非實作**，而且那道閘門在組合使用時從未上膛
 

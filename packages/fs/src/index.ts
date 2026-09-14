@@ -35,8 +35,35 @@ export function resolvePath(workspace: string, path: string): string {
   return resolved
 }
 
+/**
+ * Refuse a write the session's sandbox policy forbids.
+ *
+ * Called at EVERY write point in this package and in patch.ts. `resolvePath`
+ * cannot carry this: it is a pure path function with no policy, and its escape
+ * check is skipped for absolute inputs by design, so an absolute path bypassed
+ * confinement entirely while the shell sandbox refused the same write.
+ */
+function guardWrite(deps: FsToolDeps, target: string): void {
+  if (deps.writeGuard === undefined) return
+  const decision = deps.writeGuard(target)
+  if (!decision.ok) throw new FsToolError("FS_SANDBOX_DENIED", decision.reason)
+}
+
 export interface FsToolDeps {
   workspace: string
+  /** M16: WRITE confinement. The assembly builds this from the session's sandbox
+   *  policy; absent means unconfined, which is the pre-M16 behavior a host that
+   *  never requested a sandbox gets.
+   *
+   *  It is a predicate rather than the policy object so this package keeps its
+   *  dependency set (core-tools + text-diff) and stays unaware of the sandbox.
+   *
+   *  Only writes are gated. Reads are unrestricted on every backend — bwrap binds
+   *  the whole root read-only, the Windows backend documents reads as
+   *  unrestricted — so refusing a read here would be stricter than the shell
+   *  sandbox while `cat` still reached the file: a false claim of isolation
+   *  rather than the real absence of it. */
+  writeGuard?: (absPath: string) => { ok: true } | { ok: false; reason: string }
   /** M42 rewind (G1): optional pre-image sink at the write points — absent ⇒
    * byte-identical behavior (zero cost). Present ⇒ every write tool captures
    * the BEFORE content it is about to overwrite (write does ONE extra read —
@@ -107,6 +134,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       // M42 rewind: writeFileAtomic OVERWRITES without reading — when rewind
       // is wired, do one extra read (ENOENT ⇒ new file); otherwise zero cost.
       const target = resolvePath(deps.workspace, path)
+      guardWrite(deps, target)
       const captured = deps.rewind !== undefined
         ? await capturePreimage(deps.rewind, deps.workspace, target)
         : {}
@@ -148,6 +176,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isReadOnly: false,
     execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs }) => softFail(async () => {
       const target = resolvePath(deps.workspace, path)
+      guardWrite(deps, target)
       if (old_string === "") throw new FsToolError("FS_AMBIGUOUS_EDIT", "ambiguous: old_string must not be empty")
       const { stat, readFile } = await import("node:fs/promises")
       let st
@@ -212,7 +241,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       // FS_EDIT_NOT_FOUND、純 add 寫入字面 \r。先統一成 LF 再解析。
       const hunks = parsePatch(normalizeLineEndings(patch_content))
       // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入；rewind sink 透傳
-      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, deps.rewind)
+      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, deps.rewind, (target) => guardWrite(deps, target))
       // M49: aggregate per-file changes when the parser exposed before/after
       // (update hunks); anything else keeps the original patch text as rawPatch.
       const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } = {

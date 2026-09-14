@@ -2,6 +2,10 @@ export type FsToolErrorCode =
   | "FS_NOT_FOUND" | "FS_NOT_REGULAR_FILE" | "FS_ALREADY_EXISTS"
   | "FS_EDIT_NOT_FOUND" | "FS_AMBIGUOUS_EDIT" | "FS_STALE_VERSION"
   | "FS_TOO_LARGE" | "FS_IO_ERROR"
+  // M16: the write was refused by the session's sandbox policy. Distinct from
+  // FS_IO_ERROR so a caller can tell "the system said no" from "the disk said no",
+  // and so the denial is classifiable rather than buried in a generic failure.
+  | "FS_SANDBOX_DENIED"
 
 export class FsToolError extends Error {
   readonly code: FsToolErrorCode

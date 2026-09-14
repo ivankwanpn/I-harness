@@ -58,7 +58,7 @@ import {
 } from "@i-harness/agent-team"
 import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
-import { createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
+import { checkWrite, createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
 import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
 import { DEFAULT_AGENT_PRESET, parsePreset } from "@i-harness/preset"
 
@@ -357,9 +357,22 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       rewindRecorder = new RewindRecorder({ store, workspace: opts.workspace })
     }
   }
-  const fsToolsDeps = rewindRecorder !== undefined
-    ? { workspace: opts.workspace, rewind: { take: (path: string, before: Uint8Array | null) => rewindRecorder.take(path, before) } }
-    : { workspace: opts.workspace }
+  // M16: the fs tools are IN-PROCESS, so no OS backend can wrap them the way the
+  // shell sandbox wraps a spawned command. They were handed `workspace` and
+  // nothing else, while `resolvePath` — the thing IH calls fs confinement — skips
+  // its escape check for ABSOLUTE inputs by design. So `sandbox: "read-only"`
+  // refused `shell` writes and let the `write` tool write anywhere on disk. The
+  // policy is now passed down as a write predicate; `checkWrite` mirrors what the
+  // OS backends actually enforce (workspace + temp writable, reads untouched) so
+  // fs and shell agree rather than one being stricter than the other.
+  const writeGuard = sandboxPolicy === undefined ? undefined : (abs: string) => checkWrite(sandboxPolicy, abs)
+  const fsToolsDeps = {
+    workspace: opts.workspace,
+    ...(rewindRecorder !== undefined
+      ? { rewind: { take: (path: string, before: Uint8Array | null) => rewindRecorder.take(path, before) } }
+      : {}),
+    ...(writeGuard !== undefined ? { writeGuard } : {}),
+  }
   for (const tool of createFsTools(fsToolsDeps)) tools.register(tool)
   createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
 
