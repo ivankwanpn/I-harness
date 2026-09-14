@@ -159,6 +159,22 @@ describe("sandbox policy is resolved per call", () => {
   })
 
   it("MEASURE: effectiveSandboxMode scan cost", async () => {
+    // A REGRESSION GUARD, not a reproduction. Three things it does not do, all
+    // deliberate and all recorded in spec §7:
+    //   - it calls `effectiveSandboxMode` DIRECTLY, the path no production
+    //     caller takes (production goes through `sandboxPolicyNow()`, which
+    //     slices from the policy floor first), so it cannot see that slice;
+    //   - its only output is the `console.log` below, which nothing reads;
+    //   - nothing here reproduces the 0.056-0.125 ms figure §7 originally
+    //     quoted (five clean runs printed 0.099-0.274 ms/call), so that figure
+    //     is recorded as one uncontrolled observation.
+    // The bound is 2 ms; it was 5. MEASURED, so nobody has to guess what the
+    // tightening buys: on the quiet run that set it this case prints
+    // ~0.09 ms/call, and a semantically identical 10x-scan mutation printed
+    // ~1.00 ms/call - so a 10x regression passes BOTH bounds. 2 ms fires at
+    // roughly 20x on a quiet machine and ~7x on the loaded one that printed
+    // 0.274. This is a ceiling against catastrophic regressions, not a 10x
+    // detector; a real detector needs the benchmark harness IH does not have.
     const { effectiveSandboxMode } = await import("@i-harness/sandbox-policy")
     const session = createSession()
     for (let i = 0; i < 20_000; i += 1) append(session, { type: "user/message", text: "x" })
@@ -166,7 +182,7 @@ describe("sandbox policy is resolved per call", () => {
     for (let i = 0; i < 1_000; i += 1) effectiveSandboxMode(session.events)
     const perCall = (performance.now() - t0) / 1_000
     console.log(`scan over ${session.events.length} events: ${perCall.toFixed(3)} ms/call`)
-    expect(perCall).toBeLessThan(5)
+    expect(perCall).toBeLessThan(2)
   })
 })
 

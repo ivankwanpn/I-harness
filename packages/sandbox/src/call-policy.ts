@@ -136,16 +136,6 @@ export async function resolveCallPolicy(input: {
 }): Promise<CallPolicyResolution> {
   const { base, surface, subject, args } = input
 
-  // Branch 1 -- malformed pair: one argument without the other, or an empty
-  // justification. `validateEscalationArgs` throws; catch it and return. Its
-  // message already says how to fix the request, so the refusal carries no
-  // escalation guidance (§3.2 corollary 2).
-  try {
-    validateEscalationArgs(args.sandbox_permissions, args.justification)
-  } catch (error) {
-    return refuse(surface, base?.mode ?? "danger-full-access", messageOf(error))
-  }
-
   // Branch 2 -- neither argument present: an ordinary unescalated call. No
   // refusal, so no denial object at all.
   if (args.sandbox_permissions === undefined && args.justification === undefined) {
@@ -166,6 +156,28 @@ export async function resolveCallPolicy(input: {
   // benefit. A §3.2 denial only ever means "the mode in force does not permit
   // this operation".
   if (base.mode === "danger-full-access") return { kind: "proceed", policy: base }
+
+  // Branch 1 -- malformed pair: one argument without the other, or an empty
+  // justification. `validateEscalationArgs` throws; catch it and return. Its
+  // message already says how to fix the request, so the refusal carries no
+  // escalation guidance (§3.2 corollary 2).
+  //
+  // MOVED HERE, after branches 3 and 4, by the final review (Scope A, finding
+  // A-3). It used to run FIRST, so a malformed pair turned a call that previously
+  // succeeded into `SANDBOX_DENIED` on a host where nothing can refuse anything --
+  // and reported it under a mode that is not in force as a refusal. That also
+  // contradicted branches 3/4's own reasoning ("the args are vacuous, not wrong"):
+  // a malformed pair is equally incapable of changing what THIS call may do, so it
+  // is answered the same way. Validation still runs, and still refuses, wherever a
+  // policy exists to refuse against -- which is the only place the request could
+  // have had an effect. The `base` here is therefore always defined, which is why
+  // the mode reported is `base.mode` rather than a `?? "danger-full-access"`
+  // fallback that could only ever describe a host that cannot refuse.
+  try {
+    validateEscalationArgs(args.sandbox_permissions, args.justification)
+  } catch (error) {
+    return refuse(surface, base.mode, messageOf(error))
+  }
 
   // Branches 5, 6 and 7. Past this point the pair is well-formed (branch 1) and at
   // least one argument is present (branch 2), so `validateEscalationArgs`'

@@ -122,9 +122,13 @@ shell 與 fs 的拒絕要走同一個可分類的形狀，讓模型能用同一�
 >
 > 初版把升級提示寫成「附上可用 `sandbox_permissions` 提出」，而實作取的是 `WIDER_MODES[mode][0]`——**第一個更寬的模式**。Task 4 的審查在真實裝配上證明那是錯的：terminal 在 `read-only` 下拒絕、建議 `workspace-write`，**而它在 `workspace-write` 下也拒絕**，所以照著重試會拿到**一模一樣的拒絕、開出 0 個 PTY**。只有 `danger-full-access` 能解鎖。
 >
-> **規則應該是：拒絕要指名「這個操作會被允許的模式當中最窄的那一個」。** 兩者在**門檻形**的拒絕上重合（fs：`workspace-write` 就夠；shell 同理），在**所有受限模式都拒絕**的表面上分岔（terminal）。`denialFor` 因此在 2026-09-15 增加了一個可選的 `escalationTarget`；預設維持舊行為，所以 fs 與 shell 不動。
+> **規則應該是：拒絕要指名「這個操作會被允許的模式當中最窄的那一個」。** 兩者在**門檻形**的拒絕上重合，在**所有受限模式都拒絕**的表面上分岔（terminal）。`denialFor` 因此在 2026-09-15 增加了一個可選的 `escalationTarget`；預設維持舊行為。
 >
-> **兩個推論，兩者都是同一類錯誤：**
+> **2026-09-15 第二次更正：fs 不是單純的門檻形，上面那句「fs：`workspace-write` 就夠」是錯的。** 最終審查的 Scope A（A-1）與 Scope B（B1）各自獨立證明：`read-only` 下寫 **workspace 外**的路徑被拒時，第一個嚴格更寬的模式（`workspace-write`）**拒絕同一個路徑**，所以模型的第一次重試**保證失敗**，還多花一次人工核准——**這正是 terminal 出貨過的同一個缺陷，只是長在 fs 上**。真正的分岔不是「門檻形 vs 全拒」，而是**同一個表面內、取決於目標位置**：workspace 內是門檻形（`workspace-write` 真的能解鎖），workspace 外不是（只有 `danger-full-access`）。
+>
+> **修法（同日落地）**：`checkWrite` 拒絕時**必須**回報 `sufficientMode`——`PathDecision` 的失敗分支把它變成必填，所以未來的拒絕路徑不能漏答，**由編譯器強制**——assembly 的 write guard 再把它傳進 `denialFor` 的第四個參數。同時補上 fs 一直缺的那個測試：**照著 denial 指名的模式重試，要求它不再被拒**（terminal 早就有那個矩陣，fs 沒有——這是「覆蓋了路徑但不會失敗」的另一個實例，也是這個錯誤能出貨的原因）。
+>
+> **三個推論，三者都是同一類錯誤：**（標題原本寫「兩個」，但這個列表從第三次補充起就是三條；三份後續文件引用的「§3.2 推論 3」指的就是下面第 3 條。）
 >
 > 1. **測試必須真的照著建議重試。** 只斷言「句子裡含有某個模式名稱」的測試，會在**無法照做的建議上照樣通過**——這正是它出貨的原因。
 > 2. **對「升級請求本身」的拒絕，不該附帶升級提示。** 參數錯、被使用者拒絕、被取消、管道不可用、要求的模式不是嚴格更寬——這些都是「**你的請求本身有問題**」，模型該做的是修正請求，不是重複它。附上提示等於叫它再送一次同樣的東西。
@@ -137,7 +141,7 @@ shell 與 fs 的拒絕要走同一個可分類的形狀，讓模型能用同一�
 
 ### 3.3 完成升級階梯
 
-**（a）** 工具 schema 宣告 `sandbox_permissions`／`justification`——這兩個名字**已經寫在標記文字裡**，只是沒有人宣告。
+**（a）** 工具 schema 宣告 `sandbox_permissions`／`justification`——這兩個名字**取自標記文字**，只是沒有人宣告。**（2026-09-15 最終審查更正：結果交付了，但這句描述的機制是假的。）** `escalationHintMarker` 與 `sandboxDenialMarker`（`packages/sandbox/src/escalation.ts`）**是死碼：零個生產呼叫點**——repo 全域只有它們的定義、`sandbox/src/index.ts` 的 re-export，以及 `packages/sandbox/test/seam.test.ts`。所以「名字已經寫在標記文字裡」為真，但**那段文字從來沒有到達任何模型**。真正在出貨的升級句子是 `denial.ts` 裡另一段手寫字串。**參數確實宣告在八個 schema 上**（這是這個 step 的成果），**被推翻的只是那條路徑的敘述**。兩個標記函式仍留著（它們是匯出的 API 且有測試），但它們的狀態是「未接線」——`escalationHintMarker` 的字面意思（「the narrowest wider mode that suffices」）甚至是 terminal 修正前的那個概念。
 **（b）** `approveEscalation` 接上真實的審批服務（現在沒有生產呼叫者）。
 **（c）** 政策 per-call 化（3.1）之後，升級才有意義。
 
@@ -165,9 +169,9 @@ IH 今天已有的審批縫是 `packages/interaction/src/index.ts` 的 `approval
 
 > **2026-09-15 補記（Task B 落地後）：`approveAll` 是一種「管道的內容」，而它讓每一次升級都免問。**
 >
-> `packages/session-executor/src/assembly.ts:461-463` 在 `opts.approveAll` 為真時註冊 `registerApprovalAnswerer(ctx, async () => ({ approved: true }))`；interaction 在服務邊界把 `{ approved: true }` 正規化成 `true`；`createApprovalEscalationApprover` 於是把它映成 `"allowed-once"`。**所以在 `--approve-all` 的宿主上，模型請求的每一次升級都會在沒有提示的情況下被授予。**
+> `packages/session-executor/src/assembly.ts:501-506` 在 `opts.approveAll` 為真時註冊 `registerApprovalAnswerer(ctx, async () => ({ approved: true }))`（`registerApprovalAnswerer` 呼叫本身在 `:505`；**這個行號於 2026-09-15 由最終審查更正——原本寫的 `:461-463` 是 Task B 落地前的位置，而那段文字是在它落地之後才寫的**）；interaction 在服務邊界把 `{ approved: true }` 正規化成 `true`；`createApprovalEscalationApprover` 於是把它映成 `"allowed-once"`。**所以在 `approveAll` 的宿主上，模型請求的每一次升級都會在沒有提示的情況下被授予。**
 >
-> 這與 `approveAll` 的語意一致（宿主已經說過「任何事都不要問我」），所以它**不是漏洞，而是宿主自己的既有決定被升級繼承**——但讀者應該被告知，而不是自己發現：用 `--approve-all` 開一個受限模式的人，等於同時把「放寬沙箱模式」也交了出去。真正的漏洞是**完全沒有管道**，那是上表第三列，fail closed。
+> 這與 `approveAll` 的語意一致（宿主已經說過「任何事都不要問我」），所以它**不是漏洞，而是宿主自己的既有決定被升級繼承**——但讀者應該被告知，而不是自己發現：**在 TUI 上 `approveAll` 是預設值**（`apps/tui/src/index.ts` 的 `!tuiPrefs.guardian || tuiPrefs.alwaysApprove`、`packages/tui/src/backend/embedded.ts` 的 `opts.approveAll ?? true`），CLI 的旗標是 `--yes`（**不是 `--approve-all`，那個旗標不存在**；2026-09-15 由最終審查更正），而 web 走 `ApprovalMuxBridge`。真正的漏洞是**完全沒有管道**，那是上表第三列，fail closed。
 >
 > 兩個同日讀碼確認的相關事實：answerer 是**每次請求惰性讀取**（mount 之後才註冊的宿主仍然有效，Task A 的測試釘住）；而在 `approveAll` 的裝配上註冊第二個 answerer 會**拋** `duplicate service registration`（`packages/core-plugin/src/index.ts:294`）——響亮的失敗，不是靜默覆蓋。
 
@@ -195,25 +199,25 @@ IH 今天已有的審批縫是 `packages/interaction/src/index.ts` 的 `approval
 
 ### 3.4 把 `terminal` 與 `fs-search` 納入圍堵
 
-> **2026-09-15 更正。** 本節原本寫：`terminal`「**在 `sandbox !== "danger-full-access"` 時不掛載**」，`fs-search`「走 shell 的同一條 exec 路徑」。兩條都在動工前被推翻，理由如下，原文保留在上面供對照。推翻的理由不是偏好，是**照原文做會留下它想堵的洞**。
+> **2026-09-15 更正。** 本節原本寫：`terminal`「**在 `sandbox !== "danger-full-access"` 時不掛載**」，`fs-search`「走 shell 的同一條 exec 路徑」。**兩條的命運不同。** `terminal` 那條**真的被推翻**，理由不是偏好，是**照原文做會留下它想堵的洞**（見下）。`fs-search` 那條**字面上是真的**——它與 shell 共用同一個 `exec/service` 實例（`assembly.ts:527-528` 把它交給 fs-search，`shell/src/index.ts:463` 把它交給 shell）——**被推翻的是從它推出來的那個結論**：共用 exec **不等於**被 exec 圍堵。圍堵靠的是**請求上的 `sandbox` 欄位**（`shell/src/index.ts:392`、`:432`），而 fs-search 的兩次 `exec.run`（`fs-search/src/index.ts:87`、`:134`）**不帶**該欄位。原文保留在上面供對照。
 
 - **`terminal`：掛載，但每次呼叫拒絕「創造能力」的操作。**
 
   原文的「不掛載」是一個**掛載期**決定，而這份設計的整個前提（§3.1）就是模式會在中途改變。一個以 `danger-full-access` 掛載、之後被收緊的 session，**它的 PTY 工具仍然在、仍然無圍堵**——正是 §3.1 存在要解決的那個情況。而且 `opts.sandbox === undefined` 是「宿主沒要求沙箱」（provider 對 `undefined` 與 `danger-full-access` 都是 `undefined`），所以 `!== "danger-full-access"` 這條規則會把 terminal 從**每一個從未要求沙箱的宿主**上拿掉。
 
-  改為：`TerminalToolDeps` 收一個 `() => SandboxExecutionPolicy | undefined` resolver，每個工具在 `execute` 開頭解析——
+  改為：`TerminalToolDeps` 收一個 `() => SandboxExecutionPolicy | undefined` resolver，**會拒絕的那三個工具**在 `execute` 開頭解析——`resolveTerminalCall` 全檔只有三個呼叫點（`terminal/src/tool.ts:197`、`:237`、`:316`）。下表其餘六個**既不解析也不讀政策**，所以「受限模式」對它們而言是一個永遠不會被查詢的狀態；它們被列在這裡是為了回答「為什麼不拒絕它們」，不是宣稱它們查了。
 
   | 工具 | 受限模式下 | 為什麼 |
   |---|---|---|
   | `terminal_open`、`process_spawn` | **拒絕** | 這是能力的創造點。受限模式下不該有新的無圍堵 PTY。 |
   | `terminal_send` | **拒絕** | 一個在寬鬆模式下開的 PTY，收緊後繼續餵它輸入＝繼續無圍堵執行。 |
-  | `terminal_read`、`terminal_signal`、`terminal_close`、`terminal_list` | 允許 | 只能觀察或**收束**（signal／close 讓模型收得掉自己開的東西）。拒絕它們只會把殘留的 PTY 變成關不掉的孤兒。 |
+  | `terminal_read`、`terminal_signal`、`terminal_close`、`terminal_list`、`process_kill`、`process_resize_pty` | 允許 | 只能觀察或**收束**（signal／close／kill 讓模型收得掉自己開的東西）。拒絕它們只會把殘留的 PTY 變成關不掉的孤兒。 |
 
   拒絕用 §3.2 的同一個形狀（`denialFor("terminal", mode, reason)`）——所以模型拿到的是「為什麼被拒、以及怎麼要求更寬」，而不是一個**默默消失的工具**。工具不在等於在說「IH 沒有 terminal」，那對 IH 是**不實陳述**；一次分級拒絕才是誠實的不可用。
 
   **仍然為真**：PTY 無法被 kernel 圍堵。這條只是拒絕在受限模式下啟動，不是假裝圍堵。
 
-- **`fs-search`：不改。rg 沒有寫入面，包 runner 只會讓兩個可用的唯讀工具開始失敗。**
+- **`fs-search`：不改。rg 沒有寫入面，包 runner 只會讓兩個可用的唯讀工具開始失敗。** 記下那個「一行就能加」的形狀，因為它正好說明為什麼一行不夠：把 `sandbox: policy` 塞進 `fs-search/src/index.ts:87`、`:134` 兩處 `exec.run` 是**機械上可行**的（exec 已經接受該欄位，`exec/src/index.ts:14`），但塞進去的東西**圍不住任何東西**——讀取在每個後端都不受限（§3.5），而 rg 寫不了檔。
 
   §7 原本記「rg 的寫入面（`--replace`？）我沒有查證」。**已查證**：ripgrep 15.0.0（`@vscode/ripgrep` 1.18.0 隨附）的完整旗標清單裡**沒有任何寫檔旗標**——`--replace` 是**在輸出裡**代換，`--files` 是列出檔案，沒有 `--output`。IH 的兩個呼叫點（`fs-search/src/index.ts:87`、`:134`）也只傳 `--files`／`--json`／`--regexp`。
 >
@@ -237,7 +241,13 @@ grok 有企業政策來源可以列舉敏感路徑；IH 沒有。所以這一步
 >
 > **代價（若這個判斷是錯的）**：受限模式下的 session 仍然讀得到使用者讀得到的一切。想要「把某些檔案藏起來」的使用者拿不到那個功能。
 >
-> **會推翻它的前提**：出現一個**真的提供具體路徑清單的宿主**——專案設定、組織政策檔，或一個 `--deny-read` 介面。在那之前動手，產出的就是這份設計自己點名的那種失敗：**一個沒有輸入的機制。**
+> **會推翻它的前提（寫成具體的介面，不是「等有人回答」）**：出現一個**真的提供具體路徑清單的宿主**——專案設定、組織政策檔，或一個 `--deny-read` 介面。在那之前動手，產出的就是這份設計自己點名的那種失敗：**一個沒有輸入的機制。**
+>
+> 那個介面的形狀今天就可以指名，所以這個「前提」不是一句空話：
+>
+> 1. **政策需要一個欄位來裝它**：`SandboxExecutionPolicy`（`sandbox/src/index.ts:5-13`）今天只有 `mode`／`workspaceRoot`／`sessionId?`／`requireReadIsolation?`——**沒有任何欄位能指名一條要被藏起來的路徑**。要加的是 `denyRead?: readonly string[]`。
+> 2. **後端要宣告它做得到**：`SandboxProvider.capabilities`（`:38`）已經有 `readIsolation`，但**今天沒有任何後端給得起**——而且兩種「給不起」的寫法不一樣，值得分開記：`sandbox-local` 的 bwrap 與 Windows-ACL 兩條路徑**明示** `readIsolation: false`（`sandbox-local/src/index.ts:47`、`:71`），而真正的 ACL 後端 `createWindowsAclSandbox`（`sandbox-windows-acl/src/index.ts:527`，provider 在 `:641`）**根本不宣告 `capabilities`**——照 `:35-38` 的契約，未宣告等於 `false`（capabilities unknown = NOT read-isolated，fail closed）。全 repo 唯一宣告 `true` 的是測試裡的假後端。所以 `requireReadIsolation: true` 現在會讓每一次受限呼叫直接丟 `SandboxUnavailableError`——`:64-71` 的閘門**照設計運作**。
+> 3. 這一條比「沒有輸入」更硬：**讀取隔離不是「還沒接線」，而是兩個真正的後端（bwrap 與 Windows ACL）都沒有實作它**；`sandbox-local` 是**分派器**不是第三個後端（win32 沒注入 ACL 後端時它直接 fail closed，`sandbox-local/src/index.ts:33-42`）。要動 §3.5 就得先有一個真的能遮蔽路徑的後端，而 IH 一個都沒有。
 
 ---
 
@@ -280,7 +290,17 @@ grok 有企業政策來源可以列舉敏感路徑；IH 沒有。所以這一步
 
 ## 7. 這份設計沒有回答的問題
 
-- **3.1 的效能**：**已量測**（2026-09-14）。per-call 解析的事件掃描在 20,000 事件的 session 上是 **0.056–0.125 ms**（九次取樣、兩個代理）。遠低於計畫設的 0.5 ms 門檻，所以**沒有加快取**，也沒有為了不存在的需求發明失效規則。
+- **3.1 的效能**：**已量測，但原本引用的數字無法重現（2026-09-15 由最終審查更正）。**
+  - 原文寫「0.056–0.125 ms（九次取樣、兩個代理）」。**最終審查的 Scope C 無法用 repo 裡任何東西重現它**：repo 自己的 MEASURE 測試（`packages/session-executor/test/sandbox-policy-per-call.test.ts`）在五次乾淨工作樹執行中印出 **0.244 / 0.274 / 0.235 / 0.106 / 0.099 ms/call**（有時落在區間內、有時高於），而它自己的安靜 harness 得到 min 0.0245 / median 0.0251 / max 0.0257 ms。**所以那個數字是一次不受控的觀測被引用到 0.001 ms 精度**，且**沒有 harness 能重現它**——IH 沒有 benchmarking harness（dsh 有）。
+  - **結論不變**：最差觀測 **0.275 ms 是 0.5 ms 預算的 0.55×**，所以「沒有加快取、也沒有為了不存在的需求發明失效規則」仍然成立。被推翻的是**舉證方式**，不是決定。
+  - **成本在哪裡（同日修正一個我先前的錯誤推論）**：per-call 的成本**不是** `events.slice(policyFloor)`（`assembly.ts` 的那個 O(n) 複製）——它複製 20k 個**指標**，量到中位數 **0.0013 ms**，可忽略；真正貴的是**掃描**（解引用 20k 個物件）。門檻管的是掃描，而那個 slice 是文件缺口，不是效能缺口。
+  - **守住這個宣稱的測試不能為它「復現」，而且把上限收緊之後它仍然只是護欄（2026-09-15 量測）**：同一支測試原本斷言 `perCall < 5`（預算的 10 倍、那個數字的 40–90 倍），現在收緊到 **2 ms**，並且**量了收緊到底買到什麼**——安靜機器上這個 case 印 **0.087 ms/call**，把掃描做一個**語意相同的 10 倍變異**後印 **1.002 ms/call**：**10 倍退化同時通過 2 與 5 兩個上限**。2 ms 只在約 20 倍（安靜）或約 7 倍（印出 0.274 ms 的負載機器）時才觸發。所以它是**災難性退化的天花板，不是 10 倍偵測器**；真正的偵測器需要 IH 沒有的 benchmark harness。另外它直接呼叫 `effectiveSandboxMode(session.events)`，那是**生產路徑不會走**的路（生產走 `sandboxPolicyNow()`，含 floor slice），所以那個 slice 它看不見。**它是回歸護欄，不是那個數字的復現。**
+  - **上限已知而量測未及**：超過 20,000 事件沒有任何量測。線性外推是計算、不是量測，所以這裡不寫出外推值。
 - **`terminal` 的產品衝擊**：**原記「TUI 的 PTY 功能在受限模式下會消失」是錯的**（2026-09-15 更正）。`node-pty` 是 `tui` 與 `tui-core` 的 **devDependency**（只給測試 harness 用），`packages/tui/src` 開編輯器／pager 走的是普通 `child_process.spawn`，**TUI 自己不使用 PTY**。唯一的生產 PTY 消費者是 `packages/terminal`（模型面的 `terminal_open`／`process_spawn`），而 `terminal/service` 除了那個套件與一支測試之外無人讀取。所以這個決定的衝擊**只限於模型能不能開 PTY**，不是產品功能。
 - **`fs-search` 的 rg**：**已查證**（2026-09-15）——rg 沒有寫檔旗標，包 runner 換不到安全。理由與證據見 §3.4。
-- **IH 要不要有專案層設定信任**：grok 有明確答案（`build-provenance-folder-trust-gate`），IH 目前的 `settings` 是使用者層。這牽涉產品定位，我沒有足夠資訊下判斷。
+- **IH 要不要有專案層設定信任**：grok 有明確答案（`build-provenance-folder-trust-gate`），IH 目前的 `settings` 是使用者層。這牽涉產品定位，我沒有足夠資訊下判斷。**這是 §7 唯一仍然真正未答的問題**（其餘三條都在這個 goal 期間被回答或推翻了）。
+- **（2026-09-15 新增，最終審查要求「已記錄而非粉飾」的幾條）**
+  1. **shell 的 runtime denial 不在共用形狀裡——而這件事原本沒有任何 artifact 記錄。** `classifyDenial`（`packages/sandbox-local/src/runner-failures.ts`）的呼叫者**只有測試**，`denialSignatures` 被發佈到 `ConfinedArgv` 卻**無人讀取**（`exec` 只讀 `runnerFailureRules`）。所以被圍堵的 shell 裡一次真實的 OS 拒絕（bwrap 的唯讀檔系統、ACL 拒絕）到達模型時**只是一個普通的非零退出加原始 stderr**：沒有 `SANDBOX_DENIED`、沒有 `surface`、沒有升級路徑。§3.2 的規範句沒有加限定詞，但 **「每個表面的拒絕都能用同一條規則」對 fs、terminal，以及 shell 的**pre-call**（無後端）拒絕成立，對 shell 的 runtime 拒絕不成立**。這是既有問題、不是這個 goal 的退化（`git diff` 對 `sandbox-local`／`exec` 是空的）。記錄在這裡，因為 §7 就是放這類事情的地方。
+  2. **`exitCode: -1` 是六義的（2026-09-15：原本記四義，讀 `exec` 之後變六）**：bash 不存在（stderr 是白話英文）、ladder 拒絕（JSON）、sandbox 不可用拒絕（JSON）、`exec` 的 spawn 失敗（`exec/src/index.ts:210` 的 `error` 事件）、**被訊號殺掉**（`exec/src/index.ts:209`：`close` 的 `code ?? -1`，所以任何 signal 結束或 Windows 強制終止也是 `-1`）、以及 **`workflow` runner 對「抛出的錯誤」合成 `-1`**（`workflow/src/runner.ts:222`）。程式碼**以「身分」承認它**（「-1 mirrors the bash-absent branch」，有測試釘住），卻**沒有以「歧義」承認它**：一個從 fs（`code: "SANDBOX_DENIED"`）與 terminal（`code`）學到「看 code」的模型，在 shell 上拿到的是六種情況共用的 `-1`，而 `fs-search/src/index.ts:89`、`:136` 的註解把它**記載成「spawn 失敗」**——那只是六分之一。唯一站得住的緩解是兩個 sandbox 拒絕都把可解析的 JSON 放進 `stderr`，只有 bash-absent 是白話。
+  3. **一次獲准的授予，會在「操作本來就因為別的理由不合法」時被消耗掉**（`edit` 在 `old_string === ""` 與 not-found／stale／no-op 檢查**之前**就過 guard；`apply_patch` 在逐 hunk 錯誤**之前**就跑 ladder）。`"allowed-once"` 綁的是那一次呼叫，而那次呼叫失敗在升級救不了的地方。記錄而不修：重排會改變「已授予但無效」的呼叫回傳哪一種拒絕。
+  4. **3.1 要修的那個情境，今天在生產路徑上沒有生產者；而 TUI 根本不組沙箱（可達性陳述，不是缺陷）。** 全 repo 搜 `sandbox/mode` 只找到**事件型別宣告**（`core-session/src/index.ts:43`）、**讀取者**（`sandbox-policy/src/session-mode.ts:9`）與測試——**沒有任何生產檔案 append 它**，而且 `sandbox-policy` **根本沒有寫入者**（IH 只移植了 fold，沒有 dsh 的 setter）。所以「session 中途被收緊」——§3.1 整節存在的理由——**在生產上不可達**；per-call 解析今天真正買到的是「某天有宿主 append 它時就正確」，以及**升級階梯**（那條是可達的）。而在 TUI 這個主要互動面上，**`sandbox` 這個字在 `apps/tui/src/index.ts` 裡一次都沒出現**，embedded 的 session service 也沒有 `sandbox` 鍵，所以 fs guard、shell 政策、terminal 拒絕在**那裡全部是惰性的**，ladder 也不可達（branch 3）。圍堵目前只由 CLI 與 web host 啟用。**`docs/CAPABILITIES-DETAIL.md:285` 把 `session-mode.ts` 列為這個事件的生產者**——它只讀；那一行已更正。

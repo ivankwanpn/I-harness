@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs"
 import { dirname, isAbsolute, relative, resolve } from "node:path"
-import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
+import type { SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
 
 /**
  * WRITE confinement for the in-process file tools.
@@ -31,7 +31,21 @@ import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
  * and would be a false claim of isolation rather than the real absence of it.
  */
 
-export type PathDecision = { ok: true } | { ok: false; reason: string }
+/**
+ * `sufficientMode` is REQUIRED on a refusal, and it is the narrowest mode in which
+ * THIS target would be permitted — NOT merely a mode wider than the one in force.
+ *
+ * Why it is not optional: a denial must never advise a retry that cannot work. The
+ * fs share of that rule used to be inferred by the caller from the first
+ * strictly-wider mode, which is right for an IN-workspace target under `read-only`
+ * (`workspace-write` genuinely lifts it) and wrong for one OUTSIDE the workspace
+ * (`workspace-write` refuses it again; only `danger-full-access` helps). Two
+ * independent final-review scopes found that the model's first retry was
+ * guaranteed to fail, and neither found a test that read the field. Making this
+ * required means a future refusal path cannot forget to answer, and the compiler
+ * is what enforces it.
+ */
+export type PathDecision = { ok: true } | { ok: false; reason: string; sufficientMode: SandboxMode }
 
 /**
  * The real path of `target`, resolving symlinks, for a target that may not exist
@@ -99,6 +113,11 @@ export function checkWrite(policy: SandboxExecutionPolicy, target: string): Path
   if (policy.mode === "read-only") {
     return {
       ok: false,
+      // `read-only` refuses EVERY write, so the sufficient mode depends on where
+      // the target is: an in-workspace path is lifted by `workspace-write`, an
+      // outside one is not. `real`/`root` are already resolved above, so this
+      // costs one containment test rather than a second traversal.
+      sufficientMode: inside(root, real) ? "workspace-write" : "danger-full-access",
       reason:
         `read-only sandbox: refusing to modify ${target}. ` +
         `The session is in read-only mode, so no file may be written.`,
@@ -109,6 +128,10 @@ export function checkWrite(policy: SandboxExecutionPolicy, target: string): Path
 
   return {
     ok: false,
+    // Reached only when the target is outside the workspace, which
+    // `workspace-write` refuses by definition — so a wider mode is not enough
+    // here, and naming one would send the model to a retry that fails the same way.
+    sufficientMode: "danger-full-access",
     reason:
       `workspace-write sandbox: refusing to modify ${target} because it resolves outside the session workspace ${policy.workspaceRoot}. ` +
       `Writes are confined to the workspace, which is the same boundary the shell sandbox enforces.`,
