@@ -596,11 +596,37 @@ Expected: PASS
 
 Remove `sandbox_permissions` from the `write` schema only. Run. Expected: **FAIL naming `write`**. Restore.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Rename the product in the policy fragment (added 2026-09-15, user-approved)**
+
+`renderPolicyContext` (`packages/sandbox-policy/src/index.ts:45,47,49`) renders **"Current DSH file policy"** into IH's own system prompt — a different product's name, in the same prompt whose first line is `DEFAULT_AGENT_PRESET`'s "You are I-harness" (`packages/preset/src/default.ts:14`). Verified: those three literals are the ONLY "DSH" occurrences in shipped TypeScript, and **no test pins the string**.
+
+Write the failing test first, in `packages/sandbox-policy/test/policy.test.ts`:
+
+```ts
+  it("names THIS harness, not another product", () => {
+    for (const mode of ["read-only", "workspace-write", "danger-full-access"] as const) {
+      const text = renderPolicyContext({ mode, workspaceRoot: "/x" })
+      expect(text).toContain("I-harness")
+      expect(text).not.toContain("DSH")
+    }
+  })
+```
+
+Run it — expected FAIL on all three. Then change the three literals (`"Current DSH file policy"` → `"Current I-harness file policy"`, `"the DSH file sandbox"` → `"the I-harness file sandbox"`), re-run to PASS.
+
+Mutation proof: put `DSH` back in the read-only literal only. Expected: **FAIL naming `read-only`**. Restore.
+
+**Check before you commit that this did not break the callers**: `packages/session-executor/test/sandbox-policy-per-call.test.ts` asserts the fragment contains a mode name and not another mode name, and `apps/cli`'s M16 sandbox-prompt tests assert on the prompt. Run both suites and confirm they are green. Neither pins "DSH" (verified), but they are the two places that read this text.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add packages/fs packages/shell packages/session-executor/test/sandbox-escalation-schema.test.ts
-git commit -m "feat(sandbox): declare the escalation arguments the marker text advertises"
+git add packages/fs packages/shell packages/sandbox-policy packages/session-executor/test/sandbox-escalation-schema.test.ts
+git commit -m "feat(sandbox): declare the escalation arguments the marker text advertises
+
+Also renames the policy fragment's product name: it said \"Current DSH file
+policy\" in IH's own system prompt, one line after the preset calls the harness
+I-harness."
 ```
 
 ---
