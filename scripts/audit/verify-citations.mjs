@@ -111,6 +111,7 @@ const stats = {
 const lineUse = new Map()
 const cells = []
 const dirOnly = []
+const unattributed = []
 const docOnly = []
 
 
@@ -342,8 +343,87 @@ for (const f of files) {
   // function needing to know the schema.
   if (f.includes("-d3-")) {
     for (const found of walkEvidence(data)) {
-      if (!found.source || !SOURCE_PATHS[found.source]) continue
-      checkClaim(found.source, { rawName: found.label }, "mechanism", found.claim, found.evidence)
+      if (found.source && SOURCE_PATHS[found.source]) {
+        checkClaim(found.source, { rawName: found.label }, "mechanism", found.claim, found.evidence)
+        continue
+      }
+      // An evidence-bearing node with no resolvable source used to be SKIPPED
+      // SILENTLY here, which is the one thing this audit keeps saying not to do.
+      // It hid every forkDeltas citation: that array is a SIBLING of opencode's
+      // `upstream`/`fork` subtrees, so it inherits no source, and 1,532 citations
+      // went unchecked while the report still said "7110/7110 resolved".
+      //
+      // The correct model for a delta is PER-CITATION resolution, not one source
+      // for the node: a fork delta legitimately cites BOTH trees, and its prose
+      // says which side is which ("upstream composes ... whereas the fork
+      // exposes ..."). So each citation is resolved against every root and
+      // attributed to whichever contains it. A citation matching NO root is a
+      // real defect; a node spanning two roots is normal for a delta and is
+      // recorded as informational rather than reported as a problem.
+      const rootsUsed = new Set()
+      let unresolved = 0
+      let firstUnresolved = null
+      const ambiguous = []
+      for (const cite of found.evidence) {
+        // A fork delta may name the tree explicitly (`fork:path:line`, written by
+        // qualify-forkdelta-citations.mjs) because the same path can exist in both
+        // trees as different files. Honour the prefix when present.
+        const qm = String(cite).match(/^(fork|upstream):(.*)$/)
+        const hint = qm ? qm[1] : null
+        const { path: rel, line, endLine } = parseCitation(qm ? qm[2] : cite)
+        const roots = hint ? [hint === "fork" ? "opencode-fork" : "opencode"] : Object.keys(SOURCE_PATHS)
+        // A path can exist in MORE THAN ONE source tree as different files --
+        // `packages/core/src/command.ts` is 65 lines upstream and longer in the
+        // fork -- so existence alone picks the wrong root and then reports the
+        // fork's line numbers as out of range against upstream's file. The root
+        // is therefore chosen by FILE AND LINE together.
+        const fits = []
+        const hasFile = []
+        for (const src of roots) {
+          const abs = join(SOURCE_PATHS[src], rel ?? "")
+          if (!rel || !existsSync(abs)) continue
+          hasFile.push(src)
+          if (line == null) {
+            fits.push(src)
+            continue
+          }
+          const ls = lines(abs)
+          if (ls && line <= ls.length && (endLine == null || endLine <= ls.length)) fits.push(src)
+        }
+        const chosen = fits[0] ?? hasFile[0]
+        if (chosen) {
+          rootsUsed.add(chosen)
+          if (hasFile.length > 1 && fits.length !== 1) {
+            ambiguous.push({ cite, inTrees: hasFile })
+          }
+        } else {
+          unresolved++
+          if (!firstUnresolved) firstUnresolved = cite
+        }
+      }
+      unattributed.push({
+        label: found.label,
+        roots: [...rootsUsed],
+        citations: found.evidence.length,
+        unresolved,
+        ambiguous,
+      })
+      for (const src of rootsUsed) {
+        // Strip the `fork:`/`upstream:` qualifier before handing the citations to
+        // checkClaim: it resolves against the root it is given, so the prefix has
+        // already done its job and would otherwise look like part of the path.
+        const bare = found.evidence.map((c) => String(c).replace(/^(fork|upstream):/, ""))
+        checkClaim(src, { rawName: found.label }, "mechanism", found.claim, bare)
+      }
+      if (unresolved > 0) {
+        stats.missingFile += unresolved
+        problems.push({
+          source: "(no source)",
+          cmd: found.label,
+          kind: "UNRESOLVED_IN_ANY_TREE",
+          detail: `${unresolved} of ${found.evidence.length} citation(s) resolve in no source tree, e.g. ${firstUnresolved}`,
+        })
+      }
     }
   }
 }
