@@ -1,5 +1,6 @@
 {
   "domain": "retrieval",
+  "note": "RE-RUN. Grok's domains.retrieval grew from 5 to 8 mechanisms: confirmed-corruption-quarantine-and-recreate and debounced-hash-deduped-index-maintenance (xai-grok-session-search) and two-tier-index-lock-with-stale-takeover (xai-codebase-graph). The first two join the session-corpus search/index row, the third joins the codebase index row; none is an agent-written durable-memory mechanism, so the session-search versus durable-memory split is preserved. Caveats that referred to an uninventoried grok column are removed. The previous run's attachment-modality-gating row is consolidated into the image normalization/request-projection row, which drops the row count from 29 to 28; no other row changed membership. Coverage is 68 placed mechanisms, up from 65 because grok's retrieval array grew from 5 to 8; every source's array is placed in full (ih 3, dsh 14, codex 8, opencode 8, opencode-fork 8, grok 8, cc-custom 19).",
   "rows": {
     "session-corpus-search-and-lineage-index": {
       "domain": "retrieval",
@@ -10,11 +11,12 @@
         "codex": ["rollout-content-search-with-ripgrep-fallback", "thread-history-occurrence-search-pagination"],
         "opencode": [],
         "opencode-fork": [],
-        "grok": ["bm25-fts5-session-index-with-lease-fenced-bootstrap"],
+        "grok": ["bm25-fts5-session-index-with-lease-fenced-bootstrap", "confirmed-corruption-quarantine-and-recreate", "debounced-hash-deduped-index-maintenance"],
         "cc-custom": []
       },
       "disposition": "已存在",
-      "rationale": "IH 已有可重建 FTS 索引與世系"
+      "rationale": "IH 已有可重建 FTS 索引與世系",
+      "note": "Grok's two new session-search mechanisms are index lifecycle, not a second capability: confirmed-corruption-quarantine-and-recreate is the recovery half of an index that grok itself declares a rebuildable cache (matching IH's disposable, self-describing derived tables), and debounced-hash-deduped-index-maintenance is the write half (per-(session,cwd) debounce, blake3 dedup, bootstrap-marker re-verification) of the same session_docs table the row's FTS member serves. They are kept in this row rather than split into an index-maintenance row so that the row states the whole session index capability; IH lacks grok's corruption classification, quarantining and settling signal (bootstrapping:true), which is real but additive and does not change the disposition."
     },
     "session-list-title-and-resume-surface": {
       "domain": "retrieval",
@@ -104,7 +106,7 @@
         "cc-custom": ["ripgrep-backed-file-search"]
       },
       "disposition": "路線差異",
-      "rationale": "IH 已於 tools 域實作"
+      "rationale": "IH 已於 tools 域提供"
     },
     "bounded-file-read-with-dedup-cache": {
       "domain": "retrieval",
@@ -173,28 +175,14 @@
         "ih": [],
         "dsh": ["image-admission-normalization-and-request-image-projection"],
         "codex": [],
-        "opencode": ["image-attachment-normalization"],
+        "opencode": ["image-attachment-normalization", "attachment-modality-gating"],
         "opencode-fork": ["image-normalization"],
         "grok": [],
         "cc-custom": []
       },
       "disposition": "rewrite",
-      "rationale": "IH 常數已宣告但未實作"
-    },
-    "attachment-modality-gating": {
-      "domain": "retrieval",
-      "label": "attachment-modality-gating",
-      "members": {
-        "ih": [],
-        "dsh": [],
-        "codex": [],
-        "opencode": ["attachment-modality-gating"],
-        "opencode-fork": [],
-        "grok": [],
-        "cc-custom": []
-      },
-      "disposition": "reuse",
-      "rationale": "依模型模態改寫可近移植"
+      "rationale": "IH 常數已宣告但未實作",
+      "note": "This run consolidates the previous attachment-modality-gating row into this one. The two are one capability seen at two names: dsh proves it in a single mechanism whose request-image projection is gated on positive proof that the exact current model route accepts image input (and otherwise projects the image as diagnostic text), while opencode names the same request-time route check separately as unsupportedParts/mimeToModality replacing unsupported parts with error text. Merging removes a false split between dsh's bundled form and opencode's separately-named form."
     },
     "web-search-provider-selection-and-tool-bounds": {
       "domain": "retrieval",
@@ -370,11 +358,12 @@
         "codex": [],
         "opencode": [],
         "opencode-fork": [],
-        "grok": ["tree-sitter-symbol-index-over-name-keyed-occurrence-map"],
+        "grok": ["tree-sitter-symbol-index-over-name-keyed-occurrence-map", "two-tier-index-lock-with-stale-takeover"],
         "cc-custom": []
       },
       "disposition": "遠期",
-      "rationale": "大型碼庫圖譜，暫緩"
+      "rationale": "大型碼庫圖譜，暫緩",
+      "note": "two-tier-index-lock-with-stale-takeover is the serialization half of the same xai-codebase-graph index the tree-sitter member builds (in-memory DashMap reader/writer registry plus an fs2 lock file with per-operation timeouts and PID liveness), so it is placed here rather than with the session-search index. Its wiring is THIN and is not presented as a working feature: only IndexOperation::BackgroundRefresh has a non-test caller, so the Load/Save/Build readers-writer and stale-takeover machinery is largely reachable only from tests and from the one background-refresh path that early-returns when the lock is Busy."
     },
     "external-code-indexing-detection": {
       "domain": "retrieval",
@@ -447,20 +436,16 @@
       "whyNotMerged": "Name collision on 'reference' only: dsh injects a budgeted, untrusted snapshot of ANOTHER SESSION into the current step, while opencode materializes configured extra directories/git repositories into a cache the agent may read. Different objects, different trust story."
     },
     {
-      "mechanisms": ["tree-sitter-symbol-index-over-name-keyed-occurrence-map", "external-code-indexing-detection"],
-      "whyNotMerged": "Same subject (codebase indexing) but opposite posture: grok builds its own tree-sitter symbol index with a persisted cache, while cc-custom builds nothing and only classifies third-party indexers from bash commands and MCP tool names for analytics. Merging would erase the built-in-versus-delegated design split."
+      "mechanisms": ["tree-sitter-symbol-index-over-name-keyed-occurrence-map", "two-tier-index-lock-with-stale-takeover", "bm25-fts5-session-index-with-lease-fenced-bootstrap", "confirmed-corruption-quarantine-and-recreate", "debounced-hash-deduped-index-maintenance"],
+      "whyNotMerged": "Placement judgement on grok's new lock: two-tier-index-lock-with-stale-takeover is a generic index-work serializer, so it could have been read as an index-maintenance member of the session-corpus row. It is placed with the codebase-graph row instead because its only module is xai-codebase-graph, its lock file sits beside the codebase-graph cache, and its shipped consumer is the codebase index background refresh; the session row's new members are all xai-grok-session-search and its SQLite session_docs table. No row mixes a session-corpus index with a repository symbol index."
     },
     {
-      "mechanisms": ["agentic-session-search", "session-search-and-lineage-over-a-rebuildable-sqlite-index", "session-full-text-index-and-ranked-search", "bm25-fts5-session-index-with-lease-fenced-bootstrap", "rollout-content-search-with-ripgrep-fallback", "thread-history-occurrence-search-pagination"],
-      "whyNotMerged": "cc-custom answers 'which past session is relevant' with a small-model selector over a packed manifest (title/branch/summary/first-prompt/excerpt), not with a lexical index or a scan. Treating an LLM selection pass as the same capability as a BM25/FTS index would hide a genuinely different retrieval paradigm, so it stays single-source."
+      "mechanisms": ["agentic-session-search", "session-search-and-lineage-over-a-rebuildable-sqlite-index", "session-full-text-index-and-ranked-search", "bm25-fts5-session-index-with-lease-fenced-bootstrap", "confirmed-corruption-quarantine-and-recreate", "debounced-hash-deduped-index-maintenance", "rollout-content-search-with-ripgrep-fallback", "thread-history-occurrence-search-pagination"],
+      "whyNotMerged": "cc-custom answers 'which past session is relevant' with a small-model selector over a packed manifest (title/branch/summary/first-prompt/excerpt), not with a lexical index or a scan. Treating an LLM selection pass as the same capability as a BM25/FTS index would hide a genuinely different retrieval paradigm, so it stays single-source. Grok's two new session-search members are index lifecycle for the FTS index and do not narrow this gap."
     },
     {
-      "mechanisms": ["attachment-modality-gating", "image-admission-normalization-and-request-image-projection"],
-      "whyNotMerged": "dsh proves the two belong together (its image mechanism gates on positive proof that the exact route accepts image input and projects otherwise), but that gating is bundled INSIDE dsh's normalization/projection mechanism in the inventory, so a gating row could only be formed by splitting a source mechanism. opencode's gating therefore stays alone here."
-    },
-    {
-      "mechanisms": ["multimodal-input-snapshot-and-image-budget", "image-admission-normalization-and-request-image-projection", "image-attachment-normalization", "image-normalization"],
-      "whyNotMerged": "codex bundles ingestion (path to portable data URL) and request-time image budgeting (detail modes, max dimension/patches) in one mechanism, so it can sit in either the ingestion row or the normalization row but not both; it is placed with ingestion and the budget half is left uncrossed."
+      "mechanisms": ["multimodal-input-snapshot-and-image-budget", "image-admission-normalization-and-request-image-projection", "image-attachment-normalization", "image-normalization", "attachment-modality-gating"],
+      "whyNotMerged": "codex bundles ingestion (path to portable data URL) and request-time image budgeting (detail modes, max dimension/patches) in one mechanism, so it can sit in either the ingestion row or the normalization row but not both; it is placed with ingestion and the budget half is left uncrossed. opencode's attachment-modality-gating no longer sits in this doubt as a separate row: it is now consolidated into the normalization/request-projection row, leaving only codex's inseparable bundling as the unresolved part."
     },
     {
       "mechanisms": ["session-query-live-preferred-corpus-reads-and-traces", "session-search-and-lineage-over-a-rebuildable-sqlite-index", "session-listing-and-title-derivation-as-a-retrieval-surface"],
@@ -487,5 +472,5 @@
       "whyNotMerged": "Cross-cutting rule-4 issue, not a merge question: IH demonstrably implements ripgrep search tools, web-search provider selection, an askUser/question-provider seam and AGENTS.md/CLAUDE.md instruction discovery, but all four sit in IH's tools/context/service domains, so rule 1 forbids citing them as ih members here and rule 4 forbids 已存在 on a row with no ih member. Those rows are marked 路線差異 (IH structures the same capability elsewhere) rather than falsely claiming a gap."
     }
   ],
-  "coverage": { "mechanismsSeen": 65, "mechanismsPlaced": 65 }
+  "coverage": { "mechanismsSeen": 68, "mechanismsPlaced": 68 }
 }
