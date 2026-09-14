@@ -12,6 +12,13 @@ init/teardown, capability probe, GrokNight theme, PTY harness) → M37a app laye
 SessionService bridge + `apps/tui`, PTY-proved live streaming). M37b covers
 interaction overlays + Inline/minimal modes.**
 
+> **Taking this project over?** Read [`docs/handoff/HANDOFF.md`](docs/handoff/HANDOFF.md) first: current
+> branch/commit state, the verification commands with **measured baselines**, nine traps that actually
+> cost time here, and the list of what was deliberately left undone. The same directory holds
+> [`FINAL-REPORT.md`](docs/handoff/FINAL-REPORT.md) (the last goal's full report) and
+> [`what-the-design-does-not-answer.md`](docs/handoff/what-the-design-does-not-answer.md) (what the
+> design does not answer, and what was declined with rulings).
+
 ## What it is
 
 An agent harness (the "back end" of an agent product) that:
