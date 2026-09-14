@@ -23,6 +23,16 @@
 - **Push to `origin/m62` only.**
 - Existing known-red tests, unrelated to this work: `packages/session-executor/test/workspace-cwd.test.ts` (2, bash on PATH is WSL not Git Bash) and `apps/cli` shell retry/retention (2, same cause).
 
+## Why this is not hypothetical (and the precise form of the hole)
+
+A session started with `--sandbox read-only` can open a PTY and write anywhere, because `registerTerminal` mounts unconditionally (`assembly.ts:295`) and its tools receive only `{ cwd }`.
+
+**The precise form matters, and an earlier draft of this plan overstated it.** The terminal is not *ungated*: `guard-approval`'s Layer-1 fallback asks for any non-`isReadOnly` tool, and `terminal_open`/`terminal_send`/`terminal_signal`/`terminal_close` are all non-`isReadOnly` (only `terminal_read` and `terminal_list` are marked read-only). So a host with an approval bridge does prompt.
+
+But **approval answers a different question than confinement does.** The prompt says "tool 'terminal_open' requires approval" — it does not say "this PTY will run outside the sandbox you asked for". A user approving a terminal in a read-only session is not being told that. And on a host that sets `approveAll` — a supported configuration the assembly exposes and its own tests use — there is no prompt at all.
+
+So: **the only gate is orthogonal to the mode, and on `approveAll` hosts it is absent.** That is the hole this plan closes, stated as it actually is rather than as "nothing gates it".
+
 ## Why we are NOT changing fs-search (recorded so nobody re-opens it)
 
 The spec's §3.4 also asked to route ripgrep through the exec runner. **That was withdrawn on 2026-09-15 with evidence, and is not part of this plan.** ripgrep 15.0.0's (shipped as `@vscode/ripgrep` 1.18.0) complete flag list contains **no flag that writes a file** — `--replace` substitutes text in the printed output, `--files` lists names, and there is no `--output`. IH's two call sites (`packages/fs-search/src/index.ts:87` and `:134`) pass only `--files` / `--json` / `--regexp`. Wrapping rg in the runner would therefore confine nothing that is not already unrestricted by design (§3.5), while making `glob` and `grep` throw `SandboxUnavailableError` on any host where the runner cannot start — two working read-only tools turned into failures for zero security gain. Revisit only when §3.5 acquires a concrete policy input, at which point running rg through the runner is exactly how read isolation would be enforced.
