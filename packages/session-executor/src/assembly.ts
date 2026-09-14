@@ -127,11 +127,16 @@ export interface AssemblyOptions {
   guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient } // R-A9
   outputSpill?: OutputSpillGuardConfig // M26-B7: registry-level output spill
   session?: Session // M14: host-pre-seeded session (host owns durability)
-  /** The session the sandbox policy resolution READS for sandbox/mode events —
-   * the HOST-SEEDED session only (run.ts parity: a resumed a session's fully
-   * restored history must not silently override the requested mode; the CLI
-   * passes opts.session here). Absent → resolve against nothing (branch
-   * live-agent parity). */
+  /** The session the sandbox policy resolution READS for `sandbox/mode` events.
+   * Defaults to the LIVE session (`opts.policySession ?? session`): a host that
+   * passes only `session` (the web service) would otherwise resolve against
+   * nothing forever and never observe a mid-session change. `run.ts` passes the
+   * same object for both, so it is unaffected either way.
+   *
+   * ONLY events appended after the assembly is constructed count. Restored
+   * history records decisions made by EARLIER runs; letting it win would enforce
+   * them over the mode THIS run requested — `--resume X --sandbox read-only` on a
+   * session once escalated would run unrestricted. */
   policySession?: Session
   coordinator?: SessionCoordinator // when present (+sessionId): write-behind + subagent persist
   restoredState?: SubagentStateSnapshot // resume: subagent registries rebuilt from the doc

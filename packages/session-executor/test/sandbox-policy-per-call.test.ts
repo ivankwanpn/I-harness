@@ -153,4 +153,36 @@ describe("restored history does not decide the sandbox mode", () => {
       rmSync(base, { recursive: true, force: true })
     }
   })
+
+  it("a distinct policySession is what resolution reads, not the live session", async () => {
+    const base = mkdtempSync(join(tmpdir(), "i-harness-policy-session-"))
+    const workspace = join(base, "ws")
+    const outside = join(base, "outside")
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(outside, { recursive: true })
+    const first = join(outside, "first.txt")
+    const second = join(outside, "second.txt")
+    const live = createSession()
+    const policySession = createSession()
+    append(live, { type: "user/message", text: "go" })
+    const assembly = await createSessionAssembly({
+      workspace, session: live, policySession,
+      model: modelWritingTargets([first, second]),
+      approveAll: true,
+      sandbox: "danger-full-access",
+    })
+    try {
+      // CONTROL: the LIVE session tightens. Resolution does not read it, so the
+      // write still lands — this is what makes the next assertion meaningful
+      // rather than a test that would pass if resolution read nothing at all.
+      append(live, { type: "sandbox/mode", mode: "read-only" })
+      await runTurn(assembly)
+      expect(readFileSync(first, "utf8")).toBe("escaped")
+
+      // The resolution session tightens; the NEXT call must obey it.
+      append(policySession, { type: "sandbox/mode", mode: "read-only" })
+      await runTurn(assembly)
+      expect(existsSync(second)).toBe(false)
+    } finally { await assembly.dispose(); rmSync(base, { recursive: true, force: true }) }
+  })
 })
