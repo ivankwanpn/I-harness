@@ -357,6 +357,18 @@ pnpm install
 
 Without the `pnpm install` the symlink is never created and `import ... from "@i-harness/sandbox"` fails to resolve (`moduleResolution: "bundler"`, no tsconfig `paths`, so resolution goes through `node_modules`).
 
+**CORRECTIONS FOUND DURING EXECUTION (2026-09-15) — four defects in this task's text, all now fixed here.**
+
+The implementer found two that the pre-check did not. Both are recorded because the pattern matters: **all four are text that still described the pre-ruling task while the steps around it had moved.**
+
+1. **The file list omitted `packages/shell/test/shell.test.ts`.** Its `sandboxPolicy:` case passed a policy **value**, so under the new thunk interface `createShellTools` throws `TypeError: deps.sandboxPolicy is not a function` **at construction** — the whole file fails, not one test. Converted to a thunk with its original assertions kept. Add it to the Files list above.
+
+2. **Step 7's test sketch could not support its own Step 8 mutation proof — it was vacuous.** As sketched (one `execute`, assert `seen[0]?.mode`) it **passes against a module-scope snapshot**, because building the tool set per call re-runs the resolver either way. The implementer's first draft had exactly that flaw and the mutation exposed it. Rewritten to build the tool set ONCE and assert the full call sequence across two calls — the only shape that distinguishes per-call resolution from a snapshot. **This is the most important of the four: a plan whose own verification step cannot fail is worse than no verification, because it returns a green result that means nothing.**
+
+3. **Step 9's `git add` line was stale** — see the correction at that step; it would have omitted the new `packages/sandbox` package, the assembly conversion, `package.json` and `pnpm-lock.yaml`.
+
+4. `packages/sandbox-policy` is correctly untouched, so the original line's `git add packages/sandbox-policy` would have staged nothing at all — harmless in itself, and exactly what made defect 3 invisible.
+
 - [ ] **Step 1: Write the failing test for the shared shape**
 
 ```ts
@@ -514,9 +526,11 @@ In `packages/shell/src/index.ts`, change `const sandboxResolved = deps.sandboxPo
 - [ ] **Step 9: Commit**
 
 ```bash
-git add packages/sandbox-policy packages/fs packages/shell
+git add packages/sandbox packages/fs packages/shell packages/session-executor/src/assembly.ts pnpm-lock.yaml
 git commit -m "feat(sandbox): one denial shape, and the shell resolves per call"
 ```
+
+**CORRECTION (2026-09-15, controller):** this step originally read `git add packages/sandbox-policy packages/fs packages/shell`, written before the RULING block above moved `denial.ts` into `@i-harness/sandbox` and added the assembly to the file list. Taken literally it would have committed the shell and fs halves while **silently omitting the entire new vocabulary package, the production `writeGuard` conversion in `packages/session-executor/src/assembly.ts`, `packages/fs/package.json`, and `pnpm-lock.yaml`** — leaving a dirty tree and a commit that does not build. Recorded rather than quietly patched: it is the third defect in this task's text, all three from the same cause, which is that the correction touched the steps and not the boilerplate around them.
 
 ---
 
@@ -530,6 +544,7 @@ git commit -m "feat(sandbox): one denial shape, and the shell resolves per call"
 - Consumes: `ESCALATION_TARGETS` from `@i-harness/sandbox` (already exported — verified in `packages/sandbox/src/index.ts:77`).
 - Produces: nothing new; this task only makes existing marker text actionable.
 - **Dependency:** `packages/fs` gains `@i-harness/sandbox` in **Task 2** (with the `pnpm install` that makes it resolve). `packages/shell` already declares it. Do not add it again here; if Task 2 has not landed, this task cannot compile.
+- **ADDED 2026-09-15, approved by the user — a naming defect folded into this task.** `renderPolicyContext` (`packages/sandbox-policy/src/index.ts:45,47,49`) renders **"Current DSH file policy"** — a different product's name — into IH's own system prompt, in the same prompt whose first line is `DEFAULT_AGENT_PRESET`'s "You are I-harness" (`packages/preset/src/default.ts:14`). Verified before changing anything: those three lines are the ONLY occurrences of "DSH" in shipped TypeScript, and **no test pins the string** (the `sandbox-policy` tests use loose `toContain(<mode>)` assertions; the CLI's M16 prompt tests do not mention it either). Change the three literals to name I-harness and add a test that pins the product name, so the wording cannot silently regress. It is folded in here rather than given its own task because it is three literals in a package this task does not otherwise touch — batching small mechanical edits is cheaper than a whole dispatch-and-review cycle.
 
 **Context:** `packages/sandbox/src/escalation.ts` renders `sandboxDenialMarker` / `escalationHintMarker` text telling the model to pass `sandbox_permissions` and `justification` — and **no tool schema declares either argument**. D1 recorded this; it is the reason the ladder has no production caller.
 
