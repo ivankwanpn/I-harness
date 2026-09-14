@@ -98,7 +98,7 @@ In `packages/session-executor/src/assembly.ts`, replace the block at `:298-303`:
   const sandboxPolicyNow = () => sandboxPolicyService?.resolve({ session: opts.policySession })
 ```
 
-At `:304-310`, resolve once per registration (shell re-resolves per call inside its own tools in Task 3):
+At `:304-310`, **leave the shell registration unchanged for now** — it still receives a resolved value, because `ShellToolDeps.sandboxPolicy` stays `SandboxExecutionPolicy` until Task 2 converts it to a thunk. Passing the thunk here would not typecheck. Task 2 owns that conversion:
 
 ```ts
   registerShell(ctx, tools, {
@@ -106,7 +106,7 @@ At `:304-310`, resolve once per registration (shell re-resolves per call inside 
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
     cwd: opts.workspace,
     ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
-    ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
+    ...(sandboxPolicyNow() !== undefined ? { sandboxPolicy: sandboxPolicyNow() } : {}),
   })
 ```
 
