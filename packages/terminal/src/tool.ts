@@ -19,6 +19,18 @@ export interface TerminalToolDeps {
 }
 
 /**
+ * The narrowest mode in which a PTY is permitted AT ALL.
+ *
+ * `confinement` refuses in EVERY confined mode — read-only and workspace-write
+ * alike — because a PTY cannot be kernel-confined. So the target a refusal
+ * advertises must be `danger-full-access`: `denialFor`'s default (the first
+ * strictly-wider mode) would name "workspace-write" from read-only, and that
+ * retry returns the IDENTICAL denial. Advice the model cannot follow is worse
+ * than no advice, because it looks like a way out.
+ */
+const PTY_PERMITTED_MODE: SandboxMode = "danger-full-access"
+
+/**
  * M62: terminal refusals are RETURNED, never thrown.
  *
  * A throwing tool body fails the whole turn — core-agent discards the batch and
@@ -32,7 +44,7 @@ export interface TerminalToolDeps {
  * sentence in one string for a reader that only looks at `error`.
  */
 function terminalRefusal(mode: SandboxMode, reason: string): { error: string; code: SandboxDenial["code"]; denial: SandboxDenial } {
-  const denial = denialFor("terminal", mode, reason)
+  const denial = denialFor("terminal", mode, reason, PTY_PERMITTED_MODE)
   return {
     error: denial.escalation === undefined ? denial.reason : `${denial.reason} ${denial.escalation}`,
     code: denial.code,
