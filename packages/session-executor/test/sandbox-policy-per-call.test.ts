@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { createMockClient } from "@i-harness/llm-mock"
+import type { LLMRequest } from "@i-harness/llm-seam"
 import { createSession, append } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
@@ -85,6 +86,62 @@ describe("sandbox policy is resolved per call", () => {
         (e) => e.type === "tool/result" && JSON.stringify(e).includes("FS_SANDBOX_DENIED"),
       )
       expect(denials.length).toBe(1)
+    } finally {
+      await assembly.dispose()
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it("the system prompt states the mode in force on the NEXT request", async () => {
+    const base = mkdtempSync(join(tmpdir(), "i-harness-prompt-now-"))
+    const workspace = join(base, "ws")
+    const outside = join(base, "outside")
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(outside, { recursive: true })
+    const first = join(outside, "first.txt")
+    const second = join(outside, "second.txt")
+    const session = createSession()
+    append(session, { type: "user/message", text: "write it" })
+    // Capture what the provider actually RECEIVES. Reading a prompt value off the
+    // assembly would assert on an internal; the request is the boundary the model
+    // sees, and it is also where "the fragment says Current" can be falsified.
+    const prompts: string[] = []
+    const inner = modelWritingTargets([first, second])
+    const model = {
+      stream: (req: LLMRequest) => {
+        prompts.push(req.systemPrompt)
+        return inner.stream(req)
+      },
+    }
+    const assembly = await createSessionAssembly({
+      workspace, session, model,
+      approveAll: true,
+      sandbox: "danger-full-access",
+    })
+    try {
+      // Turn 1 — the mode the assembly was constructed with.
+      await runTurn(assembly)
+      const turnOne = prompts.length
+      expect(turnOne).toBeGreaterThan(0)
+      expect(prompts.at(-1)).toContain("danger-full-access")
+      // The mode did not change across the turn's steps, so the fragment is
+      // memoised and every request carries a byte-identical string. A prompt that
+      // churned per step would defeat provider-side prefix caching.
+      expect(new Set(prompts.slice(0, turnOne)).size).toBe(1)
+
+      // The mode changes; the NEXT request must say so.
+      append(session, { type: "sandbox/mode", mode: "read-only" })
+      await runTurn(assembly)
+      // Guard against a vacuous assertion: the turn below must have issued a NEW
+      // request, or `at(-1)` would still be turn 1's prompt and pass for free.
+      expect(prompts.length).toBeGreaterThan(turnOne)
+      expect(prompts.at(-1)).toContain("read-only")
+      expect(prompts.at(-1)).not.toContain("danger-full-access")
+
+      // The prompt is not the only thing that moved: the guard enforced the mode
+      // the prompt just described.
+      expect(readFileSync(first, "utf8")).toBe("escaped")
+      expect(existsSync(second)).toBe(false)
     } finally {
       await assembly.dispose()
       rmSync(base, { recursive: true, force: true })

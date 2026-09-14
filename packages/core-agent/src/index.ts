@@ -36,7 +36,11 @@ export interface AgentBudgetConfig {
 }
 
 export interface AgentConfig {
-  systemPrompt: string
+  /** Prompt for every request. A STRING is fixed for the session. A FUNCTION is
+   * resolved at the start of each step, for prompts that carry a fact the
+   * session can change while the agent runs (the sandbox policy: see
+   * session-executor/src/assembly.ts). */
+  systemPrompt: string | (() => string)
   maxTurns?: number
   signal?: AbortSignal
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction (requires contextWindow)
@@ -216,7 +220,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       const request: LLMRequest = {
         messages,
         tools: deps.tools.schemas(),
-        systemPrompt: deps.systemPrompt,
+        systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
         // M32 T3: verbatim effort passthrough (absent → the field is never set;
         // the adapter's translateReasoning owns the wire vocabulary).
         ...(deps.reasoningEffort !== undefined ? { reasoningEffort: deps.reasoningEffort } : {}),
