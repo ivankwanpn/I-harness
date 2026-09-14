@@ -254,10 +254,26 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.sandbox !== undefined ? { sandbox: opts.sandbox } : {}),
       session,
-      // M16 final-review (C1) parity: the policy resolves against the
-      // HOST-SEEDED session only — a resumed session's fully restored history
-      // must not silently override the requested mode (see AssemblyOptions.
-      // policySession).
+      // M16 final-review (C1) parity. WHAT PROTECTS THE MODE HERE IS THE
+      // ASSEMBLY'S FLOOR SLICE, not `policySession` — rewritten 2026-09-15
+      // because the previous comment named a mechanism this file does not have.
+      // `assembly.ts` takes `policyFloor = policyBase.events.length` at
+      // construction and the resolver reads `events.slice(policyFloor)`, so
+      // every event present at mount — restored history included — is excluded
+      // from the mode decision.
+      //
+      // `policySession: opts.session` cannot be that protection: `session` above
+      // is `opts.session ?? createSession(...)`, and the resumed events are
+      // pushed INTO `session.events`, so this passes either the SAME object as
+      // the live session or `undefined` (which the assembly falls back from to
+      // that same object). It never selects a different session here.
+      //
+      // Why it matters: a resumed session carries a `sandbox/mode` decision made
+      // in an EARLIER run — possibly an escalation to danger-full-access — and
+      // letting it win would run `--resume X --sandbox read-only` unrestricted.
+      // HAZARD: because `policySession` is a no-op in this file, a later reader
+      // who "simplifies" the floor slice on the belief that this option is
+      // protecting them reintroduces that privilege escalation on resume.
       policySession: opts.session,
       ...(opts.mcp !== undefined ? { mcp: opts.mcp } : {}),
       ...(opts.lsp !== undefined ? { lsp: opts.lsp } : {}),

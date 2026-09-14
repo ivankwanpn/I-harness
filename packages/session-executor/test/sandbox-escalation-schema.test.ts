@@ -44,7 +44,23 @@ function capturingModel(): ModelClient & { requests: LLMRequest[] } {
   }
 }
 
-const WRITE_CAPABLE_AND_SHELL = ["write", "edit", "apply_patch", "bash", "pwsh"] as const
+/**
+ * Every tool that runs the escalation ladder — the five Task 3 declared, plus
+ * the terminal's three (Task B). The name says "declares the escalation
+ * arguments" rather than "write-capable and shell" because the terminal tools
+ * are neither: they are refused under a confined mode and the ladder is their
+ * only way through, which is exactly the class this list must not lose.
+ */
+const ESCALATION_DECLARING_TOOLS = [
+  "write",
+  "edit",
+  "apply_patch",
+  "bash",
+  "pwsh",
+  "terminal_open",
+  "process_spawn",
+  "terminal_send",
+] as const
 
 /** One real turn, then the schemas the model was given on it (keyed by name). */
 async function toolSchemasFor(names: readonly string[]): Promise<Record<string, { inputSchema: unknown }>> {
@@ -68,7 +84,7 @@ async function toolSchemasFor(names: readonly string[]): Promise<Record<string, 
 
 describe("the escalation arguments the marker text advertises", () => {
   it("every write-capable and shell tool declares the escalation arguments", async () => {
-    const names = [...WRITE_CAPABLE_AND_SHELL]
+    const names = [...ESCALATION_DECLARING_TOOLS]
     const schemas = await toolSchemasFor(names)
     for (const name of names) {
       const schema = schemas[name]
@@ -88,8 +104,8 @@ describe("the escalation arguments the marker text advertises", () => {
   })
 
   it("sandbox_permissions offers exactly the escalation targets, as a closed enum", async () => {
-    const schemas = await toolSchemasFor(WRITE_CAPABLE_AND_SHELL)
-    for (const name of WRITE_CAPABLE_AND_SHELL) {
+    const schemas = await toolSchemasFor(ESCALATION_DECLARING_TOOLS)
+    for (const name of ESCALATION_DECLARING_TOOLS) {
       const props = (schemas[name]!.inputSchema as { properties: Record<string, { enum?: string[]; type?: string }> }).properties
       // A free-form string would let a model ask for a mode that does not exist
       // (and `read-only` is not a wider mode — asking for it is meaningless).

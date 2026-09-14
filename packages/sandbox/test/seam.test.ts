@@ -84,11 +84,17 @@ describe("approveEscalation", () => {
 
   it("allowed-once returns the granted mode", async () => {
     const granted = await approveEscalation(
-      { requestedMode: "workspace-write", justification: "need write", effectiveMode: "read-only", subject: "command" },
+      { requestedMode: "workspace-write", justification: "need write", effectiveMode: "read-only", subject: "run npm install" },
       approver("allowed-once"),
     )
     expect(granted).toBe("workspace-write")
     expect(calls[0]!.reason).toContain("escalate sandbox to workspace-write")
+    // The approval prompt must name the OPERATION, not only the mode and the
+    // requester's own justification (Task B ruling, fifth declared item 2). A
+    // human asked to grant a capability has to be told what it is FOR; the
+    // subject used to reach only the rejection message, so this assertion is the
+    // one that distinguishes the two behaviours.
+    expect(calls[0]!.reason).toContain("run npm install")
   })
 
   it("non-widening request throws without prompting", async () => {

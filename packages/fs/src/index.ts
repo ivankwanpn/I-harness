@@ -1,6 +1,6 @@
 import { readFile, writeFile, readdir } from "node:fs/promises"
 import { resolve, relative, isAbsolute } from "node:path"
-import type { Tool } from "@i-harness/core-tools"
+import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { FsToolFailure } from "./error.ts"
 import { createTextDiff, type TextDiff } from "@i-harness/text-diff"
 import { FsToolError, softFail } from "./error.ts"
@@ -8,7 +8,8 @@ import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit } from "./text.ts"
 import { parsePatch, applyPatch, type RewindCapture } from "./patch.ts"
-import { ESCALATION_TARGETS } from "@i-harness/sandbox"
+import type { EscalationApprover, SandboxDenial, SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
+import { ESCALATION_TARGETS, resolveCallPolicy } from "@i-harness/sandbox"
 
 export { FsToolError, softFail, type FsToolErrorCode, type FsToolFailure } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
@@ -43,11 +44,73 @@ export function resolvePath(workspace: string, path: string): string {
  * cannot carry this: it is a pure path function with no policy, and its escape
  * check is skipped for absolute inputs by design, so an absolute path bypassed
  * confinement entirely while the shell sandbox refused the same write.
+ *
+ * STILL SYNCHRONOUS, and `modeOverride` is a MODE rather than a context on
+ * purpose: `applyPatch` calls this once per hunk (patch.ts:186-189), so anything
+ * awaited in here would run once per hunk. The escalation ladder is therefore
+ * awaited ONCE PER CALL in the tool body, and only its resulting mode travels
+ * down; `"allowed-once"` means one call, not one hunk.
  */
-function guardWrite(deps: FsToolDeps, target: string): void {
+function guardWrite(deps: FsToolDeps, target: string, modeOverride?: SandboxMode): void {
   if (deps.writeGuard === undefined) return
-  const decision = deps.writeGuard(target)
+  const decision = deps.writeGuard(target, modeOverride)
   if (!decision.ok) throw new FsToolError("FS_SANDBOX_DENIED", JSON.stringify(decision.denial))
+}
+
+/**
+ * Run the escalation ladder ONCE for this call, at the top of a write tool's
+ * body (spec §3.3; `@i-harness/sandbox`'s `resolveCallPolicy`).
+ *
+ * The APPROVER comes from deps — the assembly builds it once, because it is a
+ * pure function of the plugin context — while the CONTEXT is composed here,
+ * because this is the only layer that holds a `ToolExec` and therefore the only
+ * one that can name the call (`callId`) and route the signal. A context built at
+ * mount time could not tell the human which call they are approving.
+ *
+ * A refusal is RETURNED as a VALUE, never thrown: a throwing tool body fails the
+ * whole turn and appends no `tool/result`, so the model would read a hung call
+ * instead of an answer (`./error.ts:19-31`). And the refusal is returned AS THE
+ * LADDER BUILT IT — it is not re-made here, because the denial's missing
+ * `escalation` sentence is exactly what branches 1/5/6 of the ladder exist to
+ * withhold (spec §3.2 corollary 2).
+ */
+async function resolveWriteCall(
+  deps: FsToolDeps,
+  exec: ToolExec,
+  toolName: string,
+  args: { sandbox_permissions?: string; justification?: string },
+  subject: string,
+): Promise<{ kind: "proceed"; mode: SandboxMode | undefined } | { kind: "refused"; failure: FsToolFailure }> {
+  const escalation = deps.escalationApprover === undefined
+    ? undefined
+    : {
+        approver: deps.escalationApprover,
+        agent: exec,
+        callId: exec.callId ?? "unknown",
+        toolName,
+        ...(exec.abortSignal !== undefined ? { signal: exec.abortSignal } : {}),
+      }
+  const resolution = await resolveCallPolicy({
+    base: deps.sandboxPolicy?.(),
+    surface: "fs",
+    subject,
+    args,
+    ...(escalation !== undefined ? { escalation } : {}),
+  })
+  if (resolution.kind === "refused") {
+    const denial = resolution.denial
+    return { kind: "refused", failure: { error: denialMessage(denial), code: denial.code, denial } }
+  }
+  // `undefined` when the host requested no sandbox at all (branch 3 of the
+  // ladder): there is no mode to hand down, and nothing is confined anyway.
+  return { kind: "proceed", mode: resolution.policy?.mode }
+}
+
+/** The model-facing sentence: the reason, plus the recovery route when the
+ *  refusal has one. A reader that only looks at `error` still learns what to do
+ *  (the structured `denial` rides alongside it for a reader that parses). */
+function denialMessage(denial: SandboxDenial): string {
+  return denial.escalation === undefined ? denial.reason : `${denial.reason} ${denial.escalation}`
 }
 
 export interface FsToolDeps {
@@ -61,25 +124,55 @@ export interface FsToolDeps {
    *  the caller resolves the mode in force and hands down only the verdict.
    *
    *  M62: the refusal is the shared `SandboxDenial` (from @i-harness/sandbox),
-   *  not a bare reason string. What is shared TODAY is the TYPE: `denialFor`'s
-   *  only production caller is the assembly's write guard, which passes "fs", so
-   *  this is the only surface that actually emits this shape. The shell's refusal
-   *  is still `SandboxUnavailableError` from exec's `resolveArgv`, and the
-   *  "shell"/"search"/"terminal" surfaces are declared but unreached — Task 3
-   *  (escalation arguments) does not change that either. The claim made here is
-   *  only that a refusal from THIS surface has a machine-readable shape with room
-   *  for the others, not that a model already meets the same object on both.
-   *  `guardWrite` serializes it into the failure message, which is the surface the
-   *  model actually reads.
+   *  not a bare reason string. Rewritten 2026-09-15 (Task B): the previous
+   *  version claimed `denialFor`'s only production caller was this guard, that
+   *  the shell "still refuses the old way", and that the other surfaces were
+   *  "declared but unreached". Every clause had become false. Two questions are
+   *  easy to conflate here, so keep them apart:
+   *
+   *  1. WHO CALLS `denialFor` — the assembly's write guard (surface "fs") and
+   *     `packages/terminal/src/tool.ts` (surface "terminal", which names
+   *     `danger-full-access` explicitly because a PTY is refused in EVERY
+   *     confined mode).
+   *  2. WHO EMITS THIS SHAPE — those two, PLUS the shell, which builds a
+   *     `SandboxDenial` literal by hand (`packages/shell/src/index.ts`) because
+   *     there the problem is that no backend is usable at all rather than that
+   *     the mode is narrow, so escalation guidance would be a dead end.
+   *     `"search"` is the one surface still unwired, deliberately (spec §3.4).
+   *
+   *  The claim made HERE is narrower than either: a refusal from THIS surface has
+   *  the machine-readable shape. `guardWrite` serializes it into the failure
+   *  message (`FS_SANDBOX_DENIED`, kept byte-identical for existing readers),
+   *  and the ladder's refusal is returned as a typed `FsToolFailure.denial`
+   *  alongside it.
    *
    *  Only writes are gated. Reads are unrestricted on every backend — bwrap binds
    *  the whole root read-only, the Windows backend documents reads as
    *  unrestricted — so refusing a read here would be stricter than the shell
    *  sandbox while `cat` still reached the file: a false claim of isolation
    *  rather than the real absence of it. */
-  writeGuard?: (absPath: string) =>
+  writeGuard?: (absPath: string, modeOverride?: SandboxMode) =>
     | { ok: true }
     | { ok: false; denial: import("@i-harness/sandbox").SandboxDenial }
+  /**
+   * M62: the session's sandbox policy, read PER CALL — the SAME thunk the shell
+   * and the terminal receive, so the mode the ladder escalates FROM is the mode
+   * `writeGuard` later judges under. A second resolver here could escalate from
+   * one mode while the operation was judged under another.
+   *
+   * Absent (or `undefined` from the thunk) means the host requested no sandbox:
+   * the ladder then has no mode to escalate from and the call proceeds as it
+   * always did (spec §3.3 point 5).
+   */
+  sandboxPolicy?: () => SandboxExecutionPolicy | undefined
+  /**
+   * M62: the approval-service ADAPTER, not a prebuilt context — the assembly
+   * builds it once (a pure function of the plugin context), and each tool body
+   * composes the per-call `EscalationContext` from its own `ToolExec`. Absent
+   * means no approval channel: an escalation request is then REFUSED (fail
+   * closed), never silently allowed.
+   */
+  escalationApprover?: EscalationApprover<unknown, string>
   /** M42 rewind (G1): optional pre-image sink at the write points — absent ⇒
    * byte-identical behavior (zero cost). Present ⇒ every write tool captures
    * the BEFORE content it is about to overwrite (write does ONE extra read —
@@ -151,16 +244,21 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isConcurrencySafe: true,
     execute: async ({ path }) => softFail(async () => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") })),
   }
-  const write: Tool<{ path: string; text: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } | FsToolFailure> = {
+  const write: Tool<{ path: string; text: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } | FsToolFailure> = {
     name: "write",
     description: "write a file",
     inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["path", "text"] },
     isReadOnly: false,
-    execute: async ({ path, text }) => softFail(async () => {
+    execute: async ({ path, text, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
+      // M62: the ladder runs ONCE here, before any guard invocation — never
+      // inside `guardWrite`, which apply_patch calls per hunk. The resolved
+      // target names the operation in the approval prompt.
+      const target = resolvePath(deps.workspace, path)
+      const ladder = await resolveWriteCall(deps, exec, "write", { sandbox_permissions, justification }, `write to ${target}`)
+      if (ladder.kind === "refused") return ladder.failure
+      guardWrite(deps, target, ladder.mode)
       // M42 rewind: writeFileAtomic OVERWRITES without reading — when rewind
       // is wired, do one extra read (ENOENT ⇒ new file); otherwise zero cost.
-      const target = resolvePath(deps.workspace, path)
-      guardWrite(deps, target)
       const captured = deps.rewind !== undefined
         ? await capturePreimage(deps.rewind, deps.workspace, target)
         : {}
@@ -185,7 +283,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isConcurrencySafe: true,
     execute: async ({ path }) => softFail(async () => ({ entries: await readdir(resolvePath(deps.workspace, path)) })),
   }
-  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean } | FsToolFailure> = {
+  const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number; sandbox_permissions?: string; justification?: string }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean } | FsToolFailure> = {
     name: "edit",
     description: "edit a file by literal string replacement (single occurrence unless replace_all)",
     inputSchema: {
@@ -202,9 +300,11 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       required: ["path", "old_string", "new_string"],
     },
     isReadOnly: false,
-    execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs }) => softFail(async () => {
+    execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
       const target = resolvePath(deps.workspace, path)
-      guardWrite(deps, target)
+      const ladder = await resolveWriteCall(deps, exec, "edit", { sandbox_permissions, justification }, `write to ${target}`)
+      if (ladder.kind === "refused") return ladder.failure
+      guardWrite(deps, target, ladder.mode)
       if (old_string === "") throw new FsToolError("FS_AMBIGUOUS_EDIT", "ambiguous: old_string must not be empty")
       const { stat, readFile } = await import("node:fs/promises")
       let st
@@ -259,17 +359,29 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       }
     }),
   }
-  const apply_patch: Tool<{ patch_content: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } | FsToolFailure> = {
+  const apply_patch: Tool<{ patch_content: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } | FsToolFailure> = {
     name: "apply_patch",
     description: "apply a multi-file structured patch (*** Begin/End Patch + Add/Delete/Update + @@ context)",
     inputSchema: { type: "object", properties: { patch_content: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["patch_content"] },
     isReadOnly: false,
-    execute: async ({ patch_content }) => softFail(async () => {
+    execute: async ({ patch_content, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
       // CRLF 正規化：patch 內容若帶 \r，parsePatch 會把 \r 當行內容 → replace 誤報
       // FS_EDIT_NOT_FOUND、純 add 寫入字面 \r。先統一成 LF 再解析。
       const hunks = parsePatch(normalizeLineEndings(patch_content))
+      // M62: the ladder runs ONCE for this call, before the first hunk is
+      // guarded. Awaiting it inside the guard would ask the human once per hunk
+      // — a five-hunk patch would raise five prompts for one tool call, and each
+      // grant is `"allowed-once"`: one CALL, not one hunk. The subject names the
+      // operation when the patch has one path, and the number of files when it
+      // does not (a multi-file patch has no single path for Layer-2-style
+      // classification; naming the count is honest, naming one file would not be).
+      const subject = hunks.length === 1 && hunks[0] !== undefined
+        ? `write to ${hunks[0].path}`
+        : `apply a patch touching ${hunks.length} files`
+      const ladder = await resolveWriteCall(deps, exec, "apply_patch", { sandbox_permissions, justification }, subject)
+      if (ladder.kind === "refused") return ladder.failure
       // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入；rewind sink 透傳
-      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, deps.rewind, (target) => guardWrite(deps, target))
+      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, deps.rewind, (target) => guardWrite(deps, target, ladder.mode))
       // M49: aggregate per-file changes when the parser exposed before/after
       // (update hunks); anything else keeps the original patch text as rawPatch.
       const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } = {

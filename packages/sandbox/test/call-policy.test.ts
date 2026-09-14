@@ -208,12 +208,12 @@ describe("resolveCallPolicy", () => {
       expect(prompts).toHaveLength(1) // the question WAS asked; the answer refused
       expect(denial.mode).toBe("read-only")
       expect(denial.reason).toMatch(/workspace-write/)
-      // The SUBJECT reaches the model HERE, and only here. `approveEscalation`
-      // builds the approver's reason from the mode + justification
-      // (escalation.ts:74); `subject` appears in the rejection message alone
-      // (:79). So the host's approval prompt is NOT told which write it is
-      // approving -- the brief's "subject ... goes into the approval reason" is
-      // false about which string it lands in.
+      // The SUBJECT reaches the model HERE, through the rejection message.
+      // `approveEscalation` names the operation in BOTH places now: the approval
+      // prompt's reason (escalation.ts:74, asserted in branch 7) and this
+      // rejection message (escalation.ts:79). The two locations stay
+      // distinguishable on purpose -- one is what the human was asked, the other
+      // is what the model is told when the answer was no.
       if (outcome === "rejected") expect(denial.reason).toContain(SUBJECT)
       expect(denial.escalation).toBeUndefined()
     }
@@ -283,6 +283,10 @@ describe("resolveCallPolicy", () => {
     expect(prompts[0]!.toolName).toBe("write")
     expect(prompts[0]!.reason).toContain("escalate sandbox to workspace-write")
     expect(prompts[0]!.reason).toContain("the file is generated outside the workspace")
+    // The subject must reach the APPROVAL PROMPT too, not only the rejection
+    // message: whoever is asked has to be told what the capability is for
+    // (Task B ruling, fifth declared item 2).
+    expect(prompts[0]!.reason).toContain(SUBJECT)
   })
 
   it("branch 7 end-to-end: only the host answerer's `true` widens the call", async () => {

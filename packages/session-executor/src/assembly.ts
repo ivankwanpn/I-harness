@@ -60,7 +60,7 @@ import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { checkWrite, createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
 import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
-import { denialFor } from "@i-harness/sandbox"
+import { createApprovalEscalationApprover, denialFor, type ApprovalPrompt } from "@i-harness/sandbox"
 import { DEFAULT_AGENT_PRESET, parsePreset } from "@i-harness/preset"
 
 export type ModelPolicy = "required" | "test-mock"
@@ -307,8 +307,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       : createLocalSandbox({ ...(winSandbox !== undefined ? { windowsAclBackend: winSandbox } : {}) })
   // M16 final-review (C1) → M62: the SERVICE is built once, but the policy is
   // resolved PER CALL instead of once here. `resolve` re-reads the session's LAST
-  // `sandbox/mode` event, so a mid-session mode change (which the escalation
-  // ladder is) takes effect on the next call without rebuilding the assembly.
+  // `sandbox/mode` event, so a mode change a HOST appends mid-session takes
+  // effect on the next call without rebuilding the assembly. (The escalation
+  // ladder is a DIFFERENT path and produces no such event: a grant is per-call
+  // and transient and the standing mode never moves — spec §3.3 point 1.)
   // NO ENFORCEMENT SITE caches a resolution: the fs write guard, the shell's
   // per-call argv confinement, and the system prompt all read through THIS one
   // resolver. (Task 2 converted the shell; it used to take a mount-time snapshot
@@ -343,23 +345,46 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // "mirrored runHeadless"; there is no second sequence to mirror —
   // `registerTerminal` has exactly one non-test caller, and `runHeadless` mounts
   // nothing itself.)
+  // M62: the escalation ladder's approval ADAPTER, built ONCE here — and only
+  // the adapter. It is a pure function of `ctx`, so it can be built at mount
+  // time; the per-call `EscalationContext` (which needs the call's `ToolExec`)
+  // cannot, and is composed inside each tool body.
+  //
+  // The lambda is the plain lookup on purpose: the throwing-getter `catch` lives
+  // INSIDE `createApprovalEscalationApprover` and is tested there. A second
+  // `try/catch` here would be a second place for the fail-closed rule (an
+  // unregistered service must never become a silent allow) to drift.
+  //
+  // The getter is read LAZILY on every request, so a host that registers its
+  // answerer after mounting — or not at all — is handled correctly: absent means
+  // `"unavailable"`, which the ladder turns into a refusal.
+  const escalationApprover = createApprovalEscalationApprover(
+    () => ctx.services.get<ApprovalPrompt>("approval/answerer"),
+  )
   const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
     cwd: opts.workspace,
     ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
+    escalationApprover,
   })
   // M62: the shell gets the RESOLVER, not a value. It used to receive
-  // `sandboxPolicyNow()` evaluated here — a mount-time snapshot — so a
-  // mid-session mode change (which the escalation ladder is) reached the fs
-  // guard but not the shell, and the two surfaces disagreed about the mode in
-  // force. Every call site now invokes this thunk, so `bash`/`pwsh` confine
-  // against the policy of THAT call, exactly like the fs write guard — and the
-  // terminal above refuses capability-creating calls on the same per-call read.
+  // `sandboxPolicyNow()` evaluated here — a mount-time snapshot — so a mode
+  // change a HOST appended to the session mid-run reached the fs guard but not
+  // the shell, and the two surfaces disagreed about the mode in force. Every
+  // call site now invokes this thunk, so `bash`/`pwsh` confine against the policy
+  // of THAT call, exactly like the fs write guard — and the terminal above
+  // refuses capability-creating calls on the same per-call read.
+  //
+  // The escalation ladder is NOT such a change and never was: a grant is
+  // per-call and transient, appends no `sandbox/mode` event, and never moves the
+  // standing mode (spec §3.3 point 1). It reaches a tool through its own
+  // arguments and the approver below, not through this resolver.
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
     cwd: opts.workspace,
     ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
     ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
+    escalationApprover,
   })
   // M26-B3: web surface (webfetch + websearch) — no provider → fail closed.
   registerWeb(ctx, tools)
@@ -426,16 +451,28 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // invalidation rule to get wrong, until a measurement says otherwise.)
   // M62: the refusal is converted HERE, at the one place that knows the policy,
   // into the shared `SandboxDenial` — `checkWrite` stays a pure path decision.
+  //
+  // `modeOverride` is the escalation grant: the tool body resolves the ladder
+  // ONCE per call and hands the granted mode down, so the check judges the
+  // operation under the mode the user approved. Two consequences the body of
+  // this closure keeps in one place:
+  //  - the denial names the mode the CHECK USED (`effective.mode`), never the
+  //    session's. A model told "refused under read-only" right after obtaining
+  //    `workspace-write` retries forever against a mode it is no longer in, and
+  //    the escalation hint derived from that mode would name the wrong next step;
+  //  - the base policy is the SAME thunk the tools receive (`sandboxPolicyNow`),
+  //    so the mode the ladder escalates FROM is the mode this guard checks.
   const writeGuard =
     sandboxPolicyService === undefined
       ? undefined
-      : (abs: string) => {
+      : (abs: string, modeOverride?: SandboxMode) => {
           const policy = sandboxPolicyNow()
           if (policy === undefined) return { ok: true as const }
-          const decision = checkWrite(policy, abs)
+          const effective = modeOverride === undefined ? policy : { ...policy, mode: modeOverride }
+          const decision = checkWrite(effective, abs)
           return decision.ok
             ? { ok: true as const }
-            : { ok: false as const, denial: denialFor("fs", policy.mode, decision.reason) }
+            : { ok: false as const, denial: denialFor("fs", effective.mode, decision.reason) }
         }
   const fsToolsDeps = {
     workspace: opts.workspace,
@@ -443,6 +480,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ? { rewind: { take: (path: string, before: Uint8Array | null) => rewindRecorder.take(path, before) } }
       : {}),
     ...(writeGuard !== undefined ? { writeGuard } : {}),
+    // The ladder's base read — the SAME thunk the guard closes over, so the
+    // mode a request escalates FROM is the mode the granted operation is judged
+    // under. A second resolver here could evaluate `approveEscalation`'s
+    // strictly-wider test against one mode and the operation against another.
+    ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
+    escalationApprover,
   }
   for (const tool of createFsTools(fsToolsDeps)) tools.register(tool)
   createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
