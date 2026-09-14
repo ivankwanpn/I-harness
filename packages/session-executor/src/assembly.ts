@@ -270,6 +270,17 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const ctx: PluginContext = createContext()
   const tools = createToolRegistry(ctx)
 
+  // ── session: live source of truth + coordinator mirror (write-behind) ──────
+  // Created BEFORE the execution environment on purpose: the sandbox policy is
+  // resolved PER CALL against this session's `sandbox/mode` events (below), and
+  // the shell registration already needs one resolution at mount time — so the
+  // session has to exist first. Nothing here depends on the mounts.
+  const session = opts.session ?? createSession((ev) => {
+    if (opts.coordinator === undefined || opts.sessionId === undefined) return
+    opts.coordinator.enqueue(opts.sessionId, [ev])
+    if (ev.type === "turn/end") void opts.coordinator.flush(opts.sessionId).catch(() => {})
+  })
+
   // ── execution environment + policy ─────────────────────────────────────────
   // Same sequence as runHeadless: terminal first (registerTerminal may be
   // reclaimed via the handle in dispose), then shell+plaintext, web, fs.
@@ -291,22 +302,30 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     opts.sandbox === undefined || opts.sandbox === "danger-full-access"
       ? undefined
       : createLocalSandbox({ ...(winSandbox !== undefined ? { windowsAclBackend: winSandbox } : {}) })
-  // M16 final-review (C1): resolve the effective policy ONCE and pass the SAME
-  // resolved value to the enforce step and the prompt renderer — the prompt
-  // and the enforcement can never drift. A host-seeded session event actually
-  // applies; an empty internal session resolves to the requested mode.
-  const sandboxPolicy =
-    opts.sandbox === undefined
-      ? undefined
-      : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace }).resolve({
-          session: opts.policySession,
-        })
+  // M16 final-review (C1) → M62: the SERVICE is built once, but the policy is
+  // resolved PER CALL instead of once here. `resolve` re-reads the session's LAST
+  // `sandbox/mode` event, so a mid-session mode change (which the escalation
+  // ladder is) takes effect on the next call without rebuilding the assembly.
+  // C1's "prompt and enforcement can never drift" rule still holds: the prompt
+  // and every enforcement site read through THIS one resolver.
+  //
+  // The session read is the LIVE one. `policySession` (the documented host-seeded
+  // override) wins when supplied — run.ts passes the same object for both — while
+  // hosts that pass only `session` (the web service) would otherwise resolve
+  // against nothing forever, leaving every mid-session change invisible.
+  const sandboxPolicyService =
+    opts.sandbox === undefined ? undefined : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace })
+  const sandboxPolicyNow = () => sandboxPolicyService?.resolve({ session: opts.policySession ?? session })
+  // The shell still receives a RESOLVED value (Task 2 owns converting its option
+  // to a resolver thunk), so this is a mount-time snapshot by construction — named
+  // so it cannot be mistaken for the live policy the fs guard reads per call.
+  const sandboxPolicyAtMount = sandboxPolicyNow()
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
     cwd: opts.workspace,
     ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
-    ...(sandboxPolicy !== undefined ? { sandboxPolicy } : {}),
+    ...(sandboxPolicyAtMount !== undefined ? { sandboxPolicy: sandboxPolicyAtMount } : {}),
   })
   // M26-B3: web surface (webfetch + websearch) — no provider → fail closed.
   registerWeb(ctx, tools)
@@ -365,7 +384,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // policy is now passed down as a write predicate; `checkWrite` mirrors what the
   // OS backends actually enforce (workspace + temp writable, reads untouched) so
   // fs and shell agree rather than one being stricter than the other.
-  const writeGuard = sandboxPolicy === undefined ? undefined : (abs: string) => checkWrite(sandboxPolicy, abs)
+  // M16 → M62: resolve at each call rather than closing over one value. The
+  // service was built once; `sandboxPolicyNow()` re-reads the session's last
+  // `sandbox/mode` event, so a mode change mid-session reaches the fs tools on
+  // their NEXT call. (The read is a reverse scan for that event — measured at
+  // ~0.08 ms over a 20k-event session; no cache, and no invalidation rule to
+  // get wrong, until a measurement says otherwise.)
+  const writeGuard =
+    sandboxPolicyService === undefined
+      ? undefined
+      : (abs: string) => {
+          const policy = sandboxPolicyNow()
+          return policy === undefined ? { ok: true as const } : checkWrite(policy, abs)
+        }
   const fsToolsDeps = {
     workspace: opts.workspace,
     ...(rewindRecorder !== undefined
@@ -405,12 +436,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
   }
 
-  // ── session: live source of truth + coordinator mirror (write-behind) ──────
-  const session = opts.session ?? createSession((ev) => {
-    if (opts.coordinator === undefined || opts.sessionId === undefined) return
-    opts.coordinator.enqueue(opts.sessionId, [ev])
-    if (ev.type === "turn/end") void opts.coordinator.flush(opts.sessionId).catch(() => {})
-  })
+  // ── session: coordinator mirror (write-behind) ─────────────────────────────
+  // `session` itself is created at the top of the function — the sandbox policy
+  // resolves against its events per call, so it has to exist before the mounts.
   const inbox = new Inbox(session)
   // M42 G1: recorder subscription — the turn's anchor is its first
   // user/message (begin, first-wins — a mid-turn spliced message must not
@@ -613,8 +641,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ? parsePreset(opts.preset).systemPrompt
       : DEFAULT_AGENT_PRESET.systemPrompt
     if (opts.planMode) systemPrompt = `${systemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`
-    if (sandboxPolicy) {
-      systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicy)}`
+    if (sandboxPolicyAtMount) {
+      // The system prompt is composed ONCE, so this is the mount-time policy —
+      // the same resolver the fs guard uses per call, read at the same moment as
+      // the shell registration, so prompt and enforcement cannot disagree.
+      systemPrompt = `${systemPrompt}\n\n${renderPolicyContext(sandboxPolicyAtMount)}`
     }
 
     // M33 §3.2: when the window is resolved and the host did not supply an
