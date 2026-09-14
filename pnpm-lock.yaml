@@ -386,6 +386,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
       '@i-harness/text-diff':
         specifier: workspace:*
         version: link:../text-diff
