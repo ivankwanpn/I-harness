@@ -208,6 +208,10 @@ IH 今天已有的審批縫是 `packages/interaction/src/index.ts` 的 `approval
 - **`fs-search`：不改。rg 沒有寫入面，包 runner 只會讓兩個可用的唯讀工具開始失敗。**
 
   §7 原本記「rg 的寫入面（`--replace`？）我沒有查證」。**已查證**：ripgrep 15.0.0（`@vscode/ripgrep` 1.18.0 隨附）的完整旗標清單裡**沒有任何寫檔旗標**——`--replace` 是**在輸出裡**代換，`--files` 是列出檔案，沒有 `--output`。IH 的兩個呼叫點（`fs-search/src/index.ts:87`、`:134`）也只傳 `--files`／`--json`／`--regexp`。
+>
+>   **2026-09-15 補上行為證據（同一顆二進位，控制器實跑）**，因為「旗標清單裡沒有」是對清單的宣稱，而下面是對行為的：對一個真實檔案跑 `--replace BYE`，**stdout 是代換後的內容、磁碟上的檔案逐字不變**；`--output` 回 `rg: unrecognized flag --output`；該二進位列出的 145 個旗標裡，唯一匹配 `write|output|out` 的是 `--files-without-match`（比對過濾，不是寫入）。
+>
+>   **順帶記下一個差點誤導我自己的事實**：**PATH 上的 `rg` 是 14.1.0（Chocolatey），與 `fs-search` 實際使用的那一顆不是同一個**（後者由 `@vscode/ripgrep` 的 `rgPath` 解析，見 `fs-search/src/index.ts:14-18`；版本按鈕在 `node_modules/.pnpm/@vscode+ripgrep-win32-x64@1.18.0/…/bin/rg.exe`）。所以這條查證**必須指名二進位**，「ripgrep 的旗標」這種寫法會讓下一個人量到另一顆程式並得出相反結論。
 
   所以包 runner 能圍堵的東西**是空的**：讀取本來就不受限（§3.5），而 rg 寫不了檔。代價卻是真的——`glob`／`grep` 會在 runner 起不來的宿主上丟 `SandboxUnavailableError`，把兩個今天能用的唯讀工具變成失敗，換不到任何security。**當 §3.5 有了具體的政策輸入時再回來做**：那時「rg 走同一條 runner」正是讀取隔離的實作方式。
 
