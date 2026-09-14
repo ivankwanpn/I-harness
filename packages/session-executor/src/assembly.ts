@@ -60,6 +60,7 @@ import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { checkWrite, createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
 import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
+import { denialFor } from "@i-harness/sandbox"
 import { DEFAULT_AGENT_PRESET, parsePreset } from "@i-harness/preset"
 
 export type ModelPolicy = "required" | "test-mock"
@@ -311,10 +312,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // resolved PER CALL instead of once here. `resolve` re-reads the session's LAST
   // `sandbox/mode` event, so a mid-session mode change (which the escalation
   // ladder is) takes effect on the next call without rebuilding the assembly.
-  // NO ENFORCEMENT SITE caches a resolution: the fs write guard and the system
-  // prompt both read through THIS one resolver. The shell still takes a
-  // mount-time snapshot (Task 2 owns converting it), which the name below says
-  // out loud rather than hiding.
+  // NO ENFORCEMENT SITE caches a resolution: the fs write guard, the shell's
+  // per-call argv confinement, and the system prompt all read through THIS one
+  // resolver. (Task 2 converted the shell; it used to take a mount-time snapshot
+  // here, which is what let it and the fs guard disagree about the mode.)
   //
   // The session read is the LIVE one. `policySession` (the documented host-seeded
   // override) wins when supplied — run.ts passes the same object for both — while
@@ -337,16 +338,18 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const policyFloor = policyBase.events.length
   const sandboxPolicyNow = () =>
     sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) } })
-  // The shell still receives a RESOLVED value (Task 2 owns converting its option
-  // to a resolver thunk), so this is a mount-time snapshot by construction — named
-  // so it cannot be mistaken for the live policy the fs guard reads per call.
-  const sandboxPolicyAtMount = sandboxPolicyNow()
+  // M62: the shell gets the RESOLVER, not a value. It used to receive
+  // `sandboxPolicyNow()` evaluated here — a mount-time snapshot — so a
+  // mid-session mode change (which the escalation ladder is) reached the fs
+  // guard but not the shell, and the two surfaces disagreed about the mode in
+  // force. Every call site now invokes this thunk, so `bash`/`pwsh` confine
+  // against the policy of THAT call, exactly like the fs write guard.
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
     cwd: opts.workspace,
     ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
-    ...(sandboxPolicyAtMount !== undefined ? { sandboxPolicy: sandboxPolicyAtMount } : {}),
+    ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
   })
   // M26-B3: web surface (webfetch + websearch) — no provider → fail closed.
   registerWeb(ctx, tools)
@@ -411,12 +414,18 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // their NEXT call. (The read is a reverse scan for that event — measured at
   // 0.056-0.125 ms over a 20k-event session across nine samples; no cache, and no
   // invalidation rule to get wrong, until a measurement says otherwise.)
+  // M62: the refusal is converted HERE, at the one place that knows the policy,
+  // into the shared `SandboxDenial` — `checkWrite` stays a pure path decision.
   const writeGuard =
     sandboxPolicyService === undefined
       ? undefined
       : (abs: string) => {
           const policy = sandboxPolicyNow()
-          return policy === undefined ? { ok: true as const } : checkWrite(policy, abs)
+          if (policy === undefined) return { ok: true as const }
+          const decision = checkWrite(policy, abs)
+          return decision.ok
+            ? { ok: true as const }
+            : { ok: false as const, denial: denialFor("fs", policy.mode, decision.reason) }
         }
   const fsToolsDeps = {
     workspace: opts.workspace,

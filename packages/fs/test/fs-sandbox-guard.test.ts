@@ -2,6 +2,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, existsSync } from "node:f
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import type { SandboxDenial } from "@i-harness/sandbox"
 import { createFsTools } from "../src/index.ts"
 
 /**
@@ -33,8 +34,25 @@ afterEach(() => {
 })
 
 /** Deny anything outside the workspace, exactly as checkWrite does. */
-const guard = (abs: string) =>
-  abs.startsWith(workspace) ? ({ ok: true } as const) : ({ ok: false, reason: `denied: ${abs}` } as const)
+const guard = (abs: string): { ok: true } | { ok: false; denial: SandboxDenial } =>
+  abs.startsWith(workspace)
+    ? ({ ok: true } as const)
+    : ({
+        ok: false,
+        denial: { code: "SANDBOX_DENIED", surface: "fs", mode: "read-only", reason: `denied: ${abs}` },
+      } as const)
+
+/**
+ * The guard's refusal reaches the model as `FsToolFailure.error`, so that string
+ * must CARRY the shared denial rather than merely mentioning a denial happened.
+ * Parsing it back is the assertion that matters: a substring check for "denied"
+ * would still pass on the `code` alone with the reason dropped — i.e. it would
+ * pass on exactly the regression (losing the why) this shape exists to prevent.
+ */
+const denialOf = (result: unknown): SandboxDenial => {
+  const message = (result as { error: string }).error
+  return JSON.parse(message.slice(message.indexOf("{"))) as SandboxDenial
+}
 
 const toolNamed = (name: string, deps: Parameters<typeof createFsTools>[0]) => {
   const tool = createFsTools(deps).find((t) => t.name === name)
@@ -51,7 +69,12 @@ describe("fs write confinement", () => {
     const target = join(outside, "escaped.txt")
     const result = await run("write", { workspace, writeGuard: guard }, { path: target, text: "x" })
     expect(result).toMatchObject({ code: "FS_SANDBOX_DENIED" })
-    expect((result as { error: string }).error).toContain("denied")
+    expect(denialOf(result)).toEqual({
+      code: "SANDBOX_DENIED",
+      surface: "fs",
+      mode: "read-only",
+      reason: `denied: ${target}`,
+    })
     expect(existsSync(target)).toBe(false)
   })
 
@@ -79,7 +102,7 @@ describe("fs write confinement", () => {
       new_string: "after",
     })
     expect(result).toMatchObject({ code: "FS_SANDBOX_DENIED" })
-    expect((result as { error: string }).error).toContain("denied")
+    expect(denialOf(result).reason).toBe(`denied: ${target}`)
     expect(readFileSync(target, "utf8")).toBe("before")
   })
 
@@ -93,7 +116,16 @@ describe("fs write confinement", () => {
       patch_content: patch,
     })) as { errors?: { path: string; message: string }[] }
     expect(result.errors?.length).toBeGreaterThan(0)
-    expect(result.errors?.some((e) => e.message.includes("denied"))).toBe(true)
+    // Same parse-back rule as the write/edit cases: on this path the denial
+    // arrives as a per-hunk `message` instead of a top-level failure, so the
+    // substring "denied" is not enough — parse it and check the reason survived.
+    // The guard is handed the RESOLVED path (patch.ts resolves the hunk path
+    // before calling it), hence the native separator here.
+    const message = result.errors![0]!.message
+    const denial = JSON.parse(message.slice(message.indexOf("{"))) as SandboxDenial
+    expect(denial.code).toBe("SANDBOX_DENIED")
+    expect(denial.surface).toBe("fs")
+    expect(denial.reason).toBe(`denied: ${join(outside, "patched.txt")}`)
     expect(existsSync(join(outside, "patched.txt"))).toBe(false)
   })
 

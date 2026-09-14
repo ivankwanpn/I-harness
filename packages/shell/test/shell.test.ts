@@ -288,6 +288,11 @@ describe("createShellTools", () => {
   // forwards the sandboxPolicy into exec.run / exec.runBackground for BOTH
   // tools (and that the field is absent when no policy is configured).
   it("sandboxPolicy: bash/pwsh attach policy to run + runBackground; absent → no sandbox field", async () => {
+    // M62: the option is a RESOLVER, not a value — this test used to pass the
+    // policy object directly. What it pins is unchanged (the policy reaches
+    // exec.run and exec.runBackground for BOTH tools, and the field is absent
+    // when none is configured); per-call resolution is covered by
+    // test/sandbox-per-call.test.ts.
     const policy: SandboxExecutionPolicy = { mode: "read-only", workspaceRoot: "/" }
     const foreground: ExecCommand[] = []
     const background: ExecCommand[] = []
@@ -304,7 +309,7 @@ describe("createShellTools", () => {
       killJob: () => "already-finished",
       listJobs: () => [],
     }
-    const [bash, pwsh] = createShellTools({ exec: recordingExec, sandboxPolicy: policy })
+    const [bash, pwsh] = createShellTools({ exec: recordingExec, sandboxPolicy: () => policy })
     await bash.execute({ command: "echo hi" }, {})
     await pwsh.execute({ command: "Get-Date" }, {})
     await bash.execute({ command: "echo bg", background: true }, {})
@@ -327,6 +332,10 @@ describe("createShellTools", () => {
     const [plainBash] = createShellTools({ exec: noPolicyExec })
     await plainBash.execute({ command: "echo hi" }, {})
     expect(plainForeground[0]!.sandbox).toBeUndefined()
+    // `undefined` must mean the field is ABSENT, not present-and-undefined: exec
+    // reads `cmd.sandbox !== undefined`, but an explicit undefined key would
+    // silently change the contract for any consumer that uses `in`.
+    expect("sandbox" in plainForeground[0]!).toBe(false)
   })
 })
 

@@ -46,7 +46,7 @@ export function resolvePath(workspace: string, path: string): string {
 function guardWrite(deps: FsToolDeps, target: string): void {
   if (deps.writeGuard === undefined) return
   const decision = deps.writeGuard(target)
-  if (!decision.ok) throw new FsToolError("FS_SANDBOX_DENIED", decision.reason)
+  if (!decision.ok) throw new FsToolError("FS_SANDBOX_DENIED", JSON.stringify(decision.denial))
 }
 
 export interface FsToolDeps {
@@ -55,15 +55,23 @@ export interface FsToolDeps {
    *  policy; absent means unconfined, which is the pre-M16 behavior a host that
    *  never requested a sandbox gets.
    *
-   *  It is a predicate rather than the policy object so this package keeps its
-   *  dependency set (core-tools + text-diff) and stays unaware of the sandbox.
+   *  It is a predicate rather than the policy object so this package stays
+   *  unaware of the sandbox RESOLVER (no policy, no session, no mode table):
+   *  the caller resolves the mode in force and hands down only the verdict.
+   *
+   *  M62: the refusal is the shared `SandboxDenial` (from @i-harness/sandbox),
+   *  not a bare reason string — the shell reports the same shape, so a model
+   *  applies ONE rule to a refusal from either surface. `guardWrite` serializes
+   *  it into the failure message, which is the surface the model actually reads.
    *
    *  Only writes are gated. Reads are unrestricted on every backend — bwrap binds
    *  the whole root read-only, the Windows backend documents reads as
    *  unrestricted — so refusing a read here would be stricter than the shell
    *  sandbox while `cat` still reached the file: a false claim of isolation
    *  rather than the real absence of it. */
-  writeGuard?: (absPath: string) => { ok: true } | { ok: false; reason: string }
+  writeGuard?: (absPath: string) =>
+    | { ok: true }
+    | { ok: false; denial: import("@i-harness/sandbox").SandboxDenial }
   /** M42 rewind (G1): optional pre-image sink at the write points — absent ⇒
    * byte-identical behavior (zero cost). Present ⇒ every write tool captures
    * the BEFORE content it is about to overwrite (write does ONE extra read —

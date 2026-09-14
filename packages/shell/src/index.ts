@@ -144,7 +144,13 @@ export interface ShellToolDeps {
   // M16 final-review (C1): when set, every bash/pwsh execution carries this
   // policy so exec confines at spawn. Absent → no sandbox field (passthrough,
   // pre-M16 behavior).
-  sandboxPolicy?: import("@i-harness/sandbox").SandboxExecutionPolicy
+  // M62: a RESOLVER, not a value. It used to be the resolved policy, captured
+  // once when the assembly mounted the tools, so a mid-session mode change
+  // reached the fs guard but not the shell — the two surfaces then disagreed
+  // about the mode in force. Every execute calls it, so the argv is confined
+  // against the policy of THAT call. Returning `undefined` still means
+  // "no policy ⇒ no sandbox field" (a host that requested no sandbox).
+  sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
@@ -236,11 +242,14 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         }
       }
       const argv = ["bash", "-c", args.command]
+      // Per CALL, never cached: the assembly's resolver re-reads the session's
+      // last `sandbox/mode` event, so an escalation mid-session applies here.
+      const sandboxResolved = deps.sandboxPolicy?.()
       if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
       return retainedRunResult(result, "bash-stdout")
     },
   }
@@ -256,11 +265,13 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     getArgv: (args: { command: string }) => getArgv(args.command),
     execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
       const argv = [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
+      // Per CALL — see the bash tool above.
+      const sandboxResolved = deps.sandboxPolicy?.()
       if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
         return { job_id: jobId }
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
+      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
       return retainedRunResult(result, "pwsh-stdout")
     },
   }
@@ -274,7 +285,9 @@ export function registerShell(
     timeoutMs?: number
     retention?: ShellRetentionOptions
     sandbox?: import("@i-harness/sandbox").SandboxProvider
-    sandboxPolicy?: import("@i-harness/sandbox").SandboxExecutionPolicy
+    // M62: a resolver thunk passed straight through to the tools — see
+    // ShellToolDeps.sandboxPolicy. The assembly hands over its per-call read.
+    sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
     /** D1 (m55): assembly workspace — the default cwd for bash/pwsh. */
     cwd?: string
   },

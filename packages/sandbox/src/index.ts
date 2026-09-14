@@ -86,3 +86,6 @@ export type {
   EscalationOutcome,
   EscalationRequest,
 } from "./escalation.ts"
+// M62: the ONE refusal shape for every confined surface (spec §3.2). Consumers
+// that must stay unaware of the policy resolver (fs, shell) import this.
+export { denialFor, type SandboxDenial, type SandboxSurface } from "./denial.ts"
