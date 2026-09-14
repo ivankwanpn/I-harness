@@ -128,8 +128,31 @@ shell 與 fs 的拒絕要走同一個可分類的形狀，讓模型能用同一�
 
 ### 3.4 把 `terminal` 與 `fs-search` 納入圍堵
 
-- **`terminal`**：`registerTerminal` 的簽名只有 `{ cwd? }`。PTY 要嘛走 OS 圍堵（spawn 時套用 runner，像 shell 那樣），要嘛明確**拒絕在受限模式下啟動**。**我傾向後者先做**——`registerTerminal` 在 `sandbox !== "danger-full-access"` 時不掛載，並回報「此模式下不可用」。**誠實的不可用勝過假裝的圍堵。**
-- **`fs-search`**：它呼叫 `exec.run({ argv, cwd })` 跑 rg。rg 是**讀取**工具，所以讀取隔離未實作之前它無法被圍堵——**但可以走 shell 的同一條 exec 路徑**，至少讓它繼承同一套 runner 選擇與失敗語意。
+> **2026-09-15 更正。** 本節原本寫：`terminal`「**在 `sandbox !== "danger-full-access"` 時不掛載**」，`fs-search`「走 shell 的同一條 exec 路徑」。兩條都在動工前被推翻，理由如下，原文保留在上面供對照。推翻的理由不是偏好，是**照原文做會留下它想堵的洞**。
+
+- **`terminal`：掛載，但每次呼叫拒絕「創造能力」的操作。**
+
+  原文的「不掛載」是一個**掛載期**決定，而這份設計的整個前提（§3.1）就是模式會在中途改變。一個以 `danger-full-access` 掛載、之後被收緊的 session，**它的 PTY 工具仍然在、仍然無圍堵**——正是 §3.1 存在要解決的那個情況。而且 `opts.sandbox === undefined` 是「宿主沒要求沙箱」（provider 對 `undefined` 與 `danger-full-access` 都是 `undefined`），所以 `!== "danger-full-access"` 這條規則會把 terminal 從**每一個從未要求沙箱的宿主**上拿掉。
+
+  改為：`TerminalToolDeps` 收一個 `() => SandboxExecutionPolicy | undefined` resolver，每個工具在 `execute` 開頭解析——
+
+  | 工具 | 受限模式下 | 為什麼 |
+  |---|---|---|
+  | `terminal_open`、`process_spawn` | **拒絕** | 這是能力的創造點。受限模式下不該有新的無圍堵 PTY。 |
+  | `terminal_send` | **拒絕** | 一個在寬鬆模式下開的 PTY，收緊後繼續餵它輸入＝繼續無圍堵執行。 |
+  | `terminal_read`、`terminal_signal`、`terminal_close`、`terminal_list` | 允許 | 只能觀察或**收束**（signal／close 讓模型收得掉自己開的東西）。拒絕它們只會把殘留的 PTY 變成關不掉的孤兒。 |
+
+  拒絕用 §3.2 的同一個形狀（`denialFor("terminal", mode, reason)`）——所以模型拿到的是「為什麼被拒、以及怎麼要求更寬」，而不是一個**默默消失的工具**。工具不在等於在說「IH 沒有 terminal」，那對 IH 是**不實陳述**；一次分級拒絕才是誠實的不可用。
+
+  **仍然為真**：PTY 無法被 kernel 圍堵。這條只是拒絕在受限模式下啟動，不是假裝圍堵。
+
+- **`fs-search`：不改。rg 沒有寫入面，包 runner 只會讓兩個可用的唯讀工具開始失敗。**
+
+  §7 原本記「rg 的寫入面（`--replace`？）我沒有查證」。**已查證**：ripgrep 15.0.0（`@vscode/ripgrep` 1.18.0 隨附）的完整旗標清單裡**沒有任何寫檔旗標**——`--replace` 是**在輸出裡**代換，`--files` 是列出檔案，沒有 `--output`。IH 的兩個呼叫點（`fs-search/src/index.ts:87`、`:134`）也只傳 `--files`／`--json`／`--regexp`。
+
+  所以包 runner 能圍堵的東西**是空的**：讀取本來就不受限（§3.5），而 rg 寫不了檔。代價卻是真的——`glob`／`grep` 會在 runner 起不來的宿主上丟 `SandboxUnavailableError`，把兩個今天能用的唯讀工具變成失敗，換不到任何security。**當 §3.5 有了具體的政策輸入時再回來做**：那時「rg 走同一條 runner」正是讀取隔離的實作方式。
+
+  **順帶查到、但這次不動的**：rg 讀 `RIPGREP_CONFIG_PATH` 指定的設定檔，而設定檔可以注入 `--pre`（對每個檔案執行任意命令）。IH 沒有傳 `--no-config`。這要使用者自己設了那個環境變數才成立，而且是行為改變（會蓋掉使用者刻意的 rg 設定），所以只記錄，不順手改。
 
 ### 3.5 讀取隔離：參考 grok，但先量測需求
 
@@ -170,7 +193,7 @@ grok 有企業政策來源可以列舉敏感路徑；IH 沒有。所以這一步
 
 1. **3.1 per-call 政策**——沒有它，3.3 無處可依，而且它本身修掉一個真實的「中途改模式無效」
 2. **3.2 統一拒絕形狀 + 3.3(a) 宣告參數**——低成本、讓模型能自我修正
-3. **3.4 terminal 與 fs-search**——`terminal` 先做「受限模式下不掛載」，誠實且立刻有效
+3. **3.4 terminal**——per-call 拒絕創造能力的操作（見該節更正）；`fs-search` 已查證為無需改動
 4. **3.3(b)(c) 完成升級階梯**——依賴 1
 5. **3.5 讀取隔離**——**先回答「要遮蔽什麼」再動手**
 
@@ -178,7 +201,7 @@ grok 有企業政策來源可以列舉敏感路徑；IH 沒有。所以這一步
 
 ## 7. 這份設計沒有回答的問題
 
-- **3.1 的效能**：per-call 解析的事件掃描成本**未量測**。若太貴需要快取策略，而快取就必須處理失效——那會重新引入一部分複雜度。
-- **`terminal` 不掛載的產品衝擊**：TUI 的 PTY 功能在受限模式下會消失。這是**產品決定**，不是技術決定。
-- **`fs-search` 的 rg**：走 exec 路徑會讓它繼承 runner 選擇，但 **rg 的寫入面**（`--replace`？）我沒有查證。
+- **3.1 的效能**：**已量測**（2026-09-14）。per-call 解析的事件掃描在 20,000 事件的 session 上是 **0.056–0.125 ms**（九次取樣、兩個代理）。遠低於計畫設的 0.5 ms 門檻，所以**沒有加快取**，也沒有為了不存在的需求發明失效規則。
+- **`terminal` 的產品衝擊**：**原記「TUI 的 PTY 功能在受限模式下會消失」是錯的**（2026-09-15 更正）。`node-pty` 是 `tui` 與 `tui-core` 的 **devDependency**（只給測試 harness 用），`packages/tui/src` 開編輯器／pager 走的是普通 `child_process.spawn`，**TUI 自己不使用 PTY**。唯一的生產 PTY 消費者是 `packages/terminal`（模型面的 `terminal_open`／`process_spawn`），而 `terminal/service` 除了那個套件與一支測試之外無人讀取。所以這個決定的衝擊**只限於模型能不能開 PTY**，不是產品功能。
+- **`fs-search` 的 rg**：**已查證**（2026-09-15）——rg 沒有寫檔旗標，包 runner 換不到安全。理由與證據見 §3.4。
 - **IH 要不要有專案層設定信任**：grok 有明確答案（`build-provenance-folder-trust-gate`），IH 目前的 `settings` 是使用者層。這牽涉產品定位，我沒有足夠資訊下判斷。
