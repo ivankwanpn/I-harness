@@ -6,6 +6,7 @@ import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import { createSession, append } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
+import type { SandboxDenial } from "@i-harness/sandbox"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
 
 /**
@@ -81,11 +82,20 @@ describe("sandbox policy is resolved per call", () => {
       // Turn 2 — the NEXT tool call must obey the new mode.
       await runTurn(assembly)
       expect(existsSync(after)).toBe(false)
-      // Model-visible as a classified failure, not a thrown turn-killer.
+      // Model-visible as a classified failure, not a thrown turn-killer — and the
+      // denial must name the mode that was ACTUALLY in force. Asserting only
+      // `FS_SANDBOX_DENIED` would pass for a denial carrying the mount-time mode,
+      // which is the one field this test exists to pin.
       const denials = session.events.filter(
         (e) => e.type === "tool/result" && JSON.stringify(e).includes("FS_SANDBOX_DENIED"),
       )
       expect(denials.length).toBe(1)
+      const output = (denials[0] as { output?: { error?: string } }).output
+      const denial = JSON.parse(output!.error!) as SandboxDenial
+      expect(denial.code).toBe("SANDBOX_DENIED")
+      expect(denial.surface).toBe("fs")
+      expect(denial.mode).toBe("read-only")
+      expect(denial.reason.replaceAll("\\", "/")).toContain(after.replaceAll("\\", "/"))
     } finally {
       await assembly.dispose()
       rmSync(base, { recursive: true, force: true })

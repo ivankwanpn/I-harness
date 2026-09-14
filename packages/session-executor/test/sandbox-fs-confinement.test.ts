@@ -3,8 +3,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { createMockClient } from "@i-harness/llm-mock"
-import { createSession, append } from "@i-harness/core-session"
+import { createSession, append, type Session } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
+import type { SandboxDenial } from "@i-harness/sandbox"
 import { createSessionAssembly } from "../src/assembly.ts"
 
 /**
@@ -32,6 +33,25 @@ function modelCallingWrite(target: string) {
     { role: "assistant", toolCalls: [{ name: "write", args: { path: target, text: "escaped" } }] },
     { role: "assistant", text: "done" },
   ])
+}
+
+/**
+ * The sandbox denial the model actually received, parsed back out of the tool
+ * result.
+ *
+ * `toContain("FS_SANDBOX_DENIED")` is satisfied by the failure's `code` alone, so
+ * it passes for a denial whose surface, mode, or reason is WRONG — or absent. A
+ * type-valid `denialFor("terminal", "danger-full-access", …)` satisfies it while
+ * telling the model the opposite of the truth about which surface refused and
+ * which mode was in force. Only parsing the object can catch that, so these tests
+ * assert the object.
+ */
+function denialFrom(session: Session): SandboxDenial {
+  const result = session.events.find((e) => e.type === "tool/result")
+  expect(result).toBeDefined()
+  const output = (result as { output?: { error?: string } }).output
+  expect(output?.error).toBeTypeOf("string")
+  return JSON.parse(output!.error!) as SandboxDenial
 }
 
 async function runTurn(mode: "read-only" | "workspace-write" | undefined, workspace: string, target: string) {
@@ -68,9 +88,14 @@ describe("assembly → fs write confinement", () => {
       const session = await runTurn("read-only", workspace, target)
       expect(existsSync(target)).toBe(false)
       // The refusal must be MODEL-VISIBLE as a classified failure, not a thrown
-      // turn-killer: the model has to be able to read it and adapt.
-      const resultEvent = session.events.find((e) => e.type === "tool/result")
-      expect(JSON.stringify(resultEvent)).toContain("FS_SANDBOX_DENIED")
+      // turn-killer: the model has to be able to read it and adapt. And it must be
+      // the RIGHT refusal — the fs surface, the mode actually in force, and a
+      // reason that names the path, not just a code.
+      const denial = denialFrom(session)
+      expect(denial.code).toBe("SANDBOX_DENIED")
+      expect(denial.surface).toBe("fs")
+      expect(denial.mode).toBe("read-only")
+      expect(denial.reason.replaceAll("\\", "/")).toContain(target.replaceAll("\\", "/"))
     } finally {
       rmSync(base, { recursive: true, force: true })
     }

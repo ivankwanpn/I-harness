@@ -60,9 +60,16 @@ export interface FsToolDeps {
    *  the caller resolves the mode in force and hands down only the verdict.
    *
    *  M62: the refusal is the shared `SandboxDenial` (from @i-harness/sandbox),
-   *  not a bare reason string — the shell reports the same shape, so a model
-   *  applies ONE rule to a refusal from either surface. `guardWrite` serializes
-   *  it into the failure message, which is the surface the model actually reads.
+   *  not a bare reason string. What is shared TODAY is the TYPE: `denialFor`'s
+   *  only production caller is the assembly's write guard, which passes "fs", so
+   *  this is the only surface that actually emits this shape. The shell's refusal
+   *  is still `SandboxUnavailableError` from exec's `resolveArgv`, and the
+   *  "shell"/"search"/"terminal" surfaces are declared but unreached — Task 3
+   *  (escalation arguments) does not change that either. The claim made here is
+   *  only that a refusal from THIS surface has a machine-readable shape with room
+   *  for the others, not that a model already meets the same object on both.
+   *  `guardWrite` serializes it into the failure message, which is the surface the
+   *  model actually reads.
    *
    *  Only writes are gated. Reads are unrestricted on every backend — bwrap binds
    *  the whole root read-only, the Windows backend documents reads as
