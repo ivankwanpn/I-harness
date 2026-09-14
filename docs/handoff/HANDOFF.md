@@ -17,11 +17,45 @@
 | HEAD | **`3e0e2536`** — `fix(sandbox): the fs refusal stops advising a retry that cannot work` |
 | Sync / tree | `HEAD == origin/m62`, working tree **clean** |
 
-`3e0e2536` is the **code state this document describes**. This handoff and its two companions — plus a pointer in `README.md` — were added by a **later docs-only commit on the same branch**, so `git log` will show a newer HEAD than `3e0e2536`. That is expected: **no code changed after `3e0e2536`.** To confirm you are on the described state, `git merge-base --is-ancestor 3e0e2536 HEAD` succeeds and `git diff 3e0e2536 HEAD -- packages apps` is empty.
+`3e0e2536` is the **code state this document describes**. Everything after it on this branch is **docs-only** — this handoff set, the `README` pointers, and this topology addendum — so `git log` will show a newer HEAD than `3e0e2536`. That is expected: **no code has changed after `3e0e2536`.** To confirm you are on the described state: `git merge-base --is-ancestor 3e0e2536 HEAD` succeeds and `git diff 3e0e2536 HEAD -- packages apps` is empty.
 
 The last goal — implementing `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` — is **complete**: five steps, a four-scope final review, a consolidated fix round. Its report is the first thing to read if you need depth: `docs/handoff/FINAL-REPORT.md`.
 
 **One surprising thing you should know up front** (it is a reachability statement, not a bug): the "session is tightened mid-run" scenario the whole sandbox design exists for **has no producer today**, and the **TUI composes no sandbox at all**. Details in §7.
+
+### 0.1 Which branch is which — measured, because this already went wrong once
+
+On **2026-09-14 two machines continued from the same commit** (`62711537`), and only one of them knew it.
+
+| Ref | Commit | What it actually is |
+|---|---|---|
+| `origin/m62` | `9dc028c7` | **The branch to take over from.** 55 commits ahead of `main`, 2 behind. Carries the whole sandbox permission/call-policy milestone **and** this handoff set. |
+| `origin/main` | `f39d4870` | The integration point. Contains `m62` **only as of `62711537`** — it does **not** have the 55 commits that followed. |
+| `origin/m63` | *retired* | Was `main` + one docs commit. **Deleted on 2026-09-15** — see below. |
+| `m62` @ `62711537` | | What the other machine snapshotted as "m62 complete, merged into `main`". |
+
+**What happened.** The 2026-09-11 audit handoff (`docs/audit/2026-09-11-ih-takeover-handoff.md`) recorded "m62 = `6271153`". On 09-14 the other machine took that as current: it treated `m62` as a finished milestone, fast-forwarded `main` to that point, and opened `m63` off `main` for the next milestone. Meanwhile this branch kept committing to `m62` — 55 commits, the entire sandbox milestone — and never touched `main`. **A document asserting the state of a *branch* is a snapshot of the most mobile thing in a repo** — the same defect class as §6 item 5, one level up.
+
+**m63 was a dead end, and that is measured, not assumed.** Its three commits were `d309e68e` and `f39d4870` (both already on `main`) plus `c5e03fd6`, whose *entire* content was one edit to that document asserting three false things: that `main` had merged `m62`, that `m62` stopped at `6271153`, and that `m62` was two commits **behind** `main`. Relative to `m62`, `m63` was missing **7,651 lines**, including `scripts/audit/verify-citations.mjs` — on `m63` that file is the **older checker that silently skipped 1,532 citations**. So it was not merely empty: working on it would have resurrected a bug this branch had already fixed.
+
+**It is safe to delete, which is why it was.** Nothing unique was lost: `f39d4870` *is* `origin/main`; `d309e68e` is on `main`; the only casualty is `c5e03fd6`, a false statement. **To restore it anyway:** `git push origin c5e03fd6e0de8dbec2f7b965d7e90ac42f975d4a:refs/heads/m63`.
+
+**Verify the whole picture yourself (four commands):**
+
+```bash
+git rev-list --count origin/main..origin/m62                    # 55  = m62 is ahead of main
+git ls-tree origin/main packages/sandbox/src/call-policy.ts     # empty = main lacks the sandbox work
+git merge-base --is-ancestor 3e0e2536 origin/main; echo $?      # 1 = main lacks the fix
+git ls-remote --heads origin | grep m63                         # empty = m63 retired
+```
+
+**Still open, and it is the human's call, not an agent's:** `main` is 55 commits behind and does not contain the sandbox milestone. The merge is one command in a conflict-free direction (`m62` never touched the audit handoff after the merge-base, and `main`'s two commits touch only that file):
+
+```bash
+git switch main && git merge --no-ff origin/m62 && git push origin main
+```
+
+This is documented rather than executed because the repo's own discipline says **merge timing into `main` is the human's decision** (`d309e68e`). Until that happens, **open the next milestone branch off `m62`, not off `main`.**
 
 ---
 
