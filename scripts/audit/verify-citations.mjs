@@ -361,6 +361,7 @@ for (const f of files) {
       // real defect; a node spanning two roots is normal for a delta and is
       // recorded as informational rather than reported as a problem.
       const rootsUsed = new Set()
+      const byRoot = new Map()
       let unresolved = 0
       let firstUnresolved = null
       const ambiguous = []
@@ -393,6 +394,12 @@ for (const f of files) {
         const chosen = fits[0] ?? hasFile[0]
         if (chosen) {
           rootsUsed.add(chosen)
+          // Group citations BY the root they resolved in. A delta node spans two
+          // trees, so calling checkClaim once per root with the WHOLE evidence
+          // array makes every citation from the other tree fail against this one
+          // -- which is what produced the last 32 flags.
+          if (!byRoot.has(chosen)) byRoot.set(chosen, [])
+          byRoot.get(chosen).push(qm ? qm[2] : String(cite))
           if (hasFile.length > 1 && fits.length !== 1) {
             ambiguous.push({ cite, inTrees: hasFile })
           }
@@ -408,12 +415,12 @@ for (const f of files) {
         unresolved,
         ambiguous,
       })
-      for (const src of rootsUsed) {
-        // Strip the `fork:`/`upstream:` qualifier before handing the citations to
-        // checkClaim: it resolves against the root it is given, so the prefix has
-        // already done its job and would otherwise look like part of the path.
-        const bare = found.evidence.map((c) => String(c).replace(/^(fork|upstream):/, ""))
-        checkClaim(src, { rawName: found.label }, "mechanism", found.claim, bare)
+      // checkClaim per root, with ONLY that root's citations. Passing the whole
+      // evidence array to every root -- which is what this did before -- makes
+      // each tree's citations fail against the other tree, and that is what
+      // produced the last 32 flags on nodes that span both.
+      for (const [src, cites] of byRoot) {
+        checkClaim(src, { rawName: found.label }, "mechanism", found.claim, cites)
       }
       if (unresolved > 0) {
         stats.missingFile += unresolved
