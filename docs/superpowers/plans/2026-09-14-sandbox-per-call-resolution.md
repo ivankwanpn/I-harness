@@ -95,8 +95,14 @@ In `packages/session-executor/src/assembly.ts`, replace the block at `:298-303`:
   // once; only `resolve()` runs per call.
   const sandboxPolicyService =
     opts.sandbox === undefined ? undefined : createSandboxPolicy({ mode: opts.sandbox, workspaceRoot: opts.workspace })
-  const sandboxPolicyNow = () => sandboxPolicyService?.resolve({ session: opts.policySession })
+  const sandboxPolicyNow = () => sandboxPolicyService?.resolve({ session: opts.policySession ?? session })
 ```
+
+**`opts.policySession ?? session`, not `opts.policySession`.** Resolving against the LIVE session is what the spec requires (§3.1). `run.ts` passes the same object for both so it is unchanged there, but the web `createSessionService` path never passes `policySession` — with `policySession` alone the resolver sees `undefined` forever, a mid-session mode change is invisible, and the escalation ladder this task exists to unblock stays unreachable on the multi-turn surface.
+
+This requires moving `const session = opts.session ?? createSession(...)` roughly four lines earlier so this block and the `registerShell` value below resolve through one resolver. That move belongs in the task's diff.
+
+**CORRECTION (2026-09-14, during execution):** this step originally read `opts.policySession` alone, which contradicted this task's own test — the test passes the session as `session`, never as `policySession`, so `resolve` would see `undefined`, the mode would stay at the requested value, and the test would have failed even with the change applied. The implementer caught it before committing.
 
 At `:304-310`, **leave the shell registration unchanged for now** — it still receives a resolved value, because `ShellToolDeps.sandboxPolicy` stays `SandboxExecutionPolicy` until Task 2 converts it to a thunk. Passing the thunk here would not typecheck. Task 2 owns that conversion:
 
@@ -409,4 +415,5 @@ git commit -m "feat(sandbox): declare the escalation arguments the marker text a
 
 **Type consistency:** `SandboxDenial` is defined once in `sandbox-policy/src/denial.ts` and referenced by `fs` and `shell`. `denialFor(surface, mode, reason)` has the same three-parameter shape everywhere it is called. `SandboxSurface` values match the four strings `denialFor`'s test asserts. The resolver thunk type `() => SandboxExecutionPolicy | undefined` is identical in `shell` (Task 2 Step 6) and the assembly (Task 1 Step 3).
 
-**Known risk this plan does not remove:** Task 1's test seam (`writeGuardForTest`) is a production-object mutation for test reachability. It is named so it cannot be mistaken for API, but a cleaner seam would be to return the resolver from `createSessionAssembly`. I did not choose that because it widens the assembly's public surface for a test-only need; if a reviewer prefers the explicit export, that is a reasonable swap and changes only Task 1.
+**Known risk this plan does not remove — RESOLVED during execution.** Task 1 originally reached its guard through a test-only `writeGuardForTest` property, and this paragraph offered exporting the resolver as the alternative. The implementer found the third option, which is better than both: `packages/session-executor/test/sandbox-fs-confinement.test.ts` already drives a real turn through `createSessionExecutor` and reads the model-visible `FS_SANDBOX_DENIED`, so the test can be end-to-end with ZERO production surface. A synthetic guard call was never needed. Both the seam and the export are dropped.
+
