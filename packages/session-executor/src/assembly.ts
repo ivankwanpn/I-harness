@@ -461,7 +461,18 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   //    `workspace-write` retries forever against a mode it is no longer in, and
   //    the escalation hint derived from that mode would name the wrong next step;
   //  - the base policy is the SAME thunk the tools receive (`sandboxPolicyNow`),
-  //    so the mode the ladder escalates FROM is the mode this guard checks.
+  //    so the mode the ladder escalates FROM is read from the same events as the
+  //    mode this guard checks. CORRECTED 2026-09-15 (final review, Scope C F10):
+  //    that is true of the THUNK, not of the READ — the ladder reads the policy
+  //    and the guard reads it again, with an `await` between them, so if a host
+  //    appended a `sandbox/mode` event while an approval prompt was open the
+  //    strictly-wider check would have been made against the older mode. No such
+  //    host exists today (nothing in production appends the event), which is why
+  //    this is a recorded boundary rather than a defect.
+  //  - the refusal names the mode that would LIFT it (`decision.sufficientMode`),
+  //    not the first strictly-wider one: for an out-of-workspace target under
+  //    `read-only` those differ, and naming the wider one sent the model to a
+  //    retry that failed identically. That was the terminal's bug class on fs.
   const writeGuard =
     sandboxPolicyService === undefined
       ? undefined
@@ -472,7 +483,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           const decision = checkWrite(effective, abs)
           return decision.ok
             ? { ok: true as const }
-            : { ok: false as const, denial: denialFor("fs", effective.mode, decision.reason) }
+            : { ok: false as const, denial: denialFor("fs", effective.mode, decision.reason, decision.sufficientMode) }
         }
   const fsToolsDeps = {
     workspace: opts.workspace,

@@ -6,7 +6,8 @@ import { createMockClient } from "@i-harness/llm-mock"
 import { createSession, append, type Session } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
-import type { SandboxDenial } from "@i-harness/sandbox"
+import type { SandboxDenial, SandboxMode } from "@i-harness/sandbox"
+import { checkWrite } from "@i-harness/sandbox-policy"
 import { createSessionAssembly } from "../src/assembly.ts"
 
 /**
@@ -212,6 +213,63 @@ describe("assembly → the fs escalation ladder", () => {
       expect(existsSync(second)).toBe(false)
       const denial = denialFrom(session)
       expect(denial.mode).toBe("read-only")
+    } finally {
+      await assembly.dispose()
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it("an OUTSIDE-path refusal advises a mode that actually permits the write", async () => {
+    // The property is NOT "the sentence names a mode" -- that assertion passes on
+    // advice that cannot be followed, which is how the terminal shipped the same
+    // bug until `ceb85fb5`. It is "the mode it names permits THIS operation",
+    // checked by running the same predicate the guard runs.
+    //
+    // Scope A (A-1) and Scope B (B1) both found this on fs, computing it directly:
+    // from `read-only`, an out-of-workspace write is advised `workspace-write`,
+    // and `checkWrite` refuses that same path under `workspace-write`. The model's
+    // first retry is guaranteed to fail. Neither found a test that reads
+    // `denial.escalation` on an fs OPERATION refusal -- the terminal has a
+    // retry-the-advice matrix and fs had none. This is that test.
+    const base = mkdtempSync(join(tmpdir(), "i-harness-advice-"))
+    const workspace = join(base, "ws")
+    const outside = join(base, "outside.txt")
+    mkdirSync(workspace, { recursive: true })
+    const session = createSession(() => {})
+    const assembly = await createSessionAssembly({
+      workspace,
+      session,
+      sandbox: "read-only",
+      model: modelWriting(outside, {}),
+      // An OUTSIDE target trips guard-approval's Layer 2 whitelist, which ASKS --
+      // and an unanswered ask throws (fail closed), so without this the call never
+      // reaches the write guard and the test would redden for the wrong reason.
+      // The whitelist ask is a different question from the ladder's; this test is
+      // about the sandbox denial the guard returns afterwards.
+      approveAll: true,
+    })
+    try {
+      await runTurn(assembly)
+      const denial = denialFrom(session)
+      expect(denial.surface).toBe("fs")
+      expect(denial.mode).toBe("read-only")
+      expect(existsSync(outside), "the refusal must refuse").toBe(false)
+
+      const advised = /sandbox_permissions set to "([^"]+)"/.exec(denial.escalation ?? "")?.[1]
+      expect(advised, "an operation refusal must advise a mode").toBeDefined()
+
+      // FOLLOW THE ADVICE AND REQUIRE IT TO WORK. Same predicate, same target.
+      const underAdvice = checkWrite({ mode: advised as SandboxMode, workspaceRoot: workspace }, outside)
+      expect(
+        underAdvice.ok,
+        `the advised retry to "${advised}" must permit an out-of-workspace write; ` +
+          `the check still refuses it: ${underAdvice.ok ? "" : underAdvice.reason}`,
+      ).toBe(true)
+
+      // And the mode is the SUFFICIENT one, not merely a wider one: under
+      // `workspace-write` this target is still outside the workspace, so only
+      // `danger-full-access` can lift the refusal.
+      expect(advised).toBe("danger-full-access")
     } finally {
       await assembly.dispose()
       rmSync(base, { recursive: true, force: true })

@@ -149,8 +149,11 @@ describe("the assembly hands the terminal a per-call policy", () => {
 
       const advised = /sandbox_permissions set to "([^"]+)"/.exec(refused.denial?.escalation ?? "")?.[1]
       expect(advised, "the denial must name a mode").toBeDefined()
-      // The escalation ladder's shape: an approved request becomes the session's
-      // mode, and the NEXT call resolves against it.
+      // A HOST action, not the ladder's: appending a `sandbox/mode` event is how a
+      // host changes the standing mode, and the per-call resolution then reads it.
+      // The escalation ladder is a DIFFERENT path — a grant is per-call and
+      // transient and appends no such event (spec §3.3 point 1) — which is why
+      // this test simulates the host rather than calling the ladder again.
       append(session, { type: "sandbox/mode", mode: advised as SandboxMode })
 
       await assembly.agent.run("retry with the mode the denial named")

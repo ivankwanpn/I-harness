@@ -97,9 +97,17 @@ describe("resolveCallPolicy", () => {
       expect(denial.escalation).toBeUndefined()
     }
 
-    // No policy at all: the mode reported is the accurate one for "the host
-    // requested no sandbox" -- unconfined. (Nothing here is refused at execution.)
-    const unconfined = refused(
+    // BEHAVIOUR CHANGE, declared 2026-09-15 (final review, Scope A finding A-3):
+    // this half used to assert that a malformed pair with NO policy is REFUSED,
+    // reporting `mode: "danger-full-access"`. That assertion WAS the
+    // specification of the old behaviour, and it is the behaviour the finding
+    // calls wrong: it refuses a call that executes nothing, on a host where no
+    // mode can refuse anything, and it reports the refusal under a mode that is
+    // not in force. Branches 3/4 already answer a WELL-FORMED pair on that same
+    // host by proceeding ("vacuous, not wrong"), so a malformed pair is answered
+    // the same way -- see the dedicated test below, which pins all three shapes
+    // plus the confined-base refusal that MUST survive.
+    const unconfined = proceeded(
       await resolveCallPolicy({
         base: undefined,
         surface: "shell",
@@ -107,8 +115,7 @@ describe("resolveCallPolicy", () => {
         args: { sandbox_permissions: "workspace-write" },
       }),
     )
-    expect(unconfined.mode).toBe("danger-full-access")
-    expect(unconfined.escalation).toBeUndefined()
+    expect(unconfined).toBeUndefined()
   })
 
   it("branch 2 (no escalation arguments): proceeds with the base policy and asks nobody", async () => {
@@ -158,6 +165,38 @@ describe("resolveCallPolicy", () => {
     )
     expect(policy).toEqual(unconfined)
     expect(prompts).toHaveLength(0)
+  })
+
+  it("a MALFORMED pair is also vacuous where nothing can refuse: it must NOT reject the call", async () => {
+    // Final review, Scope A (A-3). Validation used to run FIRST, so on a host with
+    // no sandbox -- or one already at `danger-full-access` -- a malformed pair
+    // turned a call that previously succeeded into `SANDBOX_DENIED`, reported under
+    // a mode that cannot refuse anything. That is a NEW refusal introduced by the
+    // ladder, and it is inconsistent with branches 3/4, which accept a WELL-FORMED
+    // pair on the same host because "the args are vacuous, not wrong". A malformed
+    // pair is equally incapable of changing anything there.
+    //
+    // What is NOT conceded: on a CONFINED base the same pair still refuses, and the
+    // assertion below pins that, so the reorder cannot decay into "never validate".
+    const malformed = [
+      { justification: "just because" },
+      { sandbox_permissions: "workspace-write" },
+      { sandbox_permissions: "workspace-write", justification: "   " },
+    ] as const
+    for (const args of malformed) {
+      expect(proceeded(await resolveCallPolicy({ base: undefined, surface: "fs", subject: SUBJECT, args })))
+        .toBeUndefined()
+      const unconfined: SandboxExecutionPolicy = { mode: "danger-full-access", workspaceRoot: "C:\\ws" }
+      expect(proceeded(await resolveCallPolicy({ base: unconfined, surface: "fs", subject: SUBJECT, args })))
+        .toEqual(unconfined)
+      // ...and still refused where a policy exists to refuse against.
+      const denial = refused(
+        await resolveCallPolicy({ base: readOnly(), surface: "fs", subject: SUBJECT, args }),
+      )
+      expect(denial.code).toBe("SANDBOX_DENIED")
+      expect(denial.mode).toBe("read-only")
+      expect(denial.escalation).toBeUndefined()
+    }
   })
 
   it("branch 5 (no approval channel): refuses -- fail closed, never a grant", async () => {
