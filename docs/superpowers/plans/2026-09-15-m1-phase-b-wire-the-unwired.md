@@ -179,7 +179,7 @@ git add packages/session-executor/src/assembly.ts packages/session-executor/test
 git commit -m "feat(sandbox): the assembly records the mode it starts under, giving sandbox/mode its first production producer"
 ```
 
-**Do not claim the headline is discharged.** This wires a construction-time producer. The baseline's stronger claim — that a **mid-session tightening** is unreachable in production — survives this task: the only shipped surface that could change a live mode is `/sandbox` in `apps/cli/src/web.ts`, which is frozen, and a per-call escalation ladder is deliberately forbidden from producing the event. Task 6 records that as a named open item.
+**Do not claim the headline is discharged.** This wires a construction-time producer. The baseline's stronger claim — that a **mid-session tightening** is unreachable in production — survives this task, and **more strongly than this paragraph first stated (corrected 2026-09-15)**: no shipped surface can change a live mode. This paragraph used to name one — "the only shipped surface that could change a live mode is `/sandbox` in `apps/cli/src/web.ts`, which is frozen" — and **that is false**: measured, `/sandbox` writes `settings.sandboxMode` and answers that it takes effect for sessions created *later* (`apps/cli/src/web.ts:273-282`), and `:470-475` reads that setting once at construction, so it never appends a `sandbox/mode` event to a live session. A per-call escalation ladder is deliberately forbidden from producing the event either. Task 6 records that as a named open item.
 
 ---
 
@@ -484,9 +484,11 @@ A variant the baseline never names: these are **alive inside their own module** 
 
 | Name | Line | In-module use |
 |---|---|---|
-| `estimateAssemblyOverhead` | `assembly.ts:220` | called at `:762` |
-| `bindAuthRefreshStatus` | `assembly.ts:234` | called at `:618` |
+| `estimateAssemblyOverhead` | `assembly.ts:220` | called from the **`overheadEstimate` initializer** in `createSessionAssembly` |
+| `bindAuthRefreshStatus` | `assembly.ts:234` | called from **`prepareMcpConfig`**'s `onAuthRefreshFailed` |
 | `RewindAssemblyHandle` | `assembly.ts:166` | **not in the baseline** — a third name in the same position |
+
+**2026-09-15 — the two call-site coordinates this table used to carry were stale, and the fix is to stop citing lines.** The table read `called at :762` and `called at :618`; at `m64` the two call sites are **`assembly.ts:786`** (`estimateAssemblyOverhead(systemPromptNow(), tools.schemas())`, the `overheadEstimate` initializer) and **`assembly.ts:642`** (`onAuthRefreshFailed: bindAuthRefreshStatus(…)`, inside `prepareMcpConfig`) — measured with `git grep -n "estimateAssemblyOverhead\|bindAuthRefreshStatus" -- packages/session-executor/src/assembly.ts`. The three declaration lines this table gives (`:166`, `:220`, `:234`) still match the file exactly, which is why only the mutation instruction rotted: **a plan that cites a line rots the next time the file moves, so cite the symbol.** Every reference to those call sites below is now by symbol rather than by line.
 
 **Do not re-export them from the entry to "make them reachable".** That would manufacture three new class-1 rows (their only non-test mention would still be inside `assembly.ts`) — a net regression against M2's digest.
 
@@ -517,9 +519,9 @@ Expected: FAIL — `Module '"../src/assembly.ts"' has no exported member 'estima
 Read `packages/session-executor/test/assembly.test.ts` — the import block at `:19-24` and the two cases that call the helpers directly (around `:96-99`). Replace the named imports with the public ones and rewrite those cases to assert the **production effect** through `createSessionAssembly` rather than the private helper:
 
 - Remove `estimateAssemblyOverhead` and `bindAuthRefreshStatus` from the `:19-24` import list, keeping the names that remain.
-- For the overhead case: build an assembly with a known `contextWindow` and a tools registry carrying a known schema set, and assert the overhead the agent received equals `approxTokens(systemPrompt) + approxTokens(JSON.stringify(schemas))`, observed through the compaction/budget config the assembly passes into `createAgent`. Take the exact option names from the assembly's own call site at `assembly.ts:762-803` — do not guess them.
+- For the overhead case: build an assembly with a known `contextWindow` and a tools registry carrying a known schema set, and assert the overhead the agent received equals `approxTokens(systemPrompt) + approxTokens(JSON.stringify(schemas))`, observed through the compaction/budget config the assembly passes into `createAgent`. Take the exact option names from the assembly's own `createAgent` call and the `compactForAgent` / `budget` options it composes just above that call — read them from the file, do not guess them.
 
-**Why this is the required shape:** the current case calls the helper directly, so changing `:762` to `estimateAssemblyOverhead(systemPromptNow(), [])` would not fail it. Rerouting through the assembly is what makes the mutation catchable.
+**Why this is the required shape:** the current case calls the helper directly, so changing the `overheadEstimate` initializer to `estimateAssemblyOverhead(systemPromptNow(), [])` would not fail it. Rerouting through the assembly is what makes the mutation catchable.
 
 - [ ] **Step 4: Typecheck and test**
 
@@ -531,7 +533,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Mutation proof**
 
-Change `assembly.ts:762`'s call to pass `[]` instead of `tools.schemas()`. Run the rerouted overhead case: it must FAIL. Restore and re-run: PASS. Record both.
+Change the **`overheadEstimate` initializer** in `createSessionAssembly` — the `estimateAssemblyOverhead(systemPromptNow(), tools.schemas())` call — to pass `[]` instead of `tools.schemas()`. Run the rerouted overhead case: it must FAIL. Restore and re-run: PASS. Record both.
 
 - [ ] **Step 6: Run the instrument and record the delta**
 
@@ -574,7 +576,7 @@ Add to §6.1, each with a reason that cites code rather than restating the verdi
 
 - [ ] **Step 3: Record what Task 1 did and did not discharge**
 
-Add a note to §4.1 item 6 stating that the construction-time producer now exists (Task 1) **and that the row's stronger claim survives**: no in-scope surface can change a *live* mode, because the only shipped one is `/sandbox` in the frozen `apps/cli/src/web.ts`, ACP's `session/set_mode` is in the v0 drop-set, and the SDK and subagent trees contain no `sandbox` occurrence at all. Name the follow-up (a `setSandboxMode` seam plus a caller) as M, and record its out-of-scope blocker explicitly so it is not rediscovered as a surprise.
+Add a note to §4.1 item 6 stating that the construction-time producer now exists (Task 1) **and that the row's stronger claim survives**: no in-scope surface can change a *live* mode — and **no shipped surface can either** (**corrected 2026-09-15**: this sentence named `/sandbox` in the frozen `apps/cli/src/web.ts` as "the only shipped one", and that is false; measured, it appends no `sandbox/mode` event at all — it writes `settings.sandboxMode` and takes effect for sessions created *later*, `apps/cli/src/web.ts:273-282` / `:470-475`) — ACP's `session/set_mode` is in the v0 drop-set, and the SDK and subagent trees contain no `sandbox` occurrence at all. Name the follow-up (a `setSandboxMode` seam plus a caller) as M, and record its out-of-scope blocker explicitly so it is not rediscovered as a surprise.
 
 - [ ] **Step 4: Restate the tally and check every place that repeats a count**
 
@@ -649,4 +651,4 @@ git commit -m "docs(audit): correct six measured errata, record two scanner blin
 
 **Type consistency.** `effectiveSandboxMode` keeps its signature across Task 2. `createSessionAssembly`'s option names are read from the file in each task rather than invented. `ExecResult` and `SessionQuery` are not modified by any task — that is what keeps the three M items out. No task introduces a name another task consumes, so tasks are independently applicable.
 
-**Known risk, stated rather than hidden:** Tasks 1 and 5 each change a test that currently passes, and both changes are the kind that can silently destroy a mutation proof — `sandbox-escalation.test.ts:105` guards the escalation ladder, and the two `assembly.test.ts` cases guard the overhead arithmetic for the `:762` call site. Both tasks therefore require an explicit mutation proof *after* the test edit, not just a green run.
+**Known risk, stated rather than hidden:** Tasks 1 and 5 each change a test that currently passes, and both changes are the kind that can silently destroy a mutation proof — `sandbox-escalation.test.ts:105` guards the escalation ladder, and the two `assembly.test.ts` cases guard the overhead arithmetic for the **`overheadEstimate` initializer** in `createSessionAssembly`. Both tasks therefore require an explicit mutation proof *after* the test edit, not just a green run.
