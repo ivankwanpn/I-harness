@@ -343,10 +343,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // already append this event "as a HOST action, not the ladder's", and say so
   // in source; this makes the assembly do what they simulate.
   //
-  // Appended ABOVE `policyFloor` deliberately: this is THIS run's decision, not
-  // restored history, so the resume-escalation guard documented just above is
-  // untouched. The ladder is still forbidden from producing this event
-  // (call-policy.ts documents that; sandbox-escalation.test.ts pins it).
+  // Appended AFTER the floor assignment above, so it lands AT the floor index --
+  // i.e. INSIDE the `slice(policyFloor)` window the resolver reads -- because it
+  // is THIS run's decision and not restored history. (Source order and window
+  // order agree here: the floor is a lower bound and this event sits on it, as
+  // the newest event in the retained window.) That keeps the resume-escalation
+  // guard documented just above intact: restored history still cannot decide the
+  // mode. The ladder is still forbidden from producing this event (call-policy.ts
+  // documents that; sandbox-escalation.test.ts pins it).
   if (opts.sandbox !== undefined) append(policyBase, { type: "sandbox/mode", mode: opts.sandbox })
   const sandboxPolicyNow = () =>
     sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) } })
