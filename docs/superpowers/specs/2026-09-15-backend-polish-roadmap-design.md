@@ -74,7 +74,7 @@
 | **M4** | 耐久 turn 狀態機 | `m66` | **L** | 取樣（opencode-fork 999.0.20 的 kernel） | — |
 | **M5** | 一致性：工具管線 ＋ prompt 快取 | `m67` | M | 取樣（dsh、cc-custom） | M3（T2 部分） |
 | **M6** | 廣度：生態 ＋ 介面硬化 | `m68` | M | 取樣（dsh、codex、grok） | M5 |
-| **M7** | 喚醒與記憶 | `m69` | M 或 S | 取樣（codex、grok、cc-custom） | M4；**且需 §5 Q1／Q2 的答案** |
+| **M7** | 自我喚醒與記憶 | `m69` | M 或 S | 取樣（codex、grok） | M4；**且需 §5 Q1／Q2 的答案** |
 
 M1 與 M2 **共用分支 `m64`**：兩者是同一個關注點（可達性），且 M2 的基線**來自 M1 的重量結果**。
 
@@ -201,15 +201,32 @@ triage 第 3 題（「誰是第二個消費者？」）repo 內沒有答案，�
 **完成定義**：MCP 的攝取面有硬化過的測試；skills 可被發現而非只是可載入；web host 的握手與背壓有測試；`settings-seam` 與 `operator-config-layer-stack` 有契約測試。
 **它不保證什麼**：**不保證第三方實作真的相容** —— 那需要一個外部消費者，而目前沒有。
 
-### M7 — 喚醒與記憶
+### M7 — 自我喚醒與記憶
 
 **它讓什麼變得不一樣**
-IH 能被**排程**與**自我啟動**，而且不會變成無人看管的迴圈；agent 能寫下跨 session 的持久事實。
+IH 能在**沒有任何外部事件**的情況下自己開始一個 turn（而且有上限，不會變成無人看管的迴圈）；agent 能寫下跨 session 的持久事實。
+
+**⚠️ 範圍更正（2026-09-15，實測後）。** triage 的主題摘要把三件不同的事綁成 T5，但其中**只有一件 IH 缺** —— 而且三個都叫「wake」，所以容易混：
+
+| | 誰有 | IH |
+|---|---|---|
+| **事件喚醒**（有通知／有活，喚醒 session） | IH、opencode-fork、codex、cc-custom、opencode | **有** —— `durable-parent-wake-delivery`，**五源共享列**，處置 `improved-writing` |
+| **持久計時器喚醒** | IH、dsh | **有** —— `schedule-durable-timer-wakeups`，處置 `improved-writing` |
+| **喚醒合併** | opencode（`v2-run-coordinator-coalescing`） | 無 |
+| **無外部觸發的自啟** | **只有 codex** | 無 |
+| **抑制閘**（喚醒前七項條件存疑即不喚） | **只有 grok** | 無 |
+
+**所以 M7 的 T5 範圍只含後兩者**；事件喚醒與持久計時器已經有了，列入 §4「不重做」。
 
 **為什麼排最後**
 這兩個不是工程問題卡住，是**產品問題卡住**：
 - **T5**：`idle-wake-and-self-tick-initiation`（「閒置觸發須有來源與上限」）與 `seven-input-auto-wake-suppression-gate` 是**政策列假裝成工程列**。沒有答案，任何 T5 工作都是投機。且**必須等 M4** —— 沒有 attempt record 的自我喚醒就是迴圈產生器。
 - **T6**：卡在沙箱 spec §7 **唯一真正未答的問題**（IH 要不要有專案層設定信任），而且與 §5 拒絕權限的**是同一個失敗模式**：多一個地方放持久 agent 狀態 ＝ 第二個真相來源。
+
+**⚠️ 兩份參考都不完整，這是實測的：**
+
+- `proactive-self-tick-loop`（triage 說「實作完整但全站未接線」）**唯一持有者是 cc-custom，IH 是 `(none)`** —— 那句話描述的是 **cc-custom 自己的** loop 死在那裡，這正是處置為 `rewrite` 而非 `reuse` 的原因。**IH 沒有這個實作，所以沒有「未接線的自我 tick」可修。**
+- **opencode-fork 沒有自我喚醒。** 直接掃它的 `packages/core/src` ＋ `packages/opencode/src`（765 個 TS 檔）：`selfTick`／`self-tick`／`proactiveTick`／`idleWake`／`idle-wake`／`WakeReason`／`notifyWake`／`autoWake` **全部零命中**。它有的是 `wake(sessionID)`，而 `execution.ts` 對它的定義是 **"Registers newly recorded work"** —— 要求工作**已經存在**，是事件驅動，不是自啟。
 
 **依賴**：M4；且需 §5 Q1／Q2 的答案。
 **分級**：**M**；若答案是「不做」，降為 **S**（把非目標寫進文件即可）。
@@ -229,6 +246,7 @@ IH 能被**排程**與**自我啟動**，而且不會變成無人看管的迴圈
 - **大部分 `service` 域的遠期產品工作**（remote attach、relay、workspace routing、sidecar、voice —— 沒有消費者）
 - **向後相容的 scaffolding**（IH 無舊帳：remote-sandbox backends、host-tool-definition compat shims、plugin-v1 bridge）
 - **T6 作為「建記憶子系統」** —— 未回答專案信任問題前不動
+- **重做 `durable-parent-wake-delivery`、`schedule-durable-timer-wakeups` 或 `durable-notification-outbox-with-injectable-admission`** —— 這三列 IH 已有，前兩列的處置是 `improved-writing`（「IH 有，且不遜於任何參考源；保留，不要退步」），第一列更是**五源共享列**。重做就是退步。
 
 ---
 
@@ -261,6 +279,7 @@ IH 能被**排程**與**自我啟動**，而且不會變成無人看管的迴圈
 2. 一個里程碑若引用的量測**早於它所在區域最後一次動到程式碼的 commit**，就**必須重量**（§1.1）。
 3. 里程碑完成後移入「已完成」，**連同它實際達成什麼、以及沒達成什麼**一起記 —— 不是只打勾。
 4. §5 的問題一旦有答案，對應里程碑的那一節就地更新，並註明是誰在何時決定的。
+5. **這份文件的第一次審查（2026-09-15，人類複審）就產生了一次範圍更正**：M7 的 T5 範圍由「喚醒與延續」縮為「自我喚醒與抑制閘」，因為實測顯示 IH 已有事件喚醒與持久計時器，而 opencode-fork 的 `wake` 也是事件驅動。**這是 §1.1 重量原則的第一次實際作用，不是例外。**
 
 ---
 
