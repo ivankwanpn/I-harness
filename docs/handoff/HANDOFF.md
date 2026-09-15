@@ -57,6 +57,49 @@ git switch main && git merge --no-ff origin/m62 && git push origin main
 
 This is documented rather than executed because the repo's own discipline says **merge timing into `main` is the human's decision** (`d309e68e`). Until that happens, **open the next milestone branch off `m62`, not off `main`.**
 
+**Correction, 2026-09-15 — recorded on `m64`.** The paragraph above says "Nothing
+unique was lost". That is true of what `origin/m63` *held*, and it is what this
+branch could see. It is **not** true of what `m63` *carried*: that machine had
+**17 unpushed commits** on its own `m63` — the entire "opencode-fork narrow fix" —
+and they were abandoned rather than merged. Two mistakes were made on that branch,
+and both were ours, not accidents:
+
+1. **It was opened off `main` while `m62` was still the live milestone branch.**
+   `main` had been fast-forwarded only as far as `62711537`, and `m62` kept
+   receiving commits afterwards. So every commit on `m63` sat on a base 7,651
+   lines stale, including an older `verify-citations.mjs` that silently skipped
+   1,532 citations — working there would have resurrected a bug `m62` had already
+   fixed.
+
+2. **The audit work on it was measured against the wrong revision.** That work
+   concluded `packages/core/src/session/kernel/` "does not exist in the 999.0.19
+   revision" — which is correct *for 999.0.19* — and on that basis retired seven
+   mechanisms, one `forkDeltas` entry and several prose clauses. But the audited
+   revision is **999.0.20**, where the subsystem is present:
+   `packages/core/src/session/kernel/` holds `coordinator.ts` (828 lines),
+   `lifecycle-store.ts` (929), `recovery-planner.ts` (179), `tool-scheduler.ts`
+   (133) and `diagnostics.ts` (73), and every identifier that work called
+   "zero-match" is there — `LifecycleStore` 126, `RecoveryPlanner` 31,
+   `KernelUnavailableError` 15, `session_execution` 22, `TurnCoordinator` 13,
+   `acquireIdle` 12, `selectSettlement` 3.
+
+   **The D3 data was right; the measurement used the wrong tree.** Pointing
+   `SOURCE_PATHS` at the trees this machine actually has resolves **8678/8678
+   citations with 0 missing files**, and the baselines in §5 reproduce exactly.
+   Nothing in the audit data needed the "fix" `m63` applied to it — and because
+   that fix was never pushed, `m62` never inherited it, which is the only reason
+   it is still intact.
+
+So `m63` was not merely a dead end that emptied itself: it was a wrong branch
+carrying wrong conclusions, and deleting it was the right call rather than a
+loss. Two things follow. The restore command above should **not** be run, and the
+name should not be reused — `m64` continues from `m62` for that reason.
+
+The durable lesson is one level up from this section's own: a claim about which
+*tree* is authoritative rots exactly as a claim about which *branch* is. Both were
+asserted in documents, and both were stale when read. The repair is the same in
+both cases — measure it, and make the wrong answer fail loudly instead of quietly.
+
 ---
 
 ## 1. There are TWO checkouts. Do not confuse them — it has already happened once.
