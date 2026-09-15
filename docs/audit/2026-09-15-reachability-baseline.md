@@ -4,6 +4,18 @@ Milestone **M1 Phase A ("the reachability sweep")**, Task 5 of 5. Branch `m64`. 
 `scripts/audit/check-reachability.mjs` (Tasks 1–4). This task changed **no code**: the only file it
 creates is this one. Phase A measures; Phase B fixes.
 
+**Sources this document refers to.** The plan is
+`docs/superpowers/plans/2026-09-15-m1-reachability-sweep.md` (its Task 5 is this task; Tasks 1–4 built
+the tool). The four source lists are reconciled against the roadmap
+`docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md` §3.M1, D1
+`docs/audit/data/2026-09-11-d1-front.md`, and sandbox spec §7
+`docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md`. A few figures are carried
+forward from the Tasks 1–4 working notes in the gitignored scratch tree
+`.superpowers/sdd/2026-09-15-m1-reachability-sweep/` (chiefly `task-2-report.md` and `progress.md`):
+each such citation is marked, and those paths are **not present in a fresh checkout**, which is why
+every carried number is stated with its counting rule and never as the document's only evidence for a
+claim.
+
 ---
 
 ## 1. What this is
@@ -197,21 +209,25 @@ spec §7; `tui --yes` in both D1 §跨包主線 8 and the CLI surface). Verdicts
 
 **Tally: `already-fixed` 2 · `still-holds` 13 · `by-design` 7.**
 
-An item the scanner did **not** surface is still a row, and the "surfaced?" column says why not.
-Every verdict below rests on a command run in this task, not on the source document.
+An item the scanner did **not** surface is still a row. The `surfaced?` column records **what the tool
+emitted for that item** — a finding kind and subject where it emitted one, a bold **no** where it did
+not. It is not a reason column: where a non-surfacing needs explaining, the explanation is in the
+`Measured evidence` cell, because the reason is always a fact about the tree (which file anchors
+match, which names are re-exported, which mention suppressed the row) rather than a property of the
+column. Every verdict below rests on a command run in this task, not on the source document.
 
 ### 4.1 D1 §跨包主線 8
 
 | # | Item | Surfaced? | Measured evidence | Verdict |
 |---|---|---|---|---|
-| 1 | no tool schema declares `sandbox_permissions` | no | `sandbox_permissions` occurs in **7** production files: `packages/fs/src/index.ts:81,247,250` (the exact three lines cited by the brief), plus `packages/shell/src/index.ts:194,239,352,412` and `packages/terminal/src/tool.ts:86,187,226`, and the ladder consumes it at `packages/sandbox/src/call-policy.ts:141,177,192` | **`already-fixed`** |
-| 2 | the sandbox escalation module appears only in tests | no | `WIDER_MODES` is used on a production path at `packages/sandbox/src/denial.ts:91,93` (the exact two lines cited by the brief) | **`already-fixed`** |
+| 1 | no tool schema declares `sandbox_permissions` | no | `sandbox_permissions` occurs in **7** production files: `packages/fs/src/index.ts:81,247,250` (the exact three lines cited by the brief), plus `packages/shell/src/index.ts:194,239,352,412` and `packages/terminal/src/tool.ts:86,187,226`, and the ladder consumes it at `packages/sandbox/src/call-policy.ts:141,177,192`. Not surfaced because there is no longer an orphan to find: the claim is false, so no scanner class can emit a row for it | **`already-fixed`** |
+| 2 | the sandbox escalation module appears only in tests | no | `WIDER_MODES` is used on a production path at `packages/sandbox/src/denial.ts:91,93` (the exact two lines cited by the brief). Not surfaced for the same reason as row 1 — the module is reached from production, so there is nothing to report | **`already-fixed`** |
 | 3 | `buildWireClient` | yes — `unused-export @i-harness/provider#buildWireClient` | the name occurs in exactly **2** files: its declaration (`packages/provider/src/index.ts:762`) and `packages/provider/test/provider.test.ts` | **`still-holds`** |
 | 4 | `mountPreset` | **no** | the name occurs in 3 files: declaration `packages/preset/src/index.ts:30`, a **comment** `packages/tui/src/views/light-personas.ts:2` (`// persona catalog (verified: @i-harness/preset exports parsePreset/mountPreset`), and `packages/preset/test/preset.test.ts`. It has **no production caller**. It did not surface because the comment in an unrelated production file counts as a mention — see §7 item 4 | **`still-holds`** |
 | 5 | `withdrawPlanModeTool` | yes — `unused-export @i-harness/plan-mode#withdrawPlanModeTool` | the name occurs in exactly **1** file in the entire tree: `packages/plan-mode/src/index.ts:36` | **`still-holds`** |
 | 6 | `sandbox/mode` has no producer | **no** | the quoted literal `"sandbox/mode"` occurs on **19** lines of the walked tree: **17 in `test/` files** and **2 in production code** — the event-type declaration (`packages/core-session/src/index.ts:43`) and the **reader** (`packages/sandbox-policy/src/session-mode.ts:9`) — with **0** in production comments. 14 of the 17 test lines are `append(…)` calls, and **0** production files append the event. It did not surface because class 2 is anchored on the declaring file's **name** (`/(^\|\/)(events?\|manifest\|public-event-manifest)\.ts$/`), which matches exactly **one** file in this repo — `packages/telemetry/src/manifest.ts` — while this union lives in `packages/core-session/src/index.ts` | **`still-holds`** |
 | 7 | `tui --yes` | yes — `unread-flag --yes` | see §3.2 item 2: `flags.yes` is assigned at `apps/tui/src/index.ts:445` and read nowhere; `--yes` is additionally advertised in two usage strings (`:9`, `:461`) | **`still-holds`** |
-| 8 | `estimateAssemblyOverhead` / `bindAuthRefreshStatus` | **no** | both are declared and **used inside their own module**: `packages/session-executor/src/assembly.ts:220` + call at `:762`, and `:234` + call at `:618`. `packages/session-executor/src/index.ts` (22 lines) re-exports `createSessionAssembly`, `ModelUnavailableError`, `AssemblyOptions`, `ModelPolicy`, `SessionAssembly`, `createDurableSessionLoader`, `createSessionService` and three types — **not** these two. The only importer is `packages/session-executor/test/assembly.test.ts:19-24`, which reaches them through the relative path `../src/assembly.ts`, i.e. **not** through the package entry. So D1's claim (exported from `assembly.ts`, not re-exported by `index.ts`, `package.json` exposes only `"."` → unreachable outside the package) **still holds as written**. It did not surface because class 1 walks only `packages/*/src/index.ts` entries, and the entry does not export these names. Half the sentence that introduced them in D1 ("no production caller") is however no longer true — both are called on a production path inside `assembly.ts`, so the residue is a re-export decision, not a wiring gap | **`still-holds`** |
+| 8 | `estimateAssemblyOverhead` / `bindAuthRefreshStatus` | **no** | both are declared and **used inside their own module**: `packages/session-executor/src/assembly.ts:220` + call at `:762`, and `:234` + call at `:618`. `packages/session-executor/src/index.ts` is 22 lines and re-exports **exactly 14 names**, none of them these two — in full: `createSessionAssembly`, `ModelUnavailableError`, `AssemblyOptions`, `ModelPolicy`, `SessionAssembly` (all from `./assembly.ts`), `createDurableSessionLoader` (from `./durable-session.ts`), `createSessionService`, `SessionModelBindingResult`, `SessionQueueItem`, `SessionService`, `SessionServiceOptions` (from `./service.ts`), `AgentTaskStatus`, `AgentTaskView` (from `@i-harness/subagent`), `ReasoningEffort` (from `@i-harness/core-agent`). The only importer of the two is `packages/session-executor/test/assembly.test.ts:19-24`, which reaches them through the relative path `../src/assembly.ts`, i.e. **not** through the package entry. So D1's claim (exported from `assembly.ts`, not re-exported by `index.ts`, `package.json` exposes only `"."` → unreachable outside the package) **still holds as written**. It did not surface because class 1 walks only `packages/*/src/index.ts` entries and reports the names **that entry exports** — these two are not among them, so there is nothing for the scanner to test. Half the sentence that introduced them in D1 ("no production caller") is however no longer true — both are called on a production path inside `assembly.ts`, so the residue is a re-export decision, not a wiring gap | **`still-holds`** |
 
 ### 4.2 D1 §未竟事項
 
@@ -233,7 +249,7 @@ The roadmap cites "the sandbox spec §7"; the residuals are `docs/superpowers/sp
 | 1 | shell runtime denial unclassified (`classifyDenial`'s callers are only tests) | **no** | `classifyDenial` is declared at `packages/sandbox-local/src/runner-failures.ts:23` and its only importer is `packages/sandbox-local/test/local.test.ts:3`. The field it consumes, `denialSignatures`, **is** published in production (`packages/sandbox-local/src/index.ts:83`, `packages/sandbox-windows-acl/src/index.ts:647`) but is read in production only at `packages/sandbox-local/src/runner-failures.ts:26` — i.e. inside the test-only classifier. `packages/exec/src/index.ts:103` only mentions it in a comment. So a real OS denial inside a confined shell reaches the model as an ordinary non-zero exit plus raw stderr. Not surfaced because `runner-failures.ts` is not re-exported from `packages/sandbox-local/src/index.ts` (which exports exactly `LocalSandboxConfig`, `createLocalSandbox`, `probeBwrap`), and class 1 walks package entries only | **`still-holds`** |
 | 2 | `exitCode: -1` is six-valued | **no** | measured `-1` synthesis sites: `packages/shell/src/index.ts:217` (ladder refusal), `:268` (sandbox-unavailable refusal), `:372` (shell refusal with `kind: "refused"`), `packages/exec/src/index.ts:209` (`child.on("close", (code) => doneFn(code ?? -1))` — so any signal death or Windows force-kill is also `-1`), `packages/workflow/src/runner.ts:222` (synthesised for a **thrown** error), plus `packages/tui/src/app/slash/impl/workflow2.ts:220` with the same `code ?? -1` shape. No scanner class covers a numeric sentinel | **`still-holds`** |
 | 3 | `allowed-once` consumed by a call that fails for an unrelated reason | **no** | verified in code: `packages/fs/src/index.ts:305` runs the escalation ladder (`resolveWriteCall`, which is where the one-shot grant is asked for and consumed) and only **then**, at `:308`, does `if (old_string === "") throw new FsToolError("FS_AMBIGUOUS_EDIT", …)`. `apply_patch` is the same shape: the ladder at `:381`, `applyPatch` at `:384` with per-hunk `guardWrite`. So a granted widening is spent on a call that fails validation the widening could not have helped. Not surfaced: no scanner class covers call ordering. The spec itself says of this item *"記錄而不修"* and gives the reason — see allowlist §6 | **`by-design`** — allowlist §6 |
-| 4 | the `sandbox/mode` scenario has no producer | **no** | identical to §4.1 item 6 — same measurement, one row, cross-referenced rather than re-derived. Note the disagreement recorded in §6: the spec calls this *"a reachability statement, not a defect"*, while roadmap §3.M1 makes it M1's headline case | **`still-holds`** |
+| 4 | the `sandbox/mode` scenario has no producer | **no** | identical to §4.1 item 6 — same measurement, one row, cross-referenced rather than re-derived. The non-surfacing reason is the same: the event union is declared in `packages/core-session/src/index.ts:43`, which class 2's file-name anchor does not match (it matches exactly one file, `packages/telemetry/src/manifest.ts`). Note the disagreement recorded in §6: the spec calls this *"a reachability statement, not a defect"*, while roadmap §3.M1 makes it M1's headline case | **`still-holds`** |
 
 ### 4.4 CLI surface
 
@@ -241,8 +257,8 @@ The roadmap cites "the sandbox spec §7"; the residuals are `docs/superpowers/sp
 |---|---|---|---|---|
 | 1 | `tui --yes` parsed but never read | yes — `unread-flag --yes` | identical to §4.1 item 7 — cross-referenced, not re-derived | **`still-holds`** |
 | 2 | unknown subcommands not rejected | **no** | `apps/cli/src/index.ts` dispatches by exact equality on `args[0]`: `web` `:102`, `sdk` `:129`, `sessions` `:134`, `acp` `:139`, `tui` `:145`, `__dist-selfcheck` `:153`, `--version`/`-v` `:156`, `help`/`--help`/`-h` `:160`; then `:164` `if (args[0] !== "run") return Promise.resolve(runTui(parseFlags(args)))` at `:167`. So `i-harness --sandbox x run t` — and any typo — launches the TUI. Not surfaced: no scanner class covers a dispatch chain. The fall-through is documented as deliberate at `:142-144` (*"the GROK-STYLE DEFAULT — a bare `i-harness` (**or any non-subcommand first token**) launches the TUI"*) | **`by-design`** — allowlist §6 |
-| 3 | no `--flag=value` support | **no** | across the whole tree: `apps/` contains **zero** occurrences of `split("=")`, `indexOf("=")` or `startsWith("--")`; `packages/` contains exactly one `startsWith("--")` — `packages/guard-approval/src/danger-class.ts:87`, a shell-flag classifier, not a parser. Both parsers match whole tokens (`apps/tui/src/index.ts:441-456` `switch (argv[i])`; `apps/cli/src/index.ts:181,305` `args.indexOf("--sandbox")` / `a === "--model"`) | **`still-holds`** |
-| 4 | `i-harness run --help` runs a task named `"--help"` | **no** | `apps/cli/src/index.ts:160` catches `--help` only as `args[0]`, so `run --help` passes it; the task is then built at `:304-309` by filtering out exactly seven flags (`--model`, `--api-key`, `--yes`, `--session-dir`, `--resume`, `--telemetry`, `--sandbox`) and their values, so the literal `"--help"` survives into `task`, is non-empty at `:310`, and reaches `runHeadless` at `:333` | **`still-holds`** |
+| 3 | no `--flag=value` support | **no** | across the whole tree: `apps/` contains **zero** occurrences of `split("=")`, `indexOf("=")` or `startsWith("--")`; `packages/` contains exactly one `startsWith("--")` — `packages/guard-approval/src/danger-class.ts:87`, a shell-flag classifier, not a parser. Both parsers match whole tokens (`apps/tui/src/index.ts:441-456` `switch (argv[i])`; `apps/cli/src/index.ts:181,305` `args.indexOf("--sandbox")` / `a === "--model"`). Not surfaced: no scanner class covers argument *syntax*; all five look for declarations, not for shapes a parser fails to accept | **`still-holds`** |
+| 4 | `i-harness run --help` runs a task named `"--help"` | **no** | `apps/cli/src/index.ts:160` catches `--help` only as `args[0]`, so `run --help` passes it; the task is then built at `:304-309` by filtering out exactly seven flags (`--model`, `--api-key`, `--yes`, `--session-dir`, `--resume`, `--telemetry`, `--sandbox`) and their values, so the literal `"--help"` survives into `task`, is non-empty at `:310`, and reaches `runHeadless` at `:333`. Not surfaced: no scanner class covers argument routing | **`still-holds`** |
 
 ### 4.5 Adjacent rows from the same D1 sections (recorded, not list items)
 
@@ -273,33 +289,73 @@ cheap to measure. Recorded so Phase B does not have to rediscover them.
 
 - a **census** of all **12** non-`unused-export`, non-source-list rows — 1 `producerless-event`,
   3 `unpushed-capability`, 8 `unconsulted-setting`;
-- a **systematic sample of 27** from the 507 remaining `unused-export` rows: sorted by
-  `(kind, subject, evidence)`, take every ⌊507 / 27⌋ = **18th** row starting at index 0, i.e. indices
-  0, 18, 36, …, 468.
+- a **systematic sample of 27** from the 507 remaining `unused-export` rows, drawn in **the tool's own
+  emission order** — the order in which `check-reachability.mjs` pushes class-1 findings, minus the
+  five source-list rows — starting at index 0 and stepping by ⌊507 / 27⌋ = **18**, stopping once 27
+  rows are held.
 
-The 27 sampled class-1 subjects, in draw order:
+  **What that order is, precisely:** `collectTs` (`scripts/audit/check-reachability.mjs:794-807`)
+  walks with a raw `readdirSync` and never sorts, and the scanners are `flatMap`'d in class order
+  (`:826`). So the emission order is **the filesystem's `readdir` order** — alphabetical on this NTFS
+  checkout only because NTFS returns directory entries in index order, and hash order on ext4. Within
+  a package it is declaration order in that package's `index.ts`. It is **not a property of the tool**
+  and is **not stable across filesystems**, so this draw rule cannot be replayed portably.
 
-```
-@i-harness/acp#ACP_SERVER_NAME, @i-harness/core-agent#AgentConfig,
-@i-harness/core-session#PlanModeView, @i-harness/feedback#MAX_FEEDBACK_NOTE_BYTES,
-@i-harness/goal#GoalStateErrorCode, @i-harness/hooks#HookDecision,
-@i-harness/llm-openai-compatible#OpenAICompatibleConfig, @i-harness/mcp-client#MAX_PUBLIC_NAME_LENGTH,
-@i-harness/plugin-registry#readMcpServers, @i-harness/provider#EffectiveContextInput,
-@i-harness/rewind#GitProbeOptions, @i-harness/sandbox-local#probeBwrap,
-@i-harness/schedule#EveryScheduleRecord, @i-harness/sdk#SdkConnectionError,
-@i-harness/session-persistence#TOOL_ABORTED_RECOVERY_RESULT, @i-harness/settings#SettingsStatusLineSegment,
-@i-harness/settings#LayeredSettingsStore, @i-harness/skills#MAX_SKILL_DEPTH,
-@i-harness/skills#SkillGetArgs, @i-harness/telemetry#TELEMETRY_MANIFEST,
-@i-harness/todo#validateTodoItems, @i-harness/tui#CancelTurnBindOptions,
-@i-harness/tui#PermissionKey, @i-harness/tui#ComposeRegionOptions,
-@i-harness/tui#editorBackspace, @i-harness/tui#NEW_SESSIONS_LABEL, @i-harness/tui-core#TtyStream
-```
+  This is also why the wrong rule was easy to publish: the drawn list *looks* alphabetical. It is not.
+  The counter-example is in the list itself — `@i-harness/settings#SettingsStatusLineSegment` is drawn
+  at index 270 and `@i-harness/settings#LayeredSettingsStore` at index 288, while a subject sort puts
+  `LayeredSettingsStore` first (`L` < `S`). Measured here: under a subject-sorted stride, **24 of the
+  27 published rows are not drawn at all** (only `@i-harness/core-agent#AgentConfig`,
+  `@i-harness/skills#MAX_SKILL_DEPTH` and `@i-harness/tui#editorBackspace` coincide). A reader who
+  applied a sorted-stride rule would audit a different set and compute a different precision table.
+
+**The 27 rows tabulated below are the sample of record — they are the sample, not a derivation of the
+rule, and they are load-bearing rather than illustrative.** A reader must not re-derive them: the
+§5.2 result is tied to exactly these rows, and re-drawing would invalidate it. Since the draw cannot
+be reproduced portably, this table *is* the definition of the sample. Each row is the
+`kind | subject | evidence` triple the tool itself emits, so every one can be located directly in
+`node scripts/audit/check-reachability.mjs --json` output. The `draw index` column records the row's
+position in *this run's* emission order (see the caveat above); it documents provenance and is not a
+recipe.
+
+| draw index | kind | subject | evidence |
+|---:|---|---|---|
+| 0 | `unused-export` | `@i-harness/acp#ACP_SERVER_NAME` | `packages/acp/src/index.ts` |
+| 18 | `unused-export` | `@i-harness/core-agent#AgentConfig` | `packages/core-agent/src/index.ts` |
+| 36 | `unused-export` | `@i-harness/core-session#PlanModeView` | `packages/core-session/src/index.ts` |
+| 54 | `unused-export` | `@i-harness/feedback#MAX_FEEDBACK_NOTE_BYTES` | `packages/feedback/src/index.ts` |
+| 72 | `unused-export` | `@i-harness/goal#GoalStateErrorCode` | `packages/goal/src/index.ts` |
+| 90 | `unused-export` | `@i-harness/hooks#HookDecision` | `packages/hooks/src/index.ts` |
+| 108 | `unused-export` | `@i-harness/llm-openai-compatible#OpenAICompatibleConfig` | `packages/llm-openai-compatible/src/index.ts` |
+| 126 | `unused-export` | `@i-harness/mcp-client#MAX_PUBLIC_NAME_LENGTH` | `packages/mcp-client/src/index.ts` |
+| 144 | `unused-export` | `@i-harness/plugin-registry#readMcpServers` | `packages/plugin-registry/src/index.ts` |
+| 162 | `unused-export` | `@i-harness/provider#EffectiveContextInput` | `packages/provider/src/index.ts` |
+| 180 | `unused-export` | `@i-harness/rewind#GitProbeOptions` | `packages/rewind/src/index.ts` |
+| 198 | `unused-export` | `@i-harness/sandbox-local#probeBwrap` | `packages/sandbox-local/src/index.ts` |
+| 216 | `unused-export` | `@i-harness/schedule#EveryScheduleRecord` | `packages/schedule/src/index.ts` |
+| 234 | `unused-export` | `@i-harness/sdk#SdkConnectionError` | `packages/sdk/src/index.ts` |
+| 252 | `unused-export` | `@i-harness/session-persistence#TOOL_ABORTED_RECOVERY_RESULT` | `packages/session-persistence/src/index.ts` |
+| 270 | `unused-export` | `@i-harness/settings#SettingsStatusLineSegment` | `packages/settings/src/index.ts` |
+| 288 | `unused-export` | `@i-harness/settings#LayeredSettingsStore` | `packages/settings/src/index.ts` |
+| 306 | `unused-export` | `@i-harness/skills#MAX_SKILL_DEPTH` | `packages/skills/src/index.ts` |
+| 324 | `unused-export` | `@i-harness/skills#SkillGetArgs` | `packages/skills/src/index.ts` |
+| 342 | `unused-export` | `@i-harness/telemetry#TELEMETRY_MANIFEST` | `packages/telemetry/src/index.ts` |
+| 360 | `unused-export` | `@i-harness/todo#validateTodoItems` | `packages/todo/src/index.ts` |
+| 378 | `unused-export` | `@i-harness/tui#CancelTurnBindOptions` | `packages/tui/src/index.ts` |
+| 396 | `unused-export` | `@i-harness/tui#PermissionKey` | `packages/tui/src/index.ts` |
+| 414 | `unused-export` | `@i-harness/tui#ComposeRegionOptions` | `packages/tui/src/index.ts` |
+| 432 | `unused-export` | `@i-harness/tui#editorBackspace` | `packages/tui/src/index.ts` |
+| 450 | `unused-export` | `@i-harness/tui#NEW_SESSIONS_LABEL` | `packages/tui/src/index.ts` |
+| 468 | `unused-export` | `@i-harness/tui-core#TtyStream` | `packages/tui-core/src/index.ts` |
 
 Per row the check was mechanical: recompute the module(s) that **declare** the name (the tool's
 `origins`), blank re-export statements the way `withoutReExportStatements` does, then classify every
 remaining occurrence of the name across the 360 production files as a declaration, a comment, or
-code. Reproduce with
-`node .superpowers/sdd/2026-09-15-m1-reachability-sweep/t5-probe.mjs sample`.
+code. **The reproduction path for this baseline is the §3 command
+(`node scripts/audit/check-reachability.mjs --json`) checked against the §2 digest** — not any scratch
+script. The probe used to draw the sample lived in the gitignored `.superpowers/sdd/` scratch tree and
+is not available in a fresh checkout; the 27 rows are published above precisely so that nothing
+depends on it.
 
 ### 5.2 Result
 
@@ -318,7 +374,24 @@ Two numbers follow, and M2 needs both because they answer different questions:
 - **Against the ratchet's operative claim** ("this declaration has no consumer on a production
   path"): **0 of 39.** Not one sampled row is exported-and-consumed, produced, read, pushed or
   consulted anywhere the tool should have seen. **The ratchet is trustworthy as a set of unconsumed
-  declaration edges.**
+  declaration edges** — with three limits that this sample cannot lift, stated so the sentence is not
+  read as a guarantee:
+  1. **The bound, not a point estimate.** 0 false positives in 27 class-1 rows bounds the class-1
+     false-positive rate at only **≈ 11 % (95 %, one-sided — the rule of three: 3 / 27 = 11.1 %)**.
+     "0 of 27" is consistent with a real rate of up to about one row in nine.
+  2. **507 is the population, not the sampling frame.** The stride stops once 27 rows are held, so the
+     last row drawn sits at index 468 and **indices 469–506 (38 rows) can never be drawn** by this
+     rule. The 27 rows are a systematic sample of the first 469 rows of the emission order, not of all
+     507 in equal proportion.
+  3. **Shared-attribution blindness, by construction.** The per-row check reuses the tool's own
+     `origins` attribution and its `withoutReExportStatements` blanking, so **any attribution error
+     the tool makes and the check inherits is invisible to this sample** — it can falsify the tool's
+     *consumer* test, not its *attribution*. Only reading the code by hand, as in the bucket tables
+     below, partially compensates.
+
+These limits apply to the class-1 block only; classes 2–5 were a census, not a sample, and their
+12/12 result is unaffected. They are also why the sentence above is scoped to *unconsumed declaration
+edges*: that is the claim the sample supports, and it is a weaker claim than "these are orphans".
 
 The operational consequence, which is the single most useful sentence for M2: **for 26 of the 27
 sampled class-1 rows the correct remediation is "drop the `export` keyword", not "delete the
@@ -372,16 +445,27 @@ leaf words that do occur — `language`, `bash` — are unrelated locals and the
 ### 5.3 The method limitation this baseline inherits: **the plan's five snippets were all broken**
 
 **Every one of the plan's five Step-3 code snippets was broken on this repo, and four of the five
-failed by returning zero findings.** Classes 2, 4 and 5 would each have reported **nothing**. Two of
-those I re-measured here rather than carrying them forward:
+failed by returning zero findings.** Classes 2, 3, 4 and 5 would each have reported **nothing**; only
+class 1 would have produced rows. ("The plan" throughout this document is
+`docs/superpowers/plans/2026-09-15-m1-reachability-sweep.md`; an identical draft copy sits at
+`.superpowers/sdd/m1-plan-draft.md`.) Three of the four are re-measured here rather than carried
+forward:
 
-- the drafted class-4 anchor `/(^|\/)(caps|capabilities)\.ts$/` matches **0** of the 729 tracked files
-  (measured directly), so the drafted scanner reported nothing over a tree that holds three unpushed
-  capabilities;
-- the drafted class-5 anchor `/(^|\/)(schema|settings-schema)\.ts$/` likewise matches **0** of the 729
-  tracked files (measured directly). And class 5's reader, reduced to its drafted string-only form,
-  returns **29** `unconsulted-setting` rows instead of **8** — **including `compaction.auto`, which
-  is genuinely read at `apps/cli/src/index.ts:215` (`const compactAuto = noCompact ? false :
+- the drafted **class-4** anchor `/(^|\/)(caps|capabilities)\.ts$/` matches **0** of the 729 tracked
+  files (measured directly), so the drafted scanner reported nothing over a tree that holds three
+  unpushed capabilities;
+- the drafted **class-3** snippet (`docs/superpowers/plans/2026-09-15-m1-reachability-sweep.md:378-395`)
+  decides a flag is read with a bare `\b<field>\b` test over the raw file text — line `:389` is
+  ``return new RegExp(`\\b${field}\\b`).test(ln)`` — excluding only the `case "…"` line and
+  `field:` / `field =` lines. For `--yes` the field is `yes`, and `\byes\b` matches inside the literal
+  `"--yes"` in the two usage strings (`apps/tui/src/index.ts:9`, `:461`), neither of which is excluded
+  — so `read` is `true` and the scanner reports **nothing** over a tree whose one real unread flag is
+  `--yes`. Shipped instead: `codeOnly` blanks string literals and trailing comments before the field
+  name is sought;
+- the drafted **class-5** anchor `/(^|\/)(schema|settings-schema)\.ts$/` likewise matches **0** of the
+  729 tracked files (measured directly). And class 5's reader, reduced to its drafted string-only
+  form, returns **29** `unconsulted-setting` rows instead of **8** — **including `compaction.auto`,
+  which is genuinely read at `apps/cli/src/index.ts:215` (`const compactAuto = noCompact ? false :
   settings.get().compaction.auto`)**. So the drafted reader would have **invented** a finding for the
   exact key the roadmap names as class 5's worked example. The 21-key difference is produced by the
   property test, which matches on the key's **leaf name only** — and the leaves here include very
@@ -395,7 +479,7 @@ those I re-measured here rather than carrying them forward:
   For the rest — `tui.prefs.statusLine.mode`, `tui.prefs.statusLine.items`, `llm.providers`,
   `llm.defaultModel.provider`, `llm.defaultModel.model` — the suppression is **not** evidence of a
   read; `tui.prefs.statusLine.mode` in particular is cleared by any of 140 unrelated `.mode` accesses.
-- class 2 is **structurally** blind here: its file anchor matches exactly **one** file in the whole
+- **class 2** is **structurally** blind here: its file anchor matches exactly **one** file in the whole
   tree, `packages/telemetry/src/manifest.ts`, while the event union it was meant to sweep lives in
   `packages/core-session/src/index.ts:43`. That is why `sandbox/mode` — M1's headline unreachability,
   and the roadmap's own named class-2 example — is **not** in the 525.
@@ -438,20 +522,27 @@ seeded with the §2 digest and fail only on *new* rows, never on the existing se
 | sandbox spec §7 item 3 | `allowed-once` consumed by a call that fails for an unrelated reason | The spec records this as "記錄而不修" (recorded, not fixed) with its reason — reordering the guard would change **which** refusal a granted-but-invalid call returns — and the ordering is deliberate in code: `packages/fs/src/index.ts:305` spends the grant before `:308`'s unrelated `old_string === ""` validation. |
 | CLI surface 2 | unknown subcommands not rejected | `apps/cli/src/index.ts:142-144` documents the fall-through as the intended grok-style default — "a bare `i-harness` (or any non-subcommand first token) launches the TUI in the current folder" — so rejecting unknown subcommands would remove a documented behaviour; the accepted cost is that a mistyped subcommand opens the TUI instead of erroring. |
 
-### 6.3 Proposed class-level rule — M2 must confirm
+### 6.3 Proposed class-level rule — **not in force**, M2 must decide
 
-**`@i-harness/sdk`: 17 `unused-export` rows, all with evidence `packages/sdk/src/index.ts`.**
+**Status: a proposal. Nothing in this subsection is an allowlist entry today.** It is recorded so the
+decision is made once, explicitly, rather than 17 times quietly.
+
+**Proposed: `@i-harness/sdk`: 17 `unused-export` rows, all with evidence `packages/sdk/src/index.ts`.**
 Reason sentence: the SDK package is the **embedder-facing public surface**, so its exports are
 addressed to code outside this repository and "no in-repo production consumer" is the expected state
 rather than an orphan — which is exactly the case roadmap §3.M1 names ("`sdk` 的公開 API 本來就不該有
-內部呼叫者"). I did **not** adjudicate these 17 rows individually (R13); the rule is recorded here as a
-single decision for M2 to accept or reject wholesale. If accepted, the allowlist becomes 4 + 17 = 21
-findings plus the 7 source-list rows.
+內部呼叫者"). I did **not** adjudicate these 17 rows individually (R13). If M2 accepts the rule, the
+allowlist becomes 4 + 17 = 21 findings plus the 7 source-list rows; if M2 rejects it, all 17 stay in
+the ratchet's baseline population.
 
 ### 6.4 What is deliberately **not** on the allowlist
 
-- **Nothing** in the 507 unadjudicated class-1 rows is allowlisted. Absence from this allowlist is
-  not a claim that a row is a defect; it is a claim that nobody has looked yet.
+- **As of this document, the allowlist contains only the 4 findings in §6.1 and the 7 source-list rows
+  in §6.2.** Everything else in the 525 is unadjudicated or reported as `still-holds`.
+- **None of the 507 unadjudicated class-1 rows is allowlisted**, and the 17 `@i-harness/sdk` rows are
+  among those 507 — §6.3 only *proposes* allowlisting them and is not in force (see its status line).
+  Absence from this allowlist is not a claim that a row is a defect; it is a claim that nobody has
+  looked yet.
 - The **26 bucket-B rows of §5 are not allowlist candidates.** They are live symbols whose `export`
   keyword has no consumer; the fix is to narrow the declaration, not to grant an exception.
 - `--yes`, the `plugins.*` / `language` / `fontSize` / `searchBackend` / `onboarding.welcomeNoticeVersion`
@@ -483,9 +574,15 @@ outside the package can reach.
 consumer and the chain terminates nowhere in particular. The re-export-blanking rule
 (`withoutReExportStatements`, `:286-293`) applies only to the entry file currently being scanned, so
 a re-export statement in **any other** production file counts as a mention and suppresses the
-finding. **128 named re-export statements** were measured in Tasks 1–4 (carried forward; not
-re-derived here — a coarser regex over the 729 files gives a larger count under a wider definition,
-so the number is not comparable and is not restated as mine).
+finding. **128** such statements were measured in Task 2, by the counting rule it states: *"statements
+across package entry points [that] are named re-exports carrying a source specifier —
+`export { X } from "./mod.ts"`"* (source: `.superpowers/sdd/2026-09-15-m1-reachability-sweep/task-2-report.md:390-392`
+— a gitignored scratch artifact, absent from a fresh checkout).
+Carried forward, not re-derived here. The counting rule was not re-measured in this task and the
+figure has no published alternative under a second rule; my own two attempts over the 729-file
+universe gave **130** (single-line `export { … } from "…"` *without* a `type` modifier, 33 files) and
+**214** (the same allowing `export type { … }`, 36 files) — different rules, so not comparable, and
+neither is offered as a correction.
 
 **4. A name used only inside its declaring module is still reported, because telling a declaration
 from a call inside one file needs real parsing.** Measured in §5.2: **26 of the 27 sampled class-1
@@ -507,13 +604,29 @@ original defect**: the module-scoping that made the entry-point scan report a na
 imports, re-exports and calls (see the `EntryCallSite` self-test case, `:705-713`).
 
 **6. Four symbols whose only in-repo mention is a comment stay unreported**, and comments cannot
-simply be stripped: `settings#FieldSpec` (`packages/settings/src/index.ts:506`),
-`subagent#TaskConcurrencyLimitError` (`:62`), `tui#SdkClientLike` (`:54`), `workflow#WorkflowJobStore`
-(`:4`). Re-checked here: none of the four appears among the 525, and each is mentioned in a
-production file **other than** the module that declares it **only** inside a comment. Stripping
-comments is unsafe because **69 files contain a string literal with `//`** (carried forward from
-Tasks 1–4; not re-derived here — my own wider regex over the 729 files finds 89 files with a `//`
-inside a string literal, and 20 where that literal is not a URL, so again the definitions differ).
+simply be stripped. Each is listed with the module that **declares** it (so the export edge exists)
+and the **comment** that masks it (the actual mechanism — a comment in a production file other than
+the declaring module counts as a mention):
+
+| symbol | declaring module | the comment that masks it |
+|---|---|---|
+| `@i-harness/settings#FieldSpec` | `packages/settings/src/sections.ts:30` | `packages/settings/src/index.ts:506` — `* values remains the section API's mutate (the protocol enum FieldSpec). */` |
+| `@i-harness/subagent#TaskConcurrencyLimitError` | `packages/subagent/src/task-protocol.ts:67` | `packages/subagent/src/index.ts:62` — `// maxConcurrency 時 submit 以 TaskConcurrencyLimitError 失敗閉合（fail-closed）。` |
+| `@i-harness/tui#SdkClientLike` | `packages/tui/src/backend/remote.ts:179` | `packages/tui/src/index.ts:54` — `// dep) + the BackendClient adapter (createRemoteBackend; SdkClientLike is the` |
+| `@i-harness/workflow#WorkflowJobStore` | `packages/workflow/src/runner.ts:59` | `packages/workflow/src/index.ts:4` — `// WorkflowJobStore; createWorkflowExecutor exposes the ExecService-like job` |
+
+Re-checked here: none of the four appears among the 525, and each is mentioned in a production file
+**other than** the module that declares it **only** inside the comment above. Stripping comments is
+unsafe because **69 files contain a string literal with `//`** — Task 2's counting rule: *"a quoted
+run containing `//` on one line"*, over its 722-file universe (packages + apps, dot-directories
+skipped) (source: `.superpowers/sdd/2026-09-15-m1-reachability-sweep/progress.md:224`, restated with
+its rule and alternates at `:368`; both are gitignored scratch artifacts, absent from a fresh
+checkout). Carried forward, not re-derived here. Under the two other rules
+that same source measured, the figure is **74** (a URL-ish `://` literal) and **243** (any `//` after
+a quote character) — so read 69 as "files where a naive comment strip is unsafe" only under the first
+rule; under the widest it is ~3.5× larger. My own attempt over the 729-file universe with a
+one-line-quoted-run rule gave **89**, which is again a different universe and a different regex, not
+a correction.
 **Two source-list items are hidden by this same mechanism**, measured here: `mountPreset` (§4.1 item
 4) and `closeSessionQueries` (§4.5).
 
