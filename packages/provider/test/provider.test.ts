@@ -44,10 +44,16 @@ describe("provider registry", () => {
   // dispatcher was a dead declaration -- nothing reached it on any production path -- so
   // it and this case were deleted together: the `openai-completions` arm and the
   // unknown-protocol -> undefined arm tested dead code, and coverage of dead code has no
-  // value. The requirement a re-add must satisfy is recorded in M1 Phase B Task 4's
-  // commit message and report: dispatch on the RESOLVED wire protocol, never on the
-  // profile's adapter marker, or a user who re-wires a seeded route gets the wrong
-  // client. Wiring it changes provider-runtime's options type and is M with its own spec.
+  // value. Provenance: `git show 24e9395` (the deletion; its message states what the
+  // factory was for). One claim in that message is superseded -- there is NO live defect
+  // waiting for the factory. `adapterProtocol` in packages/provider-runtime/src/index.ts
+  // maps the resolved wire vocabulary onto the adapter markers injectively (only
+  // "openai-completions" is renamed, to "openai-compatible"; the other four pass
+  // through), so `buildModelClient` -- what provider-runtime actually calls -- already
+  // dispatches every resolved route to the client the deleted switch returned. A
+  // wire-keyed factory is useful only to a consumer that holds the resolved string and
+  // no profile (the frozen web build), so re-adding one is new public surface with no
+  // current consumer.
 
   it("buildModelClient throws on unknown protocol", () => {
     expect(() => buildModelClient({ name: "x", displayName: "X", protocol: "bogus" as never }, "m")).toThrow(/protocol/i)
