@@ -18,8 +18,14 @@ instrument and a measured baseline; **Phase B acts on that baseline's verdicts**
 - Baseline: `docs/audit/2026-09-15-reachability-baseline.md`
 - Instrument: `scripts/audit/check-reachability.mjs`
 
-**Branch:** `m64`. **Phase B base:** `fbfbfb5`. Work is committed in small per-task commits; nothing
-outside `packages/*` and `apps/cli` was touched, and no frozen frontend file was modified.
+**Branch:** `m64`. **Phase B base:** `fbfbfb5`. Work is committed in small per-task commits, and no
+frozen frontend file was modified. **Corrected 2026-09-15 by re-measurement:** this line also said
+"nothing outside `packages/*` and `apps/cli` was touched", and that is false for the range as a whole
+— measured `git diff --name-only fbfbfb5..HEAD`, the range touches **12 `docs/` files**, including
+three audit-corpus JSONs under `docs/audit/data/`. It was already false at this handoff's own
+revision `d682a50b`, where the range had touched two of them
+(`docs/audit/2026-09-15-reachability-baseline.md` and this file); the later fix waves added the rest.
+The frontend half of the sentence holds: no frozen path was modified anywhere in the range.
 
 ---
 
@@ -31,9 +37,20 @@ outside `packages/*` and `apps/cli` was touched, and no frozen frontend file was
 | 2 | Made the event reader validate against its own vocabulary | `1ca5fd8`..`f4de68b` | clean (1 fix round + scoped re-review) |
 | 3 | `i-harness run` rejects unknown flags instead of turning them into the prompt | `f4de68b`..`b96d162` | clean (1 fix round + scoped re-review) |
 | 4 | Deleted two dead declarations (`buildWireClient`, `withdrawPlanModeTool`) | `b96d162`..`cd9579e` | clean (1 fix round + scoped re-review) |
-| 5 | Un-export three names in `session-executor` and reroute their tests | `cd9579e`..`06d684c` | **NOT REVIEWED** |
-| 6 | Reconciled the baseline's verdicts, allowlist and row tally | `637cdd7` | **NOT REVIEWED** |
-| 7 | Baseline errata, post-Phase-B digest, M2 blind-spot requirements | `06d684c`..`17cdb25` | **NOT REVIEWED** |
+| 5 | Un-export three names in `session-executor` and reroute their tests | `637cdd7`..`06d684c` | **APPROVED** — reviewer session `945e22d3` (spec ✅; one plan-mandated Important parked by ruling; 4 minors) |
+| 6 | Reconciled the baseline's verdicts, allowlist and row tally | `cd9579e`..`637cdd7` | **NEEDS FIXES → ADDRESSED** — reviewer `bbf1d419`; fixed in `5b301609`; re-review `c4dc27a9`: all findings addressed |
+| 7 | Baseline errata, post-Phase-B digest, M2 blind-spot requirements | `06d684c`..`17cdb25` | **NEEDS FIXES → ADDRESSED** — reviewer `3cd389db`; same fix wave `5b301609`; re-review `c4dc27a9`: all findings addressed |
+
+**Corrected 2026-09-15 by re-measurement — those three `NOT REVIEWED` flags were stale and false,
+and Task 5's range swallowed Task 6's whole commit.** All four reviews had run; their verdicts, the
+reviewer sessions that produced them and the ruling one of them parked are copied into **the review
+ledger below**, because the ledger that holds them is gitignored like the implementer's. Left as
+written, the flags would have made the next session re-dispatch three completed reviews. Two range
+corrections come with them: Task 5 is `637cdd7`..`06d684c` — the old cell said `cd9579e`..`06d684c`,
+which is **two** commits, because Task 6 (`637cdd7`) landed *before* Task 5 (`06d684c`) — and Task 6
+is `cd9579e`..`637cdd7`. Measured: `git log --oneline cd9579e9..06d684c6` lists both `06d684c6` and
+`637cdd70`, while `git log --oneline 637cdd70..06d684c6` lists only `06d684c6` and
+`git log --oneline cd9579e9..637cdd70` only `637cdd70`.
 
 **Instrument state:** `reachability: 731 ts files, 523 finding(s)`; digest
 `5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`, computed as sha256 over the
@@ -83,29 +100,124 @@ the declaring module **is** added to `origins`, and excluding it at `:364` **man
 measured: re-exporting `classifyDenial` through `sandbox-local`'s entry moves the count `523 → 524`
 (experiment run and reverted). Two different mechanisms, both real, in the same area.
 
+### The review ledger — verdicts, rulings and residuals (2026-09-15)
+
+**Why this section exists:** the review verdicts were produced by a second session whose ledger is
+`.superpowers/sdd/2026-09-15-m1-phase-b-wire-the-unwired/progress.md` — **gitignored, like the
+implementing session's** — so without this section the milestone's review history dies with that
+workspace. **The ids below are that ledger's review-session ids, not git revisions:**
+`git log 945e22d3` fails with "unknown revision" (verified), and the commits the reviews name are the
+branch's own, listed in the table above.
+
+| Reviewed | Reviewer session | Verdict |
+|---|---|---|
+| Task 5 | `945e22d3` | **Approved** — spec ✅; independently re-ran package `tsc --noEmit` (exit 0), `assembly.test.ts` (22/22) and the instrument (731/523, unchanged) |
+| Task 6 | `bbf1d419` | **Needs fixes** — spec ❌, no Critical, 4 Important, 5 Minor |
+| Task 7 | `3cd389db` | **Needs fixes** — spec ❌, no Critical, 4 Important, 6 Minor |
+| Tasks 6 + 7 fix wave | `5b301609`, re-reviewed by `c4dc27a9` | **All findings addressed** (F1–F6, all nine F5 bullets, plus a 38→39 figure neither review had flagged) |
+| this session's own `a7f6775d` | `37a9eaa1` | **Needs fixes** — 1 Critical (a **false reachability claim**, withdrawn in `1cef0d59`), 1 Important, 5 Minor |
+| wave 2 (`1cef0d59`) | `43e16ae3` | **All findings addressed** |
+| final whole-branch review | `b7a33044` (Tasks 1–4 semantics) · `d9dd5dab` (the branch's own record) | code **merge-sound**, nothing to block on; the **record not ready** until this fix wave — its findings are the dated corrections in §2, the §6 entries, and the plan's mid-session bullet re-worded from "blocked by the freeze" to "must be built" |
+
+**Task 5's parked Important, and its ruling (the remedy was documentation, not a fix).** The deleted
+case was "degrades to ready when `currentState` itself throws", and the brief forced the deletion
+because through the assembly `currentState` is `() => mcpStates.get(cfg.serverName)`
+(`assembly.ts:643`) — a `Map.get` over `const mcpStates = new Map<…>()` (`:623`) that cannot throw.
+So the defensive `catch` at `assembly.ts:263` is not merely untested, it is **unfalsifiable by
+construction**: no mutation can redden a test for a branch that cannot be reached. **Ruling: park it;
+remedy in the documentation, not a test-only seam** — this repo ruled against test-only production
+surface in M62, and the file's own header plus the test's disclosure say the same. The ruling's
+ordered remedy ("a handoff §6 follow-up entry, **or** an inline comment marking the catch
+defensive-only") had landed **neither** half; both are now in place (§6's "Parked by ruling" entry
+and the comment at `assembly.ts:261-263`).
+
+**Task 5's four deferred minors** (kept out of the fix loop by design; none blocks merge):
+1. `test/assembly.test.ts:598-643` sniffs `console.warn` **text** instead of asserting the exact error
+   object on an injected `onHostError` — couples the test to the log string at `assembly.ts:646-648`.
+2. `test/assembly.test.ts:44-61` — the `@i-harness/mcp-client` mock is file-global and
+   non-delegating, so no case exercises the real mount plumbing (disclosed in-source; no other case
+   in that file mounts MCP, so nothing else is weakened).
+3. `assembly.ts:164-165` — the doc comment still says "the host (run.ts / the web service) builds a
+   RewindService over these", but the host can no longer name the type. One-line fix.
+4. `test/assembly.test.ts:530` uses `mcpMounts.calls.at(-1)` after clearing the array; `calls[0]` plus
+   a length check would state the single-mount assumption and fail faster.
+   Recorded with them: the plan's Step 5 call-site coordinates (`:762`/`:618`) had rotted to
+   `:786`/`:642` — the same rot Task 7's reviewer found independently — and the red-first evidence is
+   unverifiable for a structural reason worth keeping: `RewindAssemblyHandle`'s un-export is
+   **type-only with no in-repo consumer**, so for that one of the three names red-first is *vacuous*,
+   not merely unmeasured.
+
+**Wave 2's two residuals, and where they stand:**
+- `d3-ih`'s `context-window-resolution-chain` claim said the compact pass-through "stays exactly as
+  the caller wrote it" — superseded by `73c9b725`, and **no citation can repair false prose**, so it
+  was reported rather than papered over. **Fixed in this wave:** the corpus claim now states what the
+  code does (the config is dropped with a warning when no window resolves, `assembly.ts:810-817`),
+  and `docs/handoff/HANDOFF.md`'s repair bullet discloses that re-anchoring could not have caught it.
+- **This document's own §6 `/sandbox` bullet** (the ledger that recorded the residual numbered it
+  `:274-275`; the line numbers moved with this fix, so the section is the durable pointer) still
+  repeated the withdrawn `/sandbox` claim; wave 1 owned this file, so it was left to the micro-fixer.
+  **Fixed in `6f2c2cea`.**
+
+**And the limit this milestone cannot repair: three of its four task reviews ran without an
+implementer report.** The implementing session's ledger and per-task reports were gitignored and
+never published, so spec compliance (plan text vs diff) and code quality (reading the code) were
+reviewable, while *"did the implementer do what it said it did"* is **permanently unverifiable** here.
+Assume the same base rate for the parts nobody could check: the one time a claim-level audit was
+possible (this session's own `a7f6775d`) it found a Critical falsehood and an over-stated repair.
+
 ---
 
-## 3. Deferred — do these first
+## 3. Deferred — what was deferred, and its state
 
-The working day ended mid-flight. **Three task reviews and the final whole-branch review were not
-run.** That was a deliberate choice with a stated cost: a rushed review would have produced false
-confidence, which is worse than a recorded gap. Nothing is *known* broken — Tasks 1–4 passed their
-gates and the instrument read `523` unchanged throughout — but "not known broken" is exactly what
-those gates exist to replace.
+**Corrected 2026-09-15 by re-measurement: nothing here is deferred any more, and this section said
+the opposite.** It opened with "Three task reviews and the final whole-branch review were not run"
+and then ordered the next session to dispatch them; all four have since run, and the verdicts are in
+§2's review ledger. Left as written, the list would have re-run three completed reviews at whole-branch
+cost. The *reason* the reviews were deferred rather than rushed still stands and is why they were
+worth waiting for: a rushed review would have produced false confidence, which is worse than a
+recorded gap. Nothing was *known* broken — Tasks 1–4 passed their gates and the instrument read `523`
+unchanged throughout — but "not known broken" is exactly what those gates existed to replace.
 
-In order:
+What was deferred, and its state:
 
-1. **Review Task 5** — `scripts/review-package <plan> <task-5-base> HEAD`.
-2. **Review Task 7**, then **Task 6** (Task 6's tally depends on whether Task 5 landed; see §6).
-3. **Final whole-branch review, scoped to `fbfbfb5..HEAD`** — *not* all of `m64`. Phase A
-   (`m62..5b01bc3` plus its fix waves) already had its own final review and a scoped re-review;
-   re-reviewing it would spend the pass on code a previous review already cleared. The two phases
-   share no file except `scripts/audit/check-reachability.mjs`, which Phase B never modified.
+1. ~~**Review Task 5** — `scripts/review-package <plan> <task-5-base> HEAD`.~~ **Done** — reviewer
+   session `945e22d3`, **Approved** (the parked Important and its ruling are in §2's review ledger).
+2. ~~**Review Task 7, then Task 6**~~ **Done** — `3cd389db` (Task 7) and `bbf1d419` (Task 6), both
+   **Needs fixes**; one fix wave (`5b301609`) carried both finding lists, and re-review `c4dc27a9`
+   recorded **all findings addressed**.
+3. **Final whole-branch review, scoped to `fbfbfb5..HEAD`** — *not* all of `m64` — **done**, in two
+   scopes (`b7a33044`, `d9dd5dab`; §2's review ledger). Phase A (`m62..5b01bc3` plus its fix waves)
+   already had its own final review and a scoped re-review; re-reviewing it would spend the pass on
+   code a previous review already cleared. **The scoping sentence that used to sit here was false,
+   and the correction is dated:** it read *"The two phases share no file except
+   `scripts/audit/check-reachability.mjs`, which Phase B never modified."* Measured with
+   `git diff --name-only` over both footprints (`m62..fbfbfb5` = Phase A, `fbfbfb5..HEAD` = Phase B),
+   the second clause holds and **the first is the opposite of the truth**: the phases share **four
+   documents** — `docs/audit/2026-09-15-reachability-baseline.md` (`+379/−42` in Phase B),
+   `docs/handoff/HANDOFF.md` (`+23/−6`), this Phase B plan (`+10/−8`) and
+   `docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md` (`+3/−3`) — while
+   `scripts/audit/check-reachability.mjs` is in **Phase A's footprint only**. So the sentence named
+   the one file the phases do *not* share and omitted the document Phase B rewrote most heavily (the
+   baseline). The scoping *decision* survives the correction, and saying why is the point: the
+   baseline's Phase B rewrites are inside `fbfbfb5..HEAD`, so the in-range review did see them, and
+   Phase A's edition of that file was covered by Phase A's own final review.
    *Cost of this scoping, stated:* a defect spanning the Phase A/Phase B boundary would be seen by
    neither review.
 
-Each task also parked Minors. They were deliberately kept out of the fix loops and are listed in §7;
-hand them to the final reviewer so it can triage which must be fixed.
+Each task also parked Minors. They were deliberately kept out of the fix loops and are listed in
+**§6** (**corrected 2026-09-15**: this line said §7, which is "Resuming"); hand them to the final
+reviewer so it can triage which must be fixed.
+
+**One pointer to repair while reading this:** the command the deferred list named,
+`scripts/review-package <plan> <base> <head>`, is **not a path in this repository** — `Test-Path
+scripts/review-package` is false (measured 2026-09-15), and `git grep` finds the string only in this
+handoff and in the M49 plan. It is a script **of the `subagent-driven-development` skill**, resolved
+from the installed plugin cache (this machine:
+`C:\Users\inkik\.claude\plugins\cache\claude-plugins-official\superpowers\6.3.0\skills\subagent-driven-development\scripts\review-package`;
+the codex-cache equivalent is recorded at
+`docs/superpowers/plans/2026-09-06-m49-remaining-tasks-execution.md:186`). Same species as the
+dangling `task-7-report.md` pointer the baseline's §7 item 3 fixed: a repository-relative path that
+does not resolve.
 
 ---
 
@@ -261,7 +373,27 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
 ## 6. Open items and follow-ups
 
 **Blocking/completion:**
-- The three deferred task reviews and the final whole-branch review (§3).
+- ~~The three deferred task reviews and the final whole-branch review (§3).~~ **Discharged
+  2026-09-15 — corrected by re-measurement:** all four reviews ran, every finding is addressed or
+  parked by an explicit ruling, and §2's review ledger carries the verdicts. This line was written
+  while they were outstanding and was not updated when they landed.
+- **M1's published completion definition, and the one carve-out it needs** (roadmap §3.M1: every
+  `still-holds` row either wired to a production path, **or** declared deliberate with a reason **and
+  recorded in a reasoned allowlist**). At HEAD exactly two rows are `still-holds` — the
+  **`sandbox/mode` pair**, baseline §4.1 item 6 and §4.3 item 4 (measured:
+  `git grep -n '\*\*`still-holds`\*\* |$' -- docs/audit/2026-09-15-reachability-baseline.md` returns
+  those two rows and no others, and the tally's `still-holds 2` counts them) — and they are
+  deliberately **not** among the allowlist's §6.1/§6.2 entries. They *are* declared deliberate, with the reason and the
+  follow-up, in the baseline's **§6.4** ("What is deliberately **not** on the allowlist", which names
+  the pair and says it "carries both" the M follow-up and its out-of-scope blocker) and in the
+  M-shaped bullet below. **So the roadmap's definition is met by that statement, not silently
+  unmet:** the pair is deliberate because **no shipped surface can change a live session's mode** —
+  the `sandbox/mode` event's sole production producer is the construction-time append at
+  `assembly.ts:354`, and the only shipped mode-changing command (the frozen `/sandbox`) writes
+  `settings.sandboxMode` for sessions created *later* (measured; see the corrected bullet below).
+  Wiring it would need the M-shaped mid-session surface, which is out of this milestone's scope by
+  ruling R-D. Recorded explicitly because a reader otherwise sees "2 `still-holds`, no allowlist
+  entry" and cannot tell a decision from a gap — which is exactly the state §6.4 exists to prevent.
 - **§4.1 item 8 of the baseline** — Task 5 landed as `06d684c`, so those names are no longer
   exported and the row is `by-design`, making the tally **`5 / 2 / 15 = 22`** (this line read
   `6 / 2 / 14` until the fix round re-measured it; §2 carries the correction and the baseline's §4 the
@@ -269,6 +401,23 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
   before Task 5 landed and therefore left it `still-holds`; **verify against the code, not the
   document.** The controller confirmed by `git grep` that all three names are un-exported and absent
   from the package entry, and that the instrument still reads `523`.
+
+**Parked by ruling, and the remedy is landed here (Task 5's one Important finding):**
+- **The defensive `catch` at `assembly.ts:261-263` stays, documented as defensive-only and
+  unfalsifiable by construction.** The deleted case was "degrades to ready when `currentState` itself
+  throws"; through the assembly `currentState` is `() => mcpStates.get(cfg.serverName)`
+  (`assembly.ts:643`, over `const mcpStates = new Map<…>()` at `:623`), a `Map.get` that cannot
+  throw — so no mutation can redden a test for a branch that cannot be reached. **Ruling: park it;
+  the remedy is documentation, not a code change and not a test-only seam** (M62 ruled against
+  test-only production surface, the file's own header forbids it, and the test's disclosure says the
+  same). The review's ordered remedy was "a §6 follow-up entry **or** an inline comment marking the
+  catch defensive-only"; **both halves are now in place** — this entry, and the comment at the site.
+  *Corrected 2026-09-15:* neither half existed before this wave, and the only comment at the site was
+  written 2026-09-09 (`b844fcd9`), before Phase B. This is the deferred-minors triage's single
+  must-fix-before-merge item.
+- **Its cost, stated:** one defensive `catch` stays permanently unprovable, which is the honest state
+  of a catch for an impossible error. The alternative — inventing a seam whose only purpose is to make
+  an unreachable branch testable — is what the ruling refuses.
 
 **M-shaped follow-ups, each needing its own spec (roadmap §3.M1):**
 - A real **mid-session sandbox-tightening surface** — **nothing shipped does this**, so it has to be
@@ -312,8 +461,10 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
   edge, not dead code*; classes 3 and 4 are lower bounds; class 5 is reader-dependent.
 
 **Parked Minors** (kept out of the fix loops by design; the final reviewer should triage them) include:
-the `sandbox-policy-per-call.test.ts` disclosure comment's self-falsifying grep sentence and its
-unreachable "load-bearing again" example; `assembly.ts`'s `policySession` comment; the
+the `sandbox-policy-per-call.test.ts` disclosure comment's self-falsifying grep sentence (triaged
+ship-as-is, still there; **its unreachable "load-bearing again" example was corrected in this fix
+wave — `opts.sandbox === undefined` builds no policy service, so that example could not happen**);
+`assembly.ts`'s `policySession` comment; the
 `sandbox-mode-event.test.ts` name implying the assembly wrote a hand-built log; the three name lists
 in the `run` router that can still drift; the non-token-aware readers at `:197`/`:209`/`:246-250`;
 `WireClientConfig`'s doc saying "all three client factories" while five exist; and this plan's own
@@ -327,7 +478,17 @@ superseded Step 2/3, which must **not** be cited as the shipped method.
    this one.**
 2. `node scripts/audit/check-reachability.mjs` — expect `731 ts files, 523 finding(s)`. If the count
    moved, something in flight changed the tree.
-3. Run the deferred reviews (§3) with `scripts/review-package <plan> <base> <head>` from
-   `subagent-driven-development`.
-4. Then decide with the human: **M1 is not complete until the reviews are clean and the verdicts
-   reconcile.** Nothing has been merged or pushed beyond `m64`.
+3. ~~Run the deferred reviews (§3) with `scripts/review-package <plan> <base> <head>` from
+   `subagent-driven-development`.~~ **Nothing to dispatch — all four reviews have run** (§2's review
+   ledger). If a later change needs a scoped review, note that `scripts/review-package` is **not a
+   path in this repository** (`Test-Path` false, measured 2026-09-15): it is a script **of the
+   `subagent-driven-development` skill**, resolved from the installed plugin cache (§3's closing note
+   names it).
+4. Then decide with the human: **M1's own gate is met as of 2026-09-15.** *Corrected 2026-09-15:*
+   this item read "**M1 is not complete until the reviews are clean and the verdicts reconcile**",
+   which is the gate as it stood *before* the reviews ran — it repeated the stale `NOT REVIEWED` flags
+   §2 corrects. As of this commit the reviews are clean (every finding addressed or parked by an
+   explicit ruling — §2's review ledger, §6's parked entry) and the verdicts reconcile (the tally
+   `5 / 2 / 15 = 22` counts the same under the baseline's own extraction, and the two remaining
+   `still-holds` rows are declared deliberate with their reason — §6's completion carve-out). What
+   remains is the human's: nothing has been merged or pushed beyond `m64`.
