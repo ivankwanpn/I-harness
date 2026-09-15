@@ -83,6 +83,7 @@ describe("assembly → the fs escalation ladder", () => {
       }),
       sandbox: "read-only",
     })
+    const eventsAtConstruction = session.events.length
     try {
       // The host's answerer, wired the way a real host wires it (assembly.ctx).
       registerApprovalAnswerer(assembly.ctx, async (req) => {
@@ -100,9 +101,14 @@ describe("assembly → the fs escalation ladder", () => {
       // `checkWrite` — `writeGuard`'s `modeOverride` parameter is the whole
       // bridge, and this is the assertion that goes red without it.
       expect(readFileSync(target, "utf8")).toBe("escalated")
-      // And the grant moved nothing standing: no `sandbox/mode` event, no change
-      // to the session's mode (spec §3.3 point 1 -- per-call, transient).
-      expect(session.events.filter((e) => e.type === "sandbox/mode")).toHaveLength(0)
+      // And the grant moved nothing standing: no `sandbox/mode` event was
+      // appended by the ESCALATION (spec §3.3 point 1 -- per-call, transient).
+      // Scoped to post-construction events on purpose: the assembly itself now
+      // records the mode it was constructed under, and counting that event
+      // would make this assertion unable to see a ladder-produced one.
+      expect(
+        session.events.slice(eventsAtConstruction).filter((e) => e.type === "sandbox/mode"),
+      ).toHaveLength(0)
     } finally {
       await assembly.dispose()
       rmSync(base, { recursive: true, force: true })
