@@ -112,25 +112,30 @@ produced this edition, `.superpowers/sdd/2026-09-15-m1-phase-b-wire-the-unwired/
 — a **gitignored scratch artifact, absent from a fresh checkout**, the same label §7 item 3 and §7
 item 6 put on their sources — records the SHA; **`git log` is the pointer that survives**, which is why
 the rule above is stated in terms of the command and not of the report. Between the measurement revision and the publication
-revision sit this edition's own commits, **other commits that do not touch this file, and two code
-commits — not one (corrected 2026-09-15 by re-measurement).** This sentence read "this edition's own
-commits — this file only — and exactly one code commit: `06d684c`, Task 5's un-export of the three
-names §4.1 item 8 names", and under this document's **own self-locating rule** that cannot stay true:
-the publication revision is whichever commit last touches this file, so every later commit to the
-branch lands inside the span. Measured `git log --oneline 637cdd7..<the last commit touching this
-file>`: the span now also holds `d682a50b` (this milestone's handoff, one file, not this one),
-`a7f6775d` (nine `docs/` files **plus** `packages/session-executor/src/assembly.ts` — a
-**comment-only** edit, every changed line a `//` comment, no executable byte), `5b301609` (this file
-and the handoff), `1cef0d59` (eight docs/corpus files) and the file-only commits that followed. The
-original sentence was accurate at the revision that published it (`17cdb252`, where the span held this
-file's own commits and `06d684c` alone); it went false as the branch grew, which is exactly the
-staleness the self-locating rule was chosen to avoid and is corrected here rather than re-pinned to a
-hash that will move again. **The row set, the finding count and the digest are identical across the
-whole span.** That was checked, not assumed: the
-scanner was re-run at the publication revision and returns the same `731 ts files, 523 finding(s)`, and
-Task 5's change is deliberately **row-neutral** because class 1 walks only package entries and the
-assembly's three names are not exported from one (§2.1's delta table, §7 item 13). **No Phase B code
-change moves a single row after Task 4's two deletions.**
+revision sit this edition's own commits, **other commits that do not touch this file, and more than
+one code commit — not one (corrected 2026-09-15 by re-measurement).** The sentence here read "this
+edition's own commits — this file only — and exactly one code commit: `06d684c`, Task 5's un-export of
+the three names §4.1 item 8 names", and under this document's **own self-locating rule** that cannot
+stay true: the publication revision is whichever commit last touches this file, so every later commit
+to the branch lands inside the span. Measured at `6f2c2cea` with `git log --oneline 637cdd7..<the last
+commit touching this file>`, the span additionally held `d682a50b` (this milestone's handoff, one file,
+not this one), `a7f6775d` (nine `docs/` files **plus** `packages/session-executor/src/assembly.ts` — a
+**comment-only** edit, every changed line a `//` comment, no executable byte), `d693cd7d` (the fix
+wave that publishes this correction: `apps/cli/src/index.ts`, `assembly.ts` and the per-call test,
+comment-only in all three), `5b301609` (this file and the handoff), `1cef0d59` (eight docs/corpus
+files) and the file-only commits that followed — **three** code-touching commits at that measurement,
+not one, and any later code commit raises the count. The original sentence was accurate at the revision
+that published it (`17cdb252`, where the span held this file's own commits and `06d684c` alone); it
+went false as the branch grew, which is exactly the staleness the self-locating rule was chosen to
+avoid and is corrected here rather than re-pinned to a hash that will move again. **The row set, the
+finding count and the digest are identical across the whole span.** That was checked, not assumed: the
+scanner was re-run at the publication revision and returns the same `731 ts files, 523 finding(s)`,
+and the machine-readable run at this correction's own revision gives **523 rows and the digest
+`5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`** — §2.1's table reproduced
+exactly, so the fix wave's comment-only edits moved no row either. Task 5's change is deliberately
+**row-neutral** because class 1 walks only package entries and the assembly's three names are not
+exported from one (§2.1's delta table, §7 item 13). **No Phase B code change moves a single row after
+Task 4's two deletions.**
 
 | Item | Phase A (§2 above) | **Phase B — current** |
 |---|---|---|
