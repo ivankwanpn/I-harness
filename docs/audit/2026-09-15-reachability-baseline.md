@@ -67,13 +67,20 @@ git ls-files "*.ts" "*.tsx"    # 729 lines
 ```
 
 The `HEAD`, walked/tracked count, finding count and digest rows are the state the 525 rows were
-measured at, and they are unchanged by M1's fix wave. The self-test row is the tool as it now stands:
-the five cases that wave added (§5.3) pin rules the 13-case version could not see, and none of them
-changes what the tool prints on this tree — so the digest, not the case count, is what pins the row
-set. For the same reason, every line citation into `check-reachability.mjs` in this document is to the
-tool **as it now stands** rather than to the SHA above: that wave added lines to the fixture, the main
-block and the case list, so a citation such as `withoutReExportStatements`'s `:340-347` no longer
-resolves at `74f86d5`. Nothing these citations point at changed behaviourally — only its line number.
+measured at, and they are unchanged by M1's fix wave. The self-test row is the tool as it now stands,
+and its count needs reading carefully: that wave added **five fixture elements**, which are what make
+five pre-existing cases fail under the loosening each element exists to expose, plus **five named
+cases** that record which hazard each element protects against and whose `run` and `expect` are
+identical to the sibling case above them. The tool therefore has **18 cases, five of which share an
+assertion with a sibling** — not 18 independent checks. Measured, with the five added cases deleted:
+every loosening those fixture elements exist to catch is still caught, by the pre-existing cases
+(class-4 `12/13`, `TYPE_DECL_LINE` `11/13`, class-5 quoted-key `12/13`, DEFAULTS anchor `12/13`,
+class-3 dot rule `12/13`, all exit 1). None of them changes what the tool prints on this tree — so the
+digest, not the case count, is what pins the row set. For the same reason, every line citation into
+`check-reachability.mjs` in this document is to the tool **as it now stands** rather than to the SHA
+above: that wave added lines to the fixture, the main block and the case list, so a citation such as
+`withoutReExportStatements`'s `:340-347` no longer resolves at `74f86d5`. Nothing these citations point
+at changed behaviourally — only its line number.
 
 The digest is `sha256` over the 525 findings rendered as sorted `kind<TAB>subject<TAB>evidence`
 lines, each newline-terminated. It pins the baseline so M2 can verify that a later run is
@@ -83,7 +90,7 @@ reproducing *this* set rather than a set that merely has the same size.
 the walker's skip list rather than of git, so it can drift. It holds today because the tracked set
 contains nothing the skip list would drop — measured: of the 729 tracked files, **0** live under a
 dot-directory at the root and **0** under `node_modules`/`dist`/`lib`, which are the walker's three
-skip rules (`scripts/audit/check-reachability.mjs:911-924`, which also excludes `*.ts`/`*.tsx`
+skip rules (`scripts/audit/check-reachability.mjs:924-937`, which also excludes `*.ts`/`*.tsx`
 outside those rules only by extension). On the authoring machine recorded in
 `docs/handoff/HANDOFF.md` the node version was `v24.15.0`; this run is on `v22.23.2`, which is why
 all three fingerprint values and the file count are recorded rather than the SHA alone.
@@ -319,9 +326,9 @@ cheap to measure. Recorded so Phase B does not have to rediscover them.
   five source-list rows — starting at index 0 and stepping by ⌊507 / 27⌋ = **18**, stopping once 27
   rows are held.
 
-  **What that order is, precisely:** `collectTs` (`scripts/audit/check-reachability.mjs:911-924`)
+  **What that order is, precisely:** `collectTs` (`scripts/audit/check-reachability.mjs:924-937`)
   walks with a raw `readdirSync` and never sorts, and the scanners are `flatMap`'d in class order
-  (`:971`). So the emission order is **the filesystem's `readdir` order** — alphabetical on this NTFS
+  (`:984`). So the emission order is **the filesystem's `readdir` order** — alphabetical on this NTFS
   checkout only because NTFS returns directory entries in index order, and hash order on ext4. Within
   a package it is declaration order in that package's `index.ts`. It is **not a property of the tool**
   and is **not stable across filesystems**, so this draw rule cannot be replayed portably.
@@ -542,11 +549,18 @@ in turn:
 could be checked it would have looked like a clean sweep.** This is recorded as a limitation of the
 method, not buried: the baseline in §3 is **not the plan's output**. It is the output of five scanners
 that were each rewritten against the real tree, and the only evidence they are detectors rather than
-rubber stamps is the self-test — **18 cases** since M1's fix wave, five of which exist precisely because
-the 13-case version stayed green with a class-4, class-2, class-5 or class-3 rule loosened
-(`node scripts/audit/check-reachability.mjs --self-test` → `self-test: 18/18 ok`) — plus the mutation
-proofs Tasks 2–4 recorded and the six the fix wave re-ran. M2 must not read a falling row count as
-progress unless it first re-runs the self-test and checks the §2 digest.
+rubber stamps is the self-test plus the mutation proofs Tasks 2–4 recorded and the six that this
+document's fix wave re-ran. The self-test is **18 cases** since that wave, and the count is not 18
+independent checks: the wave added five **fixture elements**, which are what make five pre-existing
+cases fail under their loosening, and five **named cases** that record each hazard and whose `run` and
+`expect` are identical to the sibling case above them. Measured with the five added cases deleted: the
+class-4 loosening still fails at **12/13**, the `TYPE_DECL_LINE` veto at **11/13**, and the class-5
+quoted-key half, the class-5 DEFAULTS anchor and the class-3 `.`-before-the-read rule at **12/13**
+each — every one of them on a pre-existing case
+(`node scripts/audit/check-reachability.mjs --self-test` → `self-test: 18/18 ok`; mutation driver
+transcript in `.superpowers/sdd/2026-09-15-m1-reachability-sweep/fixwave/mutation-run.txt`, gitignored
+scratch, absent from a fresh checkout). M2 must not read a falling row count as progress unless it first
+re-runs the self-test and checks the §2 digest.
 
 ---
 
@@ -661,7 +675,7 @@ counts.
 is not reported either. And `core-session`'s `migrate` (§4.2 item 1) is hidden by an unrelated
 private `migrate` in `session-persistence`. **Any rule narrow enough to catch these reintroduces the
 original defect**: the module-scoping that made the entry-point scan report a name the entry itself
-imports, re-exports and calls (see the `EntryCallSite` self-test case, `:705-713`).
+imports, re-exports and calls (see the `EntryCallSite` self-test case, `check-reachability.mjs:767-775`).
 
 **6. Four symbols whose only in-repo mention is a comment stay unreported**, and comments cannot
 simply be stripped. Each is listed with the module that **declares** it (so the export edge exists)
@@ -744,6 +758,6 @@ the tool; do not trust this document.
 rewritten against the real tree, and what each half of that claim rests on — two measured anchor
 failures, one measured reader, one structural wrong-union argument, and one class not re-measured at all
 — is stated there rather than compressed into "all five were broken". The 525 rows come from five
-rewritten scanners whose only warrant is the self-test (**18 cases** since M1's fix wave; §5.3) and the
-mutation proofs Tasks 2–4 recorded. **M2 must check the self-test and the §2 digest before it trusts any
-comparison against this baseline.**
+rewritten scanners whose only warrant is the self-test (**18 cases** since M1's fix wave, five of which
+share an assertion with a sibling; §5.3) and the mutation proofs Tasks 2–4 recorded. **M2 must check the
+self-test and the §2 digest before it trusts any comparison against this baseline.**
