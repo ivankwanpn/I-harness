@@ -1,6 +1,6 @@
 # I-harness 後端打磨路線圖（2026-09-15）
 
-> **基準**：`m64` @ `d66c28b7` · **範圍**：後端（`packages/*` 的 65 包 ＋ `apps/cli`）
+> **基準**：`m64` @ `d66c28b7` · **範圍**：後端（`packages/*` 的 64 包 ＋ `apps/cli`；**已排除前端四包** `tui`、`tui-core`、`web`、`web-host` —— 2026-09-15 隨 §5 Q6 更正：原記為 65 包，即已排除前三包但仍含 `web-host`，而 `web-host` 是 web 前端的宿主，§3.M6 已因其預定汰換而刪去相關工作）
 > **輸入**：`docs/audit/2026-09-11-ih-backend-inventory.md`（D1）、`docs/audit/2026-09-11-sevenway-command-matrix.md`（D2）、`docs/audit/2026-09-11-sevenway-backend-mechanisms.md`（D3）、`docs/audit/2026-09-15-backend-gap-triage.md`、`docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md`
 > **方式**：以上述文件為**輸入**，但**逐項對現行 HEAD 重量之後**才寫進本路線圖（見 §1.1）
 
