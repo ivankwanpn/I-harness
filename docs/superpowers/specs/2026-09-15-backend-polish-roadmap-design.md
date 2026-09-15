@@ -30,10 +30,10 @@
 |---|---|
 | 沒有任何 tool schema 宣告 `sandbox_permissions` | **已修** —— `packages/fs/src/index.ts:81,247,250` |
 | 沙箱升級模組只出現在測試裡 | **已修** —— `packages/sandbox/src/denial.ts:91,93` 使用 `WIDER_MODES` |
-| `buildWireClient` 僅測試使用 | 仍成立（非測試命中只有定義本身，`provider/src/index.ts:762`） |
+| `buildWireClient` 僅測試使用 | **已解決（Phase B Task 4 刪除宣告，`24e9395`）** —— baseline §4.1 item 3 記為 `already-fixed`；此列寫的「仍成立」是 Phase A 當時的判定 |
 | `mountPreset` 無生產呼叫者 | 仍成立（非測試只有一句註解，`tui/src/views/light-personas.ts:2`） |
-| `withdrawPlanModeTool` 無呼叫者 | 仍成立（全樹只有定義，`plan-mode/src/index.ts:36`） |
-| `sandbox/mode` 事件沒有生產者 | 仍成立（生產檔只有型別宣告與讀取者） |
+| `withdrawPlanModeTool` 無呼叫者 | **已解決（Phase B Task 4 刪除宣告，`24e9395`）** —— baseline §4.1 item 5 記為 `already-fixed`；此列寫的「仍成立」是 Phase A 當時的判定 |
+| `sandbox/mode` 事件沒有生產者 | **生產者已補上（Phase B Task 1，`34c746e6`，建構期）**，但**「session 中途被收緊」仍不可達**——baseline §4.1 item 6／§4.4 item 4 把這條重新界定成後者；設計 spec §7 第 4 條同步更正 |
 | `tui --yes` 被解析但從未被讀 | 仍成立（`apps/tui/src/index.ts` 5 處出現，無一處讀它做決定） |
 | `estimateAssemblyOverhead`／`bindAuthRefreshStatus` 套件外不可達 | **需精確化** —— 兩者在 `assembly.ts` **內部**被使用（`:762`、`:618`），D1 的措辭聽起來比實際嚴重 |
 

@@ -463,9 +463,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // M16 → M62: resolve at each call rather than closing over one value. The
   // service was built once; `sandboxPolicyNow()` re-reads the session's last
   // `sandbox/mode` event, so a mode change mid-session reaches the fs tools on
-  // their NEXT call. (The read is a reverse scan for that event — measured at
-  // 0.056-0.125 ms over a 20k-event session across nine samples; no cache, and no
-  // invalidation rule to get wrong, until a measurement says otherwise.)
+  // their NEXT call. (The read is a reverse scan for that event. NO FIGURE HERE, on
+  // purpose: the "0.056-0.125 ms over a 20k-event session, nine samples" this comment
+  // used to quote was WITHDRAWN by the M62 final review — nothing in the repo
+  // reproduces it, and the test guarding the cost is a ceiling (~20x on a quiet
+  // machine), not a detector. Spec §7 records the withdrawal and the measured
+  // spread; the decision it supported stands: no cache, and no invalidation rule to
+  // get wrong, until a measurement says otherwise.)
   // M62: the refusal is converted HERE, at the one place that knows the policy,
   // into the shared `SandboxDenial` — `checkWrite` stays a pure path decision.
   //
@@ -484,8 +488,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   //    and the guard reads it again, with an `await` between them, so if a host
   //    appended a `sandbox/mode` event while an approval prompt was open the
   //    strictly-wider check would have been made against the older mode. No such
-  //    host exists today (nothing in production appends the event), which is why
-  //    this is a recorded boundary rather than a defect.
+  //    host exists today, and the REASON changed on 2026-09-15: this comment used to
+  //    say "nothing in production appends the event", which the construction-time
+  //    producer above (`:354`, M1 Phase B) made false. The surviving reason is
+  //    narrower and still true: that producer runs at CONSTRUCTION only, so no host
+  //    can append an event *while a prompt is open*.
   //  - the refusal names the mode that would LIFT it (`decision.sufficientMode`),
   //    not the first strictly-wider one: for an out-of-workspace target under
   //    `read-only` those differ, and naming the wider one sent the model to a
