@@ -64,15 +64,32 @@ afterEach(() => {
 
 describe("run argv routing", () => {
   it("refuses a stray flag instead of sending it as the prompt", async () => {
-    const code = await main(["node", "i-harness", "run", "--help"])
-    expect(calls).toHaveLength(0)
-    expect(code).toBe(1)
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const code = await main(["node", "i-harness", "run", "--help"])
+      expect(calls).toHaveLength(0)
+      expect(code).toBe(1)
+      // The HUMAN RULING is ENFORCED here, not merely documented: `--help` after
+      // `run` is an unrecognised flag, not a help request, and must never become
+      // a second help contract. A contributor who adds the natural run-path
+      // `--help` branch (print usage, exit 0) fails the first two assertions; one
+      // who exits non-zero with different output fails this one.
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("unknown flag --help")
+    } finally {
+      err.mockRestore()
+    }
   })
 
   it("refuses a stray flag in any position", async () => {
-    const code = await main(["node", "i-harness", "run", "hello", "--nope"])
-    expect(calls).toHaveLength(0)
-    expect(code).toBe(1)
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const code = await main(["node", "i-harness", "run", "hello", "--nope"])
+      expect(calls).toHaveLength(0)
+      expect(code).toBe(1)
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("unknown flag --nope")
+    } finally {
+      err.mockRestore()
+    }
   })
 
   it("does not leak --no-compact into the prompt", async () => {
@@ -88,5 +105,40 @@ describe("run argv routing", () => {
   it("value-skip control: a known value-taking flag consumes its value", async () => {
     await main(["node", "i-harness", "run", "hello", "--sandbox", "read-only"])
     expect(calls.map((c) => c.task)).toEqual(["hello"])
+  })
+
+  it("value-skip control: a value that is ITSELF dash-leading is consumed, not rejected", async () => {
+    // The guard's `RUN_VALUE_FLAGS.has(runArgs[i - 1])` skip clause is pinned by
+    // THIS case and by nothing else: the sibling control above passes even with
+    // that clause deleted, because `read-only` has no leading dash. `-x` does, so
+    // without the clause the loop reads it as a stray flag and returns 1 with no
+    // call at all. (The class is likewise NOT pinned by `--model -x`: that argv
+    // returns 1 at the `--model requires --api-key KEY` gate in BOTH states, so
+    // only an added stderr assertion could tell them apart.)
+    await main(["node", "i-harness", "run", "hello", "--api-key", "-x"])
+    expect(calls.map((c) => c.task)).toEqual(["hello"])
+  })
+
+  it("declared narrowing: dash-leading task tokens are reserved, with no `--` escape hatch", async () => {
+    // This test exists so the narrowing is INTENTIONAL and visible rather than an
+    // accident of the guard. Task 6 declares it in the baseline's grammar
+    // statement. `-40 degrees` is a legitimate-looking prompt the router now
+    // refuses, and `--` is NOT an end-of-flags separator here -- adding one is
+    // new argv grammar (M-shaped, own spec), not a router fix.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const quoted = await main(["node", "i-harness", "run", "-40 degrees"])
+      expect(quoted).toBe(1)
+      expect(calls).toHaveLength(0)
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("unknown flag -40 degrees")
+
+      err.mockClear()
+      const separator = await main(["node", "i-harness", "run", "hello", "--"])
+      expect(separator).toBe(1)
+      expect(calls).toHaveLength(0)
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("unknown flag --")
+    } finally {
+      err.mockRestore()
+    }
   })
 })

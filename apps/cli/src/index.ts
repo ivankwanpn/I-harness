@@ -169,9 +169,9 @@ export async function main(argv: string[]): Promise<number> {
 
   // M1 Phase B: a FLAG must never become the prompt. `--help`/`-h` are handled at
   // :156-163 as `args[0]` only, so `i-harness run --help` fell through to the
-  // filter at :304-308 -- which knows only the seven flags it strips -- and
+  // filter at :331-335 -- which knows only the seven flags it strips -- and
   // reached runHeadless as a real turn whose prompt was "--help". The same hole
-  // sent `--no-compact` (parsed at :182, absent from that filter) into the prompt
+  // sent `--no-compact` (parsed at :209, absent from that filter) into the prompt
   // as `do x --no-compact`.
   //
   // The TOP-LEVEL `help`/`--help`/`-h` command at :156-163 is deliberately left
@@ -180,7 +180,7 @@ export async function main(argv: string[]): Promise<number> {
   // `--help` case for a different reason: `--help` AFTER `run` is not a help
   // request, it is an unrecognised flag, and unrecognised flags are errors here.
   // That mirrors the file's own fail-loud stance (`--session-backend`: ":92-97";
-  // `--resume`: ":225-235") rather than inventing a second help contract.
+  // `--resume`: ":252-263") rather than inventing a second help contract.
   const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact"])
   const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox"])
   const runArgs = args.slice(1)
