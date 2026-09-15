@@ -13,11 +13,16 @@
 |---|---|
 | Repo | `D:\I-harness-main` on the original workstation; any clone works |
 | Remote | `https://github.com/ivankwanpn/I-harness` — **authoritative** |
-| Branch | `m62` |
-| HEAD | **`3e0e2536`** — `fix(sandbox): the fs refusal stops advising a retry that cannot work` |
-| Sync / tree | `HEAD == origin/m62`, working tree **clean** |
+| Branch | **`m64`** — the live branch. `m62` is its ancestor and is finished; `m63` was retired (see §0.1) |
+| HEAD | **`a5e4bb0e`** — `docs(handoff,audit): scope the still-holds count, and drop a "verbatim" the code refutes` |
+| Sync / tree | `HEAD == origin/m64`, working tree **clean** |
+| What `m64` holds | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** (7 commits, docs and comments only) — 50 commits after `3e0e2536`, 104 after `origin/main` |
 
-`3e0e2536` is the **code state this document describes**. Everything after it on this branch is **docs-only** — this handoff set, the `README` pointers, and this topology addendum — so `git log` will show a newer HEAD than `3e0e2536`. That is expected: **no code has changed after `3e0e2536`.** To confirm you are on the described state: `git merge-base --is-ancestor 3e0e2536 HEAD` succeeds and `git diff 3e0e2536 HEAD -- packages apps` is empty.
+**This document is not a snapshot of the tip; it is the orientation guide, and §5's baselines are the M62 baseline plus a tip section.** Two things follow, and the second is the one that bites:
+
+- The M62 work itself is unchanged: `git merge-base --is-ancestor 3e0e2536 HEAD` succeeds.
+- **`git diff 3e0e2536 HEAD -- packages apps` is NO LONGER empty** — this guide used to tell you it was, and that instruction became false when M1 Phase B landed code after `3e0e2536`: **14 paths, six of them sources** (`session-executor/src/assembly.ts`, `sandbox-policy/src/session-mode.ts`, `provider/src/index.ts`, `plan-mode/src/index.ts`, `session-persistence/src/index.ts`, `apps/cli/src/index.ts`) and eight tests. To confirm *the state you are adopting*, use `git rev-parse HEAD origin/m64` and read §5's tip bullet.
+- **For the milestone that is actually live, read `docs/handoff/2026-09-15-m1-phase-b-handoff.md`** — its own record, including the review ledger (§2) that carries every verdict, ruling and parked minor from the 2026-09-15 review cycle.
 
 The last goal — implementing `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` — is **complete**: five steps, a four-scope final review, a consolidated fix round. Its report is the first thing to read if you need depth: `docs/handoff/FINAL-REPORT.md`.
 
@@ -29,9 +34,10 @@ On **2026-09-14 two machines continued from the same commit** (`62711537`), and 
 
 | Ref | Commit | What it actually is |
 |---|---|---|
-| `origin/m62` | `9dc028c7` | **The branch to take over from.** 55 commits ahead of `main`, 2 behind. Carries the whole sandbox permission/call-policy milestone **and** this handoff set. |
-| `origin/main` | `f39d4870` | The integration point. Contains `m62` **only as of `62711537`** — it does **not** have the 55 commits that followed. |
-| `origin/m63` | *retired* | Was `main` + one docs commit. **Deleted on 2026-09-15** — see below. |
+| `origin/m64` | `a5e4bb0e` | **The branch to take over from.** 104 commits ahead of `origin/main`, 2 behind. Holds the M62 sandbox milestone, M1 Phase A/B, and the 2026-09-15 review cycle. |
+| `origin/m62` | `ddd88a15` | The **finished** milestone branch. An ancestor of `m64` — nothing on it is missing from `m64`. |
+| `origin/main` | `f39d4870` | The integration point. Contains the milestones **only as far as `62711537`** — it does **not** have the M62 sandbox work, M1, or the review cycle. |
+| `origin/m63` | *retired* | Was `main` + one docs commit. **Deleted 2026-09-15** — and see the correction below: it was our mistake, not an empty branch. |
 | `m62` @ `62711537` | | What the other machine snapshotted as "m62 complete, merged into `main`". |
 
 **What happened.** The 2026-09-11 audit handoff (`docs/audit/2026-09-11-ih-takeover-handoff.md`) recorded "m62 = `6271153`". On 09-14 the other machine took that as current: it treated `m62` as a finished milestone, fast-forwarded `main` to that point, and opened `m63` off `main` for the next milestone. Meanwhile this branch kept committing to `m62` — 55 commits, the entire sandbox milestone — and never touched `main`. **A document asserting the state of a *branch* is a snapshot of the most mobile thing in a repo** — the same defect class as §6 item 5, one level up.
@@ -43,19 +49,19 @@ On **2026-09-14 two machines continued from the same commit** (`62711537`), and 
 **Verify the whole picture yourself (four commands):**
 
 ```bash
-git rev-list --count origin/main..origin/m62                    # 55  = m62 is ahead of main
+git rev-list --count origin/main..origin/m64                    # 104 = m64 is ahead of main
 git ls-tree origin/main packages/sandbox/src/call-policy.ts     # empty = main lacks the sandbox work
-git merge-base --is-ancestor 3e0e2536 origin/main; echo $?      # 1 = main lacks the fix
+git merge-base --is-ancestor 3e0e2536 origin/main; echo $?      # 1 = main lacks the M62 code state
 git ls-remote --heads origin | grep m63                         # empty = m63 retired
 ```
 
-**Still open, and it is the human's call, not an agent's:** `main` is 55 commits behind and does not contain the sandbox milestone. The merge is one command in a conflict-free direction (`m62` never touched the audit handoff after the merge-base, and `main`'s two commits touch only that file):
+**Still open, and it is the human's call, not an agent's:** `main` is **104 commits behind** and contains neither the M62 sandbox milestone nor M1. The merge is one command in a conflict-free direction — `m64` has never touched the one file `main`'s two unique commits touch (`docs/audit/2026-09-11-ih-takeover-handoff.md`), so nothing in the merge overlaps:
 
 ```bash
-git switch main && git merge --no-ff origin/m62 && git push origin main
+git switch main && git merge --no-ff origin/m64 && git push origin main
 ```
 
-This is documented rather than executed because the repo's own discipline says **merge timing into `main` is the human's decision** (`d309e68e`). Until that happens, **open the next milestone branch off `m62`, not off `main`.**
+This is documented rather than executed because the repo's own discipline says **merge timing into `main` is the human's decision** (`d309e68e`). Until that happens, **open the next milestone branch off `m64`, not off `main`.**
 
 **Correction, 2026-09-15 — recorded on `m64`.** The paragraph above says "Nothing
 unique was lost". That is true of what `origin/m63` *held*, and it is what this
@@ -102,6 +108,46 @@ both cases — measure it, and make the wrong answer fail loudly instead of quie
 
 ---
 
+### 0.2 The 2026-09-15 review cycle — what a second session found, and the one lesson worth inheriting
+
+M1 Phase B was implemented on another machine, and its reviews were left outstanding. A second session
+took `m64`, ran them, reviewed its own commit, and fixed what came back. Seven commits, all docs and
+comments — **no behaviour changed anywhere** (measured: the only source files this cycle touched are
+`packages/session-executor/src/assembly.ts` and `apps/cli/src/index.ts`, plus one test file, and every
+changed line in all three is a comment).
+
+**Verdicts:** Task 5 **Approved**; Tasks 6 and 7 **Needs fixes** → fixed → re-review *all findings
+addressed*; the reviewing session's own commit **Needs fixes (1 Critical)** → fixed → re-review *all
+addressed*; the final whole-branch review split in two — **code: merge-sound, no Critical**;
+**record: not ready** (1 Critical, 4 Important) → fixed → residual verification clean. The full
+history, with reviewer ids and per-finding verdicts, is in
+`docs/handoff/2026-09-15-m1-phase-b-handoff.md` §2.
+
+**What was actually wrong, because the shape repeats:**
+
+- The milestone's own headline reconciliation published a tally (`6 / 2 / 14`) that **no table in its
+  own document supported** — the tables said `5 / 2 / 15`. Four independent counts agreed on the latter.
+- An "erratum" had **corrected a citation that was already right** (`file-backed.ts:91` is the
+  declaration; `:89` is a comment) — and the false correction reached two durable documents.
+- The reviewing session's own commit **published a falsehood into five documents**: that `/sandbox` in
+  the frozen `apps/cli/src/web.ts` was a shipped host which tightens a live session. It only writes a
+  setting for sessions created *later*; the event's sole producer is `assembly.ts:354`, at construction.
+  It was copied from a handoff paragraph without being verified.
+- The durable handoff said three reviews were `NOT REVIEWED` while its own gate sentence ("M1 is not
+  complete until the reviews are clean") was already **met** — and the entire review history lived in a
+  gitignored ledger that no clone can see. It is now a tracked section.
+- A count ("exactly two rows are `still-holds`") was an artefact of the **grep pattern** rather than a
+  measurement: the pattern matched only the bold form, and the file carries **eleven**.
+
+**The one lesson, and it is not "review the diff":** every defect above — in the other session's work,
+in this session's own commit, and in **three consecutive fix waves, each of which introduced a fresh
+defect of the class it was fixing** — was found by **re-running the measurement the text quotes**, and
+none by reading. Five false "corrections" shipped during this cycle, every one caught that way. When
+you touch a document that cites a number, a line, or a revision, **re-derive it in the tree you are
+standing in**, and date the correction so the next reader can tell what moved.
+
+---
+
 ## 1. There are TWO checkouts. Do not confuse them — it has already happened once.
 
 | Path | What it is |
@@ -126,6 +172,8 @@ Also harness-side, and worth knowing if a goal dies mid-run: `STREAM_CLOSED` is 
 ---
 
 ## 3. What was just delivered, and where its evidence is
+
+**This section describes the M62 goal, whose code state is `3e0e2536`.** The milestone that *followed* it — M1 Phase A/B, which wired seven "unreachable" declarations to production paths and gave `sandbox/mode` its first producer — has its own record: `docs/handoff/2026-09-15-m1-phase-b-handoff.md` (task table, rulings, deferred minors, and the review ledger from §0.2 above). Read that one for the state of the tree; read this one for how the repo behaves.
 
 The goal was to implement the backend permission/sandbox design **in the order it specifies**:
 
@@ -181,11 +229,14 @@ Primary files touched: `packages/sandbox-policy/src/paths.ts`, `packages/session
 ```bash
 git clone https://github.com/ivankwanpn/I-harness
 cd I-harness
-git checkout m62            # the branch the work is on
+git checkout m64            # the branch the work is on (m62 is its ancestor, finished)
 pnpm install                # pnpm >= 10 required (package.json engines: node >=22.18, pnpm >=10)
 ```
 
-Then confirm you are on the described state: `git log --oneline -1` and `git diff 3e0e2536 HEAD -- packages apps` (expect: empty).
+Then confirm you are on the described state — `git rev-parse HEAD origin/m64` (they must match) and
+`git log --oneline -1`. **Do not use `git diff 3e0e2536 HEAD -- packages apps` to check this**: it was
+the right test while M62 was the tip, and it is empty no longer — M1 Phase B changed 14 paths under
+`packages/` and `apps/` after `3e0e2536`, six of them sources.
 
 **The verification gates:**
 
@@ -208,7 +259,16 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 
 **Hint for a first session:** run the four gates once *before* changing anything, and compare against the baselines below. If a number differs on a fresh machine, you have learned something about the machine before you have muddied it with your own edits.
 
-**Measured at `d682a50b` (m64) on a clean tree — the state you are adopting:**
+**The tip baseline — measured at `a5e4bb0e` on a clean tree. Compare your gates against THIS row:**
+
+- typecheck **exit 0**, every package.
+- thresholds: **ALL THRESHOLDS PASS**.
+- citations: **8680 resolved / 0 missing / 51 problems**, of which exactly **3 are `BLANK_LINE`** (all pre-existing).
+- reachability instrument: **731 ts files, 523 finding(s)** — the figure Phase B publishes, reproduced here.
+- full suite: **every package green except `session-executor`** — the known-red WSL-`bash` pair only (86 passed / 2 failed of 88), unchanged across this cycle.
+- What the 2026-09-15 cycle changed in the tree: **docs, the audit corpus, and comments only.** No behaviour.
+
+**The M62 baseline, measured at `d682a50b` — kept because the corrections below were computed against it:**
 
 - typecheck **exit 0**, every package.
 - thresholds: **ALL THRESHOLDS PASS**.
@@ -246,6 +306,14 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 
 ## 7. Not done — the honest list
 
+**Outstanding as of `a5e4bb0e`, and whose call each one is:**
+
+- **`main` is 104 commits behind** and contains neither the M62 sandbox milestone nor M1. The merge is the **human's decision** (repo discipline, `d309e68e`); the one-line command is in §0.1.
+- **M1's completion definition is met by an explicit, scoped carve-out**, not silently: the two remaining `still-holds` rows (the `sandbox/mode` pair) are declared deliberate and outside M1's list. The scope and its basis are in `2026-09-15-m1-phase-b-handoff.md` §2.
+- **The deferred-minors roll-up is triaged**: of 33 accumulated minors exactly **one** was must-fix (the parked Task 5 ruling's documentation remedy) and it landed in `d693cd7d`; the rest ship as-is with written reasons.
+- **The "Phase A was already cleared" premise behind the final review's scoping is unverifiable from this repository** — Phase A's own final review left no tracked artifact. It is recorded as such rather than assumed.
+- **A harness-side crash is not the code's problem, but it will interrupt you.** `dsh web` died with Windows fail-fast `0xC0000409` (exit `3221226505`) on 2026-09-15 mid-session. Work on disk survived; expect long tool calls to be cut and re-check state before resuming.
+
 **One design question remains genuinely open:** whether IH should have **project-level settings trust** (a repo being able to change behaviour for whoever cloned it). grok has an answer; IH's `settings` is user-level only. Product positioning, not a technical gap. Nothing in the delivered work depends on it.
 
 **Six findings were considered and declined, each with a written ruling** (`what-the-design-does-not-answer.md` §D, in this directory):
@@ -274,10 +342,10 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 ## 8. If you are the next agent: the process that was used here
 
 - **Plan → fresh implementer per task → independent task review → scoped re-review after fixes → final whole-branch review in disjoint scopes → fix round → finishing.** The ledger is the long-term memory between fresh contexts; each task's brief names the *exact* files, the red-first test, and the mutation proof.
-- **Constraints that were binding, and should stay binding:** no production change without a test that failed first **and** a mutation proof; all §8 thresholds keep passing; **push to `origin/m62` only**; record honestly what the design does not answer; the design's §5 exclusions are binding (no permission rule engine, no governance layer, no second LLM danger classifier).
+- **Constraints that were binding, and should stay binding:** no production change without a test that failed first **and** a mutation proof; all §8 thresholds keep passing; record honestly what the design does not answer; the design's §5 exclusions are binding (no permission rule engine, no governance layer, no second LLM danger classifier). **The M62 goal also bound pushes to `origin/m62` only** — that constraint belonged to that goal; the live branch is now **`m64`**, and the merge into `main` remains the human's call.
 - **One model route** means you cannot buy a stronger reviewer. Substitute **structure**: disjoint scopes, fresh contexts, each required to re-derive claims from code — and report that as structure, not as extra rigour.
 - **If the budget binds, the agreed reduction order is:** merge the semantics scope into the compliance scope *for reporting* → trim the claims audit's sampling, **never** its triage → **never** drop the tests+mutation scope. Any reduction must be reported as a reduction. (It was not needed this time.)
-- **Finishing:** `finishing-a-development-branch`, **Option 3 only** (keep on `m62`, pushed) — the goal's push constraint pre-decides it; do not open a PR.
+- **Finishing:** `finishing-a-development-branch`, **Option 3 only** (keep the branch pushed) — the M62 goal's push constraint pre-decided it; do not open a PR. The live branch is `m64`.
 
 ---
 
@@ -286,5 +354,6 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 - I did **not** run the TUI or the web host end-to-end. The reachability statements in §7 come from reading code plus targeted greps, not from driving those surfaces.
 - The six parked findings in §7 are **unproven in both directions** — no test was written to demonstrate them, and none was written to rule them out.
 - The performance figure is withdrawn; no replacement measurement exists, and **IH has no benchmarking harness** (dsh does).
-- On the harness side I verified only the code paths cited in §1 (`sse.ts:39`, `retry-policy.ts:18-24`, the pinning test). I did not reproduce the `STREAM_CLOSED` failure itself.
-- Everything in §5 is a **snapshot**: those numbers were true at `3e0e2536` on this machine. Re-run before relying on them.
+- On the harness side I verified only the code paths cited in §1 (`sse.ts:39`, `retry-policy.ts:18-24`, the pinning test). I did not reproduce the `STREAM_CLOSED` failure itself — nor the `0xC0000409` web-server crash in §7.
+- **The 2026-09-15 review cycle's verdicts cannot be independently re-derived from this repository.** Three of M1's four task reviews ran **without an implementer report** (that session's ledger was gitignored and never published), so "did the implementer do what it said it did" is permanently unverifiable there; what *was* independently re-measured — the tally, the digest and its rule, the two-row delta, the frozen-path and instrument constraints, and every gate number — is recorded with its commands in `2026-09-15-m1-phase-b-handoff.md` §2 and in this session's ledger.
+- Everything in §5 is a **snapshot**: the M62 row was true at `3e0e2536`, the tip row at `a5e4bb0e`. Re-run before relying on either.
