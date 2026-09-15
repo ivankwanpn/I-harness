@@ -193,10 +193,12 @@ What was deferred, and its state:
    `scripts/audit/check-reachability.mjs`, which Phase B never modified."* Measured with
    `git diff --name-only` over both footprints (`m62..fbfbfb5` = Phase A, `fbfbfb5..HEAD` = Phase B),
    the second clause holds and **the first is the opposite of the truth**: the phases share **four
-   documents** — `docs/audit/2026-09-15-reachability-baseline.md` (`+379/−42` in Phase B),
-   `docs/handoff/HANDOFF.md` (`+23/−6`), this Phase B plan (`+10/−8`) and
-   `docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md` (`+3/−3`) — while
-   `scripts/audit/check-reachability.mjs` is in **Phase A's footprint only**. So the sentence named
+   documents** — `docs/audit/2026-09-15-reachability-baseline.md`, `docs/handoff/HANDOFF.md`, this
+   Phase B plan and `docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md` — while
+   `scripts/audit/check-reachability.mjs` is in **Phase A's footprint only**. Their Phase B churn,
+   measured at `6f2c2cea` (the revision this correction was written against; the figures move with
+   every later commit to those files, this fix wave's included), was `+379/−42`, `+23/−6`, `+10/−8`
+   and `+3/−3` respectively. So the sentence named
    the one file the phases do *not* share and omitted the document Phase B rewrote most heavily (the
    baseline). The scoping *decision* survives the correction, and saying why is the point: the
    baseline's Phase B rewrites are inside `fbfbfb5..HEAD`, so the in-range review did see them, and
