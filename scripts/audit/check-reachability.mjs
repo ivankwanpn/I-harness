@@ -134,6 +134,37 @@ function buildFixture() {
     "",
   ].join("\n"))
 
+  // class 4: `plan-mode` appears in the capability union but is never pushed.
+  put("packages/gamma/src/caps.ts", 'export type Cap = "plan-mode" | "vim-mode"\n')
+  put("packages/gamma/src/push.ts", 'caps.push("vim-mode")\n')
+
+  // class 5: `compaction.auto` is in the schema, nothing reads it; `notify.on` is read.
+  put("packages/delta/src/schema.ts", 'export const S = { "compaction.auto": b, "notify.on": b }\n')
+  put("packages/delta/src/read.ts", 'const x = s["notify.on"]\n')
+
+  // class 4 regression: the inventory lives in a file that is NOT named caps.ts /
+  // capabilities.ts, which is this repo's shape (packages/tui/src/app/slash/
+  // types.ts). Without this file the fixture's only inventory is caps.ts, so a
+  // file-name anchor passes while the real tree's union stays invisible -- and it
+  // did: the drafted CAP_UNION_FILE matches no file here, and the drafted scanner
+  // therefore reported 0 findings over a tree with three unpushed capabilities.
+  put("packages/theta/src/types.ts", 'export type PluginCapability = "alpha-cap" | "beta-cap"\n')
+  put("packages/theta/src/loop.ts", 'caps.push("alpha-cap")\n')
+
+  // class 4 regression: a union whose members are supplied some OTHER way (the
+  // packages/plugin-registry/src/capability.ts shape: disk sniffing, no `push`
+  // anywhere) is not a push inventory. With no member pushed, every member would
+  // be invented, so this file pins the guard that skips such a union.
+  put("packages/iota/src/capability.ts", 'export type Capability = "skills" | "commands"\n')
+
+  // class 5 regression: the schema is a `*_DEFAULTS` document in a file that is
+  // NOT named schema.ts, its keys are NESTED (packages/settings/src/index.ts is
+  // the real one), and a read goes through a property path rather than a bracket
+  // string. Without this file the fixture's only schema is already dotted-and-
+  // quoted, and a property read is never exercised.
+  put("packages/kappa/src/defaults.ts", 'export const APP_DEFAULTS = { ui: { themeName: "dark", fontSizePx: 14 } }\n')
+  put("packages/kappa/src/read.ts", "const t = s.ui.themeName\n")
+
   return dir
 }
 
@@ -402,6 +433,209 @@ function scanUnreadFlags(files) {
 
 SCANNERS.push(scanProducerlessEvents, scanUnreadFlags)
 
+
+// ------------------------------ shared lexical helpers (classes 4 and 5)
+/** `text` from `i` with whitespace and comments skipped, strings NOT skipped.
+ *  Both new scanners must read past prose -- every member of this repo's
+ *  capability union carries a trailing `//` comment, and a settings document is
+ *  half comments -- while their quoted values are still data. `codeOnly`
+ *  (class 3) blanks strings as well, and these two classes are looking for
+ *  exactly those strings, so it does not fit them. */
+function skipTrivia(text, i) {
+  for (;;) {
+    if (i >= text.length) return i
+    const c = text[i]
+    const d = text[i + 1]
+    if (/\s/.test(c)) { i++; continue }
+    if (c === "/" && d === "/") { while (i < text.length && text[i] !== "\n") i++; continue }
+    if (c === "/" && d === "*") { i += 2; while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++; i += 2; continue }
+    return i
+  }
+}
+
+/** The string literal that opens at `i` (its quote is `text[i]`), escape
+ *  sequences honoured; `end` is the index just past the closing quote. */
+function readQuoted(text, i) {
+  const q = text[i]
+  let j = i + 1
+  while (j < text.length && text[j] !== q) { if (text[j] === "\\") j++; j++ }
+  return { value: text.slice(i + 1, j), end: j + 1 }
+}
+
+// ------------------------------------- class 4: capability never pushed
+/** The capability INVENTORY is a string-literal union TYPE, not a file name.
+ *  The drafted anchor `/(^|\/)(caps|capabilities)\.ts$/` matches no file in this
+ *  repo -- the real inventory is `SlashCapability` in
+ *  packages/tui/src/app/slash/types.ts -- and no quoted `"word"` in the real
+ *  declaring file is a capability either, so the drafted scanner reported
+ *  0 findings over a tree that holds three unpushed capabilities: a broken rule
+ *  reading as a clean sweep. The name pattern keeps `Cap`/`Caps`/`Capability`/
+ *  `Capabilities` (the fixture's `Cap`, the real `SlashCapability`) and rejects
+ *  `CapabilityStatus`, which is a status union, not an inventory. */
+const CAP_UNION_DECL = /^export\s+type\s+([A-Za-z_$][\w$]*)\s*=/gm
+const CAP_UNION_NAME = /(?:Cap|Caps|Capability|Capabilities)$/
+const CAP_PUSH = /\.push\(\s*"([^"]+)"/g
+
+/** The members of the union whose `=` ends at `i`: it reads `| "x"` pairs across
+ *  comments and newlines and stops at the first token that is neither. Only the
+ *  union's own literals become members -- reading every quoted string in the file
+ *  (the drafted rule) would turn the dozens of other quoted strings in tui's
+ *  types.ts (`"agent"`, `"skills"`, `"jump"`, ...) into capabilities. */
+function unionMembers(text, i) {
+  const members = []
+  for (;;) {
+    i = skipTrivia(text, i)
+    const c = text[i]
+    if (c === "|") { i++; continue }
+    if (c === '"' || c === "'") { const s = readQuoted(text, i); members.push(s.value); i = s.end; continue }
+    break
+  }
+  return [...new Set(members)]
+}
+
+/** A capability is "pushed" when a production file adds it to a capability list
+ *  with `.push("name")` -- tui's loop.ts `slashCapabilities()` is the only such
+ *  site here -- never when it is merely named. A union that NO member of is ever
+ *  pushed is not a push inventory at all: plugin-registry's `Capability` is
+ *  `skills`/`commands`/`mcp` sniffed off disk by `existsSync`, and reporting its
+ *  three members would invent three findings (measured), so such a union is
+ *  skipped. The cost is the mirror image and is stated: a union that is entirely
+ *  unpushed is a silent miss, never an invented finding.
+ *
+ *  The drafted `CAP_PUSH` carried no `g` flag, so its `matchAll` threw
+ *  `TypeError: String.prototype.matchAll called with a non-global RegExp
+ *  argument` the moment a declaration file matched -- measured, by running the
+ *  drafted snippet: the empty declaration set is the only reason that defect
+ *  stayed invisible. */
+function scanUnpushedCapabilities(files) {
+  const prod = files.filter((f) => !f.test)
+  const pushed = new Set()
+  for (const f of prod) for (const m of f.text.matchAll(CAP_PUSH)) pushed.add(m[1])
+  const findings = []
+  for (const decl of prod) {
+    for (const m of decl.text.matchAll(CAP_UNION_DECL)) {
+      if (!CAP_UNION_NAME.test(m[1])) continue
+      const members = unionMembers(decl.text, m.index + m[0].length)
+      if (members.length === 0 || !members.some((n) => pushed.has(n))) continue
+      for (const n of members) {
+        if (!pushed.has(n)) findings.push({ kind: "unpushed-capability", subject: n, evidence: decl.rel })
+      }
+    }
+  }
+  return findings
+}
+
+// ------------------------------------ class 5: setting never consulted
+/** The settings schema here is a DEFAULTS DOCUMENT, not a file named
+ *  `schema.ts`: the drafted anchor `/(^|\/)(schema|settings-schema)\.ts$/`
+ *  matches no file in this repo (the schema is `SETTINGS_DEFAULTS` in
+ *  packages/settings/src/index.ts), and no quoted dotted key exists anywhere in
+ *  the production tree -- no `"compaction.auto":` shape at all. So the drafted
+ *  scanner reported 0 findings over 33 declared key paths: a broken rule reading
+ *  as a clean sweep. The name anchor is kept for the fixture's shape; the export
+ *  anchor is added for the real one. */
+const SETTINGS_SCHEMA_FILE = /(^|\/)(schema|settings-schema)\.ts$/
+const SETTINGS_DEFAULTS_DECL = /export const [A-Z0-9_]*DEFAULTS\b[^=]*=\s*\{/
+const SETTING_KEY = /"([a-z][a-zA-Z0-9-]*\.[a-zA-Z0-9.-]+)"\s*:/g
+
+/** Skip one object-literal VALUE. Strings, templates and comments are honoured,
+ *  so a `,` or `}` inside a separator string or a comment cannot end it. */
+function skipValue(text, i) {
+  let depth = 0
+  while (i < text.length) {
+    const c = text[i]
+    const d = text[i + 1]
+    if (c === "/" && d === "/") { while (i < text.length && text[i] !== "\n") i++; continue }
+    if (c === "/" && d === "*") { i += 2; while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) i++; i += 2; continue }
+    if (c === '"' || c === "'" || c === "`") { i = readQuoted(text, i).end; continue }
+    if (c === "{" || c === "[" || c === "(") { depth++; i++; continue }
+    if (c === "}" || c === "]" || c === ")") { if (depth === 0) return i; depth--; i++; continue }
+    if (c === "," && depth === 0) return i
+    i++
+  }
+  return i
+}
+
+/** The key/value entries of the object literal that opens at `open`. A quoted
+ *  key is one key (`"compaction.auto"`), a nested object recurses, anything else
+ *  is a leaf. `end` is the index just past the closing `}`. */
+function objectEntries(text, open) {
+  const entries = []
+  let i = skipTrivia(text, open + 1)
+  while (i < text.length && text[i] !== "}") {
+    let key
+    if (text[i] === '"' || text[i] === "'" || text[i] === "`") {
+      const s = readQuoted(text, i)
+      key = s.value
+      i = skipTrivia(text, s.end)
+    } else {
+      let j = i
+      while (j < text.length && /[\w$]/.test(text[j])) j++
+      key = text.slice(i, j)
+      i = skipTrivia(text, j)
+    }
+    if (text[i] !== ":") break
+    i = skipTrivia(text, i + 1)
+    if (text[i] === "{") {
+      const inner = objectEntries(text, i)
+      entries.push({ key, kids: inner.entries })
+      i = skipTrivia(text, inner.end)
+    } else {
+      entries.push({ key, kids: null })
+      i = skipValue(text, i)
+    }
+    if (text[i] === ",") { i = skipTrivia(text, i + 1); continue }
+    break
+  }
+  return { entries, end: i + 1 }
+}
+
+/** Dotted paths of every leaf entry -- the settings DOCUMENT's key paths
+ *  (`compaction.auto`, `tui.prefs.statusLine.mode`). This is the half the
+ *  drafted rule could not see: it recognised only keys already written
+ *  dotted-and-quoted, and the real document is nested objects. */
+function leafKeyPaths(entries, prefix = []) {
+  const out = []
+  for (const e of entries) {
+    const path = [...prefix, e.key]
+    if (e.kids && e.kids.length > 0) out.push(...leafKeyPaths(e.kids, path))
+    else out.push(path.join("."))
+  }
+  return out
+}
+
+/** A key is CONSULTED when a production file other than the one that declares
+ *  it reads it: as the quoted key (`s["notify.on"]`, the drafted test) or as a
+ *  property access ending in the key's LEAF (`settings.get().compaction.auto`).
+ *  The drafted test was string-only, and this repo reads settings as properties,
+ *  so it would have reported `compaction.auto` -- read at apps/cli/src/index.ts:
+ *  215 -- as unconsulted, an invented finding. Both tests are mention-based, as
+ *  class 3's is: a mention counts, so a reported key is strong evidence and an
+ *  unreported one is not proof that it is read. The leaf name is regex-escaped
+ *  the way `scanUnusedExports` escapes it, since `$` is both regex syntax and a
+ *  legal identifier character. */
+function scanUnconsultedSettings(files) {
+  const prod = files.filter((f) => !f.test)
+  const findings = []
+  for (const decl of prod.filter((f) => SETTINGS_SCHEMA_FILE.test(f.rel) || SETTINGS_DEFAULTS_DECL.test(f.text))) {
+    const keys = new Set([...decl.text.matchAll(SETTING_KEY)].map((m) => m[1]))
+    const m = decl.text.match(SETTINGS_DEFAULTS_DECL)
+    if (m) {
+      const open = decl.text.indexOf("{", decl.text.indexOf(m[0]))
+      for (const key of leafKeyPaths(objectEntries(decl.text, open).entries)) keys.add(key)
+    }
+    for (const key of keys) {
+      const leaf = key.slice(key.lastIndexOf(".") + 1).replace(/[$]/g, "\\$")
+      const prop = new RegExp(`\\.\\s*${leaf}\\b`)
+      const read = prod.some((f) => f !== decl && (f.text.includes(`"${key}"`) || f.text.includes(`'${key}'`) || prop.test(f.text)))
+      if (!read) findings.push({ kind: "unconsulted-setting", subject: key, evidence: decl.rel })
+    }
+  }
+  return findings
+}
+
+SCANNERS.push(scanUnpushedCapabilities, scanUnconsultedSettings)
+
 SELF_TEST_CASES.push({
   name: "class 1: an export only a test imports is a finding",
   expect: ["@i-harness/alpha#Orphan", "@i-harness/alpha#OnlyAType"],
@@ -510,6 +744,18 @@ SELF_TEST_CASES.push({
       .map((f) => f.subject)
       .filter((s) => s === "--strict")
   },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 4: a capability in the union that is never pushed is a finding",
+  expect: ["beta-cap", "plan-mode"],
+  run(root) { return scanUnpushedCapabilities(indexTree(root)).map((f) => f.subject) },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 5: a settings key with a schema entry and no reader is a finding",
+  expect: ["compaction.auto", "ui.fontSizePx"],
+  run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
 function runSelfTest() {
