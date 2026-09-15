@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient, buildWireClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -40,12 +40,14 @@ describe("provider registry", () => {
     await it.return?.()
   })
 
-  it("buildWireClient dispatches the new wire protocols and returns undefined otherwise", () => {
-    expect(buildWireClient("gemini", { apiKey: "k", model: "m" })).toBeDefined()
-    expect(buildWireClient("bedrock", { apiKey: "", model: "m" })).toBeDefined()
-    expect(buildWireClient("openai-completions", { apiKey: "k", model: "m" })).toBeDefined()
-    expect(buildWireClient("no-such-protocol", { apiKey: "k", model: "m" })).toBeUndefined()
-  })
+  // M1 Phase B Task 4: the case that stood here called `buildWireClient` directly, and
+  // it is gone with that export edge. A named import of a non-exported declaration does
+  // not compile (`tsc`: "declares 'buildWireClient' locally, but it is not exported"),
+  // and no public entry reaches that dispatcher -- it has no production caller at all,
+  // which is exactly why the reachability row `@i-harness/provider#buildWireClient`
+  // existed. So the `openai-completions` arm and the unknown-protocol -> undefined arm
+  // now have NO test. That is a coverage loss this change accepts, not a gain: if the
+  // resolved-wire-protocol seam is ever wired, this case comes back with it.
 
   it("buildModelClient throws on unknown protocol", () => {
     expect(() => buildModelClient({ name: "x", displayName: "X", protocol: "bogus" as never }, "m")).toThrow(/protocol/i)
