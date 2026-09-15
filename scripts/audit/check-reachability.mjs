@@ -72,9 +72,23 @@ function buildFixture() {
   put("packages/epsilon/src/impl.ts", [
     "export function ReExported() { return 1 }",
     "export function UnusedReExport() { return 2 }",
-    "export type TypeOnlyExport = string",
   ].join("\n"))
-  put("packages/epsilon/src/index.ts", 'export * from "./impl"\nexport { type TypeOnlyExport } from "./impl"\n')
+  // `interface`, not `type`, and its OWN module: with `type`, the phantom
+  // subject `type TypeOnlyExport` matched this declaration's own text, and the
+  // clean name reached the entry through `export *` as well, so the case passed
+  // with the modifier strip removed -- a test that certified its own defect.
+  put("packages/epsilon/src/type-only.ts", "export interface TypeOnlyExport { value: string }\n")
+  // The entry is a production file too: it imports this name, re-exports it and
+  // calls it -- the shape the whole-entry exclusion got wrong.
+  put("packages/epsilon/src/range.ts", "export function EntryCallSite() { return 4 }\n")
+  put("packages/epsilon/src/index.ts", [
+    'export * from "./impl"',
+    'export { type TypeOnlyExport } from "./type-only.ts"',
+    'import { EntryCallSite } from "./range.ts"',
+    'export { EntryCallSite } from "./range.ts"',
+    "const entryValue = EntryCallSite()",
+    "",
+  ].join("\n"))
   put("packages/epsilon/src/use.ts", 'import { ReExported } from "./impl"\nReExported()\n')
 
   // index regression: a dot-directory is gitignored scratch, never repo source.
@@ -207,21 +221,39 @@ function exportedNamesDeep(file, byRel, seen = new Set([file.rel])) {
   return origins
 }
 
-/** A name is "used" when some NON-TEST file -- other than the entry being
- *  audited and other than the module(s) that DECLARE it -- mentions it as a
- *  word. Package scoping is deliberately absent: a symbol imported relatively
- *  and called inside its own package is used on a production path just as much
- *  as one imported by a sibling package. The entry is excluded because its own
- *  export statement names everything it re-exports without using any of it. */
+/** An entry point is a production file like any other: a name it imports and
+ *  then calls, composes or narrows IS used on a production path. Only the
+ *  statements that merely NAME what it re-exports are a false mention, so those
+ *  spans are blanked -- spaces, newlines kept, so blanking can never join two
+ *  tokens into one word -- and the rest of the entry is scanned like any other
+ *  file. Blanking the whole entry is what reported
+ *  `compaction#selectShadowableRange`, imported at :8, re-exported at :12 and
+ *  called at :92. */
+function withoutReExportStatements(text) {
+  let out = text
+  for (const shared of [EXPORT_LIST, EXPORT_STAR]) {
+    // A fresh copy per use: the shared regexes are also read by matchAll.
+    out = out.replace(new RegExp(shared.source, shared.flags), (m) => m.replace(/[^\n]/g, " "))
+  }
+  return out
+}
+
+/** A name is "used" when some NON-TEST file -- other than the module(s) that
+ *  DECLARE it -- mentions it as a word. Package scoping is deliberately absent:
+ *  a symbol imported relatively and called inside its own package is used on a
+ *  production path just as much as one imported by a sibling package. The entry
+ *  point is scanned too, minus its re-export statements: those name everything
+ *  the package re-exports without using any of it. */
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
   const findings = []
   for (const entry of prod.filter((f) => /^packages\/[^/]+\/src\/index\.ts$/.test(f.rel))) {
     const pkg = "@i-harness/" + entry.rel.split("/")[1]
+    const entryText = withoutReExportStatements(entry.text)
     for (const [name, origins] of exportedNamesDeep(entry, byRel)) {
       const word = new RegExp(`\\b${name.replace(/[$]/g, "\\$")}\\b`)
-      const used = prod.some((f) => f.rel !== entry.rel && !origins.has(f.rel) && word.test(f.text))
+      const used = prod.some((f) => !origins.has(f.rel) && word.test(f.rel === entry.rel ? entryText : f.text))
       if (!used) findings.push({ kind: "unused-export", subject: `${pkg}#${name}`, evidence: entry.rel })
     }
   }
@@ -290,6 +322,12 @@ SELF_TEST_CASES.push({
   },
 })
 
+// Two assertions in one exact-set expectation, because both describe what the
+// ENTRY's own text contributes: `TypeOnlyExport` arrives only through the
+// entry's `export { type ... }` list (so dropping the modifier strip loses the
+// clean name AND produces the phantom), and `EntryCallSite` is imported,
+// re-exported and CALLED by the entry (so excluding the whole entry reports a
+// name on a production path).
 SELF_TEST_CASES.push({
   name: "class 1: an inline type modifier does not leak into the subject",
   expect: ["@i-harness/epsilon#TypeOnlyExport", "@i-harness/epsilon#UnusedReExport"],
