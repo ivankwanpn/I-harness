@@ -38,15 +38,23 @@ outside `packages/*` and `apps/cli` was touched, and no frozen frontend file was
 **Instrument state:** `reachability: 731 ts files, 523 finding(s)`; digest
 `5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`, computed as sha256 over the
 findings rendered as sorted `kind<TAB>subject<TAB>evidence` lines, LF-joined, **each
-newline-terminated — the trailing newline matters**. Phase A's digest was `da57ae75…` at 525 rows;
+newline-terminated — the trailing newline matters**, and **sorted byte-wise** (`Array#sort()` /
+`LC_ALL=C`, not a locale-aware collation: a `localeCompare` sort moves `@i-harness/tui#…` after
+`@i-harness/tui-core#…` and does not reproduce this digest — measured, baseline §2.1). Phase A's
+digest was `da57ae75…` at 525 rows;
 **two rows left the set** (Task 4's two deletions) and **zero were added** across all of Phase B.
 
-**Row tally after Phase B (§4 of the baseline): `already-fixed` 6 · `still-holds` 2 · `by-design` 14
-= 22 rows.** Phase A was 3/10/9. Note that **14 `by-design` rows are not 19 allowlist *entries*** —
+**Row tally after Phase B (§4 of the baseline): `already-fixed` 5 · `still-holds` 2 · `by-design` 15
+= 22 rows.** Phase A was 2/10/10. **Corrected 2026-09-15 by re-measurement:** this paragraph first
+published `6 / 2 / 14` and `Phase A was 3/10/9`, both taken from the baseline's §4 tally paragraph,
+which was wrong in two columns — Task 7 moved `§4.1 item 8` out of `still-holds` into **`by-design`**
+and the baseline's paragraph counted it into `already-fixed` instead. The baseline now states the
+derivation and the extraction it was checked with; this handoff carries the corrected figures and does
+not re-derive them. Note that **15 `by-design` rows are not 19 allowlist *entries*** —
 the baseline states that distinction explicitly, and `§4.1 item 8` is the one `by-design` row with no
 allowlist entry. That is recorded deliberately rather than resolved by inventing an entry.
 
-### Four corrections Task 7 made to the controller's numbers, each by re-measurement
+### Three corrections Task 7 made to the controller's numbers — and one it got backwards
 
 Recorded because they are wrong in the briefs and would otherwise be re-derived:
 
@@ -60,7 +68,14 @@ Recorded because they are wrong in the briefs and would otherwise be re-derived:
   68 entries / 6 with a local export list / `tui-core` 31, `fs-lock` 2, `sandbox-policy` 2,
   `session-persistence` 2, `attachment` 1, `core-agent` 1. (The controller's 38 treated
   `session-persistence` as 1.)
-- **`closeFileBackedConnections` is declared at `file-backed.ts:89`**, not the `:91` the brief said.
+- **RETRACTED — `closeFileBackedConnections` is declared at `file-backed.ts:91`, which is what the
+  brief said.** This item first read "…is declared at `file-backed.ts:89`, not the `:91` the brief
+  said"; that correction was **false**. Re-measured: `:89` is the last line of the comment block that
+  introduces `openConnections`, `:91` is `export function closeFileBackedConnections(): void {`, and
+  `openConnections.clear()` is at `:93`. The false correction is recorded rather than deleted — it
+  reached the baseline's §4.5 row 2 and §7 item 13, both now corrected — and it is the same failure
+  mode §5 lists: the claim was published without the measurement that decides it (reading the three
+  lines) being run.
 
 **And one correction to the controller's *mechanism*, not just a number:** the re-export hazard is
 **not** the `originOf` self-origin path. When the re-export carries a `from` specifier it resolves,
@@ -165,6 +180,11 @@ listed with what each costs if wrong, because that is the only way they can be r
   therefore a lower bound for a second reason the baseline did not state.** *Ruling:* record it, do
   **not** fix the scanner mid-flight — that would change the finding set, the digest and the precision
   sample after Phase A was reviewed and its digest published.
+  **Correction to this ruling's own figure (2026-09-15, fix round):** the breakdown above under-counts
+  `session-persistence` by one — it is **2**, not 1, and the measurement under the rule stated here
+  gives **39 of 39** declared elsewhere; see §2's correction and the baseline's §7 item 12. The page
+  above is left as it was written, because the ruling is what was ruled; only the number is
+  superseded.
 
 ### Task 3
 - **R-M** — the fail-loud router kills **any** dash-leading task token (`run "-40 degrees"`,
@@ -228,6 +248,10 @@ handover that lists only successes cannot be reworked.
   is what made the claim true.
 - **R-H, R-I, R-O, R-P** — briefs and instructions of mine that were wrong.
 - **R-Q** — the false claim above.
+- **The `file-backed.ts:89` correction** (§2) — withdrawn: the brief's `:91` was right, and the
+  "correction" replaced a correct citation with a wrong one. Recorded here as well as in §2 because it
+  is the first entry in this list where the error ran the *other* way: not a brief of mine that was
+  wrong, but a brief of mine that was right and was overruled without a measurement.
 
 **The pattern is identical every time: a plausible claim accepted before the mechanism that decides
 it was checked.** The counter-check is cheap in every instance and was skipped in every instance.
@@ -239,7 +263,9 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
 **Blocking/completion:**
 - The three deferred task reviews and the final whole-branch review (§3).
 - **§4.1 item 8 of the baseline** — Task 5 landed as `06d684c`, so those names are no longer
-  exported and the row should be `by-design`, making the tally **`6 / 2 / 14 = 22`**. Task 6 committed
+  exported and the row is `by-design`, making the tally **`5 / 2 / 15 = 22`** (this line read
+  `6 / 2 / 14` until the fix round re-measured it; §2 carries the correction and the baseline's §4 the
+  derivation). Task 6 committed
   before Task 5 landed and therefore left it `still-holds`; **verify against the code, not the
   document.** The controller confirmed by `git grep` that all three names are un-exported and absent
   from the package entry, and that the instrument still reads `523`.
@@ -258,14 +284,20 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
 
 **M2 (the reachability gate) must inherit:**
 - Seed the ratchet with the **digest** and fail only on **new** rows — never on "zero rows".
-- **The local re-export blind spot** (R-L) — 38 unreportable names; the ask is to follow a local
-  re-export through the entry's own imports, or at minimum to refuse to credit the entry as its own
-  origin.
-- **The entry-only blind spot** — class 1 walks only `packages/*/src/index.ts`, so any file its entry
-  does not mention, and every name it declares, is invisible to all five classes. Three known
-  instances: `packages/guard-approval/src/remember.ts`,
-  `packages/sandbox-local/src/runner-failures.ts`, `closeFileBackedConnections`. **Re-exporting is not
-  a remedy** — a probe gives 1 finding without the re-export and 2 with it.
+- **The local re-export blind spot** (R-L) — **39** unreportable names (R-L's "38 declared elsewhere"
+  is corrected in §2; re-measured in the fix round as 39 of 39 under R-L's own rule); the ask is to
+  follow a local re-export through the entry's own imports, or at minimum to refuse to credit the
+  entry as its own origin.
+- **The entry-only blind spot has two shapes, and M2 needs both** — class 1 walks only
+  `packages/*/src/index.ts` and tests **the names those entries export**, so **(a)** any **file** its
+  entry does not mention, and every name it declares, and **(b)** any **name** declared in a file the
+  entry does reach but not exported through it, are invisible to all five classes. Two known
+  instances of (a) — `packages/guard-approval/src/remember.ts`,
+  `packages/sandbox-local/src/runner-failures.ts` — and one of (b), `closeFileBackedConnections`
+  (`packages/session-query/src/file-backed.ts:91`), whose file the entry *does* import and re-export
+  from, so a file-level rule alone would not report it. The baseline's §7 item 13 states the same two
+  parts as M2's ask. **Re-exporting is not a remedy** — a probe gives 1 finding without the re-export
+  and 2 with it.
 - **Argument routing is invisible to every scanner class** — Task 3's defect class can never be
   caught by the gate; only tests will.
 - **A worked demonstration of the cross-package collision false negative:** during Task 4, a
