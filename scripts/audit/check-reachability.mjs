@@ -19,7 +19,7 @@
 //   node scripts/audit/check-reachability.mjs --json          # machine readable
 //   node scripts/audit/check-reachability.mjs --self-test     # prove the scanners
 
-import { readFileSync, readdirSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { readFileSync, readdirSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
 import { tmpdir } from "node:os"
 
@@ -60,8 +60,11 @@ function buildFixture() {
   // class 2 regression: the SAME name as a union member on its own continuation
   // line of ANOTHER file is a declaration, not a producer. Without this file the
   // fixture's only union sits in events.ts, which the scanner excludes as the
-  // declaring file, so nothing would pin the `| "name"` clause -- and dropping
-  // it flips the real tree's class-2 result from 1 finding to 0.
+  // declaring file, so nothing would pin the `| "name"` clause. Measured, M1's
+  // fix wave: deleting that clause fails this case AND moves the real tree from
+  // 525 rows to 524 -- class 2's single row, `retry/start`, disappears. The
+  // fixture half was measured when the clause was written; the real-tree half
+  // was not, and is, as of the fix wave.
   put("packages/beta/src/types.ts", [
     "export type EventKind =",
     '  | "beta/ghost"',
@@ -135,7 +138,21 @@ function buildFixture() {
   ].join("\n"))
 
   // class 4: `plan-mode` appears in the capability union but is never pushed.
-  put("packages/gamma/src/caps.ts", 'export type Cap = "plan-mode" | "vim-mode"\n')
+  // Added by M1's fix wave (I2): the union file is a real module, so it also
+  // carries UNRELATED quoted strings -- a path, a package name, a plain word --
+  // beside the union. Reading every quoted string in the file (the drafted
+  // class-4 rule) invents all three as unpushed capabilities; on the real tree
+  // that loosening moves 525 rows to 551 and `unpushed-capability` from 3 to 29
+  // (measured). Without these literals the file held nothing but the union, so
+  // the strict `unionMembers` reader and the loose one agreed exactly and no
+  // case could tell them apart.
+  put("packages/gamma/src/caps.ts", [
+    'export type Cap = "plan-mode" | "vim-mode"',
+    'export const CAP_CONTRACT = "../../contracts.ts"',
+    'export const CAP_SETTINGS = "@i-harness/settings"',
+    'export const CAP_MARKET = "marketplace"',
+    "",
+  ].join("\n"))
   put("packages/gamma/src/push.ts", 'caps.push("vim-mode")\n')
 
   // class 5: `compaction.auto` is in the schema, nothing reads it; `notify.on` is read.
@@ -164,6 +181,43 @@ function buildFixture() {
   // quoted, and a property read is never exercised.
   put("packages/kappa/src/defaults.ts", 'export const APP_DEFAULTS = { ui: { themeName: "dark", fontSizePx: 14 } }\n')
   put("packages/kappa/src/read.ts", "const t = s.ui.themeName\n")
+
+  // --- Added by M1's fix wave (final whole-branch review, I2 and Deferred item
+  // 18). Each element below exists to make ONE loosening visible to
+  // `--self-test`; the mutation it turns red is named in the comment.
+
+  // I2 survivor, class 2: an inline TYPE DECLARATION in a file that does not
+  // declare the union NAMES the event without producing it. Without this file
+  // the ghost's only non-declaring occurrences are a test file (excluded) and
+  // the `| "beta/ghost"` continuation line in types.ts (rejected by the leading
+  // pipe rule), so deleting the `TYPE_DECL_LINE` veto changed no expectation.
+  put("packages/beta/src/alias.ts", 'export type GhostAlias = "beta/ghost"\n')
+
+  // I2 survivor, class 5: a key read ONLY as a quoted key. `syncWindow` has no
+  // dot, so there is no `.syncWindow` for the reader's property half to find and
+  // the quoted-key half is the only test that clears it. Every other fixture
+  // read is also visible to the property half, so deleting the quoted-key half
+  // changed no expectation.
+  put("packages/mu/src/defaults.ts", 'export const MU_DEFAULTS = { syncWindow: 5 }\n')
+  put("packages/mu/src/read.ts", 'const w = s["syncWindow"]\n')
+
+  // I2 survivor, class 3: a read that is NOT a dotted property access. `--quiet`
+  // is destructured out of the flags object and passed on, so the surviving word
+  // has no `.` in front of it; every other fixture read is `flags.<field>`, so
+  // requiring a `.` before the read changed no expectation.
+  put("apps/tool-c/src/index.ts", [
+    "type Flags = { quiet?: boolean }",
+    "const flags: Flags = {}",
+    'case "--quiet": flags.quiet = true; break',
+    "const { quiet } = flags",
+    "run(quiet)",
+  ].join("\n"))
+
+  // Deferred item 18: a `*_DEFAULTS` declaration that carries a TYPE ANNOTATION,
+  // so the first `{` at or after the declaration's start is the ANNOTATION's.
+  // Anchoring there parses `annotationOnly` as a settings key and never sees
+  // `realKey`; anchoring on the initialiser does the opposite.
+  put("packages/nu/src/defaults.ts", 'export const NU_DEFAULTS: { annotationOnly: number } = { realKey: 5 }\n')
 
   return dir
 }
@@ -621,7 +675,15 @@ function scanUnconsultedSettings(files) {
     const keys = new Set([...decl.text.matchAll(SETTING_KEY)].map((m) => m[1]))
     const m = decl.text.match(SETTINGS_DEFAULTS_DECL)
     if (m) {
-      const open = decl.text.indexOf("{", decl.text.indexOf(m[0]))
+      // Anchor on the INITIALISER, not on the first `{` at or after the
+      // declaration's start. With a type annotation -- `export const X_DEFAULTS:
+      // { a: number } = { a: 1 }` -- that first brace is the ANNOTATION's, so the
+      // annotation was parsed as the defaults document: `a` was emitted as a
+      // settings key and the real ones were lost. `SETTINGS_DEFAULTS_DECL`
+      // carries no `=` between the name and the initialiser's, so the first `=`
+      // after the match start is the one that introduces the value.
+      const eq = decl.text.indexOf("=", decl.text.indexOf(m[0]))
+      const open = decl.text.indexOf("{", eq + 1)
       for (const key of leafKeyPaths(objectEntries(decl.text, open).entries)) keys.add(key)
     }
     for (const key of keys) {
@@ -754,7 +816,62 @@ SELF_TEST_CASES.push({
 
 SELF_TEST_CASES.push({
   name: "class 5: a settings key with a schema entry and no reader is a finding",
-  expect: ["compaction.auto", "ui.fontSizePx"],
+  expect: ["compaction.auto", "realKey", "ui.fontSizePx"],
+  run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
+})
+
+// The five cases below were added by M1's fix wave (final whole-branch review,
+// I2 and Deferred item 18). Each one is the fixture element of the same name
+// above plus an exact-set assertion, and each exists because a specific
+// loosening of its scanner kept the 13-case self-test green -- the mutation is
+// named in the comment. The expectations are the unfiltered subject lists, so
+// several deliberately agree with a sibling case (the class-2 pair at
+// `beta/ghost` and the class-5 pair below already did): the invariant differs
+// even where the list does not.
+
+// I2 survivor, class 4. Loosening caught: replacing the strict `unionMembers`
+// reader with "every quoted string in the file" -- which then reports the three
+// unrelated literals in `packages/gamma/src/caps.ts` and, on the real tree,
+// moves 525 rows to 551.
+SELF_TEST_CASES.push({
+  name: "class 4: quoted strings beside the union are not capabilities",
+  expect: ["beta-cap", "plan-mode"],
+  run(root) { return scanUnpushedCapabilities(indexTree(root)).map((f) => f.subject) },
+})
+
+// I2 survivor, class 2. Loosening caught: deleting the `TYPE_DECL_LINE` veto,
+// which makes the inline type declaration in `packages/beta/src/alias.ts` read
+// as a producer of `beta/ghost`.
+SELF_TEST_CASES.push({
+  name: "class 2: a type declaration elsewhere names the event without producing it",
+  expect: ["beta/ghost"],
+  run(root) { return scanProducerlessEvents(indexTree(root)).map((f) => f.subject) },
+})
+
+// I2 survivor, class 5. Loosening caught: deleting the quoted-key half of the
+// reader, which reports `syncWindow` -- a key with no dot, so the surviving
+// property half has no `.syncWindow` anywhere to find.
+SELF_TEST_CASES.push({
+  name: "class 5: a key read as a quoted key rather than a property is consulted",
+  expect: ["compaction.auto", "realKey", "ui.fontSizePx"],
+  run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
+})
+
+// I2 survivor, class 3. Loosening caught: requiring a `.` before the surviving
+// field name, which reports `--quiet` -- read by destructuring, so its
+// occurrence has no dot in front of it.
+SELF_TEST_CASES.push({
+  name: "class 3: a read that is not a dotted property access still counts",
+  expect: ["--verbose", "--yes"],
+  run(root) { return scanUnreadFlags(indexTree(root)).map((f) => f.subject) },
+})
+
+// Deferred item 18. Loosening caught: anchoring the DEFAULTS document on the
+// first `{` at or after the declaration's start, which with a type annotation is
+// the annotation's brace -- it reports `annotationOnly` and never sees `realKey`.
+SELF_TEST_CASES.push({
+  name: "class 5: a typed DEFAULTS declaration anchors on its initialiser",
+  expect: ["compaction.auto", "realKey", "ui.fontSizePx"],
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
@@ -821,15 +938,49 @@ function indexTree(root) {
 }
 
 // ----------------------------------------------------------------------- main
-if (!args.includes("--self-test")) {
-  const files = indexTree(resolve(argVal("--root", ROOT)))
+/** `statSync` that answers instead of throwing, so a missing path and a path
+ *  that is not a directory are both simply "not a directory". */
+function isDirectorySync(p) {
+  try { return statSync(p).isDirectory() } catch { return false }
+}
+
+/** A root the scanner cannot walk is a USAGE error, never a clean tree. Before
+ *  this guard, `--root ./nope` printed `0 ts files, 0 finding(s)` and exited 0,
+ *  and `--root package.json` printed the same thing because the `readdirSync`
+ *  in `collectTs` threw straight into its own catch: an under-report no caller
+ *  can tell from a clean sweep, which is the exact failure this tool exists to
+ *  prevent. `existsSync` was imported for this and never called. Exit 2, and the
+ *  message goes to stderr, so a caller cannot read it as a result. */
+function main() {
+  const root = resolve(argVal("--root", ROOT))
+  if (!existsSync(root)) {
+    console.error(`reachability: --root ${root} does not exist`)
+    return 2
+  }
+  if (!isDirectorySync(root)) {
+    console.error(`reachability: --root ${root} is not a directory`)
+    return 2
+  }
+  const files = indexTree(root)
+  // The same refusal for a real directory that holds no TypeScript at all: an
+  // empty scan reports zero findings for the same reason a broken rule does.
+  if (files.length === 0) {
+    console.error(`reachability: --root ${root} contains no .ts/.tsx files -- refusing to report a clean sweep`)
+    return 2
+  }
   const findings = SCANNERS.flatMap((s) => s(files))
 
   if (AS_JSON) {
-    console.log(JSON.stringify({ root: resolve(argVal("--root", ROOT)), findings }, null, 2))
+    console.log(JSON.stringify({ root, findings }, null, 2))
   } else {
     console.log(`reachability: ${files.length} ts files, ${findings.length} finding(s)\n`)
     for (const f of findings) console.log(`  ${f.kind.padEnd(22)} ${f.subject.padEnd(52)} ${f.evidence}`)
   }
-  process.exit(0)
+  return 0
 }
+
+// The exit code is ASSIGNED rather than forced with `process.exit` so stdout and
+// stderr are flushed before the process ends: on Windows a piped stderr write is
+// asynchronous, and `process.exit` can truncate the very message this guard
+// exists to deliver.
+if (!args.includes("--self-test")) process.exitCode = main()
