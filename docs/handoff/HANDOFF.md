@@ -14,9 +14,9 @@
 | Repo | `D:\I-harness-main` on the original workstation; any clone works |
 | Remote | `https://github.com/ivankwanpn/I-harness` — **authoritative** |
 | Branch | **`m64`** — the live branch. `m62` is its ancestor and is finished; `m63` was retired (see §0.1) |
-| HEAD | **`a5e4bb0e`** — `docs(handoff,audit): scope the still-holds count, and drop a "verbatim" the code refutes` |
+| HEAD | **`a5e4bb0e`** is the revision **these measurements were taken at**; the guide itself has been updated since (`7bb848ae`), and every later commit moves HEAD again. **Run `git rev-parse HEAD origin/m64` rather than trusting this row** — that is the lesson §0.2 records, applied to this table. |
 | Sync / tree | `HEAD == origin/m64`, working tree **clean** |
-| What `m64` holds | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** (7 commits, docs and comments only) — 50 commits after `3e0e2536`, 104 after `origin/main` |
+| What `m64` holds | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** (documentation and comments only — no behaviour changed) — 50 commits after `3e0e2536`, 104 after `origin/main` |
 
 **This document is not a snapshot of the tip; it is the orientation guide, and §5's baselines are the M62 baseline plus a tip section.** Two things follow, and the second is the one that bites:
 
