@@ -269,7 +269,9 @@ Two measured defects in one router. (a) `--help` after `run` survives the task f
 
 The run path parses its argv **twice** — `:170-223` reads flag values, `:304-308` re-derives which tokens are flags in order to strip them — and that duplication is the shared cause of both defects. This task closes both at the router, which is the fix that cannot drift again; the larger single-table refactor is deliberately **not** taken here because it is a bigger diff for the same behaviour.
 
-**Decided, do not re-litigate:** this CLI has no help *feature* — the `help`/`--help` handling at `:160-163` is copy residue from other projects (human ruling, 2026-09-15). The run path therefore gets **no** `--help` special case: every dash-leading token it does not recognise is an error. `--flag=value` stays unsupported and is declared deliberate in Task 6; what changes is that it now **fails loud** instead of being silently swallowed into the prompt.
+**Scope: the top-level `help` command is deliberately left alone.** It is not residue — `apps/cli/test/bin.test.ts:33-38` asserts it prints the subcommand list and the grok-style default, and `:72-75` ("documents the flag in help") is an M62 test that forces a new run flag to be documented there. Removing it would break both, delete the only on-demand way to read `USAGE`, and delete that enforcement. The run path gets **no** `--help` special case for a different and simpler reason: **`--help` after `run` is not a help request, it is an unrecognised flag**, and this task makes unrecognised flags errors. `--flag=value` stays unsupported and is declared deliberate in Task 6; what changes is that it now **fails loud** instead of being silently swallowed into the prompt.
+
+*Optional and deliberately not done here:* `help` prints `USAGE` via `console.error` (`:161`) — the error channel — while returning exit 0, whereas the TUI's own handler writes to stdout (`apps/tui/src/index.ts:459`). Making them consistent would change stdout for a command scripts may parse, so it is a separate decision, not part of Task 3.
 
 **Files:**
 - Modify: `apps/cli/src/index.ts` — insert a guard at the top of the run path (after `:168`, before the `SettingsStore` load at `:188`) and add one clause at `:305`
@@ -355,11 +357,13 @@ Insert at the top of the run path, after the `if (args[0] !== "run")` block clos
   // sent `--no-compact` (parsed at :182, absent from that filter) into the prompt
   // as `do x --no-compact`.
   //
-  // There is no help FEATURE in this CLI: `help`/`--help` at :156-163 is residue
-  // copied from other projects, so the run path gets no `--help` case -- any
-  // dash-leading token it does not recognise is an error. This mirrors the file's
-  // own fail-loud stance (`--session-backend`: ":92-97"; `--resume`: ":225-235")
-  // rather than inventing a second help contract.
+  // The TOP-LEVEL `help`/`--help`/`-h` command at :156-163 is deliberately left
+  // alone -- it is test-pinned as the documentation surface (bin.test.ts:33-38,
+  // and ":72-75" forces a new run flag to appear in it). The run path gets no
+  // `--help` case for a different reason: `--help` AFTER `run` is not a help
+  // request, it is an unrecognised flag, and unrecognised flags are errors here.
+  // That mirrors the file's own fail-loud stance (`--session-backend`: ":92-97";
+  // `--resume`: ":225-235") rather than inventing a second help contract.
   const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact"])
   const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox"])
   const runArgs = args.slice(1)
