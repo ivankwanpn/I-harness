@@ -48,7 +48,7 @@ they are deliberately **not** adjudicated row by row (ruling R13, §3.4).
 | **assertion** | **PASS — walked == tracked == 729** |
 | of which test files, by the walker's predicate | 369 |
 | of which production files | 360 |
-| self-test | `self-test: 13/13 ok` (exit 0) |
+| self-test | `self-test: 18/18 ok` (exit 0) — the tool as it now stands; the SHA above carried 13 cases, and M1's fix wave added five without moving either the 525 rows or the digest |
 | baseline digest | `sha256 = da57ae75d53e20c6e73e37da4d5cda68ed084c85fb046d5f877699a2d082e728` |
 
 Commands, run from `D:\I-harness-main`:
@@ -58,13 +58,22 @@ node scripts/audit/check-reachability.mjs
 # reachability: 729 ts files, 525 finding(s)
 
 node scripts/audit/check-reachability.mjs --self-test
-# self-test: 13/13 ok          (exit 0)
+# self-test: 18/18 ok          (exit 0; 13 cases at the HEAD above, 18 after M1's fix wave)
 
 node --version                 # v22.23.2
 pnpm --version                 # 11.7.0
 git rev-parse HEAD             # 74f86d5a80528b61653a437658e4657e208fe59a
 git ls-files "*.ts" "*.tsx"    # 729 lines
 ```
+
+The `HEAD`, walked/tracked count, finding count and digest rows are the state the 525 rows were
+measured at, and they are unchanged by M1's fix wave. The self-test row is the tool as it now stands:
+the five cases that wave added (§5.3) pin rules the 13-case version could not see, and none of them
+changes what the tool prints on this tree — so the digest, not the case count, is what pins the row
+set. For the same reason, every line citation into `check-reachability.mjs` in this document is to the
+tool **as it now stands** rather than to the SHA above: that wave added lines to the fixture, the main
+block and the case list, so a citation such as `withoutReExportStatements`'s `:340-347` no longer
+resolves at `74f86d5`. Nothing these citations point at changed behaviourally — only its line number.
 
 The digest is `sha256` over the 525 findings rendered as sorted `kind<TAB>subject<TAB>evidence`
 lines, each newline-terminated. It pins the baseline so M2 can verify that a later run is
@@ -74,7 +83,7 @@ reproducing *this* set rather than a set that merely has the same size.
 the walker's skip list rather than of git, so it can drift. It holds today because the tracked set
 contains nothing the skip list would drop — measured: of the 729 tracked files, **0** live under a
 dot-directory at the root and **0** under `node_modules`/`dist`/`lib`, which are the walker's three
-skip rules (`scripts/audit/check-reachability.mjs:794-807`, which also excludes `*.ts`/`*.tsx`
+skip rules (`scripts/audit/check-reachability.mjs:911-924`, which also excludes `*.ts`/`*.tsx`
 outside those rules only by extension). On the authoring machine recorded in
 `docs/handoff/HANDOFF.md` the node version was `v24.15.0`; this run is on `v22.23.2`, which is why
 all three fingerprint values and the file count are recorded rather than the SHA alone.
@@ -96,8 +105,8 @@ all three fingerprint values and the file count are recorded rather than the SHA
 
 **Class 4's count is a LOWER BOUND, and structurally so.** The scanner inspects only string-literal
 union *types* whose name ends `Cap`/`Caps`/`Capability`/`Capabilities`
-(`check-reachability.mjs:475-476`), and it **skips any such union where no member is ever pushed**
-(`:519`) — because a union with no pushed member is not a push inventory at all (it is sniffed off
+(`check-reachability.mjs:529-530`), and it **skips any such union where no member is ever pushed**
+(`:573`) — because a union with no pushed member is not a push inventory at all (it is sniffed off
 disk, as `plugin-registry`'s is) and reporting its members would invent findings. Measured: the
 production tree contains exactly three such unions —
 
@@ -136,7 +145,7 @@ These are few enough to adjudicate in full. Verdict vocabulary is §4's.
 | kind | subject | evidence | verdict | note |
 |---|---|---|---|---|
 | `producerless-event` | `retry/start` | `packages/telemetry/src/manifest.ts` | `by-design` | allowlist §6 |
-| `unread-flag` | `--yes` | `apps/tui/src/index.ts` | `still-holds` | source-list row; see §4.1 item 7 and §4.4 item 1 |
+| `unread-flag` | `--yes` | `apps/tui/src/index.ts` | `by-design` | allowlist §6.2 — deliberately out of scope: `apps/tui` is the TUI, frozen and slated for replacement (§4, scope decision). Source-list row; see §4.1 item 7 and §4.4 item 1 |
 | `unpushed-capability` | `plan-mode` | `packages/tui/src/app/slash/types.ts` | `by-design` | allowlist §6 |
 | `unpushed-capability` | `guardian` | `packages/tui/src/app/slash/types.ts` | `by-design` | allowlist §6 |
 | `unpushed-capability` | `vim-mode` | `packages/tui/src/app/slash/types.ts` | `by-design` | allowlist §6 |
@@ -207,7 +216,23 @@ none is claimed.** §5 states the sample that was.
 spec §7; `tui --yes` in both D1 §跨包主線 8 and the CLI surface). Verdicts are exactly one of
 `already-fixed`, `still-holds`, `by-design`.
 
-**Tally: `already-fixed` 2 · `still-holds` 13 · `by-design` 7.**
+**Tally: `already-fixed` 2 · `still-holds` 10 · `by-design` 10.**
+
+**The standing scope decision this tally applies (2026-09-15, roadmap §5 Q6).** The existing TUI and
+web are **frozen and slated for replacement**: the whole frontend is to be abandoned and rebuilt later,
+outside M1–M7, so the roadmap's own scope line excludes the four frontend packages `tui`, `tui-core`,
+`web`, `web-host` and keeps `apps/cli` and `packages/*` in scope
+(`docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:3`, `:192`, `:278`). Two items
+below are therefore allowlisted as **deliberately out of scope** rather than as `still-holds` — the
+finding is real, but the only in-repo code it names is TUI code that is going away, so fixing it would
+be investment in code being removed. Each carries the obligation it hands the replacement frontend in
+its reason sentence (§6.2), so the replacement does not silently inherit the gap. That move is why the
+tally changed from the first edition's `2 / 13 / 7`: `tui --yes` is **two** of the 22 rows (§4.1 item 7
+and §4.4 item 1 — the CLI-surface list repeats the D1 item) and `mountPreset` is one, so three row
+verdicts moved from `still-holds` to `by-design`. The remaining 10 `still-holds` rows are in-scope work
+as written — their evidence is `packages/*` or `apps/cli` code, and none is a TUI-only gap (§4.3 item 2
+does list one `packages/tui` site among its six, and §4.4 item 3 names both parsers, but neither row is
+about TUI code alone).
 
 An item the scanner did **not** surface is still a row. The `surfaced?` column records **what the tool
 emitted for that item** — a finding kind and subject where it emitted one, a bold **no** where it did
@@ -223,10 +248,10 @@ column. Every verdict below rests on a command run in this task, not on the sour
 | 1 | no tool schema declares `sandbox_permissions` | no | `sandbox_permissions` occurs in **7** production files: `packages/fs/src/index.ts:81,247,250` (the exact three lines cited by the brief), plus `packages/shell/src/index.ts:194,239,352,412` and `packages/terminal/src/tool.ts:86,187,226`, and the ladder consumes it at `packages/sandbox/src/call-policy.ts:141,177,192`. Not surfaced because there is no longer an orphan to find: the claim is false, so no scanner class can emit a row for it | **`already-fixed`** |
 | 2 | the sandbox escalation module appears only in tests | no | `WIDER_MODES` is used on a production path at `packages/sandbox/src/denial.ts:91,93` (the exact two lines cited by the brief). Not surfaced for the same reason as row 1 — the module is reached from production, so there is nothing to report | **`already-fixed`** |
 | 3 | `buildWireClient` | yes — `unused-export @i-harness/provider#buildWireClient` | the name occurs in exactly **2** files: its declaration (`packages/provider/src/index.ts:762`) and `packages/provider/test/provider.test.ts` | **`still-holds`** |
-| 4 | `mountPreset` | **no** | the name occurs in 3 files: declaration `packages/preset/src/index.ts:30`, a **comment** `packages/tui/src/views/light-personas.ts:2` (`// persona catalog (verified: @i-harness/preset exports parsePreset/mountPreset`), and `packages/preset/test/preset.test.ts`. It has **no production caller**. It did not surface because the comment in an unrelated production file counts as a mention — see §7 item 4 | **`still-holds`** |
+| 4 | `mountPreset` | **no** | the name occurs in 3 files: declaration `packages/preset/src/index.ts:30`, a **comment** `packages/tui/src/views/light-personas.ts:2` (`// persona catalog (verified: @i-harness/preset exports parsePreset/mountPreset`), and `packages/preset/test/preset.test.ts`. It has **no production caller**. It did not surface because the comment in an unrelated production file counts as a mention — see §7 item 4. The file holding that comment is `packages/tui` — the TUI, frozen and slated for replacement (§4, scope decision) — so the row is allowlisted as deliberately out of scope instead of kept as Phase B work | **`by-design`** — allowlist §6.2, deliberately out of scope; the replacement frontend carries the decision |
 | 5 | `withdrawPlanModeTool` | yes — `unused-export @i-harness/plan-mode#withdrawPlanModeTool` | the name occurs in exactly **1** file in the entire tree: `packages/plan-mode/src/index.ts:36` | **`still-holds`** |
 | 6 | `sandbox/mode` has no producer | **no** | the quoted literal `"sandbox/mode"` occurs on **19** lines of the walked tree: **17 in `test/` files** and **2 in production code** — the event-type declaration (`packages/core-session/src/index.ts:43`) and the **reader** (`packages/sandbox-policy/src/session-mode.ts:9`) — with **0** in production comments. 14 of the 17 test lines are `append(…)` calls, and **0** production files append the event. It did not surface because class 2 is anchored on the declaring file's **name** (`/(^\|\/)(events?\|manifest\|public-event-manifest)\.ts$/`), which matches exactly **one** file in this repo — `packages/telemetry/src/manifest.ts` — while this union lives in `packages/core-session/src/index.ts` | **`still-holds`** |
-| 7 | `tui --yes` | yes — `unread-flag --yes` | see §3.2 item 2: `flags.yes` is assigned at `apps/tui/src/index.ts:445` and read nowhere; `--yes` is additionally advertised in two usage strings (`:9`, `:461`) | **`still-holds`** |
+| 7 | `tui --yes` | yes — `unread-flag --yes` | see §3.2 item 2: `flags.yes` is assigned at `apps/tui/src/index.ts:445` and read nowhere; `--yes` is additionally advertised in two usage strings (`:9`, `:461`). The finding is real; `apps/tui` is the TUI, frozen and slated for replacement (§4, scope decision — note this is `apps/tui`, not `packages/tui`), so it is allowlisted as deliberately out of scope | **`by-design`** — allowlist §6.2, deliberately out of scope |
 | 8 | `estimateAssemblyOverhead` / `bindAuthRefreshStatus` | **no** | both are declared and **used inside their own module**: `packages/session-executor/src/assembly.ts:220` + call at `:762`, and `:234` + call at `:618`. `packages/session-executor/src/index.ts` is 22 lines and re-exports **exactly 14 names**, none of them these two — in full: `createSessionAssembly`, `ModelUnavailableError`, `AssemblyOptions`, `ModelPolicy`, `SessionAssembly` (all from `./assembly.ts`), `createDurableSessionLoader` (from `./durable-session.ts`), `createSessionService`, `SessionModelBindingResult`, `SessionQueueItem`, `SessionService`, `SessionServiceOptions` (from `./service.ts`), `AgentTaskStatus`, `AgentTaskView` (from `@i-harness/subagent`), `ReasoningEffort` (from `@i-harness/core-agent`). The only importer of the two is `packages/session-executor/test/assembly.test.ts:19-24`, which reaches them through the relative path `../src/assembly.ts`, i.e. **not** through the package entry. So D1's claim (exported from `assembly.ts`, not re-exported by `index.ts`, `package.json` exposes only `"."` → unreachable outside the package) **still holds as written**. It did not surface because class 1 walks only `packages/*/src/index.ts` entries and reports the names **that entry exports** — these two are not among them, so there is nothing for the scanner to test. Half the sentence that introduced them in D1 ("no production caller") is however no longer true — both are called on a production path inside `assembly.ts`, so the residue is a re-export decision, not a wiring gap | **`still-holds`** |
 
 ### 4.2 D1 §未竟事項
@@ -255,7 +280,7 @@ The roadmap cites "the sandbox spec §7"; the residuals are `docs/superpowers/sp
 
 | # | Item | Surfaced? | Measured evidence | Verdict |
 |---|---|---|---|---|
-| 1 | `tui --yes` parsed but never read | yes — `unread-flag --yes` | identical to §4.1 item 7 — cross-referenced, not re-derived | **`still-holds`** |
+| 1 | `tui --yes` parsed but never read | yes — `unread-flag --yes` | identical to §4.1 item 7 — cross-referenced, not re-derived. Verdict follows it: `apps/tui` is frozen and slated for replacement (§4, scope decision), so deliberately out of scope | **`by-design`** — allowlist §6.2 |
 | 2 | unknown subcommands not rejected | **no** | `apps/cli/src/index.ts` dispatches by exact equality on `args[0]`: `web` `:102`, `sdk` `:129`, `sessions` `:134`, `acp` `:139`, `tui` `:145`, `__dist-selfcheck` `:153`, `--version`/`-v` `:156`, `help`/`--help`/`-h` `:160`; then `:164` `if (args[0] !== "run") return Promise.resolve(runTui(parseFlags(args)))` at `:167`. So `i-harness --sandbox x run t` — and any typo — launches the TUI. Not surfaced: no scanner class covers a dispatch chain. The fall-through is documented as deliberate at `:142-144` (*"the GROK-STYLE DEFAULT — a bare `i-harness` (**or any non-subcommand first token**) launches the TUI"*) | **`by-design`** — allowlist §6 |
 | 3 | no `--flag=value` support | **no** | across the whole tree: `apps/` contains **zero** occurrences of `split("=")`, `indexOf("=")` or `startsWith("--")`; `packages/` contains exactly one `startsWith("--")` — `packages/guard-approval/src/danger-class.ts:87`, a shell-flag classifier, not a parser. Both parsers match whole tokens (`apps/tui/src/index.ts:441-456` `switch (argv[i])`; `apps/cli/src/index.ts:181,305` `args.indexOf("--sandbox")` / `a === "--model"`). Not surfaced: no scanner class covers argument *syntax*; all five look for declarations, not for shapes a parser fails to accept | **`still-holds`** |
 | 4 | `i-harness run --help` runs a task named `"--help"` | **no** | `apps/cli/src/index.ts:160` catches `--help` only as `args[0]`, so `run --help` passes it; the task is then built at `:304-309` by filtering out exactly seven flags (`--model`, `--api-key`, `--yes`, `--session-dir`, `--resume`, `--telemetry`, `--sandbox`) and their values, so the literal `"--help"` survives into `task`, is non-empty at `:310`, and reaches `runHeadless` at `:333`. Not surfaced: no scanner class covers argument routing | **`still-holds`** |
@@ -294,9 +319,9 @@ cheap to measure. Recorded so Phase B does not have to rediscover them.
   five source-list rows — starting at index 0 and stepping by ⌊507 / 27⌋ = **18**, stopping once 27
   rows are held.
 
-  **What that order is, precisely:** `collectTs` (`scripts/audit/check-reachability.mjs:794-807`)
+  **What that order is, precisely:** `collectTs` (`scripts/audit/check-reachability.mjs:911-924`)
   walks with a raw `readdirSync` and never sorts, and the scanners are `flatMap`'d in class order
-  (`:826`). So the emission order is **the filesystem's `readdir` order** — alphabetical on this NTFS
+  (`:971`). So the emission order is **the filesystem's `readdir` order** — alphabetical on this NTFS
   checkout only because NTFS returns directory entries in index order, and hash order on ext4. Within
   a package it is declaration order in that package's `index.ts`. It is **not a property of the tool**
   and is **not stable across filesystems**, so this draw rule cannot be replayed portably.
@@ -361,7 +386,7 @@ depends on it.
 
 | Bucket | Meaning | class 1 | classes 2–5 | total |
 |---|---|---:|---:|---:|
-| **A — dead** | the only occurrences are declarations, re-export statements and comments. The tool is right, and the symbol really is dead | 1 | 0 | 1 |
+| **A — dead** | **no code occurrence beyond the declaration itself**: apart from the declaration, every occurrence of the name — in the declaring module or in any other production file — is a re-export statement, a comment, a test import, or absent altogether. A declaration is not a "reference" for this purpose, and neither is a re-export statement or a comment; that is what separates A from B, which requires at least one **code** occurrence inside the module that declares the name. The tool is right, and the symbol really is dead | 1 | 0 | 1 |
 | **B — live inside its declaring module only** | the name is referenced in **code** inside the module(s) that declare it; no production file outside them mentions it, so the `export` edge has no consumer anywhere, but the **symbol is not dead** | 26 | 0 | 26 |
 | **C — live elsewhere** | referenced in a production file **outside** its declaring module. The report would be flatly wrong | **0** | 0 | 0 |
 | | classes 2–5 are all genuine | | 12 | 12 |
@@ -442,14 +467,23 @@ the scanner's own test and, for the six checked by hand, none under any looser r
 leaf words that do occur — `language`, `bash` — are unrelated locals and the shell tool name, §3.3);
 `retry/start` has no producer.
 
-### 5.3 The method limitation this baseline inherits: **the plan's five snippets were all broken**
+### 5.3 The method limitation this baseline inherits: **the plan's snippets do not produce it**
 
-**Every one of the plan's five Step-3 code snippets was broken on this repo, and four of the five
-failed by returning zero findings.** Classes 2, 3, 4 and 5 would each have reported **nothing**; only
-class 1 would have produced rows. ("The plan" throughout this document is
+**The plan's five Step-3 code snippets were each rewritten against this repo before they produced this
+baseline, and none of the five produces it as written.** The first edition of this section put that as
+"all five were broken and four returned zero findings"; that sentence measured three of the five and
+asserted the rest, so it is replaced here by what the claim actually rests on — **measured** for the
+class-4 and class-5 anchors (0 of the 729 tracked files, an exact match count) and for class 5's drafted
+string-only reader (**29** rows instead of **8**, re-run with that one predicate changed); **derived**
+for class 3, whose drafted read test is applied by hand to the two usage strings this tree actually
+contains rather than executed; **argued structurally** for class 2, whose anchor matches exactly one
+file and therefore sweeps the wrong union, with what it would have emitted from that one file **not**
+measured; and **not re-measured at all** for class 1, whose claimed row count is withdrawn. Each class
+in turn:
+
+("The plan" throughout this document is
 `docs/superpowers/plans/2026-09-15-m1-reachability-sweep.md`; an identical draft copy sits at
-`.superpowers/sdd/m1-plan-draft.md`.) Three of the four are re-measured here rather than carried
-forward:
+`.superpowers/sdd/m1-plan-draft.md`.)
 
 - the drafted **class-4** anchor `/(^|\/)(caps|capabilities)\.ts$/` matches **0** of the 729 tracked
   files (measured directly), so the drafted scanner reported nothing over a tree that holds three
@@ -460,7 +494,8 @@ forward:
   `field:` / `field =` lines. For `--yes` the field is `yes`, and `\byes\b` matches inside the literal
   `"--yes"` in the two usage strings (`apps/tui/src/index.ts:9`, `:461`), neither of which is excluded
   — so `read` is `true` and the scanner reports **nothing** over a tree whose one real unread flag is
-  `--yes`. Shipped instead: `codeOnly` blanks string literals and trailing comments before the field
+  `--yes` (derived from the drafted rule plus those two lines; the snippet was not executed here).
+  Shipped instead: `codeOnly` blanks string literals and trailing comments before the field
   name is sought;
 - the drafted **class-5** anchor `/(^|\/)(schema|settings-schema)\.ts$/` likewise matches **0** of the
   729 tracked files (measured directly). And class 5's reader, reduced to its drafted string-only
@@ -471,7 +506,7 @@ forward:
   property test, which matches on the key's **leaf name only** — and the leaves here include very
   common identifiers. Stating the counting rule, because without it the figures do not reproduce:
   these are the class-5 scanner's **own** property regex `\.\s*<leaf>\b`
-  (`scripts/audit/check-reachability.mjs:629`) applied over the 360 production files **excluding the
+  (`scripts/audit/check-reachability.mjs:691`) applied over the 360 production files **excluding the
   file that declares the key** (`packages/settings/src/index.ts`), counted as occurrences / matching
   lines / distinct files — `mode` **151 / 140 / 28**, `model` **121 / 97 / 39**, `providers`
   **54 / 52 / 15**, `items` **53 / 48 / 17**. Genuine settings reads were confirmed by hand for **7** of the 21
@@ -484,18 +519,34 @@ forward:
   `llm.defaultModel.provider`, `llm.defaultModel.model` — the suppression is **not** evidence of a
   read: `tui.prefs.statusLine.mode` in particular is cleared by any of the 151 unrelated `.mode`
   occurrences counted above, and the test cannot tell one of those from a genuine read.
-- **class 2** is **structurally** blind here: its file anchor matches exactly **one** file in the whole
-  tree, `packages/telemetry/src/manifest.ts`, while the event union it was meant to sweep lives in
-  `packages/core-session/src/index.ts:43`. That is why `sandbox/mode` — M1's headline unreachability,
-  and the roadmap's own named class-2 example — is **not** in the 525.
+- **class 2 fails by sweeping the wrong union**, which is a stronger and more specific failure than
+  "returns zero". Its file anchor `/(^|\/)(events?|manifest|public-event-manifest)\.ts$/` matches
+  exactly **one** file in the whole tree, `packages/telemetry/src/manifest.ts` (measured — the same
+  match count §4.1 item 6 rests on), while the event union it was meant to sweep lives in
+  `packages/core-session/src/index.ts:43`. So `sandbox/mode` — M1's headline unreachability, and the
+  roadmap's own named class-2 example — can never be reported by it: the drafted rule is blind exactly
+  where the milestone's worked example sits, and its silence there would have been a **structural**
+  silence, not a clean result. Whether the drafted snippet would have emitted rows from the one file its
+  anchor *does* match is **not** measured. Note that this is the same file whose union holds today's
+  single class-2 row, `retry/start`, so the first edition's "class 2 would have reported nothing" was an
+  inference, not a measurement.
+- **class 1 was not re-measured here, and no row count for it is claimed.** The first edition's "only
+  class 1 would have produced rows" was an assertion, and it is withdrawn. What *is* measured about the
+  drafted class-1 rule is fixture-level rather than a count over the tree: the drafted scanner excluded
+  the whole entry file (`f !== entry`) and required the package specifier and the name in the same file,
+  and the `EntryCallSite` self-test case (`check-reachability.mjs:767-775`) fails under exactly that
+  whole-entry exclusion, because the entry imports, re-exports and **calls** the name it re-exports. The
+  real-tree row count of the drafted class-1 snippet is unknown and is not guessed at here.
 
-**A verbatim implementation of the plan would have looked like a clean sweep.** This is recorded as a
-limitation of the method, not buried: the baseline in §3 is **not the plan's output**. It is the
-output of five scanners that were each rewritten against the real tree, and the only evidence they
-are detectors rather than rubber stamps is the 13-case self-test
-(`node scripts/audit/check-reachability.mjs --self-test` → `self-test: 13/13 ok`) plus the mutation
-proofs Tasks 2–4 recorded. M2 must not read a falling row count as progress unless it first re-runs
-the self-test and checks the §2 digest.
+**A verbatim implementation of the plan would not have produced this baseline, and on the classes that
+could be checked it would have looked like a clean sweep.** This is recorded as a limitation of the
+method, not buried: the baseline in §3 is **not the plan's output**. It is the output of five scanners
+that were each rewritten against the real tree, and the only evidence they are detectors rather than
+rubber stamps is the self-test — **18 cases** since M1's fix wave, five of which exist precisely because
+the 13-case version stayed green with a class-4, class-2, class-5 or class-3 rule loosened
+(`node scripts/audit/check-reachability.mjs --self-test` → `self-test: 18/18 ok`) — plus the mutation
+proofs Tasks 2–4 recorded and the six the fix wave re-ran. M2 must not read a falling row count as
+progress unless it first re-runs the self-test and checks the §2 digest.
 
 ---
 
@@ -506,7 +557,7 @@ rows**. Because R13 forbids row-by-row adjudication of the 512 class-1 rows, **t
 exhaustive over them** — M2 inherits that obligation. Until it is discharged, the ratchet must be
 seeded with the §2 digest and fail only on *new* rows, never on the existing set.
 
-### 6.1 `by-design` findings (4)
+### 6.1 `by-design` findings that are not source-list rows (4)
 
 | kind | subject | evidence | reason sentence |
 |---|---|---|---|
@@ -515,7 +566,7 @@ seeded with the §2 digest and fail only on *new* rows, never on the existing se
 | `unpushed-capability` | `guardian` | `packages/tui/src/app/slash/types.ts` | Same declaration and the same reason as `plan-mode` above: the guardian commands are gated by `hasCapability(ctx, "guardian")` at `packages/tui/src/app/slash/impl/approval.ts:27,35` and the loop never pushes it, deliberately. |
 | `unpushed-capability` | `vim-mode` | `packages/tui/src/app/slash/types.ts` | Same declaration and the same reason as `plan-mode` above: the vim binding is gated by `hasCapability(ctx, "vim-mode")` at `packages/tui/src/app/slash/impl/text-input.ts:67` and the loop never pushes it, deliberately. |
 
-### 6.2 `by-design` source-list rows (7)
+### 6.2 `by-design` source-list rows (9)
 
 | source | item | reason sentence |
 |---|---|---|
@@ -526,6 +577,8 @@ seeded with the §2 digest and fail only on *new* rows, never on the existing se
 | D1 §未竟事項 6 | `lsp` forces one server per run | `packages/lsp/src/scheduler.ts:20-24` declares it an explicit M18 non-goal and ships the refusal string "lsp: only one LSP server per run is supported (M18 core)", so the limit is announced rather than silent. |
 | sandbox spec §7 item 3 | `allowed-once` consumed by a call that fails for an unrelated reason | The spec records this as "記錄而不修" (recorded, not fixed) with its reason — reordering the guard would change **which** refusal a granted-but-invalid call returns — and the ordering is deliberate in code: `packages/fs/src/index.ts:305` spends the grant before `:308`'s unrelated `old_string === ""` validation. |
 | CLI surface 2 | unknown subcommands not rejected | `apps/cli/src/index.ts:142-144` documents the fall-through as the intended grok-style default — "a bare `i-harness` (or any non-subcommand first token) launches the TUI in the current folder" — so rejecting unknown subcommands would remove a documented behaviour; the accepted cost is that a mistyped subcommand opens the TUI instead of erroring. |
+| D1 §跨包主線 8 item 7 / CLI surface 1 | `tui --yes` parsed but never read | **Deliberately out of scope — freeze/replacement.** The finding is real and unpatched: `flags.yes` is assigned at `apps/tui/src/index.ts:445` and read nowhere, while `--yes` is advertised in two usage strings (`:9`, `:461`). The code is `apps/tui`, the **TUI application** (not `packages/tui`), i.e. the frontend the roadmap's Q6 freeze covers (`2026-09-15-backend-polish-roadmap-design.md:278`), so fixing it would be investment in code being removed and Phase B must not be handed it. The gap is **not** retired with the code: the replacement frontend inherits the requirement that its flag surface must not advertise a flag nothing reads — if the replacement keeps a `--yes`, it must parse **and** read it, or drop the flag and its usage text. That obligation belongs to the replacement's requirements; this row records it rather than leaving it implicit. |
+| D1 §跨包主線 8 item 4 | `mountPreset` declared and exported with no production caller | **Deliberately out of scope — freeze/replacement.** The finding is real: `packages/preset/src/index.ts:30` declares and exports it and no production file calls it — the only production mention outside the declaring module is a comment in `packages/tui/src/views/light-personas.ts:2` (§7 item 4). That file is `packages/tui`, one of the four frontend packages frozen and slated for replacement (Q6), so the only in-repo evidence of a consumer is code being removed, and whether this export is wanted cannot be decided against it. `packages/preset` itself stays in scope; what is deferred is the decision, and it moves to the replacement frontend: its persona/catalog surface either calls `mountPreset` (which clears the row) or the export is dropped as dead. |
 
 ### 6.3 Proposed class-level rule — **not in force**, M2 must decide
 
@@ -537,12 +590,12 @@ Reason sentence: the SDK package is the **embedder-facing public surface**, so i
 addressed to code outside this repository and "no in-repo production consumer" is the expected state
 rather than an orphan — which is exactly the case roadmap §3.M1 names ("`sdk` 的公開 API 本來就不該有
 內部呼叫者"). I did **not** adjudicate these 17 rows individually (R13). If M2 accepts the rule, the
-allowlist becomes 4 + 17 = 21 findings plus the 7 source-list rows; if M2 rejects it, all 17 stay in
+allowlist becomes 4 + 17 = 21 findings plus the 9 source-list rows; if M2 rejects it, all 17 stay in
 the ratchet's baseline population.
 
 ### 6.4 What is deliberately **not** on the allowlist
 
-- **As of this document, the allowlist contains only the 4 findings in §6.1 and the 7 source-list rows
+- **As of this document, the allowlist contains only the 4 findings in §6.1 and the 9 source-list rows
   in §6.2.** Everything else in the 525 is unadjudicated or reported as `still-holds`.
 - **None of the 507 unadjudicated class-1 rows is allowlisted**, and the 17 `@i-harness/sdk` rows are
   among those 507 — §6.3 only *proposes* allowlisting them and is not in force (see its status line).
@@ -550,10 +603,12 @@ the ratchet's baseline population.
   looked yet.
 - The **26 bucket-B rows of §5 are not allowlist candidates.** They are live symbols whose `export`
   keyword has no consumer; the fix is to narrow the declaration, not to grant an exception.
-- `--yes`, the `plugins.*` / `language` / `fontSize` / `searchBackend` / `onboarding.welcomeNoticeVersion`
-  settings, and `withdrawPlanModeTool` / `buildWireClient` / `mountPreset` / `createUnifiedSpillStore`
-  are `still-holds`: none of them is declared deliberate anywhere in the tree, so none belongs in an
-  allowlist.
+- The `plugins.*` / `language` / `fontSize` / `searchBackend` / `onboarding.welcomeNoticeVersion`
+  settings, and `withdrawPlanModeTool` / `buildWireClient` / `createUnifiedSpillStore` are `still-holds`:
+  none of them is declared deliberate anywhere in the tree, so none belongs in an allowlist. `--yes` and
+  `mountPreset` are **not** in this list and are not `still-holds`: they are the two rows allowlisted in
+  §6.2 as **deliberately out of scope** by the freeze/replacement decision (§4) — which is a scope
+  judgement, not a claim that either is declared deliberate in the tree.
 
 ---
 
@@ -575,9 +630,9 @@ outside the package can reach.
 
 **3. Named re-export statements mask genuinely dead exports — a false negative, safe direction.**
 `export { X } from "./mod.ts"` makes `X` reachable from the barrel, and `originOf`
-(`check-reachability.mjs:235-252`) attributes the name to its **declarer**, so the barrel is a
+(`check-reachability.mjs:289-306`) attributes the name to its **declarer**, so the barrel is a
 consumer and the chain terminates nowhere in particular. The re-export-blanking rule
-(`withoutReExportStatements`, `:286-293`) applies only to the entry file currently being scanned, so
+(`withoutReExportStatements`, `:340-347`) applies only to the entry file currently being scanned, so
 a re-export statement in **any other** production file counts as a mention and suppresses the
 finding. **128** such statements were measured in Task 2, by the counting rule it states: *"statements
 across package entry points [that] are named re-exports carrying a source specifier —
@@ -620,8 +675,21 @@ the declaring module counts as a mention):
 | `@i-harness/tui#SdkClientLike` | `packages/tui/src/backend/remote.ts:179` | `packages/tui/src/index.ts:54` — `// dep) + the BackendClient adapter (createRemoteBackend; SdkClientLike is the` |
 | `@i-harness/workflow#WorkflowJobStore` | `packages/workflow/src/runner.ts:59` | `packages/workflow/src/index.ts:4` — `// WorkflowJobStore; createWorkflowExecutor exposes the ExecService-like job` |
 
-Re-checked here: none of the four appears among the 525, and each is mentioned in a production file
-**other than** the module that declares it **only** inside the comment above. Stripping comments is
+Re-checked here: none of the four appears among the 525. The claim that each is mentioned outside its
+declaring module **only** inside the comment above holds **literally for `FieldSpec` alone** — no
+production file other than `packages/settings/src/sections.ts` mentions it except the comment at
+`packages/settings/src/index.ts:506`. The other three carry a second out-of-module occurrence, which the
+tool **blanks** rather than counts: each is re-exported by its own package entry
+(`packages/subagent/src/index.ts:17`, `packages/tui/src/index.ts:64`,
+`packages/workflow/src/index.ts:30`), and `withoutReExportStatements`
+(`check-reachability.mjs:340-347`) blanks exactly those statements when it scans that entry — so for
+those three the masking mention is the comment **plus** a re-export the tool deliberately discounts,
+not the comment alone. All four are also **live inside their declaring module** — `FieldSpec` at
+`packages/settings/src/sections.ts:40,46,50,127,136`; `TaskConcurrencyLimitError` thrown at
+`packages/subagent/src/task-protocol.ts:190`; `SdkClientLike` implemented at
+`packages/tui/src/backend/remote.ts:670` and used at `:661`, `:823`; and `WorkflowJobStore` returned at
+`packages/workflow/src/runner.ts:68` and typed at `:178`, `:287` — which is the separate reason the
+`export` edge has no consumer outside the module that declares it. Stripping comments is
 unsafe because **69 files contain a string literal with `//`** — Task 2's counting rule: *"a quoted
 run containing `//` on one line"*, over its 722-file universe (packages + apps, dot-directories
 skipped) (source: `.superpowers/sdd/2026-09-15-m1-reachability-sweep/progress.md:224`, restated with
@@ -648,7 +716,7 @@ only**, so it is simultaneously too **loose**: `tui.prefs.statusLine.mode` is cl
 property access elsewhere in production — and there are **151 of them, on 140 lines across 28 files** —
 while `llm.defaultModel.model` is cleared by any of **121 `.model` occurrences, on 97 lines across 39
 files**. (Rule, identical to §5.3: the scanner's own property regex `\.\s*<leaf>\b`
-(`check-reachability.mjs:629`) over the 360 production files **excluding** `packages/settings/src/index.ts`,
+(`check-reachability.mjs:691`) over the 360 production files **excluding** `packages/settings/src/index.ts`,
 the file that declares both keys; counts are occurrences, then matching lines, then distinct files.)
 That this test cannot tell an unrelated access from a genuine read of the key is exactly the weakness:
 the key is cleared by a `.mode` on a modal dialog or a `.model` in a provider list just as readily as
@@ -672,8 +740,10 @@ mode, the shipped hosts never passing `compact`, and the TUI composing no sandbo
 rows marked `already-fixed` in §4.1 are fixes from 2026-09-14, i.e. one day old at this SHA. Re-run
 the tool; do not trust this document.
 
-**11. This baseline is not the plan's output.** See §5.3: every one of the plan's five Step-3 snippets
-was broken on this repo and four of the five would have reported zero findings. The 525 rows come
-from five rewritten scanners whose only warrant is a 13-case self-test and the mutation proofs Tasks
-2–4 recorded. **M2 must check the self-test and the §2 digest before it trusts any comparison against
-this baseline.**
+**11. This baseline is not the plan's output.** See §5.3: the plan's five Step-3 snippets were each
+rewritten against the real tree, and what each half of that claim rests on — two measured anchor
+failures, one measured reader, one structural wrong-union argument, and one class not re-measured at all
+— is stated there rather than compressed into "all five were broken". The 525 rows come from five
+rewritten scanners whose only warrant is the self-test (**18 cases** since M1's fix wave; §5.3) and the
+mutation proofs Tasks 2–4 recorded. **M2 must check the self-test and the §2 digest before it trusts any
+comparison against this baseline.**
