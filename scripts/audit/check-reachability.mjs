@@ -47,6 +47,7 @@ function buildFixture() {
     "export function Wired() { return 1 }",
     "export function Orphan() { return 2 }",
     "export type OnlyAType = string",
+    "export function RelativelyUsed() { return 3 }",
   ].join("\n"))
   put("packages/alpha/src/use.ts", 'import { Wired } from "@i-harness/alpha"\nWired()\n')
   put("packages/alpha/test/orphan.test.ts", 'import { Orphan } from "@i-harness/alpha"\nOrphan()\n')
@@ -65,6 +66,16 @@ function buildFixture() {
     "run(flags.model)",
   ].join("\n"))
 
+  // class 1 regression: a same-package RELATIVE consumer counts as usage, and
+  // `export *` is followed without marking everything it re-exports used.
+  put("packages/alpha/src/local.ts", 'import { RelativelyUsed } from "./index"\nRelativelyUsed()\n')
+  put("packages/epsilon/src/impl.ts", [
+    "export function ReExported() { return 1 }",
+    "export function UnusedReExport() { return 2 }",
+  ].join("\n"))
+  put("packages/epsilon/src/index.ts", 'export * from "./impl"\n')
+  put("packages/epsilon/src/use.ts", 'import { ReExported } from "./impl"\nReExported()\n')
+
   return dir
 }
 
@@ -74,6 +85,8 @@ const SELF_TEST_CASES = []   // { name, run(fixtureRoot) -> string[] } expected 
 // ------------------------------------------------- class 1: unused export
 const EXPORT_DECL = /^export\s+(?:async\s+)?(?:function|const|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
 const EXPORT_LIST = /^export\s*(?:type\s*)?\{([^}]*)\}/gm
+
+const EXPORT_STAR = /^export\s*\*\s*from\s*["']([^"']+)["']/gm
 
 function exportedNames(text) {
   const names = new Set()
@@ -89,17 +102,61 @@ function exportedNames(text) {
   return [...names]
 }
 
-/** A name is "used" when some NON-TEST file other than its own entry point
- *  both mentions the name and refers to the package. Requiring both is what
- *  keeps a same-named symbol in an unrelated package from counting as usage. */
+/** `./x` resolves to `./x.ts`, `./x.tsx`, `./x.js` (the ESM spelling of a TS
+ *  file) or `./x/index.ts`. Package specifiers are out of scope: only sibling
+ *  modules are followed, which is all `export *` needs. */
+function resolveModule(spec, fromRel, byRel) {
+  if (!spec.startsWith(".")) return null
+  const parts = fromRel.split("/").slice(0, -1)
+  for (const seg of spec.split("/")) {
+    if (seg === "" || seg === ".") continue
+    if (seg === "..") { parts.pop(); continue }
+    parts.push(seg)
+  }
+  const base = parts.join("/")
+  const js2ts = base.replace(/\.jsx?$/, (e) => (e === ".js" ? ".ts" : ".tsx"))
+  for (const cand of [base, `${base}.ts`, `${base}.tsx`, js2ts, `${base}/index.ts`, `${base}/index.tsx`]) {
+    if (byRel.has(cand)) return byRel.get(cand)
+  }
+  return null
+}
+
+/** Exports of `file`, following `export * from "./sibling"` into the sibling
+ *  and recursing. Returns name -> the set of rel paths that DECLARE it, because
+ *  a declaration site is not a use of its own name: without that, following a
+ *  re-export would mark the whole re-exported surface used. `seen` terminates a
+ *  re-export cycle. */
+function exportedNamesDeep(file, byRel, seen = new Set([file.rel])) {
+  const names = new Map()
+  const add = (name, rel) => {
+    if (!names.has(name)) names.set(name, new Set())
+    names.get(name).add(rel)
+  }
+  for (const name of exportedNames(file.text)) add(name, file.rel)
+  for (const m of file.text.matchAll(EXPORT_STAR)) {
+    const target = resolveModule(m[1], file.rel, byRel)
+    if (!target || seen.has(target.rel)) continue
+    seen.add(target.rel)
+    for (const [name, origins] of exportedNamesDeep(target, byRel, seen)) {
+      for (const o of origins) add(name, o)
+    }
+  }
+  return names
+}
+
+/** A name is "used" when some NON-TEST file other than the one that DECLARES
+ *  it mentions it as a word. Package scoping is deliberately absent: a symbol
+ *  imported relatively and called inside its own package is used on a
+ *  production path just as much as one imported by a sibling package. */
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
+  const byRel = new Map(prod.map((f) => [f.rel, f]))
   const findings = []
   for (const entry of prod.filter((f) => /^packages\/[^/]+\/src\/index\.ts$/.test(f.rel))) {
     const pkg = "@i-harness/" + entry.rel.split("/")[1]
-    for (const name of exportedNames(entry.text)) {
+    for (const [name, origins] of exportedNamesDeep(entry, byRel)) {
       const word = new RegExp(`\\b${name.replace(/[$]/g, "\\$")}\\b`)
-      const used = prod.some((f) => f !== entry && f.text.includes(pkg) && word.test(f.text))
+      const used = prod.some((f) => !origins.has(f.rel) && word.test(f.text))
       if (!used) findings.push({ kind: "unused-export", subject: `${pkg}#${name}`, evidence: entry.rel })
     }
   }
@@ -125,6 +182,26 @@ SELF_TEST_CASES.push({
     return scanUnusedExports(indexTree(root))
       .map((f) => f.subject)
       .filter((s) => s === "@i-harness/alpha#Wired")
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: a same-package relative consumer counts as use",
+  expect: [],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s === "@i-harness/alpha#RelativelyUsed")
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: export * is followed, and following it does not mark everything used",
+  expect: ["@i-harness/epsilon#UnusedReExport"],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/epsilon#"))
   },
 })
 
