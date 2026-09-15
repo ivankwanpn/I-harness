@@ -71,6 +71,63 @@ function buildFixture() {
 const SCANNERS = []          // filled in by Tasks 2-4
 const SELF_TEST_CASES = []   // { name, run(fixtureRoot) -> string[] } expected subjects
 
+// ------------------------------------------------- class 1: unused export
+const EXPORT_DECL = /^export\s+(?:async\s+)?(?:function|const|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
+const EXPORT_LIST = /^export\s*(?:type\s*)?\{([^}]*)\}/gm
+
+function exportedNames(text) {
+  const names = new Set()
+  for (const m of text.matchAll(EXPORT_DECL)) names.add(m[1])
+  for (const m of text.matchAll(EXPORT_LIST)) {
+    for (const part of m[1].split(",")) {
+      const t = part.trim()
+      if (!t) continue
+      const alias = t.split(/\s+as\s+/)
+      names.add((alias[1] ?? alias[0]).trim())
+    }
+  }
+  return [...names]
+}
+
+/** A name is "used" when some NON-TEST file other than its own entry point
+ *  both mentions the name and refers to the package. Requiring both is what
+ *  keeps a same-named symbol in an unrelated package from counting as usage. */
+function scanUnusedExports(files) {
+  const prod = files.filter((f) => !f.test)
+  const findings = []
+  for (const entry of prod.filter((f) => /^packages\/[^/]+\/src\/index\.ts$/.test(f.rel))) {
+    const pkg = "@i-harness/" + entry.rel.split("/")[1]
+    for (const name of exportedNames(entry.text)) {
+      const word = new RegExp(`\\b${name.replace(/[$]/g, "\\$")}\\b`)
+      const used = prod.some((f) => f !== entry && f.text.includes(pkg) && word.test(f.text))
+      if (!used) findings.push({ kind: "unused-export", subject: `${pkg}#${name}`, evidence: entry.rel })
+    }
+  }
+  return findings
+}
+
+SCANNERS.push(scanUnusedExports)
+
+SELF_TEST_CASES.push({
+  name: "class 1: an export only a test imports is a finding",
+  expect: ["@i-harness/alpha#Orphan", "@i-harness/alpha#OnlyAType"],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/alpha#"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: an export a production file imports is NOT a finding",
+  expect: [],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s === "@i-harness/alpha#Wired")
+  },
+})
+
 function runSelfTest() {
   const root = buildFixture()
   let ok = 0
