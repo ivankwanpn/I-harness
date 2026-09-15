@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 /** Poll `cond` (the projection settles asynchronously — the child's abort
  * path lands after the gate release). */
@@ -12,16 +12,53 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
 }
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { createSessionExecutor } from "@i-harness/core-agent"
+import { createSessionExecutor, type AgentConfig, type AgentDeps } from "@i-harness/core-agent"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import type { McpServerStatusEvent } from "@i-harness/mcp-client"
-import {
-  bindAuthRefreshStatus,
-  createSessionAssembly,
-  estimateAssemblyOverhead,
-  ModelUnavailableError,
-} from "../src/assembly.ts"
+import type { McpMountDeps, McpServerConfig, McpServerStatusEvent } from "@i-harness/mcp-client"
+import { approxTokens } from "@i-harness/compaction"
+import { createTelemetry, type TelemetryEvent } from "@i-harness/telemetry"
+import { createSessionAssembly, ModelUnavailableError } from "../src/assembly.ts"
+
+// ── Observation seams for the two wirings the M33/M56/M57 cases below cover ──
+// Neither has a read-back on the assembly handle: the overhead estimate exists
+// only as the config the assembly hands `createAgent`, and the auth-refresh
+// binder only as the config it hands `mountMcpClient`. Both wrappers are
+// PASS-THROUGH recorders — they capture the call and then delegate (or hand
+// back an inert handle), so every other case in this file still runs against
+// the real implementations.
+const agentCalls = vi.hoisted(() => ({ deps: [] as (AgentDeps & AgentConfig)[] }))
+vi.mock("@i-harness/core-agent", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@i-harness/core-agent")>()
+  return {
+    ...actual,
+    createAgent: (ctx: Parameters<typeof actual.createAgent>[0], deps: Parameters<typeof actual.createAgent>[1]) => {
+      agentCalls.deps.push(deps)
+      return actual.createAgent(ctx, deps)
+    },
+  }
+})
+
+type CapturedMount = { config: McpServerConfig; deps?: McpMountDeps }
+const mcpMounts = vi.hoisted(() => ({ calls: [] as CapturedMount[] }))
+vi.mock("@i-harness/mcp-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@i-harness/mcp-client")>()
+  return {
+    ...actual,
+    // The real mount dials the server and a live OAuth AS is out of scope here;
+    // the CONFIG the assembly built is the object under test, so record it and
+    // hand back an inert handle (dispose only ever calls `unmount`).
+    mountMcpClient: async (
+      _ctx: unknown,
+      _tools: unknown,
+      config: McpServerConfig,
+      deps?: McpMountDeps,
+    ): Promise<{ serverName: string; unmount(): Promise<void> }> => {
+      mcpMounts.calls.push({ config, deps })
+      return { serverName: config.serverName, unmount: async () => {} }
+    },
+  }
+})
 
 describe("createSessionAssembly", () => {
   it("omitted model policy refuses an assembly without a client", async () => {
@@ -93,11 +130,31 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
-  it("M33: estimateAssemblyOverhead prices systemPrompt/4 + schemas JSON/4 (chars-4 estimator, scheduling-only)", () => {
-    const schemas = [{ name: "read", description: "b".repeat(1200) }]
-    const expected = Math.ceil(400 / 4) + Math.ceil(JSON.stringify(schemas).length / 4)
-    expect(estimateAssemblyOverhead("a".repeat(400), schemas)).toBe(expected)
-  })
+  it("M33: the assembly prices the agent's overhead as systemPrompt/4 + schemas JSON/4 (chars-4 estimator, scheduling-only)", async () => {
+    agentCalls.deps.length = 0
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      contextWindow: 200_000,
+      compact: { contextWindow: 200_000 },
+      model: createMockClient([{ role: "assistant", text: "ok" }]),
+    })
+    try {
+      const deps = agentCalls.deps.at(-1)!
+      const prompt = typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt
+      const schemas = deps.tools.schemas()
+      // The premise the estimate is distinguishable on: the registry the agent
+      // received really carries schemas (an empty set would price as "[]").
+      expect(schemas.length).toBeGreaterThan(0)
+      const overhead = approxTokens(prompt) + approxTokens(JSON.stringify(schemas))
+      // The SAME number reaches BOTH count surfaces: the M11 compaction config
+      // (no host-supplied `overheadTokens`) ...
+      expect(deps.compact?.overheadTokens).toBe(overhead)
+      // ... and the M20 budget ladder.
+      expect(deps.budget).toEqual({ contextWindow: 200_000, overheadTokens: overhead })
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
 
   it("M33: a resolved contextWindow with NO host overhead tips the budget ladder (estimate is injected)", async () => {
     // base session ≈ 885 tokens at the first boundary: under a window-1000
@@ -438,101 +495,156 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
 
 // M56 T1.5: the provider's fail-soft refresh-failure signal is bound to the
 // mcp/server-status sink as an ADDITIVE event field — the lifecycle state does
-// not change (the stored token is kept; the 401/M53 path owns recovery).
-describe("bindAuthRefreshStatus (M56)", () => {
-  it("emits an additive authRefreshFailed event, leaving the lifecycle state untouched", () => {
-    const events: McpServerStatusEvent[] = []
-    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev))
-    notify("invalid_grant: refresh token revoked")
-    expect(events).toEqual([
-      { server: "oauth-x", state: "ready", authRefreshFailed: "invalid_grant: refresh token revoked" },
-    ])
-  })
-
-  // M57 T1: the event must carry the server's REAL lifecycle state — a hardcoded
-  // "ready" is only accidentally right.
-  it("reports the server's real lifecycle state when the caller supplies currentState", () => {
-    const events: McpServerStatusEvent[] = []
-    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
-      currentState: () => "reconnecting",
+// not change (the stored token is kept; the 401/M53 path owns recovery). The
+// binding is exercised through the PUBLIC assembly surface: the auth config the
+// assembly hands `mountMcpClient` IS the production binding, and the assertions
+// read the telemetry stream that binding writes to.
+describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)", () => {
+  /** ONE assembly mounting ONE streamable-http OAuth server. The server is never
+   * dialled (the mount is recorded, not performed), so the test drives the two
+   * signals production would: the supervisor's lifecycle `onStatus` and the
+   * provider's refresh-failure callback. `trace` interleaves the host handler
+   * and the telemetry sink for the composition-order case. */
+  async function withOAuthMcp(opts: {
+    hostHandler?: (message: string) => unknown
+    trace?: string[]
+  } = {}) {
+    mcpMounts.calls.length = 0
+    const events: TelemetryEvent[] = []
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      telemetry: createTelemetry([{
+        onEvent: (ev) => {
+          events.push(ev)
+          if (ev.type === "mcp/server-status") opts.trace?.push("event")
+        },
+      }]),
+      pluginMcp: [{
+        transport: "streamable-http",
+        serverName: "oauth-x",
+        url: "http://127.0.0.1:9/mcp",
+        auth: opts.hostHandler === undefined ? {} : { onAuthRefreshFailed: opts.hostHandler },
+      }],
     })
-    notify("invalid_grant: refresh token revoked")
-    expect(events).toEqual([
-      { server: "oauth-x", state: "reconnecting", authRefreshFailed: "invalid_grant: refresh token revoked" },
-    ])
-  })
+    const call = mcpMounts.calls.at(-1)
+    // The config built for a streamable-http mount is the variant carrying `auth`.
+    const config = call?.config as Extract<McpServerConfig, { transport: "streamable-http" }> | undefined
+    const refreshFailed = config?.auth?.onAuthRefreshFailed
+    if (call === undefined || refreshFailed === undefined) {
+      await assembly.dispose()
+      throw new Error("the assembly did not bind onAuthRefreshFailed into the mount config")
+    }
+    const statusEvents = (): Record<string, unknown>[] =>
+      events.filter((e) => e.type === "mcp/server-status").map((e) => e.data)
+    const authEvents = (): Record<string, unknown>[] =>
+      statusEvents().filter((d) => d.authRefreshFailed !== undefined)
+    return {
+      assembly,
+      refreshFailed,
+      status: (ev: McpServerStatusEvent): void => call.deps?.onStatus?.(ev),
+      statusEvents,
+      authEvents,
+    }
+  }
 
-  it("falls back to ready when the server has not emitted any state yet", () => {
-    const events: McpServerStatusEvent[] = []
-    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
-      currentState: () => undefined,
+  it("routes the provider's refresh-failure signal to mcp/server-status with the server's REAL lifecycle state, additively", async () => {
+    const { assembly, refreshFailed, status, statusEvents } = await withOAuthMcp()
+    try {
+      status({ server: "oauth-x", state: "reconnecting" })
+      refreshFailed("invalid_grant: refresh token revoked")
+      // Additive: the failure REPORTS the state the supervisor last emitted and
+      // does not replace it — a second failure still reads "reconnecting".
+      refreshFailed("network down")
+      expect(statusEvents()).toEqual([
+        { server: "oauth-x", state: "reconnecting" },
+        { server: "oauth-x", state: "reconnecting", authRefreshFailed: "invalid_grant: refresh token revoked" },
+        { server: "oauth-x", state: "reconnecting", authRefreshFailed: "network down" },
+      ])
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("falls back to ready when the server has not emitted any state yet", async () => {
+    const { assembly, refreshFailed, authEvents } = await withOAuthMcp()
+    try {
+      refreshFailed("network down")
+      expect(authEvents()).toEqual([
+        { server: "oauth-x", state: "ready", authRefreshFailed: "network down" },
+      ])
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("composes a host onAuthRefreshFailed handler, host first, without losing the visibility event", async () => {
+    const trace: string[] = []
+    const { assembly, refreshFailed, authEvents } = await withOAuthMcp({
+      hostHandler: (message) => { trace.push(`host:${message}`) },
+      trace,
     })
-    notify("network down")
-    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "network down" }])
-  })
+    try {
+      refreshFailed("refresh failed")
+      expect(trace).toEqual(["host:refresh failed", "event"])
+      expect(authEvents()).toEqual([
+        { server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" },
+      ])
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
 
-  // M57 T2: a host-supplied onAuthRefreshFailed must be composed, not overwritten —
-  // host first, then our visibility event (a broken host handler must never
-  // silence it).
-  it("calls the host handler first, then still emits the visibility event", () => {
-    const calls: string[] = []
-    const events: McpServerStatusEvent[] = []
-    const notify = bindAuthRefreshStatus(
-      "oauth-x",
-      (ev) => { calls.push("event"); events.push(ev) },
-      { hostHandler: () => { calls.push("host") } },
-    )
-    notify("refresh failed")
-    expect(calls).toEqual(["host", "event"])
-    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
-  })
-
-  it("swallows a throwing host handler, reports it, and still emits the event", () => {
-    const events: McpServerStatusEvent[] = []
-    const errors: unknown[] = []
-    const boom = new Error("host handler exploded")
-    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
-      hostHandler: () => { throw boom },
-      onHostError: (err) => { errors.push(err) },
+  it("swallows a throwing host handler, reports it, and still emits the event", async () => {
+    const { assembly, refreshFailed, authEvents } = await withOAuthMcp({
+      hostHandler: () => { throw new Error("host handler exploded") },
     })
-    expect(() => notify("refresh failed")).not.toThrow()
-    expect(errors).toEqual([boom])
-    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
-  })
+    try {
+      const warnings: string[] = []
+      const original = console.warn
+      console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")) }
+      try {
+        expect(() => refreshFailed("refresh failed")).not.toThrow()
+      } finally {
+        console.warn = original
+      }
+      expect(authEvents()).toEqual([
+        { server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" },
+      ])
+      expect(warnings.some((w) => w.includes("host onAuthRefreshFailed handler threw") && w.includes("host handler exploded"))).toBe(true)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
 
-  it("emits with an opts object that carries no host handler", () => {
-    const events: McpServerStatusEvent[] = []
-    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), { currentState: () => "ready" })
-    notify("refresh failed")
-    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
-  })
-
-  // M57 fix-wave F2: a throwing state reader is the one remaining hole in the
-  // fail-soft story — it must degrade to the "ready" fallback, not silence the
-  // event.
-  it("degrades to ready when currentState itself throws", () => {
-    const events: McpServerStatusEvent[] = []
-    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
-      currentState: () => { throw new Error("boom") },
+  it("routes a rejecting async host handler to the warn path without losing the event", async () => {
+    const { assembly, refreshFailed, authEvents } = await withOAuthMcp({
+      hostHandler: async () => { throw new Error("async host handler exploded") },
     })
-    expect(() => notify("refresh failed")).not.toThrow()
-    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
-  })
+    try {
+      const warnings: string[] = []
+      const original = console.warn
+      console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")) }
+      try {
+        refreshFailed("refresh failed")
+        // The rejection lands on a microtask (the binder's own guard), so the
+        // capture must outlive it.
+        await new Promise((resolve) => setImmediate(resolve))
+      } finally {
+        console.warn = original
+      }
+      expect(authEvents()).toEqual([
+        { server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" },
+      ])
+      expect(warnings.some((w) => w.includes("async host handler exploded"))).toBe(true)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
 
-  // M57 fix-wave F3: an `async` host handler rejects on a microtask — neither the
-  // sync try/catch here nor the provider's own guard can see it, so it must be
-  // routed to onHostError instead of escaping as an unhandledRejection.
-  it("routes a rejecting async host handler to onHostError without losing the event", async () => {
-    const events: McpServerStatusEvent[] = []
-    const errors: unknown[] = []
-    const boom = new Error("async host handler exploded")
-    const notify = bindAuthRefreshStatus("oauth-x", (ev) => events.push(ev), {
-      hostHandler: async () => { throw boom },
-      onHostError: (err) => { errors.push(err) },
-    })
-    notify("refresh failed")
-    expect(events).toEqual([{ server: "oauth-x", state: "ready", authRefreshFailed: "refresh failed" }])
-    await new Promise((resolve) => setImmediate(resolve))
-    expect(errors).toEqual([boom])
-  })
+  // NOT rerouted: the former "degrades to ready when currentState itself throws"
+  // case drove the binder's `currentState` seam directly. Through the assembly
+  // that reader is `mcpStates.get(serverName)` — a Map lookup that cannot throw —
+  // so the defensive branch has no reachable public trigger. The loss is recorded
+  // in the task report (it is the one unit case the un-export costs).
 })
