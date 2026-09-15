@@ -232,12 +232,39 @@ describe("sandbox policy is resolved per call", () => {
  * session's fully restored history must not silently override the requested mode").
  *
  * The rule the code implements: only events appended AFTER construction are this
- * session's decisions. This test pins it. The reviewer's finding was that the
- * opposite behavior was live and untested, with Task 3's escalation ladder as the
- * producer that would make it reachable in production.
+ * session's decisions. The reviewer's finding was that the opposite behavior was
+ * live and untested, with Task 3's escalation ladder as the producer that would
+ * make it reachable in production.
+ *
+ * WHAT THIS CASE NO LONGER PINS (M1 Phase B, Task 1 -- disclosure, not a seam).
+ * The OUTCOME below is still asserted and still valid: restored history does not
+ * decide the mode. But the `policyFloor` slice is no longer INDEPENDENTLY
+ * OBSERVABLE here, so this case is no longer a mutation detector for it.
+ *
+ * Mechanism. The log is now `[user/message, sandbox/mode danger-full-access
+ * (restored), sandbox/mode read-only (the producer's construction-time append)]`.
+ * `effectiveSandboxMode` is a BACKWARDS scan, and the producer's append is the
+ * NEWEST event, so it returns `read-only` in BOTH worlds -- with
+ * `slice(policyFloor)` and without it. Delete the slice and this case still
+ * passes. Before the producer the retained window was empty, so the configured
+ * `read-only` won only BECAUSE of the slice, and removing it let the restored
+ * `danger-full-access` win -- the case went red, which is what made it a test.
+ *
+ * Consequences, recorded rather than papered over:
+ *  - `policyFloor` has NO mutation-detecting test. A repo-wide grep finds it only
+ *    in `assembly.ts` (the definition, two comments, the slice) and in a comment
+ *    in `apps/cli/src/run.ts` -- no test references it.
+ *  - It is not dead code: it is cheap defence-in-depth on a privilege-escalation
+ *    path, and it is REDUNDANT only GIVEN this producer, whose append always
+ *    supplies the newest event. It becomes load-bearing again the moment that
+ *    append becomes conditional -- e.g. a host that states no `sandbox` option,
+ *    or a future change that appends only on a mode CHANGE.
+ *  - The guard is deliberately NOT exported to make it testable again: that would
+ *    be the "test-only surface living in production code" this file's header
+ *    rejects (lines 21-23). The slice stays private.
  */
 describe("restored history does not decide the sandbox mode", () => {
-  it("a persisted sandbox/mode event does NOT override the mode this run requested", async () => {
+  it("a persisted sandbox/mode event does NOT override the mode this run requested (OUTCOME only -- the policyFloor slice is no longer independently pinned; see the block comment)", async () => {
     const base = mkdtempSync(join(tmpdir(), "i-harness-restored-"))
     const workspace = join(base, "ws")
     const outside = join(base, "outside")
