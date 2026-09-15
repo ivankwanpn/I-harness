@@ -271,8 +271,14 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
   from the package entry, and that the instrument still reads `523`.
 
 **M-shaped follow-ups, each needing its own spec (roadmap §3.M1):**
-- A real **mid-session sandbox-tightening surface**. *Blocker to report:* the only shipped one is
-  `/sandbox` in the **frozen** `apps/cli/src/web.ts`.
+- A real **mid-session sandbox-tightening surface** — **nothing shipped does this**, so it has to be
+  **built**, not unfrozen. *Corrected 2026-09-15:* this bullet read "the only shipped one is `/sandbox`
+  in the **frozen** `apps/cli/src/web.ts`", which implies `/sandbox` tightens a live session. It does
+  not: `web.ts:273-282` runs `settings.set({ sandboxMode: mode })` and answers that it takes effect for
+  sessions created **later**, and `web.ts:470-475` reads that value **once** at service construction,
+  so no shipped command changes the mode of a running session. The `sandbox/mode` event's sole
+  production producer stays `assembly.ts:354`, at construction (`apps/` appends none). The frozen
+  `/sandbox` is the user-facing precedent a real surface should carry into the replacement frontend.
 - **`classifyDenial` wiring** — a real OS denial in a confined shell currently reaches the model as a
   bare non-zero exit. Widens `ExecResult` and the model-visible shell payload.
 - **`exitCode: -1` disambiguation** — at least eight meanings, four of them indistinguishable.
