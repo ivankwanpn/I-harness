@@ -163,7 +163,7 @@ export interface AssemblyOptions {
 
 /** M42 G1: the rewind slice of an assembly — the host (run.ts / the web
  * service) builds a RewindService over these for the rewind surface. */
-export interface RewindAssemblyHandle {
+interface RewindAssemblyHandle {
   store: RewindStore
   recorder: RewindRecorder
 }
@@ -217,7 +217,7 @@ export interface SessionAssembly {
 // Documented as an estimate, NOT a wire price — it exists so the M20 budget
 // ladder and the M11 pressure gate charge something for prompt+schemas when
 // the host supplies no exact value.
-export function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown): number {
+function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown): number {
   return approxTokens(systemPrompt) + approxTokens(JSON.stringify(schemas))
 }
 
@@ -231,7 +231,7 @@ export function estimateAssemblyOverhead(systemPrompt: string, schemas: unknown)
  *  `hostHandler` is COMPOSED (not overwritten): it runs first and its throw is
  *  swallowed into `onHostError` — a broken host handler must never silence our
  *  visibility event. */
-export const bindAuthRefreshStatus =
+const bindAuthRefreshStatus =
   (
     serverName: string,
     onStatus: (ev: McpServerStatusEvent) => void,
