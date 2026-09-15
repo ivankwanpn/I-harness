@@ -251,17 +251,21 @@ describe("sandbox policy is resolved per call", () => {
  * `danger-full-access` win -- the case went red, which is what made it a test.
  *
  * Consequences, recorded rather than papered over:
- *  - `policyFloor` has NO mutation-detecting test. A repo-wide grep finds it only
+ *  - `policyFloor` has NO mutation detector at HEAD: a repo-wide grep finds it only
  *    in `assembly.ts` (the definition, two comments, the slice) and in a comment
- *    in `apps/cli/src/run.ts` -- no test references it.
+ *    in `apps/cli/src/run.ts` -- no test references it. Adding a seam so a test
+ *    COULD detect its removal was ruled against: that would be the "test-only
+ *    surface living in production code" this file's header rejects (lines 21-23),
+ *    and the slice stays private.
  *  - It is not dead code: it is cheap defence-in-depth on a privilege-escalation
  *    path, and it is REDUNDANT only GIVEN this producer, whose append always
- *    supplies the newest event. It becomes load-bearing again the moment that
- *    append becomes conditional -- e.g. a host that states no `sandbox` option,
- *    or a future change that appends only on a mode CHANGE.
- *  - The guard is deliberately NOT exported to make it testable again: that would
- *    be the "test-only surface living in production code" this file's header
- *    rejects (lines 21-23). The slice stays private.
+ *    supplies the newest event. It becomes load-bearing again only if that append
+ *    turns conditional -- a future change that appends only on a mode CHANGE.
+ *    **Corrected 2026-09-15:** this list also gave "a host that states no
+ *    `sandbox` option", and that one cannot happen -- with `opts.sandbox ===
+ *    undefined`, `assembly.ts:323-324` builds no policy service, so nothing ever
+ *    receives the thunk and the slice is UNREACHABLE there rather than
+ *    load-bearing.
  */
 describe("restored history does not decide the sandbox mode", () => {
   it("a persisted sandbox/mode event does NOT override the mode this run requested (OUTCOME only -- the policyFloor slice is no longer independently pinned; see the block comment)", async () => {

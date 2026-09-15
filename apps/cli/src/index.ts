@@ -169,7 +169,7 @@ export async function main(argv: string[]): Promise<number> {
 
   // M1 Phase B: a FLAG must never become the prompt. `--help`/`-h` are handled at
   // :156-163 as `args[0]` only, so `i-harness run --help` fell through to the
-  // filter at :331-335 -- which knows only the seven flags it strips -- and
+  // filter at :331-335 -- which knows only the eight flags it strips (it read "seven" until 2026-09-15; the list at :332 carries eight names) -- and
   // reached runHeadless as a real turn whose prompt was "--help". The same hole
   // sent `--no-compact` (parsed at :209, absent from that filter) into the prompt
   // as `do x --no-compact`.

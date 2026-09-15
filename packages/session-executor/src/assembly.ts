@@ -258,9 +258,9 @@ const bindAuthRefreshStatus =
       // The reporter's own throw is swallowed too — emitting the event is the point.
       try { opts?.onHostError?.(err) } catch { /* reporting must not silence the event */ }
     }
-    // A throwing state reader must not silence the event either — degrade to the fallback.
+    // Defensive-only and UNFALSIFIABLE BY CONSTRUCTION (M1 Phase B Task 5 ruling, 2026-09-15): through this assembly `currentState` is a Map lookup that cannot throw.
     let state: McpServerState | undefined
-    try { state = opts?.currentState?.() } catch { /* fall through to "ready" */ }
+    try { state = opts?.currentState?.() } catch { /* unreachable here: `prepareMcpConfig` passes `mcpStates.get(...)`; a test-only seam was ruled against */ }
     onStatus({ server: serverName, state: state ?? "ready", authRefreshFailed: message })
   }
 
