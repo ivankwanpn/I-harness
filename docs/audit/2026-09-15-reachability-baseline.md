@@ -140,11 +140,11 @@ These are few enough to adjudicate in full. Verdict vocabulary is §4's.
 | `unpushed-capability` | `plan-mode` | `packages/tui/src/app/slash/types.ts` | `by-design` | allowlist §6 |
 | `unpushed-capability` | `guardian` | `packages/tui/src/app/slash/types.ts` | `by-design` | allowlist §6 |
 | `unpushed-capability` | `vim-mode` | `packages/tui/src/app/slash/types.ts` | `by-design` | allowlist §6 |
-| `unconsulted-setting` | `language` | `packages/settings/src/index.ts` | `still-holds` | no production reader. The 6 files containing the bare word `language` declare unrelated locals (`packages/tui/src/render/highlight.ts:147` `const language = (lang ?? "")`, `packages/lsp/src/instance.ts:258` `languageId`); none is a settings read |
+| `unconsulted-setting` | `language` | `packages/settings/src/index.ts` | `still-holds` | no production reader. The **6** production files **other than the one that declares the key** that contain the bare word `language` all declare unrelated locals (`packages/tui/src/render/highlight.ts:147` `const language = (lang ?? "")`, `packages/lsp/src/instance.ts:258` `languageId`); the 7th is the declaring file itself, so the count is 6 excluding it and 7 including it. None is a settings read |
 | `unconsulted-setting` | `fontSize` | `packages/settings/src/index.ts` | `still-holds` | the name occurs in **no** production file other than the declaring one (schema `:272`, default `:315`, normaliser `:670`); no reader anywhere |
 | `unconsulted-setting` | `searchBackend` | `packages/settings/src/index.ts` | `still-holds` | same shape (`:278`, `:318`, `:673`); declared, defaulted and validated, read nowhere |
 | `unconsulted-setting` | `plugins.agentLoop` | `packages/settings/src/index.ts` | `still-holds` | declared at `:77`/`:319`/`:676`; no production file outside the declaring one mentions it |
-| `unconsulted-setting` | `plugins.bash` | `packages/settings/src/index.ts` | `still-holds` | `bash` occurs in 22 production files, but always as the shell tool name or a plugin-tool list entry (`packages/preset/src/default.ts:59`, `packages/subagent/src/roles.ts:37`) — never as `plugins.bash`, so the toggle is unread |
+| `unconsulted-setting` | `plugins.bash` | `packages/settings/src/index.ts` | `still-holds` | `bash` occurs in **22** production files **other than the one that declares the key** (23 including it), but always as the shell tool name or a plugin-tool list entry (`packages/preset/src/default.ts:59`, `packages/subagent/src/roles.ts:37`) — never as `plugins.bash`, so the toggle is unread |
 | `unconsulted-setting` | `plugins.webSearch` | `packages/settings/src/index.ts` | `still-holds` | declared `:79`/`:319`/`:678`; no occurrence outside the declaring file |
 | `unconsulted-setting` | `plugins.subagentModel` | `packages/settings/src/index.ts` | `still-holds` | declared `:80`/`:319`/`:679`; no occurrence outside the declaring file |
 | `unconsulted-setting` | `onboarding.welcomeNoticeVersion` | `packages/settings/src/index.ts` | `still-holds` | the only other production occurrence is the mutation schema (`packages/settings/src/sections.ts:170`). The comment at `packages/settings/src/index.ts:329-331` says *"the frontend shows the notice while `welcomeNoticeVersion !== "2026-08-30.1"` (Task 9)"* — and **no frontend reads it**. The comment describes a behaviour that does not exist |
@@ -469,8 +469,12 @@ forward:
   settings.get().compaction.auto`)**. So the drafted reader would have **invented** a finding for the
   exact key the roadmap names as class 5's worked example. The 21-key difference is produced by the
   property test, which matches on the key's **leaf name only** — and the leaves here include very
-  common identifiers (`mode` 140 sites after a dot in other production files, `model` 97,
-  `providers` 52, `items` 48). Genuine settings reads were confirmed by hand for **7** of the 21
+  common identifiers. Stating the counting rule, because without it the figures do not reproduce:
+  these are the class-5 scanner's **own** property regex `\.\s*<leaf>\b`
+  (`scripts/audit/check-reachability.mjs:629`) applied over the 360 production files **excluding the
+  file that declares the key** (`packages/settings/src/index.ts`), counted as occurrences / matching
+  lines / distinct files — `mode` **151 / 140 / 28**, `model` **121 / 97 / 39**, `providers`
+  **54 / 52 / 15**, `items` **53 / 48 / 17**. Genuine settings reads were confirmed by hand for **7** of the 21
   (`compaction.auto` at `apps/cli/src/index.ts:215`; `sandboxMode` at `apps/cli/src/index.ts:202` and
   `apps/cli/src/web.ts:470`; `tui.prefs.scrollSpeed` at `apps/tui/src/index.ts:708` and
   `packages/tui/src/views/settings.ts:502-504`; `tui.prefs.timestamps` at `views/settings.ts:108,156`;
@@ -478,7 +482,8 @@ forward:
   `apps/tui/src/index.ts:572,577,666`; `tui.prefs.dashboard.pinned` at `views/dashboard-state.ts:60`).
   For the rest — `tui.prefs.statusLine.mode`, `tui.prefs.statusLine.items`, `llm.providers`,
   `llm.defaultModel.provider`, `llm.defaultModel.model` — the suppression is **not** evidence of a
-  read; `tui.prefs.statusLine.mode` in particular is cleared by any of 140 unrelated `.mode` accesses.
+  read: `tui.prefs.statusLine.mode` in particular is cleared by any of the 151 unrelated `.mode`
+  occurrences counted above, and the test cannot tell one of those from a genuine read.
 - **class 2** is **structurally** blind here: its file anchor matches exactly **one** file in the whole
   tree, `packages/telemetry/src/manifest.ts`, while the event union it was meant to sweep lives in
   `packages/core-session/src/index.ts:43`. That is why `sandbox/mode` — M1's headline unreachability,
@@ -639,8 +644,15 @@ therefore strong evidence; the absence of other reports is not evidence of anyth
 the reader removed, the class returns **29** rows instead of **8** (§5.3) — so **21 of the 29
 declared leaf key paths** are cleared by the property test, and the count of unconsulted settings
 moves by a factor of 3.6 on that one predicate. But the property test matches the key's **leaf name
-only**, so it is simultaneously too **loose**: `tui.prefs.statusLine.mode` is cleared by any of 140
-unrelated `.mode` accesses, `llm.defaultModel.model` by 97 `.model` accesses. Genuine settings reads
+only**, so it is simultaneously too **loose**: `tui.prefs.statusLine.mode` is cleared by **any** `.mode`
+property access elsewhere in production — and there are **151 of them, on 140 lines across 28 files** —
+while `llm.defaultModel.model` is cleared by any of **121 `.model` occurrences, on 97 lines across 39
+files**. (Rule, identical to §5.3: the scanner's own property regex `\.\s*<leaf>\b`
+(`check-reachability.mjs:629`) over the 360 production files **excluding** `packages/settings/src/index.ts`,
+the file that declares both keys; counts are occurrences, then matching lines, then distinct files.)
+That this test cannot tell an unrelated access from a genuine read of the key is exactly the weakness:
+the key is cleared by a `.mode` on a modal dialog or a `.model` in a provider list just as readily as
+by a real read. Genuine settings reads
 were confirmed for 7 of the 21 by hand (`compaction.auto`, `sandboxMode`, `tui.prefs.scrollSpeed`,
 `tui.prefs.timestamps`, `tui.prefs.guardian`, `tui.prefs.screenMode`, `tui.prefs.dashboard.pinned`);
 the remaining 14 are **not** established. So class 5's **8 is not a count of settings nobody reads**
