@@ -30,24 +30,13 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
-import { carrierClass } from "./lib-union.mjs"
+import { carrierClass, SOURCE_PATHS, missingSourceRoots } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const DATA = join(ROOT, "docs/audit/data")
 const args = process.argv.slice(2)
 const sampleIdx = args.indexOf("--sample")
 const SAMPLE_N = sampleIdx >= 0 ? Number(args[sampleIdx + 1]) : 0
-
-/** Source roots, mirroring extract-commands.mjs. */
-const SOURCE_PATHS = {
-  ih: "D:/I-harness-main",
-  dsh: "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
-  codex: "D:/agent-complete/codex-rust-v0.149.1",
-  opencode: "D:/agent-complete/opencode-1.18.30",
-  "opencode-fork": "D:/agent-complete/opencode-fork-private-999.0.15",
-  grok: "D:/agent-complete/grok-build-main",
-  "cc-custom": "D:/opencode-bugfix/cc-custom",
-}
 
 function readJson(p) {
   try {
@@ -113,7 +102,6 @@ const cells = []
 const dirOnly = []
 const unattributed = []
 const docOnly = []
-
 
 const LEADING_CLASSES = ["implementation", "manifest", "registry-listing", "alias-or-helper", "doc-comment", "type-decl", "blank"]
 const leadingTally = Object.fromEntries(LEADING_CLASSES.map((c) => [c, 0]))
@@ -294,6 +282,30 @@ function walkEvidence(node, ctx = { source: null, label: null }, out = []) {
     walkEvidence(v, { source, label: ctx.label ?? k }, out)
   }
   return out
+}
+
+// A source root that does not exist turns every citation under it into a
+// "missing file", so ONE wrong path reads as thousands of bad citations --
+// measured: 6116 phantom problems against a baseline of 0. Refuse instead of
+// reporting someone else's directory layout as a data defect.
+{
+  const missing = missingSourceRoots()
+  if (missing.length && !args.includes("--allow-missing-roots")) {
+    console.error("SOURCE ROOTS MISSING -- refusing to run.")
+    console.error("")
+    console.error("A missing root does not fail loudly: it reports every citation")
+    console.error("under it as a missing file. Point the roots with")
+    console.error("scripts/audit/source-paths.local.json (gitignored) or the")
+    console.error("IH_AUDIT_SOURCE_PATHS env var, or pass --allow-missing-roots")
+    console.error("to check only the sources that are present.")
+    console.error("")
+    for (const m of missing) console.error(`  ${m.key.padEnd(15)} ${m.path}`)
+    console.error(`\n${missing.length} of ${Object.keys(SOURCE_PATHS).length} roots absent.`)
+    process.exit(2)
+  }
+  if (missing.length) {
+    console.error(`! --allow-missing-roots: proceeding without ${missing.map((m) => m.key).join(", ")}`)
+  }
 }
 
 const files = readdirSync(DATA).filter((f) => f.endsWith(".json") && !f.includes("-surface"))

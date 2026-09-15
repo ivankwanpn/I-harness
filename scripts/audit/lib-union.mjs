@@ -24,7 +24,8 @@
 // the mapping, and never delete a row that another source already occupies.
 
 import { readFileSync, existsSync } from "node:fs"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 
 export const SOURCES = [
   { key: "ih", label: "IH" },
@@ -36,8 +37,28 @@ export const SOURCES = [
   { key: "cc-custom", label: "cc-custom" },
 ]
 
-/** Absolute roots, used to resolve a citation's line for carrier classification. */
-export const SOURCE_PATHS = {
+/**
+ * Absolute roots, used to resolve a citation's line for carrier classification.
+ *
+ * The defaults below describe the ORIGINAL workstation. Every other machine has
+ * the trees somewhere else, and a wrong root does NOT fail loudly: every
+ * citation under it becomes a "missing file", so one bad path reads as
+ * thousands of bad citations. Measured on a machine whose trees sit at
+ * `D:/<name>` rather than `D:/agent-complete/<name>`: 6116 missing files
+ * against a baseline of 0 -- a machine difference wearing the costume of a
+ * data problem.
+ *
+ * So the roots are overridable without editing tracked files, and an absent
+ * root is reported rather than silently trusted:
+ *
+ *   scripts/audit/source-paths.local.json   gitignored, {"dsh": "D:/...", ...}
+ *   IH_AUDIT_SOURCE_PATHS                   JSON object; wins over the file
+ *
+ * Both are partial -- name only the sources you are moving. An unknown key is
+ * an error rather than a silent no-op, because a typo would otherwise leave
+ * the committed default in place and look like it had worked.
+ */
+export const SOURCE_PATH_DEFAULTS = {
   ih: "D:/I-harness-main",
   dsh: "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
   codex: "D:/agent-complete/codex-rust-v0.149.1",
@@ -45,6 +66,55 @@ export const SOURCE_PATHS = {
   "opencode-fork": "D:/agent-complete/opencode-fork-private-999.0.15",
   grok: "D:/agent-complete/grok-build-main",
   "cc-custom": "D:/opencode-bugfix/cc-custom",
+}
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+
+/** Overrides from the gitignored local file, then the env var (env wins). */
+function sourcePathOverrides() {
+  const file = join(HERE, "source-paths.local.json")
+  let fromFile = {}
+  if (existsSync(file)) {
+    try {
+      fromFile = JSON.parse(readFileSync(file, "utf8"))
+    } catch (e) {
+      throw new Error(`${file} is not valid JSON: ${e.message}`)
+    }
+  }
+  const raw = process.env.IH_AUDIT_SOURCE_PATHS
+  let fromEnv = {}
+  if (raw) {
+    try {
+      fromEnv = JSON.parse(raw)
+    } catch (e) {
+      throw new Error(`IH_AUDIT_SOURCE_PATHS is not valid JSON: ${e.message}`)
+    }
+  }
+  return { ...fromFile, ...fromEnv }
+}
+
+export function resolveSourcePaths(defaults = SOURCE_PATH_DEFAULTS, overrides = sourcePathOverrides()) {
+  const unknown = Object.keys(overrides).filter((k) => !(k in defaults))
+  if (unknown.length) {
+    throw new Error(
+      `source-path override names unknown source(s): ${unknown.join(", ")}. ` +
+        `Known: ${Object.keys(defaults).join(", ")}`,
+    )
+  }
+  return { ...defaults, ...overrides }
+}
+
+export const SOURCE_PATHS = resolveSourcePaths()
+
+/**
+ * Roots this machine does not have. A caller that resolves citations must
+ * refuse to run on a non-empty result rather than emit a phantom problem for
+ * every citation underneath.
+ */
+export function missingSourceRoots(paths = SOURCE_PATHS) {
+  return Object.entries(paths)
+    .filter(([, p]) => !existsSync(p))
+    .map(([key, path]) => ({ key, path }))
 }
 
 export const norm = (s) =>
