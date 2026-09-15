@@ -105,12 +105,14 @@ all three fingerprint values and the file count are recorded rather than the SHA
 
 Measured by `node scripts/audit/check-reachability.mjs`, re-run in this task. **The revision the
 measurement was taken at is `637cdd7`** (`637cdd70a97aab8b9664842ce5e7bfba483ca25d`, the commit this
-document's Phase A edition published at). **The revision this edition is published at is `0580af3`**
-(`0580af36e82e2af52c2bddf4ec9fdc8ad013cf2e`). It is the second of this edition's two commits: the first,
-`386b7f9`, adds §2.1 and the errata; the second corrects the revision accounting this paragraph carries.
-Between the measurement revision and the publication revision sits exactly one code commit — `06d684c`,
-Task 5's un-export of the three names §4.1 item 8 names — and **the row set, the finding count and the
-digest are identical at all three revisions.** That was checked, not assumed: the
+document's Phase A edition published at). **The revision this edition is published at is the last commit
+of the `m64` branch that touches this file** — `git log -1 -- docs/audit/2026-09-15-reachability-baseline.md`
+names it exactly, and no hash that would go stale on re-reading is embedded here. The task report that
+produced this edition, `.superpowers/sdd/2026-09-15-m1-phase-b-wire-the-unwired/task-7-report.md`,
+records the SHA. Between the measurement revision and the publication
+revision sit this edition's own commits — this file only — and exactly one code commit: `06d684c`,
+Task 5's un-export of the three names §4.1 item 8 names. **The row set, the finding count and the digest
+are identical at all of them.** That was checked, not assumed: the
 scanner was re-run at the publication revision and returns the same `731 ts files, 523 finding(s)`, and
 Task 5's change is deliberately **row-neutral** because class 1 walks only package entries and the
 assembly's three names are not exported from one (§2.1's delta table, §7 item 13). **No Phase B code
@@ -119,7 +121,7 @@ change moves a single row after Task 4's two deletions.**
 | Item | Phase A (§2 above) | **Phase B — current** |
 |---|---|---|
 | revision measured | `74f86d5a…` | **`637cdd7`** |
-| revision published | `74f86d5a…` | **`0580af3`** |
+| revision published | `74f86d5a…` | **the last `m64` commit touching this file** (see above) |
 | walked `.ts`/`.tsx` | 729 | **731** |
 | `git ls-files "*.ts" "*.tsx"` | 729 | **731** |
 | assertion | PASS — 729 == 729 | **PASS — 731 == 731** |
