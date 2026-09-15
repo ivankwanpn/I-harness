@@ -262,6 +262,109 @@ function scanUnusedExports(files) {
 
 SCANNERS.push(scanUnusedExports)
 
+// ------------------------------------------- class 2: event with no producer
+const EVENT_LITERAL = /"([a-z][a-z0-9-]*\/[a-z0-9-]+)"/g
+const EVENT_DECL_FILE = /(^|\/)(events?|manifest|public-event-manifest)\.ts$/
+/** A line whose leading tokens DECLARE a type: `type X`, `export interface X`,
+ *  `declare type X`. The identifier after the keyword is required, because the
+ *  object-literal property `type: "compaction/attempt"` -- the shape of every
+ *  real emit site in this repo -- otherwise reads as a type declaration and
+ *  silences its own event. */
+const TYPE_DECL_LINE = /^\s*(?:export\s+)?(?:declare\s+)?(?:type|interface)\s+[A-Za-z_$]/
+
+/** Is this occurrence of `"name"` a USE rather than a declaration? A union
+ *  member declares, inline (`= "a" | "b"`) or on its own `| "a"` continuation
+ *  line -- telemetry/types.ts lists every code that way, and counting those
+ *  lines as producers reported zero findings for a manifest that does contain a
+ *  producerless code. A literal on the value side of an `=` is a use even when
+ *  its line also carries a type annotation: `const e: E = "beta/change"`
+ *  assigns one, so vetoing the whole line on `:\s*[A-Z]` (as a line-level rule
+ *  does) reports the fixture's own producer as producerless.
+ *
+ *  Judgements this cannot make, in the spirit of the header: a quoted name
+ *  inside a TRAILING comment still reads as a use (a missed finding, never an
+ *  invented one; there is none in this tree), and only the first occurrence on
+ *  a line is classified. */
+function isProducerLine(ln, name) {
+  const at = ln.indexOf(`"${name}"`)
+  if (at < 0) return false
+  if (/^\s*(?:\/\/|\*|\/\*)/.test(ln)) return false
+  if (/\|\s*$/.test(ln.slice(0, at))) return false
+  return !TYPE_DECL_LINE.test(ln)
+}
+
+/** An event name is "produced" when a NON-TEST file other than the file that
+ *  declares the union contains the same string literal outside a type position.
+ *  A union member is a declaration; a literal in a value position is a use. */
+function scanProducerlessEvents(files) {
+  const prod = files.filter((f) => !f.test)
+  const findings = []
+  for (const decl of prod.filter((f) => EVENT_DECL_FILE.test(f.rel))) {
+    const names = new Set([...decl.text.matchAll(EVENT_LITERAL)].map((m) => m[1]))
+    for (const name of names) {
+      const produced = prod.some((f) => f !== decl && f.text.split(/\r?\n/).some((ln) => isProducerLine(ln, name)))
+      if (!produced) findings.push({ kind: "producerless-event", subject: name, evidence: decl.rel })
+    }
+  }
+  return findings
+}
+
+// ------------------------------------------------ class 3: flag never read
+const FLAG_CASE = /case\s+"(--[a-z0-9-]+)"\s*:\s*flags\.([A-Za-z_$][\w$]*)\s*=/g
+
+/** The line with its string literals and trailing comment blanked -- spaces,
+ *  never deletion, so blanking cannot join two tokens into one word. A `--yes`
+ *  named in a `--help` usage string, or in the header comment that documents
+ *  it, is a mention and not a read of `flags.yes`: counting those mentions is
+ *  what hid this repo's own parsed-but-never-read flag. What it does not model:
+ *  a `/` pair inside a regex literal reads as a comment start (no such line
+ *  matches a flag field here), and a read sharing a line with `field:` or
+ *  `field =` is still discounted by the caller below. */
+function codeOnly(ln) {
+  let out = ""
+  let quote = null
+  for (let i = 0; i < ln.length; i++) {
+    const c = ln[i]
+    if (quote !== null) {
+      if (c === "\\") { out += "  "; i++; continue }
+      if (c === quote) quote = null
+      out += " "
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c
+      out += " "
+    } else if (c === "/" && ln[i + 1] === "/") {
+      break
+    } else {
+      out += c
+    }
+  }
+  return out
+}
+
+/** A flag is "read" when its field name appears somewhere in the same file other
+ *  than its declaration, its initialiser and the `case` that assigns it. */
+function scanUnreadFlags(files) {
+  const findings = []
+  for (const f of files.filter((x) => !x.test)) {
+    const assigned = new Map()
+    for (const m of f.text.matchAll(FLAG_CASE)) assigned.set(m[2], m[1])
+    for (const [field, flag] of assigned) {
+      const lines = f.text.split(/\r?\n/)
+      const read = lines.some((ln) => {
+        if (ln.includes(`case "${flag}"`)) return false
+        const code = codeOnly(ln)
+        if (new RegExp(`\\b${field}\\s*:`).test(code)) return false
+        if (new RegExp(`\\b${field}\\s*=`).test(code)) return false
+        return new RegExp(`\\b${field}\\b`).test(code)
+      })
+      if (!read) findings.push({ kind: "unread-flag", subject: flag, evidence: f.rel })
+    }
+  }
+  return findings
+}
+
+SCANNERS.push(scanProducerlessEvents, scanUnreadFlags)
+
 SELF_TEST_CASES.push({
   name: "class 1: an export only a test imports is a finding",
   expect: ["@i-harness/alpha#Orphan", "@i-harness/alpha#OnlyAType"],
@@ -335,6 +438,22 @@ SELF_TEST_CASES.push({
     return scanUnusedExports(indexTree(root))
       .map((f) => f.subject)
       .filter((s) => s.startsWith("@i-harness/epsilon#"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 2: an event only declared and read, never constructed, is a finding",
+  expect: ["beta/ghost"],
+  run(root) {
+    return scanProducerlessEvents(indexTree(root)).map((f) => f.subject)
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 3: a flag parsed into the flags object and never read is a finding",
+  expect: ["--yes"],
+  run(root) {
+    return scanUnreadFlags(indexTree(root)).map((f) => f.subject)
   },
 })
 
