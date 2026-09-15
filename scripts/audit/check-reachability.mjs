@@ -821,13 +821,26 @@ SELF_TEST_CASES.push({
 })
 
 // The five cases below were added by M1's fix wave (final whole-branch review,
-// I2 and Deferred item 18). Each one is the fixture element of the same name
-// above plus an exact-set assertion, and each exists because a specific
-// loosening of its scanner kept the 13-case self-test green -- the mutation is
-// named in the comment. The expectations are the unfiltered subject lists, so
-// several deliberately agree with a sibling case (the class-2 pair at
-// `beta/ghost` and the class-5 pair below already did): the invariant differs
-// even where the list does not.
+// I2 and Deferred item 18). Honest accounting, because an earlier version of
+// this comment claimed otherwise:
+//
+//   * Each one asserts the SAME exact set as the sibling case above it -- the
+//     `run` and the `expect` are identical, and a case with the same `run` and
+//     `expect` tests the same proposition. These five add NO independent check.
+//   * What makes each loosening visible is the FIXTURE element added beside it
+//     in `buildFixture`, not the case. That element is what turns the
+//     PRE-EXISTING sibling red. Measured with `--self-test` on a copy whose
+//     five added cases are deleted: the class-4 loosening still fails at
+//     `12/13`, `TYPE_DECL_LINE` at `11/13`, the class-5 quoted-key half and the
+//     DEFAULTS anchor at `12/13` each, and the class-3 `.`-before-the-read rule
+//     at `12/13` -- every one of them on a pre-existing case, exit 1.
+//   * The value of these cases is their NAME and the comment above each one:
+//     that is the only record of which loosening its fixture element protects
+//     against. Deleting them would delete the record without changing what the
+//     self-test catches.
+//   * The expectations are the unfiltered subject lists, the style the existing
+//     cases use; the class-2 pair at `beta/ghost` already shared an assertion
+//     before this wave.
 
 // I2 survivor, class 4. Loosening caught: replacing the strict `unionMembers`
 // reader with "every quoted string in the file" -- which then reports the three
