@@ -381,11 +381,11 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
   while they were outstanding and was not updated when they landed.
 - **M1's published completion definition, and the one carve-out it needs** (roadmap §3.M1: every
   `still-holds` row either wired to a production path, **or** declared deliberate with a reason **and
-  recorded in a reasoned allowlist**). At HEAD exactly two rows are `still-holds` — the
-  **`sandbox/mode` pair**, baseline §4.1 item 6 and §4.3 item 4 (measured:
-  `git grep -n '\*\*`still-holds`\*\* |$' -- docs/audit/2026-09-15-reachability-baseline.md` returns
-  those two rows and no others, and the tally's `still-holds 2` counts them) — and they are
-  deliberately **not** among the allowlist's §6.1/§6.2 entries. They *are* declared deliberate, with the reason and the
+  recorded in a reasoned allowlist**). **Read that criterion over §4's four source lists — the 22 rows
+  the baseline rules it covers (baseline §3.4, ruling R13: those items "are the **four source lists**
+  of §4, which are 22 rows") — and at HEAD exactly two of those 22 rows are `still-holds`:** the
+  **`sandbox/mode` pair**, baseline §4.1 item 6 and §4.3 item 4, which the tally's `still-holds 2`
+  counts. They are deliberately **not** among the allowlist's §6.1/§6.2 entries. They *are* declared deliberate, with the reason and the
   follow-up, in the baseline's **§6.4** ("What is deliberately **not** on the allowlist", which names
   the pair and says it "carries both" the M follow-up and its out-of-scope blocker) and in the
   M-shaped bullet below. **So the roadmap's definition is met by that statement, not silently
@@ -396,6 +396,24 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
   Wiring it would need the M-shaped mid-session surface, which is out of this milestone's scope by
   ruling R-D. Recorded explicitly because a reader otherwise sees "2 `still-holds`, no allowlist
   entry" and cannot tell a decision from a gap — which is exactly the state §6.4 exists to prevent.
+  *Corrected 2026-09-15 by re-measurement — the count above is scoped, and this bullet did not say so
+  until now:* it read "At HEAD exactly two rows are `still-holds`" with **whole-document** scope,
+  evidenced by ``git grep -n '\*\*`still-holds`\*\* |$'``. That pattern names the **bold** verdict form
+  only, so it returned **2 of 11 by construction**, not by measurement — and run verbatim it returns
+  **0** here: git grep reads it as a BRE, where the unescaped `|` is a literal pipe (as an ERE it
+  would be alternation and the pattern would degenerate to `$`, matching every line), so it demands a
+  literal `|` immediately before end-of-line, and this file is CRLF, so `\r` sits between the two.
+  Measured cell by cell over every form of the verdict cell — bold, plain, with or without trailing
+  text — the baseline carries **11** `still-holds` rows at HEAD, and
+  ``git grep -n -e '\*\*`still-holds`\*\*' -e '| `still-holds` |' --
+  docs/audit/2026-09-15-reachability-baseline.md`` returns exactly those 11 lines (no `still-holds`
+  verdict cell in this revision carries trailing text): the `sandbox/mode` pair above, **§3.3's eight
+  `unconsulted-setting` keys**, and **§4.5's `registerUpgrade`** — the same 8 + 2 + 1 the baseline's
+  **§6.4** groups as "the rows still reported as `still-holds`". **The nine rows outside §4 are outside
+  M1's list by R13, not hidden by it:** they are §3.3 rows and a §4.5 adjacent row rather than
+  source-list rows, so they belong to M2's ratchet, and §6.4 itself names them as "**simply open**" —
+  they have neither a task nor a reason sentence, which §6.4 records precisely so that their absence
+  from the allowlist is not read as a decision about them.
 - **§4.1 item 8 of the baseline** — Task 5 landed as `06d684c`, so those names are no longer
   exported and the row is `by-design`, making the tally **`5 / 2 / 15 = 22`** (this line read
   `6 / 2 / 14` until the fix round re-measured it; §2 carries the correction and the baseline's §4 the
@@ -489,8 +507,14 @@ superseded Step 2/3, which must **not** be cited as the shipped method.
 4. Then decide with the human: **M1's own gate is met as of 2026-09-15.** *Corrected 2026-09-15:*
    this item read "**M1 is not complete until the reviews are clean and the verdicts reconcile**",
    which is the gate as it stood *before* the reviews ran — it repeated the stale `NOT REVIEWED` flags
-   §2 corrects. As of this commit the reviews are clean (every finding addressed or parked by an
-   explicit ruling — §2's review ledger, §6's parked entry) and the verdicts reconcile (the tally
-   `5 / 2 / 15 = 22` counts the same under the baseline's own extraction, and the two remaining
-   `still-holds` rows are declared deliberate with their reason — §6's completion carve-out). What
-   remains is the human's: nothing has been merged or pushed beyond `m64`.
+   §2 corrects. All four reviews have run, and every finding is addressed or parked by an explicit
+   ruling (§2's review ledger, §6's parked entry); **the fix waves were then themselves re-reviewed,
+   and the corrections that re-review asked for are in** — the ones its follow-up `4a47145f` had
+   already repaired, and the rest in this commit: the `still-holds` count's scope (§6 above), the
+   "verbatim" wording in the D3 context-window claim, and this item's own premature "clean" (it was
+   written before that re-review ran). **No item from the re-review is left open by this commit.** The
+   verdicts reconcile (the tally `5 / 2 / 15 = 22` counts the same under the baseline's own
+   extraction, and the two `still-holds` rows **of §4's 22** are declared deliberate with their
+   reason — §6's completion carve-out). What stays open is what §6 names as open: the M-shaped
+   follow-ups, each needing its own spec, and the parked minors awaiting triage. What remains is the
+   human's: nothing has been merged or pushed beyond `m64`.
