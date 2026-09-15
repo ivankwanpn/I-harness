@@ -167,6 +167,33 @@ export async function main(argv: string[]): Promise<number> {
     return Promise.resolve(runTui(parseFlags(args)))
   }
 
+  // M1 Phase B: a FLAG must never become the prompt. `--help`/`-h` are handled at
+  // :156-163 as `args[0]` only, so `i-harness run --help` fell through to the
+  // filter at :304-308 -- which knows only the seven flags it strips -- and
+  // reached runHeadless as a real turn whose prompt was "--help". The same hole
+  // sent `--no-compact` (parsed at :182, absent from that filter) into the prompt
+  // as `do x --no-compact`.
+  //
+  // The TOP-LEVEL `help`/`--help`/`-h` command at :156-163 is deliberately left
+  // alone -- it is test-pinned as the documentation surface (bin.test.ts:33-38,
+  // and ":72-75" forces a new run flag to appear in it). The run path gets no
+  // `--help` case for a different reason: `--help` AFTER `run` is not a help
+  // request, it is an unrecognised flag, and unrecognised flags are errors here.
+  // That mirrors the file's own fail-loud stance (`--session-backend`: ":92-97";
+  // `--resume`: ":225-235") rather than inventing a second help contract.
+  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact"])
+  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox"])
+  const runArgs = args.slice(1)
+  for (let i = 0; i < runArgs.length; i += 1) {
+    const a = runArgs[i]!
+    if (RUN_FLAGS.has(a)) continue
+    if (i > 0 && RUN_VALUE_FLAGS.has(runArgs[i - 1]!)) continue
+    if (a.startsWith("-")) {
+      console.error(`i-harness run: unknown flag ${a} (a flag-like token would otherwise become the prompt)\n${USAGE}`)
+      return Promise.resolve(1)
+    }
+  }
+
   const yes = args.includes("--yes")
   // M62: `--sandbox` is the headless face of `settings.sandboxMode`. Measured
   // gap this closes: HeadlessOptions.sandbox was read from the caller and the
@@ -302,7 +329,7 @@ export async function main(argv: string[]): Promise<number> {
 
   // task = everything after the "run" command, excluding flag tokens/values.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry" || a === "--sandbox") return false
+    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry" || a === "--sandbox" || a === "--no-compact") return false
     const prev = args.slice(1)[i - 1]
     return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--sandbox"
   })
