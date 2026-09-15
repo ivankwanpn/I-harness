@@ -187,7 +187,9 @@ IH **完全沒有 prompt cache 的概念** —— 全 inventory grep `cache` 只
 ### M6 — 廣度：生態 ＋ 介面硬化
 
 **它讓什麼變得不一樣**
-MCP 與 skills 不再是淺整合；web host 在慢客戶端與不可信頁面下仍然正確。
+MCP 與 skills 不再是淺整合；`@i-harness/sdk` 的 wire 在慢客戶端與不可信客戶端下仍然正確。
+
+**⚠️ 範圍更正（2026-09-15，人類決定 Q6）。** 這一節原本的另一半是「web host 在慢客戶端與不可信頁面下仍然正確」，完成定義也要求「web host 的握手與背壓有測試」。**既然現有 TUI 與 web 預定汰換（§5 Q6），對 `packages/web-host` 做硬化就是對即將丟棄的程式碼投資 —— 這半刪除。** 但**概念不刪，改掛到 wire 上**：`session/event` 是 append-only 且**不重播**（`packages/sdk/src/protocol.ts` 的 Replay semantics），所以「慢客戶端」與「背壓」是**契約問題**，不是某個 host 的實作問題 —— 對未來的新前端一樣要緊，因此它們屬於 `packages/sdk`。T7 那兩列（連線握手、輸出背壓）的價值也在這裡，不在舊 web host。
 
 **證據**
 - T8 是安全性之後**最大的 active 叢集**（13 列）。IH 的底子已經不錯（`plugin-event-kernel-with-four-extension-channels`、`skill-md-deferred-retrieval-with-a-shadow-selector`、`mcp-client-with-generation-based-reconnection-and-oauth`），**所以剩下的都是淺缺口而非結構缺口**。
@@ -198,7 +200,7 @@ triage 第 3 題（「誰是第二個消費者？」）repo 內沒有答案，�
 
 **依賴**：M5（工具管線是 MCP 工具進來的入口）。
 **分級**：**M**，且增量。
-**完成定義**：MCP 的攝取面有硬化過的測試；skills 可被發現而非只是可載入；web host 的握手與背壓有測試；`settings-seam` 與 `operator-config-layer-stack` 有契約測試。
+**完成定義**：MCP 的攝取面有硬化過的測試；skills 可被發現而非只是可載入；**`@i-harness/sdk` 的 append-only `session/event` 語意與背壓在 wire 層有測試**（原為「web host 的握手與背壓有測試」，2026-09-15 隨 Q6 改）；`settings-seam` 與 `operator-config-layer-stack` 有契約測試。
 **它不保證什麼**：**不保證第三方實作真的相容** —— 那需要一個外部消費者，而目前沒有。
 
 ### M7 — 自我喚醒與記憶
@@ -268,6 +270,12 @@ IH 能在**沒有任何外部事件**的情況下自己開始一個 turn（而�
 | Q2 | **閒置自我喚醒是不是產品目標**？ | **暫不作為目標**。IH 的價值是耐久、可審計、由人指揮的 harness；自我喚醒會改變那個定位。 | M7／T5 |
 
 **這兩題若你的答案與我相反，M7 的內容與分級跟著改；其餘里程碑不受影響。**
+
+**由你決定並已決定（2026-09-15）**
+
+| # | 問題 | 決定 | 理由與後果 |
+|---|---|---|---|
+| Q6 | 現有 TUI 與 web 的去留 | **預定汰換** —— 之後整個放棄現有的 TUI 與 web、重新建一個新的。**那是很後面的工作，不在 M1–M7 的範圍內**（2026-09-15 人類決定） | 所以本路線圖的「TUI／web 不動」不只是省工，是**策略事實**。關鍵後果：**未來前端的後端契約是 `@i-harness/sdk` 的 wire（`packages/sdk/src/protocol.ts`；`PROTOCOL_VERSION = 2`，v0 `FROZEN`、v1 `ADDITIVE-ONLY`，欄位級漂移哨兵在 `packages/sdk/test/server.test.ts`），而不是 in-process 的 `createSessionService` API。** 現有 TUI 的 `--attach` 已經是這條 wire 的生產消費者（`packages/tui/src/backend/remote.ts`），所以「重建前端」是一個**客戶端專案**，不是後端專案 —— 後端的責任是讓那條 wire 值得被蓋在上面。連帶兩點：舊 TUI／web 還在出貨期間，engine 改動仍須**向後相容**（`packages/tui` 依賴 `session-executor`，且被 `pnpm -r typecheck` 檢查）；一旦它們移除，唯一還須穩定的契約就是 wire。範圍更正見 §3.M6。 |
 
 ---
 
