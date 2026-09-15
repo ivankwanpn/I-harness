@@ -36,12 +36,18 @@ they are deliberately **not** adjudicated row by row (ruling R13, §3.4).
 
 ## 2. Machine fingerprint
 
+**Two revisions appear in this document, and they are not the same one.** The table below is the
+**Phase A measurement**: the state the 525 rows and the Phase A digest were measured at. §2.1 publishes
+the **Phase B state** — the 523 rows and the digest M2 seeds from — measured at `637cdd7`, the revision
+this document's predecessor published at. §2.1 also names the revision **this** edition is published at.
+Read §2.1 for "what the tree says now"; read this table for "what Phase A measured".
+
 | Item | Value |
 |---|---|
 | node | `v22.23.2` |
 | pnpm | `11.7.0` |
 | branch | `m64` |
-| HEAD | `74f86d5a80528b61653a437658e4657e208fe59a` |
+| HEAD, the revision measured | `74f86d5a80528b61653a437658e4657e208fe59a` — **the Phase A measurement revision** |
 | scanner, human mode | `reachability: 729 ts files, 525 finding(s)` |
 | walked `.ts`/`.tsx` count (the scanner's) | **729** |
 | `git ls-files "*.ts" "*.tsx"` | **729** |
@@ -95,11 +101,85 @@ outside those rules only by extension). On the authoring machine recorded in
 `docs/handoff/HANDOFF.md` the node version was `v24.15.0`; this run is on `v22.23.2`, which is why
 all three fingerprint values and the file count are recorded rather than the SHA alone.
 
+### 2.1 The post-Phase-B state — this is what M2 seeds from
+
+Measured by `node scripts/audit/check-reachability.mjs`, re-run in this task. **The revision the
+measurement was taken at is `637cdd7`** (`637cdd70a97aab8b9664842ce5e7bfba483ca25d`, the commit this
+document's Phase A edition published at, i.e. the parent of this edition's own commit).
+**The revision this edition is published at is `PUBLISH__SHA`, the commit that adds §2.1.** The two are
+one commit apart and no `packages/` or `apps/` file differs between them — Phase B's code changes are
+all ancestors of `637cdd7` — so the row set is the same at both, and the count was re-checked at the
+publication revision as well as at the measurement revision.
+
+| Item | Phase A (§2 above) | **Phase B — current** |
+|---|---|---|
+| revision measured | `74f86d5a…` | **`637cdd7`** |
+| revision published | `74f86d5a…` | **`PUBLISH__SHA`** |
+| walked `.ts`/`.tsx` | 729 | **731** |
+| `git ls-files "*.ts" "*.tsx"` | 729 | **731** |
+| assertion | PASS — 729 == 729 | **PASS — 731 == 731** |
+| finding count | 525 | **523** |
+| `unused-export` | 512 | **510** |
+| `unconsulted-setting` | 8 | **8** |
+| `unpushed-capability` | 3 | **3** |
+| `producerless-event` | 1 | **1** |
+| `unread-flag` | 1 | **1** |
+| digest | `da57ae75…` | **`5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`** |
+| self-test | `18/18 ok` | **`18/18 ok`** (exit 0) |
+
+```powershell
+node scripts/audit/check-reachability.mjs
+# reachability: 731 ts files, 523 finding(s)
+
+node scripts/audit/check-reachability.mjs --self-test
+# self-test: 18/18 ok          (exit 0)
+```
+
+**The digest reproduction rule, restated because M2 must recompute it rather than trust it.**
+`sha256` over the findings rendered as `kind<TAB>subject<TAB>evidence` lines, **sorted**, LF-joined,
+**each line newline-terminated — the trailing newline after the last line matters.** Dropping that final
+newline yields `d89827d07a4521b3dca6ebde0159d82eb284c0118511835cbc71f4b5cad7b779`, so the two are not
+interchangeable: reproduce the digest with `--json`, take `findings`, render and sort each as
+`kind ⇥ subject ⇥ evidence`, and join with `"\n"` **after every line, including the last**. (The rule
+above at the Phase A digest is the same rule; this paragraph states only what that one left implicit.)
+The digest is the artefact §6 prescribes as the ratchet's seed: **M2 must fail only on rows that are
+*new* relative to this digest, never on the fact that rows exist.**
+
+**Row delta from Phase A — exactly two rows left the set, and zero were added.** Both departures are
+Task 4's deletions, and both were `unused-export` rows, which is why class 1 moved 512 → 510 while all
+four other classes are unchanged:
+
+| row (Phase A subject) | evidence | left the set because |
+|---|---|---|
+| `@i-harness/provider#buildWireClient` | `packages/provider/src/index.ts` | Task 4 removed the declaration (un-exported in `c5652c7`, deleted in `24e9395`) — §4.1 item 3 |
+| `@i-harness/plan-mode#withdrawPlanModeTool` | `packages/plan-mode/src/index.ts` | Task 4 removed the declaration (un-exported in `c5652c7`, deleted in `24e9395`) — §4.1 item 5 |
+
+**No Phase B task added a row.** The three names Task 5 un-exports (`§4.1` item 8) were never in the
+set to begin with, because class 1 walks only `packages/*/src/index.ts` entries and none of the three
+is exported from one — that is the entry-only blind spot §7 item 12 records. Re-exporting them to
+"make them reachable" would *add* three rows rather than remove any (measured, §7 item 12).
+
+**The walked count moved 729 → 731 and that is not a row delta.** The two extra files are both **test**
+files added by Phase B — `apps/cli/test/run-flag-routing.test.ts` (Task 3) and
+`packages/session-persistence/test/sandbox-mode-event.test.ts` (Task 1) — so they change neither the
+360-file non-test universe nor the row set. `731` is
+the count the scanner's own walk and `git ls-files` agree on at `637cdd7` — the same asserted equality
+§2 records for Phase A, now at a second revision.
+
 ---
 
 ## 3. The finding table
 
-### 3.1 The 525 rows, grouped by class
+### 3.1 The Phase A 525 rows, grouped by class
+
+**This section is the Phase A record and its numbers are the Phase A ones.** The current counts are in
+§2.1; the two differ only by Task 4's two deletions, and §3.2–§3.4 below are Phase A records for the
+same reason. §3.4's 512 rows are 510 at `637cdd7`.
+
+**Class 1's 512 is a LOWER BOUND, for a reason this section does not otherwise state.** Separately from
+class 4's floor below, class 1 cannot see a name that its entry re-exports through a local
+`export { … }` list with no `from` clause — measured at `637cdd7` as 39 names across 6 entries, all of
+them unreportable. See §7 item 12 for the mechanism, the measurement and M2's ask.
 
 | Class | `kind` | Rows | Distinct `evidence` files | Note |
 |---|---|---:|---:|---|
@@ -165,14 +245,17 @@ These are few enough to adjudicate in full. Verdict vocabulary is §4's.
 | `unconsulted-setting` | `plugins.subagentModel` | `packages/settings/src/index.ts` | `still-holds` | declared `:80`/`:319`/`:679`; no occurrence outside the declaring file |
 | `unconsulted-setting` | `onboarding.welcomeNoticeVersion` | `packages/settings/src/index.ts` | `still-holds` | the only other production occurrence is the mutation schema (`packages/settings/src/sections.ts:170`). The comment at `packages/settings/src/index.ts:329-331` says *"the frontend shows the notice while `welcomeNoticeVersion !== "2026-08-30.1"` (Task 9)"* — and **no frontend reads it**. The comment describes a behaviour that does not exist |
 
-### 3.4 The 512 `unused-export` rows — recorded, not adjudicated (ruling R13)
+### 3.4 The Phase A 512 `unused-export` rows (510 at `637cdd7`) — recorded, not adjudicated (ruling R13)
 
 The plan's Step 2 says "adjudicate **every** finding". **Ruling R13 overrides that**: the roadmap's
 §3.M1 completion criterion never required it — it requires that each item which still holds be either
 wired up or explicitly declared deliberate, and those items are the **four source lists** of §4,
 which are 22 rows. At 525 rows a row-by-row adjudication is not a workflow anyone should perform and
 would not be a measurement. So the 512 class-1 rows are recorded here as the raw baseline for M2's
-ratchet, and §5 samples 39 rows to characterise them.
+ratchet, and §5 samples 39 rows to characterise them. **At the Phase B revision (§2.1) the same list is
+510 rows** — Task 4 deleted the two rows §2.1's delta table names — and the per-package table below is
+the Phase A grouping, unrevised: `@i-harness/provider` loses one row and `@i-harness/plan-mode` one, so
+of the counts below only those two move (15 → 14 and 3 → 2 respectively at `637cdd7`).
 
 Grouped by declaring package (`subject` prefix), descending:
 
@@ -223,26 +306,35 @@ none is claimed.** §5 states the sample that was.
 spec §7; `tui --yes` in both D1 §跨包主線 8 and the CLI surface). Verdicts are exactly one of
 `already-fixed`, `still-holds`, `by-design`.
 
-**Tally: `already-fixed` 5 · `still-holds` 3 · `by-design` 14** — recomputed from the four tables below
-rather than carried from any sentence of this document. Phase B moved **seven** of the 22 verdicts:
+**Tally: `already-fixed` 6 · `still-holds` 2 · `by-design` 14** — recomputed from the four tables below
+rather than carried from any sentence of this document. Phase B moved **eight** of the 22 verdicts:
 
 - **three to `already-fixed`**, each by a code task: `buildWireClient` (§4.1 item 3) and
   `withdrawPlanModeTool` (§4.1 item 5), whose declarations Task 4 deleted; and `i-harness run --help`
   (§4.4 item 4), whose route Task 3's guard now closes. Each row names the commits that did it;
-- **four to `by-design`**, each with a reason sentence in §6.2: the `output-retention` spill row (§4.2
-  item 4), `classifyDenial` (§4.3 item 1), `exitCode: -1` (§4.3 item 2) and `--flag=value` (§4.4 item 3).
+- **five to `by-design`**, each with a reason sentence in §6.2 or §4.1: the `output-retention` spill row
+  (§4.2 item 4), `classifyDenial` (§4.3 item 1), `exitCode: -1` (§4.3 item 2), `--flag=value`
+  (§4.4 item 3), and the three-name export residue of §4.1 item 8, which Task 5 narrowed to
+  module-private declarations rather than wiring.
 
 The arithmetic is stated so it can be checked against the tables rather than against this paragraph:
-Phase A's `already-fixed` 2 is unchanged and Phase B added 3 (**2 + 3 = 5**); Phase A's `still-holds` 10
-lost 7 rows (**10 − 7 = 3**); Phase A's `by-design` 10 gained 4 (**10 + 4 = 14**); **5 + 3 + 14 = 22**,
-the row count §4 opens with.
+Phase A's `already-fixed` 3 is unchanged (**3**); Phase A's `still-holds` 10 lost 8 rows
+(**10 − 8 = 2**); Phase A's `by-design` 9 gained 5 (**9 + 5 = 14**); **6 + 2 + 14 = 22**, the row count §4
+opens with — 3 + 2 + 9 = 14 is Phase A's own total over the same 22 rows.
+This is a **row** tally, not the allowlist's entry count. The four tables contribute 8 + 6 + 4 + 4 = 22
+rows, of which **12 are `by-design`**; adding §4.5's 2 `by-design` adjacent D1 rows gives the 14. The
+allowlist's 6 entries in §6.1 and 13 in §6.2 are a separate set, so 14 `by-design` rows and 19
+allowlist entries are not two figures for one thing.
+§4.1 item 8's move is the eighth of Phase B's eight and is why `already-fixed`, not `still-holds`, is the
+column that did **not** grow from Task 5: dropping an `export` keyword removes a consumer-less
+declaration *edge*, it does not make the declaration reachable from anywhere it was not reachable
+before, so the row is a disposition (`by-design`) rather than a fix.
 
-**The three remaining `still-holds` cells are two items.** Two of them are the same item twice: the
-`sandbox/mode` scenario — §4.1 item 6 and §4.3 item 4, which the sandbox spec repeats. That one is not a
-TUI-only gap and is not left without a task or a reason: §4.1 item 6 records what Task 1 did and did not
-discharge, and names the follow-up as **M** with its out-of-scope blocker stated. The third is §4.1 item
-8, whose residue is a **re-export decision**: un-exporting the declarations in that position is Task 5's
-change, so the verdict moves with that task and with the row's own name-list correction rather than here.
+**The two remaining `still-holds` cells are one item twice.** The `sandbox/mode` scenario — §4.1 item 6
+and §4.3 item 4, which the sandbox spec repeats. That one is not a TUI-only gap and is not left without
+a task or a reason: §4.1 item 6 records what Task 1 did and did not discharge, and names the follow-up
+as **M** with its out-of-scope blocker stated. **Both `still-holds` cells in the tally are that pair**,
+and no third residue remains: §4.1 item 8 was the third and Task 5's narrowing moved it to `by-design`.
 
 **§4.5's four adjacent rows are recorded, not list items, and are not in this tally** — which is why
 three of their cells can be `by-design` without moving the 22-row split.
@@ -277,9 +369,9 @@ column. Every verdict below rests on a command run in this task, not on the sour
 | 3 | `buildWireClient` | yes — `unused-export @i-harness/provider#buildWireClient` | the name occurred in exactly **2** files at Phase A: its declaration (`packages/provider/src/index.ts:762`) and `packages/provider/test/provider.test.ts`. It was a **bucket-A** row — no reference inside its own declaring module — so the remediation was deletion rather than un-exporting: Task 4 removed it in two commits — `c5652c7` un-exported it, then `24e9395` deleted the declaration and the case that called it — and the name survives only in that case's comment, which keeps the **requirement** the function embodied (a wire-keyed factory is useful only to a consumer that holds the resolved string and no profile) rather than the dead function. The declaration is gone from the tree, so the row is discharged | **`already-fixed`** |
 | 4 | `mountPreset` | **no** | the name occurs in 3 files: declaration `packages/preset/src/index.ts:30`, a **comment** `packages/tui/src/views/light-personas.ts:2` (`// persona catalog (verified: @i-harness/preset exports parsePreset/mountPreset`), and `packages/preset/test/preset.test.ts`. It has **no production caller**. It did not surface because the comment in an unrelated production file counts as a mention — see §7 item 4. The file holding that comment is `packages/tui` — the TUI, frozen and slated for replacement (§4, scope decision) — so the row is allowlisted as deliberately out of scope instead of kept as Phase B work | **`by-design`** — allowlist §6.2, deliberately out of scope; the replacement frontend carries the decision |
 | 5 | `withdrawPlanModeTool` | yes — `unused-export @i-harness/plan-mode#withdrawPlanModeTool` | the name occurred in exactly **1** file in the entire tree at Phase A: `packages/plan-mode/src/index.ts:36`. Task 4 removed it in two commits — `c5652c7` un-exported the declaration, then `24e9395` deleted it — and removed only the case that asserted the absence of the export edge the deletion removes; the surviving `plan-mode` case asserts **live** behaviour instead (`ensurePlanModeTool` is idempotent, and plan mode OFF does not withdraw `exit_plan_mode`), so the deletion did not have to sacrifice coverage. The declaration is gone from the tree, so the row is discharged | **`already-fixed`** |
-| 6 | `sandbox/mode` has no producer | **no** | the quoted literal `"sandbox/mode"` occurs on **19** lines of the walked tree: **17 in `test/` files** and **2 in production code** — the event-type declaration (`packages/core-session/src/index.ts:43`) and the **reader** (`packages/sandbox-policy/src/session-mode.ts:9`) — with **0** in production comments. 14 of the 17 test lines are `append(…)` calls, and **0** production files append the event. It did not surface because class 2 is anchored on the declaring file's **name** (`/(^\|\/)(events?\|manifest\|public-event-manifest)\.ts$/`), which matches exactly **one** file in this repo — `packages/telemetry/src/manifest.ts` — while this union lives in `packages/core-session/src/index.ts`. **What Task 1 changed, and what it did not.** A **construction-time** producer now exists: `packages/session-executor/src/assembly.ts:354` appends the event when a host passes a `sandbox` option (`if (opts.sandbox !== undefined) append(policyBase, { type: "sandbox/mode", mode: opts.sandbox })`), so the "0 production files append the event" measurement above is the **Phase A** one. The row's **stronger** claim survives it: **no in-scope surface can change a *live* mode.** The only shipped surface that could is `/sandbox` (`apps/cli/src/web.ts:273-282`), which is frozen, and even it writes `settings.sandboxMode` for sessions created *afterwards* (`:280`), not for the one running; ACP's `session/set_mode` is in the v0 **drop-set** (`packages/acp/src/index.ts:21-25`); and the SDK and subagent trees contain **no** `sandbox` occurrence at all (0 in `packages/sdk/src`, `packages/subagent/src`). The follow-up is therefore a **`setSandboxMode` seam plus a caller** — new mechanism on a published assembly surface, i.e. **M** — and its blocker is **outside this milestone**: the only host that changes a mode at all is the frozen web route, so the caller cannot be written here. Recorded so it is not rediscovered as a surprise | **`still-holds`** |
+| 6 | `sandbox/mode` has no producer | **no** | the quoted literal `"sandbox/mode"` occurs on **19** lines of the walked tree: **17 in `test/` files** and **2 in production code** — the event-type declaration (`packages/core-session/src/index.ts:43`) and the **reader** (`packages/sandbox-policy/src/session-mode.ts:9`) — with **0** in production comments *in that quoted form*. **Which form that zero counts, corrected here by re-measurement.** The `0` above is true of the **double-quoted literal only**; the **bare** pattern `sandbox/mode` — the spelling the codebase actually uses in prose — matches **18 production comment lines** (measured over the 360 non-test files, counting a line whose first non-space characters open a `//`, `/*` or `*` comment), of which **four state the missing-producer contract in prose**: `packages/sandbox/src/call-policy.ts:33` and `:206` (*"appends no `sandbox/mode` event"*, *"no `sandbox/mode` event is appended"*), `packages/shell/src/index.ts:159` and `:385` (*"no `sandbox/mode` event, and never moves the standing mode"*, *"appends no `sandbox/mode` event of its own"*). The bare count is what a reader reproduces, so recording only the quoted zero understated this row's production-comment count by 18 lines. 14 of the 17 test lines are `append(…)` calls, and **0** production files append the event. It did not surface because class 2 is anchored on the declaring file's **name** (`/(^\|\/)(events?\|manifest\|public-event-manifest)\.ts$/`), which matches exactly **one** file in this repo — `packages/telemetry/src/manifest.ts` — while this union lives in `packages/core-session/src/index.ts`. **What Task 1 changed, and what it did not.** A **construction-time** producer now exists: `packages/session-executor/src/assembly.ts:354` appends the event when a host passes a `sandbox` option (`if (opts.sandbox !== undefined) append(policyBase, { type: "sandbox/mode", mode: opts.sandbox })`), so the "0 production files append the event" measurement above is the **Phase A** one. The row's **stronger** claim survives it: **no in-scope surface can change a *live* mode.** The only shipped surface that could is `/sandbox` (`apps/cli/src/web.ts:273-282`), which is frozen, and even it writes `settings.sandboxMode` for sessions created *afterwards* (`:280`), not for the one running; ACP's `session/set_mode` is in the v0 **drop-set** (`packages/acp/src/index.ts:21-25`); and the SDK and subagent trees contain **no** `sandbox` occurrence at all (0 in `packages/sdk/src`, `packages/subagent/src`). The follow-up is therefore a **`setSandboxMode` seam plus a caller** — new mechanism on a published assembly surface, i.e. **M** — and its blocker is **outside this milestone**: the only host that changes a mode at all is the frozen web route, so the caller cannot be written here. Recorded so it is not rediscovered as a surprise | **`still-holds`** |
 | 7 | `tui --yes` | yes — `unread-flag --yes` | see §3.2 item 2: `flags.yes` is assigned at `apps/tui/src/index.ts:445` and read nowhere; `--yes` is additionally advertised in two usage strings (`:9`, `:461`). The finding is real; `apps/tui` is the TUI, frozen and slated for replacement (§4, scope decision — note this is `apps/tui`, not `packages/tui`), so it is allowlisted as deliberately out of scope | **`by-design`** — allowlist §6.2, deliberately out of scope |
-| 8 | `estimateAssemblyOverhead` / `bindAuthRefreshStatus` | **no** | both are declared and **used inside their own module**: `packages/session-executor/src/assembly.ts:220` + call at `:762`, and `:234` + call at `:618`. `packages/session-executor/src/index.ts` is 22 lines and re-exports **exactly 14 names**, none of them these two — in full: `createSessionAssembly`, `ModelUnavailableError`, `AssemblyOptions`, `ModelPolicy`, `SessionAssembly` (all from `./assembly.ts`), `createDurableSessionLoader` (from `./durable-session.ts`), `createSessionService`, `SessionModelBindingResult`, `SessionQueueItem`, `SessionService`, `SessionServiceOptions` (from `./service.ts`), `AgentTaskStatus`, `AgentTaskView` (from `@i-harness/subagent`), `ReasoningEffort` (from `@i-harness/core-agent`). The only importer of the two is `packages/session-executor/test/assembly.test.ts:19-24`, which reaches them through the relative path `../src/assembly.ts`, i.e. **not** through the package entry. So D1's claim (exported from `assembly.ts`, not re-exported by `index.ts`, `package.json` exposes only `"."` → unreachable outside the package) **still holds as written**. It did not surface because class 1 walks only `packages/*/src/index.ts` entries and reports the names **that entry exports** — these two are not among them, so there is nothing for the scanner to test. Half the sentence that introduced them in D1 ("no production caller") is however no longer true — both are called on a production path inside `assembly.ts`, so the residue is a re-export decision, not a wiring gap | **`still-holds`** |
+| 8 | `estimateAssemblyOverhead` / `bindAuthRefreshStatus` / `RewindAssemblyHandle` | **no** | **Corrected to three names** — D1 and the first edition named two; there are **three** in the same position, and the third is `RewindAssemblyHandle`, an interface declared at `packages/session-executor/src/assembly.ts:166` and used only at `:206` (`rewind?: RewindAssemblyHandle`). All three are declared and **used inside their own module**: `:220` + call at `:779`, `:234` + call at `:635`, `:166` + use at `:206`. `packages/session-executor/src/index.ts` is 22 lines and re-exports **exactly 14 names**, none of them these three — in full: `createSessionAssembly`, `ModelUnavailableError`, `AssemblyOptions`, `ModelPolicy`, `SessionAssembly` (all from `./assembly.ts`), `createDurableSessionLoader` (from `./durable-session.ts`), `createSessionService`, `SessionModelBindingResult`, `SessionQueueItem`, `SessionService`, `SessionServiceOptions` (from `./service.ts`), `AgentTaskStatus`, `AgentTaskView` (from `@i-harness/subagent`), `ReasoningEffort` (from `@i-harness/core-agent`). At Phase A their only importer was `packages/session-executor/test/assembly.test.ts:19-24`, through the relative path `../src/assembly.ts` — i.e. **not** through the package entry. So D1's claim (declared in `assembly.ts`, not re-exported by `index.ts`, `package.json` exposes only `"."` → unreachable outside the package) **still holds as written**. It did not surface because class 1 walks only `packages/*/src/index.ts` entries and reports the names **that entry exports** — these three are not among them, so there is nothing for the scanner to test. Half the sentence that introduced them in D1 ("no production caller") is however no longer true — all three are used on a production path inside `assembly.ts`. **Task 5 discharged the residue**: it dropped the three `export` keywords (`assembly.ts:166`, `:220`, `:234`) and rerouted the two test cases through `createSessionAssembly`, so the file-level export edge with no consumer is gone and the declarations are now module-private. That is the *narrowing* disposition this row's residue called for, not a wiring change — nothing was made reachable, and nothing needed to be. Verdict moved to `by-design`: the row is a declaration-edge decision that has been taken, and the declarations stay live and private. (The change is in the working tree at the revision this edition was measured at; see §2.1 and §4 for the revision accounting.) | **`by-design`** — narrowed, not allowlisted as a finding (§6.4) |
 
 ### 4.2 D1 §未竟事項
 
@@ -309,7 +401,7 @@ The roadmap cites "the sandbox spec §7"; the residuals are `docs/superpowers/sp
 |---|---|---|---|---|
 | 1 | `tui --yes` parsed but never read | yes — `unread-flag --yes` | identical to §4.1 item 7 — cross-referenced, not re-derived. Verdict follows it: `apps/tui` is frozen and slated for replacement (§4, scope decision), so deliberately out of scope | **`by-design`** — allowlist §6.2 |
 | 2 | unknown subcommands not rejected | **no** | `apps/cli/src/index.ts` dispatches by exact equality on `args[0]`: `web` `:102`, `sdk` `:129`, `sessions` `:134`, `acp` `:139`, `tui` `:145`, `__dist-selfcheck` `:153`, `--version`/`-v` `:156`, `help`/`--help`/`-h` `:160`; then `:164` `if (args[0] !== "run") return Promise.resolve(runTui(parseFlags(args)))` at `:167`. So `i-harness --sandbox x run t` — and any typo — launches the TUI. Not surfaced: no scanner class covers a dispatch chain. The fall-through is documented as deliberate at `:142-144` (*"the GROK-STYLE DEFAULT — a bare `i-harness` (**or any non-subcommand first token**) launches the TUI"*) | **`by-design`** — allowlist §6 |
-| 3 | no `--flag=value` support | **no** | across the whole tree: `apps/` contains **zero** occurrences of `split("=")`, `indexOf("=")` or `startsWith("--")`; `packages/` contains exactly one `startsWith("--")` — `packages/guard-approval/src/danger-class.ts:87`, a shell-flag classifier, not a parser. Both parsers match whole tokens (`apps/tui/src/index.ts:441-456` `switch (argv[i])`; `apps/cli/src/index.ts:208` `args.indexOf("--sandbox")` and `:332` `a === "--model"` — the `:181`/`:305` of Phase A, which Task 3's guard pushed down by 27 lines). Not surfaced: no scanner class covers argument *syntax*; all five look for declarations, not for shapes a parser fails to accept. **Adjudicated `by-design` — deliberately unsupported (§6.2)** — and the declaration carries an obligation Task 3 discharged: the form now **fails loud** as an unknown flag, so `--model=x` can no longer be silently swallowed into the prompt. The grammar this leaves in place is narrower than "no `=` support" and is recorded as **grammar, not as a defect**: any `run` task token beginning with a dash is **reserved and rejected with exit 1** — `run "-40 degrees"`, `run hi --` and `run hi --flag=value` all exit 1 naming the token — and there is **no `--` end-of-flags separator**, so a prompt that must begin with a dash is inexpressible. Adding one is new argv grammar, i.e. an **M** follow-up with its own spec (§6.2), not a fix round on the router | **`by-design`** — allowlist §6.2 |
+| 3 | no `--flag=value` support | **no** | **in `apps/`**: contains **zero** `split("=")` and **zero** `indexOf("=")`, and two `startsWith("-")` — `apps/cli/src/sessions.ts:62` (`if (!token.startsWith("-") && subcommand === "show" && id === undefined)`) and `apps/cli/src/index.ts:191`, which is the **dash-token guard Task 3 added**, not a parser (§4.4 item 4). **Corrected here: the first edition's "across the whole tree … `apps/` contains zero occurrences of …" conflated two scopes.** Two `=` splits **do** exist in the tree — `packages/web-host/src/host.ts:700` (`const i = part.indexOf("=")`) and `packages/tui/src/app/slash/impl/workflow2.ts:38` (`const eq = tok.indexOf("=")`) — both in **frozen frontend packages** (§4, scope decision) and neither a CLI parser, so the verdict stands; only the scope sentence was wrong. `packages/` also contains exactly one `startsWith("--")` — `packages/guard-approval/src/danger-class.ts:87`, a shell-flag classifier, not a parser. **The parse-site list was also incomplete**: it missed a third in-scope site, `apps/cli/src/sessions.ts:45-65` (`parseSessionsArgs`, which reads `--json` at `:52`, `--session-dir` at `:53`, `--last` at `:54-58`, `--help`/`-h` at `:59`, and the bare positional at `:62`) — the `sessions` subcommand's own parser. Both parsers match whole tokens (`apps/tui/src/index.ts:441-456` `switch (argv[i])`; `apps/cli/src/index.ts:208` `args.indexOf("--sandbox")` and `:332` `a === "--model"` — the `:181`/`:305` of Phase A, which Task 3's guard pushed down by 27 lines). Not surfaced: no scanner class covers argument *syntax*; all five look for declarations, not for shapes a parser fails to accept. **Adjudicated `by-design` — deliberately unsupported (§6.2)** — and the declaration carries an obligation Task 3 discharged: the form now **fails loud** as an unknown flag, so `--model=x` can no longer be silently swallowed into the prompt. The grammar this leaves in place is narrower than "no `=` support" and is recorded as **grammar, not as a defect**: any `run` task token beginning with a dash is **reserved and rejected with exit 1** — `run "-40 degrees"`, `run hi --` and `run hi --flag=value` all exit 1 naming the token — and there is **no `--` end-of-flags separator**, so a prompt that must begin with a dash is inexpressible. Adding one is new argv grammar, i.e. an **M** follow-up with its own spec (§6.2), not a fix round on the router | **`by-design`** — allowlist §6.2 |
 | 4 | `i-harness run --help` runs a task named `"--help"` | **no** | `apps/cli/src/index.ts:160` catches `--help` only as `args[0]`, so `run --help` passes it; the task is then built at `:304-309` by filtering out exactly seven flags (`--model`, `--api-key`, `--yes`, `--session-dir`, `--resume`, `--telemetry`, `--sandbox`) and their values, so the literal `"--help"` survives into `task`, is non-empty at `:310`, and reaches `runHeadless` at `:333`. Not surfaced: no scanner class covers argument routing. **Task 3 fixed the route** (`0d168e2`, then `b96d162`): the guard at `:184-195` rejects any dash-leading unknown token on the `run` path **before** the settings load, the session/coordinator creation and model resolution, so `run --help` now exits 1 with `unknown flag --help` and never reaches the filter — which at HEAD is `:331-335`, with `runHeadless` at `:360`. Refusing is the intended answer here: `--help` *after* `run` is an unrecognised flag, not a help request, and the top-level `help`/`--help`/`-h` command is deliberately untouched, still pinned by `apps/cli/test/bin.test.ts:33-38`. The new refusal and the declared narrowing are pinned in `apps/cli/test/run-flag-routing.test.ts`. The description above is the **Phase A** measurement of the pre-fix code | **`already-fixed`** |
 
 ### 4.5 Adjacent rows from the same D1 sections (recorded, not list items)
@@ -320,7 +412,7 @@ cheap to measure. Recorded so Phase B does not have to rediscover them.
 | Item (D1 location) | Surfaced? | Measured evidence | Verdict |
 |---|---|---|---|
 | `session-persistence` `registerUpgrade` has no registration point (D1 §未竟事項 bullet 4) | yes — `unused-export @i-harness/session-persistence#registerUpgrade` | the name occurs in exactly 2 files: its declaration + comment (`packages/session-persistence/src/index.ts:151,153`) and `packages/session-persistence/test/persistence.test.ts:74`. No production caller | `still-holds` |
-| `session-query` `closeSessionQueries` (and the legacy opener) has no production caller (D1 §8) | **no** | the name occurs in exactly 3 files: `packages/session-query/src/index.ts:49` (comment) + `:52` (declaration), `packages/session-query/src/file-backed.ts:88` (**comment**), and four `test/` files. It has **no production caller** and did not surface because of the comment-masking mechanism of §7 item 4 — the same mechanism as `mountPreset`. **Adjudicated `by-design`** (§6.1): each CLI entry point creates **at most one query per process** — `apps/cli/src/index.ts:307` (`run`), `:474` (`sdk`), `:644` (`acp`) — the code's own comment at `:304` says the index is a process-private `:memory:` index, and no caller passes a `dbPath` (the default at `packages/session-query/src/file-backed.ts:238` is `:memory:`). The process exit **is** the lifetime boundary, so a close would have no observable effect on any shipped path. Note what the function is: a **process-global destroyer** (`packages/session-query/src/index.ts:51-56` closes a module-level `Set` of connections plus the file-backed ones, so any caller reaching it closes every other caller's handle too). The honest long-term fix — a per-instance `close()` — adds a member to the published `SessionQuery` interface (`:43-46`) and is therefore **M** | `by-design` |
+| `session-query` `closeSessionQueries` (and the legacy opener) has no production caller (D1 §8) | **no** | the name occurs in **6** files, **2** of them non-test: `packages/session-query/src/index.ts:49` (comment) + `:52` (declaration) and `packages/session-query/src/file-backed.ts:88` (**comment**). The other **five are `test/` files**, counted by the rule that counts every other occurrence — whole-word matches of the name: `packages/session-query/test/filebacked.test.ts:10,28`, `query.test.ts:8,11,166`, `tools.test.ts:9,42,58,74`, and **`apps/cli/test/cli.test.ts:17,320,348`**, which the first edition's "four `test/` files" omitted. That fifth file is in an **in-scope** package (`apps/cli`), unlike the other four. The count is wrong; the verdict does not change, because `cli.test.ts` is still a test file and test-only callers are not production callers. It has **no production caller** and did not surface because of the comment-masking mechanism of §7 item 4 — the same mechanism as `mountPreset`. **It also has a sibling invisible for the same entry-only reason**: `closeFileBackedConnections` — declared at `packages/session-query/src/file-backed.ts:89` (the `:91` a brief cites for it is the `openConnections.clear()` line inside its body) — appears in only two files, both non-test — its declaration and `packages/session-query/src/index.ts:55`, which is inside the package that imports it relatively (`:7`) — and it is **not exported from the package entry at all** (`packages/session-query/src/index.ts` imports it, never re-exports it), so class 1, which walks only `packages/*/src/index.ts` entries, cannot test it: §7 item 12's blind spot, with this pair as one of its named instances. **Adjudicated `by-design`** (§6.1): each CLI entry point creates **at most one query per process** — `apps/cli/src/index.ts:307` (`run`), `:474` (`sdk`), `:644` (`acp`) — the code's own comment at `:304` says the index is a process-private `:memory:` index, and no caller passes a `dbPath` (the default at `packages/session-query/src/file-backed.ts:238` is `:memory:`). The process exit **is** the lifetime boundary, so a close would have no observable effect on any shipped path. Note what the function is: a **process-global destroyer** (`packages/session-query/src/index.ts:52-56` closes a module-level `Set` of connections plus the file-backed ones, so any caller reaching it closes every other caller's handle too). The honest long-term fix — a per-instance `close()` — adds a member to the published `SessionQuery` interface (`:43-46`) and is therefore **M** | `by-design` |
 | `guard-approval/src/remember.ts` is not re-exported and has no importer (D1 §8) | **no** | not a finding: `packages/guard-approval/src/index.ts` does not export it, and class 1 walks package entries only. This is the same structural blind spot as §4.3 item 1. **Kept and declared deliberately unwired** (human ruling, 2026-09-15): §6.1 states the reasons — the TUI lists `"remember"` in `NEVER_REGISTERED`, the approval path has no persistent-decision vocabulary, and the entry re-exports three sibling modules while never mentioning this one — and names the module an **input to the replacement frontend**, not a pending task | `by-design` |
 | `sandbox-local/src/runner-failures.ts` is not re-exported, and `exec` never scans `ConfinedArgv.denialSignatures` (D1 §8) | no | the same measurement as §4.3 item 1; one row, not two. **Its verdict follows that row's**: `by-design` (§6.2) — the wiring is the same M-shaped change, and recording it here keeps the two rows from disagreeing | `by-design` |
 
@@ -330,12 +422,19 @@ cheap to measure. Recorded so Phase B does not have to rediscover them.
 
 ### 5.1 How the sample was drawn
 
-**Frame**: the 525 findings minus the 6 rows adjudicated in §4 = **519**
-(the 5 source-list `unused-export` rows `@i-harness/provider#buildWireClient`,
-`@i-harness/plan-mode#withdrawPlanModeTool`,
+**Frame: 519, stated both ways so the arithmetic survives the two rows Task 4 deleted.** At the Phase A
+revision the frame was `525 − 6 = 519` (the 6 being the 5 source-list `unused-export` rows
+`@i-harness/provider#buildWireClient`, `@i-harness/plan-mode#withdrawPlanModeTool`,
 `@i-harness/output-retention#createUnifiedSpillStore`,
 `@i-harness/output-retention#gcSpillStore`,
-`@i-harness/session-persistence#registerUpgrade`, plus the `unread-flag --yes` row).
+`@i-harness/session-persistence#registerUpgrade`, plus the `unread-flag --yes` row). At the Phase B
+revision it is `523 − 4 = 519`: `buildWireClient` and `withdrawPlanModeTool` are no longer *in* the 523
+(Task 4 deleted both — §2.1), so only **four** of those six are still findings to subtract. **The frame
+is 519 at both revisions and the sample arithmetic is unchanged** — but note it is not the *same* 519:
+the Phase B frame is the Phase A frame minus those two rows. The 39-row sample below was drawn against
+the Phase A frame, so two of its 27 class-1 rows (`buildWireClient`, `withdrawPlanModeTool`) are no
+longer in the shipped set; that is recorded here rather than silently re-drawn, because §5.2's result is
+tied to exactly those rows.
 
 **Sample size: 39**, drawn in two parts:
 
@@ -644,7 +743,12 @@ population.
 - **As of this document, the allowlist contains the 6 rows of §6.1 — 4 findings plus 2 adjacent D1 rows —
   and the 13 source-list rows of §6.2, i.e. 19 entries.** Everything else in the 525 is unadjudicated, or
   one of the rows still reported as `still-holds`: §3.3's eight `unconsulted-setting` keys, the
-  `sandbox/mode` pair (§4.1 item 6 and §4.3 item 4), §4.1 item 8, and §4.5's `registerUpgrade`.
+  `sandbox/mode` pair (§4.1 item 6 and §4.3 item 4), and §4.5's `registerUpgrade`.
+- **§4.1 item 8 is `by-design` and deliberately carries no allowlist entry.** Task 5 discharged it by
+  **narrowing the declarations** — dropping three `export` keywords (§8's bucket-B method) — not by
+  granting an exception, so it needs no reason sentence here; the row's own cell carries it. The 14
+  `by-design` rows of §4 are therefore 14 rows and 19 allowlist entries, not two figures for one thing:
+  §4.1 item 8 is the one `by-design` row absent from this allowlist.
 - **None of the 507 unadjudicated class-1 rows is allowlisted**, and the 17 `@i-harness/sdk` rows are
   among those 507 — §6.3 only *proposes* allowlisting them and is not in force (see its status line).
   Absence from this allowlist is not a claim that a row is a defect; it is a claim that nobody has
@@ -675,9 +779,7 @@ imported and called.
 
 **2. It did not check reachability *within* a call graph.** There is no call graph anywhere in it. A
 declaration whose only consumer is a function that is itself never called is reported as **used**.
-That is why `estimateAssemblyOverhead` / `bindAuthRefreshStatus` (§4.1 item 8) are absent from the
-525 while being unreachable from outside their package: they are called, inside a module nothing
-outside the package can reach.
+That is why the three names of §4.1 item 8 are absent from the 525 while being unreachable from outside their package: they are called, inside a module nothing outside the package can reach.
 
 **3. Named re-export statements mask genuinely dead exports — a false negative, safe direction.**
 `export { X } from "./mod.ts"` makes `X` reachable from the barrel, and `originOf`
@@ -712,7 +814,8 @@ counts.
 is not reported either. And `core-session`'s `migrate` (§4.2 item 1) is hidden by an unrelated
 private `migrate` in `session-persistence`. **Any rule narrow enough to catch these reintroduces the
 original defect**: the module-scoping that made the entry-point scan report a name the entry itself
-imports, re-exports and calls (see the `EntryCallSite` self-test case, `check-reachability.mjs:767-775`).
+imports, re-exports and calls (see the `EntryCallSite` fixture and the comment that states its hazard,
+`check-reachability.mjs:761-766`).
 
 **6. Four symbols whose only in-repo mention is a comment stay unreported**, and comments cannot
 simply be stripped. Each is listed with the module that **declares** it (so the export edge exists)
@@ -798,3 +901,148 @@ failures, one measured reader, one structural wrong-union argument, and one clas
 rewritten scanners whose only warrant is the self-test (**18 cases** since M1's fix wave, five of which
 share an assertion with a sibling; §5.3) and the mutation proofs Tasks 2–4 recorded. **M2 must check the
 self-test and the §2 digest before it trusts any comparison against this baseline.**
+
+---
+
+**Items 12–15 are new in this edition.** Each was found by **re-measurement during Phase B**, and each is
+recorded as a **named M2 requirement** rather than a defect in this baseline: the ratchet's scope is M2's,
+and without them the rows they hide — and the siblings of those rows — regrow.
+
+**12. Re-exporting through a package entry does not report the entry's re-exported names — it can
+*add* rows, and the entry's own local `export { … }` list is unreportable entirely.** This is the
+**local re-export blind spot**, and it is a second reason class 1's 510 is a **lower bound**.
+
+- **The mechanism.** When the entry itself declares the name, `originOf`
+  (`scripts/audit/check-reachability.mjs:289-306`) credits the entry as the origin, and the used-scan
+  excludes origin modules (`:364`, `!origins.has(f.rel)`), so the entry is scanned through
+  `withoutReExportStatements` (`:340-347`, called at `:361`) — a deliberate and correct rule
+  (`EntryCallSite`, `:761-775`). The failure is at `:296-297`: for an `export { X }` entry with **no
+  `from` clause**, `resolveModule` yields no target, so the code does `origins.add(file.rel)` — **the
+  entry becomes its own origin**, and the module that actually declares `X` is never added to `origins`
+  and therefore never excluded from the used-scan. The name then self-satisfies at `:364` (`prod.some(…,
+  !origins.has(f.rel) && word.test(…))`): the file that
+  declares it is scanned as an ordinary production file, finds its own declaration, and reports "used".
+  **A name re-exported from an entry through a local `export { … }` list is unreportable by
+  `scanUnusedExports`.**
+- **Measured at `637cdd7`.** Of the **68** `packages/*/src/index.ts` entries, **6 carry a local
+  `export { … }` list** (an export list with no `from` clause) — the entries of `tui-core`, `attachment`,
+  `core-agent`, `fs-lock`, `sandbox-policy` and `session-persistence`. Those six lists name **39 distinct
+  names**, and **all 39 are declared elsewhere** — in a sibling module the entry re-exports from — so
+  **every one of the 39 is unreportable** by class 1. Counted by the module that **declares** the name:
+  `tui-core` **31**, `fs-lock` **2**, `sandbox-policy` **2**, `session-persistence` **2**
+  (`SessionWriteBehind`, `SessionWriteBehindOptions`, both from
+  `packages/session-persistence/src/write-behind.ts`), `attachment` **1** (`ImageMediaType`, declared in
+  `packages/core-session/src/index.ts`) and `core-agent` **1** (`ReasoningEffort`, declared in
+  `packages/llm-seam/src/index.ts`). **31 + 2 + 2 + 2 + 1 + 1 = 39.** A working figure of 38 for this
+  blind spot is a count under a slightly different attribution rule; this document's rule is stated
+  above, and under it the number is 39 of 39.
+- **The ask for M2.** Either **follow a local re-export through to the module that declares the name**
+  — resolve `export { X }` against the entry's own imports and re-exports before falling back — or, at
+  minimum, **refuse to credit the entry as its own origin** when it does not declare the name, so the
+  declaring module is excluded from the used-scan and the row is emitted. This is a scanner change, not
+  a code change, and it belongs to M2's ratchet scope.
+- **Consequence for this document: 510 `unused-export` rows is a lower bound for a second reason.**
+  §3.1 already records class 4's count as a lower bound; class 1 has a different one here, and the
+  paragraph in §3.1 states only the first. 510 is a floor on the number of unused export edges in this
+  tree, not the number.
+
+**13. The entry-only blind spot: a file under `packages/*/src/` that its entry never mentions is
+invisible to all five classes, and re-exporting it is *not* a remedy.** Class 1 walks only
+`packages/*/src/index.ts` entries (`check-reachability.mjs:359`), so any such file — and every name it
+declares — is invisible to all five scanner classes: classes 2–5 are anchored on file-name patterns and
+specific constructs, and none of them enumerates `packages/*/src/**/*.ts`. **Three instances are now
+known**, one of them found during Phase B:
+
+| invisible file / name | why it is invisible |
+|---|---|
+| `packages/guard-approval/src/remember.ts` | the package entry (`packages/guard-approval/src/index.ts`) never mentions it — not imported, not re-exported (§4.5, §6.1). It carries `BANNED_PREFIX_PATTERNS`, the tree's **only** statement that a shell or interpreter can never be "remembered" |
+| `packages/sandbox-local/src/runner-failures.ts` | the entry exports exactly `LocalSandboxConfig`, `createLocalSandbox`, `probeBwrap` and never mentions this file, so `classifyDenial` (§4.3 item 1) has no row |
+| `closeFileBackedConnections` (`packages/session-query/src/file-backed.ts:89`) | the name is not exported from the package entry at all, and its only caller is `packages/session-query/src/index.ts:55` — inside the package. Found during Phase B while correcting §4.5 row 2; a **sibling of a row that *is* recorded**, which is the shape M2 should expect to keep finding |
+
+- **The ask for M2.** A scanner class that enumerates `packages/*/src/**/*.ts` and reports every such
+  file with **no inbound reference from either its entry or any other production file** — i.e. the file
+  is reachable from nothing. This is M2's, not a fix here: the rows and their siblings regrow without
+  it, and each of the three instances above is a live symbol, not dead code.
+- **Re-exporting is NOT a remedy — measured.** Re-exporting such a file's name through the package entry
+  to "clear the row" makes the ratchet **worse**, not better. The `export { X } from "./file.ts"` line
+  becomes a traversable export-list entry, so `originOf` (`check-reachability.mjs:294-299`) follows it
+  through `resolveModule` (`:296`) and adds the **real declaring module** to `origins`. Because the
+  used-scan excludes every origin module (`:364`, `!origins.has(f.rel)`), the declaring module is no
+  longer scanned for the name — exactly the exclusion that makes class 1 correct when a name *is* a
+  genuine export — so the name is now reported as an unused export **it is not**. Nothing about the code
+  changed; the re-export manufactured the row. Probe through the real scanner: **1 finding without the
+  re-export and 2 with it** for the probed pair. Re-measured in this task for the `classifyDenial` case
+  (`packages/sandbox-local`): adding `export { classifyDenial } from "./runner-failures.ts"` to the
+  package entry moves the total **523 → 524**, adding `@i-harness/sandbox-local#classifyDenial` and
+  removing nothing. (The citation the probe runs through is `check-reachability.mjs:359-365` — the entry
+  selection, the origin exclusion and the `findings.push` that all three halves of the mechanism live
+  in.)
+- Recorded so the remedy is not discovered twice: **fix the scanner, not the re-export.**
+
+**14. No scanner class covers argument routing, so Task 3's defect class is invisible to the gate
+forever.** The class is "a flag becomes a prompt": a value-taking or boolean token that a parser fails
+to strip is passed through as task text. Nothing in the five classes looks at argv — class 3 asks
+whether a *declared* flag is ever *read* (`flags.yes` assigned and never read, §3.2 item 2), which is a
+different question from whether the router routes it correctly.
+- **The structural reason is that the `run` path parses its argv twice.** `apps/cli/src/index.ts:170-223`
+  reads values (`--sandbox` at `:208`, the settings load that follows), and `:331-335` **re-derives which
+  tokens to strip** by filtering the known flags and their values out of the same argv before the
+  remaining tokens become the task. Two passes over one argv is a drift surface by construction: adding a
+  flag to the first pass and not the second is exactly how `--no-compact` became a prompt (Task 3,
+  §4.4 item 4) and how `run --help` reached `runHeadless`.
+- **Task 3's tests are the only protection.** `apps/cli/test/run-flag-routing.test.ts` pins the guard
+  and the value-skip clause; nothing in the baseline's five classes would have caught the defect or
+  would catch its reintroduction.
+- **The shape that cannot drift again** — named as the direction, **not required**: a **single
+  declarative flag table** (one entry per flag: name, takes-value, …) that both the value-reading pass
+  and the token-stripping pass consume, so there is one place to add a flag and no second list to forget.
+  M2 should hold the tests until that exists.
+- This is why §3's row count is not a defect count for this class: **the gate would report zero rows for
+  a router that sends every flag into the prompt.**
+
+**15. The cross-package collision false negative has a *worked* instance, not just a structural
+limit — and a comment written to *explain* code can hide a finding about it.** §7 item 5 records the
+collision mechanism in the abstract (`activeTokens`, `AgentTaskStatus`, `migrate`); this is it
+happening during Phase B, measured.
+- **The instance.** During Task 4 a **comment** that named `CreateProviderRuntimeOptions` suppressed
+  that package's **own** row: the expected count of **523** came back **522**, and the missing row was
+  `@i-harness/provider-runtime#CreateProviderRuntimeOptions`. The comment mentioned the name in a
+  production file other than the declaring module, which is enough for the used-scan (`:364`'s word test
+  over `f.text`); the row disappeared without any code changing.
+- **The general hazard, stated for M2.** A comment written to **explain** code — a contract note, a
+  "why this exists" paragraph, a cross-reference — can hide a finding about the thing it explains. The
+  suppression is not a property of dead code or of the comment's intent; it is a property of the name
+  appearing in a production file. §7 item 6 records four symbols hidden this way and §4.5 two more;
+  this instance is the one where the masking comment was **added during the milestone**, and it is why
+  a falling row count must never be read as progress without the §2 digest and the self-test (§5.3).
+
+---
+
+## 8. A warning about this milestone's own plan text
+
+**Do not cite the Phase B plan's Step 2/Step 3 as the shipped method.** The plan at
+`docs/superpowers/plans/2026-09-15-m1-phase-b-wire-the-unwired.md:434-435` prescribes the **un-export
+method** — drop the `export` keyword at `packages/provider/src/index.ts:762` and
+`packages/plan-mode/src/index.ts:36` — and its brief repeats it at `:3` and `:23-24`.
+
+**Task 4 found that method unsatisfiable for bucket-A rows, and the controller superseded it.** A
+bucket-A row is a **dead** declaration: nothing references it, inside its module or out (§5.2's bucket
+definition). Dropping only the `export` keyword leaves the declaration referenced by nothing at all,
+which is a **`TS6133` unused-declaration error** under this repo's compiler settings — `noUnusedLocals`
+is `true` at `tsconfig.base.json:9` — so the "fix" does not typecheck. For a bucket-A row the only
+satisfiable remediation is **deletion**, which is what shipped: `c5652c7` un-exported both names,
+`24e9395` then deleted the declarations and the case that called `buildWireClient` (§4.1 items 3 and 5).
+
+So a later reader has two different dispositions to keep apart, and the plan text records only the first:
+
+| row shape | the method that ships | example |
+|---|---|---|
+| **bucket A** — nothing references the name anywhere | **delete the declaration** (un-exporting alone is `TS6133`) | `buildWireClient`, `withdrawPlanModeTool` — Task 4, §4.1 items 3 and 5 |
+| **bucket B** — referenced in **code inside its declaring module** | **drop the `export` keyword**, keep the declaration | the three names of §4.1 item 8 — Task 5 |
+
+**The un-export method is still correct for bucket B, and only for bucket B.** §5.2 measured that 26 of
+the 27 sampled class-1 rows are bucket B, which is why "drop the `export` keyword" is the right
+remediation for most class-1 rows (§5.2) *and* why it would silently fail to typecheck on the bucket-A
+minority. A future fix wave that reads the plan's Step 2/3 and applies it row-by-row will hit a red
+typecheck on every bucket-A row it touches; the plan's own text was never updated to say so, and this
+section is the correction of record.
