@@ -391,7 +391,7 @@
           "evidence": [
             "packages/session-executor/src/assembly.ts:1",
             "packages/session-executor/src/assembly.ts:259",
-            "packages/session-executor/src/assembly.ts:702"
+            "packages/session-executor/src/assembly.ts:709"
           ]
         },
         {
@@ -425,8 +425,8 @@
           "decision": "Ownership of teardown is explicit: the assembly disposes what it mounted (mcp/lsp/team handles, skills, workflow, terminal, win32 ACL sandbox) but NEVER closes the coordinator or the telemetry stream — the owner does. Plugin MCP servers degrade with a warn + pluginMcpResults map, while core mounts fail loud.",
           "rationale": "Shared resources must outlive one session; a plugin server this host cannot serve must not take the whole session down.",
           "evidence": [
-            "packages/session-executor/src/assembly.ts:697",
-            "packages/session-executor/src/assembly.ts:506"
+            "packages/session-executor/src/assembly.ts:704",
+            "packages/session-executor/src/assembly.ts:513"
           ]
         },
         {
@@ -438,7 +438,7 @@
           ]
         }
       ],
-      "failurePolicy": "Fail-closed at the boundaries: missing/unconfigured model throws ModelUnavailableError (packages/session-executor/src/assembly.ts:262), submit rejects when the service is closed or the session is closing (packages/session-executor/src/service.ts:316), an unknown task id throws instead of silently succeeding (packages/session-executor/src/service.ts:594), and a lane drain rejection becomes the submit rejection (packages/session-executor/src/service.ts:397). Fail-open only for teardown: every unmount/dispose is individually try/catch'd and never throws (packages/session-executor/src/assembly.ts:702, packages/session-executor/src/service.ts:542).",
+      "failurePolicy": "Fail-closed at the boundaries: missing/unconfigured model throws ModelUnavailableError (packages/session-executor/src/assembly.ts:262), submit rejects when the service is closed or the session is closing (packages/session-executor/src/service.ts:316), an unknown task id throws instead of silently succeeding (packages/session-executor/src/service.ts:594), and a lane drain rejection becomes the submit rejection (packages/session-executor/src/service.ts:397). Fail-open only for teardown: every unmount/dispose is individually try/catch'd and never throws (packages/session-executor/src/assembly.ts:709, packages/session-executor/src/service.ts:542).",
       "events": [
         "user/message (CONSUMED via subscribe — rewind recorder anchor)",
         "turn/end (CONSUMED via subscribe — rewind finalize + coordinator flush trigger)",
@@ -469,7 +469,7 @@
       "evidence": [
         "packages/session-executor/src/assembly.ts:86",
         "packages/session-executor/src/assembly.ts:259",
-        "packages/session-executor/src/assembly.ts:591",
+        "packages/session-executor/src/assembly.ts:598",
         "packages/session-executor/src/service.ts:150"
       ]
     },
@@ -540,8 +540,9 @@
           "decision": "Ownership lease is opt-in (lock.enabled defaults false; the CLI wiring turns it on), mutating paths run under it while readers (list/getDocument/profile) never lock, acquisition is single-flight per session, and ALL backend mutations for one session are linearized through a per-session operation chain whose gate promise never rejects.",
           "rationale": "Two concurrent mutating paths in one process would otherwise conflict against each other's OS-level exclusive lock and fail closed spuriously.",
           "evidence": [
-            "packages/session-persistence/src/index.ts:240",
-            "packages/session-persistence/src/index.ts:277",
+            "packages/session-persistence/src/index.ts:254",
+            "packages/session-persistence/src/index.ts:271",
+            "packages/session-persistence/src/index.ts:276-288",
             "packages/session-persistence/src/index.ts:324"
           ]
         },
@@ -1157,7 +1158,7 @@
           "rationale": "The prompt is per-assembly configuration; the event is per-session state.",
           "evidence": [
             "packages/plan-mode/src/index.ts:5",
-            "packages/session-executor/src/assembly.ts:597"
+            "packages/session-executor/src/assembly.ts:604"
           ]
         }
       ],
