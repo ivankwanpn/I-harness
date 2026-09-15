@@ -6,7 +6,7 @@
 // output-spill/plan-mode/guardian/instructions/runtime-context/mcp-oauth —
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
-import { createSession, Inbox, subscribe, type Session } from "@i-harness/core-session"
+import { append, createSession, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
@@ -335,6 +335,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // than tracking indices keeps `resolve`'s contract unchanged.
   const policyBase = opts.policySession ?? session
   const policyFloor = policyBase.events.length
+  // M1 Phase B: the CONSTRUCTION-TIME producer. Until this line the
+  // `sandbox/mode` event had zero production producers -- 14 of its 17
+  // occurrences were test `append(…)` calls -- so `effectiveSandboxMode`'s
+  // non-default branch could never be taken and a host that stated the mode it
+  // was starting under wrote nothing at all. The two session-executor tests
+  // already append this event "as a HOST action, not the ladder's", and say so
+  // in source; this makes the assembly do what they simulate.
+  //
+  // Appended ABOVE `policyFloor` deliberately: this is THIS run's decision, not
+  // restored history, so the resume-escalation guard documented just above is
+  // untouched. The ladder is still forbidden from producing this event
+  // (call-policy.ts documents that; sandbox-escalation.test.ts pins it).
+  if (opts.sandbox !== undefined) append(policyBase, { type: "sandbox/mode", mode: opts.sandbox })
   const sandboxPolicyNow = () =>
     sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) } })
   // M62: the terminal is mounted HERE, not at the top of the environment,

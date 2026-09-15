@@ -184,6 +184,41 @@ describe("sandbox policy is resolved per call", () => {
     console.log(`scan over ${session.events.length} events: ${perCall.toFixed(3)} ms/call`)
     expect(perCall).toBeLessThan(2)
   })
+
+  it("the assembly records the mode it starts under, so the resolver has a producer", async () => {
+    const base = mkdtempSync(join(tmpdir(), "i-harness-producer-"))
+    const workspace = join(base, "ws")
+    mkdirSync(workspace, { recursive: true })
+    const session = createSession()
+    const assembly = await createSessionAssembly({
+      workspace,
+      session,
+      model: modelWritingTargets([]),
+      sandbox: "read-only",
+    })
+    try {
+      const modes = session.events.filter((e) => e.type === "sandbox/mode")
+      expect(modes).toHaveLength(1)
+      expect(modes[0]).toMatchObject({ type: "sandbox/mode", mode: "read-only" })
+    } finally {
+      await assembly.dispose()
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it("negative control: an assembly with no sandbox option writes no sandbox/mode event", async () => {
+    const base = mkdtempSync(join(tmpdir(), "i-harness-producer-none-"))
+    const workspace = join(base, "ws")
+    mkdirSync(workspace, { recursive: true })
+    const session = createSession()
+    const assembly = await createSessionAssembly({ workspace, session, model: modelWritingTargets([]) })
+    try {
+      expect(session.events.filter((e) => e.type === "sandbox/mode")).toHaveLength(0)
+    } finally {
+      await assembly.dispose()
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
 })
 
 /**

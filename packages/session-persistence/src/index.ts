@@ -220,6 +220,20 @@ registerEventType("command/done")
 // SessionFormatUnsupportedError. NOT `ignorable: true`: load() drops ignorable
 // events, which would silently resurrect the rewound turns (probe D2).
 registerEventType("rewind/point")
+// M1 Phase B (Task 1): the sandbox mode marker (core-session union member,
+// `packages/core-session/src/index.ts:43`). SAME load-gate defect class as
+// `rewind/point` directly above, and it stayed latent only because the event
+// had ZERO production producers: `createSessionAssembly` now appends it at
+// construction whenever the host passes a `sandbox` option, so without this
+// registration the first producer makes every sandboxed session unloadable —
+// web-host `GET /api/sessions/:id/events` answers 500 and CLI `--resume`, TUI
+// resume, `--attach` and fork all fail with SessionFormatUnsupportedError.
+// NOT `ignorable: true`: core-session's own test asserts this event is "durable
+// and replayable" across the JSONL round-trip (`packages/core-session/test/
+// session.test.ts:483`), and load() DROPS ignorable events — which would erase
+// the record of the mode a session actually ran under. It is registered, not
+// dropped, so `effectiveSandboxMode` still sees the history it was built for.
+registerEventType("sandbox/mode")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
