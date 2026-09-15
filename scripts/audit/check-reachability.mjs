@@ -76,6 +76,9 @@ function buildFixture() {
   put("packages/epsilon/src/index.ts", 'export * from "./impl"\n')
   put("packages/epsilon/src/use.ts", 'import { ReExported } from "./impl"\nReExported()\n')
 
+  // index regression: a dot-directory is gitignored scratch, never repo source.
+  put("packages/alpha/.hidden/sneaky.ts", "export function HiddenOrphan() { return 1 }\n")
+
   return dir
 }
 
@@ -205,6 +208,16 @@ SELF_TEST_CASES.push({
   },
 })
 
+SELF_TEST_CASES.push({
+  name: "index: a dot-directory is never walked",
+  expect: [],
+  run(root) {
+    return indexTree(root)
+      .map((f) => f.rel)
+      .filter((rel) => rel.split("/").includes(".hidden"))
+  },
+})
+
 function runSelfTest() {
   const root = buildFixture()
   let ok = 0
@@ -242,7 +255,10 @@ function collectTs(dir, out = []) {
   let ents
   try { ents = readdirSync(dir, { withFileTypes: true }) } catch { return out }
   for (const e of ents) {
-    if (e.name === "node_modules" || e.name === ".git" || e.name === "dist" || e.name === "lib") continue
+    if (e.name === "node_modules" || e.name === "dist" || e.name === "lib") continue
+    // A dot-directory is gitignored scratch or metadata, never repo source:
+    // walking .superpowers/ made the file count track scratch, not the repo.
+    if (e.name.startsWith(".") && e.isDirectory()) continue
     const full = join(dir, e.name)
     if (e.isDirectory()) collectTs(full, out)
     else if (/\.tsx?$/.test(e.name)) out.push(full)
