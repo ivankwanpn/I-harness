@@ -72,12 +72,30 @@ function buildFixture() {
   put("packages/epsilon/src/impl.ts", [
     "export function ReExported() { return 1 }",
     "export function UnusedReExport() { return 2 }",
+    "export type TypeOnlyExport = string",
   ].join("\n"))
-  put("packages/epsilon/src/index.ts", 'export * from "./impl"\n')
+  put("packages/epsilon/src/index.ts", 'export * from "./impl"\nexport { type TypeOnlyExport } from "./impl"\n')
   put("packages/epsilon/src/use.ts", 'import { ReExported } from "./impl"\nReExported()\n')
 
   // index regression: a dot-directory is gitignored scratch, never repo source.
   put("packages/alpha/.hidden/sneaky.ts", "export function HiddenOrphan() { return 1 }\n")
+
+  // class 1 regression: a named re-export belongs to its DECLARER, not to the
+  // file that re-exports it -- and a barrel that merely MENTIONS the name is
+  // not an origin for it, or the mention that makes it used would be silenced.
+  put("packages/eta/src/models.ts", [
+    "export type CatalogDefault = { a: number }",
+    "export type CatalogShadowed = { b: number }",
+  ].join("\n"))
+  put("packages/eta/src/types.ts", 'export type { CatalogDefault } from "./models.ts"\n')
+  put("packages/eta/src/notes.ts", 'import type { CatalogShadowed } from "./models.ts"\ntype Notes = CatalogShadowed\n')
+  put("packages/eta/src/index.ts", [
+    'export * from "./types.ts"',
+    'export * from "./models.ts"',
+    'export * from "./notes.ts"',
+    'export { type CatalogShadowed } from "./models.ts"',
+    "",
+  ].join("\n"))
 
   return dir
 }
@@ -87,21 +105,35 @@ const SELF_TEST_CASES = []   // { name, run(fixtureRoot) -> string[] } expected 
 
 // ------------------------------------------------- class 1: unused export
 const EXPORT_DECL = /^export\s+(?:async\s+)?(?:function|const|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm
-const EXPORT_LIST = /^export\s*(?:type\s*)?\{([^}]*)\}/gm
-
+const EXPORT_LIST = /^export\s*(?:type\s*)?\{([^}]*)\}(?:\s*from\s*["']([^"']+)["'])?/gm
 const EXPORT_STAR = /^export\s*\*\s*from\s*["']([^"']+)["']/gm
 
-function exportedNames(text) {
+function exportDeclNames(text) {
   const names = new Set()
   for (const m of text.matchAll(EXPORT_DECL)) names.add(m[1])
+  return [...names]
+}
+
+/** Export-list entries, each paired with the module it is re-exported FROM
+ *  (null when the name is local to the file). A leading `type` / `typeof` is a
+ *  keyword, not part of the name: keeping it produced subjects like
+ *  `#type ServerInfo`, which no word-boundary match can ever find. */
+function exportListEntries(text) {
+  const out = []
   for (const m of text.matchAll(EXPORT_LIST)) {
     for (const part of m[1].split(",")) {
-      const t = part.trim()
+      const t = part.trim().replace(/^(?:type|typeof)\s+/, "")
       if (!t) continue
       const alias = t.split(/\s+as\s+/)
-      names.add((alias[1] ?? alias[0]).trim())
+      out.push({ name: (alias[1] ?? alias[0]).trim(), from: m[2] ?? null })
     }
   }
+  return out
+}
+
+function exportedNames(text) {
+  const names = new Set(exportDeclNames(text))
+  for (const e of exportListEntries(text)) names.add(e.name)
   return [...names]
 }
 
@@ -124,33 +156,63 @@ function resolveModule(spec, fromRel, byRel) {
   return null
 }
 
-/** Exports of `file`, following `export * from "./sibling"` into the sibling
- *  and recursing. Returns name -> the set of rel paths that DECLARE it, because
- *  a declaration site is not a use of its own name: without that, following a
- *  re-export would mark the whole re-exported surface used. `seen` terminates a
- *  re-export cycle. */
-function exportedNamesDeep(file, byRel, seen = new Set([file.rel])) {
-  const names = new Map()
-  const add = (name, rel) => {
-    if (!names.has(name)) names.set(name, new Set())
-    names.get(name).add(rel)
+/** The rel paths that DECLARE `name`, as exported by `file`. A re-exporter is
+ *  an importer, not a declarer: `export { X } from "./m"` inherits X's origin
+ *  from `./m` rather than claiming it, and `export *` is searched the same way.
+ *  Returns EMPTY when this file does not account for the name at all -- it
+ *  neither declares it, lists it, nor reaches it through a re-export. An
+ *  unaccounted name must not become an origin: doing so silences the very file
+ *  that mentions it, which turned a barrel containing one comment into a false
+ *  positive. The caller decides what an unaccounted name falls back to. */
+function originOf(file, name, byRel, seen = new Set()) {
+  if (exportDeclNames(file.text).includes(name)) return new Set([file.rel])
+  if (seen.has(file.rel)) return new Set()
+  seen.add(file.rel)
+  const origins = new Set()
+  for (const e of exportListEntries(file.text)) {
+    if (e.name !== name) continue
+    const target = e.from ? resolveModule(e.from, file.rel, byRel) : null
+    if (!target) { origins.add(file.rel); continue }
+    for (const o of originOf(target, name, byRel, seen)) origins.add(o)
   }
-  for (const name of exportedNames(file.text)) add(name, file.rel)
+  for (const m of file.text.matchAll(EXPORT_STAR)) {
+    const target = resolveModule(m[1], file.rel, byRel)
+    if (!target || seen.has(target.rel)) continue
+    for (const o of originOf(target, name, byRel, seen)) origins.add(o)
+  }
+  return origins
+}
+
+/** Exports of `file`, following `export * from "./sibling"` into the sibling and
+ *  recursing, each name paired with the module(s) that DECLARE it. A name that
+ *  resolves to no declaring module falls back to `file`, so an unresolvable
+ *  chain still has an origin instead of making every mention look legitimate.
+ *  `seen` terminates a re-export cycle. */
+function exportedNamesDeep(file, byRel, seen = new Set([file.rel])) {
+  const origins = new Map()
+  const add = (name, rels) => {
+    if (!origins.has(name)) origins.set(name, new Set())
+    for (const r of rels) origins.get(name).add(r)
+  }
+  for (const name of exportedNames(file.text)) {
+    const o = originOf(file, name, byRel)
+    add(name, o.size ? o : new Set([file.rel]))
+  }
   for (const m of file.text.matchAll(EXPORT_STAR)) {
     const target = resolveModule(m[1], file.rel, byRel)
     if (!target || seen.has(target.rel)) continue
     seen.add(target.rel)
-    for (const [name, origins] of exportedNamesDeep(target, byRel, seen)) {
-      for (const o of origins) add(name, o)
-    }
+    for (const [name, rels] of exportedNamesDeep(target, byRel, seen)) add(name, rels)
   }
-  return names
+  return origins
 }
 
-/** A name is "used" when some NON-TEST file other than the one that DECLARES
- *  it mentions it as a word. Package scoping is deliberately absent: a symbol
- *  imported relatively and called inside its own package is used on a
- *  production path just as much as one imported by a sibling package. */
+/** A name is "used" when some NON-TEST file -- other than the entry being
+ *  audited and other than the module(s) that DECLARE it -- mentions it as a
+ *  word. Package scoping is deliberately absent: a symbol imported relatively
+ *  and called inside its own package is used on a production path just as much
+ *  as one imported by a sibling package. The entry is excluded because its own
+ *  export statement names everything it re-exports without using any of it. */
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
@@ -159,7 +221,7 @@ function scanUnusedExports(files) {
     const pkg = "@i-harness/" + entry.rel.split("/")[1]
     for (const [name, origins] of exportedNamesDeep(entry, byRel)) {
       const word = new RegExp(`\\b${name.replace(/[$]/g, "\\$")}\\b`)
-      const used = prod.some((f) => !origins.has(f.rel) && word.test(f.text))
+      const used = prod.some((f) => f.rel !== entry.rel && !origins.has(f.rel) && word.test(f.text))
       if (!used) findings.push({ kind: "unused-export", subject: `${pkg}#${name}`, evidence: entry.rel })
     }
   }
@@ -204,7 +266,7 @@ SELF_TEST_CASES.push({
   run(root) {
     return scanUnusedExports(indexTree(root))
       .map((f) => f.subject)
-      .filter((s) => s.startsWith("@i-harness/epsilon#"))
+      .filter((s) => s === "@i-harness/epsilon#ReExported" || s === "@i-harness/epsilon#UnusedReExport")
   },
 })
 
@@ -215,6 +277,26 @@ SELF_TEST_CASES.push({
     return indexTree(root)
       .map((f) => f.rel)
       .filter((rel) => rel.split("/").includes(".hidden"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: a named re-export is attributed to its declarer",
+  expect: [],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/eta#"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: an inline type modifier does not leak into the subject",
+  expect: ["@i-harness/epsilon#TypeOnlyExport", "@i-harness/epsilon#UnusedReExport"],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/epsilon#"))
   },
 })
 
