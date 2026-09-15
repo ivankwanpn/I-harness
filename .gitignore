@@ -50,3 +50,8 @@ desktop.ini
 
 # git worktrees（區域隔離工作區）
 .worktrees/
+
+# Machine-local audit source roots (see scripts/audit/lib-union.mjs).
+# The committed defaults describe the original workstation; every other
+# machine names its own trees here instead of editing tracked files.
+scripts/audit/source-paths.local.json
