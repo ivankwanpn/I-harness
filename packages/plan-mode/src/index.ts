@@ -33,6 +33,19 @@ export function ensurePlanModeTool(tools: ToolRegistry, session: Session): void 
   for (const tool of createPlanModeTools(session)) tools.register(tool)
 }
 
-export function withdrawPlanModeTool(tools: ToolRegistry): void {
+// M1 Phase B Task 4: the withdraw half of the seam. Nothing in the tree calls it,
+// and nothing should. The tool registry is created inside the session assembly and
+// dies with it, `packages/session-executor/src/assembly.ts` wires the ensure half
+// only, plan-mode OFF is a session-log event rather than a registry mutation
+// (`exitPlanMode` above), and the upstream design keeps `exit_plan_mode` registered
+// while plan mode is inactive so the request tool catalog stays stable. Wiring this
+// would be the wrong fix, so the declaration stays as the recorded seam and only its
+// export edge goes -- the reachability row `@i-harness/plan-mode#withdrawPlanModeTool`.
+function withdrawPlanModeTool(tools: ToolRegistry): void {
   tools.unregister("exit_plan_mode")
 }
+
+// Kept only so `noUnusedLocals` (tsconfig.base.json:9), which cannot express a
+// deliberately unread declaration, accepts the record above. Delete this line and
+// the function together if the seam is ever wired or abandoned.
+void withdrawPlanModeTool
