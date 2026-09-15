@@ -185,10 +185,10 @@
           }
         ],
         "evidence": [
-          "packages/session-executor/src/assembly.ts:259",
+          "packages/session-executor/src/assembly.ts:267",
           "packages/session-executor/src/service.ts:241-269",
           "packages/session-executor/src/service.ts:315",
-          "packages/session-executor/src/assembly.ts:709"
+          "packages/session-executor/src/assembly.ts:894-903"
         ],
         "modules": [
           "session-executor",
@@ -624,7 +624,7 @@
         "evidence": [
           "packages/core-agent/src/index.ts:130",
           "packages/core-agent/src/index.ts:324-325",
-          "packages/session-executor/src/assembly.ts:628-638",
+          "packages/session-executor/src/assembly.ts:801-823",
           "packages/session-executor/src/service.ts:256-258",
           "packages/tui/src/backend/embedded.ts:969-980",
           "apps/cli/src/index.ts:424-441",
@@ -766,7 +766,7 @@
           "packages/provider/src/index.ts:117-158",
           "packages/compaction/src/config.ts:151",
           "packages/compaction/src/config.ts:112",
-          "packages/session-executor/src/assembly.ts:624-643"
+          "packages/session-executor/src/assembly.ts:801-828"
         ],
         "modules": [
           "provider",
@@ -1499,7 +1499,7 @@
         "evidence": [
           "packages/plan-mode/src/index.ts:10-21",
           "packages/plan-mode/src/index.ts:31",
-          "packages/session-executor/src/assembly.ts:604"
+          "packages/session-executor/src/assembly.ts:835"
         ],
         "modules": [
           "plan-mode",
@@ -1908,7 +1908,7 @@
         "evidence": [
           "packages/preset/src/index.ts:26-63",
           "packages/preset/src/default.ts:1-52",
-          "packages/session-executor/src/assembly.ts:599-609"
+          "packages/session-executor/src/assembly.ts:752-778"
         ],
         "modules": [
           "preset",
