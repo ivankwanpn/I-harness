@@ -343,7 +343,7 @@ that move into `already-fixed` instead. Phase B moved **eight** of the 22 verdic
   module-private declarations rather than wiring (`06d684c`).
 
 The arithmetic is stated so it can be checked against the tables rather than against this paragraph:
-**Phase A was `2 / 10 / 10`** — its own tally line, which the first edition of this section carried and
+**Phase A was `2 / 10 / 10`** — its own tally line, which the edition before Task 6's carried, and
 Task 6 replaced. Phase B moved eight rows **out of Phase A's `still-holds` 10**, and the two bullets
 above are those eight: three became `already-fixed` (**2 + 3 = 5**) and five became `by-design`
 (**10 + 5 = 15**), leaving **10 − 8 = 2** still holding. **5 + 2 + 15 = 22**, the row count §4 opens
