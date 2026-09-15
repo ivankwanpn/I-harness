@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { resolve as resolvePath } from "node:path"
 import { createSession, append } from "@i-harness/core-session"
+import type { SessionEvent } from "@i-harness/core-session"
 import { SANDBOX_MODES, createSandboxPolicy, effectiveSandboxMode, renderPolicyContext } from "../src/index.ts"
 
 describe("SANDBOX_MODES", () => {
@@ -28,6 +29,19 @@ describe("effectiveSandboxMode", () => {
     const s = createSession()
     append(s, { type: "sandbox/mode", mode: "read-only", source: "delegation" })
     expect(effectiveSandboxMode(s.events)).toBe("read-only")
+  })
+
+  it("ignores a mode outside the vocabulary instead of returning it", () => {
+    const events = [
+      { type: "sandbox/mode", mode: "read-only" },
+      { type: "sandbox/mode", mode: "host-root" as never },
+    ] as unknown as SessionEvent[]
+    expect(effectiveSandboxMode(events)).toBe("read-only")
+  })
+
+  it("returns undefined when the only mode is out of vocabulary", () => {
+    const events = [{ type: "sandbox/mode", mode: "host-root" as never }] as unknown as SessionEvent[]
+    expect(effectiveSandboxMode(events)).toBeUndefined()
   })
 })
 
