@@ -736,15 +736,6 @@ export function buildModelClient(profile: ProviderProfile, model?: string, extra
   return createRetryingClient(client, resolveRetryPolicy(profile.retryPolicy))
 }
 
-// ── Task 4: RESOLVED wire protocol → adapter dispatch ─────────────────────────
-// The profile's `protocol` field is the registry's ADAPTER-KIND marker
-// (describeDirectory / the headless parseModel order). The WEB build (and the
-// T2 probe) dispatch on the RESOLVED THREE-value wire vocabulary that
-// settings' resolveProviderProtocol produces (user section > SEEDED_PROTOCOLS >
-// DEFAULT): the same keys ProbeRequest.protocol carries. A user who re-wires a
-// seeded route (e.g. deepseek → anthropic-messages) must get the anthropic
-// client even though the profile's marker still says "openai-compatible".
-
 /** The adapter inputs, protocol-independent — the shared shape of all three
  * client factories (llm-openai-compatible / llm-openai / llm-anthropic). */
 export interface WireClientConfig {
@@ -756,41 +747,6 @@ export interface WireClientConfig {
   /** M59: literal extra request headers merged into every request. */
   headers?: Record<string, string>
 }
-
-/** Build the adapter client for a RESOLVED wire protocol; undefined for an
- * unknown protocol so the caller owns the warn + mock fallback. */
-function buildWireClient(protocol: string, config: WireClientConfig): ModelClient | undefined {
-  switch (protocol) {
-    case "openai-completions":
-      return createOpenAICompatibleClient(config)
-    case "openai-responses":
-      return createOpenAIClient(config)
-    case "anthropic-messages":
-      return createAnthropicClient(config)
-    case "gemini":
-      return createGeminiClient(config)
-    case "bedrock":
-      // Key-less by design (AWS credential chain); apiKey is ignored.
-      return createBedrockClient({ model: config.model, options: config.options, inputModalities: config.inputModalities })
-    default:
-      return undefined
-  }
-}
-
-// M1 Phase B Task 4: un-exported -- no file in the tree consumes this name on a
-// production path (reachability row `@i-harness/provider#buildWireClient`; its only
-// other mention is the test case that used to call it). The declaration and the
-// RESOLVED-wire-protocol requirement comment above stay as the recorded seam: the
-// fix that would wire it belongs in provider-runtime, where it needs a change to
-// that package's runtime-options type -- M-shaped, and deliberately out of this
-// task's scope. (Named nowhere here on purpose: a comment in another production file
-// counts as a mention for the reachability scanner, which would mask that package's
-// own unused-export row -- the false negative recorded in the baseline's §7 item 4.)
-//
-// The reference below exists only so `noUnusedLocals` (tsconfig.base.json:9), which
-// cannot express a deliberately unread declaration, accepts the record. Delete it
-// and the function together if the seam is ever wired or abandoned.
-void buildWireClient
 
 // ── M26-B3 → M31: websearch provider seam（同 interaction/questions 模式）──
 // M31 契約升級（spec §3.1, dsh-honest）：websearch 全鏈對「當下一個 provider 的

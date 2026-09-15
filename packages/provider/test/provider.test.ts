@@ -40,14 +40,14 @@ describe("provider registry", () => {
     await it.return?.()
   })
 
-  // M1 Phase B Task 4: the case that stood here called `buildWireClient` directly, and
-  // it is gone with that export edge. A named import of a non-exported declaration does
-  // not compile (`tsc`: "declares 'buildWireClient' locally, but it is not exported"),
-  // and no public entry reaches that dispatcher -- it has no production caller at all,
-  // which is exactly why the reachability row `@i-harness/provider#buildWireClient`
-  // existed. So the `openai-completions` arm and the unknown-protocol -> undefined arm
-  // now have NO test. That is a coverage loss this change accepts, not a gain: if the
-  // resolved-wire-protocol seam is ever wired, this case comes back with it.
+  // M1 Phase B Task 4: the case that stood here called `buildWireClient` directly. That
+  // dispatcher was a dead declaration -- nothing reached it on any production path -- so
+  // it and this case were deleted together: the `openai-completions` arm and the
+  // unknown-protocol -> undefined arm tested dead code, and coverage of dead code has no
+  // value. The requirement a re-add must satisfy is recorded in M1 Phase B Task 4's
+  // commit message and report: dispatch on the RESOLVED wire protocol, never on the
+  // profile's adapter marker, or a user who re-wires a seeded route gets the wrong
+  // client. Wiring it changes provider-runtime's options type and is M with its own spec.
 
   it("buildModelClient throws on unknown protocol", () => {
     expect(() => buildModelClient({ name: "x", displayName: "X", protocol: "bogus" as never }, "m")).toThrow(/protocol/i)
