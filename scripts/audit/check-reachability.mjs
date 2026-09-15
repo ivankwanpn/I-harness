@@ -57,6 +57,17 @@ function buildFixture() {
   put("packages/beta/src/write.ts", 'const e: E = "beta/change"\n')
   put("packages/beta/test/ghost.test.ts", 'const e: E = "beta/ghost"\n')
 
+  // class 2 regression: the SAME name as a union member on its own continuation
+  // line of ANOTHER file is a declaration, not a producer. Without this file the
+  // fixture's only union sits in events.ts, which the scanner excludes as the
+  // declaring file, so nothing would pin the `| "name"` clause -- and dropping
+  // it flips the real tree's class-2 result from 1 finding to 0.
+  put("packages/beta/src/types.ts", [
+    "export type EventKind =",
+    '  | "beta/ghost"',
+    "",
+  ].join("\n"))
+
   // class 3: `--yes` is parsed into flags and never read; `--model` is read.
   put("apps/tool/src/index.ts", [
     "type Flags = { yes: boolean; model?: string }",
@@ -64,6 +75,18 @@ function buildFixture() {
     'case "--yes": flags.yes = true; break',
     'case "--model": flags.model = next(); break',
     "run(flags.model)",
+  ].join("\n"))
+
+  // class 3 regression: `verbose?:` is declared OPTIONAL and never read, so it IS
+  // a finding -- a line-level `field:` exclusion cannot match the `?` and lets
+  // the declaration read as a use. `strict?` is read, and only through `===`,
+  // which is compared rather than assigned: the negative control.
+  put("apps/tool-b/src/index.ts", [
+    "type Flags = { verbose?: boolean; strict?: boolean }",
+    "const flags: Flags = { verbose: false }",
+    'case "--verbose": flags.verbose = true; break',
+    'case "--strict": flags.strict = true; break',
+    "if (flags.strict === true) run()",
   ].join("\n"))
 
   // class 1 regression: a same-package RELATIVE consumer counts as usage, and
@@ -312,51 +335,65 @@ function scanProducerlessEvents(files) {
 // ------------------------------------------------ class 3: flag never read
 const FLAG_CASE = /case\s+"(--[a-z0-9-]+)"\s*:\s*flags\.([A-Za-z_$][\w$]*)\s*=/g
 
-/** The line with its string literals and trailing comment blanked -- spaces,
- *  never deletion, so blanking cannot join two tokens into one word. A `--yes`
- *  named in a `--help` usage string, or in the header comment that documents
- *  it, is a mention and not a read of `flags.yes`: counting those mentions is
- *  what hid this repo's own parsed-but-never-read flag. What it does not model:
- *  a `/` pair inside a regex literal reads as a comment start (no such line
- *  matches a flag field here), and a read sharing a line with `field:` or
- *  `field =` is still discounted by the caller below. */
-function codeOnly(ln) {
+/** `text` with its string literals and comments blanked -- spaces, never
+ *  deletion, and newlines kept, so blanking can neither join two tokens nor
+ *  destroy line structure. A `--yes` named in a `--help` usage string, in a
+ *  header comment or in block-comment prose is a mention, not a read of
+ *  `flags.yes`. What it does not model: a `/` pair inside a regex literal starts
+ *  a comment, and a whole template literal is blanked including its `${...}`. */
+function codeOnly(text) {
   let out = ""
   let quote = null
-  for (let i = 0; i < ln.length; i++) {
-    const c = ln[i]
+  let block = false
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
+    const d = text[i + 1]
+    if (c === "\n") { out += c; continue }
+    if (block) {
+      if (c === "*" && d === "/") { block = false; out += "  "; i++; continue }
+      out += " "
+      continue
+    }
     if (quote !== null) {
       if (c === "\\") { out += "  "; i++; continue }
       if (c === quote) quote = null
       out += " "
-    } else if (c === '"' || c === "'" || c === "`") {
-      quote = c
-      out += " "
-    } else if (c === "/" && ln[i + 1] === "/") {
-      break
-    } else {
-      out += c
+      continue
     }
+    if (c === "/" && d === "*") { block = true; out += "  "; i++; continue }
+    if (c === "/" && d === "/") {
+      while (i < text.length && text[i] !== "\n") { out += " "; i++ }
+      if (i < text.length) out += "\n"
+      continue
+    }
+    if (c === '"' || c === "'" || c === "`") { quote = c; out += " "; continue }
+    out += c
   }
   return out
 }
 
-/** A flag is "read" when its field name appears somewhere in the same file other
- *  than its declaration, its initialiser and the `case` that assigns it. */
+/** A flag is "read" when an occurrence of its field name SURVIVES the two shapes
+ *  that DEFINE a field rather than use it: a key or type annotation, required or
+ *  optional (`yes:`, `prompt?:`), and an assignment target (`yes =`, but not
+ *  `yes ===`, which compares). Blanking the occurrence rather than the whole
+ *  line is the point: a line-level `field:` exclusion cannot match the `?` in
+ *  `prompt?: string`, so every OPTIONAL field was certified read by its own
+ *  declaration and this scanner's one real finding came out right by luck. A
+ *  read sharing a line with a key still counts: `{ prompt: flags.prompt }`
+ *  blanks the key and keeps the read. */
 function scanUnreadFlags(files) {
   const findings = []
   for (const f of files.filter((x) => !x.test)) {
     const assigned = new Map()
     for (const m of f.text.matchAll(FLAG_CASE)) assigned.set(m[2], m[1])
+    if (assigned.size === 0) continue
+    const lines = codeOnly(f.text).split(/\r?\n/)
     for (const [field, flag] of assigned) {
-      const lines = f.text.split(/\r?\n/)
-      const read = lines.some((ln) => {
-        if (ln.includes(`case "${flag}"`)) return false
-        const code = codeOnly(ln)
-        if (new RegExp(`\\b${field}\\s*:`).test(code)) return false
-        if (new RegExp(`\\b${field}\\s*=`).test(code)) return false
-        return new RegExp(`\\b${field}\\b`).test(code)
-      })
+      // `$` is regex syntax AND a legal identifier character: escape it.
+      const word = field.replace(/[$]/g, "\\$")
+      const key = new RegExp(`\\b${word}\\s*\\??\\s*:`, "g")
+      const assign = new RegExp(`\\b${word}\\s*=(?!=|>)`, "g")
+      const read = lines.some((ln) => new RegExp(`\\b${word}\\b`).test(ln.replace(key, " ").replace(assign, " ")))
       if (!read) findings.push({ kind: "unread-flag", subject: flag, evidence: f.rel })
     }
   }
@@ -451,9 +488,27 @@ SELF_TEST_CASES.push({
 
 SELF_TEST_CASES.push({
   name: "class 3: a flag parsed into the flags object and never read is a finding",
-  expect: ["--yes"],
+  expect: ["--verbose", "--yes"],
   run(root) {
     return scanUnreadFlags(indexTree(root)).map((f) => f.subject)
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 2: a union member on its own continuation line is a declaration, not a producer",
+  expect: ["beta/ghost"],
+  run(root) {
+    return scanProducerlessEvents(indexTree(root)).map((f) => f.subject)
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 3: an optional field that IS read is not a finding (negative control)",
+  expect: [],
+  run(root) {
+    return scanUnreadFlags(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s === "--strict")
   },
 })
 
