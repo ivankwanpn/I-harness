@@ -88,6 +88,19 @@ above: that wave added lines to the fixture, the main block and the case list, s
 `withoutReExportStatements`'s `:340-347` no longer resolves at `74f86d5`. Nothing these citations point
 at changed behaviourally — only its line number.
 
+**Corrected by M2's closing fix wave (2026-09-16): the shipped self-test is 36 cases, and the sentence
+above describes M1's fix-wave revision.** M2's four tasks and this wave added 18 more: the ratchet's
+`gateDiff` cases, the completion-proof case, and eleven cases that drive the CLI itself — before them no
+case called `main()`, so deleting the whole `--gate` block, the whole `--digest` block, the allowlist
+read inside `--gate`, or the stale-disposition check each left the suite fully green (measured on
+`ba656320`). Two consequences for a reader of this paragraph: the case count is no longer 18 anywhere in
+this document's reasoning (the digest, not the count, still pins the row set), and the citation
+convention has changed — citations into `check-reachability.mjs` now name the **symbol** with the line
+number as a dated secondary, because the tool grew 999 → 1389 lines during M2 and every bare line
+number into it rotted, including one this document's §6.4 had just certified. **§5.3's "18 cases" and
+§7 item 11's "(18 cases since M1's fix wave)" below are the same M1-revision figure and are read the
+same way.**
+
 The digest is `sha256` over the 525 findings rendered as sorted `kind<TAB>subject<TAB>evidence`
 lines, each newline-terminated. It pins the baseline so M2 can verify that a later run is
 reproducing *this* set rather than a set that merely has the same size.
@@ -96,8 +109,9 @@ reproducing *this* set rather than a set that merely has the same size.
 the walker's skip list rather than of git, so it can drift. It holds today because the tracked set
 contains nothing the skip list would drop — measured: of the 729 tracked files, **0** live under a
 dot-directory at the root and **0** under `node_modules`/`dist`/`lib`, which are the walker's three
-skip rules (`scripts/audit/check-reachability.mjs:924-937`, which also excludes `*.ts`/`*.tsx`
-outside those rules only by extension). On the authoring machine recorded in
+skip rules (`collectTs`'s skip list in `scripts/audit/check-reachability.mjs`: it drops
+`node_modules`, `dist` and `lib`, skips dot-directories, and admits only `*.ts`/`*.tsx` — the
+**symbol** is the anchor, because a line number into that tool rotted twice during this milestone). On the authoring machine recorded in
 `docs/handoff/HANDOFF.md` the node version was `v24.15.0`; this run is on `v22.23.2`, which is why
 all three fingerprint values and the file count are recorded rather than the SHA alone.
 
@@ -214,6 +228,22 @@ after (`523 rows, 510 of them unused-export, digest 5acf81aa…` both times), an
 deliberately added orphan failing it — was performed and reverted on a package entry with the digest
 verified back to `5acf81aa…`.
 
+**M2 closing-wave note (2026-09-16): the same data file now carries a `reason`, and its sha256 changed
+because of it.** Roadmap `:125` requires a date **and a reason** of the baseline as well as of the
+allowlist ("基線與 allowlist 都帶日期與理由"). The M2 Task 4 edition of
+`scripts/audit/reachability-baseline.json` had `seededAt`, `digest`, `count` and `rows` only, so the
+clause held by argument rather than by the file. The `reason` is now part of the **`--seed-baseline`
+payload** — so the tool, never a hand edit, is what writes it — and the file was re-seeded with the tool:
+`seededAt`, `count` (523), `digest` (`5acf81aa…`) and **every row byte-identical**, plus a `reason` naming
+what the file is for (the accepted orphan population at seeding time; the gate fails only on rows outside
+it; the adjudications live in this document's §6 and in the dated allowlist). Because the bytes changed,
+the file's sha256 moved from `3b6b07217667a6908fc5d054f9fdf75387a162263eea14860fec5a722cf692f5`
+(47 760 bytes) to **`9545e2dab0ba64a99612fc3b05fb94e7db79de777ef78b600887238ca6209f6fa`** (48 422 bytes) —
+a deliberate, disclosed, content-bearing change, not drift, and the only one this wave makes to a machine
+artifact. `--gate` now also verifies that a baseline's own `count` and `digest` describe its own `rows`
+before it prints them as the seed's identity, so a hand-edited or mis-seeded baseline is refused (exit 2)
+instead of passing.
+
 ---
 
 ## 3. The finding table
@@ -240,8 +270,9 @@ them unreportable. See §7 item 13 for the mechanism, the measurement and M2's a
 
 **Class 4's count is a LOWER BOUND, and structurally so.** The scanner inspects only string-literal
 union *types* whose name ends `Cap`/`Caps`/`Capability`/`Capabilities`
-(`check-reachability.mjs:529-530`), and it **skips any such union where no member is ever pushed**
-(`:573`) — because a union with no pushed member is not a push inventory at all (it is sniffed off
+(the `CAP_UNION_NAME` filter in `check-reachability.mjs`), and it **skips any such union where no
+member is ever pushed** (`scanUnpushedCapabilities`'s `members.some((n) => pushed.has(n))` guard) —
+because a union with no pushed member is not a push inventory at all (it is sniffed off
 disk, as `plugin-registry`'s is) and reporting its members would invent findings. Measured: the
 production tree contains exactly three such unions —
 
@@ -495,8 +526,9 @@ revision the frame was `525 − 6 = 519` (the 6 being the 5 source-list `unused-
 `@i-harness/session-persistence#registerUpgrade`, plus the `unread-flag --yes` row). At the Phase B
 revision it is `523 − 4 = 519`: `buildWireClient` and `withdrawPlanModeTool` are no longer *in* the 523
 (Task 4 deleted both — §2.1), so only **four** of those six are still findings to subtract. **The frame
-is 519 at both revisions and the sample arithmetic is unchanged** — but note it is not the *same* 519:
-the Phase B frame is the Phase A frame minus those two rows. The 39-row sample below was drawn against
+is 519 at both revisions and the sample arithmetic is unchanged** — and it is the *same* 519: the two
+rows Task 4 deleted were subtracted from the Phase A frame as well, so `525 − 6` and `523 − 4` name one
+set. The 39-row sample below was drawn against
 the Phase A frame, so two of its 27 class-1 rows (`buildWireClient`, `withdrawPlanModeTool`) are no
 longer in the shipped set; that is recorded here rather than silently re-drawn, because §5.2's result is
 tied to exactly those rows.
@@ -510,9 +542,11 @@ tied to exactly those rows.
   five source-list rows — starting at index 0 and stepping by ⌊507 / 27⌋ = **18**, stopping once 27
   rows are held.
 
-  **What that order is, precisely:** `collectTs` (`scripts/audit/check-reachability.mjs:924-937`)
+  **What that order is, precisely:** `collectTs` (the walker in
+  `scripts/audit/check-reachability.mjs`)
   walks with a raw `readdirSync` and never sorts, and the scanners are `flatMap`'d in class order
-  (`:984`). So the emission order is **the filesystem's `readdir` order** — alphabetical on this NTFS
+  (`SCANNERS`, and `SCANNERS.flatMap((s) => s(files))` in `main`). So the emission order is **the
+  filesystem's `readdir` order** — alphabetical on this NTFS
   checkout only because NTFS returns directory entries in index order, and hash order on ext4. Within
   a package it is declaration order in that package's `index.ts`. It is **not a property of the tool**
   and is **not stable across filesystems**, so this draw rule cannot be replayed portably.
@@ -697,7 +731,8 @@ in turn:
   property test, which matches on the key's **leaf name only** — and the leaves here include very
   common identifiers. Stating the counting rule, because without it the figures do not reproduce:
   these are the class-5 scanner's **own** property regex `\.\s*<leaf>\b`
-  (`scripts/audit/check-reachability.mjs:691`) applied over the 360 production files **excluding the
+  (the `prop` test in `scanUnconsultedSettings`, `scripts/audit/check-reachability.mjs`) applied over
+  the 360 production files **excluding the
   file that declares the key** (`packages/settings/src/index.ts`), counted as occurrences / matching
   lines / distinct files — `mode` **151 / 140 / 28**, `model` **121 / 97 / 39**, `providers`
   **54 / 52 / 15**, `items` **53 / 48 / 17**. Genuine settings reads were confirmed by hand for **7** of the 21
@@ -725,7 +760,8 @@ in turn:
   class 1 would have produced rows" was an assertion, and it is withdrawn. What *is* measured about the
   drafted class-1 rule is fixture-level rather than a count over the tree: the drafted scanner excluded
   the whole entry file (`f !== entry`) and required the package specifier and the name in the same file,
-  and the `EntryCallSite` self-test case (`check-reachability.mjs:767-775`) fails under exactly that
+  and the `EntryCallSite` self-test case (the case named *"class 1: an inline type modifier does not
+  leak into the subject"*, `scripts/audit/check-reachability.mjs`) fails under exactly that
   whole-entry exclusion, because the entry imports, re-exports and **calls** the name it re-exports. The
   real-tree row count of the drafted class-1 snippet is unknown and is not guessed at here.
 
@@ -734,7 +770,8 @@ could be checked it would have looked like a clean sweep.** This is recorded as 
 method, not buried: the baseline in §3 is **not the plan's output**. It is the output of five scanners
 that were each rewritten against the real tree, and the only evidence they are detectors rather than
 rubber stamps is the self-test plus the mutation proofs Tasks 2–4 recorded and the six that this
-document's fix wave re-ran. The self-test is **18 cases** since that wave, and the count is not 18
+document's fix wave re-ran. The self-test is **18 cases** since that wave (**36 as shipped by M2's
+closing wave on 2026-09-16 — see §2's correction**), and the count is not 18
 independent checks: the wave added five **fixture elements**, which are what make five pre-existing
 cases fail under their loosening, and five **named cases** that record each hazard and whose `run` and
 `expect` are identical to the sibling case above them. Measured with the five added cases deleted: the
@@ -766,7 +803,7 @@ was re-measured on 2026-09-16 with `--json`; the arithmetic is shown, not assert
 |---|---|---|---|
 | **512** | the `unused-export` (class-1) rows at the Phase A revision `74f86d5a`, before Task 4 deleted two | §6's opening paragraph above ("row-by-row adjudication of the 512 class-1 rows") | **510** = 512 − 2. Measured: 523 findings, 510 of them `unused-export`. The two departures are §2.1's delta table (`buildWireClient`, `withdrawPlanModeTool`) |
 | **525** | the TOTAL findings at `74f86d5a` | §6.4's first bullet ("Everything else in the 525 is unadjudicated") | **523** = 525 − 2 — the same two deletions, both class 1, which is why the other four classes are unchanged |
-| **507** | class 1 **minus the five source-list `unused-export` rows** — the population §5.1 drew its systematic sample of 27 from (`512 − 5`; §5.1's own sentence says so) | §6.4's third bullet ("None of the 507 unadjudicated class-1 rows") | **507** again, but *not the same 507* — exactly the distinction §5.1 draws for its 519 frame. Of those five rows only **three** still exist (`createUnifiedSpillStore`, `gcSpillStore`, `registerUpgrade`; measured), and 510 − 3 = **507** |
+| **507** | class 1 **minus the five source-list `unused-export` rows** — the population §5.1 drew its systematic sample of 27 from (`512 − 5`; §5.1's own sentence says so) | §6.4's third bullet ("None of the 507 unadjudicated class-1 rows") | **507** again, and it is the *same* 507: the two rows Task 4 deleted were subtracted from the authoring frame as well, so `512 − 5` and `510 − 3` name one set. Of those five rows only **three** still exist (`createUnifiedSpillStore`, `gcSpillStore`, `registerUpgrade`; measured), and 510 − 3 = **507** |
 
 **The word "unadjudicated" also moved, which is why 507 is no longer the number to compare against.** When
 §6.3's class rule was **accepted on 2026-09-16** (M2 Task 3 — the decision note at the end of §6.3), the
@@ -807,10 +844,11 @@ at all, and not list items either, so they belong here rather than in §6.2.
 | sandbox spec §7 item 2 | `exitCode: -1` is six-valued (§4.3 item 2) | `by-design` on **C10** (`docs/handoff/what-the-design-does-not-answer.md:49`), which records the **six** meanings and the mitigation that does hold — both sandbox refusals carry parseable JSON in `stderr`, and bash-absent is the only prose case — **and not, as this cell said until this correction, that the sentinel is "deliberate":** C10 rules nothing intentional, so "un-disambiguated" is what the source supports and "deliberate" is not — the `by-design` disposition is this document's adjudication on top of C10's record, not a quotation of it; the site list is corrected in §4.3 item 2, where `packages/shell/src/index.ts:372` turns out to be the **bash-absent** branch rather than a `kind: "refused"` refusal (that is `:217`, and its discriminator is internal — `:380` returns the bare refusal object), and `packages/exec/src/index.ts:210` (`child.on("error", …)`) was missing from the baseline entirely. Counting **meanings** rather than sites gives **at least eight**, because `exec/src/index.ts:148-150` documents a deliberate, indistinguishable `-1` for an external abort (the same value a signal death produces). Follow-up: the disambiguation is **M** for the same reason as `classifyDenial` — it widens a result type every surface consumes before it can change what the model is told. |
 | CLI surface 3 | no `--flag=value` support (§4.4 item 3) | `by-design` — **deliberately unsupported**, because partial grammar is worse than none: the value-taking flags are read through **nine** in-scope sites before the frozen TUI's parser is even reached — five lookups on the `run` argv (`apps/cli/src/index.ts:208`, `:247-250`), a **second** pass over that same argv which re-derives which tokens are flags and which are values (`:331-335` — the duplication Task 3's fix had to reconcile), and `apps/cli/src/sessions.ts:53-54`, which is **seven**, **plus** `--session-dir` again on the `sdk` and `acp` paths (`:455`, `:625`), which makes **nine**. **Corrected here by re-measurement:** this cell said "seven" while enumerating all nine; the seven is the count *before* the two subcommand parsers, and the plan this number was inherited from (`docs/superpowers/plans/2026-09-15-m1-phase-b-wire-the-unwired.md:573`) stops at seven. The last parser in the chain is the frozen TUI's (`apps/tui/src/index.ts:441-456`), which is reached only after all nine. Demand is zero: no caller, test or argv in the tree uses the form, and no spec or report asks for it. **The obligation this declaration carries:** Task 3 made the form **fail loud** as an unknown flag, so `--model=x` can no longer be silently swallowed into the prompt. The related grammar narrowing is recorded as grammar in §4.4 item 3 — any `run` task token beginning with a dash is reserved and rejected with exit 1, and there is no `--` end-of-flags separator — and adding one is new argv grammar, i.e. the **M** follow-up. |
 
-### 6.3 Proposed class-level rule — **accepted by M2 on 2026-09-16** (as written: **not in force**, M2 must decide)
+### 6.3 Proposed class-level rule — **accepted by M2 on 2026-09-16** (the *as-written* status below is superseded: it **is in force**, as 17 explicit entries)
 
-**Status: a proposal. Nothing in this subsection is an allowlist entry today.** It is recorded so the
-decision is made once, explicitly, rather than 17 times quietly.
+**Status, as originally written and now superseded: "a proposal. Nothing in this subsection is an
+allowlist entry today."** M2 decided otherwise — see the decision note at the end of this subsection.
+It was recorded so the decision is made once, explicitly, rather than 17 times quietly.
 **M2 decided on 2026-09-16: ACCEPTED and in force, as 17 explicit entries — see the decision note at the
 end of this subsection.**
 
@@ -849,7 +887,9 @@ population.
 ### 6.4 What is deliberately **not** on the allowlist
 
 - **As of this document, the allowlist contains the 6 rows of §6.1 — 4 findings plus 2 adjacent D1 rows —
-  and the 13 source-list rows of §6.2, i.e. 19 entries.** Everything else in the 525 is unadjudicated, or
+  and the 13 source-list rows of §6.2, i.e. 19 entries** (**superseded 2026-09-16: the machine allowlist
+  holds 24 `entries` + 13 `noRow` — see the §6.3 decision note and the two bullets below**). Everything
+  else in the 525 is unadjudicated, or
   one of the rows still reported as `still-holds`: §3.3's eight `unconsulted-setting` keys, the
   `sandbox/mode` pair (§4.1 item 6 and §4.3 item 4), and §4.5's `registerUpgrade`. **Two of those three
   residuals have neither a task nor a reason sentence:** §3.3's eight `unconsulted-setting` keys and
@@ -864,7 +904,9 @@ population.
   `already-fixed` — §4's tally) are therefore 15 rows and 19 allowlist entries, not two figures for one
   thing: §4.1 item 8 is the one `by-design` row absent from this allowlist.
 - **None of the 507 unadjudicated class-1 rows is allowlisted**, and the 17 `@i-harness/sdk` rows are
-  among those 507 — §6.3 only *proposes* allowlisting them and is not in force (see its status line).
+  among those 507 — §6.3 only *proposes* allowlisting them and is not in force (**as written; superseded
+  2026-09-16 — §6.3 was accepted, so those 17 rows *are* allowlisted; see the correction below**)
+  (see its status line).
   Absence from this allowlist is not a claim that a row is a defect; it is a claim that nobody has
   looked yet. **Corrected by M2 Task 3 (2026-09-16):** §6.3 was **accepted**, so those 17 rows **are** now
   allowlisted; the remaining class-1 rows are not. (The counts in this bullet are also stale against the
@@ -886,7 +928,8 @@ population.
   does declare and export `mountPreset` and no production file calls it, but the scanner emits **no**
   `unused-export` `@i-harness/preset#mountPreset` row at all: the package's only row is
   `@i-harness/preset#ToolProvider` (measured 2026-09-16). The sole production mention is a **comment** at
-  `packages/tui/src/views/light-personas.ts:2`, and `scanUnusedExports` (`check-reachability.mjs:368`) tests
+  `packages/tui/src/views/light-personas.ts:2`, and `scanUnusedExports` (the `used` test,
+  `scripts/audit/check-reachability.mjs`) tests
   the raw file text, so the comment reads as a mention and suppresses the row. That is the tool's known
   file-level false negative — the finding is real — but it means a machine key for it would **exempt
   nothing**. The allowlist therefore files it under `noRow` with its reason preserved. Consequently §6.4's
@@ -913,9 +956,9 @@ That is why the three names of §4.1 item 8 are absent from the 525 while being 
 
 **3. Named re-export statements mask genuinely dead exports — a false negative, safe direction.**
 `export { X } from "./mod.ts"` makes `X` reachable from the barrel, and `originOf`
-(`check-reachability.mjs:289-306`) attributes the name to its **declarer**, so the barrel is a
+(`scripts/audit/check-reachability.mjs`) attributes the name to its **declarer**, so the barrel is a
 consumer and the chain terminates nowhere in particular. The re-export-blanking rule
-(`withoutReExportStatements`, `:340-347`) applies only to the entry file currently being scanned, so
+(`withoutReExportStatements`, same file) applies only to the entry file currently being scanned, so
 a re-export statement in **any other** production file counts as a mention and suppresses the
 finding. **128** such statements were measured in Task 2, by the counting rule it states: *"statements
 across package entry points [that] are named re-exports carrying a source specifier —
@@ -944,9 +987,10 @@ counts.
 is not reported either. And `core-session`'s `migrate` (§4.2 item 1) is hidden by an unrelated
 private `migrate` in `session-persistence`. **Any rule narrow enough to catch these reintroduces the
 original defect**: the module-scoping that made the entry-point scan report a name the entry itself
-imports, re-exports and calls (see the `EntryCallSite` fixture at `check-reachability.mjs:109-115` and
-the comment that states its hazard at `:761-766` — **corrected here:** the previous edition pointed the
-fixture at `:761-766`, which is where the hazard is stated, not where the fixture lives).
+imports, re-exports and calls (see the `EntryCallSite` fixture in `buildFixture`, and the hazard comment
+above the case that measures it — both in `scripts/audit/check-reachability.mjs`; **corrected here:** the
+previous edition pointed the fixture at the hazard comment's line and the hazard comment at the fixture's,
+which is why this wave names the two by role and anchors them on the symbols).
 
 **6. Four symbols whose only in-repo mention is a comment stay unreported**, and comments cannot
 simply be stripped. Each is listed with the module that **declares** it (so the export edge exists)
@@ -967,7 +1011,7 @@ production file other than `packages/settings/src/sections.ts` mentions it excep
 tool **blanks** rather than counts: each is re-exported by its own package entry
 (`packages/subagent/src/index.ts:17`, `packages/tui/src/index.ts:64`,
 `packages/workflow/src/index.ts:30`), and `withoutReExportStatements`
-(`check-reachability.mjs:340-347`) blanks exactly those statements when it scans that entry — so for
+(`scripts/audit/check-reachability.mjs`) blanks exactly those statements when it scans that entry — so for
 those three the masking mention is the comment **plus** a re-export the tool deliberately discounts,
 not the comment alone. All four are also **live inside their declaring module** — `FieldSpec` at
 `packages/settings/src/sections.ts:40,46,50,127,136`; `TaskConcurrencyLimitError` thrown at
@@ -1001,7 +1045,8 @@ only**, so it is simultaneously too **loose**: `tui.prefs.statusLine.mode` is cl
 property access elsewhere in production — and there are **151 of them, on 140 lines across 28 files** —
 while `llm.defaultModel.model` is cleared by any of **121 `.model` occurrences, on 97 lines across 39
 files**. (Rule, identical to §5.3: the scanner's own property regex `\.\s*<leaf>\b`
-(`check-reachability.mjs:691`) over the 360 production files **excluding** `packages/settings/src/index.ts`,
+(the `prop` test in `scanUnconsultedSettings`, `scripts/audit/check-reachability.mjs`) over the 360
+production files **excluding** `packages/settings/src/index.ts`,
 the file that declares both keys; counts are occurrences, then matching lines, then distinct files.)
 That this test cannot tell an unrelated access from a genuine read of the key is exactly the weakness:
 the key is cleared by a `.mode` on a modal dialog or a `.model` in a provider list just as readily as
@@ -1030,7 +1075,8 @@ rewritten against the real tree, and what each half of that claim rests on — t
 failures, one measured reader, one structural wrong-union argument, and one class not re-measured at all
 — is stated there rather than compressed into "all five were broken". The 525 rows come from five
 rewritten scanners whose only warrant is the self-test (**18 cases** since M1's fix wave, five of which
-share an assertion with a sibling; §5.3) and the mutation proofs Tasks 2–4 recorded. **M2 must check the
+share an assertion with a sibling; §5.3 — **36 as shipped by M2 on 2026-09-16, §2's correction**) and the
+mutation proofs Tasks 2–4 recorded. **M2 must check the
 self-test and the §2 digest before it trusts any comparison against this baseline.**
 
 ---
@@ -1044,14 +1090,15 @@ and without them the rows they hide — and the siblings of those rows — regro
 **local re-export blind spot**, and it is a second reason class 1's 510 is a **lower bound**.
 
 - **The mechanism.** When the entry itself declares the name, `originOf`
-  (`scripts/audit/check-reachability.mjs:289-306`) credits the entry as the origin, and the used-scan
-  excludes origin modules (`:364`, `!origins.has(f.rel)`), so the entry is scanned through
-  `withoutReExportStatements` (`:340-347`, called at `:361`) — a deliberate and correct rule
-  (`EntryCallSite`, `:761-775`). The failure is at `:296-297`: for an `export { X }` entry with **no
+  (`scripts/audit/check-reachability.mjs`) credits the entry as the origin, and the used-scan
+  excludes origin modules (the `used` test's `!origins.has(f.rel)`), so the entry is scanned through
+  `withoutReExportStatements` — a deliberate and correct rule
+  (the `EntryCallSite` case and its fixture). The failure is in **`originOf`'s from-less branch**: for an
+  `export { X }` entry with **no
   `from` clause**, `resolveModule` yields no target, so the code does `origins.add(file.rel)` — **the
   entry becomes its own origin**, and the module that actually declares `X` is never added to `origins`
-  and therefore never excluded from the used-scan. The name then self-satisfies at `:364` (`prod.some(…,
-  !origins.has(f.rel) && word.test(…))`): the file that
+  and therefore never excluded from the used-scan. The name then self-satisfies in the `used` test's
+  `prod.some((f) => !origins.has(f.rel) && word.test(…))`): the file that
   declares it is scanned as an ordinary production file, finds its own declaration, and reports "used".
   **A name re-exported from an entry through a local `export { … }` list is unreportable by
   `scanUnusedExports`.**
@@ -1080,8 +1127,9 @@ and without them the rows they hide — and the siblings of those rows — regro
 **13. The entry-only blind spot has two shapes: a file under `packages/*/src/` that its entry never
 mentions, and a name the entry reaches but does not export. Both are invisible to all five classes, and
 re-exporting is *not* a remedy.** Class 1 walks only
-`packages/*/src/index.ts` entries (`check-reachability.mjs:359`) and tests **the names those entries
-export** (`:362`), so two kinds of row fall outside its population: (a) any **file** an entry never
+`packages/*/src/index.ts` entries (the entry loop in `scanUnusedExports`) and tests **the names those
+entries
+export** (via `exportedNamesDeep`), so two kinds of row fall outside its population: (a) any **file** an entry never
 mentions — and every name it declares — and (b) any **name** declared in a file the entry *does* reach
 but not among the names that entry exports. Classes 2–5 are anchored on file-name patterns and
 specific constructs, and none of them enumerates `packages/*/src/**/*.ts`, so neither shape is visible
@@ -1101,14 +1149,14 @@ during Phase B:
   `packages/*/src/` that is **not exported through its package entry** and has no reference outside its
   own declaring module — the shape `closeFileBackedConnections` has, and the one class 1 cannot see
   however reachable its file is, because class 1's population is the entry's *exported* names
-  (`:362`). Part (b) is the load-bearing half for this milestone's own instance: a file-level rule alone
+  (`exportedNamesDeep`). Part (b) is the load-bearing half for this milestone's own instance: a file-level rule alone
   would certify `file-backed.ts` as reachable and leave the name unreported. This is M2's, not a fix
   here: the rows and their siblings regrow without it, and each of the three instances above is a live
   symbol, not dead code.
 - **Re-exporting is NOT a remedy — measured.** Re-exporting such a file's name through the package entry
   to "clear the row" makes the ratchet **worse**, not better. The `export { X } from "./file.ts"` line
-  becomes a traversable export-list entry, so `originOf` (`check-reachability.mjs:294-299`) follows it
-  through `resolveModule` (`:296`) and adds the **real declaring module** to `origins`. Because the
+  becomes a traversable export-list entry, so `originOf` follows it
+  through `resolveModule` and adds the **real declaring module** to `origins`. Because the
   used-scan excludes every origin module (`:364`, `!origins.has(f.rel)`), the declaring module is no
   longer scanned for the name — exactly the exclusion that makes class 1 correct when a name *is* a
   genuine export — so the name is now reported as an unused export **it is not**. Nothing about the code
@@ -1116,7 +1164,8 @@ during Phase B:
   re-export and 2 with it** for the probed pair. Re-measured in this task for the `classifyDenial` case
   (`packages/sandbox-local`): adding `export { classifyDenial } from "./runner-failures.ts"` to the
   package entry moves the total **523 → 524**, adding `@i-harness/sandbox-local#classifyDenial` and
-  removing nothing. (The citation the probe runs through is `check-reachability.mjs:359-365` — the entry
+  removing nothing. (The citation the probe runs through is `scanUnusedExports` in
+  `check-reachability.mjs` — the entry
   selection, the origin exclusion and the `findings.push` that all three halves of the mechanism live
   in.)
 - Recorded so the remedy is not discovered twice: **fix the scanner, not the re-export.**

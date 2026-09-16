@@ -287,7 +287,8 @@ listed with what each costs if wrong, because that is the only way they can be r
   experiments** (each reverted) showed the real cause.
 - **R-L — the local re-export blind spot, and its measured scope.** A name re-exported from a package
   entry through a **local** `export { … }` list is **unreportable** by `scanUnusedExports`: `originOf`
-  (`check-reachability.mjs:296-297`) credits the entry as its own origin, so the declaring module is
+  (its from-less `export { … }` branch, `scripts/audit/check-reachability.mjs`) credits the entry as its
+  own origin, so the declaring module is
   never excluded from the used-scan and self-satisfies. **Measured: 68 entries, 6 with a local export
   list, 39 names, 38 declared elsewhere and therefore unreportable** (`tui-core` 31, `fs-lock` 2,
   `sandbox-policy` 2, `attachment` 1, `core-agent` 1, `session-persistence` 1). **Class 1's 512 is
@@ -485,11 +486,18 @@ item, including the one that is only partly done, because the point of this list
 tell closure from silence.
 
 - **Seeded the ratchet from the digest ✓.** `scripts/audit/reachability-baseline.json` is committed with
-  `seededAt: 2026-09-16`, `count: 523` and digest
-  `5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`, and it reproduces the §2.1 row set.
+  `seededAt: 2026-09-16`, `count: 523`, digest
+  `5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`, and a `reason` — the reason was
+  added by the closing fix wave of the same date, as part of the `--seed-baseline` **payload**, so
+  roadmap `:125`'s "基線與 allowlist 都帶日期與理由" holds of the data file and not only of the allowlist
+  (§2.1's closing-wave note carries both sha256 values). It reproduces the §2.1 row set.
   `--gate` fails on rows **new** relative to it and never on a low count: `gateDiff` computes `removed`
   separately and the gate prints it as progress. Exit codes are `0` pass, `1` new rows, `2`
-  usage/missing-baseline/stale-allowlist, all four measured 2026-09-16.
+  usage/missing-baseline/stale-allowlist, all **three** measured 2026-09-16. (The closing fix wave of the
+  same date widened exit 2 to every configuration refusal — an unusable baseline whose own `count` or
+  `digest` does not describe its own `rows`, a wrong-shape baseline or allowlist, `noRow` dispositions
+  without a date, and `--seed-baseline --gate` — so the three codes are now the whole contract, and `1`
+  is reached only by genuinely new rows.)
 - **The local re-export blind spot (R-L) — documented in the tool, not fixed ✓.** `scanUnusedExports`'s
   own doc comment (`scripts/audit/check-reachability.mjs`) now carries the mechanism — a from-less local
   `export { X }` list has no module to attribute the name to, so `originOf` credits the **entry**, which
@@ -516,10 +524,39 @@ tell closure from silence.
   with an explicit `(no status recorded -- add one)` fallback so a kind the map lacks cannot print as a
   bare number. Measured 2026-09-16 over the 523 rows: `510` `unused-export` / `8` `unconsulted-setting` /
   `3` `unpushed-capability` / `1` `producerless-event` / `1` `unread-flag`.
+- **A worked demonstration of the cross-package collision false negative — done ✓, as an executable
+  case.** The list's sixth bullet was answered nowhere until the closing fix wave; this entry closes it.
+  The demonstration is the fixture pair Task 4 added — a `beta` entry plus a comment in
+  `packages/alpha/src/index.ts` that merely NAMES `BetaThing` — and it is pinned by the `--self-test`
+  case *"class 1: a COMMENT naming a type suppresses the row (documented false negative)"*: measured
+  red-first, with the entry present and no mention anywhere the scanner emits
+  `@i-harness/beta#BetaThing` and the case fails. The real-tree instance is `mountPreset`
+  (`packages/preset/src/index.ts:30` declares and exports it, no production file calls it) whose sole
+  outside mention is the comment at `packages/tui/src/views/light-personas.ts:2`, so no
+  `@i-harness/preset#mountPreset` row exists. **Not fixed, and recorded as such:** the direction is a
+  false negative, and removing it is a scanner change that moves the row set, the digest and the
+  published precision sample — the same ruling R-L gives the local re-export blind spot.
 
 **Nothing on the list above was *fixed* — every item was seeded, documented or printed.** That is the
-honest reading of the five ticks: the two blind spots still under-report class 1, and the gate still
-cannot see argument routing.
+honest reading of the six ticks: the two blind spots still under-report class 1, the gate still
+cannot see argument routing, and the cross-package collision is demonstrated rather than removed.
+
+**The mutation proof the completion definition requires — recorded 2026-09-16, and re-measured by M2's
+closing fix wave.** Roadmap `:125` requires that a deliberately added orphan **fails** the gate, and this
+is the record of that proof, so that the pointer in `docs/handoff/HANDOFF.md` does not send a reader to a
+paragraph that does not contain it. Performed on a byte-faithful `git archive HEAD` extraction in TEMP,
+not on the working tree: appending `export const M2_GATE_PROOF = "delete me"` to
+`packages/guard-repeat-tool/src/index.ts` moved `--digest` from
+`5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786` to
+`be1178de220d3b8383a6734dfe0f73166a0248db67130abecbbc40ddb3ea09cf`, took the table from 523 to 524
+findings, and made `--gate` print `new  unused-export  @i-harness/guard-repeat-tool#M2_GATE_PROOF` and
+exit **1**; reverting the edit restored the digest and `--gate` exit 0. It is **re-runnable without a
+human edit** as the `--self-test` case *"gate: a deliberately added orphan fails the gate (the
+milestone's completion proof)"*, with the live measurement recorded in the tool's own comment beside
+that case. The proof is also **not tautological**, re-measured by the closing wave on 2026-09-16: the
+mutant that makes the gate's `added` set empty fails that case, its sibling and the CLI-wiring case that
+drives `--gate` (3 of 36), and the mutant that reports the whole row set as added fails nine — the two
+gate cases above, the allowlist-key case, the completion proof, and five of the CLI-wiring cases.
 
 **What M2 does not establish, in the roadmap's own words** — recorded here because this milestone is built
 on not over-claiming, and these are the source's words, read in the source:

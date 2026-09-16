@@ -1,5 +1,6 @@
 {
   "seededAt": "2026-09-16",
+  "reason": "The accepted orphan population of this repository at seededAt. Every row here was reported by the scanner when this file was seeded, and this is the set the gate treats as known: it fails only on rows OUTSIDE it (a row a later change adds) and never on rows that leave it (reported as progress), so the file is a ratchet and not a cleanup target. It is not a claim that a row here is dead. The adjudications behind the allowlist, and the reasons for the rows that stay, are in docs/audit/2026-09-15-reachability-baseline.md section 6 and in the dated scripts/audit/reachability-allowlist.json. Regenerate with --seed-baseline; never edit by hand.",
   "digest": "5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786",
   "count": 523,
   "rows": [
