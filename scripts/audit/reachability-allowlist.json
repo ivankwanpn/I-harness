@@ -5,144 +5,144 @@
       "key": "producerless-event\tretry/start",
       "reason": "The telemetry manifest is the event **vocabulary**, not an emitter — `TELEMETRY_MANIFEST` is consumed at `packages/telemetry/src/manifest.ts:39` to build `TELEMETRY_EVENT_TYPES` — and the deferral is recorded in source at `packages/core-agent/src/index.ts:234,238` (\"NOTE (retry/start deferral): M12 tool retry (guard-retry) and M20 … emits no `retry/start`\"), so deleting the row would delete a vocabulary entry the M12/M20 retry work is specified against.",
       "dated": "2026-09-15",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:753 (6.1)"
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:786 (6.1)"
     },
     {
       "key": "unpushed-capability\tplan-mode",
       "reason": "`packages/tui/src/app/loop.ts:2415-2418` states the three are NEVER supplied because the M49 backend has no live capability for them and the project refuses UI-state-only fakes, and their commands are gated invisible by `hasCapability` (`packages/tui/src/app/slash/impl/run.ts:49,57`) rather than faked — so nothing is broken and nothing is unreachable that advertises itself as reachable.",
       "dated": "2026-09-15",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:754 (6.1)"
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:787 (6.1)"
     },
     {
       "key": "unpushed-capability\tguardian",
       "reason": "Same declaration and the same reason as `plan-mode` above: the guardian commands are gated by `hasCapability(ctx, \"guardian\")` at `packages/tui/src/app/slash/impl/approval.ts:27,35` and the loop never pushes it, deliberately.",
       "dated": "2026-09-15",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:755 (6.1)"
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:788 (6.1)"
     },
     {
       "key": "unpushed-capability\tvim-mode",
       "reason": "Same declaration and the same reason as `plan-mode` above: the vim binding is gated by `hasCapability(ctx, \"vim-mode\")` at `packages/tui/src/app/slash/impl/text-input.ts:67` and the loop never pushes it, deliberately.",
       "dated": "2026-09-15",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:756 (6.1)"
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:789 (6.1)"
     },
     {
       "key": "unread-flag\t--yes",
       "reason": "**Deliberately out of scope — freeze/replacement.** The finding is real and unpatched: `flags.yes` is assigned at `apps/tui/src/index.ts:445` and read nowhere, while `--yes` is advertised in two usage strings (`:9`, `:461`). The code is `apps/tui`, the **TUI application** (not `packages/tui`), i.e. the frontend the roadmap's Q6 freeze covers (`2026-09-15-backend-polish-roadmap-design.md:278`), so fixing it would be investment in code being removed and Phase B must not be handed it. The gap is **not** retired with the code: the replacement frontend inherits the requirement that its flag surface must not advertise a flag nothing reads — if the replacement keeps a `--yes`, it must parse **and** read it, or drop the flag and its usage text. That obligation belongs to the replacement's requirements; this row records it rather than leaving it implicit.",
       "dated": "2026-09-15",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:771 (6.2) — D1 §跨包主線 8 item 7 / CLI surface 1"
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:804 (6.2) — D1 §跨包主線 8 item 7 / CLI surface 1"
     },
     {
       "key": "unused-export\t@i-harness/output-retention#createUnifiedSpillStore",
       "reason": "`by-design`, because all three parts of the Phase A characterisation were wrong: `createUnifiedSpillStore` (`packages/output-retention/src/spill-guard.ts:90-92`) is a three-line root-selecting factory that **never calls GC**; GC **is** wired at `spill-guard.ts:25` inside `createOutputSpillGuard`, which production mounts at `packages/session-executor/src/assembly.ts:524` whenever a host passes `outputSpill` (`assembly.ts:129`); and **no production host passes one**, so what ships is **no spill store at all** — the shell path's default retention is `opts.shellRetention ?? { maxBytes: 64_000 }` (`assembly.ts:400`), which carries no `spill` key (`packages/shell/src/index.ts:135` declares it, `:280` tests it), and nothing outside `test/` ever passes either option with a value (`apps/cli/src/run.ts:252,288` only forwards what its caller gave). The decision is the source's own, at `packages/output-retention/src/index.ts:170-171`: *\"絕不寫 workspace——研究決策；**不清理（已知 limitation）**\"*, and the guard, the GC it calls and the factory landed together in `c3875a9`. Follow-up: **none owed in code** — if a host ever supplies a spill root it gets exactly the GC wired at `:25`, so the honest future question is retention **policy** (age/size caps), not wiring.",
       "dated": "2026-09-15",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:773 (6.2) — D1 §未竟事項 4 (the item's spill pair: both live rows it adjudicates)"
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:806 (6.2) — D1 §未竟事項 4 (the item's spill pair: both live rows it adjudicates)"
     },
     {
       "key": "unused-export\t@i-harness/output-retention#gcSpillStore",
       "reason": "`by-design`, because all three parts of the Phase A characterisation were wrong: `createUnifiedSpillStore` (`packages/output-retention/src/spill-guard.ts:90-92`) is a three-line root-selecting factory that **never calls GC**; GC **is** wired at `spill-guard.ts:25` inside `createOutputSpillGuard`, which production mounts at `packages/session-executor/src/assembly.ts:524` whenever a host passes `outputSpill` (`assembly.ts:129`); and **no production host passes one**, so what ships is **no spill store at all** — the shell path's default retention is `opts.shellRetention ?? { maxBytes: 64_000 }` (`assembly.ts:400`), which carries no `spill` key (`packages/shell/src/index.ts:135` declares it, `:280` tests it), and nothing outside `test/` ever passes either option with a value (`apps/cli/src/run.ts:252,288` only forwards what its caller gave). The decision is the source's own, at `packages/output-retention/src/index.ts:170-171`: *\"絕不寫 workspace——研究決策；**不清理（已知 limitation）**\"*, and the guard, the GC it calls and the factory landed together in `c3875a9`. Follow-up: **none owed in code** — if a host ever supplies a spill root it gets exactly the GC wired at `:25`, so the honest future question is retention **policy** (age/size caps), not wiring.",
       "dated": "2026-09-15",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:773 (6.2) — D1 §未竟事項 4 (the item's spill pair: both live rows it adjudicates)"
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:806 (6.2) — D1 §未竟事項 4 (the item's spill pair: both live rows it adjudicates)"
     },
     {
       "key": "unused-export\t@i-harness/sdk#HarnessSession",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#HistoryOptions",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#INVALID_REQUEST",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#PARSE_ERROR",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#QueueState",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#RewindConflictOpWire",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#RewindPointRowWire",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#RewindUnseenChangeWire",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#RpcRequest",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#RunInput",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#RunResult",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#SdkConnectionError",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#SdkRunError",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#createHarnessClient",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#isRpcFailure",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#isRpcSuccess",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     },
     {
       "key": "unused-export\t@i-harness/sdk#runHarness",
       "dated": "2026-09-16",
-      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:817-820 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
       "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
     }
   ],

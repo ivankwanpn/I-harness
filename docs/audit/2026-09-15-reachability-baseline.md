@@ -200,6 +200,20 @@ files added by Phase B — `apps/cli/test/run-flag-routing.test.ts` (Task 3) and
 the count the scanner's own walk and `git ls-files` agree on at `637cdd7` — the same asserted equality
 §2 records for Phase A, now at a second revision.
 
+**M2 Task 4 note (2026-09-16): where these figures now live, and what produces them.** The digest above
+is no longer a hand-computed value: `node scripts/audit/check-reachability.mjs --digest` prints it from
+the findings, and `--seed-baseline` writes the same number into the committed ratchet seed at
+**`scripts/audit/reachability-baseline.json`** — re-measured 2026-09-16, it holds `seededAt: "2026-09-16"`,
+`count: 523` and digest `5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`, identical to
+§2.1's table. Deliberate exceptions live in **`scripts/audit/reachability-allowlist.json`**: every entry
+carries a `dated` and a `reason` (24 `entries` plus 13 `noRow` dispositions, per §6.3's decision note),
+and `--gate` **refuses to run** — exit 2, before `gateDiff` exempts anything — on an entry missing either
+field, rather than honouring it. `pnpm verify:reachability` is the wired alias for `--gate`. **Task 4
+changed no scanner rule**: the row set, the count and the digest were untouched by it, measured before and
+after (`523 rows, 510 of them unused-export, digest 5acf81aa…` both times), and the gate's own proof — a
+deliberately added orphan failing it — was performed and reverted on a package entry with the digest
+verified back to `5acf81aa…`.
+
 ---
 
 ## 3. The finding table
@@ -742,6 +756,24 @@ proposal that is **not** in force (§6.3). Because R13 forbids row-by-row adjudi
 rows, **this allowlist is not exhaustive over them** — M2 inherits that obligation. Until it is
 discharged, the ratchet must be seeded with the §2 digest and fail only on *new* rows, never on the
 existing set.
+
+**Correction (M2 Task 4, 2026-09-16): the three counts this section and §6.4 quote are the AUTHORING
+revision's, and this is what each one counted.** They are corrected here rather than rewritten in place,
+so a reader can still see which figure a given sentence was written against. Every "current" figure below
+was re-measured on 2026-09-16 with `--json`; the arithmetic is shown, not asserted.
+
+| stale figure | what it counted | where it appears | current figure, with its arithmetic |
+|---|---|---|---|
+| **512** | the `unused-export` (class-1) rows at the Phase A revision `74f86d5a`, before Task 4 deleted two | §6's opening paragraph above ("row-by-row adjudication of the 512 class-1 rows") | **510** = 512 − 2. Measured: 523 findings, 510 of them `unused-export`. The two departures are §2.1's delta table (`buildWireClient`, `withdrawPlanModeTool`) |
+| **525** | the TOTAL findings at `74f86d5a` | §6.4's first bullet ("Everything else in the 525 is unadjudicated") | **523** = 525 − 2 — the same two deletions, both class 1, which is why the other four classes are unchanged |
+| **507** | class 1 **minus the five source-list `unused-export` rows** — the population §5.1 drew its systematic sample of 27 from (`512 − 5`; §5.1's own sentence says so) | §6.4's third bullet ("None of the 507 unadjudicated class-1 rows") | **507** again, but *not the same 507* — exactly the distinction §5.1 draws for its 519 frame. Of those five rows only **three** still exist (`createUnifiedSpillStore`, `gcSpillStore`, `registerUpgrade`; measured), and 510 − 3 = **507** |
+
+**The word "unadjudicated" also moved, which is why 507 is no longer the number to compare against.** When
+§6.3's class rule was **accepted on 2026-09-16** (M2 Task 3 — the decision note at the end of §6.3), the
+**17** `@i-harness/sdk` rows stopped being unadjudicated and became allowlisted, so the third bullet's
+quantity is now **490** = 510 − 3 − 17, not 507. Nothing in this document adjudicated a row to make that
+change: the class rule did. For the same reason, §6.4's "unadjudicated" bullets should be read as a count
+at the *authoring* revision plus one class-level acceptance, never as a per-row tally.
 
 ### 6.1 `by-design` rows that are not source-list items (6)
 

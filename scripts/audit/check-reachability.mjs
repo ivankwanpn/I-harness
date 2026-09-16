@@ -13,6 +13,12 @@
 // What it CANNOT prove: that a declaration which IS mentioned is wired correctly,
 // or that a declaration is dead rather than public API. Both are judgements, and
 // they belong in the allowlist, not in a cleverer regex.
+// The sharpest instance of the first limit is ARGUMENT ROUTING: every scanner is a
+// name/string test, so a flag that is parsed and then handed to the WRONG consumer
+// reads exactly like one that is wired (M1 Phase B Task 3's defect class). No class
+// here can see it and no fixture can make one see it -- it is invisible to this tool
+// by construction, and it is guarded by tests, not by the gate. A passing `--gate`
+// must not be read as covering it.
 //
 // Usage:
 //   node scripts/audit/check-reachability.mjs                 # human table
@@ -47,7 +53,11 @@ function buildFixture() {
   }
 
   // class 1: `Wired` is imported by non-test code, `Orphan` is not.
+  // The FIRST line is M2 Task 4's half of the false-negative fixture: the only
+  // mention of `BetaThing` anywhere in this FIXTURE is that COMMENT, in another
+  // package, and it is enough to suppress `@i-harness/beta#BetaThing`.
   put("packages/alpha/src/index.ts", [
+    "// BetaThing is mentioned only here, in a comment.",
     "export function Wired() { return 1 }",
     "export function Orphan() { return 2 }",
     "export type OnlyAType = string",
@@ -74,6 +84,14 @@ function buildFixture() {
     '  | "beta/ghost"',
     "",
   ].join("\n"))
+
+  // --- Added by M2 Task 4, for the cross-package false-negative case below.
+  // A `beta` ENTRY is what class 1 needs before it can report anything for that
+  // package at all; the fixture had none, because `beta` existed only for the
+  // class-2 files above. The second half of this fixture -- a COMMENT in
+  // another package that merely NAMES the export -- is what suppresses the row,
+  // and it is added beside the case that measures it.
+  put("packages/beta/src/index.ts", "export type BetaThing = string\n")
 
   // class 3: `--yes` is parsed into flags and never read; `--model` is read.
   put("apps/tool/src/index.ts", [
@@ -355,7 +373,33 @@ function withoutReExportStatements(text) {
  *  a symbol imported relatively and called inside its own package is used on a
  *  production path just as much as one imported by a sibling package. The entry
  *  point is scanned too, minus its re-export statements: those name everything
- *  the package re-exports without using any of it. */
+ *  the package re-exports without using any of it.
+ *
+ *  Two structural blind spots are LEFT IN PLACE deliberately. M1's ruling R-L
+ *  recorded the second and refused to fix the scanner mid-flight, because either
+ *  fix moves the row set, the digest and the published precision sample; M2
+ *  Task 4 documented both here and fixed neither. What they mean for a reader:
+ *  a clean class-1 result is NOT a clean bill for the package.
+ *
+ *  (1) ENTRY-ONLY. The loop below walks `packages/<pkg>/src/index.ts` and tests
+ *      the names THAT ENTRY exports, so two shapes are invisible: (a) any file
+ *      the entry never mentions, and every name it declares -- e.g.
+ *      `packages/guard-approval/src/remember.ts` and
+ *      `packages/sandbox-local/src/runner-failures.ts`; and (b) any name the
+ *      entry reaches but does not export through itself -- e.g.
+ *      `closeFileBackedConnections`
+ *      (`packages/session-query/src/file-backed.ts:91`), which the entry imports
+ *      at `:7` and calls at `:55` while re-exporting only its siblings (`:246`).
+ *      Measured 2026-09-16: that name has no row.
+ *
+ *  (2) FROM-LESS LOCAL RE-EXPORT. A name the entry re-exports through a LOCAL
+ *      `export { X }` list (no `from`) has no module to attribute it to, so
+ *      `originOf` credits the ENTRY -- which leaves the file that DECLARES X
+ *      inside the used-scan, where its own declaration satisfies the word test.
+ *      Such a name can never be reported. Measured 2026-09-16 on this tree: 68
+ *      entries, 6 carrying a from-less list, 39 names (`tui-core` 31, `fs-lock`
+ *      2, `sandbox-policy` 2, `session-persistence` 2, `attachment` 1,
+ *      `core-agent` 1), and 0 of the 39 appears in the row set. */
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
@@ -892,6 +936,39 @@ SELF_TEST_CASES.push({
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
+// The cross-package false negative, PINNED rather than fixed. Class 1's `used`
+// test runs a word regex over the RAW file text (`scanUnusedExports`, the `used`
+// line) -- comments included -- so a comment that merely NAMES an export counts
+// as a consumer and suppresses that package's row. The direction is a false
+// NEGATIVE: a real orphan reads as reachable.
+//
+// The fixture's `beta` entry AND the comment-only mention in
+// `packages/alpha/src/index.ts` were ADDED by M2 Task 4 for this case. Neither
+// half is decoration, and the second is load-bearing: with the entry present and
+// no mention anywhere, the scanner emits `@i-harness/beta#BetaThing` and this
+// case fails (measured, red-first, before the comment was added).
+//
+// This is not hypothetical in the real tree.
+// `docs/audit/2026-09-15-reachability-baseline.md:805` records §6.2's row as a REAL
+// finding -- `packages/preset/src/index.ts:30` declares and exports `mountPreset` and
+// no production file calls it -- while the scanner emits no
+// `@i-harness/preset#mountPreset` row at all (measured: the package's only row
+// is `#ToolProvider`), because the sole production mention is the COMMENT at
+// `packages/tui/src/views/light-personas.ts:2`. The inherited list records the
+// same collision a second time (`CreateProviderRuntimeOptions` suppressed its own
+// package's row during Task 4; M1 Phase B handoff §6). So the gate's silence
+// about a name is NOT proof that the name is reachable -- which is the
+// over-claim this case exists to prevent.
+SELF_TEST_CASES.push({
+  name: "class 1: a COMMENT naming a type suppresses the row (documented false negative)",
+  expect: [],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/beta#"))
+  },
+})
+
 /** The three conventions the digest depends on, each pinned by a published
  *  counterfactual in the baseline document section 2.1: sort order, LF joining,
  *  and a trailing newline on EVERY line. The row set is synthetic so the case
@@ -989,6 +1066,35 @@ SELF_TEST_CASES.push({
   run() {
     const allowlist = { entries: [{ key: "unpushed-capability\tguardian" }] }
     return staleAllowlistEntries(allowlist)
+  },
+})
+
+// The milestone's completion definition, made re-runnable
+// (backend-polish-roadmap-design.md:125 -- "對**故意新增**的一個孤兒會**失敗**").
+// Step 1 of M2 Task 4 performed it once, by hand, on the REAL tree: appending
+// `export const M2_GATE_PROOF = "delete me"` to
+// `packages/guard-repeat-tool/src/index.ts` moved the digest from `5acf81aa…` to
+// `be1178de…`, took the table from 523 to 524 rows, and made `--gate` print
+// `new  unused-export\t@i-harness/guard-repeat-tool#M2_GATE_PROOF\t…` and exit 1.
+// This case performs the same operation on the fixture, so the proof does not
+// depend on a human repeating that edit and remembering to revert it.
+//
+// Honest accounting of its overlap: its expectation coincides with the sibling
+// case above ("a row the baseline does not have is the ONLY failure") because
+// both pin `gateDiff`'s added-row direction. What differs is the PROCEDURE it
+// encodes -- a baseline seeded from the tree as it stood BEFORE the orphan
+// existed, which is what "someone added an export nobody calls" looks like to
+// the gate, rather than a baseline built by removing `current[0]`.
+SELF_TEST_CASES.push({
+  name: "gate: a deliberately added orphan fails the gate (the milestone's completion proof)",
+  expect: ["unused-export\t@i-harness/alpha#Orphan\tpackages/alpha/src/index.ts"],
+  run(root) {
+    // The fixture tree already contains the orphan class 1 reports; seeding a
+    // baseline from the fixture WITHOUT it is what a real "someone added an
+    // export nobody calls" looks like to the gate.
+    const current = scanUnusedExports(indexTree(root)).map(rowKey)
+    const withoutOrphan = current.filter((k) => !k.includes("#Orphan"))
+    return gateDiff(current, { rows: withoutOrphan }, { entries: [] }).added
   },
 })
 
@@ -1124,6 +1230,24 @@ function staleAllowlistEntries(allowlist) {
     .sort()
 }
 
+// ------------------------------------------------------- the classes' strength
+// Per-class tally. The status strings are not decoration: class 1 is an
+// UNCONSUMED EXPORT EDGE (the symbol may still be reachable through a path the
+// scanner cannot follow), 3 and 4 are LOWER BOUNDS (they depend on what the
+// walker saw), and 5 is READER-DEPENDENT (a setting may be read by a consumer
+// outside this tree). Printing a bare number next to them would overstate all
+// four; M1's reviews removed exactly that overstatement from its documents.
+// The map covers all five kinds the tool emits today; a kind it lacks prints an
+// explicit "(no status recorded)" rather than a bare count, because silence
+// reads as a status.
+const CLASS_STATUS = {
+  "unused-export": "unconsumed export edge, not dead code",
+  "producerless-event": "anchor is a file-name pattern; a lower bound",
+  "unread-flag": "lower bound (depends on the walker's parse)",
+  "unpushed-capability": "lower bound (depends on the walker's parse)",
+  "unconsulted-setting": "reader-dependent (consumers outside this tree are invisible)",
+}
+
 // ----------------------------------------------------------------------- main
 /** `statSync` that answers instead of throwing, so a missing path and a path
  *  that is not a directory are both simply "not a directory". */
@@ -1244,6 +1368,15 @@ function main() {
     console.log(JSON.stringify({ root, digest: findingsDigest(findings), findings }, null, 2))
   } else {
     console.log(`reachability: ${files.length} ts files, ${findings.length} finding(s)\n`)
+    // The tally sits BETWEEN the summary line and the flat list, so a count is
+    // never printed without the strength of the evidence behind it. A kind the
+    // map does not know is printed explicitly rather than skipped.
+    const byKind = new Map()
+    for (const f of findings) byKind.set(f.kind, (byKind.get(f.kind) ?? 0) + 1)
+    for (const [kind, n] of [...byKind].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${String(n).padStart(4)}  ${kind.padEnd(22)} ${CLASS_STATUS[kind] ?? "(no status recorded -- add one)"}`)
+    }
+    console.log("")
     for (const f of findings) console.log(`  ${f.kind.padEnd(22)} ${f.subject.padEnd(52)} ${f.evidence}`)
   }
   return 0

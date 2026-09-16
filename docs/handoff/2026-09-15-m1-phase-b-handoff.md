@@ -480,6 +480,54 @@ it was checked.** The counter-check is cheap in every instance and was skipped i
 - Print each class's epistemic status where its count is printed: class 1 is an *unconsumed export
   edge, not dead code*; classes 3 and 4 are lower bounds; class 5 is reader-dependent.
 
+**What M2 did with this list — added 2026-09-16, M2 Task 4, the milestone's closing task.** Stated item by
+item, including the one that is only partly done, because the point of this list is that a reader can
+tell closure from silence.
+
+- **Seeded the ratchet from the digest ✓.** `scripts/audit/reachability-baseline.json` is committed with
+  `seededAt: 2026-09-16`, `count: 523` and digest
+  `5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786`, and it reproduces the §2.1 row set.
+  `--gate` fails on rows **new** relative to it and never on a low count: `gateDiff` computes `removed`
+  separately and the gate prints it as progress. Exit codes are `0` pass, `1` new rows, `2`
+  usage/missing-baseline/stale-allowlist, all four measured 2026-09-16.
+- **The local re-export blind spot (R-L) — documented in the tool, not fixed ✓.** `scanUnusedExports`'s
+  own doc comment (`scripts/audit/check-reachability.mjs`) now carries the mechanism — a from-less local
+  `export { X }` list has no module to attribute the name to, so `originOf` credits the **entry**, which
+  leaves the file that DECLARES `X` inside the used-scan where its own declaration satisfies the word
+  test — and the measured scope: **68 entries, 6 with such a list, 39 names** (`tui-core` 31, `fs-lock` 2,
+  `sandbox-policy` 2, `session-persistence` 2, `attachment` 1, `core-agent` 1), and **0 of the 39 appears
+  in the row set**. Re-measured independently on 2026-09-16; it reproduces R-L's post-§2 figure, 39 of 39.
+  **Not fixed**, as R-L ruled: a fix moves the row set, the digest and the published precision sample.
+  (Task 4's first check found this was *not* documented in the tool despite this list saying it was; the
+  comment was written rather than the claim softened.)
+- **The entry-only blind spot (both shapes) — documented ✓, not fixed.** The same comment names a measured
+  instance of each shape: (a) a file the entry never mentions, `packages/guard-approval/src/remember.ts`
+  and `packages/sandbox-local/src/runner-failures.ts`; (b) a name the entry reaches but does not export
+  through itself, `closeFileBackedConnections` (`packages/session-query/src/file-backed.ts:91`), which the
+  entry imports at `:7` and calls at `:55` while re-exporting only its siblings at `:246` — measured
+  2026-09-16: **no row**. Class 1's 510 rows remain a **lower bound** for this reason and for R-L's.
+- **Argument routing is invisible to every scanner class — documented as a test-only guard ✓.** The tool's
+  header now says it in those terms: every scanner is a name/string test, so a flag parsed and handed to
+  the **wrong** consumer reads exactly like one that is wired, no class can see it, no fixture can make
+  one see it, and it is guarded by tests rather than by the gate. (As with R-L, this sentence did not
+  exist before Task 4; the general "cannot prove it is wired correctly" clause did.)
+- **Per-class epistemic status where its count is printed — done ✓.** The human table now prints a
+  per-class tally **between** the summary line and the flat list, each row carrying its status string,
+  with an explicit `(no status recorded -- add one)` fallback so a kind the map lacks cannot print as a
+  bare number. Measured 2026-09-16 over the 523 rows: `510` `unused-export` / `8` `unconsulted-setting` /
+  `3` `unpushed-capability` / `1` `producerless-event` / `1` `unread-flag`.
+
+**Nothing on the list above was *fixed* — every item was seeded, documented or printed.** That is the
+honest reading of the five ticks: the two blind spots still under-report class 1, and the gate still
+cannot see argument routing.
+
+**What M2 does not establish, in the roadmap's own words** — recorded here because this milestone is built
+on not over-claiming, and these are the source's words, read in the source:
+
+- `docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:126` — *"**不保證可達的東西是對的** —— 它只證明「有人呼叫」。一個接了但接錯的生產者會通過這道閘門。"* A wired-but-wrong producer passes: the gate proves a caller exists, never that the call is right.
+- `:102` (M1's limit, which M2 does not remove) — *"**不保證所有未接線的表面都找到了** —— 只保證抽樣過的與清單上的。"*
+- And the completion definition M2 satisfies, `:125` — *"腳本可重跑；對**故意新增**的一個孤兒會**失敗**（變異證明）；基線與 allowlist 都帶日期與理由。"*
+
 **Parked Minors** (kept out of the fix loops by design; the final reviewer should triage them) include:
 the `sandbox-policy-per-call.test.ts` disclosure comment's self-falsifying grep sentence (triaged
 ship-as-is, still there; **its unreachable "load-bearing again" example was corrected in this fix
