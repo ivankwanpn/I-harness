@@ -1135,6 +1135,16 @@ function main() {
   const current = findings.map(rowKey)
 
   if (args.includes("--seed-baseline")) {
+    // Seeding writes the file the SCAN's tree owns, and `BASELINE_DEFAULT` is
+    // this script's own root -- so `--seed-baseline --root <other tree>` without
+    // an explicit `--baseline` silently replaced the committed row set with that
+    // tree's rows and exited 0. Measured: it rewrote
+    // scripts/audit/reachability-baseline.json from a synthetic fixture. A seed
+    // against any tree but this one must name where it writes.
+    if (root !== ROOT && argVal("--baseline") === undefined) {
+      console.error(`reachability: --seed-baseline would write this repository's baseline (${baselinePath}) from --root ${root} -- pass --baseline <path> to seed another tree`)
+      return 2
+    }
     const payload = {
       seededAt: new Date().toISOString().slice(0, 10),
       digest: findingsDigest(findings),
@@ -1159,7 +1169,16 @@ function main() {
       console.error(`reachability: no baseline at ${baselinePath} -- seed one with --seed-baseline`)
       return 2
     }
-    const allowlist = loadJsonIfPresent(allowlistPath)
+    let allowlist
+    try {
+      allowlist = loadJsonIfPresent(allowlistPath)
+    } catch (err) {
+      // A malformed allowlist must NOT reach the caller as exit 1: that code
+      // means "new rows". Escaping as an uncaught throw printed a stack trace
+      // AND exited 1, which a caller reads as a failed scan.
+      console.error(err.message)
+      return 2
+    }
     const { added, removed } = gateDiff(current, baseline, allowlist)
     console.log(`reachability: ${current.length} row(s) now; baseline seeded ${baseline.seededAt} with ${baseline.count} (digest ${baseline.digest})`)
     if (removed.length > 0) {
